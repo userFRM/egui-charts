@@ -9,6 +9,9 @@ use crate::widget::ChartBuilder;
 use chrono::{DateTime, TimeDelta, Utc};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[path = "rebinding_tests.rs"]
+mod rebinding;
+
 #[derive(Debug, Clone, PartialEq)]
 enum Call {
     Resolve(String),
@@ -35,6 +38,8 @@ struct Script {
     /// `unsubscribe` drops the replies it keeps.
     drop_replies: AtomicBool,
     capabilities: Mutex<Vec<Reply<FeedCapabilities>>>,
+    targets: Mutex<Vec<Reply<crate::data::PriceTargets>>>,
+    teardown_push: Mutex<Option<Sink>>,
 }
 
 impl Script {
@@ -87,6 +92,9 @@ impl Datafeed for Script {
     }
     fn unsubscribe(&self, id: SubscriptionId) {
         self.calls.lock().unwrap().push(Call::Unsubscribe(id));
+        if let Some(sink) = self.teardown_push.lock().unwrap().as_ref() {
+            sink.push_tick(Tick::new(bars(1)[0].time, 999.0, 999.0, None));
+        }
         if self.drop_replies.load(Ordering::Relaxed) {
             self.resolves.lock().unwrap().clear();
             self.pages.lock().unwrap().clear();
@@ -112,6 +120,9 @@ impl Datafeed for Script {
     }
     fn request_depth_snapshot(&self, id: SubscriptionId) {
         self.calls.lock().unwrap().push(Call::Snapshot(id));
+    }
+    fn price_targets(&self, _: &str, reply: Reply<crate::data::PriceTargets>) {
+        self.targets.lock().unwrap().push(reply);
     }
 }
 

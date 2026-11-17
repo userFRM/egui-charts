@@ -422,6 +422,123 @@ impl Drop for FeedLink {
 }
 
 impl Chart {
+    /// Installs or replaces this chart's feed, loading from the next [`show`](Self::show).
+    ///
+    /// The same `Arc` allocation is a no-op, also during market replay, where it is compared
+    /// with the saved live feed rather than the replay driver. To reload changed settings in
+    /// the same adapter, leave replay and call [`reload_feed`](Self::reload_feed).
+    ///
+    /// A different feed immediately retires this chart's subscriptions and clears feed-owned
+    /// bars, study histories, order flow, quotes and metadata, even while paused. No new feed
+    /// requests run here. Other charts and a shared replay driver are not changed.
+    ///
+    /// Keeps chart configuration, drawings, host-supplied auxiliary series and
+    /// [`set_study_data`](Self::set_study_data) overrides. The configured initial page size
+    /// stays; first attachment uses the builder default of 1,000 bars. Ends replay locally and
+    /// restores the pre-replay host pause choice. Clears undo/redo, whose retained series could
+    /// otherwise restore old-source bars; the source change is not an undoable action.
+    pub fn set_feed(&mut self, feed: Arc<dyn Datafeed>) {
+        let configured = self
+            .market_replay
+            .as_ref()
+            .map_or(self.feed_link.as_ref(), |replay| replay.feed.as_ref());
+        if configured.is_some_and(|link| Arc::ptr_eq(&link.feed, &feed)) {
+            return;
+        }
+
+        let (mut previous, window) = if let Some(replay) = self.market_replay.take() {
+            // Drop only this chart's driver subscription, without seeking or stopping it.
+            drop(self.feed_link.take());
+            (replay.feed, Some(replay.window))
+        } else {
+            (self.feed_link.take(), self.replay.take())
+        };
+        let host_paused = window.as_ref().map_or_else(
+            || previous.as_ref().is_some_and(|link| link.host_paused),
+            |window| window.feed_paused,
+        );
+        if let Some(window) = window {
+            // Restore only host-owned auxiliary history, never the old main/feed histories.
+            for (id, bars) in window.bars {
+                if id != SeriesId::MAIN
+                    && let Some(item) = self.price_series.iter_mut().find(|item| item.id == id)
+                    && !item.fed
+                {
+                    item.bars = bars;
+                    item.revision = crate::model::next_revision();
+                }
+            }
+            for (size, live) in self
+                .chart_type_params
+                .sizes_mut()
+                .into_iter()
+                .zip(window.live_sizes)
+            {
+                if let Some((live, _)) = live {
+                    *size = live;
+                }
+            }
+        }
+
+        self.legend_instrument = None;
+        self.currency_choice = None;
+        self.bar_close_time = None;
+        self.server_time_offset = None;
+        self.set_quote(None);
+        self.quote_action = None;
+        self.session_quote = None;
+        self.state.price_scale_mut().set_price_precision(None);
+        self.state.price_scale_mut().set_tick_size(None);
+        let initial_bars = previous.as_ref().map_or(1000, |link| link.initial_bars);
+        self.attach_feed(feed, initial_bars);
+        if let (Some(old), Some(new)) = (&mut previous, &mut self.feed_link) {
+            new.adjusted = old.adjusted;
+            new.bubbles_config = std::mem::take(&mut old.bubbles_config);
+            new.bubbles = old
+                .bubbles
+                .take()
+                .map(|bubbles| new.bubbles(bubbles.config));
+            new.depth_history = old.depth_history.take();
+            new.depth_history.iter_mut().for_each(DepthHistory::clear);
+            new.heatmap = old.heatmap.take().map(|_| Default::default());
+            new.heatmap_config = old.heatmap_config;
+            new.book_view = std::mem::take(&mut old.book_view);
+            new.book_visible = old.book_visible;
+        }
+        drop(previous);
+
+        // All old sinks are inactive before shared inputs lose their source context.
+        let clock = self.bar_clock();
+        for study in self.studies.indicators_mut() {
+            for input in study.order_flow_inputs() {
+                input.clear();
+                input.set_tick_size(None);
+                input.set_replay(&clock, None, None, &[]);
+            }
+            study.update(&[], 0);
+        }
+        self.pending_from.fill(Some(0));
+        self.next_refresh.fill(f64::NEG_INFINITY);
+        self.stale.fill(false);
+        self.element_studies = Default::default();
+        self.execution_ranges = Default::default();
+        self.replace_main_data(Vec::new());
+        self.feed = Default::default();
+        for series in self.price_series.iter_mut().filter(|series| series.fed) {
+            series.feed = Default::default();
+        }
+        self.invalidate_study_data();
+        self.state.set_elements(None, false);
+        self.refresh_time_scale_content();
+        #[cfg(feature = "drawings")]
+        self.project_drawing_points();
+        self.set_feed_paused(host_paused);
+        self.history.clear();
+        #[cfg(feature = "drawings")]
+        self.drawings
+            .swap_history(&mut crate::drawings::services::HistoryService::new());
+    }
+
     /// Drives the chart from `feed` from the next [`show`](Self::show) on.
     pub(crate) fn attach_feed(&mut self, feed: Arc<dyn Datafeed>, initial_bars: usize) {
         self.set_timeframe(self.timeframe.unwrap_or_default());
