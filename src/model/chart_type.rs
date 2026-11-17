@@ -653,6 +653,17 @@ impl Default for TradeProfileSettings {
 }
 
 /// A row of the per-bar execution statistics table.
+///
+/// ```
+/// use egui_charts::model::FootprintStatistic;
+///
+/// let rows = [
+///     FootprintStatistic::Volume,
+///     FootprintStatistic::OpenInterestHigh,
+///     FootprintStatistic::OpenInterestLow,
+/// ];
+/// assert_eq!(rows.map(FootprintStatistic::label), ["Vol", "OI high", "OI low"]);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum FootprintStatistic {
