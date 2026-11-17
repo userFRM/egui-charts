@@ -406,7 +406,7 @@ impl BarClock {
 /// The bar that [`BarClock::instant_open`] gave a recent update, with its clock and the instants
 /// that share the update's trading date, so that a stream of trades, quotes and heartbeats finds
 /// the session once per date rather than once per update.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Placement(Option<(BarClock, Range<DateTime<Utc>>, DateTime<Utc>)>);
 
 impl Placement {

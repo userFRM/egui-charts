@@ -286,18 +286,21 @@ mod tests {
             ]
         );
     }
-    /// Fork medians and tines use anchor construction, and regression fits the supplied closes.
+    /// Fork medians and tines use anchor construction, and regression fits the source prices of
+    /// the supplied bars.
     #[test]
     fn fork_and_regression_sources_follow_edits_and_saved_geometry() {
+        // Opens 100, 102, 104 and 106; each bar's high and low are its open and close.
         let bars = [100.0, 104.0, 102.0, 108.0]
             .into_iter()
             .enumerate()
             .map(|(i, close)| {
+                let open = 100.0 + 2.0 * i as f64;
                 Bar::new(
                     DateTime::from_timestamp(i as i64 * 60, 0).unwrap(),
-                    close,
-                    close,
-                    close,
+                    open,
+                    open.max(close),
+                    open.min(close),
                     close,
                     1.0,
                 )
@@ -425,6 +428,27 @@ mod tests {
                 "regression {level}: {got} != {expected}"
             );
         }
+        // Without their deviations the bands pass through the high and the low furthest from the
+        // line: 1.6 above and 2.6 below the closes' line, 2 either side of the opens' y=100+2x.
+        let mut config = crate::drawings::RegressionTrendConfig::default();
+        config.use_upper = false;
+        config.use_lower = false;
+        for (source, levels) in [
+            (crate::model::PriceSource::Close, [106.8, 108.4, 104.2]),
+            (crate::model::PriceSource::Open, [106.0, 108.0, 104.0]),
+        ] {
+            config.source = source;
+            chart.drawings_mut().drawings[0].regression_trend = Some(config);
+            for (level, expected) in levels.into_iter().enumerate() {
+                let alert = chart.drawings().drawings[0].alert_source(level);
+                let got = chart.alert_value(&alert, 3).unwrap();
+                assert!(
+                    (got - expected).abs() < 1e-9,
+                    "{source:?} {level}: {got} != {expected}"
+                );
+            }
+        }
+        chart.drawings_mut().drawings[0].regression_trend = None;
         #[cfg(feature = "ui")]
         {
             let mut menu = crate::ui::context_menu::drawing::DrawingContextMenu::new();

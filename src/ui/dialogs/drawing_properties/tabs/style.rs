@@ -85,16 +85,19 @@ impl StyleTab {
                 line_width_row(ui, &mut props.line_width);
                 ui.end_row();
 
-                let label = ui.label(l10n::text(ui.ctx(), "Line style"));
-                ui.label_inputs_by(label.id, |ui| {
-                    ui.combo_select(
-                        "line_style",
-                        &mut props.line_style,
-                        LineStyle::all().iter().copied(),
-                        |v| v.name().to_string(),
-                    );
-                });
-                ui.end_row();
+                // The regression trend sets its fitted line's pattern among its inputs.
+                if tool != Some(DrawingToolType::RegressionTrend) {
+                    let label = ui.label(l10n::text(ui.ctx(), "Line style"));
+                    ui.label_inputs_by(label.id, |ui| {
+                        ui.combo_select(
+                            "line_style",
+                            &mut props.line_style,
+                            LineStyle::all().iter().copied(),
+                            |v| v.name().to_string(),
+                        );
+                    });
+                    ui.end_row();
+                }
             }
 
             let exact = props.color_rgba();

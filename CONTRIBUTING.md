@@ -93,7 +93,15 @@ A second table prints the first frame and the median and 95th percentile of stea
 
 `cargo bench --bench footprint_feed` compares raw trades, owned prepared footprints and shared native rows on 3,000 one-minute bars with 48,000 historical executions, plus ordinary candles. It reports load time and steady/live frame p50 and p95, with statistics and naked POC enabled. It checks matching text signatures and shape/vertex counts for all footprint paths; live frames add one trade each. Fixture generation is outside the load timer. This is a headless CPU measurement, not a storage or GPU benchmark. Pass `--delta-poc` or `--stacks` for either annotation alone, `--all-annotations` to enable the four annotation switches (naked POC, delta POC, unfinished auctions and stacks), or `--no-annotations` / `--no-statistics` to isolate their frame cost. Name filters select `raw`, `prepared`, `shared` or `candles`; output signatures on stderr allow comparisons across builds.
 
+Pass `--dense-stacks` or `--sparse-stacks` to use alternating four-row bid and ask imbalance runs, with an unknown-side trade in each bar's middle row. The sparse fixture leaves out a price after every fourth row. Both fixtures contain 99,000 historical executions instead of 48,000 and print a `study-signature` line on stderr for each prepared/shared path. These switches change the input, not the enabled annotations; combine them with `--stacks` or `--all-annotations` to measure stacked imbalances.
+
 With `drawings`, `cargo bench --bench footprint_feed -- --profile` adds a fixed range volume profile over the last 120 bars and checks the same raw/owned/shared output parity.
+
+`--profile-study` attaches the built-in fixed range volume profile study instead. Use `raw` when comparing with versions that do not yet pass prepared pages to study inputs; the prepared cases require that handoff to produce equivalent profiles.
+
+`cargo bench --no-default-features --bench footprint_input` reports source ingestion time, snapshot capture time and allocations, and producer latency with queries paced at 60 Hz. Snapshots are held across writes to detect copying on the writer. Add `-- --short-bars` for 100,000 single-row bars, on minute and one-tick intervals, including retention. These are generated-data CPU measurements, not feed, disk or GPU timings.
+
+With `widget,studies`, `-- --prepared` measures capture and retained-snapshot writes after a candle chart admits a shared prepared page through its feed and profile study. Fixture construction and chart admission are outside these timings.
 
 `benches/stream.rs` feeds one chart 10,000 trades a second from a thread, with 10 or 30 studies on 100,000 and 1,000,000 bars and frames paced at 60 Hz on the wall clock. It prints frame p50, p99 and max, and full recomputes per second for a fallback study: `cargo bench --bench stream`. `FRAME_TIME_FRAMES` and name filters work as above; warm-up waits for every study to have one value per bar, then runs 60 more frames.
 

@@ -7,8 +7,8 @@ use crate::scales::PriceScaleMode;
 impl Drawing {
     /// [`Self::alert_levels`] with the main-series bars needed by a regression drawing or an
     /// anchored VWAP. The fitted median is level 0, upper band 1 and lower band 2. Regression
-    /// uses the same closes, residual deviation and axis interpolation between fitted endpoints
-    /// as its painted lines, and is empty when the anchored range has fewer than two bars or
+    /// uses the same source prices, bounds and axis interpolation between fitted endpoints as
+    /// its painted lines, and is empty when the anchored range has fewer than two bars or
     /// invalid geometry. The anchored VWAP is level 0 and the upper and lower lines of each
     /// enabled band `n` (from zero) levels `2n + 1` and `2n + 2`, at the values the painted lines
     /// have at `bar`; they are empty before the anchor, past the last bar and before volume
@@ -36,33 +36,30 @@ impl Drawing {
         else {
             return Vec::new();
         };
-        let Some(fit) = Moments::of(bars).fit() else {
+        let config = self.regression_trend.unwrap_or_default();
+        let Some(fit) = Moments::of(bars, config.source).fit() else {
             return Vec::new();
         };
         if !fit.intercept.is_finite() || !fit.slope.is_finite() || !fit.sigma.is_finite() {
             return Vec::new();
         }
-        let deviations = self.regression_trend.unwrap_or_default().deviations();
+        let [above, below] = fit.bounds(bars, config.band_deviations());
         let last = (bars.len() - 1) as f64;
-        [
-            ("Median", 0.0),
-            ("Upper", deviations),
-            ("Lower", -deviations),
-        ]
-        .into_iter()
-        .enumerate()
-        .filter_map(|(level, (name, k))| {
-            let start = fit.intercept + k * fit.sigma;
-            let end = start + fit.slope * last;
-            axis_line(
-                [first as f64, start],
-                [first as f64 + last, end],
-                bar,
-                scale,
-            )
-            .map(|price| (level, name.to_owned(), price))
-        })
-        .collect()
+        [("Median", 0.0), ("Upper", above), ("Lower", -below)]
+            .into_iter()
+            .enumerate()
+            .filter_map(|(level, (name, offset))| {
+                let start = fit.intercept + offset;
+                let end = start + fit.slope * last;
+                axis_line(
+                    [first as f64, start],
+                    [first as f64 + last, end],
+                    bar,
+                    scale,
+                )
+                .map(|price| (level, name.to_owned(), price))
+            })
+            .collect()
     }
 
     fn vwap_alert_levels(&self, bar: f64, bars: &[Bar]) -> Vec<(usize, String, f64)> {
