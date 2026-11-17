@@ -6687,6 +6687,7 @@ mod tests {
             name: "Trend".into(),
         });
         app.settings_dialog.templates.poll(&ctx);
+        app.drawing_props.templates.poll(&ctx);
         app.show_templates(&ctx);
         let mut storage = AppStorage::default();
         app.save(&mut storage);
