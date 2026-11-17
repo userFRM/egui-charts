@@ -181,8 +181,15 @@ impl StudyTemplate {
             .into_iter()
             .chain(template.inputs.iter().cloned())
             .collect();
+        // A host study registered under a built-in's name never had the presentation an upgrade
+        // gives that built-in's older templates either.
+        let settings = if factory.is_host(&self.name) {
+            &self.settings
+        } else {
+            &template.settings
+        };
         let mut study = ConfiguredStudy::new(study);
-        study.apply_settings(&inputs, template.settings.clone())?;
+        study.apply_settings(&inputs, settings.clone())?;
         study.set_visible(template.visible);
         if let Some(scale) = template.scale {
             study.set_scale(scale);
@@ -1296,8 +1303,8 @@ mod tests {
 
     /// A host study registered under a built-in's name replaces it (`IndicatorFactory::register`),
     /// so its own template restores through that factory as that study, with the inputs and plots
-    /// it was saved with, also where an upgrade of the built-in's templates adds, renames or
-    /// converts an input.
+    /// and fill styles it was saved with, also where an upgrade of the built-in's templates adds,
+    /// renames or converts an input or adds fill styles.
     #[test]
     fn host_studies_named_like_upgraded_builtins_restore_from_their_templates() {
         use crate::studies::{CustomIndicator, IndicatorValue, InputKind};
@@ -1305,7 +1312,12 @@ mod tests {
         let millis = || InputKind::Number(0.0, 1e13);
         let rows = [
             ("RSI", vec![], 1),
-            ("VWAP", vec![], 1),
+            // Built-in templates with a band and no fill styles restore with hidden fills.
+            (
+                "VWAP",
+                vec![("band_count", Length(1), InputKind::Length(0, 3))],
+                3,
+            ),
             ("VWAP Auto Anchored", vec![], 1),
             ("Trading Sessions", vec![], 1),
             // Built-in templates with `offset_percent` restore as Envelopes, which draws three
@@ -1359,6 +1371,8 @@ mod tests {
                 .create_with(&factory)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!((restored.name(), restored.line_count()), (name, lines));
+            let fills = StudyTemplate::from_study(restored.as_ref()).settings.fills;
+            assert_eq!(fills, saved.settings.fills, "{name}");
             let restored = restored.inputs();
             for (id, value, _) in inputs {
                 let input = restored.iter().find(|input| input.id == id);
