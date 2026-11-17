@@ -98,7 +98,7 @@ impl Chart {
                 } else {
                     l10n::text(ctx, "No value")
                 };
-                let _ = write!(text, ". {}: {value}", study.label());
+                let _ = write!(text, ". {}: {value}", study.translated_label(ctx));
             }
         } else if !bars.is_empty() {
             text.push_str(&l10n::text(ctx, ". No values"));
