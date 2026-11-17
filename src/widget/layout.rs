@@ -1738,6 +1738,21 @@ impl ChartLayout {
         {
             self.active = index;
         }
+        // Keys go to the active chart, also when the wheel activated it and left the focus on
+        // another chart.
+        if !self.detached[self.active]
+            && let Some(id) = charts[self.active].keyboard.chart_id
+            && ui.memory(|memory| {
+                memory.focused().is_some_and(|focused| {
+                    focused != id
+                        && charts
+                            .iter()
+                            .any(|chart| chart.keyboard.chart_id == Some(focused))
+                })
+            })
+        {
+            ui.memory_mut(|memory| memory.request_focus(id));
+        }
         for (index, chart) in charts.iter().enumerate() {
             if !self.sync.sync_time_axis || total == 1 {
                 self.pending_ranges[index] = None;
@@ -1771,21 +1786,6 @@ impl ChartLayout {
             if self.maximized.is_some_and(|slot| slot != index) && !self.detached[index] {
                 continue;
             }
-        // Keys go to the active chart, also when the wheel activated it and left the focus on
-        // another chart.
-        if !self.detached[self.active]
-            && let Some(id) = charts[self.active].keyboard.chart_id
-            && ui.memory(|memory| {
-                memory.focused().is_some_and(|focused| {
-                    focused != id
-                        && charts
-                            .iter()
-                            .any(|chart| chart.keyboard.chart_id == Some(focused))
-                })
-            })
-        {
-            ui.memory_mut(|memory| memory.request_focus(id));
-        }
             charts[index].layout_inactive =
                 count > 1 && index != self.active && !self.detached[index];
             let focus = self.focus_active && index == self.active;
@@ -5022,91 +5022,6 @@ mod tests {
         );
     }
 
-    /// A host exchanges two charts with `swap_slots`, as the demo does when a smaller preset
-    /// would hide the active chart, between a group change of the moved chart and its undo. The
-    /// undo and the redo reach the chart in its new slot and leave the chart now in its old slot
-    /// alone, whether the change was recorded before the exchange or at the next frame.
-    #[test]
-    fn link_undo_follows_a_chart_moved_by_swap_slots() {
-        let show = |layout: &mut ChartLayout, charts: &mut [Chart; 4]| {
-            egui::Context::default()
-                .run_ui(RawInput::default(), |ui| {
-                    layout.show(ui, &mut charts.each_mut());
-                })
-                .drop_without_applying_deltas();
-        };
-        let group = |name: &str| ChartLinkGroups {
-            symbol: ChartLink::Group(name.to_owned()),
-            ..Default::default()
-        };
-        for recorded in [true, false] {
-            let mut charts = [chart(60), chart(60), chart(60), chart(60)];
-            let mut layout = ChartLayout {
-                mode: ChartLayoutMode::Four,
-                ..Default::default()
-            };
-            layout.set_link_groups(0, group("B"), true);
-            layout.set_active(3);
-            show(&mut layout, &mut charts);
-            layout.set_link_groups(3, group("A"), false);
-            if recorded {
-                show(&mut layout, &mut charts);
-            }
-            charts.swap(0, 3);
-            layout.swap_slots(0, 3);
-            layout.set_active(0);
-            if !recorded {
-                show(&mut layout, &mut charts);
-            }
-            let mut seen = Vec::new();
-            for undo in [true, false] {
-                assert!(if undo {
-                    charts[0].undo()
-                } else {
-                    charts[0].redo()
-                });
-                show(&mut layout, &mut charts);
-                seen.push((layout.link_groups(0), layout.link_groups(3)));
-            }
-            assert_eq!(
-                seen,
-                [
-                    (Some(ChartLinkGroups::default()), Some(group("B"))),
-                    (Some(group("A")), Some(group("B"))),
-                ],
-                "recorded before the exchange: {recorded}"
-            );
-        }
-    }
-
-    /// A host opens a saved layout by supplying its charts in the same slots or restoring
-    /// snapshots into them. Nobody changed a symbol or interval, so each opened chart keeps its
-    /// own, also in slots that share a symbol and an interval group; the next change is sent.
-    #[test]
-    fn charts_opened_into_linked_slots_keep_their_symbols() {
-        let ctx = egui::Context::default();
-        let mut layout = ChartLayout {
-            mode: ChartLayoutMode::TwoHorizontal,
-            ..Default::default()
-        };
-        let link = ChartLinkGroups {
-            symbol: ChartLink::Group("🔶".into()),
-            interval: ChartLink::Group("💧".into()),
-        };
-        layout.set_link_groups(0, link.clone(), true);
-        layout.set_link_groups(1, link, true);
-        let mut charts = vec![chart(60), chart(60)];
-        let mut time = 0.0;
-        let mut frames = |layout: &mut ChartLayout, charts: &mut Vec<Chart>| {
-            for _ in 0..2 {
-                time += 0.1;
-                frame_texts(&ctx, layout, charts, vec2(1440.0, 900.0), time, vec![]);
-            }
-        };
-        let state = |charts: &[Chart]| {
-            charts
-                .iter()
-                .map(|chart| (chart.symbol().to_owned(), chart.timeframe()))
     /// Keys reach the active chart however it became active: a wheel turn over the second chart
     /// after a click focused the first, then Escape, which leaves no chart focused.
     #[test]
@@ -5197,6 +5112,91 @@ mod tests {
         );
     }
 
+    /// A host exchanges two charts with `swap_slots`, as the demo does when a smaller preset
+    /// would hide the active chart, between a group change of the moved chart and its undo. The
+    /// undo and the redo reach the chart in its new slot and leave the chart now in its old slot
+    /// alone, whether the change was recorded before the exchange or at the next frame.
+    #[test]
+    fn link_undo_follows_a_chart_moved_by_swap_slots() {
+        let show = |layout: &mut ChartLayout, charts: &mut [Chart; 4]| {
+            egui::Context::default()
+                .run_ui(RawInput::default(), |ui| {
+                    layout.show(ui, &mut charts.each_mut());
+                })
+                .drop_without_applying_deltas();
+        };
+        let group = |name: &str| ChartLinkGroups {
+            symbol: ChartLink::Group(name.to_owned()),
+            ..Default::default()
+        };
+        for recorded in [true, false] {
+            let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+            let mut layout = ChartLayout {
+                mode: ChartLayoutMode::Four,
+                ..Default::default()
+            };
+            layout.set_link_groups(0, group("B"), true);
+            layout.set_active(3);
+            show(&mut layout, &mut charts);
+            layout.set_link_groups(3, group("A"), false);
+            if recorded {
+                show(&mut layout, &mut charts);
+            }
+            charts.swap(0, 3);
+            layout.swap_slots(0, 3);
+            layout.set_active(0);
+            if !recorded {
+                show(&mut layout, &mut charts);
+            }
+            let mut seen = Vec::new();
+            for undo in [true, false] {
+                assert!(if undo {
+                    charts[0].undo()
+                } else {
+                    charts[0].redo()
+                });
+                show(&mut layout, &mut charts);
+                seen.push((layout.link_groups(0), layout.link_groups(3)));
+            }
+            assert_eq!(
+                seen,
+                [
+                    (Some(ChartLinkGroups::default()), Some(group("B"))),
+                    (Some(group("A")), Some(group("B"))),
+                ],
+                "recorded before the exchange: {recorded}"
+            );
+        }
+    }
+
+    /// A host opens a saved layout by supplying its charts in the same slots or restoring
+    /// snapshots into them. Nobody changed a symbol or interval, so each opened chart keeps its
+    /// own, also in slots that share a symbol and an interval group; the next change is sent.
+    #[test]
+    fn charts_opened_into_linked_slots_keep_their_symbols() {
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::TwoHorizontal,
+            ..Default::default()
+        };
+        let link = ChartLinkGroups {
+            symbol: ChartLink::Group("🔶".into()),
+            interval: ChartLink::Group("💧".into()),
+        };
+        layout.set_link_groups(0, link.clone(), true);
+        layout.set_link_groups(1, link, true);
+        let mut charts = vec![chart(60), chart(60)];
+        let mut time = 0.0;
+        let mut frames = |layout: &mut ChartLayout, charts: &mut Vec<Chart>| {
+            for _ in 0..2 {
+                time += 0.1;
+                frame_texts(&ctx, layout, charts, vec2(1440.0, 900.0), time, vec![]);
+            }
+        };
+        let state = |charts: &[Chart]| {
+            charts
+                .iter()
+                .map(|chart| (chart.symbol().to_owned(), chart.timeframe()))
                 .collect::<Vec<_>>()
         };
         let opened = [
