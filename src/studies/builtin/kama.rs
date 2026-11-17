@@ -118,7 +118,7 @@ impl Indicator for KAMA {
     }
 
     fn desc(&self) -> &str {
-        "Kaufman Adaptive Moving Avg - Adjusts smoothing based on market efficiency"
+        "Kaufman Adaptive Moving Average - Adjusts smoothing based on market efficiency"
     }
 
     fn calculate(&mut self, data: &[Bar]) {

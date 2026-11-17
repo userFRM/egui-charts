@@ -1172,13 +1172,17 @@ mod tests {
         };
         let blue = Color32::from_rgba_unmultiplied(41, 98, 255, 51);
         let red = Color32::from_rgba_unmultiplied(255, 0, 0, 51);
-        for (inverted, visible, boundary_visible) in [
-            (false, true, true),
-            (true, true, true),
-            (false, false, true),
-            (true, false, true),
-            (false, true, false),
-            (true, true, false),
+        // (inverted scale, fill switch, boundary plot shown, fill saved since the switch alone
+        // decided that the band is drawn)
+        for (inverted, visible, boundary_visible, independent) in [
+            (false, true, true, true),
+            (true, true, true, true),
+            (false, false, true, true),
+            (true, false, true, true),
+            (false, true, false, true),
+            (true, true, false, true),
+            // Saved before then, a hidden boundary plot also hid the band.
+            (false, true, false, false),
         ] {
             let mut study = CustomIndicator::new("Band", |_| {
                 vec![
@@ -1205,6 +1209,9 @@ mod tests {
             settings["fills"] = serde_json::json!([{
                 "color": blue.to_array(), "inverted_color": red.to_array(), "visible": visible
             }]);
+            if independent {
+                settings["fills"][0]["independent"] = true.into();
+            }
             study
                 .apply_settings(&[], serde_json::from_value(settings).unwrap())
                 .unwrap();
@@ -1241,8 +1248,9 @@ mod tests {
                 })
                 .collect();
             // Values cross halfway from displayed bar 2 to 3, at price 1.
-            assert_eq!(bands.len(), if visible { 2 } else { 0 });
-            if !visible {
+            let drawn = visible && (boundary_visible || independent);
+            assert_eq!(bands.len(), if drawn { 2 } else { 0 });
+            if !drawn {
                 continue;
             }
             let crossing = Pos2::new(209.0, 60.0);

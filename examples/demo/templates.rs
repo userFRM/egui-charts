@@ -57,22 +57,34 @@ impl DemoApp {
 
     pub(super) fn load_drawing_template(&mut self, template: DrawingTemplate) {
         let manager = self.chart.drawings();
-        let Some(id) = manager.sel_drawing() else {
-            self.notify("Select a drawing first");
+        let tool = &template.settings;
+        let ids: Vec<usize> = manager
+            .selected_ids()
+            .filter(|id| {
+                manager.drawings.iter().any(|drawing| {
+                    drawing.id == *id
+                        && !drawing.locked
+                        && drawing.tool_type == tool.tool_type
+                        && drawing.custom_tool == tool.custom_tool
+                })
+            })
+            .collect();
+        let Some(first) = ids
+            .first()
+            .and_then(|id| manager.drawings.iter().find(|drawing| drawing.id == *id))
+        else {
+            self.notify("Select a drawing of the template's type");
             return;
         };
-        let Some(drawing) = manager.drawings.iter().find(|drawing| drawing.id == id) else {
-            return;
-        };
-        let mut edited = drawing.clone();
-        if let Err(error) = template.apply_to(&mut edited) {
+        // The template's own checks: every selected drawing passes or fails them alike.
+        if let Err(error) = template.apply_to(&mut first.clone()) {
             self.notify(error);
             return;
         }
         self.chart.user_action(|chart| {
-            chart
-                .drawings_mut()
-                .edit_drawing(id, |drawing| *drawing = edited)
+            chart.drawings_mut().edit_drawings(&ids, |drawing| {
+                let _ = template.apply_to(drawing);
+            })
         });
     }
 
@@ -82,9 +94,6 @@ impl DemoApp {
                 .show_for_chart(ctx, "Study templates", &self.chart)
         {
             self.load_study_template(&studies);
-        }
-        if let Some(drawing) = self.drawing_templates.show(ctx, "Drawing templates") {
-            self.load_drawing_template(drawing);
         }
         self.top_toolbar.indicator_templates = self
             .study_templates
@@ -100,15 +109,14 @@ impl DemoApp {
             .filter(|info| dialog.favorites.contains(&info.id))
             .map(|info| (info.id.clone(), info.name.clone()))
             .collect();
-        self.drawing_toolbar.state.templates = self
-            .drawing_templates
-            .templates
+        let templates = &self.drawing_props.templates;
+        self.drawing_toolbar.state.templates = templates
             .entries()
             .iter()
             .map(
-                |(name, template)| egui_charts::ui::drawing_toolbar::DrawingTemplate {
-                    id: name.clone(),
-                    name: name.clone(),
+                |(document, template)| egui_charts::ui::drawing_toolbar::DrawingTemplate {
+                    id: document.clone(),
+                    name: templates.template_name(document).into(),
                     drawing_type: template.settings.tool_type.as_str().into(),
                     is_default: false,
                 },
