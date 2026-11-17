@@ -566,6 +566,41 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
     }
 }
 
+#[cfg(feature = "studies")]
+#[test]
+fn optimise_checks_zone_levels_as_a_pair_in_any_order() {
+    use crate::strategies::optimise;
+    use InputValue::Number;
+    let backtest = Backtest::new("Levels", "TEST", Timeframe::Min1, 10_000.);
+    let factory = StrategyFactory::new();
+    // Overbought is listed first, and equal levels are refused.
+    let grid = [
+        ("overbought".to_owned(), vec![Number(25.), Number(70.)]),
+        (
+            "oversold".to_owned(),
+            vec![Number(20.), Number(40.), Number(70.)],
+        ),
+    ];
+    let refused: Result<Vec<InputValue>, _> = Err("oversold must be below overbought");
+    for name in ["RSI", "Stochastic Slow"] {
+        let items: Vec<_> = optimise(|| factory.create(name).unwrap(), &backtest, &[], &[], &grid)
+            .map(|item| item.map(|trial| trial.inputs.into_iter().map(|(_, v)| v).collect()))
+            .collect();
+        assert_eq!(
+            items,
+            vec![
+                Ok(vec![Number(25.), Number(20.)]),
+                refused.clone(),
+                refused.clone(),
+                Ok(vec![Number(70.), Number(20.)]),
+                Ok(vec![Number(70.), Number(40.)]),
+                refused.clone(),
+            ],
+            "{name}"
+        );
+    }
+}
+
 #[test]
 fn every_default_strategy_is_causal_and_declares_valid_defaults() {
     let bars: Vec<_> = (0..80)
@@ -600,6 +635,9 @@ fn every_default_strategy_is_causal_and_declares_valid_defaults() {
             );
             strategy.set_input(&input.id, input.value).unwrap();
         }
+        strategy
+            .validate_inputs()
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
         assert_prefixes(name, &[], &bars, &backtest);
         assert_prefixes(name, &[], &gapped, &backtest);
     }
