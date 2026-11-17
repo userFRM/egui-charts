@@ -507,6 +507,16 @@ impl DrawingProps {
             {
                 return Err("Price note text size must be 1 to 256");
             }
+            if settings
+                .anchor_price_style
+                .is_some_and(|style| !style.is_valid())
+            {
+                return Err("Price text size must be 1 to 256");
+            }
+            if !(settings.middle_line.width > 0.0 && settings.middle_line.width <= MAX_STROKE_WIDTH)
+            {
+                return Err("Middle line width must be above 0 and at most 100");
+            }
             if !settings.position_style.is_valid() {
                 return Err("Position line width must be 1 to 100 and font size 1 to 256");
             }
