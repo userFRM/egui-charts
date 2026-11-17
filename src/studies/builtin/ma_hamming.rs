@@ -185,6 +185,11 @@ mod tests {
         by_input.set_input("period", InputValue::Length(1)).unwrap();
         // Period 3 weighs 0.08, 1 and 0.08: (100.5 * 0.08 + 101.25 + 99.75 * 0.08) / 1.16
         // = 11727 / 116, then (101.25 * 0.08 + 99.75 + 102 * 0.08) / 1.16 = 11601 / 116.
+        let close = |g: &Option<f64>, w: &Option<f64>| match (g, w) {
+            (Some(g), Some(w)) => (g - w).abs() <= 1e-12 * w.abs(),
+            (g, w) => g == w,
+        };
+        let mut failures = Vec::new();
         for (label, mut study, want) in [
             ("new(1)", HammingMA::new(1), closes.map(Some)),
             ("Period input 1", by_input, closes.map(Some)),
@@ -198,14 +203,10 @@ mod tests {
             let got: Vec<Option<f64>> = (0..bars.len())
                 .map(|i| study.values().value(0, i))
                 .collect();
-            let close = |g: &Option<f64>, w: &Option<f64>| match (g, w) {
-                (Some(g), Some(w)) => (g - w).abs() <= 1e-12 * w.abs(),
-                (g, w) => g == w,
-            };
-            assert!(
-                got.iter().zip(&want).all(|(g, w)| close(g, w)),
-                "{label}: {got:?}, want {want:?}"
-            );
+            if !got.iter().zip(&want).all(|(g, w)| close(g, w)) {
+                failures.push(format!("{label}: {got:?}, want {want:?}"));
+            }
         }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }
