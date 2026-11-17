@@ -294,6 +294,9 @@ pub struct Footprint {
     incomplete_through: Option<DateTime<Utc>>,
     /// Execution coverage missing between prepared history and the retained stream.
     missing: Vec<(DateTime<Utc>, DateTime<Utc>)>,
+    /// Earliest answered prepared-history boundary, including quiet and unavailable spans.
+    /// Missing intervals still determine whether those answers certify complete executions.
+    covered_from: Option<DateTime<Utc>>,
     /// Only the partial boundary is copied; completed prepared trees stay in `bars`.
     #[cfg(feature = "widget")]
     prepared: Option<(DateTime<Utc>, Option<FootprintBar>)>,
@@ -385,6 +388,7 @@ impl Footprint {
             max_rows: usize::MAX,
             incomplete_through: None,
             missing: Vec::new(),
+            covered_from: None,
             #[cfg(feature = "widget")]
             prepared: None,
             revision: next_revision(),
@@ -523,6 +527,13 @@ impl Footprint {
         from_start: bool,
     ) {
         let boundary = self.bars.get(&self.clock.bar_open(before)).cloned();
+        self.covered_from = self.covered_from.or_else(|| {
+            Some(
+                self.bars
+                    .first_key_value()
+                    .map_or(before, |(time, _)| *time),
+            )
+        });
         self.prepared = Some((before, boundary));
         if !from_start {
             let first = trades.iter().next();
@@ -546,16 +557,6 @@ impl Footprint {
                 }),
             );
         }
-    }
-
-    /// Moves a validated, adjoining older page into the existing prepared history.
-    #[cfg(feature = "widget")]
-    pub(crate) fn prepend_prepared(&mut self, page: Self) {
-        for (time, bar) in page.bars {
-            self.rows += bar.levels.len();
-            self.bars.insert(time, bar);
-        }
-        self.revision = next_revision();
     }
 
     /// Replays only the mutable suffix after a trade-page reply, or after a streamed trade stamped

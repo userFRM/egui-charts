@@ -78,7 +78,8 @@ pub enum DrawingContextMenuAction {
     ReversePosition,
     /// Clone drawing with offset
     Clone,
-    /// Delete drawing
+    /// Delete the selected drawings, for example with [`Chart::delete_selected_drawings`], which
+    /// keeps locked drawings and reports them. The menu disables this entry on a locked drawing.
     Delete,
 }
 
@@ -91,7 +92,7 @@ pub struct DrawingContextMenu {
     pub drawing_id: Option<usize>,
     /// Drawing type name for display
     pub drawing_type: String,
-    /// Whether the drawing is currently locked
+    /// Whether the drawing is currently locked; its Delete entry is then disabled.
     pub is_locked: bool,
     /// Whether the drawing is currently visible
     pub is_visible: bool,
@@ -364,13 +365,16 @@ impl DrawingContextMenu {
                 ),
                 MenuEntry::Item(MenuItem::new("Clone", DrawingContextMenuAction::Clone)),
                 MenuEntry::Separator,
-                // Delete (last item, potentially destructive)
-                MenuEntry::Item(
-                    MenuItem::new("Delete", DrawingContextMenuAction::Delete)
+                // Delete (last item, potentially destructive); a locked drawing is unlocked first,
+                // as the floating toolbar's Delete button requires.
+                MenuEntry::Item({
+                    let mut item = MenuItem::new("Delete", DrawingContextMenuAction::Delete)
                         .with_icon(&embedded_icons::TRASH)
                         .with_shortcut(shortcuts.shortcut(KeyboardAction::DeleteSelectedDrawing))
-                        .danger(),
-                ),
+                        .danger();
+                    item.enabled = !self.is_locked;
+                    item
+                }),
             ])
             .collect()
     }
@@ -482,6 +486,32 @@ mod tests {
                     })
                     .as_ref()
             );
+        }
+    }
+
+    /// The Delete entry is disabled exactly while the right-clicked drawing is locked.
+    #[test]
+    fn delete_follows_the_lock() {
+        let mut chart = Chart::new(BarData::default());
+        let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+        drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(1.0, 110.0)];
+        drawing.completed = true;
+        chart.drawings_mut().drawings.push(drawing);
+        let mut menu = DrawingContextMenu::new();
+        for locked in [false, true, false] {
+            chart.drawings_mut().drawings[0].locked = locked;
+            menu.open_on(&Context::default(), &chart, Pos2::ZERO, 7);
+            let enabled = menu
+                .build_menu_items(&Context::default(), &crate::widget::ShortcutMap::default())
+                .into_iter()
+                .find_map(|entry| match entry {
+                    MenuEntry::Item(item) if item.action == DrawingContextMenuAction::Delete => {
+                        Some(item.enabled)
+                    }
+                    _ => None,
+                })
+                .expect("Delete row");
+            assert_eq!(enabled, !locked, "locked {locked}");
         }
     }
 

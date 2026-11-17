@@ -96,7 +96,10 @@ pub(crate) struct FeedLink {
     pub(super) depth_history: Option<DepthHistory>,
     depth_complete: bool,
     footprints_complete: bool,
-    footprint_cursor: Option<chrono::DateTime<chrono::Utc>>,
+    /// A terminal footprint error stops requests until refresh, independently of older EOF.
+    footprints_stopped: bool,
+    /// Unavailable spans suppressed only for the current feed context.
+    footprint_unavailable: Vec<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
     /// Where older history continues after an empty page, by source: bars, trades, depth. The
     /// bar cursor keeps the oldest bar held when the feed named it and lapses once that bar goes.
     bar_cursor: Option<(
@@ -222,7 +225,8 @@ impl FeedLink {
             depth_history: self.depth_history.clone(),
             depth_complete: self.depth_complete,
             footprints_complete: true,
-            footprint_cursor: None,
+            footprints_stopped: true,
+            footprint_unavailable: Vec::new(),
             bar_cursor: None,
             trade_cursor: None,
             depth_cursor: None,
@@ -457,7 +461,8 @@ impl Chart {
             depth_history: None,
             depth_complete: false,
             footprints_complete: false,
-            footprint_cursor: None,
+            footprints_stopped: false,
+            footprint_unavailable: Vec::new(),
             bar_cursor: None,
             trade_cursor: None,
             depth_cursor: None,
@@ -752,6 +757,8 @@ impl Chart {
             && link.adjusted != adjusted
         {
             link.adjusted = adjusted;
+            // Adjusted rows belong to another context even when the symbol and clock match.
+            link.footprint = None;
             link.reload_pending = true;
             self.study_data.clear_feed();
         }
