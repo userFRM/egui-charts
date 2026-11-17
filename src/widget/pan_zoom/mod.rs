@@ -569,10 +569,11 @@ impl Chart {
 
     /// Advance the kinetic scrolling animation by one frame.
     ///
-    /// Applies the current velocity to the right-offset, then damps the velocity
-    /// using the configured damping coefficient. Stops when velocity drops below
-    /// the minimum threshold or motion becomes non-finite. Requests a repaint
-    /// while the animation is running.
+    /// The speed decays continuously by the configured damping coefficient every 60th of a
+    /// second, and the frame moves the right offset by the distance that speed covers over the
+    /// frame's length, so a coast travels as far at any frame rate and across pauses. It stops
+    /// where the speed falls below the minimum, or when the motion is not finite. Requests a
+    /// repaint while the animation is running.
     pub(crate) fn apply_kinetic_scroll(&mut self, ui: &Ui) {
         if !self.chart_options.handle_scroll.enabled {
             self.kinetic_scroll = state::KineticScrollState::new();
@@ -595,9 +596,23 @@ impl Chart {
         self.kinetic_scroll.anim_last_time = Some(now);
 
         if dt > 0.0 {
-            let velocity_in_bars_per_s =
-                self.kinetic_scroll.velocity / self.state.time_scale().bar_spacing();
-            let delta_offset = velocity_in_bars_per_s * dt;
+            let velocity = self.kinetic_scroll.velocity;
+            // The speed decays continuously by `damping_coeff` every 60th of a second, and a
+            // frame moves by the distance it covers over the frame, whatever the frame rate.
+            let rate = -60.0 * options.damping_coeff.ln();
+            let kept = (-rate * dt).exp();
+            let min_v_px_s = options.min_scroll_speed * 60.0;
+            let ends = (velocity * kept).abs() < min_v_px_s;
+            // Seconds at the starting speed that cover the frame's distance. A coast that ends
+            // in this frame stops where its speed reaches the minimum.
+            let covered = if ends {
+                (1.0 - (min_v_px_s / velocity.abs()).min(1.0)) / rate
+            } else {
+                -(-rate * dt).exp_m1() / rate
+            };
+            // Bars per second first: a speed too fast to scroll overflows and stops below.
+            let velocity_in_bars_per_s = velocity / self.state.time_scale().bar_spacing();
+            let delta_offset = velocity_in_bars_per_s * covered;
             let curr_offset = self.state.time_scale().right_offset_precise();
             let new_offset = curr_offset - f64::from(delta_offset);
 
@@ -607,15 +622,11 @@ impl Chart {
             }
             self.state.time_scale_mut().set_right_offset(new_offset);
 
-            let frames = (dt * 60.0).max(0.0);
-            let damping = self.chart_options.kinetic_scroll.damping_coeff.powf(frames);
-            self.kinetic_scroll.velocity *= damping;
-
-            let min_v_px_s = self.chart_options.kinetic_scroll.min_scroll_speed * 60.0;
-            if self.kinetic_scroll.velocity.abs() < min_v_px_s {
+            if ends {
                 self.kinetic_scroll = state::KineticScrollState::new();
                 return;
             }
+            self.kinetic_scroll.velocity = velocity * kept;
         }
 
         ui.ctx().request_repaint();
@@ -845,7 +856,8 @@ mod tests {
     use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
 
     /// Invalid damping falls back at both option entry points and the animation still ends;
-    /// under the defaults a flick keeps its speed and settles in under two seconds.
+    /// under the defaults a flick keeps its speed and settles in under two seconds, and a coast
+    /// travels as far at any frame rate and after a pause in painting.
     #[test]
     fn kinetic_damping_options_decay_to_a_stop() {
         for runtime in [false, true] {
@@ -886,6 +898,39 @@ mod tests {
                 assert_eq!(chart.kinetic_scroll.velocity, 0.0);
                 assert_eq!(chart.chart_options().kinetic_scroll.damping_coeff, expected);
             }
+        }
+
+        // A flick at 2000 points per second toward the future decays to the minimum of 12 points
+        // per second over the same distance whatever the frames: at 60, 10 and 2 frames per
+        // second, and with one frame 2 seconds after the release,
+        // (2000 - 12) / (60 ln(1 / 0.95)) = 645.96 points.
+        for (first, step) in [
+            (1.0 / 60.0, 1.0 / 60.0),
+            (0.1, 0.1),
+            (0.5, 0.5),
+            (2.0, 1.0 / 60.0),
+        ] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[95.0], &[105.0]);
+            chart.chart_options.kinetic_scroll.enabled = true;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let start = chart.state.time_scale().right_offset_precise();
+            chart.kinetic_scroll.is_active = true;
+            chart.kinetic_scroll.velocity = -2000.0;
+            chart.kinetic_scroll.anim_last_time = Some(0.0);
+            for i in 0..200 {
+                frame(&ctx, &mut chart, first + f64::from(i) * step, vec![]);
+            }
+            assert!(
+                !chart.kinetic_scroll.is_active,
+                "first={first}, step={step}"
+            );
+            let spacing = f64::from(chart.state.time_scale().bar_spacing());
+            let travel = (chart.state.time_scale().right_offset_precise() - start) * spacing;
+            assert!(
+                (travel - 645.96).abs() < 1.0,
+                "first={first}, step={step}: {travel}"
+            );
         }
 
         // A drag of 20 points every 10 ms is released at 2000 points per second, under the
