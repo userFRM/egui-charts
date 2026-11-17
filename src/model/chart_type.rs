@@ -653,6 +653,17 @@ impl Default for TradeProfileSettings {
 }
 
 /// A row of the per-bar execution statistics table.
+///
+/// ```
+/// use egui_charts::model::FootprintStatistic;
+///
+/// let rows = [
+///     FootprintStatistic::Volume,
+///     FootprintStatistic::OpenInterestHigh,
+///     FootprintStatistic::OpenInterestLow,
+/// ];
+/// assert_eq!(rows.map(FootprintStatistic::label), ["Vol", "OI high", "OI low"]);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum FootprintStatistic {
@@ -689,11 +700,17 @@ pub enum FootprintStatistic {
     /// The change of total volume from the previous bar with executions, in percent; the first
     /// such bar has none.
     VolumeChange,
+    /// The highest open interest of the bar: the value in effect at its open and every value
+    /// published before its close, from the metric `open_interest` of the chart symbol.
+    OpenInterestHigh,
+    /// The lowest open interest of the bar, from the same values as
+    /// [`OpenInterestHigh`](Self::OpenInterestHigh).
+    OpenInterestLow,
 }
 
 impl FootprintStatistic {
     /// All available rows in their display order.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 18] = [
         Self::Volume,
         Self::Bid,
         Self::Ask,
@@ -710,6 +727,8 @@ impl FootprintStatistic {
         Self::Range,
         Self::PointOfControl,
         Self::VolumeChange,
+        Self::OpenInterestHigh,
+        Self::OpenInterestLow,
     ];
 
     /// Shared table label.
@@ -731,6 +750,8 @@ impl FootprintStatistic {
             Self::Range => "Range",
             Self::PointOfControl => "POC",
             Self::VolumeChange => "Vol change %",
+            Self::OpenInterestHigh => "OI high",
+            Self::OpenInterestLow => "OI low",
         }
     }
 }
