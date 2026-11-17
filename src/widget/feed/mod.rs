@@ -139,15 +139,6 @@ enum Request {
 }
 
 impl FeedLink {
-    /// Deactivate the sink before the provider can push during teardown.
-    fn unsubscribe(&mut self) {
-        *lock(&self.wake) = None;
-        if let Some(id) = self.subscription.take() {
-            self.inbox.unsubscribe(id);
-            self.feed.unsubscribe(id);
-        }
-    }
-
     pub(super) fn server_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.inbox.server_time(self.subscription?)
     }
@@ -422,7 +413,11 @@ impl FeedLink {
 
 impl Drop for FeedLink {
     fn drop(&mut self) {
-        self.unsubscribe();
+        *lock(&self.wake) = None;
+        if let Some(id) = self.subscription.take() {
+            self.inbox.unsubscribe(id);
+            self.feed.unsubscribe(id);
+        }
     }
 }
 
@@ -458,9 +453,6 @@ impl Chart {
         } else {
             (self.feed_link.take(), self.replay.take())
         };
-        if let Some(link) = &mut previous {
-            link.unsubscribe();
-        }
         let host_paused = window.as_ref().map_or_else(
             || previous.as_ref().is_some_and(|link| link.host_paused),
             |window| window.feed_paused,
@@ -469,8 +461,8 @@ impl Chart {
             // Restore only host-owned auxiliary history, never the old main/feed histories.
             for (id, bars) in window.bars {
                 if id != SeriesId::MAIN
-                    && !self.is_fed(id)
                     && let Some(item) = self.price_series.iter_mut().find(|item| item.id == id)
+                    && !item.fed
                 {
                     item.bars = bars;
                     item.revision = crate::model::next_revision();
@@ -492,8 +484,6 @@ impl Chart {
         self.currency_choice = None;
         self.bar_close_time = None;
         self.server_time_offset = None;
-        self.legend_badge = None;
-        self.legend_statuses.clear();
         self.set_quote(None);
         self.quote_action = None;
         self.session_quote = None;
@@ -545,7 +535,8 @@ impl Chart {
         self.set_feed_paused(host_paused);
         self.history.clear();
         #[cfg(feature = "drawings")]
-        self.drawings.swap_history(&mut Default::default());
+        self.drawings
+            .swap_history(&mut crate::drawings::services::HistoryService::new());
     }
 
     /// Drives the chart from `feed` from the next [`show`](Self::show) on.

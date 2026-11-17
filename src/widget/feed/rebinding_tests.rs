@@ -178,6 +178,12 @@ fn set_feed_resets_immediately_and_preserves_options_while_paused_or_inactive() 
         chart.set_extended_hours(true);
         chart.set_conversion(Some("USD".into()));
         chart.set_dividend_adjusted(true);
+        chart.set_legend_badge(Some("bytes://host-badge".into()));
+        chart.set_legend_statuses(&[crate::widget::LegendStatus::new(
+            "Host status",
+            egui::Color32::WHITE,
+            egui::Color32::DARK_RED,
+        )]);
         let bubbles = VolumeBubblesConfig {
             opacity: 77,
             min_size_filter: Some(12.0),
@@ -247,6 +253,18 @@ fn set_feed_resets_immediately_and_preserves_options_while_paused_or_inactive() 
         assert_eq!(chart.timeframe(), Some(Timeframe::Min1));
         assert!(chart.extended_hours() && chart.dividend_adjusted());
         assert_eq!(chart.conversion.as_deref(), Some("USD"));
+        assert!(matches!(
+            chart.legend_badge.as_ref(),
+            Some(egui::ImageSource::Uri(uri)) if uri == "bytes://host-badge"
+        ));
+        assert_eq!(
+            chart.legend_statuses,
+            [(
+                "Host status".into(),
+                egui::Color32::WHITE,
+                egui::Color32::DARK_RED
+            )]
+        );
         let link = chart.feed_link.as_ref().unwrap();
         assert_eq!(
             (link.host_paused, link.paused),
@@ -332,12 +350,17 @@ fn set_feed_clears_price_based_elements_before_a_paused_frame() {
         }
         assert!(!chart.state.shown().is_empty());
         #[cfg(feature = "drawings")]
-        {
+        let drawing_id = {
             use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
-            let mut drawing = Drawing::new(123, DrawingToolType::TrendLine);
+            let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
             drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(2.0, 102.0)];
-            chart.drawings_mut().drawings.push(drawing);
-        }
+            let id = chart.drawings_mut().add_drawing(drawing.clone()).unwrap();
+            assert!(chart.drawings_mut().undo());
+            assert!(chart.drawings_mut().redo());
+            chart.drawings_mut().add_drawing(drawing).unwrap();
+            assert!(chart.drawings_mut().undo());
+            id
+        };
         chart.set_feed_paused(true);
         chart.set_feed(Arc::new(Script::default()));
         assert!(chart.state.shown().is_empty(), "{kind:?}");
@@ -345,8 +368,20 @@ fn set_feed_clears_price_based_elements_before_a_paused_frame() {
         assert!(frozen.state.shown().is_empty());
         #[cfg(feature = "drawings")]
         {
-            assert_eq!(chart.drawings().drawings[0].id, 123);
+            assert_eq!(chart.drawings().drawings[0].id, drawing_id);
             assert_eq!(chart.drawings().drawings[0].chart_points.len(), 2);
+            assert!(!chart.drawings_mut().undo());
+            assert!(!chart.drawings_mut().redo());
+            let drawing = chart.drawings().drawings[0].clone();
+            for _ in 0..150 {
+                chart.drawings_mut().add_drawing(drawing.clone()).unwrap();
+            }
+            for _ in 0..100 {
+                assert!(chart.drawings_mut().undo());
+            }
+            assert!(!chart.drawings_mut().undo());
+            assert_eq!(chart.drawings().drawings.len(), 51);
+            assert_eq!(chart.drawings().drawings[0].id, drawing_id);
         }
     }
 }
@@ -434,15 +469,6 @@ fn set_feed_clears_profile_and_trade_inputs_but_preserves_host_histories() {
     assert!(chart.bars(comparison).is_empty());
     assert_eq!(chart.bars(host), bars(3));
     assert_eq!(chart.bars(override_id), bars(2));
-    assert!(
-        chart
-            .indicators()
-            .find(|(id, _)| *id == delta)
-            .unwrap()
-            .1
-            .values()
-            .is_empty()
-    );
     for _ in 0..2 {
         frames.run(&mut chart);
     }
@@ -644,29 +670,30 @@ fn set_feed_keeps_frozen_shared_owners_without_exporting_old_source_again() {
 
 #[cfg(feature = "studies")]
 #[test]
-fn set_feed_deactivates_shared_inputs_before_unsubscribe_can_push() {
+fn set_feed_clears_calculated_study_values_outside_replay() {
     let old = Arc::new(Script::default());
     let mut chart = fed(&old, Some("A"));
-    chart.add_indicator(Box::new(crate::studies::VolProfileVisible::new(24)));
+    chart.add_indicator(Box::new(crate::studies::OrderFlowStudy::execution_delta(
+        false,
+    )));
     let mut frames = Frames::new();
     load(&old, &mut chart, &mut frames, 100.0);
-    let input = chart.indicators().next().unwrap().1.order_flow_inputs()[0].clone();
-    let start = bars(1)[0].time;
-    let sink = old.sink();
-    sink.push_tick(Tick::new(start, 100.0, 3.0, None));
-    frames.run(&mut chart);
-    assert_eq!(
-        input
-            .footprint_snapshot(start)
-            .bars(..)
-            .map(|bar| bar.volume())
-            .sum::<f64>(),
-        3.0
+    let tick = Tick::new(
+        bars(1)[0].time,
+        100.0,
+        3.0,
+        Some(crate::model::OrderSide::Buy),
     );
-    *old.teardown_push.lock().unwrap() = Some(sink.clone());
+    for reply in old.trades.lock().unwrap().drain(..) {
+        reply.send(Ok(TradePage::new(vec![tick.clone()], true)));
+    }
+    for _ in 0..3 {
+        frames.run(&mut chart);
+    }
+    assert_eq!(chart.replay_time(), None);
+    let values = chart.indicators().next().unwrap().1.values();
+    assert!(!values.is_empty());
+    assert_eq!(values.value(0, 0), Some(3.0));
     chart.set_feed(Arc::new(Script::default()));
-    sink.push_tick(Tick::new(start, 100.0, 99.0, None));
-    assert!(!sink.is_active());
-    assert!(input.footprint_snapshot(start).bars(..).next().is_none());
-    assert_eq!(chart.trades(SeriesId::MAIN).count(), 0);
+    assert!(chart.indicators().next().unwrap().1.values().is_empty());
 }
