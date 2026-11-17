@@ -723,6 +723,46 @@ mod tests {
         }
     }
 
+    /// While its second anchor is placed, a rotated rectangle draws its base between its two
+    /// anchors in its colour and width; the third anchor makes it the rectangle.
+    #[test]
+    fn a_rotated_rectangle_draws_its_base_until_its_third_anchor() {
+        use egui::{Stroke, pos2};
+        let stroke = Stroke::new(3.0, Color32::from_rgb(200, 40, 40));
+        let base = [pos2(100., 100.), pos2(300., 200.)];
+        let corners = [
+            pos2(100., 100.),
+            pos2(300., 100.),
+            pos2(300., 200.),
+            pos2(100., 200.),
+        ];
+        for anchors in [
+            base.to_vec(),
+            vec![corners[0], corners[1], pos2(200., 200.)],
+        ] {
+            let mut drawing = Drawing::new(1, DrawingToolType::RotatedRect);
+            drawing.points = anchors.clone();
+            drawing.color = [200, 40, 40, 255];
+            drawing.stroke_width = 3.0;
+            drawing.line_style = crate::model::LineStyle::Solid;
+            let shapes = paint(&drawing);
+            let segments: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::LineSegment { points, stroke } => Some((*points, *stroke)),
+                    _ => None,
+                })
+                .collect();
+            if anchors.len() == 2 {
+                assert_eq!(segments, [(base, stroke)]);
+            } else {
+                assert!(segments.is_empty(), "{segments:?}");
+                assert!(shapes.iter().any(|shape| matches!(shape,
+                    Shape::Path(path) if path.closed && path.points == corners)));
+            }
+        }
+    }
+
     /// The settings the properties dialog offers for a tool are the ones its renderer uses: a
     /// fill colour reaches a filled area, extension moves geometry (each flag flipped from the
     /// tool's default, since an extended line starts extended), the text is painted, each line
