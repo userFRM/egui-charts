@@ -179,7 +179,8 @@ pub(super) fn tags(
             && study.plot_tagged(line)
             && map.range().contains(value)
         {
-            let label = crate::chart::rendering::axes::named_label(
+            let label = crate::chart::rendering::axes::study_named_label(
+                painter.ctx(),
                 axis.show_study_names,
                 study.name(),
                 study.format_value(value),

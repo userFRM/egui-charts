@@ -414,8 +414,11 @@ impl IndicatorPane {
         let available_width = ui.available_width();
         let panel_size = egui::vec2(available_width, self.config.height);
         let (rect, response) = ui.allocate_exact_size(panel_size, Sense::click());
-        let translated_label =
-            l10n::format_text(ui.ctx(), "{0} pane", &[("0", indicator.name().to_string())]);
+        let translated_label = l10n::format_text(
+            ui.ctx(),
+            "{0} pane",
+            &[("0", l10n::text(ui.ctx(), indicator.name()))],
+        );
         response.widget_info(|| {
             egui::WidgetInfo::labeled(
                 egui::Role::GraphicsObject,
