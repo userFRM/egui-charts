@@ -1,5 +1,7 @@
 //! Matched raw and prepared history, including admission, steady frames and live updates.
 //! `--profile` also draws a fixed range volume profile over the last 120 bars (needs `drawings`).
+//! `--dense-stacks` or `--sparse-stacks` supplies both sides with real imbalance runs.
+//! `--profile-study` attaches the built-in fixed range volume profile study.
 
 #[expect(
     dead_code,
@@ -141,6 +143,17 @@ fn main() {
     let stacks = args.iter().any(|arg| arg == "--stacks");
     let annotations = !args.iter().any(|arg| arg == "--no-annotations");
     let statistics = !args.iter().any(|arg| arg == "--no-statistics");
+    let dense = args.iter().any(|arg| arg == "--dense-stacks");
+    let sparse = args.iter().any(|arg| arg == "--sparse-stacks");
+    assert!(!(dense && sparse), "choose one row fixture");
+    let signals = dense || sparse;
+    let level = |row: usize| row + if sparse { row / 4 } else { 0 };
+    let high = 100.0 + level(ROWS - 1) as f64 * 0.25;
+    let volume = if signals {
+        (ROWS * 5 + 7) as f64
+    } else {
+        ROWS as f64
+    };
     let filters: Vec<_> = args.iter().filter(|arg| !arg.starts_with("--")).collect();
     println!(
         "\n| footprint-feed | load ms | steady p50 ms | steady p95 ms | live p50 ms | live p95 ms | shapes | vertices |"
@@ -162,26 +175,37 @@ fn main() {
                 Bar::new(
                     start + TimeDelta::minutes(i as i64),
                     100.0,
-                    103.75,
+                    high,
                     100.0,
-                    103.75,
-                    ROWS as f64,
+                    high,
+                    volume,
                 )
             })
             .collect();
-        let mut trades: Vec<_> = (0..BARS * ROWS)
-            .map(|i| {
-                Tick::new(
-                    start
-                        + TimeDelta::minutes((i / ROWS) as i64)
-                        + TimeDelta::seconds((i % ROWS) as i64),
-                    100.0 + (i % ROWS) as f64 * 0.25,
-                    1.0,
-                    [Some(OrderSide::Buy), Some(OrderSide::Sell), None][i % 3],
-                )
-                .with_id(i as u64)
-            })
-            .collect();
+        let mut trades = Vec::new();
+        for bar in 0..BARS {
+            for row in 0..ROWS {
+                let at = start + TimeDelta::minutes(bar as i64) + TimeDelta::seconds(row as i64);
+                let price = 100.0 + level(row) as f64 * 0.25;
+                let mut push = |size, side| {
+                    trades.push(Tick::new(at, price, size, side).with_id(trades.len() as u64));
+                };
+                if signals {
+                    let ask = row % 8 < 4;
+                    push(if ask { 1.0 } else { 4.0 }, Some(OrderSide::Sell));
+                    push(if ask { 4.0 } else { 1.0 }, Some(OrderSide::Buy));
+                    if row == ROWS / 2 {
+                        push(7.0, None);
+                    }
+                } else {
+                    push(
+                        1.0,
+                        [Some(OrderSide::Buy), Some(OrderSide::Sell), None][(bar * ROWS + row) % 3],
+                    );
+                }
+            }
+        }
+        let historical_trades = trades.len();
         let rows = prepared.then(|| {
             let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
             for trade in &trades {
@@ -189,12 +213,27 @@ fn main() {
             }
             assert_eq!(
                 flow.bars().values().map(|bar| bar.volume()).sum::<f64>(),
-                (BARS * ROWS) as f64
+                BARS as f64 * volume
             );
+            if signals {
+                use egui_charts::studies::{
+                    FootprintStudyConfig, FootprintStudyKind, footprint_studies,
+                };
+                let studies = footprint_studies(&flow, &FootprintStudyConfig::default());
+                for kind in [
+                    FootprintStudyKind::StackedBid,
+                    FootprintStudyKind::StackedAsk,
+                ] {
+                    assert!(studies.iter().any(|study| study.kind == kind));
+                }
+                let mut signature = std::hash::DefaultHasher::new();
+                format!("{studies:?}").hash(&mut signature);
+                eprintln!("study-signature {name}: {:016x}", signature.finish());
+            }
             flow.bars().values().cloned().collect()
         });
         let cutoff = bars.last().unwrap().time + TimeDelta::seconds(30);
-        let boundary = Tick::new(cutoff, 100.0, 1.0, None).with_id((BARS * ROWS) as u64);
+        let boundary = Tick::new(cutoff, 100.0, 1.0, None).with_id(historical_trades as u64);
         // The raw reply proves the first streamed instant; the stream later repeats its id.
         if prepared {
             trades.clear();
@@ -220,6 +259,13 @@ fn main() {
             .with_chart_type(kind)
             .build();
         chart.config_mut().show_countdown = false;
+        if args.iter().any(|arg| arg == "--profile-study") {
+            chart.add_indicator(
+                egui_charts::studies::IndicatorFactory::new()
+                    .create("Vol Profile FR")
+                    .unwrap(),
+            );
+        }
         if std::env::args().any(|arg| arg == "--profile") {
             #[cfg(feature = "drawings")]
             {
@@ -276,11 +322,11 @@ fn main() {
                 sink.push_tick(
                     Tick::new(
                         cutoff + TimeDelta::milliseconds(tick),
-                        100.0 + (tick % ROWS as i64) as f64 * 0.25,
+                        100.0 + level(tick as usize % ROWS) as f64 * 0.25,
                         1.0,
                         None,
                     )
-                    .with_id((BARS * ROWS) as u64 + tick as u64),
+                    .with_id(historical_trades as u64 + tick as u64),
                 );
                 chart.show(ui);
             },
@@ -297,7 +343,7 @@ fn main() {
         }
         assert_eq!(
             chart.trades(SeriesId::MAIN).count(),
-            if prepared { 1 } else { BARS * ROWS + 1 } + frame::WARMUP + frames
+            if prepared { 1 } else { historical_trades + 1 } + frame::WARMUP + frames
         );
         eprintln!("signature {name}: {before:016x} {after:016x}");
         println!(
