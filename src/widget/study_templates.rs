@@ -1,11 +1,34 @@
 //! A chart's studies saved and applied as a set, with their links and shared panes.
 
 use super::{Chart, PaneId, SeriesId};
-use crate::studies::{IndicatorFactory, InputValue, StudySource, StudyTemplate, StudyTemplateSet};
+use crate::studies::{
+    Indicator, IndicatorFactory, InputValue, StudySource, StudyTemplate, StudyTemplateSet,
+};
 
 /// The position saved for a link to a study the chart no longer has: past the end of any set,
 /// and still a `usize` where that is 32 bits wide.
 pub(super) const NO_STUDY: usize = u32::MAX as usize;
+
+/// Which of a chart's studies stay when a [`StudyTemplateSet`] is placed on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Keep {
+    /// None: the set replaces them all.
+    None,
+    /// Those whose user edits are off, which no user command removes.
+    ReadOnly,
+    /// All of them: the set is added beside them.
+    All,
+}
+
+impl Keep {
+    pub(super) fn keeps(self, study: &dyn Indicator) -> bool {
+        match self {
+            Self::None => false,
+            Self::ReadOnly => !study.user_edit_enabled(),
+            Self::All => true,
+        }
+    }
+}
 
 impl Chart {
     /// The chart's studies as a [`StudyTemplateSet`], in the order they were added. A link to
@@ -107,22 +130,22 @@ impl Chart {
         set: &StudyTemplateSet,
         factory: &IndicatorFactory,
     ) -> Result<Vec<SeriesId>, String> {
-        self.place_study_template_set(set, factory, true)
+        self.place_study_template_set(set, factory, Keep::None)
     }
 
-    /// Adds the studies of `set`, in place of the chart's own when `replace` is true, and fails
-    /// as [`apply_study_template_set_with`](Self::apply_study_template_set_with) does.
+    /// Adds the studies of `set` in place of the chart's own, but for those `keep` keeps, which
+    /// count against the study cap with them, and fails as
+    /// [`apply_study_template_set_with`](Self::apply_study_template_set_with) does.
     pub(super) fn place_study_template_set(
         &mut self,
         set: &StudyTemplateSet,
         factory: &IndicatorFactory,
-        replace: bool,
+        keep: Keep,
     ) -> Result<Vec<SeriesId>, String> {
-        let kept = if replace {
-            0
-        } else {
-            self.indicators().count()
-        };
+        let kept = self
+            .indicators()
+            .filter(|(_, study)| keep.keeps(*study))
+            .count();
         if self
             .study_limit
             .is_some_and(|limit| kept + set.studies.len() > limit)
@@ -151,8 +174,12 @@ impl Chart {
         if let Some(interval) = set.interval {
             self.set_timeframe(interval);
         }
-        if replace {
-            let replaced: Vec<_> = self.indicators().map(|(id, _)| id).collect();
+        if keep != Keep::All {
+            let replaced: Vec<_> = self
+                .indicators()
+                .filter(|(_, study)| !keep.keeps(*study))
+                .map(|(id, _)| id)
+                .collect();
             for id in replaced {
                 self.remove_series(id);
             }
@@ -192,7 +219,7 @@ impl Chart {
             .find(|(_, study)| study.is_volume())
             .map(|(id, _)| id);
         // A study added beside the chart's own leaves the setting alone unless it is the volume.
-        if replace || (volume.is_some() && self.volume_study.is_none()) {
+        if keep != Keep::All || (volume.is_some() && self.volume_study.is_none()) {
             self.volume_study = volume;
             self.volume_setting = self.volume_study.is_some();
             self.config.show_volume = self.volume_setting;

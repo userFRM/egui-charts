@@ -8,7 +8,7 @@ use crate::model::{Bar, ChartType};
 use crate::scales::instrument_price_precision;
 use crate::studies::{Indicator, IndicatorFactory, InputValue, StudySource, StudyTemplateSet};
 use crate::widget::settings::{ChartSettingsState, PrecisionMode};
-use crate::widget::study_templates::NO_STUDY;
+use crate::widget::study_templates::{Keep, NO_STUDY};
 use crate::widget::{Chart, SeriesId};
 
 /// What [`ChartLayout::apply_copy`] takes from one chart to the others of the layout.
@@ -20,7 +20,9 @@ pub enum LayoutCopy {
     /// each chart's price pane; any other study gets a new pane at the bottom of each chart.
     Study(SeriesId),
     /// Replaces the studies of each other chart with those of the source, with their links,
-    /// shared panes and input captions, as [`Chart::apply_study_template_set_with`] does.
+    /// shared panes and input captions, as [`Chart::apply_study_template_set_with`] does, but
+    /// for the studies whose [user edits](Chart::set_indicator_user_edit_enabled) are off: they
+    /// stay, the source's are added beside them, and they count against the chart's study cap.
     Studies,
     /// Applies these settings to every chart, the source included. Each other chart keeps its
     /// symbol, interval and chart type, the sizes and other parameters of that type, its own
@@ -113,8 +115,8 @@ struct CopiedStudies {
     draws: Vec<bool>,
     /// The input caption each study shows on the source, by its position in the set.
     captions: Vec<String>,
-    /// Whether the other charts keep the studies they have.
-    adding: bool,
+    /// Which studies the other charts keep.
+    keep: Keep,
 }
 
 impl CopiedStudies {
@@ -149,14 +151,14 @@ impl CopiedStudies {
                     },
                     draws: vec![draws[at]],
                     captions: vec![captions[at].clone()],
-                    adding: true,
+                    keep: Keep::All,
                 })
             }
             LayoutCopy::Studies => Some(Self {
                 set,
                 draws,
                 captions,
-                adding: false,
+                keep: Keep::ReadOnly,
             }),
             LayoutCopy::Settings(_) => None,
         }
@@ -164,11 +166,10 @@ impl CopiedStudies {
 
     fn issues(&self, chart: &Chart, factory: &IndicatorFactory) -> Vec<LayoutCopyIssueKind> {
         let mut issues = Vec::new();
-        let kept = if self.adding {
-            chart.indicators().count()
-        } else {
-            0
-        };
+        let kept = chart
+            .indicators()
+            .filter(|(_, study)| self.keep.keeps(*study))
+            .count();
         if chart
             .study_limit
             .is_some_and(|limit| kept + self.set.studies.len() > limit)
@@ -185,7 +186,7 @@ impl CopiedStudies {
             let linked = template.inputs.iter().any(|(_, value)| {
                 matches!(value, InputValue::Source(StudySource::Study { id, .. }) if *id != NO_STUDY)
             });
-            if linked && self.adding {
+            if linked && self.keep == Keep::All {
                 issues.push(LayoutCopyIssueKind::LinkedInput(template.name.clone()));
                 continue;
             }
@@ -422,7 +423,7 @@ impl ChartLayout {
                     }
                     (_, Some(studies)) => {
                         let ids = chart
-                            .place_study_template_set(&studies.set, factory, !studies.adding)
+                            .place_study_template_set(&studies.set, factory, studies.keep)
                             .unwrap_or_default();
                         for (id, caption) in ids.into_iter().zip(&studies.captions) {
                             chart.set_indicator_inputs(id, caption.clone());
@@ -747,10 +748,10 @@ mod tests {
         assert_eq!(names(charts[2]), ["SMA"]);
     }
 
-    /// The set replaces what each chart had, keeping links and shared panes; only the charts of
-    /// the preset take it.
+    /// The set replaces the studies each chart lets the user edit, keeping links, shared panes and
+    /// captions; only the charts of the preset take it.
     #[test]
-    fn study_set_copy_replaces_studies_with_links_and_panes() {
+    fn study_set_copy_replaces_editable_studies_with_links_and_panes() {
         let (mut a, mut b, mut hidden) = (chart(50), chart(50), chart(50));
         let parent = a.add_indicator(Box::new(RSI::new(5)));
         let child = a.add_indicator(Box::new(SMA::new(3)));
@@ -766,6 +767,8 @@ mod tests {
         a.set_indicator_inputs(parent, "5");
         a.set_indicator_inputs(child, "3");
         b.add_indicator(Box::new(SMA::new(20)));
+        let read_only = b.add_indicator(Box::new(crate::studies::EMA::new(9)));
+        b.set_indicator_user_edit_enabled(read_only, false);
         let mut layout = ChartLayout {
             mode: ChartLayoutMode::TwoHorizontal,
             ..ChartLayout::default()
@@ -774,9 +777,13 @@ mod tests {
         let mut charts = [&mut a, &mut b, &mut hidden];
         let issues = layout.apply_copy(&mut charts, 0, &LayoutCopy::Studies, &factory);
         assert_eq!(issues, []);
-        assert_eq!(names(charts[1]), ["RSI", "SMA"]);
+        assert_eq!(
+            names(charts[1]),
+            ["EMA", "RSI", "SMA"],
+            "a read-only study stays"
+        );
         assert_eq!(charts[2].indicators().count(), 0, "hidden slot");
-        let ids: Vec<_> = charts[1].indicators().map(|(id, _)| id).collect();
+        let ids: Vec<_> = charts[1].indicators().skip(1).map(|(id, _)| id).collect();
         assert_eq!(charts[1].series_pane(ids[0]), charts[1].series_pane(ids[1]));
         let captions: Vec<_> = ids
             .iter()
@@ -784,11 +791,22 @@ mod tests {
             .collect();
         assert_eq!(captions, [Some("5"), Some("3")]);
         assert_eq!(
-            charts[1].indicators().nth(1).unwrap().1.source(),
+            charts[1].indicators().nth(2).unwrap().1.source(),
             Some(StudySource::Study {
                 id: ids[0].0,
                 plot: 0
             })
+        );
+        assert!(charts[1].undo());
+        assert_eq!(names(charts[1]), ["SMA", "EMA"]);
+        // The kept study counts against the cap.
+        charts[1].set_study_limit(Some(2));
+        assert_eq!(
+            layout.copy_issues(&charts, 0, &LayoutCopy::Studies, &factory),
+            [LayoutCopyIssue {
+                slot: 1,
+                kind: LayoutCopyIssueKind::StudyLimit
+            }]
         );
     }
 
