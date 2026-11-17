@@ -324,6 +324,7 @@ impl Chart {
                     events.push((
                         key,
                         crate::model::Marker::event(event.time, event.kind.label())
+                            .with_shape(crate::model::MarkerShape::Circle)
                             .with_id(&event.id)
                             .with_tooltip(format!("{}\n{}", event.title, event.details)),
                     ));
