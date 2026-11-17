@@ -3749,6 +3749,9 @@ impl DemoApp {
                         ctx.open_url(egui::OpenUrl::new_tab(link));
                     }
                 }
+                egui_charts::widget::ChartEvent::LockedDrawingsKept(kept) => {
+                    self.toasts.info(locked_drawings_kept(kept));
+                }
                 _ => {}
             }
         }
@@ -3962,7 +3965,7 @@ impl DemoApp {
         };
         let dm = self.chart.drawings_mut();
         match action {
-            DrawingContextMenuAction::Delete => dm.delete_selected(),
+            DrawingContextMenuAction::Delete => self.chart.delete_selected_drawings(),
             DrawingContextMenuAction::Edit => self.open_drawing_props_for(id),
             DrawingContextMenuAction::Clone => self.clone_drawing(id),
             DrawingContextMenuAction::Copy => match self.chart.copy_selected_drawings() {
@@ -4446,6 +4449,15 @@ fn panel_frame(bg: egui::Color32) -> egui::Frame {
         .fill(bg)
         .stroke(egui::Stroke::NONE)
         .inner_margin(egui::Margin::ZERO)
+}
+
+/// The toast after a delete that kept `kept` locked drawings.
+fn locked_drawings_kept(kept: usize) -> String {
+    if kept == 1 {
+        "The locked drawing was kept. Unlock it to delete it.".to_owned()
+    } else {
+        format!("{kept} locked drawings were kept. Unlock them to delete them.")
+    }
 }
 
 /// Gives the price-based chart types of `chart` half the 14-bar average true range of the bars
