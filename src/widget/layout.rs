@@ -1600,7 +1600,9 @@ impl ChartLayout {
         self.groups[a] == self.groups[b]
     }
 
-    /// Shows the preset and synchronizes its charts. Click or scroll a panel to activate it.
+    /// Shows the preset and synchronizes its charts. Click or scroll a panel to activate it;
+    /// chart shortcuts and typed entry go to the active chart, while a focused text field or
+    /// dialog keeps its keys.
     /// Its header and corner menu offer independent symbol and interval groups; the corner menu
     /// also offers detachment and the synchronization group. The active border is painted
     /// inside the chart; stacked charts have a two-point gap and side-by-side charts meet at their
@@ -1769,6 +1771,21 @@ impl ChartLayout {
             if self.maximized.is_some_and(|slot| slot != index) && !self.detached[index] {
                 continue;
             }
+        // Keys go to the active chart, also when the wheel activated it and left the focus on
+        // another chart.
+        if !self.detached[self.active]
+            && let Some(id) = charts[self.active].keyboard.chart_id
+            && ui.memory(|memory| {
+                memory.focused().is_some_and(|focused| {
+                    focused != id
+                        && charts
+                            .iter()
+                            .any(|chart| chart.keyboard.chart_id == Some(focused))
+                })
+            })
+        {
+            ui.memory_mut(|memory| memory.request_focus(id));
+        }
             charts[index].layout_inactive =
                 count > 1 && index != self.active && !self.detached[index];
             let focus = self.focus_active && index == self.active;
@@ -5090,6 +5107,96 @@ mod tests {
             charts
                 .iter()
                 .map(|chart| (chart.symbol().to_owned(), chart.timeframe()))
+    /// Keys reach the active chart however it became active: a wheel turn over the second chart
+    /// after a click focused the first, then Escape, which leaves no chart focused.
+    #[test]
+    fn chart_keys_reach_the_active_chart() {
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::TwoHorizontal,
+            ..Default::default()
+        };
+        let mut charts = [chart(60), chart(60)];
+        let mut time = 0.0;
+        let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart; 2], events| {
+            time += 0.1;
+            frame_texts(&ctx, layout, charts, vec2(1440.0, 900.0), time, events);
+        };
+        let pressed = |key, modifiers| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        let command = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        };
+        frame(&mut layout, &mut charts, vec![]);
+        for chart in &mut charts {
+            chart.user_action(|chart| chart.set_chart_type(crate::model::ChartType::Line));
+        }
+        let (left, right) = (pos2(300.0, 400.0), pos2(1000.0, 400.0));
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(left)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(left, true)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(left, false)]);
+        frame(
+            &mut layout,
+            &mut charts,
+            vec![
+                Event::PointerMoved(right),
+                Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: vec2(0.0, -40.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                    source: egui::MouseWheelSource::Wheel,
+                },
+            ],
+        );
+        assert_eq!(layout.active(), 1);
+        frame(&mut layout, &mut charts, vec![key(egui::Key::Escape)]);
+        frame(
+            &mut layout,
+            &mut charts,
+            vec![
+                Event::ModifiersChanged(command),
+                pressed(egui::Key::Z, command),
+            ],
+        );
+        frame(
+            &mut layout,
+            &mut charts,
+            vec![
+                Event::ModifiersChanged(egui::Modifiers::NONE),
+                pressed(egui::Key::L, egui::Modifiers::ALT),
+            ],
+        );
+        frame(&mut layout, &mut charts, vec![Event::Text("A".into())]);
+        let state = |chart: &mut Chart| {
+            (
+                chart.chart_type(),
+                chart.state.price_scale().options().mode,
+                chart.take_shortcut_requests(),
+            )
+        };
+        use crate::scales::PriceScaleMode;
+        let line = crate::model::ChartType::Line;
+        assert_eq!(
+            charts.each_mut().map(state),
+            [
+                (line, PriceScaleMode::Normal, vec![]),
+                (
+                    crate::model::ChartType::Candles,
+                    PriceScaleMode::Logarithmic,
+                    vec![ShortcutRequest::SymbolSearch("A".into())]
+                ),
+            ]
+        );
+    }
+
                 .collect::<Vec<_>>()
         };
         let opened = [
