@@ -1880,7 +1880,6 @@ mod tests {
             study.pane().levels,
             [
                 (70.0, palette::MUTED, "Upper guide"),
-                (50.0, palette::MUTED.gamma_multiply_u8(128), "Middle guide"),
                 (30.0, palette::MUTED, "Lower guide"),
             ]
         );
@@ -1904,7 +1903,6 @@ mod tests {
         let mut edited = defaults.clone();
         for (level, (value, color, pattern, width, visible)) in edited.levels.iter_mut().zip([
             (80.0, egui::Color32::RED, LineStyle::Solid, 3.0, false),
-            (45.0, egui::Color32::GRAY, LineStyle::Dashed, 1.5, true),
             (20.0, egui::Color32::GREEN, LineStyle::Dotted, 2.0, true),
         ]) {
             level.value = Some(value);
@@ -1942,7 +1940,6 @@ mod tests {
             for caption in [
                 "Upper guide",
                 "Lower guide",
-                "Middle guide",
                 "Fill between levels",
                 "Latest value line",
                 "Fill colour",
@@ -1952,6 +1949,7 @@ mod tests {
                     "{caption}"
                 );
             }
+            assert!(harness.query_all_by_label("Middle guide").next().is_none());
             assert!(
                 egui::Rect::from_min_size(egui::Pos2::ZERO, size)
                     .contains_rect(harness.get_by_label(action).rect())

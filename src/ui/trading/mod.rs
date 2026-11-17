@@ -95,7 +95,8 @@ pub struct Trading {
     pending: Option<TradingLineAction>,
     /// An order the user asked the broker to preview, until it is placed or discarded.
     preview: Option<Preview>,
-    /// Decimals of the chart's prices, for notifications.
+    /// Decimals of the chart's prices at the last [`show`](Self::show), in which
+    /// [`numbers`](Self::numbers) writes the prices of the chart symbol.
     decimals: usize,
     /// The metadata of the symbols the host described with
     /// [`set_instrument`](Self::set_instrument), by symbol.
@@ -298,8 +299,10 @@ impl Trading {
         }
     }
 
+    /// Starts over with the broker in `service`, or without one: the order ticket, a previewed
+    /// order, the execution sound, the quantity calculator and the trading rules of the previous
+    /// account are dropped, and a new stream starts.
     fn connect(&mut self) {
-        self.pending = None;
         self.preview = None;
         self.sound = None;
         self.calculator = None;
@@ -307,6 +310,15 @@ impl Trading {
         self.rules = TradingRules::new("");
         self.rules_ready = false;
         self.rules_failed = false;
+        self.listen();
+    }
+
+    /// Starts a new stream, on which the broker restates the account. What the old stream built
+    /// is dropped, and so are the changes to its orders and positions that wait for confirmation
+    /// or for trading rules, since those orders and positions may have changed unseen. The order
+    /// ticket, a previewed order, the quantity calculator and the trading rules stay.
+    fn listen(&mut self) {
+        self.pending = None;
         self.account = None;
         self.connection = None;
         self.orders.clear();
@@ -418,6 +430,14 @@ impl Trading {
             && let Some(service) = &self.service
         {
             service.rules(&self.rules.symbol, self.inbox.reply(self.rules_key));
+        }
+    }
+
+    /// Asks once more for the rules of `rules.symbol` when they have neither arrived nor been
+    /// refused.
+    fn ask_rules_again(&mut self) {
+        if !self.rules_ready && !self.rules_failed && !self.rules.symbol.is_empty() {
+            self.ask_rules();
         }
     }
 
