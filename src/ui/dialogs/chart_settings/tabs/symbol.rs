@@ -1,13 +1,12 @@
 //! Symbol and status line tabs of the chart settings dialog.
 
 use super::super::SettingsDialog;
-use super::{checkbox, styled_checkbox, styled_dropdown};
+use super::{checkbox, pick_color, styled_checkbox, styled_dropdown};
 use crate::localization as l10n;
 use crate::scales::TimezoneMode;
 use crate::theme::Theme;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui_kit::ColorPicker;
 use crate::widget::settings::PrecisionMode;
 use egui::{RichText, Ui};
 
@@ -200,11 +199,7 @@ impl SettingsDialog {
                                     for (color, picker, id) in
                                         [(up, up_picker, up_id), (down, down_picker, down_id)]
                                     {
-                                        if let Some(picked) =
-                                            ColorPicker::new(picker, id).show(ui).inner
-                                        {
-                                            *color = picked;
-                                        }
+                                        pick_color(ui, picker, id, color);
                                     }
                                 });
                             });

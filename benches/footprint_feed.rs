@@ -1,6 +1,7 @@
 //! Matched raw and prepared history, including admission, steady frames and live updates.
 //! `--profile` also draws a fixed range volume profile over the last 120 bars (needs `drawings`).
 //! `--dense-stacks` or `--sparse-stacks` supplies both sides with real imbalance runs.
+//! `--profile-study` attaches the built-in fixed range volume profile study.
 
 #[expect(
     dead_code,
@@ -258,6 +259,13 @@ fn main() {
             .with_chart_type(kind)
             .build();
         chart.config_mut().show_countdown = false;
+        if args.iter().any(|arg| arg == "--profile-study") {
+            chart.add_indicator(
+                egui_charts::studies::IndicatorFactory::new()
+                    .create("Vol Profile FR")
+                    .unwrap(),
+            );
+        }
         if std::env::args().any(|arg| arg == "--profile") {
             #[cfg(feature = "drawings")]
             {
