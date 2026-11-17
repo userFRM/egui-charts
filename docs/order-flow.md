@@ -309,6 +309,15 @@ synchronized update; a loss after it, or an update with an invalid level, leaves
 one. Footprint and book sources keep at most 11,000 bars and 110,000 price rows, then drop their
 oldest bars at once, down to 10,000 bars and 100,000 rows.
 
+[`footprint_snapshot`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowInput.html#method.footprint_snapshot)
+returns an owned reader whose `bars(range)` and `span_is_complete(start, end)` methods read
+after the input lock is released. It shares completed source bars and accepted prepared pages,
+and copies only mutable rows. `footprints_from` remains available when a caller needs owned
+price trees. Prepared pages have the chart's retention, independently of the raw-source limits.
+On time intervals, a footprint input also requests `Datafeed::footprints`, including on a candle
+chart. Studies attached after history arrives share the same pages; raw-page replies and eviction
+preserve them, and only trades at or after the page's exclusive cutoff continue its totals.
+
 ### Volume profile studies
 
 Vol Profile VR, FR, Session, Periodic, Anchored and Auto Anchored each return a footprint
@@ -324,6 +333,12 @@ input. A host without a feed gives the source the tick size with [`OrderFlowInpu
 and pushes executions with [`OrderFlowInput::push_trade`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowInput.html#method.push_trade) and the bar clock it gives the study
 through [`Indicator::set_bar_clock`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.set_bar_clock) (by default [`BarClock::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.BarClock.html#method.new) of the study's interval), then
 updates the study from the first bar that changed.
+
+Profile studies use the shared reader for painting, extended levels and autoscale. Frozen chart
+exports call `Indicator::clone_for_export`; profile studies use `OrderFlowInput::frozen` there,
+so even a first query after later live updates sees the saved state. Ordinary study clones still
+share their live input. Other indicators keep their existing clone behavior unless they override
+the export hook.
 
 ### Replay
 
