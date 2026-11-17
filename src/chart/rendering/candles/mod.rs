@@ -522,6 +522,7 @@ mod tests {
         styles.marker_radius = 8.0;
         styles.area.marker_radius = 8.0;
         styles.baseline.marker_radius = 8.0;
+        styles.step_line_price_source = Some(crate::model::PriceSource::Open);
         styles.area.top_fill = Color32::from_rgba_unmultiplied(255, 0, 0, 200);
         styles.area.bottom_fill = Color32::from_rgba_unmultiplied(0, 0, 255, 40);
         styles.baseline.above_fill = Color32::from_rgba_unmultiplied(255, 255, 0, 100);

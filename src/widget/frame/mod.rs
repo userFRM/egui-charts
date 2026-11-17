@@ -41,11 +41,12 @@ impl Chart {
                 self.config.conflation_threshold,
             )
         };
+        let source = self.main_price_source();
         self.merge_groups.update(
             &self.state.data().bars,
             self.state.revision(),
             factor,
-            self.config.price_source,
+            source,
         );
         factor
     }
@@ -439,8 +440,7 @@ impl Chart {
         };
         let last = &self.state.shown()[index];
         let price = self
-            .config
-            .price_source
+            .main_price_source()
             .compute(last.open, last.high, last.low, last.close);
         let Some(color) = rendering::candles::line_color_at(
             self.chart_type,
@@ -1714,7 +1714,7 @@ impl Chart {
             &self.chart_type_params,
             rendering::TradingColors::new(colors.bullish, colors.bearish),
             rendering::CoordMapping::new(chart_rect.min.x),
-            self.config.price_source,
+            self.main_price_source(),
         );
         // Draw one merged bar, or a column's line points, for each group.
         let merged = footprint
@@ -1728,7 +1728,7 @@ impl Chart {
                         &self.merge_groups,
                         start_idx..start_idx + visible_data.len(),
                         line,
-                        self.config.price_source,
+                        self.main_price_source(),
                     )
                 };
                 // Volume columns merge as bars beneath a merged line.
@@ -1752,7 +1752,7 @@ impl Chart {
             &self.chart_type_params,
             rendering::TradingColors::new(colors.bullish, colors.bearish),
             rendering::CoordMapping::new(chart_rect.min.x),
-            self.config.price_source,
+            self.main_price_source(),
         );
 
         // Both paint paths and the summary box mix their shades with what the chart paints.
@@ -3658,8 +3658,7 @@ impl Chart {
                     if self.main_series_visible {
                         let bar = &self.state.shown()[index];
                         let value = self
-                            .config
-                            .price_source
+                            .main_price_source()
                             .compute(bar.open, bar.high, bar.low, bar.close);
                         if let Some(color) = rendering::candles::line_color_at(
                             self.chart_type,
