@@ -102,7 +102,7 @@ impl Indicator for WMA {
     }
 
     fn desc(&self) -> &str {
-        "Weighted Moving Avg - Gives more weight to recent prices"
+        "Weighted Moving Average - Gives more weight to recent prices"
     }
 
     fn calculate(&mut self, data: &[Bar]) {

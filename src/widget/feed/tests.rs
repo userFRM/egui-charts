@@ -3463,16 +3463,17 @@ fn replay_after_a_trade_page_repeats_a_live_execution_stops_at_the_cutoff() {
     }
 }
 
-/// Hand counts on 2t at price 100: live buys of 1, 2, 4, 8 and 16 one a second from 0 s into a
-/// trade store that keeps four, so the drain evicts the buy of 1, and the chart's bars are 1 and 2
-/// (delta 3) at 0 s, 4 and 8 (12) at 2 s and 16 at 4 s. The replay cutoff is exclusive. At 3 s it
-/// falls in the 2 s bar, which lost nothing and before which only the buy of 4 came. At 0.5 s it
-/// falls in the 0 s bar, which lost the buy of 1, so that bar has no value. Trade Rate summing
-/// volume has the same bar totals, but its 60 s window at 3 s reaches the lost buy, so it leaves
-/// the 2 s bar empty.
+/// Hand counts on 2t at price 100: live buys of 1, 2, 4, 8 and 16 one a second from 0 s, and the
+/// chart's bars are 1 and 2 (delta 3) at 0 s, 4 and 8 (12) at 2 s and 16 at 4 s. A trade store
+/// that keeps four evicts the buy of 1 at the drain; one that keeps five loses nothing. The replay
+/// cutoff is exclusive. At 3 s it falls in the 2 s bar, which lost nothing and before which only
+/// the buy of 4 came. At 0.5 s it falls in the 0 s bar, which lost the buy of 1, so that bar has
+/// no value. Trade Rate summing volume has the same bar totals, but leaves the 2 s bar empty with
+/// either store, as every rolling study does with the cutoff's bar: its 60 s window at 3 s reaches
+/// the lost buy, or executions before the oldest held one.
 #[cfg(feature = "studies")]
 #[test]
-fn replay_after_a_trade_store_loss_stops_at_the_cutoff() {
+fn replay_with_or_without_a_trade_store_loss_stops_at_the_cutoff() {
     use crate::data::OrderFlowKind;
     use crate::model::OrderSide::Buy;
     use crate::studies::OrderFlowStudy;
@@ -3490,17 +3491,20 @@ fn replay_after_a_trade_store_loss_stops_at_the_cutoff() {
         instant: 1,
     };
     let live = [Some(3.0), Some(12.0), Some(16.0)];
-    // The study, the replay cutoff in milliseconds, and its first line during the replay.
-    let rows: [(OrderFlowStudy, i64, &[Option<f64>]); 3] = [
+    // The study, the store's capacity, the replay cutoff in milliseconds, and the study's first
+    // line during the replay.
+    let rows: [(OrderFlowStudy, usize, i64, &[Option<f64>]); 4] = [
         (
             OrderFlowStudy::execution_delta(false),
+            4,
             3000,
             &[Some(3.0), Some(4.0)],
         ),
-        (OrderFlowStudy::execution_delta(false), 500, &[None]),
-        (OrderFlowStudy::new(rate), 3000, &[Some(3.0), None]),
+        (OrderFlowStudy::execution_delta(false), 4, 500, &[None]),
+        (OrderFlowStudy::new(rate), 4, 3000, &[Some(3.0), None]),
+        (OrderFlowStudy::new(rate), 5, 3000, &[Some(3.0), None]),
     ];
-    for (row, (study, cutoff, replayed)) in rows.into_iter().enumerate() {
+    for (row, (study, capacity, cutoff, replayed)) in rows.into_iter().enumerate() {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
         chart.set_timeframe("2t".parse().unwrap());
@@ -3511,7 +3515,7 @@ fn replay_after_a_trade_store_loss_stops_at_the_cutoff() {
             .send(Ok(Instrument::new("A").with_tick_size(1.0)));
         feed.page().send(page(Vec::new(), true));
         frames.run(&mut chart);
-        chart.feed_link.as_mut().unwrap().trades = Trades::new(4);
+        chart.feed_link.as_mut().unwrap().trades = Trades::new(capacity);
         let sink = feed.sink();
         tape.iter().for_each(|trade| sink.push_tick(trade.clone()));
         let mut line = |chart: &mut Chart| {
@@ -3525,7 +3529,11 @@ fn replay_after_a_trade_store_loss_stops_at_the_cutoff() {
         };
         assert_eq!(line(&mut chart), live, "row {row}");
         let lost = chart.feed_link.as_ref().unwrap().trades.lost_until();
-        assert_eq!(lost, Some(start), "row {row}, loss");
+        assert_eq!(
+            lost,
+            (capacity < tape.len()).then_some(start),
+            "row {row}, loss"
+        );
         chart.set_feed_paused(true);
         chart.set_replay_time(Some(start + TimeDelta::milliseconds(cutoff)));
         assert_eq!(line(&mut chart), replayed, "row {row}, replay");
@@ -5266,6 +5274,9 @@ fn scroll_to_time_shows_the_nearest_bar_and_loads_older_history() {
             Call::History(request)
         };
         assert_eq!(feed.calls(), [ranged(all[2000].time)]);
+        // A range synchronised from another chart keeps the target, so a linked chart that
+        // follows the active one still pages towards its own date.
+        assert!(chart.apply_synced_time_range(chart.visible_time_range().unwrap()));
         feed.page().send(page(all[1000..2000].to_vec(), false));
         frames.run(&mut chart);
         frames.run(&mut chart);
