@@ -589,6 +589,9 @@ mod tests {
                 ..Recorder::default()
             }));
             trading.poll(&egui::Context::default(), &mut Toasts::new());
+            // The accessibility check covers the whole panel, whose broker menu is named after
+            // the broker the host sets.
+            trading.account_panel.broker = "Broker".into();
             trading.account_panel.editing = Some((order.clone(), order.request));
             let mut harness = Harness::builder()
                 .with_size(egui::vec2(1000.0, 600.0))
