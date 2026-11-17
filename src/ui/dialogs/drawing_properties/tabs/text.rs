@@ -377,11 +377,17 @@ impl TextTab {
                 return;
             };
             let settings = &mut template.settings;
+            // Tools that place their text on a line by the alignment settings and have no readouts.
             let line_text = matches!(
                 settings.tool_type,
                 DrawingToolType::HorizontalLine
                     | DrawingToolType::HorizontalRay
                     | DrawingToolType::VerticalLine
+                    | DrawingToolType::CrossLine
+                    | DrawingToolType::Arrow
+                    | DrawingToolType::ParallelChannel
+                    | DrawingToolType::FlatTopBottom
+                    | DrawingToolType::DisjointChannel
             );
             if writes && (line_text || settings.tool_type.supports_line_measurements()) {
                 use LineTextHorizontalAlign as H;
@@ -461,6 +467,11 @@ impl TextTab {
                         | DrawingToolType::Rect
                         | DrawingToolType::Circle
                         | DrawingToolType::Ellipse
+                        | DrawingToolType::ArrowMarker
+                        | DrawingToolType::ArrowMarkUp
+                        | DrawingToolType::ArrowMarkDown
+                        | DrawingToolType::ArrowMarkLeft
+                        | DrawingToolType::ArrowMarkRight
                 ))
             {
                 return;
@@ -542,6 +553,51 @@ impl TextTab {
                 ui.end_row();
             }
 
+            if matches!(
+                settings.tool_type,
+                DrawingToolType::FlatTopBottom | DrawingToolType::DisjointChannel
+            ) {
+                // Until the prices have settings of their own, they are drawn in the line colour.
+                let mut style = shown.anchor_price_style_or_default();
+                let opened = style;
+                let shown_prices = &mut settings.line_measurements.price_labels;
+                let label = ui.label(l10n::text(ui.ctx(), "Prices"));
+                ui.horizontal(|ui| {
+                    ui.checkbox(shown_prices, l10n::text(ui.ctx(), "Show prices"))
+                        .labelled_by(label.id);
+                    if *shown_prices {
+                        let [r, g, b, a] = style.color;
+                        let color = egui::Color32::from_rgba_unmultiplied(r, g, b, a);
+                        if let Some(picked) =
+                            color_swatch(ui, background_picker, color, "drawing_props_price_color")
+                        {
+                            style.color =
+                                keep_opacity(picked, color, background_picker.custom_mode)
+                                    .to_srgba_unmultiplied();
+                        }
+                        ui.combo_select(
+                            "price_font_size",
+                            &mut style.font_size,
+                            FONT_SIZES.iter().copied(),
+                            |v| format!("{}px", *v as i32),
+                        );
+                    }
+                });
+                ui.end_row();
+                if *shown_prices {
+                    let label = ui.label(l10n::text(ui.ctx(), "Price style"));
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut style.bold, l10n::text(ui.ctx(), "Bold"))
+                            .labelled_by(label.id);
+                        ui.checkbox(&mut style.italic, l10n::text(ui.ctx(), "Italic"));
+                    });
+                    ui.end_row();
+                }
+                if style != opened {
+                    settings.anchor_price_style = Some(style);
+                }
+            }
+
             if !boxed {
                 return;
             }
@@ -593,9 +649,10 @@ mod tests {
 
     /// Line tools offer the text placement, colour and emphasis they draw, and a vertical line
     /// also offers the orientation of its text. A rectangle, circle or ellipse writes its text at
-    /// its centre, so it offers the colour and emphasis alone. A chart pattern styles its labels:
-    /// colour and emphasis alone, its colour swatch showing the white or black they take until a
-    /// colour is set.
+    /// its centre and an arrow mark or arrow marker beside its arrow, so each offers the colour
+    /// and emphasis alone. The flat top/bottom and disjoint channel also style the prices beside
+    /// their lines. A chart pattern styles its labels: colour and emphasis alone, its colour
+    /// swatch showing the white or black they take until a colour is set.
     #[test]
     fn tools_offer_the_text_settings_they_draw() {
         let chart = crate::Chart::new(crate::model::BarData::default());
@@ -606,6 +663,16 @@ mod tests {
             (DrawingToolType::ExtendedLine, true),
             (DrawingToolType::HorizontalRay, true),
             (DrawingToolType::VerticalLine, true),
+            (DrawingToolType::CrossLine, true),
+            (DrawingToolType::Arrow, true),
+            (DrawingToolType::ParallelChannel, true),
+            (DrawingToolType::FlatTopBottom, true),
+            (DrawingToolType::DisjointChannel, true),
+            (DrawingToolType::ArrowMarker, false),
+            (DrawingToolType::ArrowMarkUp, false),
+            (DrawingToolType::ArrowMarkDown, false),
+            (DrawingToolType::ArrowMarkLeft, false),
+            (DrawingToolType::ArrowMarkRight, false),
             (DrawingToolType::Rect, false),
             (DrawingToolType::Circle, false),
             (DrawingToolType::Ellipse, false),
@@ -641,6 +708,14 @@ mod tests {
             assert_eq!(
                 labels.contains(&"Text orientation"),
                 tool == DrawingToolType::VerticalLine,
+                "{tool:?}"
+            );
+            assert_eq!(
+                labels.contains(&"Prices"),
+                matches!(
+                    tool,
+                    DrawingToolType::FlatTopBottom | DrawingToolType::DisjointChannel
+                ),
                 "{tool:?}"
             );
             output.drop_without_applying_deltas();
@@ -700,5 +775,55 @@ mod tests {
             })
         );
         assert_eq!(settings.font_weight, FontWeight::Normal);
+    }
+
+    /// A flat top/bottom's price rows start from the line colour at 12 points and write the
+    /// prices' own style, leaving the text's bold and italic.
+    #[test]
+    fn channel_price_rows_style_the_prices_alone() {
+        use crate::ui_kit::color_picker::tests::click;
+        let chart = crate::Chart::new(crate::model::BarData::default());
+        let mut drawing = Drawing::new(1, DrawingToolType::FlatTopBottom);
+        drawing.italic = true;
+        drawing.line_measurements.price_labels = true;
+        let mut props = DrawingProps::from_drawing(&drawing, &chart);
+        let ctx = egui::Context::default();
+        let mut pickers: [ColorPickerState; 3] = Default::default();
+        let mut frame = |events| {
+            let input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| TextTab::show(ui, &mut props, &mut pickers));
+            let shapes: Vec<_> = output.shapes.iter().map(|s| s.shape.clone()).collect();
+            output.drop_without_applying_deltas();
+            shapes
+        };
+        frame(vec![]);
+        let shapes = frame(vec![]);
+        // The prices' Bold sits below the text's.
+        let bold = shapes
+            .iter()
+            .rev()
+            .find_map(|shape| match shape {
+                egui::Shape::Text(t) if t.galley.text() == "Bold" => {
+                    Some(t.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .unwrap();
+        frame(click(bold));
+        let settings = &props.tool_settings.as_ref().unwrap().settings;
+        assert_eq!(
+            settings.anchor_price_style,
+            Some(NoteTextStyle {
+                color: [255, 152, 0, 255],
+                font_size: 12.0,
+                bold: true,
+                italic: false,
+            })
+        );
+        assert_eq!(settings.font_weight, FontWeight::Normal);
+        assert!(settings.italic);
     }
 }
