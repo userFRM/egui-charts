@@ -994,20 +994,26 @@ mod tests {
         })
     }
 
-    /// A service tracking "ES", tick 0.25, subscribed at one minute, with a fixed big trade
-    /// threshold of `threshold` unless `None`.
+    /// A service tracking "ES", with a fixed big trade threshold of `threshold` unless `None`.
     struct Host {
         detectors: OrderFlowDetectors,
         inbox: Arc<Inbox>,
         listeners: Vec<Listener>,
+        timeframe: Timeframe,
     }
 
     impl Host {
+        /// Tick 0.25, subscribed at one minute.
         fn new(threshold: Option<f64>) -> Self {
-            let detectors = OrderFlowDetectors::new();
             let mut instrument = Instrument::new("ES").with_volume_decimals(0);
             instrument.tick_size = Some(0.25);
-            detectors.track(&instrument).unwrap();
+            Self::tracking(&instrument, Timeframe::Min1, threshold)
+        }
+
+        /// `instrument`, as "ES", subscribed at `timeframe`.
+        fn tracking(instrument: &Instrument, timeframe: Timeframe, threshold: Option<f64>) -> Self {
+            let detectors = OrderFlowDetectors::new();
+            detectors.track(instrument).unwrap();
             let mut settings = DetectorSettings::default();
             settings.big_trades.enabled = true;
             if let Some(size) = threshold {
@@ -1018,6 +1024,7 @@ mod tests {
                 detectors,
                 inbox: Arc::new(Inbox::default()),
                 listeners: Vec::new(),
+                timeframe,
             };
             host.subscribe();
             host
@@ -1026,7 +1033,7 @@ mod tests {
         fn subscribe(&mut self) {
             let (listener, events) = Listener::new(&self.inbox, 1);
             self.listeners.push(listener);
-            self.detectors.subscribe("ES", Timeframe::Min1, events);
+            self.detectors.subscribe("ES", self.timeframe, events);
         }
 
         /// Pushes `event` and returns the signal events pushed since the last call.
@@ -1756,6 +1763,62 @@ mod tests {
                 "{name}: rebuilt back at one minute after the last sided execution"
             );
         }
+    }
+
+    /// On a daily chart with a session the detectors close the bars of trading dates, as the
+    /// chart's candles and footprint date them: an evening session opens the next date's bar.
+    #[cfg(feature = "timezones")]
+    #[test]
+    fn daily_detector_bars_are_trading_dates() {
+        use crate::model::{Session, SessionWindow};
+        use chrono::{NaiveTime, Weekday::*};
+        let hour = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+        // A date trades from 17:00 the evening before to 16:00 in Chicago, 23:00 to 22:00 UTC.
+        let futures = Instrument::new("ES")
+            .with_volume_decimals(0)
+            .with_tick_size(0.25)
+            .with_time_zone(TimezoneId::named("America/Chicago").unwrap())
+            .with_session(Session::new([SessionWindow::new(
+                [Mon, Tue, Wed, Thu, Fri],
+                hour(17),
+                hour(16),
+            )]));
+        let trade = |time: &str, price, size, side| {
+            MarketEvent::Trade(Tick::new(time.parse().unwrap(), price, size, side))
+        };
+        let host = Host::tracking(&futures, Timeframe::Day1, None);
+        let mut settings = host.detectors.settings();
+        settings.stop_sweeps.enabled = true;
+        host.detectors.set_settings(settings);
+        let mut events = Vec::new();
+        // A buy of 20 on every weekday from 1 to 16 January 2024, the baseline volume.
+        for day in [1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 15, 16] {
+            let time = format!("2024-01-{day:02}T14:00:00Z");
+            events.extend(host.push(trade(&time, 100.0, 20.0, Some(OrderSide::Buy))));
+        }
+        // The qualifying sweep of the test above, from 17:10 on Tuesday 16 January: Wednesday's
+        // date.
+        for (minute, price, size, side) in [
+            (10, 100.0, 1.0, OrderSide::Sell),
+            (11, 100.25, 1.0, OrderSide::Sell),
+            (12, 100.5, 1.0, OrderSide::Sell),
+            (13, 100.25, 10.0, OrderSide::Buy),
+            (14, 100.5, 10.0, OrderSide::Buy),
+            (15, 100.75, 10.0, OrderSide::Buy),
+            (16, 100.75, 0.1, OrderSide::Buy),
+        ] {
+            let time = format!("2024-01-16T23:{minute}:00Z");
+            events.extend(host.push(trade(&time, price, size, Some(side))));
+        }
+        // Feed time at 17:05 on Wednesday trades Thursday's date and closes Wednesday's bar.
+        let at = "2024-01-17T23:05:00Z";
+        host.detectors
+            .push("ES", at.parse().unwrap(), &trade(at, 100.75, 1.0, None));
+        events.extend(host.events());
+        let sweeps: Vec<_> = (of_kind(events, "Stop sweeps").into_iter())
+            .map(|signal| signal.id.0)
+            .collect();
+        assert_eq!(sweeps, ["stop-sweep-1705449600000"]);
     }
     fn depth_book(bids: &[(f64, f64)], asks: &[(f64, f64)]) -> OrderBook {
         let levels = |rows: &[(f64, f64)]| {
