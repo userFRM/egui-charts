@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 /// Narrowest span from the plot's left edge to the chart's right edge that shows the field
 /// selectors in the header. The title controls need 8 points of status line inset, 116 of their
 /// own and 228 from the chart's right edge to the end of the first row; a narrower chart leaves
-/// the selectors to its corner menu.
+/// the selectors to its corner menu and shows its group markers alone.
 const LINK_CONTROLS_MIN_WIDTH: f32 = 352.0;
 /// Distance of the selectors from the chart's right edge, which ends the status line's first row.
 pub(super) const LINK_CONTROLS_INSET: f32 = 220.0;
@@ -1541,6 +1541,29 @@ impl ChartLayout {
         changed
     }
 
+    /// Paints the symbol and interval group markers of a slot too narrow for the selectors,
+    /// without captions, in a row that ends at `end`. A field outside a group paints none.
+    fn paint_link_markers(&self, ui: &Ui, index: usize, end: egui::Pos2) {
+        let groups = &self.links.groups[index];
+        for (field, offset) in [(&groups.symbol, 27.0), (&groups.interval, 9.0)] {
+            let ChartLink::Group(name) = field else {
+                continue;
+            };
+            let rect = Rect::from_center_size(end - Vec2::new(offset, 0.0), Vec2::splat(14.0));
+            if LINK_MARKERS.iter().any(|(emoji, _)| emoji == name) {
+                paint_link_marker(ui, rect, name);
+            } else {
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    name.chars().take(2).collect::<String>(),
+                    egui::FontId::proportional(11.0),
+                    ui.visuals().text_color(),
+                );
+            }
+        }
+    }
+
     fn linked(&self, a: usize, b: usize, interval: bool) -> bool {
         let groups = &self.links.groups;
         let field = |index: usize| {
@@ -1888,6 +1911,21 @@ impl ChartLayout {
                                     self.link_controls(ui, index, true);
                                 });
                             },
+                        );
+                    } else if total > 1 {
+                        // The markers alone end the first row, past the status line, which stops
+                        // 48 points short of the plot's right edge and 100 short of the slot's,
+                        // and before the corner menu button.
+                        let plot = charts[index].last_rendered_price_rect;
+                        let right = if plot.is_positive() {
+                            plot.right()
+                        } else {
+                            rect.right()
+                        };
+                        self.paint_link_markers(
+                            ui,
+                            index,
+                            egui::pos2(right.min(rect.right() - 24.0), rect.top() + 13.0),
                         );
                     }
                     if self.corner_menu == Some(index)
@@ -5586,5 +5624,103 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Four charts in two by two 320 point slots, too narrow for the selectors. Each grouped
+    /// chart, active or not, paints the markers of its groups past its status line and axis
+    /// labels, and an ungrouped chart paints none.
+    #[test]
+    fn narrow_slots_show_their_group_markers() {
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::Four,
+            ..Default::default()
+        };
+        let symbol = ChartLink::Group("🔶".into());
+        let interval = ChartLink::Group("💧".into());
+        layout.set_link_groups(
+            0,
+            ChartLinkGroups {
+                symbol: symbol.clone(),
+                interval: interval.clone(),
+            },
+            true,
+        );
+        layout.set_link_groups(
+            1,
+            ChartLinkGroups {
+                interval,
+                ..Default::default()
+            },
+            true,
+        );
+        layout.set_link_groups(
+            2,
+            ChartLinkGroups {
+                symbol,
+                interval: ChartLink::Unlinked,
+            },
+            true,
+        );
+        let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+        let size = vec2(640.0, 600.0);
+        let slots = layout.rects(Rect::from_min_size(Pos2::ZERO, size), 4);
+        let colors = [LINK_MARKERS[0].1, LINK_MARKERS[2].1];
+        let mut markers = vec![Vec::new(); 4];
+        for frame in 0..3 {
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                    time: Some(frame as f64 * 0.1),
+                    ..Default::default()
+                },
+                |ui| {
+                    layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                },
+            );
+            markers = vec![Vec::new(); 4];
+            let mut texts = Vec::new();
+            for shape in &output.shapes {
+                match &shape.shape {
+                    egui::Shape::Path(path) if colors.contains(&path.fill) => {
+                        let rect = path.visual_bounding_rect();
+                        let slot = slots.iter().position(|slot| slot.contains_rect(rect));
+                        markers[slot.expect("a marker inside a slot")].push((path.fill, rect));
+                    }
+                    egui::Shape::Text(text) => texts.push(
+                        text.galley
+                            .rect
+                            .translate(text.pos.to_vec2())
+                            .intersect(shape.clip_rect),
+                    ),
+                    _ => {}
+                }
+            }
+            output.drop_without_applying_deltas();
+            for (marker, text) in markers.iter().flatten().flat_map(|marker| {
+                texts
+                    .iter()
+                    .filter(|text| text.is_positive())
+                    .map(move |text| (marker, text))
+            }) {
+                assert!(
+                    !marker.1.intersects(*text),
+                    "frame {frame}: marker {marker:?} covers text at {text:?}"
+                );
+            }
+        }
+        let fills: Vec<Vec<_>> = markers
+            .iter()
+            .map(|slot| slot.iter().map(|(fill, _)| *fill).collect())
+            .collect();
+        assert_eq!(
+            fills,
+            [
+                vec![colors[0], colors[1]],
+                vec![colors[1]],
+                vec![colors[0]],
+                vec![]
+            ]
+        );
     }
 }
