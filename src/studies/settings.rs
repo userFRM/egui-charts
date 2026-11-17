@@ -132,15 +132,31 @@ pub struct FillStyle {
     pub inverted_color: Option<Color32>,
     /// Whether the band is drawn.
     pub visible: bool,
+    /// Whether `visible` alone decides that the band is drawn. Styles saved by earlier releases
+    /// lack it: their band was also hidden with a boundary plot, which applying them carries over
+    /// to `visible`.
+    #[serde(default)]
+    pub(super) independent: bool,
 }
 
 impl FillStyle {
     /// A visible band with the same colour on either side of a crossing.
+    ///
+    /// ```
+    /// use ecolor::Color32;
+    /// use egui_charts::studies::FillStyle;
+    ///
+    /// let mut band = FillStyle::new(Color32::from_rgba_unmultiplied(33, 150, 243, 13));
+    /// band.inverted_color = Some(Color32::from_rgba_unmultiplied(242, 54, 69, 13));
+    /// band.visible = false;
+    /// assert_eq!(band.color, Color32::from_rgba_unmultiplied(33, 150, 243, 13));
+    /// ```
     pub fn new(color: Color32) -> Self {
         Self {
             color,
             inverted_color: None,
             visible: true,
+            independent: true,
         }
     }
 }
@@ -220,7 +236,9 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
         let mut zero = levels[0];
         zero.visible = false;
         settings.levels.push(zero);
-    } else if settings.levels.len() != levels.len() {
+    } else if settings.levels.len() != levels.len()
+        && former_guides(study, settings.levels.len()).is_none()
+    {
         settings.levels = levels;
         settings.fill_between_levels = fill;
         settings.level_fill_color = color;
@@ -255,10 +273,43 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
     settings
         .fills
         .extend(fills[saved..].iter().map(|fill| FillStyle {
-            color: fill.color,
             inverted_color: fill.inverted_color,
-            visible: true,
+            ..FillStyle::new(fill.color)
         }));
+}
+
+/// Guides as [`StudyPane::levels`](super::StudyPane::levels) declares them.
+type Guides = Vec<(f64, Color32, &'static str)>;
+
+/// The guides a built-in study declared before it opened with fewer, and the levels its band
+/// filled between, for settings saved with that many levels. A host study under the same name,
+/// which declares other guides, keeps its own.
+fn former_guides(study: &dyn Indicator, saved: usize) -> Option<(Guides, Option<[usize; 2]>)> {
+    use super::palette::{GRAY, MUTED};
+    // The guides each built-in study declares now, written out because the built-in studies are
+    // compiled only with the `studies` feature.
+    let (current, former, fill) = match (study.name(), saved) {
+        ("Connors RSI", 3) => (
+            vec![(70.0, MUTED, "Upper guide"), (30.0, MUTED, "Lower guide")],
+            vec![
+                (70.0, MUTED, "Upper guide"),
+                (50.0, MUTED.gamma_multiply_u8(128), "Middle guide"),
+                (30.0, MUTED, "Lower guide"),
+            ],
+            Some([0, 2]),
+        ),
+        ("Correlation Coefficient", 3) => (
+            vec![(0.0, GRAY.gamma_multiply_u8(128), "Zero")],
+            vec![
+                (1.0, GRAY, "Upper guide"),
+                (-1.0, GRAY, "Lower guide"),
+                (0.0, GRAY.gamma_multiply_u8(128), "Zero"),
+            ],
+            None,
+        ),
+        _ => return None,
+    };
+    (study.pane().levels == current).then_some((former, fill))
 }
 
 /// Interval visibility evaluated for every interval, including custom and trade-based ones.
@@ -332,7 +383,9 @@ pub struct StudySettings {
     /// [`StudyPane::levels`](super::StudyPane::levels). Settings saved before levels were
     /// editable, and settings with another number of levels, take the study's own levels and fill.
     /// Only the guide declared since is added, hidden, to a Stochastic saved with two levels or a
-    /// Know Sure Thing, Chaikin Money Flow or Force Index saved with none.
+    /// Know Sure Thing, Chaikin Money Flow or Force Index saved with none. A Connors RSI or a
+    /// Correlation Coefficient with three levels keeps the guides it opened with before: 70, 50
+    /// and 30 with the band between 70 and 30, or 1, -1 and 0.
     #[serde(default)]
     pub levels: Vec<LevelStyle>,
     /// Whether the band between the boundary levels is filled.
@@ -364,11 +417,14 @@ pub struct StudySettings {
     pub background_visible: bool,
     /// One independent style per band returned by [`Indicator::fills`].
     /// Missing styles take the study's declared colours and visibility. Styles of bands the study
-    /// does not declare yet are kept for when it does.
+    /// does not declare yet are kept for when it does. A style saved before bands were drawn
+    /// whatever the visibility of their boundary plots restores hidden while one of those plots
+    /// is hidden, as it was drawn then.
     #[serde(default)]
     pub fills: Vec<FillStyle>,
     /// Independent styles for [`Indicator::gradients`], in declaration order.
-    /// Older settings inherit the study's declared ramps.
+    /// Missing styles take the study's declared ramps, shown. A saved study template of an SMI
+    /// from before it declared its shading restores the ramps hidden.
     #[serde(default)]
     pub gradients: Vec<GradientStyle>,
 }
@@ -589,6 +645,16 @@ impl ConfiguredStudy {
             aligned_zones: self.aligned_zones.clone(),
             kept: self.kept.clone(),
         }
+    }
+
+    /// The study's pane, with the guides it declared before it opened with fewer when the
+    /// settings hold that many levels.
+    fn declared_pane(&self) -> super::StudyPane {
+        let mut pane = self.study.pane();
+        if let Some((levels, _)) = former_guides(self.study.as_ref(), self.settings.levels.len()) {
+            pane.levels = levels;
+        }
+        pane
     }
 
     /// Retain the study's current colours, widths and calculation parameters.
@@ -1453,6 +1519,25 @@ impl Indicator for ConfiguredStudy {
         if bands > 0 && bands < self.study.fills().len() {
             settings.fills.truncate(bands);
         }
+        // A band saved before its style alone decided whether it is drawn was not drawn while
+        // a boundary plot was hidden, so it keeps that look with its own switch off.
+        let declared = edited.study.fills();
+        let hidden = |boundary| match boundary {
+            super::FillBoundary::Plot(line) => {
+                settings.plots.get(line).is_some_and(|plot| !plot.visible)
+            }
+            super::FillBoundary::Level(_) => false,
+        };
+        for (band, style) in settings.fills.iter_mut().enumerate() {
+            if !style.independent
+                && declared
+                    .get(band)
+                    .is_some_and(|fill| hidden(fill.first) || hidden(fill.second))
+            {
+                style.visible = false;
+            }
+            style.independent = true;
+        }
         match_declared_styles(edited.study.as_ref(), &mut settings);
         if self.study.value_format() != edited.study.value_format() {
             self.formatter = None;
@@ -1634,8 +1719,7 @@ impl Indicator for ConfiguredStudy {
     }
     fn level_style(&self, value: f64) -> LineStyle {
         // Levels moved onto one value draw with the pattern of the first visible one.
-        self.study
-            .pane()
+        self.declared_pane()
             .levels
             .iter()
             .zip(&self.settings.levels)
@@ -1645,7 +1729,8 @@ impl Indicator for ConfiguredStudy {
             .map_or_else(|| self.study.level_style(value), |(_, style)| style.pattern)
     }
     fn level_fill_indices(&self) -> Option<[usize; 2]> {
-        self.study.level_fill_indices()
+        former_guides(self.study.as_ref(), self.settings.levels.len())
+            .map_or_else(|| self.study.level_fill_indices(), |(_, fill)| fill)
     }
     fn level_price_line(&self, index: usize) -> Option<Color32> {
         self.settings
@@ -1661,7 +1746,7 @@ impl Indicator for ConfiguredStudy {
             .filter(|style| {
                 style
                     .value
-                    .or_else(|| self.study.pane().levels.get(index).map(|level| level.0))
+                    .or_else(|| self.declared_pane().levels.get(index).map(|level| level.0))
                     == Some(value)
             })
             .map_or_else(
@@ -1673,8 +1758,7 @@ impl Indicator for ConfiguredStudy {
         self.settings.level_fill_color
     }
     fn level_width(&self, value: f64) -> f32 {
-        self.study
-            .pane()
+        self.declared_pane()
             .levels
             .iter()
             .zip(&self.settings.levels)
@@ -1684,7 +1768,7 @@ impl Indicator for ConfiguredStudy {
             .map_or_else(|| self.study.level_width(value), |(_, style)| style.width)
     }
     fn pane(&self) -> super::StudyPane {
-        let mut pane = self.study.pane();
+        let mut pane = self.declared_pane();
         for ((value, color, _), style) in pane.levels.iter_mut().zip(&self.settings.levels) {
             *value = style.value.unwrap_or(*value);
             // A hidden level still bounds the fill; its transparent line is not drawn.
