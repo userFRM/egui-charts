@@ -339,14 +339,17 @@ impl Drawing {
     }
 
     /// Paints a vertical line that reaches this pane from another: the line alone, as its text,
-    /// ends and handle stay in its own pane.
+    /// ends and handle stay in its own pane. It takes the colours of its own pane, with the
+    /// shade [`Drawing::theme_shaded`] gives.
     pub(crate) fn render_line_from_other_pane(&self, painter: &egui::Painter, rect: Rect) {
         if let Some(point) = self.points.first() {
             let (top, bottom) = (
                 Pos2::new(point.x, rect.min.y),
                 Pos2::new(point.x, rect.max.y),
             );
-            self.styled_segment(painter, top, bottom, self.stroke());
+            let shaded = self.theme_shaded(painter.ctx());
+            let stroke = shaded.as_ref().unwrap_or(self).stroke();
+            self.styled_segment(painter, top, bottom, stroke);
         }
     }
 
