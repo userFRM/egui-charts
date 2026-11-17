@@ -173,12 +173,11 @@ pub(super) fn begin_shape_edit(ui: &Ui, manager: &mut DrawingManager, response: 
     else {
         return;
     };
-    // The same handle test as the drag in `handle_selection`, which starts it for one selection.
+    // The same handle test as the drag in `handle_selection`.
     let origin = ui
         .data(|data| data.get_temp::<egui::Pos2>(press_key))
         .unwrap_or(pos);
-    let one = manager.selected_ids().count() == 1;
-    if one && manager.hit_test_handle_by_id(origin, id).is_some() {
+    if manager.hit_test_handle_by_id(origin, id).is_some() {
         return;
     }
     ui.data_mut(|data| data.insert_temp(key, (id, pos, now + delay)));
@@ -639,7 +638,8 @@ mod tests {
     /// text field on a still click there, once the double-click delay has passed. A double click,
     /// whether or not it begins by selecting the shape, reports the double click and leaves the
     /// field closed, and a locked shape has no field. A circle's centre handle, where its text is
-    /// painted, opens no field and still starts a move after a click on it. A draft that starts
+    /// painted, opens no field, also with other drawings selected, and still starts a move after a
+    /// click on it. A draft that starts
     /// blank keeps its field, cancels without history, and confirms as one undoable edit that a
     /// saved file restores.
     #[test]
@@ -806,6 +806,17 @@ mod tests {
                         step(&mut chart, vec![]);
                     }
                     assert!(chart.drawings().is_selected(id), "{initial:?}");
+                    if initial.is_some() {
+                        // The same holds with another drawing selected too.
+                        let mut other = Drawing::new(id + 100, DrawingToolType::TrendLine);
+                        other.completed = true;
+                        other.chart_points =
+                            vec![ChartPoint::new(1.0, 11.0), ChartPoint::new(3.0, 11.0)];
+                        chart.drawings_mut().drawings.push(other);
+                        chart.drawings_mut().select_drawings([id, id + 100]);
+                        step(&mut chart, vec![]);
+                        assert_eq!(chart.drawings().selected_ids().count(), 2, "{initial:?}");
+                    }
                     for pressed in [true, false] {
                         step(&mut chart, vec![button(handle, pressed)]);
                     }

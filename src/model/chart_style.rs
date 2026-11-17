@@ -593,7 +593,7 @@ impl Default for KagiStyle {
 /// ```
 /// use egui_charts::model::{
 ///     CandlesStyle, ChartTypeStyles, ColumnsStyle, HeikinStyle, HighLowStyle, HlcAreaStyle,
-///     HollowStyle, KagiStyle, VolumeCandlesStyle,
+///     HollowStyle, KagiStyle, PriceSource, VolumeCandlesStyle,
 /// };
 ///
 /// let mut styles = ChartTypeStyles::default();
@@ -619,6 +619,7 @@ impl Default for KagiStyle {
 /// kagi.thick_width = 3.0;
 /// styles.kagi = kagi;
 /// styles.columns = ColumnsStyle::default();
+/// styles.step_line_price_source = Some(PriceSource::High);
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -636,6 +637,18 @@ pub struct ChartTypeStyles {
     pub area: AreaStyle,
     /// Baseline chart.
     pub baseline: BaselineStyle,
+    /// Price the Line chart draws. `None`, as in documents saved before each line-based chart
+    /// type had a source of its own, draws `ChartConfig::price_source`.
+    pub line_price_source: Option<PriceSource>,
+    /// Price the Step line chart draws; `None` draws `ChartConfig::price_source`.
+    pub step_line_price_source: Option<PriceSource>,
+    /// Price the Line with markers chart draws; `None` draws `ChartConfig::price_source`.
+    pub line_with_markers_price_source: Option<PriceSource>,
+    /// Price the Area chart draws; `None` draws `ChartConfig::price_source`.
+    pub area_price_source: Option<PriceSource>,
+    /// Price the Baseline chart draws on both sides of its base; `None` draws
+    /// `ChartConfig::price_source`.
+    pub baseline_price_source: Option<PriceSource>,
     /// HLC area chart. Documents saved with its former `fill_opacity` and `line_width` restore as
     /// they were drawn.
     #[serde(deserialize_with = "read_hlc_area")]
@@ -686,6 +699,11 @@ impl Default for ChartTypeStyles {
             marker_radius: 3.0,
             area: AreaStyle::default(),
             baseline: BaselineStyle::default(),
+            line_price_source: None,
+            step_line_price_source: None,
+            line_with_markers_price_source: None,
+            area_price_source: None,
+            baseline_price_source: None,
             hlc_area: HlcAreaStyle::default(),
             candles: CandlesStyle::default(),
             hollow: HollowStyle::default(),
@@ -705,6 +723,51 @@ impl Default for ChartTypeStyles {
 }
 
 impl ChartTypeStyles {
+    /// The price `chart_type` draws: a Line, Step line, Line with markers, Area or Baseline
+    /// chart its own source, or `shared` while that is `None`; any other chart type `shared`.
+    #[cfg(feature = "widget")]
+    pub(crate) fn line_source(
+        &self,
+        chart_type: super::ChartType,
+        shared: PriceSource,
+    ) -> PriceSource {
+        use super::ChartType as Kind;
+        match chart_type {
+            Kind::Line => self.line_price_source,
+            Kind::StepLine => self.step_line_price_source,
+            Kind::LineWithMarkers => self.line_with_markers_price_source,
+            Kind::Area => self.area_price_source,
+            Kind::Baseline => self.baseline_price_source,
+            _ => None,
+        }
+        .unwrap_or(shared)
+    }
+
+    /// Makes the Line, Step line, Line with markers, Area or Baseline `chart_type` draw `source`,
+    /// `shared` being what it draws without a source of its own. A type that already draws
+    /// `source` is left as it is, and so is any other chart type.
+    #[cfg(feature = "widget")]
+    pub(crate) fn set_line_source(
+        &mut self,
+        chart_type: super::ChartType,
+        source: PriceSource,
+        shared: PriceSource,
+    ) {
+        use super::ChartType as Kind;
+        if self.line_source(chart_type, shared) == source {
+            return;
+        }
+        let own = match chart_type {
+            Kind::Line => &mut self.line_price_source,
+            Kind::StepLine => &mut self.step_line_price_source,
+            Kind::LineWithMarkers => &mut self.line_with_markers_price_source,
+            Kind::Area => &mut self.area_price_source,
+            Kind::Baseline => &mut self.baseline_price_source,
+            _ => return,
+        };
+        *own = Some(source);
+    }
+
     /// The styles of a document saved before chart types had styles of their own.
     pub(super) fn saved_without_styles() -> Self {
         Self {
