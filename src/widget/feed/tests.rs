@@ -9,6 +9,9 @@ use crate::widget::ChartBuilder;
 use chrono::{DateTime, TimeDelta, Utc};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[path = "rebinding_tests.rs"]
+mod rebinding;
+
 #[derive(Debug, Clone, PartialEq)]
 enum Call {
     Resolve(String),
@@ -35,6 +38,8 @@ struct Script {
     /// `unsubscribe` drops the replies it keeps.
     drop_replies: AtomicBool,
     capabilities: Mutex<Vec<Reply<FeedCapabilities>>>,
+    targets: Mutex<Vec<Reply<crate::data::PriceTargets>>>,
+    teardown_push: Mutex<Option<Sink>>,
 }
 
 impl Script {
@@ -87,6 +92,9 @@ impl Datafeed for Script {
     }
     fn unsubscribe(&self, id: SubscriptionId) {
         self.calls.lock().unwrap().push(Call::Unsubscribe(id));
+        if let Some(sink) = self.teardown_push.lock().unwrap().as_ref() {
+            sink.push_tick(Tick::new(bars(1)[0].time, 999.0, 999.0, None));
+        }
         if self.drop_replies.load(Ordering::Relaxed) {
             self.resolves.lock().unwrap().clear();
             self.pages.lock().unwrap().clear();
@@ -112,6 +120,9 @@ impl Datafeed for Script {
     }
     fn request_depth_snapshot(&self, id: SubscriptionId) {
         self.calls.lock().unwrap().push(Call::Snapshot(id));
+    }
+    fn price_targets(&self, _: &str, reply: Reply<crate::data::PriceTargets>) {
+        self.targets.lock().unwrap().push(reply);
     }
 }
 
@@ -3627,19 +3638,21 @@ fn footprint_turned_on_later_leaves_out_a_paged_execution_the_sink_dropped() {
 /// stream buys twice at 00:00:00 and once at 00:00:01, and the store of three drops the sell at
 /// 23:59:59 for the last buy. In the second the page also holds a sell at 23:59:58, for which the
 /// store of three has no room. The sink's bars are the two buys at 00:00:00 and the buy at
-/// 00:00:01, without the sells, so the page's executions give the first bar no cells, after the
-/// footprint is turned on and after it is turned off and on. In the third row the page holds
-/// copies of the buys at 00:00:00 to 00:00:03, the stream buys once a second from 00:00:00 to
-/// 00:00:05, and the store of four drops the page's buys at 00:00:00 and 00:00:01 for the last
-/// two: past the stream's first instant, the page's copies at 00:00:02 and 00:00:03 fill the
-/// 00:00:02 bar, bid 0 and ask 2. In the last two rows, on 50000t, the stream buys once a second
-/// from 00:00:00, the page holds copies of its buys at 0 s to 99,999 s and the store holds both,
-/// but the sink holds 100,000 executions between frames. In the fourth row the page is answered
-/// in the drain that streams 100,001 buys, and the sink drops the buy at 0 s. In the fifth the
-/// page's drain streams the buy at 0 s, which the store keeps apart, and the next one streams
-/// 100,001 buys from 1 s, of which the sink drops the buy at 1 s. Either way the stream sent
-/// every execution after the one dropped, so the page's copies fill the 50,000 s bar, bid 0 and
-/// ask 50,000.
+/// 00:00:01, without the sells. The loss is older than both, so the footprint shows them as the
+/// stream sent them, bid 0 and ask 2 from the two buys the store kept apart, then bid 0 and ask 1,
+/// never with a sell, after it is turned on and after it is turned off and on. In the third row
+/// the page holds copies of the buys at 00:00:00 to 00:00:03, the stream buys once a second from
+/// 00:00:00 to 00:00:05, and the store of four drops the page's buys at 00:00:00 and 00:00:01 for
+/// the last two: the 00:00:00 bar lost them and draws a candle, while the copies at 00:00:02 and
+/// 00:00:03 and the buys at 00:00:04 and 00:00:05 fill their bars, each bid 0 and ask 2. In the
+/// last two rows, on 50000t, the stream buys once a second from 00:00:00, the page holds copies
+/// of its buys at 0 s to 99,999 s and the store holds both, but the sink holds 100,000 executions
+/// between frames. In the fourth row the page is answered in the drain that streams 100,001 buys,
+/// and the sink drops the buy at 0 s. In the fifth the page's drain streams the buy at 0 s, which
+/// the store keeps apart, and the next one streams 100,001 buys from 1 s, of which the sink drops
+/// the buy at 1 s. Either way the stream sent every execution after the one dropped, so the
+/// page's copies fill the 50,000 s bar, bid 0 and ask 50,000, and the forming 100,000 s bar
+/// shows the buy at 100,000 s, ask 1, or those at 100,000 s and 100,001 s, ask 2.
 #[test]
 fn footprint_after_store_loss_does_not_fill_the_first_bar_from_the_page() {
     use crate::model::OrderSide::{Buy, Sell};
@@ -3669,7 +3682,7 @@ fn footprint_after_store_loss_does_not_fill_the_first_bar_from_the_page() {
             vec![vec![0, 0, 1]],
             -1,
             &[0, 1],
-            &[None, None],
+            &[Some((0.0, 2.0)), Some((0.0, 1.0))],
         ),
         (
             "the page is larger than the store",
@@ -3679,7 +3692,7 @@ fn footprint_after_store_loss_does_not_fill_the_first_bar_from_the_page() {
             vec![vec![0, 0, 1]],
             -1,
             &[0, 1],
-            &[None, None],
+            &[Some((0.0, 2.0)), Some((0.0, 1.0))],
         ),
         (
             "the loss reaches the stream's first instant",
@@ -3689,7 +3702,7 @@ fn footprint_after_store_loss_does_not_fill_the_first_bar_from_the_page() {
             vec![vec![0, 1, 2, 3, 4, 5]],
             1,
             &[0, 2, 4],
-            &[None, Some((0.0, 2.0)), None],
+            &[None, Some((0.0, 2.0)), Some((0.0, 2.0))],
         ),
         (
             "the sink drops executions in the page's drain",
@@ -3699,7 +3712,7 @@ fn footprint_after_store_loss_does_not_fill_the_first_bar_from_the_page() {
             vec![(0..=100_000).collect()],
             0,
             &[0, 50_000, 100_000],
-            &[None, Some((0.0, 50_000.0)), None],
+            &[None, Some((0.0, 50_000.0)), Some((0.0, 1.0))],
         ),
         (
             "the sink drops executions after the store kept some apart",
@@ -3709,7 +3722,7 @@ fn footprint_after_store_loss_does_not_fill_the_first_bar_from_the_page() {
             vec![vec![0], (1..=100_001).collect()],
             1,
             &[0, 50_000, 100_000],
-            &[None, Some((0.0, 50_000.0)), None],
+            &[None, Some((0.0, 50_000.0)), Some((0.0, 2.0))],
         ),
     ];
     for (label, interval, capacity, paged, streamed, lost, opens, cells) in rows {

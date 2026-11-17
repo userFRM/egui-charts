@@ -598,9 +598,10 @@ impl Chart {
         ui: &egui::Ui,
         painter: &egui::Painter,
         widget: Rect,
-        rect: Rect,
+        coords: &crate::chart::rendering::ChartMapping,
         colors: &StyleColors,
     ) -> f32 {
+        let rect = coords.rect;
         let study_axis = crate::config::PriceAxisOptions {
             show_study_values: self.config.price_axis.show_study_values,
             ..self.config.price_axis
@@ -655,6 +656,16 @@ impl Chart {
             let map = self.series_map(item, rect);
             let label_rect = super::axis_label_rect(rect, axis);
             let ctx = RenderContext::new(&clipped, label_rect);
+            // As on the main axis: drawing behind the labels, automatic tags after the series'
+            // own and before the studies', pinned tags above every other tag.
+            let primitives: Vec<_> = self.axis_primitives(coords, key).collect();
+            let column = Rect::from_x_y_ranges(axis.x_range(), rect.y_range());
+            let column_painter = painter.with_clip_rect(painter.clip_rect().intersect(column));
+            for (primitive, view) in &primitives {
+                primitive
+                    .get()
+                    .draw_price_axis(&column_painter, column, view);
+            }
             let slot = clipped.add(egui::Shape::Noop);
             let mut tags = Vec::new();
             for (value, colors, mapping, label) in self.secondary_axis_values(key, rect) {
@@ -669,6 +680,25 @@ impl Chart {
                     self.config.price_axis.allow_label_overlap,
                 ));
             }
+            let (fixed, automatic): (Vec<_>, Vec<_>) = primitives
+                .iter()
+                .flat_map(|(primitive, view)| {
+                    let map = view.mapping.price;
+                    primitive
+                        .get()
+                        .price_axis_labels(view)
+                        .into_iter()
+                        .map(move |label| (label, map))
+                })
+                .partition(|(label, _)| label.fixed_coordinate.is_some());
+            crate::chart::rendering::axes::render_primitive_price_labels(
+                &clipped,
+                label_rect,
+                axis.right(),
+                automatic,
+                &mut tags,
+                self.config.price_axis.allow_label_overlap,
+            );
             if study_axis.show_study_values {
                 let last_in_view =
                     crate::chart::rendering::axes::last_bar_in_view(&self.get_chart_mapping());
@@ -691,6 +721,14 @@ impl Chart {
                     );
                 }
             }
+            crate::chart::rendering::axes::render_primitive_price_labels(
+                &clipped,
+                label_rect,
+                axis.right(),
+                fixed,
+                &mut tags,
+                self.config.price_axis.allow_label_overlap,
+            );
             let formatter = self.series_label_formatter(item.id, map.transform().mode);
             crate::chart::rendering::render_price_labels_at_pos(
                 &ctx,
