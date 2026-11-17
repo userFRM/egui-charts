@@ -374,8 +374,8 @@ impl DrawingStorage {
     /// Current storage format version. Version 10 draws a price label without a border colour
     /// with a border in its own colour; those saved before that change load with the border off,
     /// as drawn. It also reads a long or short position's target and stop colour alpha as the
-    /// opacity of its zone; those saved earlier without a position style load at the 20% their
-    /// zones were drawn at on a dark theme. Version 9 draws a callout's border at its stored width; those saved before that
+    /// opacity of its zone; earlier versions load at the 20% their zones were drawn at on a dark
+    /// theme. Version 9 draws a callout's border at its stored width; those saved before that
     /// change load with the 1 px border they were drawn with. Version 8
     /// extends a trend line past the anchor its Left or Right names; those saved before that
     /// change load with the reach they were drawn with.
@@ -578,7 +578,6 @@ impl DrawingStorage {
                 let has_price_labels = value
                     .pointer("/drawing/line_measurements/price_labels")
                     .is_some();
-                let has_position_style = value.pointer("/drawing/position_style").is_some();
                 load(value)
                     .and_then(|mut drawing| {
                         // Before the id check, so that a skipped drawing does not claim its id.
@@ -679,13 +678,9 @@ impl DrawingStorage {
                             // colour, which now follows the label's colour.
                             drawing.drawing.border = false;
                         }
-                        if version < 10
-                            && matches!(tool, T::LongPos | T::ShortPos)
-                            && !has_position_style
-                        {
+                        if version < 10 && matches!(tool, T::LongPos | T::ShortPos) {
                             // Earlier renderers filled each zone with its colour at 20% on a dark
-                            // theme; the alpha now is the zone's opacity. Builds that wrote the
-                            // position style already read it so.
+                            // theme; the alpha now is the zone's opacity.
                             let settings = &mut drawing.drawing;
                             for color in [
                                 &mut settings.position_target_color,
@@ -2650,19 +2645,14 @@ mod tests {
 
     /// Before version 10 a position filled its zones with the target and stop colours at 20% on a
     /// dark theme, and a palette pick saved alpha 255: such a zone loads at alpha 51, and 128 at
-    /// 25.6, rounded to 26, also once saved again. Version 10 alphas, and version 9 ones saved
-    /// with a position style, which came with zone opacity, are the zone opacity.
+    /// 25.6, rounded to 26, also once saved again. Version 10 alphas are the zone opacity.
     #[test]
     fn position_colours_saved_before_zone_opacity_keep_their_zones() {
-        let styled: serde_json::Value =
-            serde_json::from_str(include_str!("fixtures/storage_v9_price_label_note.json"))
-                .unwrap();
-        for (version, tool, style, saved, want) in [
-            (9, DrawingToolType::LongPos, false, [255, 255], [51, 51]),
-            (9, DrawingToolType::ShortPos, false, [255, 255], [51, 51]),
-            (3, DrawingToolType::ShortPos, false, [255, 128], [51, 26]),
-            (9, DrawingToolType::LongPos, true, [255, 128], [255, 128]),
-            (10, DrawingToolType::LongPos, false, [255, 128], [255, 128]),
+        for (version, tool, saved, want) in [
+            (9, DrawingToolType::LongPos, [255, 255], [51, 51]),
+            (9, DrawingToolType::ShortPos, [255, 255], [51, 51]),
+            (3, DrawingToolType::ShortPos, [255, 128], [51, 26]),
+            (10, DrawingToolType::LongPos, [255, 128], [255, 128]),
         ] {
             let mut file: serde_json::Value =
                 serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
@@ -2675,10 +2665,6 @@ mod tests {
             settings["tool_type"] = serde_json::to_value(tool).unwrap();
             settings["position_target_color"] = serde_json::json!([40, 100, 220, saved[0]]);
             settings["position_stop_color"] = serde_json::json!([220, 140, 40, saved[1]]);
-            if style {
-                settings["position_style"] =
-                    styled["drawings"][0]["drawing"]["position_style"].clone();
-            }
             let (loaded, skipped) = DrawingStorage::from_json(&file.to_string()).unwrap();
             assert!(skipped.is_empty(), "{tool:?} v{version}: {skipped:?}");
             let (again, _) = DrawingStorage::from_json(&loaded.to_json().unwrap()).unwrap();
@@ -2687,7 +2673,7 @@ mod tests {
                 assert_eq!(
                     (drawing.position_target_color, drawing.position_stop_color),
                     (Some([40, 100, 220, want[0]]), Some([220, 140, 40, want[1]])),
-                    "{tool:?} v{version} {style}"
+                    "{tool:?} v{version}"
                 );
             }
         }
