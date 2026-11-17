@@ -232,11 +232,12 @@ impl Chart {
     /// Times include the chart's UTC offset, including DST changes and subsecond timestamps; on a
     /// [horizontal scale](Self::set_horizontal_scale) other than time, keys read as the crosshair
     /// label does.
-    /// Prices use the instrument's decimals. Without `price_decimals` or a valid `tick_size`, a
-    /// price column writes the decimals its values hold, at least two and at most twelve, so a
-    /// price the chart shows does not read as another number; an added series keeps at least
-    /// four significant digits. Study overrides and non-price units retain their precision.
-    /// Missing/non-finite values are empty cells.
+    /// Prices use the instrument's decimals. Without `price_decimals` or a valid `tick_size`, the
+    /// main series and price studies write the decimals the main series' prices hold, and an
+    /// added series those its closes hold, at least two and at most twelve, so a price the chart
+    /// shows does not read as another number; an added series keeps at least four significant
+    /// digits. Study overrides and non-price units retain their precision. Missing/non-finite
+    /// values are empty cells.
     #[cfg(feature = "csv")]
     #[cfg_attr(docsrs, doc(cfg(feature = "csv")))]
     pub fn export_csv(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
