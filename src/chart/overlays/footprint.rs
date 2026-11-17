@@ -20,6 +20,11 @@ const FONT_LIMITS: [f32; 2] = [8.0, 24.0];
 const LADDER_CELL_SHARE: f32 = 0.39;
 /// The height of a ladder bar's totals and box, three rows of the 10 point font and their margins.
 const INFO_BOX_HEIGHT: f32 = 46.0;
+/// How far a bar's two threshold-marker rows reach beyond its outer row: 4.5 radii of at most
+/// 4 points.
+const MARKER_ROOM: f32 = 18.0;
+/// The height of a bar's extreme ratio, one line of the 10 point font.
+const RATIO_TEXT_HEIGHT: f32 = 14.0;
 
 pub use crate::model::{FootprintColor, FootprintMode};
 
@@ -101,8 +106,9 @@ pub struct FootprintConfig {
     /// within 8 and 24 points. Fitting to the cell can reduce the size to 8 points; columns that
     /// cannot fit readable numbers use an overview without them.
     pub font_size: [f32; 2],
-    /// Write the ask/bid ratio of the highest and lowest row of each bar above and below it,
-    /// or `n/a` when the bid is zero and the ratio is undefined.
+    /// Write the ask/bid ratio of the highest and lowest row of each bar beyond those rows, or
+    /// `n/a` when the bid is zero and the ratio is undefined. With annotations that mark delta
+    /// percentages or bid/ask ratios, the ratios are written beyond their markers.
     pub extreme_ratio: bool,
     /// Outline the rows of the bar's pullback range, see [`pullback_range`].
     pub pullback: bool,
@@ -778,6 +784,9 @@ pub(crate) fn render_footprint_read(
             }
         }
         if config.extreme_ratio {
+            let offset = ratio_offset(config);
+            // An inverted scale puts the highest row at the bottom.
+            let inverted = mapping.price.is_inverted();
             let step = flow.price_step() * group as f64;
             let first = shown.levels.first_key_value();
             let last = shown.levels.last_key_value();
@@ -806,12 +815,12 @@ pub(crate) fn render_footprint_read(
                 );
                 let galley =
                     painter.layout_no_wrap(text, FontId::monospace(10.0), config.text_color);
-                let anchor = if high {
-                    Align2::CENTER_BOTTOM
+                let (anchor, at) = if high != inverted {
+                    (Align2::CENTER_BOTTOM, edge - offset)
                 } else {
-                    Align2::CENTER_TOP
+                    (Align2::CENTER_TOP, edge + offset)
                 };
-                let bounds = anchor.anchor_size(pos2(x, edge), galley.size());
+                let bounds = anchor.anchor_size(pos2(x, at), galley.size());
                 if edge.is_finite()
                     && galley.size().x <= mapping.bar_spacing
                     && mapping.rect.contains_rect(bounds)
@@ -1090,17 +1099,41 @@ fn has_ladder(config: &FootprintConfig) -> bool {
         .any(|mode| *mode == FootprintMode::Ladder)
 }
 
-/// How far below a bar's lowest row its summary starts: past the extreme ratio and threshold
-/// marker rows, which sit directly below the bar, when they are on.
+/// How far below a bar's lowest row its summary starts: past the threshold marker rows and the
+/// extreme ratio, which sit below the bar, when they are on.
 fn info_box_offset(config: &FootprintConfig) -> f32 {
     #[cfg(feature = "studies")]
     let studies = config.studies.is_some();
     #[cfg(not(feature = "studies"))]
     let studies = false;
     if config.extreme_ratio || studies {
-        20.0
+        outer_room(config) + 2.0
     } else {
         2.0
+    }
+}
+
+/// How far beyond its outer row a bar's extreme ratio starts: past the threshold markers when
+/// the annotations can paint them, that is when they mark delta percentages or bid/ask ratios at
+/// a threshold the study accepts.
+fn ratio_offset(
+    #[cfg_attr(not(feature = "studies"), allow(unused_variables))] config: &FootprintConfig,
+) -> f32 {
+    #[cfg(feature = "studies")]
+    let markers = config.studies.as_ref().is_some_and(|studies| {
+        studies.delta_percent.is_some_and(|t| t >= 0.0) || studies.ratio.is_some_and(|r| r >= 1.0)
+    });
+    #[cfg(not(feature = "studies"))]
+    let markers = false;
+    if markers { MARKER_ROOM + 2.0 } else { 0.0 }
+}
+
+/// How far a bar's threshold markers and extreme ratios reach beyond either of its outer rows.
+fn outer_room(config: &FootprintConfig) -> f32 {
+    if config.extreme_ratio {
+        MARKER_ROOM.max(ratio_offset(config) + RATIO_TEXT_HEIGHT)
+    } else {
+        MARKER_ROOM
     }
 }
 
@@ -1755,7 +1788,8 @@ pub(crate) fn render_footprint_annotations(
 /// stacks take the imbalance colour of their side;
 /// local annotations stay anchored to their originating bar. Delta percentage and ratio markers
 /// are triangles outside the bar: buy markers above it, sell markers below, the delta marker
-/// nearest and the ratio marker beyond it. Captions avoid every footprint and its marker rows; details are
+/// nearest and the ratio marker beyond it. Extreme ratios written by [`render_footprint`] with the
+/// same `config` go beyond both. Captions avoid every footprint and its marker rows; details are
 /// available on hover when a caption has no room. Overview marks shrink with bar spacing and
 /// zones become faint centre lines. Prices use the aggregation's row step.
 #[cfg(feature = "studies")]
@@ -1808,9 +1842,10 @@ pub(crate) fn render_footprint_studies_read(
                 pos2(x - mapping.bar_spacing * 0.46, y1.min(y2)),
                 pos2(x + mapping.bar_spacing * 0.46, y1.max(y2)),
             );
-            // The two threshold-marker rows extend up to 18 points beyond either extreme, and a
-            // ladder's summary below the bar takes the same space or more.
-            let mut reserved = rect.expand2(vec2(0.0, 18.0));
+            // The two threshold-marker rows and an extreme ratio beyond them reach `outer_room`
+            // beyond either extreme, and a ladder's summary below the bar takes the same space or
+            // more.
+            let mut reserved = rect.expand2(vec2(0.0, outer_room(config)));
             let summary = summary_room(config);
             if summary > 0.0 {
                 reserved.max.y = rect.max.y + summary;
@@ -3883,6 +3918,143 @@ mod tests {
         ] {
             let bar = Bar::new(time, open, 100.5, 100.0, close, 3.0);
             assert_eq!(pullback_range(&bar, &flow), expected, "{open} to {close}");
+        }
+    }
+
+    /// A bar's extreme ratios are written beyond its rows, its threshold markers and its
+    /// summary, with the highest row's ratio on the side of that row, also on an inverted scale.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn extreme_ratios_clear_their_bar_and_threshold_markers() {
+        use crate::studies::{
+            FootprintStudy, FootprintStudyConfig, FootprintStudyKind, FootprintStudyState,
+        };
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let bars = [Bar::new(time, 105.0, 106.0, 105.0, 105.0, 1.0)];
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        // Ask/bid 250,100 / 223,400 is 1.12 at 106 and 120,000 / 320,100 is 0.37 at 105.
+        for (price, sell, buy) in [(106.0, 223_400.0, 250_100.0), (105.0, 320_100.0, 120_000.0)] {
+            for (size, side) in [(sell, OrderSide::Sell), (buy, OrderSide::Buy)] {
+                flow.push(&Tick::new(time, price, size, Some(side)))
+                    .unwrap();
+            }
+        }
+        let config = FootprintConfig {
+            extreme_ratio: true,
+            auto_row_height: None,
+            studies: Some(FootprintStudyConfig {
+                delta_percent: Some(10.0),
+                ratio: Some(1.5),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let studies = [
+            FootprintStudyKind::DeltaAsk,
+            FootprintStudyKind::RatioAsk,
+            FootprintStudyKind::DeltaBid,
+            FootprintStudyKind::RatioBid,
+        ]
+        .map(|kind| FootprintStudy {
+            start: time,
+            end: Some(time),
+            low: 105,
+            high: 106,
+            kind,
+            state: FootprintStudyState::Local,
+        });
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(480.0, 320.0));
+        let ctx = egui::Context::default();
+        for spacing in [60.0, 120.0] {
+            for inverted in [false, true] {
+                let map = ChartMapping::new(
+                    rect,
+                    spacing,
+                    0,
+                    0,
+                    0.0,
+                    PriceMap::new(
+                        PriceTransform::default(),
+                        PriceRange::new(98.0, 110.0),
+                        0.0,
+                        320.0,
+                        inverted,
+                    ),
+                );
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(rect),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        render_footprint(ui.painter(), &map, &bars, &flow, &config);
+                        render_footprint_studies(
+                            ui.painter(),
+                            &map,
+                            &bars,
+                            &flow,
+                            &studies,
+                            &config,
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+                let shapes: Vec<_> = output.shapes.into_iter().map(|s| s.shape).collect();
+                let markers: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        // The value-area markers in the gap are text coloured.
+                        Shape::Path(path)
+                            if path.fill == config.ask_color || path.fill == config.bid_color =>
+                        {
+                            Some(Rect::from_points(&path.points))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    markers.len(),
+                    4,
+                    "markers at {spacing}, inverted {inverted}"
+                );
+                let text = painted_text(&shapes);
+                // The rows run from 104.5 to 106.5, y 146.67 to 93.33, or 173.33 to 226.67.
+                let x = map.idx_to_x(0);
+                let [low, high] = [104.5, 106.5].map(|price| map.price_to_y(price));
+                let rows = Rect::from_x_y_ranges(
+                    x - spacing * 0.5..=x + spacing * 0.5,
+                    low.min(high)..=low.max(high),
+                );
+                for (label, side) in [("A/B 1.12", high), ("A/B 0.37", low)] {
+                    let (_, bounds) =
+                        text.iter()
+                            .find(|(text, _)| text == label)
+                            .unwrap_or_else(|| {
+                                panic!("{label} missing at {spacing}, inverted {inverted}")
+                            });
+                    assert!(
+                        !bounds.intersects(rows),
+                        "{label} over the rows at {spacing}, inverted {inverted}"
+                    );
+                    assert_eq!(
+                        bounds.center().y < rows.center().y,
+                        side < rows.center().y,
+                        "{label} beyond its own row at {spacing}, inverted {inverted}"
+                    );
+                    for marker in &markers {
+                        assert!(
+                            !bounds.intersects(*marker),
+                            "{label} over a marker at {spacing}, inverted {inverted}"
+                        );
+                    }
+                    for (other, rect) in &text {
+                        assert!(
+                            other == label || !bounds.intersects(*rect),
+                            "{label} over {other} at {spacing}, inverted {inverted}"
+                        );
+                    }
+                }
+            }
         }
     }
 

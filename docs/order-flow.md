@@ -73,6 +73,24 @@ constructor docs include examples of both forms. `FootprintPage::bars` is a
 [`FootprintBars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/enum.FootprintBars.html);
 its `iter` method reads either form.
 
+A bounded request names `[since, before)`. Each reply answers one contiguous suffix ending
+at `before`: its first bar starts the answered span, or an empty page uses
+`with_continue_before(from)`. An available empty span certifies that no executions occurred.
+Earlier unanswered history remains requestable; `count` still limits the number of bars.
+Use [`FootprintPage::unavailable(from, before)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FootprintPage.html#method.unavailable)
+when the recording cannot supply that span. This is not empty history or a transport error.
+The chart skips automatic retries of that span until refresh/reconnect and continues loading
+other required history. `is_available()` distinguishes the two answers.
+
+The chart requests missing spans needed by its viewport or footprint studies, including
+internal gaps. Internal fills use clock-aligned boundaries and leave the initial exclusive
+prepared/live cutoff unchanged. Existing row owners remain retained; closing even an empty
+gap updates coverage and invalidates affected study results. Older end-of-history does not
+prevent an internal gap from being filled after resuming a paused feed. Resume retains
+prepared owners; an explicit `Chart::reload_feed()` instead discards the old bars, trades and
+prepared history and requests the latest pages again. Invalid replies preserve accepted
+data and stop footprint requests until refresh; they never certify empty or unavailable history.
+
 A shared owner can serve several charts. Admission validates its clock, grid, rows, totals and
 exclusive execution cutoff when each page is accepted. Of the shared page's bars, only an
 unfinished boundary is copied into mutable rows; subsequent live trades use the existing accumulator.
