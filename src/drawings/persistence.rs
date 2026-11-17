@@ -379,7 +379,9 @@ impl Default for StorageMetadata {
 impl DrawingStorage {
     /// Current storage format version. Version 10 draws a price label without a border colour
     /// with a border in its own colour; those saved before that change load with the border off,
-    /// as drawn. Version 9 draws a callout's border at its stored width; those saved before that
+    /// as drawn. It also reads a long or short position's target and stop colour alpha as the
+    /// opacity of its zone; earlier versions load at the 20% their zones were drawn at on a dark
+    /// theme. Version 9 draws a callout's border at its stored width; those saved before that
     /// change load with the 1 px border they were drawn with. Version 8
     /// extends a trend line past the anchor its Left or Right names; those saved before that
     /// change load with the reach they were drawn with.
@@ -681,6 +683,20 @@ impl DrawingStorage {
                             // Earlier renderers drew no border on a price label without a border
                             // colour, which now follows the label's colour.
                             drawing.drawing.border = false;
+                        }
+                        if version < 10 && matches!(tool, T::LongPos | T::ShortPos) {
+                            // Earlier renderers filled each zone with its colour at 20% on a dark
+                            // theme; the alpha now is the zone's opacity.
+                            let settings = &mut drawing.drawing;
+                            for color in [
+                                &mut settings.position_target_color,
+                                &mut settings.position_stop_color,
+                            ]
+                            .into_iter()
+                            .flatten()
+                            {
+                                color[3] = (f32::from(color[3]) * 0.2).round() as u8;
+                            }
                         }
                         if ((version < 7
                             && matches!(tool, T::InfoLine | T::TrendAngle)
@@ -2661,6 +2677,42 @@ mod tests {
                 drawing.channel_midline,
                 tool == DrawingToolType::ParallelChannel
             );
+        }
+    }
+
+    /// Before version 10 a position filled its zones with the target and stop colours at 20% on a
+    /// dark theme, and a palette pick saved alpha 255: such a zone loads at alpha 51, and 128 at
+    /// 25.6, rounded to 26, also once saved again. Version 10 alphas are the zone opacity.
+    #[test]
+    fn position_colours_saved_before_zone_opacity_keep_their_zones() {
+        for (version, tool, saved, want) in [
+            (9, DrawingToolType::LongPos, [255, 255], [51, 51]),
+            (9, DrawingToolType::ShortPos, [255, 255], [51, 51]),
+            (3, DrawingToolType::ShortPos, [255, 128], [51, 26]),
+            (10, DrawingToolType::LongPos, [255, 128], [255, 128]),
+        ] {
+            let mut file: serde_json::Value =
+                serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
+            file["version"] = version.into();
+            let records = file["drawings"].as_array_mut().unwrap();
+            // The fixture's second drawing is its long position.
+            records.remove(0);
+            records.truncate(1);
+            let settings = &mut records[0]["drawing"];
+            settings["tool_type"] = serde_json::to_value(tool).unwrap();
+            settings["position_target_color"] = serde_json::json!([40, 100, 220, saved[0]]);
+            settings["position_stop_color"] = serde_json::json!([220, 140, 40, saved[1]]);
+            let (loaded, skipped) = DrawingStorage::from_json(&file.to_string()).unwrap();
+            assert!(skipped.is_empty(), "{tool:?} v{version}: {skipped:?}");
+            let (again, _) = DrawingStorage::from_json(&loaded.to_json().unwrap()).unwrap();
+            for storage in [&loaded, &again] {
+                let drawing = &storage.drawings[0].drawing;
+                assert_eq!(
+                    (drawing.position_target_color, drawing.position_stop_color),
+                    (Some([40, 100, 220, want[0]]), Some([220, 140, 40, want[1]])),
+                    "{tool:?} v{version}"
+                );
+            }
         }
     }
 

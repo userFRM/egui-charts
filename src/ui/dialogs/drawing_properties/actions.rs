@@ -366,6 +366,12 @@ impl DrawingProps {
                         let edited = settings.fibonacci_config();
                         let mut config = drawing.fibonacci_config().into_owned();
                         config.apply_edits(&original, &edited);
+                        // An edited fan saved before it had time levels takes the current look.
+                        if drawing.tool_type == crate::drawings::DrawingToolType::FibonacciSpeedFan
+                            && config.time_levels.is_none()
+                        {
+                            config.time_levels = Some(config.levels.clone());
+                        }
                         drawing.fib_config = Some(config);
                     } else {
                         drawing.fib_config.clone_from(&settings.fib_config);
@@ -1044,6 +1050,19 @@ mod tests {
             assert_eq!(config.levels[1].value, 0.25 + index as f32);
             assert_eq!(config.level_width, 2.0 + index as f32);
         }
+        // A fan saved before it had time levels takes its price levels as time levels, and with
+        // them the current look, on any edit of its settings.
+        let mut fan = Drawing::new(0, DrawingToolType::FibonacciSpeedFan);
+        fan.fib_config.as_mut().unwrap().time_levels = None;
+        chart.drawings_mut().drawings = vec![fan];
+        chart.drawings_mut().select_drawings([0]);
+        let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+        let settings = &mut props.tool_settings.as_mut().unwrap().settings;
+        settings.fib_config.as_mut().unwrap().grid_visible = false;
+        let edits = props.edited_drawings(DrawingId(0), &chart).unwrap();
+        let config = edits[0].fib_config.as_ref().unwrap();
+        assert!(!config.grid_visible);
+        assert_eq!(config.time_levels.as_ref(), Some(&config.levels));
         // A rate belongs to an account currency; changing the currency also replaces its rate.
         for currency_changed in [false, true] {
             chart.drawings_mut().drawings = [("EUR", 0.8), ("GBP", 0.6), ("EUR", 0.7)]

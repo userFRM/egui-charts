@@ -46,8 +46,13 @@ impl StyleTab {
         ui.space_md();
 
         FormGrid::new("style_grid").show(ui, |ui| {
+            // A sticker's art and the ghost feed's candles keep their own colours.
             if tool != Some(DrawingToolType::FibonacciChannel)
                 && tool != Some(DrawingToolType::PriceLabel)
+                && !matches!(
+                    tool,
+                    Some(DrawingToolType::Sticker | DrawingToolType::GhostFeed)
+                )
                 && !position
             {
                 ui.label(l10n::text(ui.ctx(), "Color"));
@@ -76,28 +81,22 @@ impl StyleTab {
                 ui.end_row();
             }
 
-            if !position
-                && tool.is_none_or(|tool| {
-                    tool.draws_line() && tool != DrawingToolType::FibonacciChannel
-                })
-            {
+            if tool.is_none_or(|tool| tool.supports_line_width()) {
                 ui.label(l10n::text(ui.ctx(), "Line width"));
                 line_width_row(ui, &mut props.line_width);
                 ui.end_row();
-
-                // The regression trend sets its fitted line's pattern among its inputs.
-                if tool != Some(DrawingToolType::RegressionTrend) {
-                    let label = ui.label(l10n::text(ui.ctx(), "Line style"));
-                    ui.label_inputs_by(label.id, |ui| {
-                        ui.combo_select(
-                            "line_style",
-                            &mut props.line_style,
-                            LineStyle::all().iter().copied(),
-                            |v| v.name().to_string(),
-                        );
-                    });
-                    ui.end_row();
-                }
+            }
+            if tool.is_none_or(|tool| tool.supports_line_style()) {
+                let label = ui.label(l10n::text(ui.ctx(), "Line style"));
+                ui.label_inputs_by(label.id, |ui| {
+                    ui.combo_select(
+                        "line_style",
+                        &mut props.line_style,
+                        LineStyle::all().iter().copied(),
+                        |v| v.name().to_string(),
+                    );
+                });
+                ui.end_row();
             }
 
             let exact = props.color_rgba();

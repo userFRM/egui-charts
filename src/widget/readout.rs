@@ -49,6 +49,46 @@ impl Chart {
         self.indicator_source_request.take()
     }
 
+    /// The bar the status line, tooltip and data window describe at a rendered index, with the
+    /// close of the bar with a value before it: the drawn candle on a Heikin Ashi chart, whose
+    /// change is measured between averaged closes, else the rendered bar.
+    pub(crate) fn readout_bar_at(&self, index: usize) -> Option<(crate::model::Bar, Option<f64>)> {
+        let readout = |bars: &[crate::model::Bar]| {
+            let bar = bars.get(index)?.clone();
+            Some((
+                bar,
+                crate::model::last_with_value(&bars[..index]).map(|bar| bar.close),
+            ))
+        };
+        if self.chart_type == crate::model::ChartType::Heikin && !self.state.data().is_empty() {
+            readout(
+                &self
+                    .heikin_ashi
+                    .bars(&self.state.data().bars, self.state.revision()),
+            )
+        } else {
+            readout(self.state.shown())
+        }
+    }
+
+    /// Whether `row` of the study `id` is a column of a volume study, whose value the data
+    /// window's own volume row already shows. Its moving average is not.
+    #[cfg(feature = "ui")]
+    pub(crate) fn is_volume_column(&self, id: SeriesId, row: &StudyValue) -> bool {
+        self.study_ids
+            .iter()
+            .zip(self.rendered_studies().indicators())
+            .find(|(study, _)| **study == id)
+            .is_some_and(|(_, study)| {
+                let names = study.line_names();
+                study.is_volume()
+                    && (0..study.line_count()).any(|line| {
+                        study.plot_style(line).plot_type == crate::studies::PlotType::Columns
+                            && names.get(line) == Some(&row.plot)
+                    })
+            })
+    }
+
     /// The first visible output with a value at a displayed bar index. Price-based charts
     /// read element study values, as the legend does. The output number is stable within
     /// the study and can be used by host alert services.
@@ -72,7 +112,8 @@ impl Chart {
     }
 
     /// Values of visible study plots at a rendered bar index, with legend names and precision.
-    /// Gaps remain `None`; price-based charts use studies calculated from element OHLC.
+    /// Gaps remain `None`; price-based charts use studies calculated from element OHLC, and
+    /// those that hide volume list no volume study.
     /// Call after [`Self::show`] to use refreshed studies.
     pub fn study_values_at(&self, index: usize) -> Vec<StudyValue> {
         self.study_rows_at(index)
@@ -82,7 +123,7 @@ impl Chart {
     }
 
     /// [`Self::study_values_at`] with the id of each row's study.
-    pub(super) fn study_rows_at(&self, index: usize) -> Vec<(SeriesId, StudyValue)> {
+    pub(crate) fn study_rows_at(&self, index: usize) -> Vec<(SeriesId, StudyValue)> {
         self.study_rows_at_with_policy(index, CursorDataPolicy::Visible)
     }
 
@@ -101,6 +142,8 @@ impl Chart {
             .iter()
             .zip(self.rendered_studies().indicators())
             .filter(|(_, study)| policy == CursorDataPolicy::IncludeHidden || study.is_visible())
+            // A chart type that hides volume lists no volume rows.
+            .filter(|(_, study)| self.chart_type.supports_volume() || !study.is_volume())
         {
             let names = study.line_names();
             let colors = study.colors();
@@ -175,6 +218,9 @@ mod tests {
             Some("120.00")
         );
         assert_eq!(chart.indicator_value_at(id, 0), None);
+        // Bricks hide volume; a time-based chart lists its study.
+        chart.set_chart_type(ChartType::Candles);
+        frame(&egui::Context::default(), &mut chart, 0.1, vec![]);
         chart.set_volume_formatter(Some(std::sync::Arc::new(
             crate::scales::CustomPriceFormatter::new(|value| format!("{value:.0} lots")),
         )));

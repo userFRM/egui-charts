@@ -470,7 +470,8 @@ pub struct FibonacciConfig {
     pub logarithmic: bool,
     /// Time levels of a speed resistance fan, read along the time axis as `levels` are along the
     /// price axis. Absent on fans saved before the two families were separate, which share
-    /// `levels`; see [`FibonacciConfig::fan_time_levels`].
+    /// `levels` and draw as they did then, whatever the grid, label side and Reverse settings;
+    /// see [`FibonacciConfig::fan_time_levels`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_levels: Option<Vec<FibonacciLevel>>,
     /// Whether a speed resistance fan draws its grid: a line through each visible level inside

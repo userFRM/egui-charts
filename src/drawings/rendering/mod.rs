@@ -1570,19 +1570,24 @@ mod tests {
     }
 
     fn paint_with(drawing: &Drawing, selected: bool) -> Vec<Shape> {
+        let bars = if drawing.tool_type == DrawingToolType::RegressionTrend {
+            sample_bars()
+        } else {
+            Vec::new()
+        };
+        paint_on(drawing, selected, &bars)
+    }
+
+    /// Paints `drawing` over `bars`, bar `i` at x = 10 i and price `p` at y = 500 - p.
+    fn paint_on(drawing: &Drawing, selected: bool, bars: &[Bar]) -> Vec<Shape> {
         let ctx = Context::default();
-        let bars = sample_bars();
         let output = ctx.run_ui(RawInput::default(), |ui| {
             let view = ChartView {
                 price_formatter: None,
                 time_formatter: None,
                 bar_seconds: 0,
                 instrument: None,
-                bars: if drawing.tool_type == DrawingToolType::RegressionTrend {
-                    &bars
-                } else {
-                    &[]
-                },
+                bars,
                 revision: 0,
                 bar_to_x: &|b| b * 10.0,
                 bar_spacing: 10.0,
@@ -1952,27 +1957,28 @@ mod tests {
         );
     }
 
-    /// An annotation that offers line controls draws differently at 2 and 7 px; annotations
-    /// with fixed borders or guides must hide those controls.
+    /// Every line control a tool offers changes its drawing: 2 and 7 px, and solid, dashed and
+    /// dotted, each paint differently. The bars span the anchors, at prices inside the pane, so
+    /// the tools that measure bars draw.
     #[test]
     fn offered_line_width_changes_the_drawing() {
+        use crate::model::LineStyle;
+        let bars: Vec<_> = (0..60)
+            .map(|i| {
+                let time = chrono::DateTime::from_timestamp(i * 60, 0).unwrap();
+                let open = 150.0 + (i % 7) as f64 * 20.0;
+                Bar::new(
+                    time,
+                    open,
+                    open + 30.0,
+                    open - 30.0,
+                    open + 10.0,
+                    100.0 + i as f64,
+                )
+            })
+            .collect();
         let mut inert = Vec::new();
-        for tool in [
-            DrawingToolType::TextLabel,
-            DrawingToolType::AnchoredText,
-            DrawingToolType::Note,
-            DrawingToolType::PriceNote,
-            DrawingToolType::AnchoredNote,
-            DrawingToolType::Table,
-            DrawingToolType::Callout,
-            DrawingToolType::Comment,
-            DrawingToolType::PriceLabel,
-            DrawingToolType::Signpost,
-            DrawingToolType::FlagNote,
-        ] {
-            if !tool.draws_line() {
-                continue;
-            }
+        for &tool in DrawingToolType::all() {
             let mut drawing = Drawing::new(7, tool);
             drawing.points = [
                 (100., 100.),
@@ -1993,14 +1999,36 @@ mod tests {
             if drawing.text.is_none() {
                 drawing.text = Some("Label".into());
             }
-            let mut thin = drawing.clone();
-            thin.stroke_width = 2.0;
-            let mut wide = drawing;
-            wide.stroke_width = 7.0;
-            if format!("{:?}", paint(&thin)) == format!("{:?}", paint(&wide)) {
-                inert.push(tool);
+            let painted = |edit: &dyn Fn(&mut Drawing)| {
+                let mut edited = drawing.clone();
+                edit(&mut edited);
+                format!("{:?}", paint_on(&edited, false, &bars))
+            };
+            if tool.supports_line_width()
+                && painted(&|d| d.stroke_width = 2.0) == painted(&|d| d.stroke_width = 7.0)
+            {
+                inert.push((tool, "width"));
+            }
+            if tool.supports_line_style() {
+                let [solid, dashed, dotted] =
+                    [LineStyle::Solid, LineStyle::Dashed, LineStyle::Dotted]
+                        .map(|style| painted(&|d| d.line_style = style));
+                if solid == dashed || solid == dotted || dashed == dotted {
+                    inert.push((tool, "style"));
+                }
             }
         }
-        assert_eq!(inert, Vec::<DrawingToolType>::new());
+        assert_eq!(inert, []);
+    }
+
+    /// A sticker's art keeps its solid outlines whatever line style the drawing stored.
+    #[test]
+    fn sticker_ignores_a_stored_line_style() {
+        let mut sticker = Drawing::new(7, DrawingToolType::Sticker);
+        sticker.text = Some("sticker:bull".into());
+        sticker.points = vec![Pos2::new(100.0, 100.0)];
+        let solid = format!("{:?}", paint(&sticker));
+        sticker.line_style = crate::model::LineStyle::Dashed;
+        assert_eq!(format!("{:?}", paint(&sticker)), solid);
     }
 }
