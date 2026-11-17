@@ -213,6 +213,7 @@ impl Chart {
         self.host_events.touch_position = None;
         self.host_events.target = None;
         self.host_events.primitive_hit = None;
+        self.readout_index = None;
         self.cover_annotation_hit();
         self.apply_config_scale_mode();
         #[cfg(feature = "studies")]
@@ -2094,6 +2095,10 @@ impl Chart {
                     );
                 }
             }
+            // A chart type that hides volume draws none, wherever the study is pinned.
+            if study.is_volume() && !self.chart_type.supports_volume() {
+                return;
+            }
             // TPO studies draw the chart type's profiles beside the bars.
             if let Some(config) = study
                 .tpo()
@@ -3311,23 +3316,37 @@ impl Chart {
         let mut series_action = None;
         let mut legend_bottom = price_rect.top() + 8.0;
         {
+            // The local pointer takes precedence over a crosshair this chart received from a
+            // linked chart or the host, as drawn below.
+            let crosshair_x = hover_pos.map(|pos| pos.x).or_else(|| {
+                self.synced_crosshair_bar_idx
+                    .filter(|_| !menu_open)
+                    .and_then(|index| {
+                        self.crosshair_position(
+                            Pos2::new(coords.index_to_x(index), price_rect.center().y),
+                            &coords,
+                        )
+                    })
+                    .map(|pos| pos.x)
+                    .filter(|x| coords.is_x_visible(*x))
+            });
             let visible_data = self.state.visible_data();
-            let selected = hover_pos
-                .and_then(|pos| coords.local_idx_at_x(pos.x, visible_data.len()))
-                .map(|index| start_idx + index)
-                .unwrap_or_else(|| {
-                    // The last bar with a value, before any whitespace bars at the end.
-                    let shown = self.state.shown();
-                    shown
-                        .iter()
-                        .rposition(|bar| !bar.is_whitespace())
-                        .unwrap_or(shown.len().saturating_sub(1))
-                });
-            if let Some(bar) = self.state.shown().get(selected) {
+            self.readout_index = crosshair_x
+                .and_then(|x| coords.local_idx_at_x(x, visible_data.len()))
+                .map(|index| start_idx + index);
+            let selected = self.readout_index.unwrap_or_else(|| {
+                // The last bar with a value, before any whitespace bars at the end.
+                let shown = self.state.shown();
+                shown
+                    .iter()
+                    .rposition(|bar| !bar.is_whitespace())
+                    .unwrap_or(shown.len().saturating_sub(1))
+            });
+            if let Some((bar, previous_close)) = self.readout_bar_at(selected) {
                 let timeframe = self.timeframe.map(|tf| tf.as_str()).unwrap_or_default();
                 #[cfg(feature = "ui")]
                 let order_quantity = self.order_quantity.take();
-                let mut legend = super::Legend::new(&self.symbol, &timeframe, bar);
+                let mut legend = super::Legend::new(&self.symbol, &timeframe, &bar);
                 let statuses: Vec<_> = self
                     .legend_statuses
                     .iter()
@@ -3386,9 +3405,7 @@ impl Chart {
                 legend.background = Some(&background);
                 let inputs: Vec<_> = self.study_inputs.iter().map(String::as_str).collect();
                 legend.study_inputs = &inputs;
-                legend.previous_close =
-                    crate::model::last_with_value(&self.state.shown()[..selected])
-                        .map(|bar| bar.close);
+                legend.previous_close = previous_close;
                 legend.bar_index = selected;
                 legend.studies = self.rendered_studies().indicators();
                 legend.show_volume =
@@ -3689,8 +3706,9 @@ impl Chart {
                     && let Some(local_idx) = coords.local_idx_at_x(hover_pos.x, visible_data.len())
                     && Some(visible_data[local_idx].time) == crosshair_time
                     && !visible_data[local_idx].is_whitespace()
+                    && let Some((candle, previous_close)) =
+                        self.readout_bar_at(start_idx + local_idx)
                 {
-                    let candle = &visible_data[local_idx];
                     if tooltip_options.on_long_press {
                         let x = coords.idx_to_x(start_idx + local_idx);
                         rendering::draw_dashed_line(
@@ -3731,9 +3749,8 @@ impl Chart {
                     rendering::render_tooltip_with_options(
                         &price_ctx,
                         hover_pos,
-                        candle,
-                        crate::model::last_with_value(&self.state.shown()[..start_idx + local_idx])
-                            .map(|bar| bar.close),
+                        &candle,
+                        previous_close,
                         &tooltip_options,
                         &colors,
                         &price_map,
@@ -3745,10 +3762,8 @@ impl Chart {
                             .study_rows_at(start_idx + local_idx)
                             .into_iter()
                             .filter(|(id, _)| {
-                                // A chart type that hides volume lists no volume rows.
-                                (self.chart_type.supports_volume()
-                                    && (!tooltip_options.on_long_press
-                                        || tooltip_options.show_volume_details))
+                                !tooltip_options.on_long_press
+                                    || tooltip_options.show_volume_details
                                     || self
                                         .study_ids
                                         .iter()

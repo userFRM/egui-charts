@@ -14,6 +14,8 @@ use crate::localization as l10n;
 use crate::theme::Theme;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui_kit::color_picker::keep_opacity;
+use crate::ui_kit::{ColorPicker, ColorPickerState};
 use egui::{Color32, FontId, Response, RichText, Ui};
 
 impl SettingsDialog {
@@ -97,6 +99,21 @@ impl SettingsDialog {
         });
         ui.add_space(ui.active_theme().spacing.sm);
     }
+}
+
+/// Shows the colour well of `state` and assigns a pick to `color`. Palette swatches are opaque,
+/// so a swatch keeps the opacity the well shows unless the Custom editor set it. Returns whether
+/// a colour was picked.
+fn pick_color(ui: &mut Ui, state: &mut ColorPickerState, id: &str, color: &mut Color32) -> bool {
+    // The well's colour, not `color`, which may be the placeholder that follows the theme.
+    let current = state.sel_color;
+    let custom = state.custom_mode;
+    let Some(picked) = ColorPicker::new(state, id).show(ui).inner else {
+        return false;
+    };
+    *color = keep_opacity(picked, current, custom || state.custom_mode);
+    state.sel_color = *color;
+    true
 }
 
 fn price_line_dropdown(ui: &mut Ui, id: &str, color: Color32, label: &mut bool, line: &mut bool) {
