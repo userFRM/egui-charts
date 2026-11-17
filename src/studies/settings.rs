@@ -132,15 +132,31 @@ pub struct FillStyle {
     pub inverted_color: Option<Color32>,
     /// Whether the band is drawn.
     pub visible: bool,
+    /// Whether `visible` alone decides that the band is drawn. Styles saved by earlier releases
+    /// lack it: their band was also hidden with a boundary plot, which applying them carries over
+    /// to `visible`.
+    #[serde(default)]
+    pub(super) independent: bool,
 }
 
 impl FillStyle {
     /// A visible band with the same colour on either side of a crossing.
+    ///
+    /// ```
+    /// use ecolor::Color32;
+    /// use egui_charts::studies::FillStyle;
+    ///
+    /// let mut band = FillStyle::new(Color32::from_rgba_unmultiplied(33, 150, 243, 13));
+    /// band.inverted_color = Some(Color32::from_rgba_unmultiplied(242, 54, 69, 13));
+    /// band.visible = false;
+    /// assert_eq!(band.color, Color32::from_rgba_unmultiplied(33, 150, 243, 13));
+    /// ```
     pub fn new(color: Color32) -> Self {
         Self {
             color,
             inverted_color: None,
             visible: true,
+            independent: true,
         }
     }
 }
@@ -255,9 +271,8 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
     settings
         .fills
         .extend(fills[saved..].iter().map(|fill| FillStyle {
-            color: fill.color,
             inverted_color: fill.inverted_color,
-            visible: true,
+            ..FillStyle::new(fill.color)
         }));
 }
 
@@ -364,11 +379,14 @@ pub struct StudySettings {
     pub background_visible: bool,
     /// One independent style per band returned by [`Indicator::fills`].
     /// Missing styles take the study's declared colours and visibility. Styles of bands the study
-    /// does not declare yet are kept for when it does.
+    /// does not declare yet are kept for when it does. A style saved before bands were drawn
+    /// whatever the visibility of their boundary plots restores hidden while one of those plots
+    /// is hidden, as it was drawn then.
     #[serde(default)]
     pub fills: Vec<FillStyle>,
     /// Independent styles for [`Indicator::gradients`], in declaration order.
-    /// Older settings inherit the study's declared ramps.
+    /// Missing styles take the study's declared ramps, shown. A saved study template of an SMI
+    /// from before it declared its shading restores the ramps hidden.
     #[serde(default)]
     pub gradients: Vec<GradientStyle>,
 }
@@ -1452,6 +1470,25 @@ impl Indicator for ConfiguredStudy {
         let bands = edited.study.fills().len();
         if bands > 0 && bands < self.study.fills().len() {
             settings.fills.truncate(bands);
+        }
+        // A band saved before its style alone decided whether it is drawn was not drawn while
+        // a boundary plot was hidden, so it keeps that look with its own switch off.
+        let declared = edited.study.fills();
+        let hidden = |boundary| match boundary {
+            super::FillBoundary::Plot(line) => {
+                settings.plots.get(line).is_some_and(|plot| !plot.visible)
+            }
+            super::FillBoundary::Level(_) => false,
+        };
+        for (band, style) in settings.fills.iter_mut().enumerate() {
+            if !style.independent
+                && declared
+                    .get(band)
+                    .is_some_and(|fill| hidden(fill.first) || hidden(fill.second))
+            {
+                style.visible = false;
+            }
+            style.independent = true;
         }
         match_declared_styles(edited.study.as_ref(), &mut settings);
         if self.study.value_format() != edited.study.value_format() {
