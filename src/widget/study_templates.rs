@@ -16,7 +16,8 @@ pub(super) const NO_STUDY: usize = u32::MAX as usize;
 pub(super) enum Keep {
     /// None: the set replaces them all.
     None,
-    /// Those whose user edits are off, which no user command removes.
+    /// Those whose user edits are off, which no user command removes. The set's own such studies
+    /// are left out, so that placing it again adds none of them twice.
     ReadOnly,
     /// All of them: the set is added beside them.
     All,
@@ -29,6 +30,11 @@ impl Keep {
             Self::ReadOnly => !study.user_edit_enabled(),
             Self::All => true,
         }
+    }
+
+    /// Whether the study of the set saved as `template` is placed.
+    pub(super) fn adds(self, template: &StudyTemplate) -> bool {
+        self != Self::ReadOnly || template.settings.user_edit_enabled != Some(false)
     }
 }
 
@@ -133,16 +139,18 @@ impl Chart {
         factory: &IndicatorFactory,
     ) -> Result<Vec<SeriesId>, String> {
         self.place_study_template_set(set, factory, Keep::None)
+            .map(|ids| ids.into_iter().flatten().collect())
     }
 
     /// Applies `set` as a user's choice, built from the built-in studies, as one
     /// [user action](Self::user_action) that a single undo reverses. The studies whose
     /// [user edits](Self::set_indicator_user_edit_enabled) are off stay, since no user command
-    /// removes them, and count against the [study cap](Self::set_study_limit); the set's studies
-    /// replace the others and are placed beside them as
+    /// removes them, and count against the [study cap](Self::set_study_limit), and the set's own
+    /// such studies are left out, so that applying it again adds none of them twice. The set's
+    /// other studies replace the chart's others and are placed beside the kept ones as
     /// [`apply_study_template_set_with`](Self::apply_study_template_set_with) places them, each
     /// additional scale of theirs numbered apart from those the kept studies use. Returns the ids
-    /// of the set's studies in its order, and fails as
+    /// of the studies it added, in the set's order, and fails as
     /// [`apply_study_template_set`](Self::apply_study_template_set) does.
     pub fn apply_chosen_study_template_set(
         &mut self,
@@ -151,25 +159,25 @@ impl Chart {
         self.user_action(|chart| {
             chart.place_study_template_set(set, &IndicatorFactory::new(), Keep::ReadOnly)
         })
+        .map(|ids| ids.into_iter().flatten().collect())
     }
 
-    /// Adds the studies of `set` in place of the chart's own, but for those `keep` keeps, which
-    /// count against the study cap with them, and fails as
+    /// Adds the studies of `set` that `keep` adds in place of the chart's own, but for those
+    /// `keep` keeps, which count against the study cap with them. Returns the id of each study of
+    /// the set by its position, `None` for those left out, and fails as
     /// [`apply_study_template_set_with`](Self::apply_study_template_set_with) does.
     pub(super) fn place_study_template_set(
         &mut self,
         set: &StudyTemplateSet,
         factory: &IndicatorFactory,
         keep: Keep,
-    ) -> Result<Vec<SeriesId>, String> {
+    ) -> Result<Vec<Option<SeriesId>>, String> {
         let kept = self
             .indicators()
             .filter(|(_, study)| keep.keeps(*study))
             .count();
-        if self
-            .study_limit
-            .is_some_and(|limit| kept + set.studies.len() > limit)
-        {
+        let added = set.studies.iter().filter(|study| keep.adds(study)).count();
+        if self.study_limit.is_some_and(|limit| kept + added > limit) {
             return Err("Study limit reached".into());
         }
         let mut placed = vec![false; set.studies.len()];
@@ -183,8 +191,9 @@ impl Chart {
             .studies
             .iter()
             .map(|template| {
-                template
-                    .create_with(factory)
+                keep.adds(template)
+                    .then(|| template.create_with(factory))
+                    .transpose()
                     .map_err(|error| error.to_string())
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -209,30 +218,38 @@ impl Chart {
         }
         let ids: Vec<_> = studies
             .into_iter()
-            .map(|study| self.add_indicator(study))
+            .map(|study| study.map(|study| self.add_indicator(study)))
             .collect();
         for (id, template) in ids.iter().zip(&set.studies) {
+            let Some(id) = *id else {
+                continue;
+            };
             for (input, value) in &template.inputs {
                 if let InputValue::Source(StudySource::Study { id: parent, plot }) = value {
                     let source = StudySource::Study {
-                        id: ids.get(*parent).map_or(usize::MAX, |parent| parent.0),
+                        id: ids
+                            .get(*parent)
+                            .copied()
+                            .flatten()
+                            .map_or(usize::MAX, |parent| parent.0),
                         plot: *plot,
                     };
-                    self.indicator_mut(*id)
+                    self.indicator_mut(id)
                         .expect("added study")
                         .set_input(input, InputValue::Source(source))
                         .expect("validated study source");
                 }
             }
         }
-        for &at in &set.price_pane {
-            self.move_series_to_pane(ids[at], self.main_series_pane());
+        for id in set.price_pane.iter().filter_map(|&at| ids[at]) {
+            self.move_series_to_pane(id, self.main_series_pane());
         }
         for pane in &set.panes {
+            let pane: Vec<_> = pane.iter().filter_map(|&at| ids[at]).collect();
             if let Some((&first, rest)) = pane.split_first() {
-                self.move_indicator_to_pane(ids[first], ids[first]);
-                for &at in rest {
-                    self.move_indicator_to_pane(ids[at], ids[first]);
+                self.move_indicator_to_pane(first, first);
+                for &id in rest {
+                    self.move_indicator_to_pane(id, first);
                 }
             }
         }
@@ -254,7 +271,7 @@ impl Chart {
     /// Gives each additional scale of `studies` a number this chart does not use yet, keeping
     /// its own where it is free, as the studies' numbers come from another chart or a template.
     /// Studies that share a scale still share one, and only with each other.
-    fn renumber_scales(&self, studies: &mut [Box<dyn Indicator>]) {
+    fn renumber_scales(&self, studies: &mut [Option<Box<dyn Indicator>>]) {
         let mut used: Vec<_> = self
             .indicators()
             .filter_map(|(_, study)| match study.scale() {
@@ -264,7 +281,7 @@ impl Chart {
             .chain(self.series().map(|(_, options)| options.scale))
             .collect();
         let mut renumbered: Vec<(SeriesScale, SeriesScale)> = Vec::new();
-        for study in studies {
+        for study in studies.iter_mut().flatten() {
             let StudyScale::Shared(scale @ (SeriesScale::Separate(_) | SeriesScale::Overlay(_))) =
                 study.scale()
             else {

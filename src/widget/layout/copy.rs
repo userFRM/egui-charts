@@ -22,9 +22,11 @@ pub enum LayoutCopy {
     Study(SeriesId),
     /// Replaces the studies of each other chart with those of the source, with their links,
     /// shared panes and input captions, as [`Chart::apply_study_template_set_with`] does, but
-    /// for the studies whose [user edits](Chart::set_indicator_user_edit_enabled) are off: they
-    /// stay, the source's are added beside them, and they count against the chart's study cap.
-    /// The source's additional scales are then numbered apart from those the kept studies use.
+    /// for the studies whose [user edits](Chart::set_indicator_user_edit_enabled) are off: each
+    /// chart keeps its own, which count against its study cap, and the source's are not copied,
+    /// so that copying again adds none of them twice. The source's other studies are added
+    /// beside the kept ones, their additional scales numbered apart from those the kept studies
+    /// use.
     Studies,
     /// Applies these settings to every chart, the source included. Each other chart keeps its
     /// symbol, interval and chart type, the sizes and other parameters of that type, its own
@@ -172,10 +174,13 @@ impl CopiedStudies {
             .indicators()
             .filter(|(_, study)| self.keep.keeps(*study))
             .count();
-        if chart
-            .study_limit
-            .is_some_and(|limit| kept + self.set.studies.len() > limit)
-        {
+        let added = self
+            .set
+            .studies
+            .iter()
+            .filter(|study| self.keep.adds(study))
+            .count();
+        if chart.study_limit.is_some_and(|limit| kept + added > limit) {
             issues.push(LayoutCopyIssueKind::StudyLimit);
         }
         let no_bars = chart.state.data().bars.is_empty();
@@ -185,6 +190,9 @@ impl CopiedStudies {
         let mut built: Vec<Box<dyn Indicator>> = Vec::new();
         let mut ids = Vec::new();
         for (at, template) in self.set.studies.iter().enumerate() {
+            if !self.keep.adds(template) {
+                continue;
+            }
             let linked = template.inputs.iter().any(|(_, value)| {
                 matches!(value, InputValue::Source(StudySource::Study { id, .. }) if *id != NO_STUDY)
             });
@@ -428,7 +436,9 @@ impl ChartLayout {
                             .place_study_template_set(&studies.set, factory, studies.keep)
                             .unwrap_or_default();
                         for (id, caption) in ids.into_iter().zip(&studies.captions) {
-                            chart.set_indicator_inputs(id, caption.clone());
+                            if let Some(id) = id {
+                                chart.set_indicator_inputs(id, caption.clone());
+                            }
                         }
                     }
                     _ => {}
@@ -751,7 +761,8 @@ mod tests {
     }
 
     /// The set replaces the studies each chart lets the user edit, keeping links, shared panes and
-    /// captions; only the charts of the preset take it.
+    /// captions; only the charts of the preset take it. The source's read-only studies stay its
+    /// own, so that copying again changes nothing.
     #[test]
     fn study_set_copy_replaces_editable_studies_with_links_and_panes() {
         let (mut a, mut b, mut hidden) = (chart(50), chart(50), chart(50));
@@ -810,6 +821,13 @@ mod tests {
                 kind: LayoutCopyIssueKind::StudyLimit
             }]
         );
+        charts[1].set_study_limit(None);
+        let own = charts[0].add_indicator(Box::new(crate::studies::EMA::new(3)));
+        charts[0].set_indicator_user_edit_enabled(own, false);
+        for _ in 0..2 {
+            layout.apply_copy(&mut charts, 0, &LayoutCopy::Studies, &factory);
+            assert_eq!(names(charts[1]), ["EMA", "RSI", "SMA"]);
+        }
     }
 
     /// A copied study on an additional scale gets one apart from the scales the other chart
