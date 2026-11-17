@@ -98,7 +98,8 @@ fn navigation_buttons(visibility: ButtonVisibility) -> NavigationButtons {
 pub enum ChartSettingsError {
     /// `timezone` names no time zone this build knows.
     Timezone(crate::model::ParseError),
-    /// The margins are not finite, are negative or leave no room for prices.
+    /// A margin is not finite, is negative or is above 100 percent. Margins that together leave
+    /// no room for prices are accepted, and ignored by the fit.
     Margins {
         /// The top margin in percent.
         top: f32,
@@ -425,12 +426,7 @@ impl ChartSettingsState {
         let timezone = self.timezone_mode()?;
         let top = self.margins.top_percent;
         let bottom = self.margins.bottom_percent;
-        if !top.is_finite()
-            || !bottom.is_finite()
-            || top < 0.0
-            || bottom < 0.0
-            || top + bottom >= 100.0
-        {
+        if !(0.0..=100.0).contains(&top) || !(0.0..=100.0).contains(&bottom) {
             return Err(ChartSettingsError::Margins { top, bottom });
         }
         let right = self.margins.right_bars;
@@ -608,9 +604,13 @@ impl ChartSettingsState {
         config.show_indicator_labels = self.status_line.show_indicator_titles;
         config.show_indicator_inputs = self.status_line.show_indicator_inputs;
         config.show_indicator_last_val = self.status_line.show_indicator_values;
-        if axis_layout.side.is_none() {
-            config.show_right_axis = !self.scales_and_lines.price_scale_left;
-            config.show_left_axis = self.scales_and_lines.price_scale_left;
+        // The placement reads both axes hidden or both shown as right, which an unedited Ok
+        // keeps.
+        let left = self.scales_and_lines.price_scale_left;
+        let chart_left = config.show_left_axis && !config.show_right_axis;
+        if axis_layout.side.is_none() && left != chart_left {
+            config.show_right_axis = !left;
+            config.show_left_axis = left;
         }
         config.show_currency = self.scales_and_lines.show_currency;
         config.show_unit = self.scales_and_lines.show_unit;
@@ -1378,6 +1378,45 @@ mod tests {
         assert_eq!(config.grid_color, grid);
         assert_eq!(config.vertical_grid_color, Some(old_grid));
         assert!(chart.can_undo());
+
+        // Margins leaving no room for prices, which the fit ignores, are kept.
+        let mut chart = Chart::new(bars());
+        chart.price_scale_mut().options_mut().scale_margins = crate::scales::PriceScaleMargins {
+            top: 0.6,
+            bottom: 0.4,
+        };
+        chart.user_action(|chart| {
+            ChartSettingsState::from_chart(chart)
+                .apply_to_chart(chart)
+                .unwrap();
+        });
+        assert!(!chart.can_undo());
+
+        // Hidden and doubled price axes read as a right placement, which keeps them as they are.
+        for (left, right) in [(false, false), (true, true)] {
+            let mut chart = Chart::new(bars());
+            chart.config_mut().show_left_axis = left;
+            chart.config_mut().show_right_axis = right;
+            chart.user_action(|chart| {
+                ChartSettingsState::from_chart(chart)
+                    .apply_to_chart(chart)
+                    .unwrap();
+            });
+            let config = chart.config();
+            assert_eq!(
+                (config.show_left_axis, config.show_right_axis),
+                (left, right)
+            );
+            assert!(!chart.can_undo(), "axes {left} {right}");
+            let mut settings = ChartSettingsState::from_chart(&chart);
+            settings.scales_and_lines.price_scale_left = true;
+            settings.apply_to_chart(&mut chart).unwrap();
+            let config = chart.config();
+            assert_eq!(
+                (config.show_left_axis, config.show_right_axis),
+                (true, false)
+            );
+        }
 
         // An ATR(14) reversal of 2 on 14 bars with a true range of 2 stays through a streamed
         // bar with a true range of 16 and an unedited apply, which would make it

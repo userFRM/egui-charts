@@ -86,7 +86,7 @@ impl Indicator for VWMA {
     }
 
     fn desc(&self) -> &str {
-        "Volume Weighted Moving Avg - MA weighted by volume"
+        "Volume Weighted Moving Average - MA weighted by volume"
     }
 
     fn calculate(&mut self, data: &[Bar]) {

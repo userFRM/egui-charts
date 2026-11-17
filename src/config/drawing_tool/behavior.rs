@@ -192,12 +192,38 @@ impl DrawingToolType {
         )
     }
 
-    /// Whether the drawing paints a line whose width and pattern its settings can change.
-    /// Solid marks and annotations with fixed borders or guides offer no line controls.
-    pub fn draws_line(&self) -> bool {
+    /// Whether the renderer draws the drawing's line width, so the Style tab and the floating
+    /// toolbar offer it. Cards keep their fixed borders.
+    pub fn supports_line_width(&self) -> bool {
+        self.draws_line() && !matches!(self, Self::Image | Self::Tweet | Self::Idea)
+    }
+
+    /// Whether the renderer draws the drawing's line style, so the Style tab and the floating
+    /// toolbar offer it. Pitchfork levels and the regression trend's lines set their own.
+    pub fn supports_line_style(&self) -> bool {
+        self.draws_line()
+            && !matches!(
+                self,
+                Self::Pitchfork
+                    | Self::SchiffPitchfork
+                    | Self::ModifiedSchiffPitchfork
+                    | Self::InsidePitchfork
+                    | Self::Pitchfan
+                    | Self::RegressionTrend
+            )
+    }
+
+    /// Whether the drawing paints lines in the common width or style. Cursors, solid marks,
+    /// annotations with fixed borders or guides, icons, stickers and the ghost feed do not, nor do
+    /// tools whose levels or zones set every line's width and style.
+    fn draws_line(&self) -> bool {
         !matches!(
             self,
-            Self::TextLabel
+            Self::CrossCursor
+                | Self::DotCursor
+                | Self::ArrowCursor
+                | Self::Eraser
+                | Self::TextLabel
                 | Self::AnchoredText
                 | Self::Note
                 | Self::PriceNote
@@ -212,6 +238,13 @@ impl DrawingToolType {
                 | Self::ArrowMarkDown
                 | Self::ArrowMarkLeft
                 | Self::ArrowMarkRight
+                | Self::FontIcon
+                | Self::Sticker
+                | Self::GhostFeed
+                | Self::FibonacciChannel
+                | Self::FibonacciSpeedFan
+                | Self::LongPos
+                | Self::ShortPos
         )
     }
 

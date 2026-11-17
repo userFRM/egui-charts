@@ -111,7 +111,7 @@ impl Indicator for SWMA {
     }
 
     fn desc(&self) -> &str {
-        "Symmetrically Weighted Moving Avg - 4-bar symmetric weighted MA"
+        "Symmetrically Weighted Moving Average - 4-bar symmetric weighted MA"
     }
 
     fn calculate(&mut self, data: &[Bar]) {

@@ -20,6 +20,11 @@ const FONT_LIMITS: [f32; 2] = [8.0, 24.0];
 const LADDER_CELL_SHARE: f32 = 0.39;
 /// The height of a ladder bar's totals and box, three rows of the 10 point font and their margins.
 const INFO_BOX_HEIGHT: f32 = 46.0;
+/// How far a bar's two threshold-marker rows reach beyond its outer row: 4.5 radii of at most
+/// 4 points.
+const MARKER_ROOM: f32 = 18.0;
+/// The height of a bar's extreme ratio, one line of the 10 point font.
+const RATIO_TEXT_HEIGHT: f32 = 14.0;
 
 pub use crate::model::{FootprintColor, FootprintMode};
 
@@ -101,8 +106,9 @@ pub struct FootprintConfig {
     /// within 8 and 24 points. Fitting to the cell can reduce the size to 8 points; columns that
     /// cannot fit readable numbers use an overview without them.
     pub font_size: [f32; 2],
-    /// Write the ask/bid ratio of the highest and lowest row of each bar above and below it,
-    /// or `n/a` when the bid is zero and the ratio is undefined.
+    /// Write the ask/bid ratio of the highest and lowest row of each bar beyond those rows, or
+    /// `n/a` when the bid is zero and the ratio is undefined. With annotations that mark delta
+    /// percentages or bid/ask ratios, the ratios are written beyond their markers.
     pub extreme_ratio: bool,
     /// Outline the rows of the bar's pullback range, see [`pullback_range`].
     pub pullback: bool,
@@ -778,6 +784,9 @@ pub(crate) fn render_footprint_read(
             }
         }
         if config.extreme_ratio {
+            let offset = ratio_offset(config);
+            // An inverted scale puts the highest row at the bottom.
+            let inverted = mapping.price.is_inverted();
             let step = flow.price_step() * group as f64;
             let first = shown.levels.first_key_value();
             let last = shown.levels.last_key_value();
@@ -806,12 +815,12 @@ pub(crate) fn render_footprint_read(
                 );
                 let galley =
                     painter.layout_no_wrap(text, FontId::monospace(10.0), config.text_color);
-                let anchor = if high {
-                    Align2::CENTER_BOTTOM
+                let (anchor, at) = if high != inverted {
+                    (Align2::CENTER_BOTTOM, edge - offset)
                 } else {
-                    Align2::CENTER_TOP
+                    (Align2::CENTER_TOP, edge + offset)
                 };
-                let bounds = anchor.anchor_size(pos2(x, edge), galley.size());
+                let bounds = anchor.anchor_size(pos2(x, at), galley.size());
                 if edge.is_finite()
                     && galley.size().x <= mapping.bar_spacing
                     && mapping.rect.contains_rect(bounds)
@@ -1090,17 +1099,41 @@ fn has_ladder(config: &FootprintConfig) -> bool {
         .any(|mode| *mode == FootprintMode::Ladder)
 }
 
-/// How far below a bar's lowest row its summary starts: past the extreme ratio and threshold
-/// marker rows, which sit directly below the bar, when they are on.
+/// How far below a bar's lowest row its summary starts: past the threshold marker rows and the
+/// extreme ratio, which sit below the bar, when they are on.
 fn info_box_offset(config: &FootprintConfig) -> f32 {
     #[cfg(feature = "studies")]
     let studies = config.studies.is_some();
     #[cfg(not(feature = "studies"))]
     let studies = false;
     if config.extreme_ratio || studies {
-        20.0
+        outer_room(config) + 2.0
     } else {
         2.0
+    }
+}
+
+/// How far beyond its outer row a bar's extreme ratio starts: past the threshold markers when
+/// the annotations can paint them, that is when they mark delta percentages or bid/ask ratios at
+/// a threshold the study accepts.
+fn ratio_offset(
+    #[cfg_attr(not(feature = "studies"), allow(unused_variables))] config: &FootprintConfig,
+) -> f32 {
+    #[cfg(feature = "studies")]
+    let markers = config.studies.as_ref().is_some_and(|studies| {
+        studies.delta_percent.is_some_and(|t| t >= 0.0) || studies.ratio.is_some_and(|r| r >= 1.0)
+    });
+    #[cfg(not(feature = "studies"))]
+    let markers = false;
+    if markers { MARKER_ROOM + 2.0 } else { 0.0 }
+}
+
+/// How far a bar's threshold markers and extreme ratios reach beyond either of its outer rows.
+fn outer_room(config: &FootprintConfig) -> f32 {
+    if config.extreme_ratio {
+        MARKER_ROOM.max(ratio_offset(config) + RATIO_TEXT_HEIGHT)
+    } else {
+        MARKER_ROOM
     }
 }
 
@@ -1343,7 +1376,22 @@ pub fn render_footprint_statistics(
         text_color,
         ..Default::default()
     };
-    render_footprint_statistics_rows(painter, mapping, bars, flow, &config, None);
+    render_footprint_statistics_rows(painter, mapping, bars, flow, &config, None, &[]);
+}
+
+/// The rows that read open interest, left out of the table without it.
+pub(crate) const OPEN_INTEREST_ROWS: [FootprintStatistic; 2] = [
+    FootprintStatistic::OpenInterestHigh,
+    FootprintStatistic::OpenInterestLow,
+];
+
+/// The open interest the statistics read: the metric `open_interest` of the chart symbol.
+pub(crate) fn open_interest_request() -> crate::data::StudyDataRequest {
+    crate::data::StudyDataRequest {
+        symbol: String::new(),
+        timeframe: None,
+        metric: Some("open_interest".to_owned()),
+    }
 }
 
 /// Draws the rows of [`FootprintConfig::statistics_rows`] in their order and in
@@ -1360,6 +1408,11 @@ pub fn render_footprint_statistics(
 /// price of the highest-volume row among the rows [`render_footprint`] groups for `config` under
 /// the price mapping of `mapping`, so it names the row marked in the bar. Range and point of
 /// control are written at the decimals of the instrument's tick.
+///
+/// `open_interest` holds the open interest points as study data bars, sorted by time with the
+/// value in `close`, each in effect until the next. A bar's high and low are taken over the point
+/// in effect at its open and every point published before its close; a bar before the first point
+/// has an empty cell. With no points both open interest rows are left out of the table.
 pub fn render_footprint_statistics_rows(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -1367,8 +1420,17 @@ pub fn render_footprint_statistics_rows(
     flow: &Footprint,
     config: &FootprintConfig,
     sessions: Option<&dyn SessionProvider>,
+    open_interest: &[Bar],
 ) {
-    render_footprint_statistics_rows_read(painter, mapping, bars, flow.into(), config, sessions)
+    render_footprint_statistics_rows_read(
+        painter,
+        mapping,
+        bars,
+        flow.into(),
+        config,
+        sessions,
+        open_interest,
+    )
 }
 
 pub(crate) fn render_footprint_statistics_rows_read(
@@ -1378,8 +1440,13 @@ pub(crate) fn render_footprint_statistics_rows_read(
     flow: FootprintView<'_>,
     config: &FootprintConfig,
     sessions: Option<&dyn SessionProvider>,
+    open_interest: &[Bar],
 ) {
-    let (rows, text_color) = (config.statistics_rows.as_slice(), config.text_color);
+    let mut rows = config.statistics_rows.clone();
+    if open_interest.is_empty() {
+        rows.retain(|row| !OPEN_INTEREST_ROWS.contains(row));
+    }
+    let (rows, text_color) = (rows.as_slice(), config.text_color);
     if rows.is_empty() {
         return;
     }
@@ -1477,6 +1544,33 @@ pub(crate) fn render_footprint_statistics_rows_read(
                     .map(|level| level as f64 * step)
             })
             .flatten();
+        // The point in effect at the open, then every point published before the bar's end.
+        let interest = rows
+            .iter()
+            .any(|row| OPEN_INTEREST_ROWS.contains(row))
+            .then(|| {
+                let end = flow
+                    .clock()
+                    .next_open(bar.time)
+                    .or_else(|| bars.get(i + 1).map(|next| next.time));
+                let start = open_interest
+                    .partition_point(|point| point.time <= bar.time)
+                    .saturating_sub(1);
+                let stop = end.map_or(open_interest.len(), |end| {
+                    open_interest.partition_point(|point| point.time < end)
+                });
+                open_interest
+                    .get(start..stop)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|point| point.close)
+                    .fold(None, |range: Option<(f64, f64)>, value| {
+                        Some(range.map_or((value, value), |(high, low)| {
+                            (high.max(value), low.min(value))
+                        }))
+                    })
+            })
+            .flatten();
         let values = [
             Some(volume),
             Some(row.bid),
@@ -1496,6 +1590,8 @@ pub(crate) fn render_footprint_statistics_rows_read(
             previous
                 .filter(|previous| *previous > 0.0)
                 .map(|previous| (volume - previous) / previous * 100.0),
+            interest.map(|(high, _)| high),
+            interest.map(|(_, low)| low),
         ];
         let values: Vec<_> = rows.iter().map(|row| values[*row as usize]).collect();
         columns.push((x, first_volume, values));
@@ -1523,6 +1619,12 @@ pub(crate) fn render_footprint_statistics_rows_read(
                                         (FootprintStatistic::VolumeChange, None) if *first => {
                                             String::new()
                                         }
+                                        // No open interest was published yet.
+                                        (
+                                            FootprintStatistic::OpenInterestHigh
+                                            | FootprintStatistic::OpenInterestLow,
+                                            None,
+                                        ) => String::new(),
                                         (_, None) => unavailable.clone(),
                                         (
                                             FootprintStatistic::DeltaPercent
@@ -1686,7 +1788,8 @@ pub(crate) fn render_footprint_annotations(
 /// stacks take the imbalance colour of their side;
 /// local annotations stay anchored to their originating bar. Delta percentage and ratio markers
 /// are triangles outside the bar: buy markers above it, sell markers below, the delta marker
-/// nearest and the ratio marker beyond it. Captions avoid every footprint and its marker rows; details are
+/// nearest and the ratio marker beyond it. Extreme ratios written by [`render_footprint`] with the
+/// same `config` go beyond both. Captions avoid every footprint and its marker rows; details are
 /// available on hover when a caption has no room. Overview marks shrink with bar spacing and
 /// zones become faint centre lines. Prices use the aggregation's row step.
 #[cfg(feature = "studies")]
@@ -1739,9 +1842,10 @@ pub(crate) fn render_footprint_studies_read(
                 pos2(x - mapping.bar_spacing * 0.46, y1.min(y2)),
                 pos2(x + mapping.bar_spacing * 0.46, y1.max(y2)),
             );
-            // The two threshold-marker rows extend up to 18 points beyond either extreme, and a
-            // ladder's summary below the bar takes the same space or more.
-            let mut reserved = rect.expand2(vec2(0.0, 18.0));
+            // The two threshold-marker rows and an extreme ratio beyond them reach `outer_room`
+            // beyond either extreme, and a ladder's summary below the bar takes the same space or
+            // more.
+            let mut reserved = rect.expand2(vec2(0.0, outer_room(config)));
             let summary = summary_room(config);
             if summary > 0.0 {
                 reserved.max.y = rect.max.y + summary;
@@ -2974,6 +3078,12 @@ mod tests {
     /// footprint draws them in pairs and both bars have their point of control in the row at
     /// 100.00, where the busiest price of the first is 100.25. The second bar trades 2500 after
     /// 16, a change of 2484 / 16 = 15525%, all of it sold, at one price.
+    ///
+    /// Open interest of 1000 from 09:58, 1004 from 10:00:20, 998 from 10:00:40, 1006 from 10:01
+    /// and 1010 from 10:05: the first bar opens at 1000 and publishes 1004 and 998 before 10:01,
+    /// so its high is 1004 and its low 998. The second holds 1006, published at its open, with
+    /// nothing else before 10:02; 10:05 is after both. Without the points the open interest rows
+    /// are left out.
     #[test]
     fn statistics_keep_shared_rows_and_aligned_values_or_explain_the_overview() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
@@ -2991,6 +3101,16 @@ mod tests {
             Bar::new(time, 100.0, 100.25, 100.0, 100.25, 16.0),
             Bar::new(next, 100.0, 100.0, 100.0, 100.0, 2500.0),
         ];
+        let points: Vec<_> = [
+            ("2026-01-05T09:58:00Z", 1000.0),
+            ("2026-01-05T10:00:20Z", 1004.0),
+            ("2026-01-05T10:00:40Z", 998.0),
+            ("2026-01-05T10:01:00Z", 1006.0),
+            ("2026-01-05T10:05:00Z", 1010.0),
+        ]
+        .into_iter()
+        .map(|(at, value)| Bar::new(at.parse().unwrap(), value, value, value, value, 0.0))
+        .collect();
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 136.0));
         let empty = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
         // Marked rows run with a translator that turns each name and message into "~".
@@ -3005,15 +3125,16 @@ mod tests {
             (60.0, true, false, 196.0, false),
             (60.0, true, false, 196.0, true),
             (60.0, false, false, 196.0, true),
+            (60.0, true, false, 220.0, false),
         ] {
             // The default renderer keeps its nine rows, which fit the panes hosts already reserve.
-            let count = if height == 112.0 {
-                9
-            } else if height == 196.0 {
-                16
-            } else {
-                11
+            let (selected, count) = match height {
+                112.0 => (9, 9),
+                196.0 => (18, 16),
+                220.0 => (18, 18),
+                _ => (11, 11),
             };
+            let interest = if count == 18 { &points[..] } else { &[] };
             let rect = Rect::from_min_size(rect.min, vec2(rect.width(), height));
             let mut shown = flow.clone();
             let mut bars = bars.clone();
@@ -3058,7 +3179,7 @@ mod tests {
                     } else {
                         let config = FootprintConfig {
                             text_color: Color32::WHITE,
-                            statistics_rows: FootprintStatistic::ALL[..count].to_vec(),
+                            statistics_rows: FootprintStatistic::ALL[..selected].to_vec(),
                             ..Default::default()
                         };
                         render_footprint_statistics_rows(
@@ -3068,6 +3189,7 @@ mod tests {
                             flow,
                             &config,
                             None,
+                            interest,
                         )
                     }
                 },
@@ -3124,17 +3246,18 @@ mod tests {
             for (column, expected) in [
                 [
                     "16", "3", "13", "10", "-3", "10", "10", "62.5%", "4.33:1", "3", "5.333",
-                    "18.8%", "81.2%", "0.25", "100.00", "",
+                    "18.8%", "81.2%", "0.25", "100.00", "", "1004", "998",
                 ],
                 if large {
                     [
                         "123.5M", "123.5M", "0", "-123.5M", "-123.5M", "0", "-123.5M", "-100.0%",
-                        "0.00:1", "2", "61.7M", "", "", "", "", "",
+                        "0.00:1", "2", "61.7M", "", "", "", "", "", "", "",
                     ]
                 } else {
                     [
                         "2500", "2500", "0", "-2500", "-2500", "0", "-2490", "-100.0%", "0.00:1",
-                        "1", "2500", "100.0%", "0.0%", "0.00", "100.00", "15525.0%",
+                        "1", "2500", "100.0%", "0.0%", "0.00", "100.00", "15525.0%", "1006",
+                        "1006",
                     ]
                 },
             ]
@@ -3200,7 +3323,17 @@ mod tests {
                 screen_rect: Some(rect),
                 ..Default::default()
             },
-            |ui| render_footprint_statistics_rows(ui.painter(), &map, &bars, &flow, &config, None),
+            |ui| {
+                render_footprint_statistics_rows(
+                    ui.painter(),
+                    &map,
+                    &bars,
+                    &flow,
+                    &config,
+                    None,
+                    &[],
+                )
+            },
         );
         output.textures_delta.clear();
         let texts: Vec<_> = output
@@ -3295,6 +3428,7 @@ mod tests {
                         &flow,
                         &config,
                         sessions,
+                        &[],
                     );
                 },
             );
@@ -3374,6 +3508,7 @@ mod tests {
                     &flow,
                     &config,
                     Some(&days),
+                    &[],
                 );
             },
         );
@@ -3475,6 +3610,7 @@ mod tests {
                         &flow,
                         &config,
                         None,
+                        &[],
                     );
                 },
             );
@@ -3782,6 +3918,143 @@ mod tests {
         ] {
             let bar = Bar::new(time, open, 100.5, 100.0, close, 3.0);
             assert_eq!(pullback_range(&bar, &flow), expected, "{open} to {close}");
+        }
+    }
+
+    /// A bar's extreme ratios are written beyond its rows, its threshold markers and its
+    /// summary, with the highest row's ratio on the side of that row, also on an inverted scale.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn extreme_ratios_clear_their_bar_and_threshold_markers() {
+        use crate::studies::{
+            FootprintStudy, FootprintStudyConfig, FootprintStudyKind, FootprintStudyState,
+        };
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let bars = [Bar::new(time, 105.0, 106.0, 105.0, 105.0, 1.0)];
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        // Ask/bid 250,100 / 223,400 is 1.12 at 106 and 120,000 / 320,100 is 0.37 at 105.
+        for (price, sell, buy) in [(106.0, 223_400.0, 250_100.0), (105.0, 320_100.0, 120_000.0)] {
+            for (size, side) in [(sell, OrderSide::Sell), (buy, OrderSide::Buy)] {
+                flow.push(&Tick::new(time, price, size, Some(side)))
+                    .unwrap();
+            }
+        }
+        let config = FootprintConfig {
+            extreme_ratio: true,
+            auto_row_height: None,
+            studies: Some(FootprintStudyConfig {
+                delta_percent: Some(10.0),
+                ratio: Some(1.5),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let studies = [
+            FootprintStudyKind::DeltaAsk,
+            FootprintStudyKind::RatioAsk,
+            FootprintStudyKind::DeltaBid,
+            FootprintStudyKind::RatioBid,
+        ]
+        .map(|kind| FootprintStudy {
+            start: time,
+            end: Some(time),
+            low: 105,
+            high: 106,
+            kind,
+            state: FootprintStudyState::Local,
+        });
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(480.0, 320.0));
+        let ctx = egui::Context::default();
+        for spacing in [60.0, 120.0] {
+            for inverted in [false, true] {
+                let map = ChartMapping::new(
+                    rect,
+                    spacing,
+                    0,
+                    0,
+                    0.0,
+                    PriceMap::new(
+                        PriceTransform::default(),
+                        PriceRange::new(98.0, 110.0),
+                        0.0,
+                        320.0,
+                        inverted,
+                    ),
+                );
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(rect),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        render_footprint(ui.painter(), &map, &bars, &flow, &config);
+                        render_footprint_studies(
+                            ui.painter(),
+                            &map,
+                            &bars,
+                            &flow,
+                            &studies,
+                            &config,
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+                let shapes: Vec<_> = output.shapes.into_iter().map(|s| s.shape).collect();
+                let markers: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        // The value-area markers in the gap are text coloured.
+                        Shape::Path(path)
+                            if path.fill == config.ask_color || path.fill == config.bid_color =>
+                        {
+                            Some(Rect::from_points(&path.points))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    markers.len(),
+                    4,
+                    "markers at {spacing}, inverted {inverted}"
+                );
+                let text = painted_text(&shapes);
+                // The rows run from 104.5 to 106.5, y 146.67 to 93.33, or 173.33 to 226.67.
+                let x = map.idx_to_x(0);
+                let [low, high] = [104.5, 106.5].map(|price| map.price_to_y(price));
+                let rows = Rect::from_x_y_ranges(
+                    x - spacing * 0.5..=x + spacing * 0.5,
+                    low.min(high)..=low.max(high),
+                );
+                for (label, side) in [("A/B 1.12", high), ("A/B 0.37", low)] {
+                    let (_, bounds) =
+                        text.iter()
+                            .find(|(text, _)| text == label)
+                            .unwrap_or_else(|| {
+                                panic!("{label} missing at {spacing}, inverted {inverted}")
+                            });
+                    assert!(
+                        !bounds.intersects(rows),
+                        "{label} over the rows at {spacing}, inverted {inverted}"
+                    );
+                    assert_eq!(
+                        bounds.center().y < rows.center().y,
+                        side < rows.center().y,
+                        "{label} beyond its own row at {spacing}, inverted {inverted}"
+                    );
+                    for marker in &markers {
+                        assert!(
+                            !bounds.intersects(*marker),
+                            "{label} over a marker at {spacing}, inverted {inverted}"
+                        );
+                    }
+                    for (other, rect) in &text {
+                        assert!(
+                            other == label || !bounds.intersects(*rect),
+                            "{label} over {other} at {spacing}, inverted {inverted}"
+                        );
+                    }
+                }
+            }
         }
     }
 

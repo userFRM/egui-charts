@@ -2,7 +2,7 @@
 //!
 //! Floating toolbar for object customization.
 
-use crate::drawings::{ChartPoint, LineMeasurements};
+use crate::drawings::{ChartPoint, DrawingToolType, LineMeasurements};
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::model::LineStyle;
@@ -64,13 +64,15 @@ pub struct FloatingSelectionToolbar {
     color_slots: Vec<ColorSlot>,
     /// Palette state per colour slot
     pickers: Vec<ColorPickerState>,
-    /// Line width and style of the selected drawing
-    stroke: Option<(f32, LineStyle)>,
+    /// Line width of the selected drawing, when its tool draws it
+    width: Option<f32>,
+    /// Line style of the selected drawing, when its tool draws it
+    line_style: Option<LineStyle>,
     /// Symbol and id of the drawing the toolbar follows
     selected: Option<(String, usize)>,
-    /// What the toolbar last stayed clear of the readout card for: the drawing's readouts and
-    /// anchors, and the toolbar's size
-    placed_for: Option<(LineMeasurements, Vec<ChartPoint>, Vec2)>,
+    /// What the toolbar last stayed clear of the drawing's label or readout card for: the
+    /// drawing's readouts and anchors, the toolbar's size and the painted label's size
+    placed_for: Option<(LineMeasurements, Vec<ChartPoint>, Vec2, Option<Vec2>)>,
     /// Whether a custom colour gesture is still open as one undo step
     colour_drag: bool,
     /// The "More" menu
@@ -102,7 +104,8 @@ impl FloatingSelectionToolbar {
             ),
             color_slots: Vec::new(),
             pickers: Vec::new(),
-            stroke: None,
+            width: None,
+            line_style: None,
             selected: None,
             placed_for: None,
             colour_drag: false,
@@ -203,21 +206,25 @@ impl FloatingSelectionToolbar {
             self.selected = Some(selected);
         }
         // Waits for the pointer so that the toolbar holds still while anchors are dragged; only
-        // edits of the drawing and the measured size move it, and only off the card.
-        // shortcut: panning or zooming can still slide the card under the toolbar, which does not
-        // follow the view; compare the anchors' screen points if that proves to matter.
+        // edits of the drawing, of its label's size and the measured size move it, and only off
+        // the label or card.
+        // shortcut: panning or zooming can still slide the label under the toolbar, which does
+        // not follow the view; compare the anchors' screen points if that proves to matter.
         let size = self.size();
+        let label = chart.drawings().painted_label_rect(drawing);
+        let label_size = label.map(|label| label.size());
         if !ui.input(|i| i.pointer.any_down())
             && self
                 .placed_for
                 .as_ref()
-                .is_none_or(|(readouts, points, placed)| {
+                .is_none_or(|(readouts, points, placed, painted)| {
                     *readouts != drawing.line_measurements
                         || points.as_slice() != drawing.chart_points.as_slice()
                         || *placed != size
+                        || *painted != label_size
                 })
         {
-            if let Some(card) = chart.line_measurement_card_rect(ui, drawing) {
+            if let Some(card) = chart.line_measurement_card_rect(ui, drawing).or(label) {
                 self.position = clear_of_card(
                     self.position,
                     size,
@@ -231,28 +238,43 @@ impl FloatingSelectionToolbar {
                 drawing.line_measurements,
                 drawing.chart_points.clone(),
                 size,
+                label_size,
             ));
         }
         self.set_locked(drawing.locked);
         self.set_object_visible(drawing.visible);
-        self.set_colors(vec![ColorSlot {
-            label: if drawing.tool_type.is_text_annotation() {
-                "Text color"
+        // A sticker's art and the ghost feed's candles keep their own colours.
+        self.set_colors(
+            if matches!(
+                drawing.tool_type,
+                DrawingToolType::Sticker | DrawingToolType::GhostFeed
+            ) {
+                Vec::new()
             } else {
-                "Line color"
+                vec![ColorSlot {
+                    label: if drawing.tool_type.is_text_annotation() {
+                        "Text color"
+                    } else {
+                        "Line color"
+                    },
+                    color: drawing.color32(),
+                }]
             },
-            color: drawing.color32(),
-        }]);
+        );
         if drawing.tool_type.supports_fill() {
             self.color_slots.push(ColorSlot {
                 label: "Fill color",
                 color: drawing.fill_color32().unwrap_or(Color32::TRANSPARENT),
             });
         }
-        self.stroke = drawing
+        self.width = drawing
             .tool_type
-            .draws_line()
-            .then_some((drawing.stroke_width, drawing.line_style));
+            .supports_line_width()
+            .then_some(drawing.stroke_width);
+        self.line_style = drawing
+            .tool_type
+            .supports_line_style()
+            .then_some(drawing.line_style);
         // Refresh context without reopening the menu or resetting its dismiss state.
         if !self.menu.is_open() {
             self.menu.open_on(ui.ctx(), chart, self.position, id);
@@ -400,28 +422,28 @@ impl FloatingSelectionToolbar {
                                             }
                                         }
                                     }
-                                    if let Some((width, style)) = &mut self.stroke {
-                                        if ui.combo_select_width(
+                                    if let Some(width) = &mut self.width
+                                        && ui.combo_select_width(
                                             "selection_width",
                                             width,
                                             [1.0, 2.0, 3.0, 4.0],
                                             |v| format!("{v} px"),
                                             48.0,
-                                        ) {
-                                            action =
-                                                Some(FloatingToolbarAction::ChangeWidth(*width));
-                                        }
-                                        let ctx = ui.ctx().clone();
-                                        if ui.combo_select_width(
+                                        )
+                                    {
+                                        action = Some(FloatingToolbarAction::ChangeWidth(*width));
+                                    }
+                                    let ctx = ui.ctx().clone();
+                                    if let Some(style) = &mut self.line_style
+                                        && ui.combo_select_width(
                                             "selection_style",
                                             style,
                                             LineStyle::all().iter().copied(),
                                             |v| l10n::text(&ctx, v.name()),
                                             72.0,
-                                        ) {
-                                            action =
-                                                Some(FloatingToolbarAction::ChangeStyle(*style));
-                                        }
+                                        )
+                                    {
+                                        action = Some(FloatingToolbarAction::ChangeStyle(*style));
                                     }
                                 });
                             });
@@ -564,10 +586,10 @@ impl FloatingSelectionToolbar {
     }
 }
 
-/// Where a toolbar of `size` at `position` goes so that it does not cover a drawing's readout
-/// `card`: where it is when clear of it, else above the card and `anchors`, below them, above or
-/// below the card alone, or beside it, preferring a place off the drawing's `line`. Unmoved when
-/// `bounds` has no such place.
+/// Where a toolbar of `size` at `position` goes so that it does not cover a drawing's label or
+/// readout `card`: where it is when clear of it, else above the card and `anchors`, below them,
+/// above or below the card alone, or beside it, preferring a place off the drawing's `line`.
+/// Unmoved when `bounds` has no such place.
 fn clear_of_card(
     position: Pos2,
     size: Vec2,
@@ -745,15 +767,20 @@ mod tests {
     }
 
     /// The colour of a text annotation is its text's; a label on a line does not make the line's
-    /// colour a text colour, although the colour paints both.
+    /// colour a text colour, although the colour paints both. A sticker and a ghost feed keep
+    /// their own colours. Width and style are offered apart, each where the tool draws it.
     #[test]
     fn colour_slot_names_what_the_colour_paints() {
         use crate::drawings::{Drawing, DrawingToolType as Tool};
-        for (tool, label) in [
-            (Tool::TrendLine, "Line color"),
-            (Tool::TextLabel, "Text color"),
-            (Tool::ArrowMarkUp, "Line color"),
-            (Tool::ArrowMarker, "Line color"),
+        for (tool, label, offers) in [
+            (Tool::TrendLine, Some("Line color"), (true, true)),
+            (Tool::TextLabel, Some("Text color"), (false, false)),
+            (Tool::ArrowMarkUp, Some("Line color"), (false, false)),
+            (Tool::ArrowMarker, Some("Line color"), (false, false)),
+            (Tool::Pitchfork, Some("Line color"), (true, false)),
+            (Tool::Tweet, Some("Text color"), (false, true)),
+            (Tool::Sticker, None, (false, false)),
+            (Tool::GhostFeed, None, (false, false)),
         ] {
             let mut chart = Chart::new(crate::model::BarData::new());
             let mut drawing = Drawing::new(7, tool);
@@ -767,8 +794,16 @@ mod tests {
                     toolbar.show_and_apply(ui, &mut chart);
                 })
                 .drop_without_applying_deltas();
-            assert_eq!(toolbar.color_slots[0].label, label, "{tool:?}");
-            assert_eq!(toolbar.stroke.is_some(), tool.draws_line(), "{tool:?}");
+            assert_eq!(
+                toolbar.color_slots.first().map(|slot| slot.label),
+                label,
+                "{tool:?}"
+            );
+            assert_eq!(
+                (toolbar.width.is_some(), toolbar.line_style.is_some()),
+                offers,
+                "{tool:?}"
+            );
         }
     }
 
@@ -911,7 +946,8 @@ mod tests {
                 false,
                 true,
             );
-            toolbar.stroke = Some((2.0, LineStyle::Solid));
+            toolbar.width = Some(2.0);
+            toolbar.line_style = Some(LineStyle::Solid);
             toolbar.set_colors(vec![ColorSlot {
                 label: "Line color",
                 color: Color32::BLUE,
@@ -1084,6 +1120,132 @@ mod tests {
             })
             .drop_without_applying_deltas();
             assert!(card.is_some_and(|card| card.contains_rect(text)), "{case}");
+        }
+    }
+
+    /// The toolbar leaves a selected price label's badge and a pin's popup readable at the
+    /// placements the readout test covers, including a pin's text typed after placing it, and
+    /// stays where it is when already clear.
+    #[test]
+    fn toolbar_stays_clear_of_price_labels_and_pin_popups() {
+        use crate::drawings::{Drawing, DrawingToolType as T};
+        let bounds = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let magenta = Color32::from_rgba_unmultiplied(255, 0, 255, 255);
+        let moved = Pos2::new(400.0, 450.0);
+        for (tool, anchor, before, after, dragged) in [
+            (T::PriceLabel, (200.0, 300.0), "", "", false),
+            // Beside the right edge the window pushes the toolbar left, over the label.
+            (T::PriceLabel, (680.0, 300.0), "", "", false),
+            // No room above a label at the window's top edge.
+            (T::PriceLabel, (200.0, 45.0), "", "", false),
+            (T::AnchoredNote, (200.0, 300.0), "Pin text", "", false),
+            (T::AnchoredNote, (680.0, 300.0), "Pin text", "", false),
+            (T::AnchoredNote, (200.0, 50.0), "Pin text", "", false),
+            // The popup appears once the text is typed.
+            (T::AnchoredNote, (200.0, 300.0), "", "Pin text", false),
+            (
+                T::AnchoredNote,
+                (200.0, 300.0),
+                "Pin",
+                "Pin text, longer",
+                true,
+            ),
+        ] {
+            let case = format!("{tool:?} {anchor:?} {before:?} {after:?}");
+            let ctx = egui::Context::default();
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[200.0]);
+            let mut toolbar = FloatingSelectionToolbar::new();
+            let raw = egui::RawInput {
+                screen_rect: Some(bounds),
+                ..Default::default()
+            };
+            let frame = |chart: &mut Chart, toolbar: &mut FloatingSelectionToolbar| {
+                let mut output = ctx.run_ui(raw.clone(), |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        chart.show(ui);
+                    });
+                    toolbar.show_and_apply(ui, chart);
+                });
+                let shapes = std::mem::take(&mut output.shapes);
+                output.drop_without_applying_deltas();
+                shapes
+            };
+            frame(&mut chart, &mut toolbar);
+            let point = |chart: &Chart, (x, y): (f32, f32)| {
+                let pane = chart.get_rendered_price_rect();
+                crate::drawings::ChartPoint::new(
+                    chart
+                        .state
+                        .time_scale()
+                        .coord_to_idx_precise(x, pane.min.x, pane.width())
+                        as f32,
+                    chart.last_price_map.y_to_price(y),
+                )
+            };
+            let mut drawing = Drawing::new(7, tool);
+            drawing.completed = true;
+            drawing.chart_points = vec![point(&chart, anchor)];
+            drawing.text = Some(before.to_owned()).filter(|text| !text.is_empty());
+            // The badge's price is the only magenta text.
+            drawing.text_color = (tool == T::PriceLabel).then_some([255, 0, 255, 255]);
+            chart.drawings_mut().drawings = vec![drawing];
+            chart.drawings_mut().select(7);
+            for _ in 0..3 {
+                frame(&mut chart, &mut toolbar);
+            }
+            if dragged {
+                toolbar.position = moved;
+            }
+            if !after.is_empty() {
+                chart.drawings_mut().drawings[0].text = Some(after.to_owned());
+            }
+            let shapes = (0..3)
+                .map(|_| frame(&mut chart, &mut toolbar))
+                .last()
+                .unwrap();
+            let shown = if after.is_empty() { before } else { after };
+            fn label(
+                shape: &egui::Shape,
+                find: &dyn Fn(&egui::epaint::TextShape) -> bool,
+            ) -> Option<egui::epaint::TextShape> {
+                match shape {
+                    egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| label(s, find)),
+                    egui::Shape::Text(text) if find(text) => Some(text.clone()),
+                    _ => None,
+                }
+            }
+            let find = |text: &egui::epaint::TextShape| {
+                if tool == T::PriceLabel {
+                    text.fallback_color == magenta
+                } else {
+                    text.galley.text() == shown
+                }
+            };
+            let (text, clip) = shapes
+                .iter()
+                .find_map(|shape| label(&shape.shape, &find).map(|text| (text, shape.clip_rect)))
+                .unwrap_or_else(|| panic!("{case}: no label"));
+            // The badge and the popup pad their text by the annotation label padding.
+            let padding = Vec2::new(
+                DESIGN_TOKENS.sizing.annotation.label_padding_x,
+                DESIGN_TOKENS.sizing.annotation.label_padding_y,
+            );
+            let boxed = Rect::from_min_size(text.pos - padding, text.galley.size() + padding * 2.0)
+                .intersect(clip);
+            assert!(boxed.is_positive(), "{case}: the label is on screen");
+            assert!(
+                !toolbar.last_rect.intersects(boxed),
+                "{case}: toolbar {:?} covers label {boxed:?}",
+                toolbar.last_rect,
+            );
+            // egui rounds the measured width, so an edge can land a fraction past the window.
+            assert!(
+                bounds.expand(1.0).contains_rect(toolbar.last_rect),
+                "{case}"
+            );
+            if dragged {
+                assert_eq!(toolbar.position, moved, "{case}");
+            }
         }
     }
 }

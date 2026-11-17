@@ -129,6 +129,7 @@ impl Chart {
                 (chrono::Utc::now(), crate::model::next_revision()),
             ),
             study_data: Default::default(),
+            footprint_open_interest: false,
             element_studies: Default::default(),
             execution_ranges: Default::default(),
             #[cfg(feature = "studies")]
@@ -249,6 +250,7 @@ impl Chart {
             last_crosshair_series: None,
             last_hover_bar_idx: None,
             last_hover_whitespace: None,
+            readout_index: None,
             // Marks (Widget API)
             marks: Default::default(),
             marker_options: Default::default(),
@@ -390,9 +392,10 @@ impl Chart {
     ///
     /// Use this when reconfiguring a long-lived chart (e.g., after the user
     /// changes settings). For initial construction prefer [`Chart::with_config`].
+    /// The configured mode of the main scale's axis replaces the scale's mode only when it
+    /// changes, so a mode chosen on the chart survives an update that keeps it.
     pub fn update_config(&mut self, config: ChartConfig) {
         self.config = config;
-        self.applied_config_scale_mode = self.state.price_scale().options().mode;
         self.apply_config_scale_mode();
     }
 

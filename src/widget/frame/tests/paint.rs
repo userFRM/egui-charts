@@ -1040,6 +1040,109 @@ fn zoomed_out_bars_merge_per_pixel_and_keep_their_extremes() {
     assert!(chart.merge_groups.groups.is_empty());
 }
 
+/// A line-based main series runs on to both plot edges while bars exist beyond them, as an
+/// added series does, its fill follows, and Line with markers marks only the bars in view.
+#[test]
+fn line_based_main_series_reach_the_plot_edges() {
+    use crate::model::{BarData, ChartType, ChartTypeStyles};
+    use egui::{Color32, epaint::ColorMode};
+    type Row = (ChartType, fn(&ChartTypeStyles) -> [Color32; 2], bool);
+    let rows: [Row; 6] = [
+        (ChartType::Line, |s| [s.line.color; 2], false),
+        (ChartType::StepLine, |s| [s.step_line.color; 2], false),
+        (
+            ChartType::LineWithMarkers,
+            |s| [s.line_with_markers.color; 2],
+            false,
+        ),
+        (ChartType::Area, |s| [s.area.line.color; 2], true),
+        (
+            ChartType::Baseline,
+            |s| [s.baseline.above.color, s.baseline.below.color],
+            true,
+        ),
+        (
+            ChartType::HlcArea,
+            |s| [s.hlc_area.close_line.color; 2],
+            false,
+        ),
+    ];
+    let ctx = egui::Context::default();
+    // 30.1 bars back neither edge cuts a bar's point; 30.9 bars back the left edge falls 9
+    // points before the first point in view.
+    for offset in [-30.1, -30.9] {
+        for (chart_type, colors, fills) in rows {
+            let mut chart = chart(&[100.0, 104.0], &[110.0, 108.0]);
+            chart.set_chart_type(chart_type);
+            // The price line spans the plot in the series' colour.
+            chart.main_series_style.price_line_visible = false;
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            chart.apply_synced_time_scale(40.0, offset);
+            let shapes = shapes(&ctx, &mut chart, 0.1, Vec::new());
+            let plot = chart.get_rendered_price_rect();
+            let colors = colors(&chart.chart_type_params.styles);
+            let xs: Vec<f32> = shapes
+                .iter()
+                .flat_map(|shape| match shape {
+                    Shape::Path(path)
+                        if colors
+                            .iter()
+                            .any(|c| path.stroke.color == ColorMode::Solid(*c)) =>
+                    {
+                        path.points.iter().map(|p| p.x).collect()
+                    }
+                    Shape::LineSegment { points, stroke } if colors.contains(&stroke.color) => {
+                        points.iter().map(|p| p.x).collect()
+                    }
+                    _ => Vec::new(),
+                })
+                .collect();
+            let left = xs.iter().copied().fold(f32::INFINITY, f32::min);
+            let right = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let row = format!("{chart_type:?} at {offset}");
+            assert!(
+                left < plot.left() && right > plot.right(),
+                "{row}: {left}..{right}"
+            );
+            if fills {
+                // The fill has a vertex at each end of the line.
+                let vertex_at = |x: f32| {
+                    shapes.iter().any(|shape| {
+                        matches!(shape, Shape::Mesh(mesh)
+                            if mesh.vertices.iter().any(|v| v.pos.x == x))
+                    })
+                };
+                assert!(vertex_at(left) && vertex_at(right), "{row}");
+            }
+            if chart_type == ChartType::LineWithMarkers {
+                let half = chart.state.time_scale().bar_spacing() / 2.0;
+                let marked = |x: f32| x > plot.left() - half && x < plot.right() + half;
+                assert!(
+                    shapes.iter().all(|shape| match shape {
+                        Shape::Circle(circle) if circle.fill == colors[0] =>
+                            marked(circle.center.x),
+                        _ => true,
+                    }),
+                    "{row}"
+                );
+            }
+        }
+    }
+    // Without bars of its own the chart draws the whitespace slots of its added series.
+    let bars = chart(&[100.0], &[110.0])
+        .bars(crate::widget::SeriesId::MAIN)
+        .to_vec();
+    let mut chart = crate::widget::Chart::new(BarData::new());
+    let added = chart.add_series(crate::widget::SeriesOptions::default());
+    chart.set_data(added, bars);
+    chart.set_chart_type(ChartType::Line);
+    frame(&ctx, &mut chart, 0.0, Vec::new());
+    assert!(chart.state.shows_fallback());
+    // Scrolled into history, the first slot in view is past the empty `full_data`.
+    chart.apply_synced_time_scale(40.0, -10.0);
+    shapes(&ctx, &mut chart, 0.1, Vec::new());
+}
+
 /// Bars whose footprint cells are not drawn show candles: all bars, merged per pixel column,
 /// at the minimum spacing, and only the bars without complete executions at a wide one.
 #[test]
@@ -1353,6 +1456,9 @@ fn volume_uses_themes_alpha_and_pitch_above_a_configured_baseline() {
 /// 14 averages the three bars there are: 35 / 3 = 11.67, a fifth is 2.33, so rows of 2 ticks.
 /// Length 2 averages the last two, the older by its own range of 5: (5 + 25) / 2 = 15, a fifth
 /// is 3, so rows of 3.
+///
+/// Open interest of 500 from 09:59 is in effect at the 10:00 open and 507 is published at
+/// 10:00:30, so the bar reads 507 and 500; without open interest its rows stay out of the table.
 #[cfg(feature = "ui")]
 #[test]
 fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
@@ -1576,26 +1682,59 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
         footprint_row_atr: true,
         footprint_row_atr_length: 30,
         footprint_statistics: true,
-        footprint_statistics_rows: vec![FootprintStatistic::Volume, FootprintStatistic::Delta],
+        footprint_statistics_rows: vec![
+            FootprintStatistic::Volume,
+            FootprintStatistic::Delta,
+            FootprintStatistic::OpenInterestHigh,
+            FootprintStatistic::OpenInterestLow,
+        ],
         profile: TradeProfileSettings {
             value_area: Some(0.5),
             ..Default::default()
         },
         ..Default::default()
     };
+    let table = |chart: &mut Chart| {
+        let shapes = draw(chart);
+        let bottom = chart.get_rendered_price_rect().bottom();
+        shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Text(text) if text.pos.y >= bottom && text.pos.y < bottom + 52.0 => {
+                    Some(text.galley.text().to_owned())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let open_interest = crate::data::StudyDataRequest {
+        symbol: String::new(),
+        timeframe: None,
+        metric: Some("open_interest".to_owned()),
+    };
+    // Open interest supplied before a row reads it is kept by the frame that selects the rows.
+    chart.set_study_data(
+        open_interest.clone(),
+        [
+            ("2026-01-05T09:59:00Z", 500.0),
+            ("2026-01-05T10:00:30Z", 507.0),
+        ]
+        .into_iter()
+        .map(|(at, value)| Bar::new(at.parse().unwrap(), value, value, value, value, 0.0))
+        .collect(),
+        None,
+    );
     chart.user_action(|chart| chart.set_chart_type_params(params.clone()));
-    let shapes = draw(&mut chart);
-    let bottom = chart.get_rendered_price_rect().bottom();
-    let labels: Vec<_> = shapes
-        .iter()
-        .filter_map(|s| match &s.shape {
-            Shape::Text(text) if text.pos.y >= bottom && text.pos.y < bottom + 28.0 => {
-                Some(text.galley.text().to_owned())
-            }
-            _ => None,
-        })
-        .collect();
-    assert_eq!(labels, ["Vol", "Delta", "5", "1"]);
+    table(&mut chart);
+    assert_eq!(
+        table(&mut chart),
+        ["Vol", "Delta", "OI high", "OI low", "5", "1", "507", "500"]
+    );
+    let four_rows = chart.get_rendered_price_rect().bottom();
+    // Without open interest the rows are left out, and the table is two rows shorter.
+    chart.set_study_data(open_interest, Vec::new(), None);
+    assert_eq!(table(&mut chart), ["Vol", "Delta", "5", "1"]);
+    assert_eq!(chart.get_rendered_price_rect().bottom() - four_rows, 24.0);
     assert_eq!(chart.trade_profile_settings().value_area, Some(0.5));
     let saved = serde_json::to_vec(&chart.snapshot().unwrap()).unwrap();
     let snapshot: ChartSnapshot = serde_json::from_slice(&saved).unwrap();

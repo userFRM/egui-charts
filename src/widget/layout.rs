@@ -1571,12 +1571,14 @@ impl ChartLayout {
     /// Fits an explicit date selection to the active chart. With `sync_time_axis` on, the other
     /// charts of its synchronization group then show the active chart's new span, as after a
     /// scroll or zoom; otherwise they fit the selection itself when `sync_date_range` is on, and
-    /// keep their view with both off. Call after the charts have rendered at their sizes.
+    /// keep their view with both off. Each chart it fits ends the scrolls and animations pending
+    /// on it, as [`Chart::set_visible_time_range`] does. Call after the charts have rendered at
+    /// their sizes.
     pub fn apply_date_range(&self, charts: &mut [&mut Chart], range: super::VisibleTimeRange) {
         let Some(active) = charts.get_mut(self.active) else {
             return;
         };
-        let fitted = active.fit_time_range(range, f64::INFINITY);
+        let fitted = active.set_visible_time_range(range);
         let source = fitted.then(|| active.sync_source()).flatten();
         let span = active
             .visible_time_range()
@@ -1585,8 +1587,11 @@ impl ChartLayout {
             return;
         };
         for (index, chart) in charts.iter_mut().take(16).enumerate() {
-            if index != self.active && self.same_group(index, self.active) {
-                chart.apply_synced_time_range_from(range, source);
+            if index != self.active
+                && self.same_group(index, self.active)
+                && chart.apply_synced_time_range_from(range, source)
+            {
+                chart.cancel_view_motion();
             }
         }
     }
@@ -3926,6 +3931,76 @@ mod tests {
         }
     }
 
+    /// A chart reads its status line at a crosshair it receives, from a linked chart or the host,
+    /// and at its latest bar once that crosshair is gone.
+    #[test]
+    fn status_line_reads_a_received_crosshair() {
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        for linked in [true, false] {
+            let ctx = egui::Context::default();
+            let mut layout = ChartLayout {
+                mode: ChartLayoutMode::TwoHorizontal,
+                ..Default::default()
+            };
+            // Bar `i` of the second chart opens at 700 + i.
+            let second = Chart::new(BarData::from_bars(
+                (0..100)
+                    .map(|i| {
+                        let open = 700.0 + i as f64;
+                        Bar::new(
+                            start + Duration::minutes(i),
+                            open,
+                            open + 3.0,
+                            open - 2.0,
+                            open - 1.0,
+                            1.0,
+                        )
+                    })
+                    .collect(),
+            ));
+            let mut charts = [chart(60), second];
+            let mut time = 0.0;
+            let mut opens = |layout: &mut ChartLayout, charts: &mut [Chart], mut events| {
+                let mut texts = Vec::new();
+                for _ in 0..2 {
+                    time += 0.1;
+                    texts = frame_texts(&ctx, layout, charts, vec2(1440.0, 900.0), time, events);
+                    events = vec![];
+                }
+                texts
+                    .into_iter()
+                    .map(|(text, ..)| text)
+                    .filter(|text| text.starts_with("O 7"))
+                    .collect::<Vec<_>>()
+            };
+            opens(&mut layout, &mut charts, vec![]);
+            let events = if linked {
+                vec![Event::PointerMoved(pos2(
+                    charts[0].index_to_x(50.0).unwrap(),
+                    charts[0].last_rendered_price_rect.center().y,
+                ))]
+            } else {
+                charts[1].set_synced_crosshair_time(Some(start + Duration::minutes(50)));
+                vec![]
+            };
+            assert_eq!(opens(&mut layout, &mut charts, events), ["O 750.00"]);
+            #[cfg(feature = "ui")]
+            assert_eq!(
+                crate::ui::widget_bar::panels::object_tree::DataWindowInfo::from_chart(&charts[1])
+                    .close,
+                749.0
+            );
+            if !linked {
+                charts[1].set_synced_crosshair_time(None);
+            }
+            assert_eq!(
+                opens(&mut layout, &mut charts, vec![Event::PointerGone]),
+                ["O 799.00"],
+                "linked {linked}"
+            );
+        }
+    }
+
     /// Linked charts mark a time the pointer reaches after the last bar at the slot holding it:
     /// eight one-minute slots after bar 99, opened 22:13:20 on Tuesday 14 November 2023, open
     /// at 00:00:20 the next day. One-minute bars from 22:13:00 hold it in their slot 107, opened
@@ -4043,6 +4118,44 @@ mod tests {
                 axis(&idle, &charts[1]),
                 "{mode:?}"
             );
+        }
+    }
+
+    /// A range chosen after scrolls were requested, as after Go to date, ends them on the active
+    /// chart and on the chart that takes its span, so the next frame still shows the range.
+    #[test]
+    fn chosen_date_range_ends_pending_scrolls() {
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::TwoHorizontal,
+            ..Default::default()
+        };
+        let mut charts = [chart(60), chart(60)];
+        let frame = |layout: &mut ChartLayout, charts: &mut [Chart; 2]| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        frame(&mut layout, &mut charts);
+        let shown = charts[0].state.shown();
+        let range = super::super::VisibleTimeRange::new(shown[10].time, shown[30].time);
+        for chart in &mut charts {
+            chart.scroll_to_time(chart.state.shown()[80].time);
+        }
+        layout.apply_date_range(&mut charts.iter_mut().collect::<Vec<_>>(), range);
+        frame(&mut layout, &mut charts);
+        for chart in &charts {
+            let actual = chart.visible_time_range().unwrap();
+            for error in [actual.from - range.from, actual.to - range.to] {
+                assert!(error.num_milliseconds().abs() < 1, "{actual:?}");
+            }
         }
     }
 

@@ -310,6 +310,9 @@ pub struct Chart {
     #[cfg(feature = "drawings")]
     data_table_identity: u64,
     study_data: studies_data::StudyDataCache,
+    /// Whether the footprint statistics of the last frame had an open interest row, so that the
+    /// study data requests the open interest they read.
+    footprint_open_interest: bool,
     pub(crate) element_studies: crate::chart::rendering::candles::price_based::ElementStudies,
     /// Range bars built from the held trades, while the chart type is Range.
     execution_ranges: crate::chart::rendering::candles::price_based::ExecutionRanges,
@@ -479,6 +482,10 @@ pub struct Chart {
     pub(crate) last_hover_bar_idx: Option<f64>,
     /// Time of the hovered whitespace slot after the last bar, sent to linked charts.
     pub(crate) last_hover_whitespace: Option<DateTime<Utc>>,
+    /// Shown bar the status line, legends and data window read this frame: the one under the
+    /// local pointer, else under a crosshair from a linked chart or the host; `None` reads the
+    /// latest bar.
+    pub(crate) readout_index: Option<usize>,
 
     // =========================================================================
     // Marks (Widget API)

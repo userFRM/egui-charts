@@ -55,6 +55,7 @@ impl Trading {
                         Some((
                             o.side == OrderSide::Buy,
                             o.price,
+                            o.size,
                             view.tier_color(tier, colors),
                         ))
                     })
@@ -335,7 +336,16 @@ impl Trading {
             }
         }
         if let Some(action) = &self.pending {
-            let numbers = self.numbers(symbol, symbol);
+            // A row of the account panel may ask about another symbol than the chart's.
+            let action_symbol = match action {
+                TradingLineAction::Cancel(order) | TradingLineAction::Modify(order, _) => {
+                    &order.request.symbol
+                }
+                TradingLineAction::Close(position)
+                | TradingLineAction::Reverse(position)
+                | TradingLineAction::Exit(position, _) => &position.symbol,
+            };
+            let numbers = self.numbers(action_symbol, symbol);
             let money = |value: f64| numbers.price(value);
             let (title, message, confirm) = describe(ui.ctx(), action, &money);
             let mut open = true;
@@ -809,7 +819,7 @@ mod tests {
     /// Rows of differently formatted symbols keep their own price decimals, host text and pip
     /// value instead of the chart symbol's decimals or a fixed two. A regression writes every
     /// symbol with the chart's decimals, ignores the host's formatter, loses the pip value or shows
-    /// another symbol's logo.
+    /// another symbol's logo. A row's cancellation is confirmed in the order's own decimals too.
     #[test]
     fn symbols_keep_their_own_decimals_host_text_pip_values_and_logos() {
         struct Host;
@@ -860,6 +870,29 @@ mod tests {
         chart.set_symbol("UNKNOWN");
         trading.rules = TradingRules::new("UNKNOWN");
         assert_eq!(trading.market(&chart, &colors).pip_value, None);
+
+        // A row of the account panel asks to cancel an order of another symbol.
+        let order = Order::new(
+            OrderId::new("1"),
+            OrderRequest::new("USDJPY", OrderSide::Buy, 1.0, OrderType::Limit(151.234)),
+            OrderStatus::Working,
+        );
+        trading.pending = Some(TradingLineAction::Cancel(order));
+        let ctx = egui::Context::default();
+        let mut texts = Vec::new();
+        // A new window is measured in its first frame and drawn in the next.
+        for _ in 0..2 {
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| trading.show(ui, &mut chart));
+            texts = (output.shapes.iter())
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+        }
+        let asked = "Cancel the order to BUY 1 USDJPY limit 151.234?";
+        assert!(texts.iter().any(|text| text == asked), "{texts:?}");
     }
 
     #[test]

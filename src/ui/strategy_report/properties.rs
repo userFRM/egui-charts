@@ -176,7 +176,7 @@ pub(super) fn show(
             _ => {
                 settings.slippage = Slippage::Ticks {
                     ticks: 0,
-                    tick_size: 0.01,
+                    tick_size: settings.price_increment,
                 }
             }
         }
