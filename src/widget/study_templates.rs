@@ -1,8 +1,10 @@
 //! A chart's studies saved and applied as a set, with their links and shared panes.
 
 use super::{Chart, PaneId, SeriesId};
+use crate::model::SeriesScale;
 use crate::studies::{
-    Indicator, IndicatorFactory, InputValue, StudySource, StudyTemplate, StudyTemplateSet,
+    Indicator, IndicatorFactory, InputValue, StudyScale, StudySource, StudyTemplate,
+    StudyTemplateSet,
 };
 
 /// The position saved for a link to a study the chart no longer has: past the end of any set,
@@ -159,7 +161,7 @@ impl Chart {
                 _ => return Err("Study template panes name a missing or repeated study".into()),
             }
         }
-        let studies = set
+        let mut studies = set
             .studies
             .iter()
             .map(|template| {
@@ -183,6 +185,9 @@ impl Chart {
             for id in replaced {
                 self.remove_series(id);
             }
+        }
+        if keep != Keep::None {
+            self.renumber_scales(&mut studies);
         }
         let ids: Vec<_> = studies
             .into_iter()
@@ -226,6 +231,45 @@ impl Chart {
         }
         self.recalculate_studies();
         Ok(ids)
+    }
+
+    /// Gives each additional scale of `studies` a number this chart does not use yet, keeping
+    /// its own where it is free, as the studies' numbers come from another chart or a template.
+    /// Studies that share a scale still share one, and only with each other.
+    fn renumber_scales(&self, studies: &mut [Box<dyn Indicator>]) {
+        let mut used: Vec<_> = self
+            .indicators()
+            .filter_map(|(_, study)| match study.scale() {
+                StudyScale::Shared(scale) => Some(scale),
+                _ => None,
+            })
+            .chain(self.series().map(|(_, options)| options.scale))
+            .collect();
+        let mut renumbered: Vec<(SeriesScale, SeriesScale)> = Vec::new();
+        for study in studies {
+            let StudyScale::Shared(scale @ (SeriesScale::Separate(_) | SeriesScale::Overlay(_))) =
+                study.scale()
+            else {
+                continue;
+            };
+            let to = match renumbered.iter().find(|(from, _)| *from == scale) {
+                Some(&(_, to)) => to,
+                None => {
+                    let numbered = |key| match scale {
+                        SeriesScale::Overlay(_) => SeriesScale::Overlay(key),
+                        _ => SeriesScale::Separate(key),
+                    };
+                    let to = std::iter::once(scale)
+                        .chain((0..).map(numbered))
+                        .find(|scale| !used.contains(scale))
+                        .expect("a number is free");
+                    used.push(to);
+                    renumbered.push((scale, to));
+                    to
+                }
+            };
+            study.set_scale(StudyScale::Shared(to));
+        }
     }
 }
 

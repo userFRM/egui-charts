@@ -17,12 +17,14 @@ use crate::widget::{Chart, SeriesId};
 pub enum LayoutCopy {
     /// Adds this study to each other chart, next to the studies it has, with its inputs, styles,
     /// interval visibility, scale and input caption. A study on the source's price pane joins
-    /// each chart's price pane; any other study gets a new pane at the bottom of each chart.
+    /// each chart's price pane; any other study gets a new pane at the bottom of each chart. A
+    /// study on an additional scale gets one numbered apart from the scales each chart has.
     Study(SeriesId),
     /// Replaces the studies of each other chart with those of the source, with their links,
     /// shared panes and input captions, as [`Chart::apply_study_template_set_with`] does, but
     /// for the studies whose [user edits](Chart::set_indicator_user_edit_enabled) are off: they
     /// stay, the source's are added beside them, and they count against the chart's study cap.
+    /// The source's additional scales are then numbered apart from those the kept studies use.
     Studies,
     /// Applies these settings to every chart, the source included. Each other chart keeps its
     /// symbol, interval and chart type, the sizes and other parameters of that type, its own
@@ -808,6 +810,36 @@ mod tests {
                 kind: LayoutCopyIssueKind::StudyLimit
             }]
         );
+    }
+
+    /// A copied study on an additional scale gets one apart from the scales the other chart
+    /// numbers alike, and studies of a set that share one still share one.
+    #[test]
+    fn copied_scales_take_numbers_the_chart_does_not_use() {
+        use crate::model::SeriesScale;
+        use crate::studies::StudyScale;
+        let separate = |key| StudyScale::Shared(SeriesScale::Separate(key));
+        let scales = |chart: &Chart| {
+            chart
+                .indicators()
+                .map(|(_, study)| study.scale())
+                .collect::<Vec<_>>()
+        };
+        let (mut a, mut b) = (chart(50), chart(50));
+        let first = a.add_indicator(Box::new(SMA::new(7)));
+        let second = a.add_indicator(Box::new(SMA::new(3)));
+        a.set_indicator_scale(first, separate(0));
+        a.set_indicator_scale(second, separate(0));
+        let rsi = b.add_indicator(Box::new(RSI::new(5)));
+        b.set_indicator_scale(rsi, separate(0));
+        b.set_indicator_user_edit_enabled(rsi, false);
+        let factory = IndicatorFactory::new();
+        let mut layout = pair();
+        let mut charts = [&mut a, &mut b];
+        layout.apply_copy(&mut charts, 0, &LayoutCopy::Study(first), &factory);
+        assert_eq!(scales(charts[1]), [separate(0), separate(1)]);
+        layout.apply_copy(&mut charts, 0, &LayoutCopy::Studies, &factory);
+        assert_eq!(scales(charts[1]), [separate(0), separate(1), separate(1)]);
     }
 
     /// A copy keeps the user's visibility switch apart from the interval settings: a study hidden
