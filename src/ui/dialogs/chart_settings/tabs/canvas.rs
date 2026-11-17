@@ -1,16 +1,14 @@
 //! Canvas tab of the chart settings dialog.
 
 use super::super::SettingsDialog;
-use super::{styled_dropdown, styled_text_input};
+use super::{pick_color, styled_dropdown, styled_text_input};
 use crate::localization as l10n;
 use crate::model::LineStyle;
 use crate::theme::Theme;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui_kit::color_picker::keep_opacity;
-use crate::ui_kit::{ColorPicker, ColorPickerState};
 use crate::widget::settings::{BackgroundType, ButtonVisibility, GridLinesMode, WatermarkMode};
-use egui::{Color32, Ui};
+use egui::Ui;
 
 impl SettingsDialog {
     pub(in super::super) fn draw_canvas_tab(&mut self, ui: &mut Ui, theme: &Theme) {
@@ -308,6 +306,10 @@ impl SettingsDialog {
                             DESIGN_TOKENS.sizing.settings_dialog.input_width_margin,
                         );
                         if let Ok(v) = dialog.margin_right_str.parse::<f32>() {
+                            // An edited margin is in bars.
+                            if v != dialog.settings.margins.right_bars {
+                                dialog.settings.margins.right_pixels = None;
+                            }
                             dialog.settings.margins.right_bars = v;
                         }
                     },
@@ -357,18 +359,6 @@ impl SettingsDialog {
                 });
             });
         });
-    }
-}
-
-/// Shows the colour well of `state` and assigns a pick to `color`. Palette swatches are opaque,
-/// so a swatch keeps the opacity the well shows unless the Custom editor set it.
-fn pick_color(ui: &mut Ui, state: &mut ColorPickerState, id: &str, color: &mut Color32) {
-    // The well's colour, not `color`, which may be the placeholder that follows the theme.
-    let current = state.sel_color;
-    let custom = state.custom_mode;
-    if let Some(picked) = ColorPicker::new(state, id).show(ui).inner {
-        *color = keep_opacity(picked, current, custom || state.custom_mode);
-        state.sel_color = *color;
     }
 }
 

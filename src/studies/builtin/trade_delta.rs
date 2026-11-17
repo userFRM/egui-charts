@@ -1,10 +1,11 @@
 //! Exact delta candles from aggressor-side executions, independently of the bar estimator.
 
-use crate::data::Footprint;
+use crate::data::{Footprint, side_delta};
 use crate::model::Bar;
 
 /// One bar's trade-based delta, cumulative delta candle, and rolling totals.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct TradeDeltaValue {
     /// Buy minus sell volume in this bar.
     pub delta: f64,
@@ -42,12 +43,14 @@ pub fn trade_delta(
 ) -> Vec<TradeDeltaValue> {
     let mut values: Vec<TradeDeltaValue> = Vec::with_capacity(bars.len());
     let mut cumulative = 0.0;
+    let (mut ask, mut bid) = (0.0, 0.0);
     let mut volume_sum = 0.0;
     let mut delta_sum = 0.0;
     let rolling = rolling.max(1);
     for (i, bar) in bars.iter().enumerate() {
         if reset(i, bar) {
             cumulative = 0.0;
+            (ask, bid) = (0.0, 0.0);
         }
         let flow = footprint.bar_at(bar.time);
         let delta = flow.map_or(0.0, |bar| bar.delta());
@@ -60,14 +63,21 @@ pub fn trade_delta(
         }
         volume_sum += volume;
         delta_sum += delta;
+        // Sides summed over the run, so a run balanced up to rounding closes at 0 as a bar does.
+        if let Some(flow) = flow {
+            ask += flow.ask;
+            bid += flow.bid;
+        }
+        let close = side_delta(ask, bid);
         let value = TradeDeltaValue {
             delta,
             delta_high,
             delta_low,
             open: cumulative,
-            high: cumulative + delta_high,
-            low: cumulative + delta_low,
-            close: cumulative + delta,
+            // The run reaches its close too, which the side sums can round past an extreme.
+            high: (cumulative + delta_high).max(close),
+            low: (cumulative + delta_low).min(close),
+            close,
             rolling_volume: volume_sum,
             rolling_delta: delta_sum,
         };
@@ -78,7 +88,7 @@ pub fn trade_delta(
 }
 
 /// Closed-bar detection state; the live bar never enters a run or confirms a pivot.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct CvdMarkers {
     pub divergence: bool,
     pub swing_bars: usize,
@@ -341,6 +351,24 @@ mod tests {
                 values[1].close
             ),
             (1e308, -1e308, 0.0)
+        );
+        // Sells of 0.1 and 0.2 sum to 0.30000000000000004, so the bar deltas -0.30000000000000004
+        // and 0.3 add up to -5.55e-17 while the sides of the run are balanced: the buy closes the
+        // run at 0, which is also the candle's high.
+        let mut rounded = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for (bar, size, side) in [
+            (0, 0.1, OrderSide::Sell),
+            (0, 0.2, OrderSide::Sell),
+            (1, 0.3, OrderSide::Buy),
+        ] {
+            rounded
+                .push(&Tick::new(bars[bar].time, 100.0, size, Some(side)))
+                .unwrap();
+        }
+        let candle = trade_delta(&rounded, &bars[..2], 2, |_, _| false)[1];
+        assert_eq!(
+            [candle.open, candle.high, candle.low, candle.close],
+            [-0.30000000000000004, 0.0, -0.30000000000000004, 0.0]
         );
     }
 }

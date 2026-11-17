@@ -260,7 +260,8 @@ fn price_labels_and_lines_are_independent_on_either_axis() {
 /// bar 61 is ten days later. Yellow's contrast with white is 1.22, so its text is black.
 /// An anchored VWAP tags its latest value only while it tracks it, at its own precision: the
 /// typical prices of bars 98 and 99 are 320 / 3 and 340 / 3, so from bar 98 it is 110 and from
-/// bar 99 it is 113.33.
+/// bar 99 it is 113.33. Its tracked upper line of band 1 at 1% tags 111.1, its untracked lower
+/// line nothing, and the tracked but hidden upper line of band 2 at 2%, 112.2, nothing either.
 #[cfg(feature = "drawings")]
 #[test]
 fn line_drawings_tag_their_price_and_time_on_the_axes() {
@@ -292,11 +293,17 @@ fn line_drawings_tag_their_price_and_time_on_the_axes() {
             6 => drawing.visible = false,
             7 => drawing.timeframe_visibility = TimeframeVisibility::specific(&["1h"]),
             12 => {
-                drawing.vwap = Some(crate::drawings::VwapConfig {
+                let mut config = crate::drawings::VwapConfig {
                     track_price: true,
                     precision: Some(4),
+                    band_mode: crate::drawings::VwapBandMode::Percentage,
                     ..Default::default()
-                })
+                };
+                config.bands[0].upper.track_price = true;
+                config.bands[1].enabled = true;
+                config.bands[1].upper.track_price = true;
+                config.bands[1].upper.visible = false;
+                drawing.vwap = Some(config);
             }
             _ => {}
         }
@@ -322,6 +329,9 @@ fn line_drawings_tag_their_price_and_time_on_the_axes() {
         ("103.59", false),
         ("114.71", false),
         ("110.0000", true),
+        ("111.1000", true),
+        ("108.9000", false),
+        ("112.2000", false),
         ("113.33", false),
     ] {
         assert_eq!(price_texts.contains(&label), shown, "price {label}");
@@ -1262,5 +1272,54 @@ fn heikin_last_visible_price_line_without_main_bars() {
                 if path.stroke.color == egui::epaint::ColorMode::Solid(color))),
             "{source:?}: the added series' line is painted"
         );
+    }
+}
+
+/// Study value tags read their plot at the last bar in view, in the price pane, in a study pane
+/// and on the volume overlay, and read the newest values again at the latest bars. Bar `i` has
+/// its low at 100 + i, closes 10 above it except on every third bar and trades i + 1 lots; the
+/// SMA(3) and MACD(12, 26, 9) values are worked out by hand from those closes.
+#[cfg(feature = "studies")]
+#[test]
+fn study_value_tags_read_the_last_bar_in_view() {
+    use crate::model::{Bar, BarData};
+    let start = chrono::DateTime::UNIX_EPOCH;
+    let bars = (0..100)
+        .map(|i| {
+            let low = 100.0 + i as f64;
+            let close = if i % 3 == 0 { low } else { low + 10.0 };
+            let time = start + chrono::Duration::days(i);
+            Bar::new(time, low, close, low, close, (i + 1) as f64)
+        })
+        .collect();
+    let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+    chart.add_indicator(Box::new(crate::studies::SMA::new(3)));
+    chart.add_indicator(Box::new(crate::studies::MACD::new(12, 26, 9)));
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    // Scrolled back 40 bars the view ends at bar 59.
+    for (offset, expected) in [
+        (-40.0, ["164.67", "7.22", "60"]),
+        (0.0, ["204.67", "6.69", "100"]),
+    ] {
+        let scale = chart.state.time_scale_mut();
+        scale.set_bar_spacing(12.0);
+        scale.set_right_offset(offset);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let painted = shapes(&ctx, &mut chart, 0.2, vec![]);
+        let plot = chart.last_rendered_price_rect;
+        let labels: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text) if text.pos.x >= plot.right() => Some(text.galley.text()),
+                _ => None,
+            })
+            .collect();
+        for expected in expected {
+            assert!(
+                labels.contains(&expected),
+                "offset {offset}: missing {expected}: {labels:?}"
+            );
+        }
     }
 }

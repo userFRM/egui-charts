@@ -50,7 +50,7 @@ use std::ops::Range;
 ///
 /// The chart supplies its interval through [`Indicator::set_bar_clock`]; without it every
 /// bar is treated as intraday.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TradingSessions {
     names: [String; 3],
     show: [bool; 3],
@@ -84,7 +84,7 @@ pub struct TradingSessions {
 }
 
 /// One session of one slot on one day.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct SessionSummary {
     slot: usize,
     day: NaiveDate,

@@ -19,6 +19,7 @@ use chrono::{DateTime, Utc};
 /// The `line_count` parameter (typically 3) controls how many prior lines
 /// must be exceeded for a reversal to register.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct LineBreakConfig {
     /// Number of lines to look back for reversal
     pub line_count: usize,
@@ -96,6 +97,14 @@ impl LineBreakLine {
 ///
 /// # Safety Limits
 /// - At most the newest 10,000 lines
+///
+/// ```
+/// use egui_charts::model::{Bar, LineBreakConfig, to_line_break_lines};
+///
+/// let bars: Vec<Bar> = Vec::new();
+/// let lines = to_line_break_lines(&bars, &LineBreakConfig::new(3));
+/// assert!(lines.is_empty());
+/// ```
 pub fn to_line_break_lines(data: &[Bar], config: &LineBreakConfig) -> Vec<LineBreakLine> {
     let mut builder = LineBreakBuilder::new(config);
     for bar in data {

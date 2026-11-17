@@ -3,6 +3,7 @@
 use crate::drawings::domain::{ChartPoint, Drawing};
 use crate::drawings::rendering::measurements::{boxed_label, elapsed_ms, format_duration};
 use crate::drawings::rendering::{ChartView, bars_between};
+use crate::localization as l10n;
 use crate::model::{Bar, percent_change};
 use crate::scales::{DefaultPriceFormatter, instrument_price_precision, price_decimals};
 use crate::theme::ThemeExt;
@@ -54,15 +55,21 @@ impl Drawing {
         } else {
             "+"
         };
-        let mut target = format!(
+        let moved = format!(
             "{sign}{change_text} ({:+.2}%)",
             percent_change(from.price, to.price)
         );
-        if let Some(ms) = elapsed_ms(view.bars, from.bar_idx, to.bar_idx).filter(|_| view.time_axis)
-        {
-            target.push_str(&format!(" in {}", format_duration(ms)));
-        }
-        target.push_str(&format!("\n{}", anchor_label(to)));
+        let mut target =
+            match elapsed_ms(view.bars, from.bar_idx, to.bar_idx).filter(|_| view.time_axis) {
+                Some(ms) => l10n::format_text(
+                    painter.ctx(),
+                    "{change} in {duration}",
+                    &[("change", moved), ("duration", format_duration(ms))],
+                ),
+                None => moved,
+            };
+        target.push('\n');
+        target.push_str(&anchor_label(to));
 
         let up = change >= 0.0;
         let gap = DESIGN_TOKENS.spacing.md;
@@ -86,7 +93,14 @@ impl Drawing {
             }
         });
         let badge = |align, pos, status: &str, color| {
-            boxed_label(painter, align, pos, status.to_owned(), color, chart.bg_axis)
+            boxed_label(
+                painter,
+                align,
+                pos,
+                l10n::text(painter.ctx(), status),
+                color,
+                chart.bg_axis,
+            )
         };
         let mut target_pos = end + egui::vec2(0.0, if up { -gap } else { gap });
         if up && let Some((status, color)) = outcome {
@@ -232,6 +246,7 @@ mod tests {
                             bars: &bars,
                             revision: 0,
                             bar_to_x: &|b| b,
+                            bar_spacing: 1.0,
                             price_to_y: &|p| p as f32,
                             y_to_price: &f64::from,
                             time_axis,

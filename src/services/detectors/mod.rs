@@ -90,6 +90,12 @@ pub struct OrderFlowDetectors {
     state: Mutex<State>,
 }
 
+impl std::fmt::Debug for OrderFlowDetectors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OrderFlowDetectors").finish_non_exhaustive()
+    }
+}
+
 /// The detections the service makes, each drawn in its own signal category.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]

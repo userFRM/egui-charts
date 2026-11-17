@@ -8,7 +8,7 @@ use egui::Color32;
 /// Schaff Trend Cycle (STC)
 /// Combines MACD with stochastic to create a faster, more accurate oscillator
 /// Oscillates between 0 and 100
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SchaffTrendCycle {
     /// MACD short period (typically 23)
     macd_short: usize,
@@ -22,7 +22,7 @@ pub struct SchaffTrendCycle {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     index: usize,
     count: usize,

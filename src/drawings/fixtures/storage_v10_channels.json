@@ -1,0 +1,296 @@
+{
+  "drawings": [
+    {
+      "created_at": 1794873745694,
+      "drawing": {
+        "arrow_end_style": "None",
+        "arrow_start_style": "None",
+        "background": true,
+        "bars_pattern": null,
+        "border": true,
+        "border_color": null,
+        "channel_midline": true,
+        "closed": false,
+        "color": [
+          41,
+          98,
+          255,
+          255
+        ],
+        "custom_settings": null,
+        "custom_tool": null,
+        "elliott_degree": "Minor",
+        "extend_left": false,
+        "extend_right": false,
+        "fib_config": null,
+        "fill_color": [
+          41,
+          98,
+          255,
+          51
+        ],
+        "folder": [],
+        "font_size": 14.0,
+        "font_weight": "Normal",
+        "gann": null,
+        "ghost_feed": null,
+        "group": null,
+        "image": null,
+        "italic": false,
+        "label": null,
+        "line_measurements": {
+          "across_panes": false,
+          "bar_count": false,
+          "elapsed_time": false,
+          "inclination": false,
+          "length": false,
+          "midpoint": false,
+          "percent_change": false,
+          "persistent": false,
+          "pip_change": false,
+          "position": "Right",
+          "price_change": false,
+          "price_labels": false,
+          "text_horizontal_align": "Center",
+          "text_orientation": "Vertical",
+          "text_vertical_align": "Bottom"
+        },
+        "line_style": "Solid",
+        "listed": true,
+        "locked": false,
+        "marker": {
+          "glyph": "🙂",
+          "glyph_color": null,
+          "show_glyph": false,
+          "show_text": true
+        },
+        "note_text_style": null,
+        "pane": null,
+        "pitchfork": null,
+        "position_readout": {
+          "account_currency": null,
+          "condensed": false,
+          "conversion_rate": null,
+          "persistent": false,
+          "quantity_decimals": null
+        },
+        "position_size": null,
+        "position_sizing": {
+          "leverage": 1.0,
+          "lot_size": 1.0,
+          "point_value": 1.0,
+          "quantity_step": 0.0
+        },
+        "position_stop_color": null,
+        "position_style": {
+          "border": false,
+          "border_color": [
+            102,
+            123,
+            139,
+            255
+          ],
+          "fill": true,
+          "font_size": 12.0,
+          "label_background": true,
+          "label_color": null,
+          "line_color": null,
+          "line_width": 1.0,
+          "text_color": null
+        },
+        "position_target_color": null,
+        "post": null,
+        "price_axis_label": true,
+        "regression_trend": null,
+        "saveable": true,
+        "screen_anchor": null,
+        "selectable": true,
+        "stroke_width": 2.0,
+        "text": null,
+        "text_color": null,
+        "text_follows_zoom": false,
+        "text_wrap": false,
+        "text_wrap_width": 200.0,
+        "text_zoom_spacing": null,
+        "theme_shade": true,
+        "time_axis_label": true,
+        "timeframe_visibility": {
+          "show_on_all": true,
+          "visible_timeframes": []
+        },
+        "tool_type": "ParallelChannel",
+        "visible": true,
+        "volume_profile": null,
+        "vwap": null,
+        "z_order": 0
+      },
+      "id": "1",
+      "modified_at": 1794873745694,
+      "notes": null,
+      "points": [
+        {
+          "price": 100.0,
+          "ts_ms": 1704067260000
+        },
+        {
+          "price": 110.0,
+          "ts_ms": 1704067500000
+        },
+        {
+          "price": 95.0,
+          "ts_ms": 1704067260000
+        }
+      ]
+    },
+    {
+      "created_at": 1794873745694,
+      "drawing": {
+        "arrow_end_style": "None",
+        "arrow_start_style": "None",
+        "background": true,
+        "bars_pattern": null,
+        "border": true,
+        "border_color": null,
+        "channel_midline": false,
+        "closed": false,
+        "color": [
+          255,
+          152,
+          0,
+          255
+        ],
+        "custom_settings": null,
+        "custom_tool": null,
+        "elliott_degree": "Minor",
+        "extend_left": false,
+        "extend_right": false,
+        "fib_config": null,
+        "fill_color": [
+          255,
+          152,
+          0,
+          51
+        ],
+        "folder": [],
+        "font_size": 14.0,
+        "font_weight": "Normal",
+        "gann": null,
+        "ghost_feed": null,
+        "group": null,
+        "image": null,
+        "italic": false,
+        "label": null,
+        "line_measurements": {
+          "across_panes": false,
+          "bar_count": false,
+          "elapsed_time": false,
+          "inclination": false,
+          "length": false,
+          "midpoint": false,
+          "percent_change": false,
+          "persistent": false,
+          "pip_change": false,
+          "position": "Right",
+          "price_change": false,
+          "price_labels": false,
+          "text_horizontal_align": "Center",
+          "text_orientation": "Vertical",
+          "text_vertical_align": "Bottom"
+        },
+        "line_style": "Solid",
+        "listed": true,
+        "locked": false,
+        "marker": {
+          "glyph": "🙂",
+          "glyph_color": null,
+          "show_glyph": false,
+          "show_text": true
+        },
+        "note_text_style": null,
+        "pane": null,
+        "pitchfork": null,
+        "position_readout": {
+          "account_currency": null,
+          "condensed": false,
+          "conversion_rate": null,
+          "persistent": false,
+          "quantity_decimals": null
+        },
+        "position_size": null,
+        "position_sizing": {
+          "leverage": 1.0,
+          "lot_size": 1.0,
+          "point_value": 1.0,
+          "quantity_step": 0.0
+        },
+        "position_stop_color": null,
+        "position_style": {
+          "border": false,
+          "border_color": [
+            102,
+            123,
+            139,
+            255
+          ],
+          "fill": true,
+          "font_size": 12.0,
+          "label_background": true,
+          "label_color": null,
+          "line_color": null,
+          "line_width": 1.0,
+          "text_color": null
+        },
+        "position_target_color": null,
+        "post": null,
+        "price_axis_label": true,
+        "regression_trend": null,
+        "saveable": true,
+        "screen_anchor": null,
+        "selectable": true,
+        "stroke_width": 2.0,
+        "text": null,
+        "text_color": null,
+        "text_follows_zoom": false,
+        "text_wrap": false,
+        "text_wrap_width": 200.0,
+        "text_zoom_spacing": null,
+        "theme_shade": true,
+        "time_axis_label": true,
+        "timeframe_visibility": {
+          "show_on_all": true,
+          "visible_timeframes": []
+        },
+        "tool_type": "FlatTopBottom",
+        "visible": true,
+        "volume_profile": null,
+        "vwap": null,
+        "z_order": 0
+      },
+      "id": "2",
+      "modified_at": 1794873745694,
+      "notes": null,
+      "points": [
+        {
+          "price": 100.0,
+          "ts_ms": 1704067260000
+        },
+        {
+          "price": 110.0,
+          "ts_ms": 1704067500000
+        },
+        {
+          "price": 90.0,
+          "ts_ms": 1704067380000
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "app_version": null,
+    "created_at": 1794873745693,
+    "modified_at": 1794873745694
+  },
+  "symbol": "AAPL",
+  "timeframe": null,
+  "version": 10
+}

@@ -4,19 +4,11 @@ use super::Chart;
 use crate::data::FeedError;
 use crate::data::inbox::Inbox;
 use crate::drawings::persistence::{DrawingStorage, LoadError, StorageError, StoredPane};
-use crate::localization as l10n;
+use crate::localization::format_text_or_english as message;
 use crate::services::document::{Received, StoredDocument, copy_number};
 use crate::services::{ConflictChoice, Revision, Storage, StoreKind};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-
-/// Formats a message for the chart's last context, with English before its first frame.
-fn message(ctx: Option<&egui::Context>, english: &str, values: &[(&str, &str)]) -> String {
-    match ctx {
-        Some(ctx) => l10n::format_text(ctx, english, values),
-        None => l10n::substitute(english, values),
-    }
-}
 
 /// What a chart asked its storage about the kept copies of its symbols' drawings.
 #[derive(Default)]
@@ -590,11 +582,12 @@ impl Chart {
             })?;
         // Shown in the price pane when this chart does not show their study, written back in it.
         let mut unshown = HashMap::new();
+        let remap = self.written_by_restored_chart(&copy);
         let drawings: Vec<_> = copy
             .drawings()
             .iter()
             .map(|record| {
-                let drawing = self.restored_drawing(record, true);
+                let drawing = self.restored_drawing(record, remap);
                 if drawing.pane.is_none()
                     && let Some(pane) = &record.pane
                 {
@@ -873,10 +866,25 @@ impl Chart {
         self.save_stored_drawings();
     }
 
+    /// Whether the study ids in `stored` are the saved ids the last restore mapped to the
+    /// studies it added: the chart that took the restored snapshot wrote it, or it was
+    /// written before documents named their writer.
+    fn written_by_restored_chart(&self, stored: &DrawingStorage) -> bool {
+        stored
+            .saved_by
+            .is_none_or(|chart| self.restored_from == Some(chart))
+    }
+
     /// Replaces the drawings with the stored ones in `json`.
     fn restore_stored_drawings(&mut self, json: &str) {
+        let stored = DrawingStorage::from_json(json)
+            .ok()
+            .map(|(stored, _)| stored);
+        let remap = stored
+            .as_ref()
+            .is_some_and(|stored| self.written_by_restored_chart(stored));
         let previous = self.drawings.before_read();
-        let loaded = self.load_drawings_remapped(json, true);
+        let loaded = self.load_drawings_remapped(json, remap);
         if loaded.is_ok() {
             self.drawings.keep_across_read(previous);
         }
@@ -886,8 +894,8 @@ impl Chart {
             Err(error) => Some(error),
         };
         // Drawings whose study this chart does not show, shown in the price pane.
-        let unshown: HashMap<_, _> = DrawingStorage::from_json(json)
-            .map(|(stored, _)| {
+        let unshown: HashMap<_, _> = stored
+            .map(|stored| {
                 self.drawings
                     .drawings
                     .iter()

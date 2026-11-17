@@ -1,10 +1,15 @@
 //! Trade volume at integer price levels. No volume or side is inferred from OHLC bars.
 
-use super::FeedError;
+use super::{FeedError, FootprintBarView, FootprintRows};
 use crate::model::{BarClock, OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
-use std::ops::RangeBounds;
+use std::ops::{Bound, RangeBounds};
+
+mod read;
+pub(crate) use read::FootprintState;
+#[cfg(any(feature = "widget", feature = "studies"))]
+pub use read::FootprintView;
 
 /// Inclusive thresholds allow a relative error of 1e-9, which covers the rounding of sizes
 /// summed trade by trade, and is far below one lot at any realistic volume.
@@ -12,7 +17,27 @@ pub(crate) fn meets_threshold(value: f64, threshold: f64) -> bool {
     value >= threshold * (1.0 - 1e-9)
 }
 
+/// Buy volume `ask` minus sell volume `bid`, or zero when each side meets the other as a
+/// [`meets_threshold`]: sides that differ only by the rounding of their sums are balanced.
+pub(crate) fn side_delta(ask: f64, bid: f64) -> f64 {
+    if meets_threshold(ask, bid) && meets_threshold(bid, ask) {
+        0.0
+    } else {
+        ask - bid
+    }
+}
+
 /// Executed volume and execution counts at one grouped price, sells on the bid and buys on the ask.
+///
+/// # Layout
+///
+/// `repr(C, align(8))` fixes the field order below, with a size of 56 bytes and an alignment of
+/// 8 bytes on every target.
+/// Changing this order, size or alignment is a breaking change and requires a changelog note.
+/// Hosts borrowing rows from encoded buffers must check byte order, alignment, bounds and field
+/// representation before creating a slice. Byte conversion belongs to the host; the chart's
+/// numerical validation is still required.
+#[repr(C, align(8))]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FootprintLevel {
     /// Integer price level, in multiples of [`Footprint::price_step`].
@@ -30,6 +55,19 @@ pub struct FootprintLevel {
     /// Number of executions whose aggressor is unknown.
     pub unknown_trades: u64,
 }
+
+const _: () = {
+    use std::mem::{align_of, offset_of, size_of};
+    assert!(size_of::<FootprintLevel>() == 56);
+    assert!(align_of::<FootprintLevel>() == 8);
+    assert!(offset_of!(FootprintLevel, level) == 0);
+    assert!(offset_of!(FootprintLevel, bid) == 8);
+    assert!(offset_of!(FootprintLevel, ask) == 16);
+    assert!(offset_of!(FootprintLevel, unknown) == 24);
+    assert!(offset_of!(FootprintLevel, bid_trades) == 32);
+    assert!(offset_of!(FootprintLevel, ask_trades) == 40);
+    assert!(offset_of!(FootprintLevel, unknown_trades) == 48);
+};
 
 impl FootprintLevel {
     pub(crate) fn absorb(&mut self, next: &Self) {
@@ -52,9 +90,9 @@ impl FootprintLevel {
         (trades > 0).then(|| self.volume() / trades as f64)
     }
 
-    /// Buy volume minus sell volume.
+    /// Buy volume minus sell volume; zero for sides equal up to the rounding of their sums.
     pub fn delta(&self) -> f64 {
-        self.ask - self.bid
+        side_delta(self.ask, self.bid)
     }
 
     /// Total executed volume, including unclassified trades.
@@ -72,6 +110,7 @@ pub use crate::model::NodeSensitivity;
 
 /// One bar's executed volume and intrabar delta path, starting at zero.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct FootprintBar {
     /// Bar open from the supplied clock or trade-bar allocation.
     pub time: DateTime<Utc>,
@@ -91,7 +130,29 @@ pub struct FootprintBar {
 
 impl FootprintBar {
     /// A bar with no executions, opening at `time`.
-    pub(crate) fn empty(time: DateTime<Utc>) -> Self {
+    /// Fill its rows, side totals and delta extrema from the prepared data, then validate the
+    /// aggregate through [`Footprint::from_bars`].
+    ///
+    /// ```
+    /// use egui_charts::{
+    ///     data::{Footprint, FootprintBar, FootprintLevel},
+    ///     model::{BarClock, Timeframe},
+    /// };
+    ///
+    /// let time = "2026-01-05T00:00:00Z".parse()?;
+    /// let mut bar = FootprintBar::empty(time);
+    /// let mut row = FootprintLevel::default();
+    /// row.level = 400;
+    /// row.ask = 2.0;
+    /// row.ask_trades = 1;
+    /// bar.levels.insert(row.level, row);
+    /// bar.ask = 2.0;
+    /// bar.max_delta = 2.0;
+    /// let footprint = Footprint::from_bars(BarClock::new(Timeframe::Min1), 0.25, 1, [bar])?;
+    /// assert_eq!(footprint.bar_at(time).unwrap().volume(), 2.0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn empty(time: DateTime<Utc>) -> Self {
         Self {
             time,
             levels: BTreeMap::new(),
@@ -103,6 +164,23 @@ impl FootprintBar {
         }
     }
 
+    pub(crate) fn copy_from(bar: FootprintBarView<'_>) -> Self {
+        Self {
+            time: bar.time,
+            levels: match bar.levels {
+                FootprintRows::Tree(rows) => rows.clone(),
+                FootprintRows::Slice(rows) => {
+                    rows.iter().map(|row| (row.level, row.clone())).collect()
+                }
+            },
+            bid: bar.bid,
+            ask: bar.ask,
+            unknown: bar.unknown,
+            min_delta: bar.min_delta,
+            max_delta: bar.max_delta,
+        }
+    }
+
     /// Adds the executions of the next bar in time, extending the running delta path.
     pub(crate) fn absorb(&mut self, next: &FootprintBar) {
         self.absorb_grouped(next, 1);
@@ -110,14 +188,18 @@ impl FootprintBar {
 
     /// [`absorb`](Self::absorb) with every `group` neighbouring rows of `next` summed into the
     /// row keyed by their quotient.
-    pub(crate) fn absorb_grouped(&mut self, next: &FootprintBar, group: i64) {
-        let open = self.delta();
-        self.min_delta = self.min_delta.min(open + next.min_delta);
-        self.max_delta = self.max_delta.max(open + next.max_delta);
+    pub(crate) fn absorb_grouped<'a>(&mut self, next: impl Into<FootprintBarView<'a>>, group: i64) {
+        let next = next.into();
+        // An extreme of `next` adds its excess of buys or sells to one side so far, so the merged
+        // point balances as `delta` does, and a bar absorbed into an empty one keeps its path.
+        let low = side_delta(self.ask, self.bid - next.min_delta);
+        let high = side_delta(self.ask + next.max_delta, self.bid);
+        self.min_delta = self.min_delta.min(low);
+        self.max_delta = self.max_delta.max(high);
         self.bid += next.bid;
         self.ask += next.ask;
         self.unknown += next.unknown;
-        for (&level, row) in &next.levels {
+        for (&level, row) in next.levels.iter() {
             let level = level.div_euclid(group);
             let target = self.levels.entry(level).or_insert_with(|| FootprintLevel {
                 level,
@@ -127,43 +209,35 @@ impl FootprintBar {
         }
     }
 
-    /// Buy volume minus sell volume.
+    /// Buy volume minus sell volume; zero for sides equal up to the rounding of their sums.
     pub fn delta(&self) -> f64 {
-        self.ask - self.bid
+        FootprintBarView::from(self).delta()
     }
 
     /// Total executed volume.
     pub fn volume(&self) -> f64 {
-        self.bid + self.ask + self.unknown
+        FootprintBarView::from(self).volume()
     }
 
     /// Executions summed across price rows, including unknown sides. An execution split
     /// across trade-based bars counts once in each bar it contributes to.
     pub fn trades(&self) -> u64 {
-        self.levels.values().map(FootprintLevel::trades).sum()
+        FootprintBarView::from(self).trades()
     }
 
     /// Total volume divided by executions; undefined when no execution was counted.
     pub fn average_size(&self) -> Option<f64> {
-        let trades = self.trades();
-        (trades > 0).then(|| self.volume() / trades as f64)
+        FootprintBarView::from(self).average_size()
     }
 
     /// Delta as a percentage of all executed volume; undefined for zero volume.
     pub fn delta_percent(&self) -> Option<f64> {
-        (self.volume() > 0.0).then(|| self.delta() / self.volume() * 100.0)
+        FootprintBarView::from(self).delta_percent()
     }
 
     /// Highest-volume level. A tie takes the lower price.
     pub fn poc(&self) -> Option<i64> {
-        self.levels
-            .values()
-            .max_by(|a, b| {
-                a.volume()
-                    .total_cmp(&b.volume())
-                    .then_with(|| b.level.cmp(&a.level))
-            })
-            .map(|level| level.level)
+        FootprintBarView::from(self).poc()
     }
 
     /// Contiguous value area grown from the POC toward the larger adjacent volume.
@@ -171,74 +245,15 @@ impl FootprintBar {
     /// Gaps hold zero volume.
     /// Returns inclusive lower and upper level keys; a zero-volume bar has no area.
     pub fn value_area(&self, share: f64) -> Option<(i64, i64)> {
-        if self.volume() <= 0.0 {
-            return None;
-        }
-        let rows: Vec<_> = self.levels.values().collect();
-        let poc = self.poc()?;
-        let mut low = rows.partition_point(|row| row.level < poc);
-        let mut high = low;
-        let mut volume = rows[low].volume();
-        let target = self.volume()
-            * if share.is_nan() {
-                0.0
-            } else {
-                share.clamp(0.0, 1.0)
-            };
-        let mut low_key = rows[low].level;
-        let mut high_key = low_key;
-        while volume < target && (low > 0 || high + 1 < rows.len()) {
-            let below = low.checked_sub(1).map(|i| rows[i]);
-            let above = rows.get(high + 1).copied();
-            let below_gap = below.map(|row| low_key as i128 - row.level as i128);
-            let above_gap = above.map(|row| row.level as i128 - high_key as i128);
-            // Skip empty spans in one step, without comparing across untraded prices.
-            let gap = below_gap.into_iter().chain(above_gap).min().unwrap_or(1);
-            if gap > 1 {
-                if below.is_some() {
-                    low_key = (low_key as i128 - gap + 1) as i64;
-                }
-                if above.is_some() {
-                    high_key = (high_key as i128 + gap - 1) as i64;
-                }
-            }
-            let bid_volume = below.map(|row| {
-                if row.level as i128 + 1 == low_key as i128 {
-                    row.volume()
-                } else {
-                    0.0
-                }
-            });
-            let ask_volume = above.map(|row| {
-                if row.level as i128 - 1 == high_key as i128 {
-                    row.volume()
-                } else {
-                    0.0
-                }
-            });
-            if below.is_some() && (above.is_none() || bid_volume >= ask_volume) {
-                low_key -= 1;
-                if below.is_some_and(|row| row.level == low_key) {
-                    low -= 1;
-                    volume += rows[low].volume();
-                }
-            }
-            if above.is_some() && (below.is_none() || ask_volume >= bid_volume) {
-                high_key += 1;
-                if above.is_some_and(|row| row.level == high_key) {
-                    high += 1;
-                    volume += rows[high].volume();
-                }
-            }
-        }
-        Some((low_key, high_key))
+        FootprintBarView::from(self).value_area(share)
     }
 
     /// (bid, ask) dominance at `level`, comparing horizontally or to the adjacent price.
     /// Missing adjacent prices and the outer diagonals do not signal an imbalance.
-    /// A positive side against a zero opposite side is imbalanced. The dominant side needs at
-    /// least `min_volume`, inclusive and with the ratio's rounding tolerance; zero keeps every
-    /// ratio signal. Ratios below 1, negative minima or non-finite values produce no signals.
+    /// A positive side against a zero opposite side is imbalanced; sides equal within the ratio's
+    /// rounding tolerance are not, at any ratio. The dominant side needs at least `min_volume`,
+    /// inclusive and with the ratio's rounding tolerance; zero keeps every ratio signal. Ratios
+    /// below 1, negative minima or non-finite values produce no signals.
     pub fn imbalance(
         &self,
         level: i64,
@@ -246,27 +261,7 @@ impl FootprintBar {
         diagonal: bool,
         min_volume: f64,
     ) -> (bool, bool) {
-        let Some(row) = self.levels.get(&level) else {
-            return (false, false);
-        };
-        if !ratio.is_finite() || ratio < 1.0 || !min_volume.is_finite() || min_volume < 0.0 {
-            return (false, false);
-        }
-        let dominant = |a: f64, b: f64| {
-            a > b && meets_threshold(a, min_volume) && meets_threshold(a / ratio, b)
-        };
-        if !diagonal {
-            return (dominant(row.bid, row.ask), dominant(row.ask, row.bid));
-        }
-        let bid = level
-            .checked_add(1)
-            .and_then(|key| self.levels.get(&key))
-            .is_some_and(|above| dominant(row.bid, above.ask));
-        let ask = level
-            .checked_sub(1)
-            .and_then(|key| self.levels.get(&key))
-            .is_some_and(|below| dominant(row.ask, below.bid));
-        (bid, ask)
+        FootprintBarView::from(self).imbalance(level, ratio, diagonal, min_volume)
     }
 }
 
@@ -297,6 +292,14 @@ pub struct Footprint {
     max_rows: usize,
     /// Bars opening up to this time lack executions that were dropped or never received.
     incomplete_through: Option<DateTime<Utc>>,
+    /// Execution coverage missing between prepared history and the retained stream.
+    missing: Vec<(DateTime<Utc>, DateTime<Utc>)>,
+    /// Earliest answered prepared-history boundary, including quiet and unavailable spans.
+    /// Missing intervals still determine whether those answers certify complete executions.
+    covered_from: Option<DateTime<Utc>>,
+    /// Only the partial boundary is copied; completed prepared trees stay in `bars`.
+    #[cfg(feature = "widget")]
+    prepared: Option<(DateTime<Utc>, Option<FootprintBar>)>,
     revision: u64,
 }
 
@@ -335,151 +338,13 @@ impl Footprint {
         }
         let mut trades = 0_u64;
         for bar in bars {
-            let invalid =
-                |reason| FeedError::InvalidData(format!("footprint bar at {} {reason}", bar.time));
-            if flow.clock.bar_open(bar.time) != bar.time {
-                return Err(invalid("does not open on the clock".into()));
-            }
             if flow.bars.contains_key(&bar.time) {
-                return Err(invalid("is supplied more than once".into()));
-            }
-            if bar.levels.is_empty() {
-                return Err(invalid("has no price rows".into()));
-            }
-            let mut totals = [0.0; 3];
-            for (&level, row) in &bar.levels {
-                if level != row.level {
-                    return Err(invalid(format!(
-                        "row {level} has mismatched level {}",
-                        row.level
-                    )));
-                }
-                if flow.level_of(level as f64 * flow.step) != Some(level) {
-                    return Err(invalid(format!(
-                        "row {level} is outside the grid of step {:?}",
-                        flow.step
-                    )));
-                }
-                for (i, (side, value, count)) in [
-                    ("bid", row.bid, row.bid_trades),
-                    ("ask", row.ask, row.ask_trades),
-                    ("unknown", row.unknown, row.unknown_trades),
-                ]
-                .into_iter()
-                .enumerate()
-                {
-                    if !value.is_finite() {
-                        return Err(invalid(format!(
-                            "row {level} {side} volume must be finite, got {value:?}"
-                        )));
-                    }
-                    if value < 0.0 {
-                        return Err(invalid(format!(
-                            "row {level} {side} volume must be at least 0, got {value:?}"
-                        )));
-                    }
-                    if value == 0.0 && count > 0 {
-                        return Err(invalid(format!(
-                            "row {level} {side} count {count} has no volume"
-                        )));
-                    }
-                    if value > 0.0 && count == 0 {
-                        return Err(invalid(format!(
-                            "row {level} {side} volume {value:?} has no executions"
-                        )));
-                    }
-                    totals[i] += value;
-                    trades = trades
-                        .checked_add(count)
-                        .filter(|total| *total <= u64::MAX / 2)
-                        .ok_or_else(|| invalid(format!(
-                            "row {level} {side} count {count} takes the snapshot past {} executions",
-                            u64::MAX / 2
-                        )))?;
-                }
-                if !row.volume().is_finite() {
-                    return Err(invalid(format!(
-                        "row {level} volume must be finite, got {:?}",
-                        row.volume()
-                    )));
-                }
-                if row.volume() == 0.0 {
-                    return Err(invalid(format!("row {level} has no executed volume")));
-                }
-            }
-            for ((side, value), total) in
-                [("bid", bar.bid), ("ask", bar.ask), ("unknown", bar.unknown)]
-                    .into_iter()
-                    .zip(totals)
-            {
-                if !value.is_finite() {
-                    return Err(invalid(format!(
-                        "{side} volume must be finite, got {value:?}"
-                    )));
-                }
-                if value < 0.0 {
-                    return Err(invalid(format!(
-                        "{side} volume must be at least 0, got {value:?}"
-                    )));
-                }
-                if !total.is_finite() {
-                    return Err(invalid(format!(
-                        "sum of row {side} volumes must be finite, got {total:?}"
-                    )));
-                }
-                if !near(value, total) {
-                    return Err(invalid(format!(
-                        "{side} volume {value:?} differs from row total {total:?}"
-                    )));
-                }
-            }
-            if !bar.volume().is_finite() {
-                return Err(invalid(format!(
-                    "volume must be finite, got {:?}",
-                    bar.volume()
+                return Err(FeedError::InvalidData(format!(
+                    "footprint bar at {} is supplied more than once",
+                    bar.time
                 )));
             }
-            for (name, value) in [("min_delta", bar.min_delta), ("max_delta", bar.max_delta)] {
-                if !value.is_finite() {
-                    return Err(invalid(format!("{name} must be finite, got {value:?}")));
-                }
-            }
-            if bar.min_delta > 0.0 {
-                return Err(invalid(format!(
-                    "min_delta must be at most 0, got {:?}",
-                    bar.min_delta
-                )));
-            }
-            if bar.max_delta < 0.0 {
-                return Err(invalid(format!(
-                    "max_delta must be at least 0, got {:?}",
-                    bar.max_delta
-                )));
-            }
-            let slack = 1e-9 * bar.bid.max(bar.ask);
-            let at_least = |value: f64, bound: f64| value >= bound - slack;
-            if !at_least(bar.delta(), bar.min_delta) {
-                return Err(invalid(format!(
-                    "min_delta {:?} exceeds final delta {:?}",
-                    bar.min_delta,
-                    bar.delta()
-                )));
-            }
-            if !at_least(bar.max_delta, bar.delta()) {
-                return Err(invalid(format!(
-                    "max_delta {:?} is below final delta {:?}",
-                    bar.max_delta,
-                    bar.delta()
-                )));
-            }
-            // Visiting both extrema requires their distance in buys or sells.
-            if !at_least(bar.bid.max(bar.ask), bar.max_delta - bar.min_delta) {
-                return Err(invalid(format!(
-                    "delta span {:?} exceeds side volume {:?}",
-                    bar.max_delta - bar.min_delta,
-                    bar.bid.max(bar.ask)
-                )));
-            }
+            validate_snapshot_bar(&flow, (&bar).into(), &mut trades)?;
             flow.rows += bar.levels.len();
             flow.bars.insert(bar.time, bar);
         }
@@ -522,42 +387,276 @@ impl Footprint {
             max_bars: usize::MAX,
             max_rows: usize::MAX,
             incomplete_through: None,
+            missing: Vec::new(),
+            covered_from: None,
+            #[cfg(feature = "widget")]
+            prepared: None,
             revision: next_revision(),
         })
     }
 
     /// Revision of aggregated rows and completeness; identical clones share it until changed.
-    #[cfg(any(test, all(feature = "widget", feature = "studies")))]
+    #[cfg(any(test, feature = "widget"))]
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
 
     /// Keeps at most `bars` bars and `rows` price rows in all, dropping the oldest bars first.
     /// The newest bar is always kept, whole. Dropped bars are counted as incomplete.
+    #[cfg(any(test, feature = "widget", feature = "detectors"))]
     pub(crate) fn set_budget(&mut self, bars: usize, rows: usize) {
         self.max_bars = bars;
         self.max_rows = rows;
         self.enforce_budget();
     }
 
-    /// Open of the oldest bar whose executions are all held: earlier bars were cut by the
-    /// budget or by trades dropped from the host's store, or may lack trades that never
-    /// arrived, and must not be shown as complete.
+    /// Open of the first bar in the complete suffix after any loss or missing join.
+    /// Earlier bars may lack executions or have been evicted. Complete prepared bars can
+    /// also precede a missing join; readers such as [`profile`](Self::profile) include them.
     pub fn complete_from(&self) -> Option<DateTime<Utc>> {
-        self.complete_bars(..).next().map(|bar| bar.time)
+        self.bars
+            .range((self.complete_start(), Bound::Unbounded))
+            .next()
+            .map(|(time, _)| *time)
     }
 
-    /// The bars in `range` from [`complete_from`](Self::complete_from) on. Panics as
-    /// [`BTreeMap::range`] does.
+    fn complete_start(&self) -> Bound<DateTime<Utc>> {
+        match (self.incomplete_through, self.missing.last().copied()) {
+            (Some(cut), Some((_, end))) if cut < end => Bound::Included(end),
+            (Some(cut), _) => Bound::Excluded(cut),
+            (None, Some((_, end))) => Bound::Included(end),
+            (None, None) => Bound::Unbounded,
+        }
+    }
+
+    /// Complete bars in `range`, including prepared bars before a missing join.
+    /// Panics as [`BTreeMap::range`] does.
     pub(crate) fn complete_bars(
         &self,
         range: impl RangeBounds<DateTime<Utc>>,
     ) -> impl Iterator<Item = &FootprintBar> {
-        let cut = self.incomplete_through;
         self.bars
             .range(range)
-            .filter(move |(time, _)| cut.is_none_or(|cut| **time > cut))
+            .filter(|(time, _)| self.complete_at(**time))
             .map(|(_, bar)| bar)
+    }
+
+    /// Whether the bar slot opening at `open` holds all its executions, if it has any.
+    pub(crate) fn complete_at(&self, open: DateTime<Utc>) -> bool {
+        self.incomplete_through.is_none_or(|cut| open > cut)
+            && self
+                .missing
+                .get(self.missing.partition_point(|(_, end)| *end <= open))
+                .is_none_or(|(from, _)| open < self.clock.bar_open(*from))
+    }
+
+    /// Whether missing executions could change a result spanning these times.
+    pub(crate) fn span_has_gap(&self, from: DateTime<Utc>, through: Option<DateTime<Utc>>) -> bool {
+        self.missing
+            .get(self.missing.partition_point(|(_, end)| *end <= from))
+            .is_some_and(|(start, _)| through.is_none_or(|end| *start <= end))
+    }
+
+    /// Keeps disjoint reconnect gaps separate so complete bars between them remain usable.
+    #[cfg(feature = "widget")]
+    pub(crate) fn add_missing(&mut self, mut from: DateTime<Utc>, mut end: DateTime<Utc>) {
+        if from >= end {
+            return;
+        }
+        let first = self.missing.partition_point(|(_, stop)| *stop < from);
+        let mut last = first;
+        while let Some(&(start, stop)) = self.missing.get(last) {
+            if start > end {
+                break;
+            }
+            from = from.min(start);
+            end = end.max(stop);
+            last += 1;
+        }
+        if last == first + 1 && self.missing[first] == (from, end) {
+            return;
+        }
+        self.missing.splice(first..last, [(from, end)]);
+        self.revision = next_revision();
+    }
+
+    /// Removes only execution coverage actually supplied by a trade page.
+    #[cfg(feature = "widget")]
+    pub(crate) fn cover_missing(&mut self, from: DateTime<Utc>, end: DateTime<Utc>) {
+        if from >= end {
+            return;
+        }
+        let mut at = self.missing.partition_point(|(_, stop)| *stop <= from);
+        while let Some(&(start, stop)) = self.missing.get(at) {
+            if start >= end {
+                break;
+            }
+            self.revision = next_revision();
+            if start < from {
+                self.missing[at].1 = from;
+                at += 1;
+                if stop > end {
+                    self.missing.insert(at, (end, stop));
+                    break;
+                }
+            } else if stop > end {
+                self.missing[at].0 = end;
+                break;
+            } else {
+                self.missing.remove(at);
+            }
+        }
+    }
+
+    #[cfg(feature = "widget")]
+    pub(crate) fn prepared_before(&self) -> Option<DateTime<Utc>> {
+        self.prepared.as_ref().map(|(before, _)| *before)
+    }
+
+    #[cfg(feature = "widget")]
+    pub(crate) fn prepared_boundary(&self) -> Option<&FootprintBar> {
+        self.prepared.as_ref().and_then(|(_, bar)| bar.as_ref())
+    }
+
+    /// Saves only the unfinished prepared bar needed to replay a changed raw suffix.
+    #[cfg(feature = "widget")]
+    pub(crate) fn prepare_history(
+        &mut self,
+        before: DateTime<Utc>,
+        trades: &super::trades::Trades,
+        from_start: bool,
+    ) {
+        let boundary = self.bars.get(&self.clock.bar_open(before)).cloned();
+        self.covered_from = self.covered_from.or_else(|| {
+            Some(
+                self.bars
+                    .first_key_value()
+                    .map_or(before, |(time, _)| *time),
+            )
+        });
+        self.prepared = Some((before, boundary));
+        if !from_start {
+            let first = trades.iter().next();
+            let unconfirmed = first.is_some_and(|first| {
+                trades
+                    .live()
+                    .next()
+                    .is_some_and(|live| std::ptr::eq(first, live))
+            });
+            self.add_missing(
+                before,
+                first.map_or(DateTime::<Utc>::MAX_UTC, |trade| {
+                    if unconfirmed {
+                        trade
+                            .ts
+                            .checked_add_signed(chrono::TimeDelta::nanoseconds(1))
+                            .unwrap_or(DateTime::<Utc>::MAX_UTC)
+                    } else {
+                        trade.ts
+                    }
+                }),
+            );
+        }
+    }
+
+    /// Replays only the mutable suffix after a trade-page reply, or after a streamed trade stamped
+    /// before held ones, never completed history.
+    #[cfg(feature = "widget")]
+    pub(crate) fn rebuild_prepared(&mut self, trades: &super::trades::Trades) {
+        let Some(before) = self.prepared_before() else {
+            return;
+        };
+        let open = self.clock.bar_open(before);
+        let removed = self.bars.split_off(&open);
+        self.rows -= removed.values().map(|bar| bar.levels.len()).sum::<usize>();
+        self.restore_boundary();
+        self.last = None;
+        // A stream can stamp its first trades before held ones: the bars take them in time order.
+        let mut tail: Vec<_> = trades.iter().filter(|trade| trade.ts >= before).collect();
+        tail.sort_by_key(|trade| trade.ts);
+        for trade in tail {
+            let _ = self.push(trade);
+        }
+        if let Some(lost) = trades.lost_until() {
+            self.drop_through(lost, trades.iter());
+        }
+        self.refresh_prepared_gap(trades);
+        self.revision = next_revision();
+    }
+
+    #[cfg(feature = "widget")]
+    fn restore_boundary(&mut self) {
+        if let Some(bar) = self.prepared.as_ref().and_then(|(_, bar)| bar.as_ref()) {
+            self.rows += bar.levels.len();
+            self.bars.insert(bar.time, bar.clone());
+        }
+    }
+
+    /// Adds actual loss and subscription gaps; a later reconnect never certifies an older gap.
+    #[cfg(feature = "widget")]
+    pub(crate) fn refresh_prepared_gap(&mut self, trades: &super::trades::Trades) {
+        let _ =
+            self.refresh_prepared_coverage(trades, self.prepared_before(), trades.retained_until());
+    }
+
+    /// Inputs retain received trades independently; only their actual losses change coverage.
+    #[cfg(feature = "widget")]
+    pub(crate) fn refresh_prepared_coverage(
+        &mut self,
+        trades: &super::trades::Trades,
+        lost_from: Option<DateTime<Utc>>,
+        retained: Option<DateTime<Utc>>,
+    ) -> Option<DateTime<Utc>> {
+        let before = self.prepared_before()?;
+        let after = |at: DateTime<Utc>| {
+            at.checked_add_signed(chrono::TimeDelta::nanoseconds(1))
+                .unwrap_or(DateTime::<Utc>::MAX_UTC)
+        };
+        let mut changed = None;
+        let mut missing = |this: &mut Self, from: DateTime<Utc>, end| {
+            let revision = this.revision();
+            this.add_missing(from, end);
+            if this.revision() != revision {
+                changed = Some(changed.map_or(from, |first: DateTime<Utc>| first.min(from)));
+            }
+        };
+        if let Some(from) = lost_from
+            && let Some(lost) = trades.lost_until().filter(|lost| *lost >= before)
+        {
+            let oldest = trades.iter().next().map_or(after(lost), |trade| trade.ts);
+            missing(self, from.max(before), after(lost).max(oldest));
+        }
+        for &left in trades.left_out().range(before..) {
+            missing(self, left, after(left));
+        }
+        let stream = trades
+            .live()
+            .find(|trade| {
+                trades
+                    .retained_until()
+                    .is_none_or(|until| trade.ts >= until)
+            })
+            .map(|trade| after(trade.ts));
+        if let Some(retained) = retained {
+            missing(
+                self,
+                retained.max(before),
+                stream.unwrap_or(DateTime::<Utc>::MAX_UTC),
+            );
+        }
+        // Once a stream begins, only the open-ended join gains a known upper boundary.
+        if let Some(&(from, end)) = self.missing.last()
+            && end == DateTime::<Utc>::MAX_UTC
+            && let Some(first) = stream
+        {
+            let from = first.max(from);
+            let revision = self.revision();
+            self.cover_missing(from, end);
+            if self.revision() != revision {
+                changed = Some(changed.map_or(from, |first| first.min(from)));
+            }
+        }
+        changed
     }
 
     /// Takes out the executions dropped from the host's store, the newest at `through`, and
@@ -572,6 +671,30 @@ impl Footprint {
         through: DateTime<Utc>,
         held: impl IntoIterator<Item = &'a Tick>,
     ) {
+        #[cfg(feature = "widget")]
+        if let Some(before) = self.prepared_before() {
+            if through < before {
+                return;
+            }
+            let (first, open) = (self.clock.bar_open(before), self.clock.bar_open(through));
+            while let Some((&time, _)) = self.bars.range(first..=open).next() {
+                self.rows -= self.bars.remove(&time).unwrap().levels.len();
+            }
+            self.restore_boundary();
+            let last = self.last.take();
+            for trade in held {
+                let at = self.clock.bar_open(trade.ts);
+                if at > open {
+                    break;
+                }
+                if trade.ts >= before && at == open {
+                    let _ = self.push(trade);
+                }
+            }
+            self.last = self.last.max(last);
+            self.revision = next_revision();
+            return;
+        }
         if self.clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
             // Keep the allocation anchor: rebuilding from the retained suffix shifts count bars.
             if let Some(open) = self
@@ -606,6 +729,9 @@ impl Footprint {
                 trade_starts: BTreeMap::new(),
                 rows: 0,
                 last: None,
+                missing: Vec::new(),
+                #[cfg(feature = "widget")]
+                prepared: None,
                 ..*self
             };
             for trade in held
@@ -651,23 +777,30 @@ impl Footprint {
 
     /// Copies changed sink allocations without replaying or shifting their grouping anchor.
     #[cfg(feature = "widget")]
-    pub(crate) fn copy_trade_bars(&mut self, source: &Self, from: Option<DateTime<Utc>>) {
-        let Some(from) = from.or_else(|| source.bars.first_key_value().map(|(time, _)| *time))
-        else {
+    pub(crate) fn copy_trade_bars(
+        &mut self,
+        source: FootprintView<'_>,
+        from: Option<DateTime<Utc>>,
+    ) {
+        let Some(from) = from.or_else(|| source.first_time()) else {
             return;
         };
         let removed = self.bars.split_off(&from);
-        let cut = self.incomplete_through.max(source.incomplete_through);
-        let changed =
-            cut != self.incomplete_through || !removed.iter().eq(source.bars.range(from..));
+        let cut = self.incomplete_through.max(source.flow.incomplete_through);
+        let changed = cut != self.incomplete_through
+            || !removed
+                .values()
+                .map(FootprintBarView::from)
+                .eq(source.bars(from..));
         self.rows -= removed.values().map(|bar| bar.levels.len()).sum::<usize>();
         self.trade_starts.retain(|time, _| *time < from);
-        for (time, bar) in source.bars.range(from..) {
+        for bar in source.bars(from..) {
             self.rows += bar.levels.len();
-            self.bars.insert(*time, bar.clone());
+            self.bars.insert(bar.time, FootprintBar::copy_from(bar));
         }
         self.trade_starts.extend(
             source
+                .flow
                 .trade_starts
                 .range(from..)
                 .map(|(time, first)| (*time, *first)),
@@ -718,7 +851,6 @@ impl Footprint {
     }
 
     /// The calendar the bars open by.
-    #[cfg(feature = "studies")]
     pub(crate) fn clock(&self) -> &BarClock {
         &self.clock
     }
@@ -745,9 +877,9 @@ impl Footprint {
     }
 
     /// The executions of the bars that contain `first` through `last`, inclusive, as one bar
-    /// opening with the first of them: the exact profile of a span of the chart. Bars before
-    /// [`complete_from`](Self::complete_from) are left out, as their executions are not all
-    /// held. Empty when no complete bar traded there or `last` precedes `first`.
+    /// opening with the first of them: the exact profile of the complete bars in a span of
+    /// the chart. Incomplete bars, including a missing history join, are left out.
+    /// Empty when no complete bar traded there or `last` precedes `first`.
     /// Counts add the contributing bars, including split executions counted in more than one bar.
     pub fn profile(&self, first: DateTime<Utc>, last: DateTime<Utc>) -> FootprintBar {
         let (first, last) = (self.clock.bar_open(first), self.clock.bar_open(last));
@@ -780,7 +912,11 @@ impl Footprint {
     /// page's end only when it ends with the last of `history`. The newest proven run is kept, so
     /// its bars have no gap. Older bars get no cells and draw candles. With `before`, adds only
     /// the executions strictly before it. Unless `ended`, executions after the last one may be
-    /// missing: the page does not end there, and that end proves nothing.
+    /// missing: the page does not end there, and that end proves nothing. Bars that open at or
+    /// after `stream_from`, the time of the oldest live execution the store kept apart at an
+    /// instant the page covers, get no cells: the sink opened them, and the page's executions
+    /// there may include some the stream never sent. They still count in the matching, so the
+    /// bars before keep their proof.
     #[cfg(feature = "widget")]
     pub(crate) fn push_history(
         &mut self,
@@ -788,6 +924,7 @@ impl Footprint {
         history: &[crate::model::Bar],
         before: Option<DateTime<Utc>>,
         ended: bool,
+        stream_from: Option<DateTime<Utc>>,
     ) {
         let Some(timeframe) = self.clock.timeframe().filter(|tf| tf.is_trade_based()) else {
             return;
@@ -842,7 +979,9 @@ impl Footprint {
             }
         }
         for (trade, open, size) in newest {
-            if before.is_none_or(|before| trade.ts < before) {
+            if before.is_none_or(|before| trade.ts < before)
+                && stream_from.is_none_or(|from| open < from)
+            {
                 let _ = self.push_part(trade, open, size);
             }
         }
@@ -975,6 +1114,165 @@ impl Footprint {
 /// Parts of chart bars: execution, bar open and allocated size.
 #[cfg(feature = "widget")]
 type Parts<'a> = Vec<(&'a Tick, DateTime<Utc>, f64)>;
+
+fn validate_snapshot_bar(
+    flow: &Footprint,
+    bar: FootprintBarView<'_>,
+    trades: &mut u64,
+) -> Result<(), FeedError> {
+    if let FootprintRows::Slice(rows) = bar.levels
+        && rows.windows(2).any(|pair| pair[0].level >= pair[1].level)
+    {
+        return Err(FeedError::InvalidData(format!(
+            "footprint bar at {} has unordered or duplicate price rows",
+            bar.time
+        )));
+    }
+    let invalid =
+        |reason| FeedError::InvalidData(format!("footprint bar at {} {reason}", bar.time));
+    if flow.clock.bar_open(bar.time) != bar.time {
+        return Err(invalid("does not open on the clock".into()));
+    }
+    if bar.levels.is_empty() {
+        return Err(invalid("has no price rows".into()));
+    }
+    let mut totals = [0.0; 3];
+    for (&level, row) in bar.levels.iter() {
+        if level != row.level {
+            return Err(invalid(format!(
+                "row {level} has mismatched level {}",
+                row.level
+            )));
+        }
+        if flow.level_of(level as f64 * flow.step) != Some(level) {
+            return Err(invalid(format!(
+                "row {level} is outside the grid of step {:?}",
+                flow.step
+            )));
+        }
+        for (i, (side, value, count)) in [
+            ("bid", row.bid, row.bid_trades),
+            ("ask", row.ask, row.ask_trades),
+            ("unknown", row.unknown, row.unknown_trades),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if !value.is_finite() {
+                return Err(invalid(format!(
+                    "row {level} {side} volume must be finite, got {value:?}"
+                )));
+            }
+            if value < 0.0 {
+                return Err(invalid(format!(
+                    "row {level} {side} volume must be at least 0, got {value:?}"
+                )));
+            }
+            if value == 0.0 && count > 0 {
+                return Err(invalid(format!(
+                    "row {level} {side} count {count} has no volume"
+                )));
+            }
+            if value > 0.0 && count == 0 {
+                return Err(invalid(format!(
+                    "row {level} {side} volume {value:?} has no executions"
+                )));
+            }
+            totals[i] += value;
+            *trades = trades
+                .checked_add(count)
+                .filter(|total| *total <= u64::MAX / 2)
+                .ok_or_else(|| {
+                    invalid(format!(
+                        "row {level} {side} count {count} takes the snapshot past {} executions",
+                        u64::MAX / 2
+                    ))
+                })?;
+        }
+        if !row.volume().is_finite() {
+            return Err(invalid(format!(
+                "row {level} volume must be finite, got {:?}",
+                row.volume()
+            )));
+        }
+        if row.volume() == 0.0 {
+            return Err(invalid(format!("row {level} has no executed volume")));
+        }
+    }
+    for ((side, value), total) in [("bid", bar.bid), ("ask", bar.ask), ("unknown", bar.unknown)]
+        .into_iter()
+        .zip(totals)
+    {
+        if !value.is_finite() {
+            return Err(invalid(format!(
+                "{side} volume must be finite, got {value:?}"
+            )));
+        }
+        if value < 0.0 {
+            return Err(invalid(format!(
+                "{side} volume must be at least 0, got {value:?}"
+            )));
+        }
+        if !total.is_finite() {
+            return Err(invalid(format!(
+                "sum of row {side} volumes must be finite, got {total:?}"
+            )));
+        }
+        if !near(value, total) {
+            return Err(invalid(format!(
+                "{side} volume {value:?} differs from row total {total:?}"
+            )));
+        }
+    }
+    if !bar.volume().is_finite() {
+        return Err(invalid(format!(
+            "volume must be finite, got {:?}",
+            bar.volume()
+        )));
+    }
+    for (name, value) in [("min_delta", bar.min_delta), ("max_delta", bar.max_delta)] {
+        if !value.is_finite() {
+            return Err(invalid(format!("{name} must be finite, got {value:?}")));
+        }
+    }
+    if bar.min_delta > 0.0 {
+        return Err(invalid(format!(
+            "min_delta must be at most 0, got {:?}",
+            bar.min_delta
+        )));
+    }
+    if bar.max_delta < 0.0 {
+        return Err(invalid(format!(
+            "max_delta must be at least 0, got {:?}",
+            bar.max_delta
+        )));
+    }
+    let slack = 1e-9 * bar.bid.max(bar.ask);
+    let at_least = |value: f64, bound: f64| value >= bound - slack;
+    if !at_least(bar.delta(), bar.min_delta) {
+        return Err(invalid(format!(
+            "min_delta {:?} exceeds final delta {:?}",
+            bar.min_delta,
+            bar.delta()
+        )));
+    }
+    if !at_least(bar.max_delta, bar.delta()) {
+        return Err(invalid(format!(
+            "max_delta {:?} is below final delta {:?}",
+            bar.max_delta,
+            bar.delta()
+        )));
+    }
+    // Visiting both extrema requires their distance in buys or sells.
+    if !at_least(bar.bid.max(bar.ask), bar.max_delta - bar.min_delta) {
+        return Err(invalid(format!(
+            "delta span {:?} exceeds side volume {:?}",
+            bar.max_delta - bar.min_delta,
+            bar.bid.max(bar.ask)
+        )));
+    }
+    Ok(())
+}
 
 /// Paged executions grouped along the chart's bars from one start.
 #[cfg(feature = "widget")]
@@ -1116,6 +1414,63 @@ pub(crate) fn live_run<'a>(
 mod tests {
     use super::*;
     use crate::model::Timeframe;
+
+    fn borrowed_bar(levels: FootprintRows<'_>) -> FootprintBarView<'_> {
+        let mut bar = FootprintBarView::new("2026-01-05T10:00:00Z".parse().unwrap(), levels);
+        bar.bid = 3.0;
+        bar.ask = 4.0;
+        bar.unknown = 3.0;
+        bar.min_delta = -2.0;
+        bar.max_delta = 2.0;
+        bar
+    }
+
+    fn borrowed_rows() -> [FootprintLevel; 3] {
+        [
+            FootprintLevel {
+                level: -2,
+                bid: 2.0,
+                bid_trades: 1,
+                ..Default::default()
+            },
+            FootprintLevel {
+                level: -1,
+                bid: 1.0,
+                ask: 4.0,
+                bid_trades: 1,
+                ask_trades: 2,
+                ..Default::default()
+            },
+            FootprintLevel {
+                level: 1,
+                unknown: 3.0,
+                unknown_trades: 1,
+                ..Default::default()
+            },
+        ]
+    }
+
+    #[test]
+    fn borrowed_rows_preserve_totals_gaps_and_price_calculations() {
+        let rows = borrowed_rows();
+        let tree = rows.iter().map(|row| (row.level, row.clone())).collect();
+        let basis = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for levels in [FootprintRows::Tree(&tree), FootprintRows::Slice(&rows)] {
+            let bar = borrowed_bar(levels);
+            validate_snapshot_bar(&basis, bar, &mut 0).unwrap();
+            assert_eq!((bar.volume(), bar.delta(), bar.trades()), (10.0, 1.0, 5));
+            assert_eq!(bar.average_size(), Some(2.0));
+            assert_eq!(bar.poc(), Some(-1));
+            assert_eq!(bar.value_area(0.7), Some((-2, -1)));
+            assert_eq!(bar.imbalance(-1, 2.0, true, 0.0), (false, true));
+            assert!(levels.get(&0).is_none());
+            let mut iter = levels.iter();
+            assert_eq!(iter.len(), 3);
+            assert_eq!(iter.next().map(|(&key, _)| key), Some(-2));
+            assert_eq!(iter.next_back().map(|(&key, _)| key), Some(1));
+        }
+    }
+
     use chrono::TimeDelta;
 
     fn aggregate_bar(time: DateTime<Utc>) -> FootprintBar {
@@ -1163,6 +1518,40 @@ mod tests {
 
     fn aggregate(bars: impl IntoIterator<Item = FootprintBar>) -> Result<Footprint, FeedError> {
         Footprint::from_bars(BarClock::new(Timeframe::Min1), 0.25, 2, bars)
+    }
+
+    #[cfg(feature = "widget")]
+    #[test]
+    fn disjoint_gaps_keep_known_bars_and_only_shrink_with_proven_coverage() {
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let at = |minute| start + TimeDelta::minutes(minute);
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for minute in 0..10 {
+            flow.push(&Tick::new(at(minute), 100.0, 1.0, None)).unwrap();
+        }
+        flow.add_missing(at(2), at(4));
+        flow.add_missing(at(6), at(9));
+        assert_eq!(
+            flow.complete_bars(..).map(|b| b.time).collect::<Vec<_>>(),
+            [0, 1, 4, 5, 9].map(at)
+        );
+        flow.cover_missing(at(7), at(8));
+        assert!(!flow.span_has_gap(at(7), Some(at(7))));
+        assert!(flow.span_has_gap(at(4), Some(at(8))));
+        flow.cover_missing(at(1), at(7));
+        assert_eq!(
+            flow.complete_bars(..).map(|b| b.time).collect::<Vec<_>>(),
+            [0, 1, 2, 3, 4, 5, 6, 7, 9].map(at)
+        );
+        flow.add_missing(at(7), at(8));
+        flow.add_missing(at(6), at(10));
+        assert_eq!(
+            flow.complete_bars(..).map(|b| b.time).collect::<Vec<_>>(),
+            [0, 1, 2, 3, 4, 5].map(at)
+        );
+        flow.cover_missing(at(0), at(10));
+        assert_eq!(flow.complete_from(), Some(start));
+        assert!(!flow.span_has_gap(start, None));
     }
 
     #[test]
@@ -1281,9 +1670,10 @@ mod tests {
             Some(&decimal)
         );
         let mut cancellation = aggregate_bar(start);
-        (cancellation.bid, cancellation.ask, cancellation.unknown) =
-            (50.12345677, 50.12345678, 0.0);
-        (cancellation.min_delta, cancellation.max_delta) = (-cancellation.bid, 1e-8);
+        // 1e-7 apart is 2e-9 of the sides, so they are not balanced, and the delta of
+        // 1.0000000116860974e-7 is above the maximum by far less than the slack.
+        (cancellation.bid, cancellation.ask, cancellation.unknown) = (50.1234567, 50.1234568, 0.0);
+        (cancellation.min_delta, cancellation.max_delta) = (-cancellation.bid, 1e-7);
         let row = cancellation.levels.get_mut(&200).unwrap();
         (row.bid, row.ask, row.unknown) = (cancellation.bid, cancellation.ask, 0.0);
         (row.bid_trades, row.ask_trades, row.unknown_trades) = (1, 1, 0);
@@ -1492,21 +1882,21 @@ mod tests {
         let references: Vec<_> = trades.iter().collect();
         let mut flow = fresh();
         let empty = flow.revision();
-        flow.push_history(&references, &history, Some(time), true);
+        flow.push_history(&references, &history, Some(time), true, None);
         assert_eq!(flow.revision(), empty);
-        flow.push_history(&references, &history, None, true);
+        flow.push_history(&references, &history, None, true, None);
         assert_ne!(flow.revision(), empty);
         assert_eq!(flow.bars().len(), 2);
         let mut copied = fresh();
         let empty = copied.revision();
-        copied.copy_trade_bars(&flow, None);
+        copied.copy_trade_bars((&flow).into(), None);
         assert_ne!(copied.revision(), empty);
         assert_eq!(copied.bars(), flow.bars());
         let held = copied.revision();
-        copied.copy_trade_bars(&flow, Some(time));
+        copied.copy_trade_bars((&flow).into(), Some(time));
         assert_eq!(copied.revision(), held);
         flow.received_from(time);
-        copied.copy_trade_bars(&flow, Some(time));
+        copied.copy_trade_bars((&flow).into(), Some(time));
         assert_ne!(copied.revision(), held, "coverage alone changes the source");
         let held = copied.revision();
         copied.drop_through(trades[1].ts, &trades[2..]);
@@ -1515,7 +1905,7 @@ mod tests {
         let held = copied.revision();
         copied.drop_through(trades[1].ts, &trades[2..]);
         assert_eq!(copied.revision(), held);
-        copied.copy_trade_bars(&fresh(), Some(time));
+        copied.copy_trade_bars((&fresh()).into(), Some(time));
         assert_ne!(copied.revision(), held);
         assert!(copied.bars().is_empty());
     }
@@ -1856,6 +2246,72 @@ mod tests {
         assert_eq!(bar.levels[&50].trades(), 3);
         assert_eq!(FootprintLevel::default().average_size(), None);
         assert_eq!(FootprintBar::empty(start).average_size(), None);
+    }
+
+    #[test]
+    fn sides_equal_up_to_rounding_have_no_imbalance() {
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        // Sells of 0.1 and 0.2 at 100 sum to 0.30000000000000004, then one buy.
+        for (buy, price, delta, at_100, at_101) in [
+            (0.3, 100.0, 0.0, (false, false), (false, false)),
+            (
+                0.31,
+                100.0,
+                0.009999999999999953,
+                (false, true),
+                (false, false),
+            ),
+            (0.3, 101.0, 0.0, (false, false), (false, false)),
+        ] {
+            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+            for (price, size, side) in [
+                (100.0, 0.1, OrderSide::Sell),
+                (100.0, 0.2, OrderSide::Sell),
+                (price, buy, OrderSide::Buy),
+            ] {
+                flow.push(&Tick::new(start, price, size, Some(side)))
+                    .unwrap();
+            }
+            let bar = &flow.bars()[&start];
+            let diagonal = price != 100.0;
+            let at = |level| bar.imbalance(level, 1.0, diagonal, 0.0);
+            assert_eq!(bar.delta(), delta, "{buy} at {price}");
+            assert_eq!((at(100), at(101)), (at_100, at_101), "{buy} at {price}");
+            if !diagonal {
+                assert_eq!(bar.levels[&100].delta(), delta, "{buy} at {price}");
+            }
+        }
+    }
+
+    #[test]
+    fn profile_path_is_balanced_only_where_its_sides_are() {
+        use OrderSide::{Buy, Sell};
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        // A buy of 0.3 is balanced by sells of 0.1 and 0.2 in the next bar, which sum to
+        // 0.30000000000000004. A first buy of 1e-8 is the high of a bar that then sells 100: its
+        // sides there are 1e-8 and 0, so the profile keeps it.
+        for (trades, path) in [
+            (
+                &[(0, 0.3, Buy), (1, 0.1, Sell), (1, 0.2, Sell)][..],
+                (0.0, 0.0, 0.3),
+            ),
+            (
+                &[(0, 1e-8, Buy), (0, 100.0, Sell)],
+                (-99.99999999, -99.99999999, 1e-8),
+            ),
+        ] {
+            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+            for &(minutes, size, side) in trades {
+                let at = start + TimeDelta::minutes(minutes);
+                flow.push(&Tick::new(at, 100.0, size, Some(side))).unwrap();
+            }
+            let profile = flow.profile(start, start + TimeDelta::minutes(1));
+            assert_eq!(
+                (profile.delta(), profile.min_delta, profile.max_delta),
+                path,
+                "{trades:?}"
+            );
+        }
     }
 
     #[test]

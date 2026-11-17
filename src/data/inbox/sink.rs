@@ -7,7 +7,7 @@ use crate::data::depth_history::Sampler;
 use crate::data::merge::{Origin, fold, valid};
 use crate::data::trades::{self, Trades};
 use crate::data::{FeedError, FeedStatus, OrderEvent, OrderQueue, RestingOrder, SubscriptionId};
-use crate::model::{Bar, BarClock, Level1Quote, OrderBook, Tick};
+use crate::model::{Bar, BarClock, Level1Quote, OrderBook, Placement, Tick};
 use chrono::{DateTime, TimeDelta, Utc};
 use std::collections::btree_map::Entry;
 use std::collections::{HashSet, VecDeque};
@@ -117,6 +117,7 @@ impl Inbox {
         let live = Live {
             symbol,
             clock,
+            placement: Placement::default(),
             forming: None,
             offset: TimeDelta::zero(),
             count_bar: None,
@@ -185,6 +186,14 @@ impl Inbox {
 pub struct Sink {
     inbox: Arc<Inbox>,
     pub(crate) id: SubscriptionId,
+}
+
+impl std::fmt::Debug for Sink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sink")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Sink {
@@ -305,15 +314,16 @@ impl Sink {
     }
 
     /// A trade, folded into the bar of its slot and kept for order flow, the oldest trades making
-    /// room for new ones. Its size is added to that bar's volume, also when the bar came from a
-    /// history page. Trades that arrive before history extend only the page's newest bar, which
-    /// must count only trades the stream did not send, or the feed must hold those trades until
-    /// the page is answered. Completed page bars replace bars built from ticks. A feed that cannot
-    /// tell pushes bars instead. Trades older than the last
-    /// accepted execution or forming bar are dropped, and so is a trade whose id is among those
-    /// of the last trades the subscription folded, as many as its trade store holds. A trade
-    /// stamped too far ahead of the feed's current time is rejected, as [`Sink::set_server_time`]
-    /// describes.
+    /// room for new ones. On a daily or longer clock with a session its slot is the bar of its
+    /// trading date, as `data::resample_with_session` dates history. Its size is added to that
+    /// bar's volume, also when the bar came from a history page. Trades that arrive before
+    /// history extend only the page's newest bar, which must count only trades the stream did not
+    /// send, or the feed must hold those trades until the page is answered. Completed page bars
+    /// replace bars built from ticks. A feed that cannot tell pushes bars instead. Trades older
+    /// than the last accepted execution or forming bar are dropped, and so is a trade whose id is
+    /// among those of the last trades the subscription folded, as many as its trade store holds.
+    /// A trade stamped too far ahead of the feed's current time is rejected, as
+    /// [`Sink::set_server_time`] describes.
     /// Repeated ids can complete missing aggressor and resting order ids without adding volume.
     ///
     /// Trade-based intervals start at the first accepted execution of the subscription. Replay the
@@ -352,11 +362,11 @@ impl Sink {
             {
                 return sampled;
             }
-            if live.ahead(live.clock.bar_open(now), system) {
+            let open = live.placement.open(&live.clock, now);
+            if live.ahead(open, system) {
                 return false;
             }
             live.updates.time = live.updates.time.max(Some(now));
-            let open = live.clock.bar_open(now);
             let Some(close) = live.last_close else {
                 return sampled || !live.study_inputs.is_empty();
             };
@@ -458,13 +468,14 @@ impl Sink {
             if quote.symbol != live.symbol {
                 return;
             }
+            let open = live.placement.open(&live.clock, quote.ts);
             if !quote.bid.is_finite()
                 || !quote.ask.is_finite()
                 || !quote.bid_size.is_finite()
                 || !quote.ask_size.is_finite()
                 || quote.bid_size < 0.0
                 || quote.ask_size < 0.0
-                || live.ahead(live.clock.bar_open(quote.ts), system)
+                || live.ahead(open, system)
             {
                 live.updates.error =
                     Some(FeedError::InvalidData("invalid best bid/ask quote".into()));
@@ -728,15 +739,13 @@ impl Live {
         {
             return false;
         }
-        let target = self.clock.bar_open(now);
+        let target = self.placement.open(&self.clock, now);
         let limit = MAX_PENDING_BARS
             .saturating_add(self.rebuilt_bars)
             .min(MAX_QUIET_BARS);
         let mut opened = false;
         while newest < target && self.updates.bars.len() + 1 < limit {
-            let Some(slot) = (self.clock.next_open(newest))
-                .and_then(|next| self.clock.open_at_or_after(next))
-                .map(|open| self.clock.bar_open(open))
+            let Some(slot) = (self.clock.next_trading_open(newest))
                 .filter(|slot| *slot > newest && *slot < target)
             else {
                 break;
@@ -773,7 +782,7 @@ impl Live {
         beyond
             && open
                 .checked_sub_signed(TimeDelta::milliseconds(1))
-                .is_some_and(|before| self.clock.bar_open(before) > self.clock.bar_open(now))
+                .is_some_and(|before| self.clock.bar_open(before) > self.clock.instant_open(now))
     }
 
     fn tick(&mut self, tick: Tick, system: DateTime<Utc>) {
@@ -804,7 +813,7 @@ impl Live {
             }
             return;
         }
-        let (open, price) = (live.clock.bar_open(tick.ts), tick.price);
+        let (open, price) = (live.placement.open(&live.clock, tick.ts), tick.price);
         let ticks = Bar::new(open, price, price, price, price, tick.size);
         let ahead = live.ahead(open, system);
         let updates = &mut live.updates;

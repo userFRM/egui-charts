@@ -8,7 +8,8 @@
 //! - Readings from -100 to -80: Oversold
 //!
 //! The pane draws both levels, dashed and muted, with the band between them filled in the study's
-//! colour at a tenth of full opacity.
+//! colour at a tenth of full opacity. The pane fits its values and visible levels, so a source from
+//! another study that reads outside -100 to 0 stays in view.
 //!
 //! # Calculation
 //! %R = (Highest High - Source) / (Highest High - Lowest Low) * -100
@@ -35,7 +36,7 @@ use egui::Color32;
 use std::collections::VecDeque;
 
 /// Williams %R indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WilliamsR {
     period: usize,
     smoothing: SmoothingType,
@@ -49,7 +50,7 @@ pub struct WilliamsR {
 }
 
 /// The highs and lows of the last `period` bars with a finite high and low, and the average of %R.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct Rolling {
     window: VecDeque<(f64, f64)>,
     smoothed: Smoothed,
@@ -198,8 +199,7 @@ impl Indicator for WilliamsR {
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             height: None,
-            // A fitted pane's margin around -100 to 0, so a reading at either end stays whole.
-            range: Some((-110.0, 10.0)),
+            range: None,
             levels: vec![
                 (-20.0, palette::MUTED, "Overbought"),
                 (-80.0, palette::MUTED, "Oversold"),
@@ -290,7 +290,6 @@ mod tests {
                 (-80.0, palette::MUTED, "Oversold"),
             ]
         );
-        assert_eq!(study.pane().range, Some((-110.0, 10.0)));
         for level in &settings.levels {
             assert_eq!(
                 (level.pattern, level.width, level.visible),

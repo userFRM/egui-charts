@@ -47,7 +47,7 @@ pub type RisingWedge = Wedge<true>;
 pub type FallingWedge = Wedge<false>;
 
 /// A rising or falling wedge found from confirmed swing pivots.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Wedge<const RISING: bool> {
     left: usize,
     right: usize,
@@ -63,7 +63,7 @@ pub struct Wedge<const RISING: bool> {
 }
 
 /// A line through two points, by position among the usable bars.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Line {
     from: (f64, f64),
     to: (f64, f64),
@@ -75,7 +75,7 @@ impl Line {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Candidate {
     upper: Line,
     lower: Line,
@@ -83,7 +83,7 @@ struct Candidate {
     last: Swing,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Confirmed {
     first: Swing,
     last: Swing,
@@ -91,7 +91,7 @@ struct Confirmed {
     level: f64,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     swings: Swings,
     candidate: Option<Candidate>,
@@ -129,6 +129,7 @@ impl<const RISING: bool> Wedge<RISING> {
                 .into(),
                 columns: ["Wedge", "Anchors", "Confirmed"].map(String::from).to_vec(),
                 rows: Vec::new(),
+                ..Default::default()
             },
             colors: if RISING {
                 [palette::GREEN, palette::GREEN, palette::RED]

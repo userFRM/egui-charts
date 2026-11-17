@@ -36,7 +36,7 @@
 //! [`StandardDeviation`], [`HistoricalVolatility`], [`ChaikinVolatility`],
 //! [`ChandelierExit`], [`AccelerationBands`], [`Envelopes`], [`ParkinsonVol`], [`ZeroTrendVol`],
 //! [`AverageDailyRange`], [`BBTrend`], [`UlcerIndex`], [`RelativeVolatilityIndex`],
-//! [`Median`]
+//! [`Median`], [`VolatilityIndex`]
 //!
 //! ## Price
 //! [`BollingerBars`]
@@ -260,6 +260,7 @@ mod price_volume_trend_study;
 mod close_to_close_vol;
 mod ohlc_volatility;
 mod parkinson_vol;
+mod volatility_index;
 mod zero_trend_vol;
 
 // Ninth batch - Moving average variants and cross indicators
@@ -310,7 +311,7 @@ pub use market_breadth::{
 mod special_k;
 mod woodies_cci;
 pub use symbol_pair::{Correlation, Ratio, Spread, SymbolPair};
-pub use technical_ratings::TechnicalRatings;
+pub use technical_ratings::{RatingBasis, TechnicalRatings};
 // Time studies
 mod lower_interval;
 mod performance;
@@ -480,6 +481,7 @@ pub use price_volume_trend_study::PriceVolumeTrendStudy;
 pub use close_to_close_vol::CloseToCloseVol;
 pub use ohlc_volatility::OhlcVolatility;
 pub use parkinson_vol::ParkinsonVol;
+pub use volatility_index::{VolatilityIndex, VolatilityIndexSmoothing};
 pub use zero_trend_vol::ZeroTrendVol;
 
 // Re-exports - Ninth batch (Moving average variants and cross indicators)
@@ -565,6 +567,8 @@ fn over_finite_bars(
 }
 
 mod trade_profile;
+#[cfg(feature = "widget")]
+pub(crate) use trade_profile::trade_profiles_with_rows_read;
 pub use trade_profile::{
     TradeProfile, TradeProfileRanges, trade_profiles, trade_profiles_with_rows,
 };

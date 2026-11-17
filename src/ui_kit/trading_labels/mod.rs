@@ -45,6 +45,7 @@ fn signed(value: f64, magnitude: String) -> (f64, String) {
 /// PnlLabel::value(-10.0, "custom").show(ui); // "custom" in red
 /// # });
 /// ```
+#[derive(Debug)]
 pub struct PnlLabel {
     value: f64,
     text: String,
@@ -136,6 +137,7 @@ impl PnlLabel {
 /// SideLabel::short().show(ui); // "SHORT" in red
 /// # });
 /// ```
+#[derive(Debug)]
 pub struct SideLabel {
     is_buy: bool,
     text: String,

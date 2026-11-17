@@ -36,6 +36,7 @@ pub enum LayoutCopy {
 /// A chart of the layout that a [`LayoutCopy`] cannot fully serve, for the host to show before it
 /// applies the copy.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LayoutCopyIssue {
     /// The chart's slot in the layout.
     pub slot: usize,
@@ -138,6 +139,7 @@ impl CopiedStudies {
                         } else {
                             vec![vec![0]]
                         },
+                        ..StudyTemplateSet::default()
                     },
                     draws: vec![draws[at]],
                     adding: true,
@@ -359,7 +361,8 @@ impl ChartLayout {
     /// The whole copy is one edit. [`Chart::undo`] on any chart it reached reverses it on all of
     /// them at the next [`Self::show`], and [`Chart::redo`] brings it back; a chart edited since
     /// the copy undoes those later edits with it, which its own redo restores. A chart that was
-    /// edited after the undo has no copy to redo and keeps that edit.
+    /// edited after the undo has no copy to redo and keeps that edit. A symbol or interval such
+    /// an undo or redo restores on a chart reaches the charts linked to it.
     pub fn apply_copy(
         &mut self,
         charts: &mut [&mut Chart],
@@ -627,6 +630,66 @@ mod tests {
         }
     }
 
+    /// Undoing a copy from one chart also undoes a later symbol or interval change of another
+    /// chart that received it. The chart sharing that chart's group follows the restored value,
+    /// as it follows a keyboard undo of the change.
+    #[test]
+    fn copy_undo_from_another_chart_keeps_a_symbol_group_together() {
+        use crate::widget::{ChartLink, ChartLinkGroups};
+        let state = |chart: &Chart| (chart.symbol().to_owned(), chart.timeframe());
+        let original = ("SAMPLE".to_owned(), Some(Timeframe::Min1));
+        for interval in [false, true] {
+            let mut charts = [chart(50), chart(50), chart(50)];
+            let sma = charts[0].add_indicator(Box::new(SMA::new(7)));
+            let factory = IndicatorFactory::new();
+            let mut layout = layout();
+            let group = ChartLink::Group("1".to_owned());
+            let linked = if interval {
+                ChartLinkGroups {
+                    interval: group,
+                    ..Default::default()
+                }
+            } else {
+                ChartLinkGroups {
+                    symbol: group,
+                    ..Default::default()
+                }
+            };
+            layout.set_link_groups(0, linked.clone(), true);
+            layout.set_link_groups(1, linked, true);
+            show(&mut layout, &mut charts.each_mut());
+            assert_eq!(
+                layout.apply_copy(&mut charts.each_mut(), 0, &LayoutCopy::Study(sma), &factory),
+                []
+            );
+            layout.set_active(1);
+            charts[1].user_action(|chart| {
+                if interval {
+                    chart.set_timeframe(Timeframe::Hour1);
+                } else {
+                    chart.set_symbol("OTHER");
+                }
+            });
+            show(&mut layout, &mut charts.each_mut());
+            assert_ne!(state(&charts[1]), original);
+            assert_eq!(
+                state(&charts[0]),
+                state(&charts[1]),
+                "the group follows the change"
+            );
+            layout.set_active(2);
+            assert!(charts[2].undo());
+            for _ in 0..2 {
+                show(&mut layout, &mut charts.each_mut());
+            }
+            assert_eq!(
+                charts.each_ref().map(state),
+                [original.clone(), original.clone(), original.clone()],
+                "interval {interval}"
+            );
+        }
+    }
+
     /// A copy made through a clone of the layout has its own id, so undoing it leaves the copies
     /// made through the original alone.
     #[test]
@@ -824,6 +887,40 @@ mod tests {
         let mut charts = [&mut a, &mut b];
         assert_eq!(pair().apply_copy(&mut charts, 0, &copy, &factory), []);
         assert_eq!(charts[1].config().bullish_color, egui::Color32::RED);
+    }
+
+    /// A right margin kept in pixels reaches the other charts in pixels, which each keeps at its
+    /// own bar spacing: a chart that already keeps the same pixels keeps its margin and its view,
+    /// and one with a margin in bars takes the pixels at its newest bar.
+    #[test]
+    fn settings_copy_keeps_a_pixel_right_margin_at_another_zoom() {
+        let mut options = crate::config::ChartOptions::default();
+        options.time_scale.right_offset_pixels = Some(60.0);
+        let factory = IndicatorFactory::new();
+        // 60 pixels at 12 points per bar are 5 bars.
+        for (pixels, kept) in [
+            (Some(60.0), (2.5, Some(60.0), (12.0, -20.0))),
+            (None, (2.5, Some(60.0), (12.0, 5.0))),
+        ] {
+            let mut a = chart(50).with_chart_options(options.clone());
+            let mut own = options.clone();
+            own.time_scale.right_offset_pixels = pixels;
+            let mut b = chart(50).with_chart_options(own);
+            b.apply_synced_time_scale(12.0, -20.0);
+            let copy = LayoutCopy::Settings(Box::new(ChartSettingsState::from_chart(&a)));
+            let mut charts = [&mut a, &mut b];
+            assert_eq!(pair().apply_copy(&mut charts, 0, &copy, &factory), []);
+            let time_scale = &charts[1].chart_options().time_scale;
+            assert_eq!(
+                (
+                    time_scale.right_offset,
+                    time_scale.right_offset_pixels,
+                    charts[1].get_time_scale_state(),
+                ),
+                kept,
+                "{pixels:?}"
+            );
+        }
     }
 
     /// A locked price-to-bar ratio is in the source's prices. A chart whose prices are a thousandth

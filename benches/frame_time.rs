@@ -326,10 +326,8 @@ fn footprint(filters: &[String], frames: usize) {
     options.time_scale.min_bar_spacing = 0.0;
     let mut chart = Chart::new(BarData::from_bars(bars)).with_chart_options(options);
     chart.set_visible_bars(100_000);
-    let config = FootprintConfig {
-        studies: Some(Default::default()),
-        ..Default::default()
-    };
+    let mut config = FootprintConfig::default();
+    config.studies = Some(Default::default());
     let samples = frame::run(vec2(1440.0, 900.0), pos2(700.0, 400.0), frames, |ui| {
         egui::CentralPanel::default().show(ui, |ui| {
             chart.show_footprint(ui, &flow, &config);
@@ -566,12 +564,13 @@ fn chart(scenario: &Scenario) -> Chart {
                     times
                         .into_iter()
                         .enumerate()
-                        .map(|(index, time)| TimeScaleEvent {
-                            id: index.to_string(),
-                            time,
-                            kind: EventKind::News,
-                            title: "Headline".into(),
-                            details: String::new(),
+                        .map(|(index, time)| {
+                            TimeScaleEvent::new(
+                                index.to_string(),
+                                time,
+                                EventKind::News,
+                                "Headline",
+                            )
                         })
                         .collect(),
                 );
@@ -600,16 +599,14 @@ fn price_based(filters: &[String], frames: usize) {
         .map(|i| {
             let open = close;
             close += step();
-            Bar {
-                time: start + Duration::minutes(i),
+            Bar::new(
+                start + Duration::minutes(i),
                 open,
+                open.max(close) + 0.05,
+                open.min(close) - 0.05,
                 close,
-                high: open.max(close) + 0.05,
-                low: open.min(close) - 0.05,
-                volume: 100.0,
-                colors: None,
-                payload: None,
-            }
+                100.0,
+            )
         })
         .collect();
     let size = RenkoConfig::from_atr(&bars, 14, 0.5).brick_size;

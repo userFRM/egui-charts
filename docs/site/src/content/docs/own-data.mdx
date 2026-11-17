@@ -27,6 +27,68 @@ without connecting, *Connect* stores it and shows it on the chart, and *Cancel* 
 dialog and keeps what you typed. While your own data is on the chart, *Use synthetic data*
 in the *Source* step brings the synthetic session back as you left it.
 
+## Ready profiles
+
+Ready profiles are listed first under *Profile*. They chart public market data that needs no
+account or key, so they connect with nothing typed.
+
+### Binance spot (public)
+
+The spot market data Binance publishes for everyone:
+
+- **Symbols.** BTCUSDT, ETHUSDT, SOLUSDT and BNBUSDT, with a price step of 0.01.
+- **Intervals.** 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 1d, 1w and 1M: every interval
+  Binance serves from one minute to one month except 3d, whose bars do not open where the
+  chart's three-day slots do. The interval menu lists 6h, 8h and 12h once *Custom interval…*
+  adds them.
+- **History.** `https://data-api.binance.vision/api/v3/klines`, up to 1000 bars a request, back
+  to the first bar Binance holds for the symbol.
+- **Live data.** One connection to `wss://data-stream.binance.vision` carries the symbol's kline
+  stream for the chart's interval and its aggregate trade stream. The kline stream sets the bar
+  in progress about every two seconds. Each aggregate trade continues the bar and reaches time
+  and sales, the footprint and the order-flow studies with its side: Binance's `m` is `true`
+  when the buyer was the maker, a sell, and `false` for a buy.
+
+### Coinbase Exchange (public)
+
+The market data Coinbase Exchange publishes for everyone:
+
+- **Symbols.** BTC-USD, ETH-USD, SOL-USD, BTC-EUR and ETH-EUR, with a price step of 0.01.
+- **Intervals.** 1m, 5m, 15m, 1h, 6h and 1d, the six Coinbase serves. The interval menu lists
+  6h once *Custom interval…* adds it.
+- **History.** `https://api.exchange.coinbase.com/products/{symbol}/candles`, up to 300 bars a
+  request, back to the first bar Coinbase holds for the symbol. Coinbase lists the newest bar
+  first and counts both ends of the range; the demo sorts the bars and drops the one at the end
+  of the range, which the chart already holds.
+- **Live data.** One connection to `wss://ws-feed.exchange.coinbase.com` subscribes to the
+  symbol's `matches` channel. Each match continues the bar in progress and reaches time and
+  sales, the footprint and the order-flow studies with its side. Coinbase's `side` is the side
+  of the resting order, so a `sell` match is a buy and a `buy` match is a sell. The
+  `last_match` Coinbase sends first happened before the subscription and is left out.
+
+### Kraken (public)
+
+The spot market data Kraken publishes for everyone:
+
+- **Symbols.** BTC/USD, ETH/USD, BTC/EUR, ETH/EUR and BTC/CHF, with a price step of 0.01, the
+  step of the ETH pairs; the BTC pairs trade in steps of 0.1.
+- **Intervals.** 1m, 5m, 15m, 30m, 1h, 4h and 1d. Kraken also serves 1w, but its weekly bars
+  open on Thursday, not on the Monday the chart's weeks open on.
+- **History.** `https://api.kraken.com/0/public/OHLC`, the 720 most recent bars of the interval
+  in one request and no older ones: 12 hours at 1m, about two years at 1d. Kraken files the
+  rows under the pair's name, which the profile reads through the path
+  `["result", "{symbol}"]`.
+- **Live data.** One connection to `wss://ws.kraken.com/v2` subscribes to the pair's `trade`
+  channel and sends a ping every 30 seconds. Each trade continues the bar in progress and
+  reaches time and sales, the footprint and the order-flow studies with the side Kraken
+  reports, the taker's. Kraken's answers to the subscription and to each ping name no
+  channel, so the profile leaves them out through a route without a value.
+
+A ready profile is read-only. *Connect* uses it as the demo ships it and stores no copy, so a
+later version of the demo updates it. To start a profile of your own from it, give it another
+name and *Save*. Where Binance refuses your region, the dialog and the chart show its answer as
+for any endpoint, such as `HTTP 451`.
+
 ## Describe the source
 
 A profile is the description of one source. The *Source* step holds what it is and what it
@@ -40,10 +102,18 @@ offers:
   can be listed, and the chart opens on the first row.
 - **Time zone.** The zone of every time that names none and of bounds printed as dates.
   It is UTC unless you change it.
+- **Price step.** The smallest price change of the symbols, such as `0.01`. The footprint
+  and the volume profiles group trades by it. Without it the volume footprint and session
+  volume profile charts draw candles, and the volume profile studies keep their estimate
+  from bars. One step serves every symbol of the profile.
 - **Keys.** A name and a value. Write the name in braces, such as `{key}`, where the value
   belongs in an address, a header, a body or a message. Values are sent only to the
-  endpoints of the profile. *Keep keys in this browser* is off unless you tick it; a kept
-  key is plain text in the browser's storage for the site.
+  endpoints of the profile. *Keep keys in this browser*, *Keep keys on this device* in the
+  native demo, is off unless you tick it. A kept key is plain text in the browser's storage
+  for the site or, in the native demo, in its settings file `app.ron`: in
+  `~/.local/share/egui-chartsdemo` on Linux (under `$XDG_DATA_HOME` when that is set),
+  `~/Library/Application Support/egui-charts-demo` on macOS and
+  `%APPDATA%\egui-charts demo\data` on Windows.
 
 A key typed straight into an address, a header or a message, instead of as a name in
 braces, is part of the profile. It is saved and exported with it.
@@ -57,6 +127,7 @@ The address is a template. The demo fills these placeholders:
 | Placeholder | Filled with |
 | --- | --- |
 | `{symbol}` | The symbol on the chart |
+| `{symbol_lower}` | The symbol on the chart in lower case, such as `btcusdt` for `BTCUSDT` |
 | `{interval}` | The text of the interval table for the chart's interval |
 | `{from}` | The start of the range asked for |
 | `{to}` | The end of the range asked for |
@@ -113,7 +184,8 @@ page size can leave a hole. For sparse data a larger page size widens the window
 ### Response shapes
 
 A response is read as one of four layouts. Rows may sit at the root or under a path such as
-`data.candles`.
+`data.candles`. In a profile file, a key of that path can be `{symbol}` or `{symbol_lower}`,
+for a service that files the rows under the symbol, such as `["result", "{symbol}"]`.
 
 A list of objects, with fields named by their keys:
 
@@ -176,7 +248,9 @@ profile's zone and in UTC. A wrong unit shows there before anything is charted.
 | A date and a time of day | A wall time in the profile's zone |
 
 The time of day is milliseconds since midnight, seconds since midnight or text such as
-`09:30:00`. It is a reading of the wall clock: 09:30 is the same value on every day of the
+`09:30:00`. A click on the field picks the reading its value has: text that is a time of
+day, else seconds below 86,400, else milliseconds. The choice beside the field changes it.
+It is a reading of the wall clock: 09:30 is the same value on every day of the
 year. When clocks go back, a wall time that occurs twice is its first occurrence. When
 clocks go forward, a wall time that does not occur is the moment of the change.
 
@@ -194,8 +268,8 @@ service stamps such bars at local midnight, and leave it at UTC when it stamps t
 
 ### The connection
 
-The address starts with `ws://` or `wss://` and takes `{symbol}`, `{interval}` and the
-names of the keys. Offer a subprotocol only when the service answers with it: a connection
+The address starts with `ws://` or `wss://` and takes `{symbol}`, `{symbol_lower}`, `{interval}`
+and the names of the keys. Offer a subprotocol only when the service answers with it: a connection
 that offers subprotocols ends when the server selects none.
 
 Connect messages are sent in their order every time the socket opens: the login first, then
@@ -211,8 +285,9 @@ the subscribe message.
 
 A keep-alive message is sent at its period for as long as the socket is open.
 
-A browser sends no headers when it opens a WebSocket, so a key travels in one of three
-places: the address, a subprotocol or a connect message.
+A browser sends no headers when it opens a WebSocket, and the native demo sends none
+either, so a key travels in one of three places: the address, a subprotocol or a connect
+message.
 
 - The subscribe message is sent right after the login, without waiting for its answer.
 - A hidden browser tab slows timers, so a keep-alive period under a minute is not kept
@@ -236,8 +311,9 @@ that place is itself the record.
 The `route by` slot is the field that tells the kinds of message apart. It is looked up in
 the record and then in the message. Each route has a value of that field and is one of
 *Ignore*, *Bars* or *Trades*. A message that is not JSON, such as a plain `pong`, is routed
-by its own text. For a stream with one kind of message, *Route every message here* makes a
-route that takes every record.
+by its own text. A route whose value is empty takes the records that have no such field, such
+as a service's answers to its subscribe and keep-alive messages. For a stream with one kind of
+message, *Route every message here* makes a route that takes every record.
 
 Binary messages that are not text, as a stream that compresses its messages itself sends,
 cannot be mapped.
@@ -247,30 +323,42 @@ cannot be mapped.
 A bar route maps a time and the five values. A bar takes the place of the bar with the
 same open time. The bars must be those of the chart's interval, so the subscribe message
 carries `{interval}`, and a stream of one fixed interval serves charts of that interval
-only. Map bars or trades for a chart, not both.
+only. A stream can carry bars and trades for the same chart, as the ready Binance profile
+does: each bar of the bars route becomes the bar the trades after it continue, and a trade
+the service had counted in that bar before sending it is counted again until its next bar.
 
 ### Trades and conditions
 
 A trades route maps a time, a price, a size and, optionally, a condition, which may be one
-value or a list. Trades are folded into bars of the chart's interval. Each condition value
-has one of three rules:
+value or a list, and a side. Trades are folded into bars of the chart's interval. Each
+condition value has one of three rules:
 
-| Rule | Effect on the bar |
-| --- | --- |
-| *Price and volume* | The price moves high, low and close, and the size is added to the volume |
-| *Volume only* | The size is added to the volume |
-| *Ignore* | None |
+| Rule | Effect on the bar | Effect on the trades |
+| --- | --- | --- |
+| *Price and volume* | The price moves high, low and close, and the size is added to the volume | Listed and counted |
+| *Volume only* | The size is added to the volume | Listed and counted at its price |
+| *Ignore* | None | Left out |
 
 With several conditions the strictest rule applies. The list fills from the log, and a
 value that is not listed counts price and volume. A *Volume only* trade that opens a slot
 shows as a flat bar at the last close.
 
+Trades reach the chart as trades too, so time and sales, the footprint, the volume bubbles
+and the order-flow studies follow them. The side field names the trade's aggressor: type
+the value that marks a buy and the value that marks a sell beside it, compared as text, so
+`true` and `false` work as well as `B` and `S`. A trade without the field, or with another
+value, has an unknown side, and the footprint and the delta studies count it for neither
+side.
+
 - A trade for a slot older than the bar being built is dropped, and a trade the service
   sends twice is counted twice.
 - A trade between the history page and the first trade of the stream is in neither until
-  the symbol is loaded again.
-- Trades reach the chart as bars only, so time and sales, the footprint and the order-flow
-  studies stay empty.
+  the symbol is loaded again. With a bars route beside it, the stream's next bar counts it
+  in the bar, though not in time and sales or the footprint.
+- A trade older than the trade before it is in its bar and in time and sales, but not in
+  the footprint or the studies.
+- The bars a reconnect or a resume loads from REST hold no trades: the footprint and the
+  studies show that span as if nothing traded.
 
 ## Reconnecting, pausing and changing symbol
 
@@ -286,10 +374,11 @@ or interval asks history again and moves the subscription.
 
 ## Profiles
 
-A profile is saved in the browser by *Save* and by *Connect*. *Export* shows the whole
-file before it saves it; the file holds no key value. In another browser, *Import* the
-file, enter the keys and *Connect*. An imported profile never replaces a saved one, and a
-file written by a newer version of the demo is refused.
+A profile is saved by *Save* and by *Connect*, where the keys are kept (see *Keys* above).
+*Export* shows the whole file before it saves it; the file holds no key value. In another
+browser or on another device, *Import* the file, enter the keys and *Connect*. An imported
+profile never replaces a saved one, and a file written by a newer version of the demo is
+refused.
 
 ## What the browser requires
 
@@ -351,8 +440,9 @@ The demo shows one chart, in the profile's zone.
 - **Keeps working:** chart types, studies, drawings, the data table, the exports, go to
   date, the settings and the paper order ticket.
 - **Off, and says so:** alerts, compare, layouts, replay, the samples, the strategy tester
-  and watchlists. The market panels show an empty state. The liquidity heatmap, the price
-  unit and the market recording are unavailable.
+  and watchlists. The market panels show an empty state, except time and sales, which lists
+  the trades of a trades route. The liquidity heatmap, the price unit and the market
+  recording are unavailable.
 
 Studies and drawings made on own data are not saved, and connecting a changed profile
 starts a new chart. The paper account is the same on both data sources and is priced at

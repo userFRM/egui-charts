@@ -16,6 +16,7 @@ use chrono::{DateTime, Utc};
 
 /// A single Renko brick representing a fixed-size price movement.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct RenkoBrick {
     /// Timestamp of the source bar that completed this brick.
     pub ts: DateTime<Utc>,
@@ -61,6 +62,7 @@ impl RenkoBrick {
 /// The brick size can be set directly or derived from ATR via
 /// [`from_atr`](Self::from_atr).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct RenkoConfig {
     /// Size of each brick in price units
     pub brick_size: f64,
@@ -115,6 +117,14 @@ impl RenkoConfig {
 /// - When the bars move by more than two million brick sizes, the bricks are built from the latest
 ///   bar after which they move at most that much
 /// - At most the newest 10,000 bricks
+///
+/// ```
+/// use egui_charts::model::{Bar, RenkoConfig, to_renko_bricks};
+///
+/// let bars: Vec<Bar> = Vec::new();
+/// let bricks = to_renko_bricks(&bars, &RenkoConfig::new(0.5));
+/// assert!(bricks.is_empty());
+/// ```
 pub fn to_renko_bricks(bars: &[Bar], config: &RenkoConfig) -> Vec<RenkoBrick> {
     let brick_size = config.brick_size;
     if bars.is_empty() || !(brick_size > 0.0 && brick_size.is_finite()) {

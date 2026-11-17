@@ -1,9 +1,11 @@
 //! Reusable drawing properties without geometry or record identity.
 
 /// Drawing properties without anchors or record identity. Apply to an existing drawing of the
-/// same type; its coordinates, closed outline, name, notes, layer, post link and persistence identity
-/// stay intact.
+/// same tool. Its coordinates, closed outline, name, notes, layer, post link and persistence
+/// identity stay intact. So do its lock, visibility, modification time and image frame size, and,
+/// on a tool that shows no text, the picture, sticker or icon its text holds.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct DrawingTemplate {
     /// Tool and reusable properties. Serialization omits anchors and record identity.
     pub settings: crate::drawings::Drawing,
@@ -35,8 +37,10 @@ impl DrawingTemplate {
         Self { settings }
     }
 
-    /// Apply properties without moving or replacing the selected drawing. Hosts wrap this edit
-    /// in their drawing manager's `edit_drawing` to retain undo and persistence notifications.
+    /// Apply the template's appearance without moving or replacing the drawing. Hosts apply it to
+    /// every unlocked selected drawing of the template's tool in one
+    /// `DrawingManager::edit_drawings` call, which keeps it one undoable step with persistence
+    /// notifications.
     pub fn apply_to(&self, drawing: &mut crate::drawings::Drawing) -> Result<(), &'static str> {
         if self.settings.tool_type != drawing.tool_type
             || self.settings.custom_tool != drawing.custom_tool
@@ -72,6 +76,23 @@ impl DrawingTemplate {
             listed: drawing.listed,
             closed: drawing.closed,
             z_order: drawing.z_order,
+            locked: drawing.locked,
+            visible: drawing.visible,
+            modified_at: drawing.modified_at,
+            // A tool that shows no text holds its picture, sticker or icon there.
+            text: if drawing.tool_type.supports_text() {
+                self.settings.text.clone()
+            } else {
+                drawing.text.clone()
+            },
+            // Only the opacity: each picture keeps its own frame size.
+            image: match (drawing.image, self.settings.image) {
+                (None, None) => None,
+                (own, template) => Some(crate::drawings::ImageConfig {
+                    size: own.and_then(|image| image.size),
+                    opacity: template.map_or(255, |image| image.opacity),
+                }),
+            },
             ..self.settings.clone()
         };
         Ok(())

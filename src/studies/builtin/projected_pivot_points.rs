@@ -43,7 +43,7 @@ use crate::studies::{Indicator, IndicatorValues, StudyDataRequest, StudyLabel, S
 use egui::Color32;
 
 /// Projected Pivot Points: the next period's pivot levels from the period so far.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ProjectedPivotPoints {
     pivots: PivotPoints,
     projections: Vec<StudyProjection>,

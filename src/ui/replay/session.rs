@@ -5,12 +5,12 @@ use crate::model::ReplaySession;
 use chrono::{DateTime, Utc};
 
 impl ReplayController {
-    /// Seeks to the last source bar completed by an exclusive cutoff. Returns `false` without
-    /// changes when the source has no completed bar there. Useful when changing source interval.
+    /// Seeks to the last source bar completed by an exclusive cutoff, each bar closing as
+    /// [`Self::cutoff`] closes it. Returns `false` without changes when the source has no
+    /// completed bar there. Useful when changing source interval.
     pub fn seek_cutoff(&mut self, time: DateTime<Utc>, clock: &crate::model::BarClock) -> bool {
         let end = self.ts.partition_point(|&open| {
-            clock
-                .next_open(clock.bar_open(open))
+            crate::widget::replay::bar_close(clock, clock.bar_open(open))
                 .map_or(open < time, |close| close <= time)
         });
         if end == 0 {
@@ -21,14 +21,16 @@ impl ReplayController {
     }
 
     /// The exclusive cutoff after the current source bar, suitable for `Chart::set_replay_time`.
-    /// Pass the source interval's clock, including its calendar timezone.
+    /// Pass the source interval's clock, including its calendar timezone. For the chart's own
+    /// interval that is [`Chart::bar_clock`](crate::widget::Chart::bar_clock). A bar closes at
+    /// its next open, and a daily, weekly or monthly bar of a clock with an exchange session when
+    /// its last trading window closes, as bar replay completes it.
     pub fn cutoff(&self, clock: &crate::model::BarClock) -> Option<DateTime<Utc>> {
         if !self.state.is_active() {
             return None;
         }
         let time = *self.curr_ts()?;
-        clock
-            .next_open(clock.bar_open(time))
+        crate::widget::replay::bar_close(clock, clock.bar_open(time))
             .or_else(|| time.checked_add_signed(chrono::TimeDelta::nanoseconds(1)))
     }
 

@@ -1,5 +1,6 @@
 //! Common drawing styles applied to renderer primitives.
 
+use crate::drawings::domain::ColorSlot;
 use crate::drawings::{ArrowStyle, Drawing, DrawingToolType, FontWeight};
 use crate::model::LineStyle;
 use crate::theme::ThemeExt;
@@ -29,6 +30,41 @@ pub(super) fn label_text_color(fill: Color32) -> Color32 {
     }
 }
 
+/// The chart and panel colours a drawing reads on. A translucent chart, such as the one an image
+/// exported without its background has, shows the panel behind it.
+fn backgrounds(theme: &crate::theme::Theme) -> [Color32; 2] {
+    [theme.ui.panel_bg.blend(theme.chart.bg), theme.ui.panel_bg]
+}
+
+/// The default colours of a tool that need another shade on a theme: slot, colour and shade.
+type Shades = Vec<(ColorSlot, [u8; 4], [u8; 4])>;
+
+/// Finds the [`Shades`] of a tool on a theme's text, chart and panel colours.
+#[derive(Default)]
+struct ThemeShades;
+
+impl egui::cache::ComputerMut<(DrawingToolType, [Color32; 3]), Shades> for ThemeShades {
+    fn compute(&mut self, (tool, [text, chart, panel]): (DrawingToolType, [Color32; 3])) -> Shades {
+        let mut shades = Vec::new();
+        Drawing::new(0, tool).visit_theme_colors(|slot, &mut color| {
+            let [r, g, b, a] = color;
+            if a == u8::MAX {
+                let shade = crate::theme::readable_color(
+                    Color32::from_rgb(r, g, b),
+                    text,
+                    &[chart, panel],
+                    4.0,
+                )
+                .to_srgba_unmultiplied();
+                if shade != color {
+                    shades.push((slot, color, shade));
+                }
+            }
+        });
+        shades
+    }
+}
+
 impl Drawing {
     /// Size annotations before laying out both the text and its surrounding box.
     pub(super) fn annotation_font(&self) -> egui::FontId {
@@ -53,12 +89,40 @@ impl Drawing {
             return color;
         }
         let theme = ctx.active_theme();
-        crate::theme::readable_color(
-            color,
-            theme.ui.text,
-            &[theme.chart.bg, theme.ui.panel_bg],
-            4.0,
-        )
+        crate::theme::readable_color(color, theme.ui.text, &backgrounds(&theme), 4.0)
+    }
+
+    /// This drawing with each of its tool's default line, level and text colours in the shade
+    /// that keeps 4:1 on the active theme's chart and panel, or `None` when it draws as stored:
+    /// with [`Drawing::theme_shade`] off, or when no default colour of its tool needs a shade.
+    /// Colours chosen for the drawing, fills and translucent colours are drawn as stored.
+    pub(super) fn theme_shaded(&self, ctx: &egui::Context) -> Option<Drawing> {
+        if !self.theme_shade {
+            return None;
+        }
+        let theme = ctx.active_theme();
+        let [chart, panel] = backgrounds(&theme);
+        let key = (self.tool_type, [theme.ui.text, chart, panel]);
+        // Nothing below reads the context, which `memory_mut` holds locked.
+        ctx.memory_mut(|memory| {
+            let shades = memory
+                .caches
+                .cache::<egui::cache::FrameCache<Shades, ThemeShades>>()
+                .get(key);
+            if shades.is_empty() {
+                return None;
+            }
+            let mut drawing = self.clone();
+            drawing.visit_theme_colors(|slot, color| {
+                if let Some(&(.., shade)) = shades
+                    .iter()
+                    .find(|(s, default, _)| *s == slot && default == color)
+                {
+                    *color = shade;
+                }
+            });
+            Some(drawing)
+        })
     }
 
     /// Colours of the box around an annotation's text. Unset colours follow the tool: a card
@@ -269,6 +333,7 @@ impl Drawing {
             || matches!(
                 self.tool_type,
                 DrawingToolType::RegressionTrend
+                    | DrawingToolType::Sticker
                     | DrawingToolType::FibonacciRetracement
                     | DrawingToolType::FibonacciExtension
                     | DrawingToolType::FibonacciChannel
@@ -278,6 +343,7 @@ impl Drawing {
                     | DrawingToolType::FibonacciCircles
                     | DrawingToolType::FibonacciSpeedResistanceArcs
                     | DrawingToolType::FibonacciWedge
+                    | DrawingToolType::AnchoredVWAP
             ) {
             None
         } else {
@@ -377,6 +443,22 @@ impl Drawing {
             return;
         };
         let b = self.points.get(1).copied().unwrap_or(a);
+        if matches!(self.tool_type, T::FlatTopBottom | T::DisjointChannel) {
+            // Both lines run from the first anchor's side to the second's, as extended.
+            let Some(outline) = self.wedge_channel_outline(rect) else {
+                return;
+            };
+            for [left, right] in outline.lines {
+                let [start, end] = if b.x < a.x {
+                    [right, left]
+                } else {
+                    [left, right]
+                };
+                self.render_marker(painter, start, start - end, self.arrow_start_style);
+                self.render_marker(painter, end, end - start, self.arrow_end_style);
+            }
+            return;
+        }
         let ends = match self.tool_type {
             T::TrendLine | T::InfoLine | T::TrendAngle | T::Ray | T::ExtendedLine | T::Arrow => {
                 self.trend_line_ends(rect).map(|(a, b)| [a, b])
@@ -681,6 +763,7 @@ mod tests {
                         bars: &[],
                         revision: 0,
                         bar_to_x: &|x| x,
+                        bar_spacing: 1.0,
                         price_to_y: &|p| p as f32,
                         y_to_price: &f64::from,
                         time_axis: true,
@@ -786,7 +869,9 @@ mod tests {
     /// Text boxes take the theme's card, or a solid label in the drawing colour, unless their
     /// text, background and border settings say otherwise; a pin's popup leaves the pin's colour
     /// to the pin. Contrast of white on the red is 1.05 / 0.269 = 3.90 and on the yellow
-    /// 1.05 / 0.860 = 1.22, so black reads on the yellow.
+    /// 1.05 / 0.860 = 1.22, so black reads on the yellow. A pin's popup follows its switch, the
+    /// selection and the pointer on a neutral leader, and a signpost's disc follows its glyph
+    /// switch and colour, taking the plate's place on the pole.
     #[test]
     fn text_boxes_follow_the_theme_and_their_settings() {
         use DrawingToolType::*;
@@ -928,6 +1013,117 @@ mod tests {
                     assert_eq!(painted_strokes, strokes, "{name}");
                 }
             }
+
+            let said = |shapes: &[Shape], text: &str| {
+                shapes
+                    .iter()
+                    .any(|s| matches!(s, Shape::Text(t) if t.galley.text() == text))
+            };
+            let mut signpost = pattern(Signpost);
+            signpost.color = red.to_array();
+            signpost.text = Some("Hi".into());
+            type Glyph = (fn(&mut Drawing), Option<Color32>);
+            let glyphs: [Glyph; 3] = [
+                (|_| {}, None),
+                (|d| d.marker.show_glyph = true, Some(red)),
+                (
+                    |d| {
+                        d.marker.show_glyph = true;
+                        d.marker.glyph_color = Some([0, 0, 255, 255]);
+                    },
+                    Some(blue),
+                ),
+            ];
+            for (setup, disc) in glyphs {
+                let mut drawing = signpost.clone();
+                setup(&mut drawing);
+                let shapes = paint_on(&ctx, &drawing, false);
+                // Circles reach these shapes as polygons.
+                let discs: Vec<_> = (shapes.iter())
+                    .filter_map(|s| match s {
+                        Shape::Path(p) if p.closed => {
+                            Some((egui::Rect::from_points(&p.points).center().round(), p.fill))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let name = format!("disc {disc:?}, dark {}", theme.dark);
+                let anchor = Pos2::new(100.0, 100.0);
+                // The bundled fonts lack the default face, so it is drawn in white on the disc:
+                // its outline, its eyes and, below, its smile as a line.
+                let face = |fill| {
+                    let eye = |x| (Pos2::new(x, 98.0), Color32::WHITE);
+                    [
+                        (anchor, fill),
+                        (anchor, Color32::TRANSPARENT),
+                        eye(98.0),
+                        eye(102.0),
+                    ]
+                };
+                assert_eq!(
+                    discs,
+                    Vec::from_iter(disc.into_iter().flat_map(face)),
+                    "{name}"
+                );
+                let smiles = (shapes.iter())
+                    .filter(|s| matches!(s, Shape::Path(p) if !p.closed))
+                    .count();
+                assert_eq!(smiles, usize::from(disc.is_some()), "{name}");
+                assert!(!said(&shapes, "🙂"), "{name}");
+                let plates: Vec<_> = (shapes.iter())
+                    .filter_map(|s| match s {
+                        Shape::Rect(r) => Some(r.rect),
+                        _ => None,
+                    })
+                    .collect();
+                let [plate] = plates[..] else {
+                    panic!("{name}: {} plates", plates.len());
+                };
+                // The plate is centred on the label's anchor, or ends 4 points above a disc of
+                // 14 points radius, and the pole from the bar at (100, 300) stops at either.
+                let (bottom, pole) = if disc.is_some() {
+                    (82.0, 114.0)
+                } else {
+                    (100.0 + plate.height() / 2.0, plate.max.y)
+                };
+                assert!((plate.max.y - bottom).abs() < 0.01, "{name}: {plate:?}");
+                let poles: Vec<_> = (shapes.iter())
+                    .filter_map(|s| match s {
+                        Shape::LineSegment { points, .. } => Some(*points),
+                        _ => None,
+                    })
+                    .collect();
+                let pole = [Pos2::new(100.0, 300.0), Pos2::new(100.0, pole)];
+                assert_eq!(poles, [pole], "{name}");
+            }
+
+            let mut pin = pattern(AnchoredNote);
+            pin.text = Some("Hi".into());
+            pin.marker.show_text = false;
+            assert!(!said(&paint_on(&ctx, &pin, true), "Hi"), "switched off");
+            pin.marker.show_text = true;
+            assert!(!said(&paint_on(&ctx, &pin, false), "Hi"), "pointer away");
+            // The pin's tip is on its anchor, with its head 16 points above.
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::PointerMoved(Pos2::new(100.0, 284.0))],
+                    ..Default::default()
+                },
+                |_| {},
+            );
+            output.drop_without_applying_deltas();
+            let shapes = paint_on(&ctx, &pin, false);
+            assert!(said(&shapes, "Hi"), "pointer on the pin");
+            let leaders: Vec<_> = (shapes.iter())
+                .filter_map(|s| match s {
+                    Shape::LineSegment { stroke, .. } => Some(*stroke),
+                    _ => None,
+                })
+                .collect();
+            let neutral = Stroke::new(1.0, theme.chart.axis_text_secondary);
+            assert_eq!(leaders, [neutral], "dark {}", theme.dark);
+            pin.marker.show_text = false;
+            assert!(!said(&paint_on(&ctx, &pin, false), "Hi"), "switched off");
         }
     }
 
@@ -952,6 +1148,170 @@ mod tests {
             assert_eq!(border(&drawing), Color32::from_gray(200));
             assert_eq!(border(&Drawing::new(1, DrawingToolType::Note)), blue);
         }
+    }
+
+    /// A tool's default line and level colours keep 4:1 on the theme, while a drawing saved
+    /// before the shade existed, a chosen colour, fills and the text on a note's fill are drawn
+    /// as stored. By hand with the WCAG formula: orange (255, 152, 0) has 2.16:1 on white, and
+    /// its 72nd step of 255 towards black, (183, 109, 0), has linear R 0.4734 and G 0.1530, so
+    /// L = 0.2126 * 0.4734 + 0.7152 * 0.1530 = 0.2101 and 1.05 / 0.2601 = 4.04:1; step 71,
+    /// (184, 110, 0), has 3.99:1. Purple (156, 39, 176) has 3.33:1 on black; towards the dark
+    /// theme's text (219, 219, 219), step 35, (165, 64, 182), has L = 0.1504 and
+    /// 0.2004 / 0.05 = 4.01:1 (step 34, (164, 63, 182), has 3.97:1), and towards white step 27,
+    /// (166, 62, 184), has 4.00:1 (step 26, (166, 61, 184), has 3.98:1). Blue (41, 98, 255) has
+    /// 4.90:1 on white and keeps its colour. A transparent chart, as an image exported without its
+    /// background has, reads as the panel: purple keeps its 6.30:1 on white rather than going
+    /// black, as no step towards black reaches 4:1 on both white and black.
+    #[test]
+    fn default_colours_keep_their_contrast_on_the_theme() {
+        use crate::theme::Theme;
+        use DrawingToolType::*;
+        let rgb = Color32::from_rgb;
+        let (orange, purple) = (rgb(255, 152, 0), rgb(156, 39, 176));
+        let mut transparent = Theme::light();
+        transparent.chart.bg = Color32::TRANSPARENT;
+        // A flat top/bottom as saved before the shade existed, in its default style.
+        let saved: Drawing = serde_json::from_str(
+            r#"{
+                "tool_type": "FlatTopBottom",
+                "color": [255, 152, 0, 255],
+                "stroke_width": 2.0,
+                "line_style": "Solid",
+                "fill_color": [255, 152, 0, 51],
+                "locked": false,
+                "visible": true,
+                "font_size": 14.0,
+                "font_weight": "Normal",
+                "extend_left": false,
+                "extend_right": false,
+                "arrow_start_style": "None",
+                "arrow_end_style": "None",
+                "timeframe_visibility": {"show_on_all": true, "visible_timeframes": []},
+                "z_order": 0
+            }"#,
+        )
+        .unwrap();
+        // Anchors 50 px apart in price keep every visible Fibonacci level in the pane.
+        let anchored = |mut drawing: Drawing| {
+            drawing.chart_points = [(100.0, 300.0), (180.0, 250.0), (260.0, 280.0)]
+                .map(|(bar, price)| crate::drawings::ChartPoint::new(bar, price))
+                .to_vec();
+            drawing
+                .chart_points
+                .truncate(drawing.tool_type.required_points().unwrap_or(3));
+            drawing.update_screen_coords(|x| x, |p| p as f32);
+            drawing
+        };
+        let mut chosen = Drawing::new(1, FlatTopBottom);
+        chosen.set_line_color([255, 200, 0, 255]);
+        let flat = Some(Color32::from_rgba_unmultiplied(255, 152, 0, 51));
+        let cases = [
+            (
+                Theme::light(),
+                Drawing::new(1, FlatTopBottom),
+                vec![rgb(183, 109, 0)],
+                Some(orange),
+                flat,
+            ),
+            (
+                Theme::light(),
+                saved,
+                vec![orange],
+                Some(rgb(183, 109, 0)),
+                flat,
+            ),
+            (Theme::light(), chosen, vec![rgb(255, 200, 0)], None, None),
+            (
+                Theme::dark(),
+                Drawing::new(1, Rect),
+                vec![rgb(165, 64, 182)],
+                Some(purple),
+                Some(Color32::from_rgba_unmultiplied(156, 39, 176, 51)),
+            ),
+            (
+                Theme::high_contrast(),
+                Drawing::new(1, Rect),
+                vec![rgb(166, 62, 184)],
+                None,
+                None,
+            ),
+            (
+                transparent,
+                Drawing::new(1, Rect),
+                vec![purple],
+                Some(Color32::BLACK),
+                None,
+            ),
+            (
+                Theme::light(),
+                Drawing::new(1, FibonacciRetracement),
+                vec![rgb(183, 109, 0), rgb(41, 98, 255)],
+                Some(orange),
+                None,
+            ),
+        ];
+        for (theme, drawing, present, absent, fill) in cases {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let name = format!("{:?}, dark {}", drawing.tool_type, theme.dark);
+            let (mut strokes, mut fills) = (vec![], vec![]);
+            for shape in paint_on(&ctx, &anchored(drawing), false) {
+                let (stroke, fill) = match shape {
+                    Shape::LineSegment { stroke, .. } => (stroke.color, Color32::TRANSPARENT),
+                    Shape::Rect(r) => (r.stroke.color, r.fill),
+                    Shape::Path(p) => match p.stroke.color {
+                        ColorMode::Solid(color) => (color, p.fill),
+                        _ => (Color32::TRANSPARENT, p.fill),
+                    },
+                    _ => continue,
+                };
+                strokes.push(stroke);
+                fills.push(fill);
+            }
+            for color in present {
+                assert!(
+                    strokes.contains(&color),
+                    "{name}: no {color:?} in {strokes:?}"
+                );
+            }
+            if let Some(color) = absent {
+                assert!(!strokes.contains(&color), "{name}: {color:?} painted");
+            }
+            if let Some(color) = fill {
+                assert!(
+                    fills.contains(&color),
+                    "{name}: no fill {color:?} in {fills:?}"
+                );
+            }
+        }
+        let ctx = egui::Context::default();
+        crate::theme::apply_to_egui(&ctx, &Theme::light());
+        // Prices set in the default orange take the line's shade, as the line does.
+        let mut priced = Drawing::new(1, FlatTopBottom);
+        priced.line_measurements.price_labels = true;
+        priced.anchor_price_style = Some(crate::drawings::NoteTextStyle::new(
+            [255, 152, 0, 255],
+            12.0,
+        ));
+        let colours: Vec<_> = paint_on(&ctx, &anchored(priced), false)
+            .into_iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text) => Some(text.galley.job.sections[0].format.color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(colours, vec![rgb(183, 109, 0); 4]);
+        let mut note = anchored(Drawing::new(1, Note));
+        note.text = Some("Hi".into());
+        let text = paint_on(&ctx, &note, false)
+            .into_iter()
+            .find_map(|s| match s {
+                Shape::Text(t) if t.galley.text() == "Hi" => {
+                    Some(t.galley.job.sections[0].format.color)
+                }
+                _ => None,
+            });
+        assert_eq!(text, Some(Color32::WHITE));
     }
 
     /// Finished drawings leave swing points clear; small circles are reserved for previews,
@@ -1507,6 +1867,7 @@ mod tests {
                     bars: &[],
                     revision: 0,
                     bar_to_x: &|b| b,
+                    bar_spacing: 1.0,
                     price_to_y: &|p| p as f32,
                     y_to_price: &f64::from,
                     time_axis: true,

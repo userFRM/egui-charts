@@ -4,6 +4,8 @@ use super::{Timeframe, TimezoneId};
 use chrono::{
     DateTime, Datelike, LocalResult, NaiveDate, NaiveTime, Offset, TimeDelta, TimeZone, Utc,
 };
+use std::ops::Range;
+use std::sync::Arc;
 
 const DAY_MS: i64 = 86_400_000;
 /// 1970-01-05, the first Monday after the Unix epoch.
@@ -15,7 +17,8 @@ pub struct BarClock {
     /// `None` for a clock that matches bars by their exact open time.
     timeframe: Option<Timeframe>,
     timezone: Option<TimezoneId>,
-    session: Option<super::ExchangeSessionProvider>,
+    /// Shared by the clock's copies, so that copying and comparing them stays cheap.
+    session: Option<Arc<super::ExchangeSessionProvider>>,
 }
 
 impl BarClock {
@@ -43,7 +46,8 @@ impl BarClock {
 
     /// Align intraday buckets to the first selected exchange-session window. Calendar bars
     /// keep their trading-date labels; use `data::resample_with_session` to derive those labels
-    /// from intraday history. Extended windows participate only when requested.
+    /// from intraday history. Live trades and heartbeats join the calendar bar of their trading
+    /// date. Extended windows participate only when requested.
     pub fn with_session(
         mut self,
         zone: super::TimezoneId,
@@ -53,7 +57,8 @@ impl BarClock {
         if !extended_hours {
             session.clear_extended_windows();
         }
-        self.session = Some(super::ExchangeSessionProvider::new(zone, Some(session)));
+        let provider = super::ExchangeSessionProvider::new(zone, Some(session));
+        self.session = Some(Arc::new(provider));
         self
     }
 
@@ -285,6 +290,74 @@ impl BarClock {
         Some(self.bar_open(time))
     }
 
+    /// The session of a clock whose bars are trading dates: a daily or longer clock with one.
+    fn date_session(&self) -> Option<&super::ExchangeSessionProvider> {
+        (self.session.as_deref())
+            .filter(|_| self.timeframe.is_some_and(|tf| tf.duration_ms() >= DAY_MS))
+    }
+
+    /// Open time of the bar that a trade or another update at `t` joins: on a daily or longer
+    /// clock with a session the bar of its trading date, as `data::resample_with_session` dates
+    /// intraday history, so an evening session opens the next date's bar and a post-market hour
+    /// after midnight stays in its date's bar; elsewhere [`bar_open`](Self::bar_open). Bar stamps
+    /// lie inside their calendar period, so `bar_open` places them.
+    pub(crate) fn instant_open(&self, t: DateTime<Utc>) -> DateTime<Utc> {
+        (self.date_session())
+            .and_then(|session| self.open_on_date(session.trading_date(t)))
+            .unwrap_or_else(|| self.bar_open(t))
+    }
+
+    /// The instants around `t` that share its trading date on a daily or longer clock with a
+    /// session, and the open of their bar: from the date's open to the next date's, at most to
+    /// the end of `t`'s UTC day, through which the session lists every open. `None` elsewhere
+    /// and before the first open listed.
+    fn trading_span(&self, t: DateTime<Utc>) -> Option<(Range<DateTime<Utc>>, DateTime<Utc>)> {
+        let opens = self.date_session()?.opens([t]);
+        let n = opens.partition_point(|(open, _)| *open <= t);
+        let (from, date) = *opens.get(n.checked_sub(1)?)?;
+        let day_end = DateTime::from_timestamp((t.timestamp().div_euclid(86_400) + 1) * 86_400, 0)?;
+        let until = opens.get(n).map_or(day_end, |(next, _)| day_end.min(*next));
+        Some((from..until, self.open_on_date(date)?))
+    }
+
+    /// First instant of the bar that `t` joins by [`instant_open`](Self::instant_open). On a
+    /// daily or longer clock with a session it is the open of the bar's first trading date, which
+    /// can come before the bar's own time.
+    pub(crate) fn instant_start(&self, t: DateTime<Utc>) -> DateTime<Utc> {
+        let open = self.instant_open(t);
+        let Some(session) = self.date_session() else {
+            return open;
+        };
+        let (mut start, mut at) = (open.min(t), t);
+        // A weekly or monthly bar holds several trading dates.
+        while let Some(date_open) = session.session_open(at, false)
+            && self.instant_open(date_open) == open
+        {
+            start = date_open;
+            let Some(before) = date_open.checked_sub_signed(TimeDelta::nanoseconds(1)) else {
+                break;
+            };
+            at = before;
+        }
+        start
+    }
+
+    /// Open of the first bar after the one opening at `open` that a trade inside this clock's
+    /// windows can join: that of the first window instant from [`next_open`](Self::next_open)
+    /// on, and on a daily or longer clock with a session the bar of the next trading date.
+    pub(crate) fn next_trading_open(&self, open: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        let Some(session) = self.date_session() else {
+            return Some(self.bar_open(self.open_at_or_after(self.next_open(open)?)?));
+        };
+        // A date's windows can close before its bar's time, as a Tokyo session's do on Los
+        // Angeles days, so the walk starts in the bar rather than at the next calendar boundary.
+        let mut at = self.open_at_or_after(self.instant_start(open))?;
+        while self.instant_open(at) <= open {
+            at = self.open_at_or_after(session.session_close(at, true)?)?;
+        }
+        Some(self.instant_open(at))
+    }
+
     /// The timeframe of the bars, `None` for a clock that matches bars by their exact open time.
     pub(crate) fn timeframe(&self) -> Option<Timeframe> {
         self.timeframe
@@ -294,7 +367,7 @@ impl BarClock {
     /// time zone without them.
     pub(crate) fn sessions(&self) -> super::ExchangeSessionProvider {
         let sessions = match (&self.session, &self.timezone) {
-            (Some(session), _) => session.clone(),
+            (Some(session), _) => super::ExchangeSessionProvider::clone(session),
             (None, Some(zone)) => super::ExchangeSessionProvider::new(zone.clone(), None),
             (None, None) => super::ExchangeSessionProvider::local(None),
         };
@@ -327,6 +400,32 @@ impl BarClock {
     /// inside it.
     pub fn same_bar(&self, a: DateTime<Utc>, b: DateTime<Utc>) -> bool {
         self.bar_open(a) == self.bar_open(b)
+    }
+}
+
+/// The bar that [`BarClock::instant_open`] gave a recent update, with its clock and the instants
+/// that share the update's trading date, so that a stream of trades, quotes and heartbeats finds
+/// the session once per date rather than once per update.
+#[derive(Clone, Default)]
+pub(crate) struct Placement(Option<(BarClock, Range<DateTime<Utc>>, DateTime<Utc>)>);
+
+impl Placement {
+    /// [`BarClock::instant_open`] of `t` on `clock`.
+    pub(crate) fn open(&mut self, clock: &BarClock, t: DateTime<Utc>) -> DateTime<Utc> {
+        if clock.date_session().is_none() {
+            return clock.bar_open(t);
+        }
+        if let Some((placed, span, open)) = &self.0
+            && span.contains(&t)
+            && placed == clock
+        {
+            return *open;
+        }
+        let Some((span, open)) = clock.trading_span(t) else {
+            return clock.instant_open(t);
+        };
+        self.0 = Some((clock.clone(), span, open));
+        open
     }
 }
 
@@ -643,5 +742,96 @@ mod tests {
                 t(open)
             );
         }
+    }
+
+    /// On a daily or longer clock with a session a trade joins the bar of its trading date, as
+    /// `data::resample_with_session` dates history, not the calendar period it falls in.
+    #[cfg(feature = "timezones")]
+    #[test]
+    fn trades_join_the_bar_of_their_trading_date() {
+        use crate::model::{Session, SessionWindow, Tick};
+        use chrono::Weekday::*;
+        let hm = |hour, minute| NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+        let weekdays = [Mon, Tue, Wed, Thu, Fri];
+        let chicago = TimezoneId::named("America/Chicago").unwrap();
+        let futures = |timeframe| {
+            BarClock::new(timeframe)
+                .with_timezone(chicago.clone())
+                .with_session(
+                    chicago.clone(),
+                    Session::new([SessionWindow::new(weekdays, hm(17, 0), hm(16, 0))])
+                        .with_holidays([NaiveDate::from_ymd_opt(2024, 1, 15).unwrap()]),
+                    false,
+                )
+        };
+        // On UTC days, with the post-market hour after midnight in winter.
+        let equities = BarClock::new(Timeframe::Day1).with_session(
+            TimezoneId::named("America/New_York").unwrap(),
+            Session::new([SessionWindow::new(weekdays, hm(9, 30), hm(16, 0))])
+                .with_extended_windows([
+                    SessionWindow::new(weekdays, hm(4, 0), hm(9, 30)),
+                    SessionWindow::new(weekdays, hm(16, 0), hm(20, 0)),
+                ]),
+            true,
+        );
+        // A Tokyo session on Los Angeles days closes before its date begins there.
+        let tokyo = BarClock::new(Timeframe::Day1)
+            .with_timezone(TimezoneId::named("America/Los_Angeles").unwrap())
+            .with_session(
+                TimezoneId::named("Asia/Tokyo").unwrap(),
+                Session::new([SessionWindow::new(weekdays, hm(9, 0), hm(15, 0))]),
+                false,
+            );
+        let day = futures(Timeframe::Day1);
+        // The instant, its bar, the bar's first instant and the next bar with trading.
+        #[rustfmt::skip]
+        let cases = [
+            // 18:30 in Chicago trades the next date, whose session opened at 17:00.
+            (&day, "2024-01-09T00:30:00Z", "2024-01-09T06:00:00Z", "2024-01-08T23:00:00Z", "2024-01-10T06:00:00Z"),
+            // Sunday's open trades Monday.
+            (&day, "2024-01-07T23:00:00Z", "2024-01-08T06:00:00Z", "2024-01-07T23:00:00Z", "2024-01-09T06:00:00Z"),
+            (&day, "2024-01-08T22:00:00Z", "2024-01-08T06:00:00Z", "2024-01-07T23:00:00Z", "2024-01-09T06:00:00Z"),
+            // The weekend and the holiday on Monday 15 January hold no bar.
+            (&day, "2024-01-12T21:00:00Z", "2024-01-12T06:00:00Z", "2024-01-11T23:00:00Z", "2024-01-16T06:00:00Z"),
+            // Daylight saving starts on Sunday 10 March.
+            (&day, "2024-03-10T22:00:00Z", "2024-03-11T05:00:00Z", "2024-03-10T22:00:00Z", "2024-03-12T05:00:00Z"),
+            // The post-market hour after midnight UTC trades the previous date.
+            (&equities, "2024-01-09T00:30:00Z", "2024-01-08T00:00:00Z", "2024-01-08T09:00:00Z", "2024-01-09T00:00:00Z"),
+            (&equities, "2024-01-09T01:00:00Z", "2024-01-08T00:00:00Z", "2024-01-08T09:00:00Z", "2024-01-09T00:00:00Z"),
+            (&equities, "2024-01-09T09:00:00Z", "2024-01-09T00:00:00Z", "2024-01-09T09:00:00Z", "2024-01-10T00:00:00Z"),
+            // Friday's post-market runs into Saturday UTC.
+            (&equities, "2024-01-06T00:30:00Z", "2024-01-05T00:00:00Z", "2024-01-05T09:00:00Z", "2024-01-08T00:00:00Z"),
+            (&equities, "2024-06-11T00:00:00Z", "2024-06-10T00:00:00Z", "2024-06-10T08:00:00Z", "2024-06-11T00:00:00Z"),
+            // The next bar is Friday's, whose session closes at 06:00 UTC, before the bar opens.
+            (&tokyo, "2024-01-04T00:30:00Z", "2024-01-04T08:00:00Z", "2024-01-04T00:00:00Z", "2024-01-05T08:00:00Z"),
+            (&futures(Timeframe::Week1), "2024-01-08T00:00:00Z", "2024-01-08T06:00:00Z", "2024-01-07T23:00:00Z", "2024-01-15T06:00:00Z"),
+            (&futures(Timeframe::Week1), "2024-01-11T16:00:00Z", "2024-01-08T06:00:00Z", "2024-01-07T23:00:00Z", "2024-01-15T06:00:00Z"),
+            (&futures(Timeframe::Month1), "2024-02-01T00:00:00Z", "2024-02-01T06:00:00Z", "2024-01-31T23:00:00Z", "2024-03-01T06:00:00Z"),
+        ];
+        for (clock, at, open, start, next) in cases {
+            assert_eq!(clock.instant_open(t(at)), t(open), "{at}");
+            assert_eq!(clock.instant_start(t(at)), t(start), "{at}");
+            assert_eq!(clock.next_trading_open(t(open)), Some(t(next)), "{at}");
+        }
+        // Through the feed: Sunday's heartbeat opens Monday's candle, an evening trade Tuesday's.
+        let inbox = std::sync::Arc::new(crate::data::inbox::Inbox::default());
+        let sink = inbox.subscribe("SAMPLE".into(), day, 100, None);
+        sink.push_tick(Tick::new(t("2024-01-05T21:00:00Z"), 100.0, 1.0, None));
+        sink.advance_time(t("2024-01-07T23:30:00Z"));
+        for (time, size) in [("2024-01-08T21:00:00Z", 1.0), ("2024-01-09T00:30:00Z", 2.0)] {
+            sink.push_tick(Tick::new(t(time), 101.0, size, None));
+        }
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        let bars: Vec<_> = (updates.bars.iter())
+            .map(|(open, (bar, _))| (*open, bar.volume))
+            .collect();
+        assert_eq!(
+            bars,
+            [
+                (t("2024-01-05T06:00:00Z"), 1.0),
+                (t("2024-01-08T06:00:00Z"), 1.0),
+                (t("2024-01-09T06:00:00Z"), 2.0),
+            ]
+        );
     }
 }

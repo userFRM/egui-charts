@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Datelike, NaiveTime, Utc, Weekday};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use super::{Bar, Timeframe, TimezoneId};
 
@@ -150,14 +151,23 @@ impl AlertDelivery {
 
 /// The source view and study definitions captured when an alert is created. The alert's
 /// symbol and condition intervals select their bars; auxiliary requests follow these saved studies.
+///
+/// ```
+/// use egui_charts::model::{AlertCalendar, AlertInputs, AlertStudy};
+///
+/// let mut inputs = AlertInputs::default();
+/// inputs.calendar = Some(AlertCalendar::new("BTCUSD", None, None));
+/// inputs.studies = vec![AlertStudy::new(0, "RSI", Vec::new())];
+/// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AlertInputs {
     /// Calendar zone; `None` follows the system's local calendar.
     pub timezone: Option<TimezoneId>,
     /// Exchange calendar of the creation symbol. Other symbols resolve their own calendars.
     pub calendar: Option<AlertCalendar>,
     /// Source choices shown when editing, independent of the currently displayed chart.
-    pub sources: Vec<(AlertSource, String)>,
+    pub sources: Vec<(AlertSource, AlertSourceName)>,
     /// Include extended trading sessions.
     pub extended_hours: bool,
     /// Host currency or unit conversion.
@@ -193,7 +203,9 @@ impl Default for AlertInputs {
 
 impl AlertInputs {
     /// Offer newly available study sources during an explicit edit. Existing identifiers keep
-    /// their original definitions, including when another chart reuses an identifier.
+    /// their original definitions, including when another chart reuses an identifier. A saved
+    /// name whose English text equals the offered name takes the offered one, so a name saved
+    /// as finished text is translated from then on.
     pub fn add_sources_from(&mut self, other: &Self) {
         for study in &other.studies {
             if !self.studies.iter().any(|saved| saved.id == study.id) {
@@ -201,8 +213,10 @@ impl AlertInputs {
             }
         }
         for (source, name) in &other.sources {
-            if !self.sources.iter().any(|(saved, _)| saved == source) {
-                self.sources.push((source.clone(), name.clone()));
+            match self.sources.iter_mut().find(|(saved, _)| saved == source) {
+                Some((_, saved)) if *saved == *name => *saved = name.clone(),
+                Some(_) => {}
+                None => self.sources.push((source.clone(), name.clone())),
             }
         }
     }
@@ -210,6 +224,7 @@ impl AlertInputs {
 
 /// The creation symbol's exchange calendar, including an explicitly continuous session.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AlertCalendar {
     /// Symbol whose calendar was captured.
     pub symbol: String,
@@ -219,8 +234,32 @@ pub struct AlertCalendar {
     pub session: Option<super::Session>,
 }
 
+impl AlertCalendar {
+    /// The calendar of `symbol`: its exchange `timezone` and trading `session`, continuous when
+    /// `session` is `None`.
+    ///
+    /// ```
+    /// use egui_charts::model::AlertCalendar;
+    ///
+    /// let calendar = AlertCalendar::new("BTCUSD", None, None);
+    /// assert_eq!(calendar.session, None);
+    /// ```
+    pub fn new(
+        symbol: impl Into<String>,
+        timezone: Option<TimezoneId>,
+        session: Option<super::Session>,
+    ) -> Self {
+        Self {
+            symbol: symbol.into(),
+            timezone,
+            session,
+        }
+    }
+}
+
 /// Serializable calculation inputs of a study, without computed values or shared stream state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AlertStudy {
     /// Identifier used by the alert sources and by dependent studies.
     pub id: usize,
@@ -230,9 +269,31 @@ pub struct AlertStudy {
     pub inputs: Vec<(String, super::InputValue)>,
 }
 
+impl AlertStudy {
+    /// The study `name`, known to the alert sources as `id`, calculated with `inputs`.
+    ///
+    /// ```
+    /// use egui_charts::model::{AlertStudy, InputValue};
+    ///
+    /// let study = AlertStudy::new(0, "RSI", vec![("length".into(), InputValue::Length(14))]);
+    /// assert_eq!(study.name, "RSI");
+    /// ```
+    pub fn new(
+        id: usize,
+        name: impl Into<String>,
+        inputs: Vec<(String, super::InputValue)>,
+    ) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            inputs,
+        }
+    }
+}
+
 impl Alert {
     /// An active alert on `symbol` with no id, no expiry and no message. Frequency is `Once`
-    /// for bar conditions and `EveryTime` for strategy fills.
+    /// for bar conditions and `EveryTime` for strategy fills, detector signals and custom events.
     pub fn new(symbol: impl Into<String>, condition: AlertCondition) -> Self {
         Self {
             id: None,
@@ -248,7 +309,7 @@ impl Alert {
             source: AlertSource::Price,
             additional_conditions: Vec::new(),
             additional_timeframes: Vec::new(),
-            frequency: if matches!(condition, AlertCondition::StrategyFills(_)) {
+            frequency: if condition.is_event() {
                 AlertFrequency::EveryTime
             } else {
                 AlertFrequency::default()
@@ -335,8 +396,8 @@ impl Alert {
     /// fired, both in RFC 3339, `{{open}}`, `{{high}}`, `{{low}}`, `{{close}}` and `{{volume}}` of
     /// `bar`, `{{value}}` the value of the alert's source, `{{output_N}}` the value of output `N`
     /// of the study the source names (empty if the source is not a study), `{{plot_ID_N}}` the
-    /// value of output `N` of the study `ID` whatever the source is, and `{{level}}` the label
-    /// that [`AlertInputs::sources`] gives the drawing level the first condition tests: the source
+    /// value of output `N` of the study `ID` whatever the source is, and `{{level}}` the English
+    /// name that [`AlertInputs::sources`] gives the drawing level the first condition tests: the source
     /// if it is a drawing, otherwise the drawing it compares with or those bounding its channel,
     /// joined by `, `, and empty if it tests no drawing. `value` gives the value of a source at
     /// the bar. A value that is missing or not finite becomes `NaN`, a number is written in the
@@ -403,7 +464,7 @@ impl Alert {
                         .flatten()
                         .filter(|source| matches!(source, AlertSource::Drawing(_)))
                         .filter_map(|source| saved.iter().find(|(s, _)| s == source))
-                        .map(|(_, label)| label.as_str())
+                        .map(|(_, label)| label.to_string())
                         .collect();
                     labels.join(", ")
                 }
@@ -470,6 +531,16 @@ pub enum AlertCondition {
     /// `AlertEngine::strategy_fills` with the same run id. Uses the price source, no additional
     /// rules, and frequency `EveryTime` (the constructor default) or `Once`. No bars evaluate it.
     StrategyFills(String),
+    /// Each new formation or target of the host's detector named here: every
+    /// [`Signal`](super::Signal) of the symbol whose category is this name, once per signal id.
+    /// `AlertEngine::detector_signals` takes the signals, and `AlertEvaluator` feeds it the
+    /// signals of the charts it is lent. Same source, rules and frequencies as `StrategyFills`.
+    DetectorSignals(String),
+    /// Each [`CustomAlertEvent`] the host's event source named here raises, from its own logic,
+    /// a Rust custom study or a strategy's alert call. Feed them to `AlertEngine::custom_events`
+    /// with the same source name; `AlertEngine` saves the alert only once the host connects that
+    /// source. Same source, rules and frequencies as `StrategyFills`.
+    CustomEvents(String),
     /// The previous value was strictly below or above the level and the current value reaches
     /// or passes it, in either direction.
     Crossing(f64),
@@ -555,6 +626,7 @@ pub enum AlertCondition {
 
 /// A host-resolved value on a bar. Identifiers remain meaningful to the host across sessions.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AlertSource {
     /// The symbol's closing or latest price.
     #[default]
@@ -572,8 +644,123 @@ pub enum AlertSource {
     Volume,
 }
 
+/// The name an alert source is shown with: English text, translated only when shown.
+///
+/// `Chart::alert_sources` builds each name from an English template such as
+/// `"{tool} {id}: {level}"`, whose placeholders take values shown as given, such as a study's
+/// name or a drawing's number, and labels translated whole, such as a drawing tool, a level or a
+/// study output, and keeps the English text they make. A host's own name converts from a string
+/// and is translated whole. A name is stored and compared by its English text, which
+/// [`Display`](std::fmt::Display) gives, so names saved as finished text, as alerts and presets
+/// stored every name before names kept their parts, still match the chart's names.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AlertSourceName(SourceName);
+
+/// A name with its parts, or finished text: a host's own name, or one that alerts and presets
+/// saved before names kept their parts hold.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum SourceName {
+    /// `template` with each `{name}` taken from `values` as given or from `labels` translated,
+    /// and `text`, the English it makes.
+    Parts {
+        text: String,
+        template: String,
+        values: BTreeMap<String, String>,
+        labels: BTreeMap<String, String>,
+    },
+    /// Text translated whole.
+    Text(String),
+}
+
+impl AlertSourceName {
+    /// A name built from `template`, whose placeholders take `values` as given and `labels`
+    /// translated when shown.
+    #[cfg(feature = "drawings")]
+    pub(crate) fn new(template: &str, values: &[(&str, &str)], labels: &[(&str, &str)]) -> Self {
+        let owned = |parts: &[(&str, &str)]| {
+            parts
+                .iter()
+                .map(|&(name, part)| (name.to_owned(), part.to_owned()))
+                .collect()
+        };
+        Self(SourceName::Parts {
+            text: crate::localization::substitute(template, &[values, labels].concat()),
+            template: template.to_owned(),
+            values: owned(values),
+            labels: owned(labels),
+        })
+    }
+
+    /// The name in the language of `ctx`'s translator: each label looked up whole, then the
+    /// template looked up and filled with the values and the translated labels, as
+    /// [`format_text`](crate::localization::format_text) does. A name without parts is looked up
+    /// whole. Without a translator this is the English text.
+    #[cfg(feature = "widget")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]
+    pub fn text(&self, ctx: &egui::Context) -> String {
+        use crate::localization as l10n;
+        match &self.0 {
+            SourceName::Text(text) => l10n::text(ctx, text),
+            SourceName::Parts {
+                template,
+                values,
+                labels,
+                ..
+            } => {
+                let labels: Vec<_> = labels
+                    .iter()
+                    .map(|(name, label)| (name.as_str(), l10n::text(ctx, label)))
+                    .collect();
+                let parts: Vec<(&str, &str)> = values
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.as_str()))
+                    .chain(labels.iter().map(|(name, label)| (*name, label.as_str())))
+                    .collect();
+                l10n::format_text(ctx, template, &parts)
+            }
+        }
+    }
+
+    /// The English text.
+    fn english(&self) -> &str {
+        match &self.0 {
+            SourceName::Parts { text, .. } | SourceName::Text(text) => text,
+        }
+    }
+}
+
+impl From<String> for AlertSourceName {
+    fn from(text: String) -> Self {
+        Self(SourceName::Text(text))
+    }
+}
+
+impl From<&str> for AlertSourceName {
+    fn from(text: &str) -> Self {
+        text.to_owned().into()
+    }
+}
+
+impl std::fmt::Display for AlertSourceName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.english())
+    }
+}
+
+/// Names are equal when their English text is, whether or not they keep their parts.
+impl PartialEq for AlertSourceName {
+    fn eq(&self, other: &Self) -> bool {
+        self.english() == other.english()
+    }
+}
+
+impl Eq for AlertSourceName {}
+
 /// Comparison of two outputs. Crossings require a strict previous side and include equality now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AlertComparison {
     /// Cross in either direction.
     Crossing,
@@ -589,6 +776,7 @@ pub enum AlertComparison {
 
 /// Relationship of a value to two inclusive, independently resolved boundaries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AlertChannelComparison {
     /// Previously outside, currently inside.
     Entering,
@@ -613,11 +801,19 @@ impl std::fmt::Display for AlertChannelComparison {
 
 /// One additional condition of an alert; all rules must hold at the same event time.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AlertRule {
     /// The value to test.
     pub source: AlertSource,
     /// The required relationship.
     pub condition: AlertCondition,
+}
+
+impl AlertRule {
+    /// The rule that `source` meets `condition`.
+    pub fn new(source: AlertSource, condition: AlertCondition) -> Self {
+        Self { source, condition }
+    }
 }
 
 impl AlertSource {
@@ -639,10 +835,20 @@ impl AlertCondition {
         }
     }
 
+    /// Whether the host raises the condition's events, which no bars evaluate.
+    pub(crate) fn is_event(&self) -> bool {
+        matches!(
+            self,
+            Self::StrategyFills(_) | Self::DetectorSignals(_) | Self::CustomEvents(_)
+        )
+    }
+
     /// Whether levels are finite and ordered, lookbacks positive, and referenced ids nonempty.
     pub fn is_valid(&self) -> bool {
         match self {
-            Self::StrategyFills(run) => !run.trim().is_empty(),
+            Self::StrategyFills(name) | Self::DetectorSignals(name) | Self::CustomEvents(name) => {
+                !name.trim().is_empty()
+            }
             Self::Crossing(v)
             | Self::CrossingUp(v)
             | Self::CrossingDown(v)
@@ -685,6 +891,8 @@ impl std::fmt::Display for AlertCondition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::StrategyFills(run) => write!(f, "Fills of strategy {run}"),
+            Self::DetectorSignals(detector) => write!(f, "Signals of detector {detector}"),
+            Self::CustomEvents(source) => write!(f, "Events of {source}"),
             Self::Crossing(v) => write!(f, "Crossing {v}"),
             Self::CrossingUp(v) => write!(f, "Crossing up {v}"),
             Self::CrossingDown(v) => write!(f, "Crossing down {v}"),
@@ -722,7 +930,7 @@ impl Alert {
                 .watchlist
                 .as_ref()
                 .is_none_or(|id| !id.trim().is_empty())
-            && (!matches!(self.condition, AlertCondition::StrategyFills(_))
+            && (!self.condition.is_event()
                 || (self.source == AlertSource::Price
                     && self.additional_conditions.is_empty()
                     && matches!(
@@ -732,7 +940,7 @@ impl Alert {
             && self
                 .additional_conditions
                 .iter()
-                .all(|rule| !matches!(rule.condition, AlertCondition::StrategyFills(_)))
+                .all(|rule| !rule.condition.is_event())
             && self.additional_conditions.len() < 5
             && self.additional_timeframes.len() <= self.additional_conditions.len()
             && {
@@ -761,6 +969,7 @@ impl Alert {
 /// windows, both read on the clock of `timezone`, so a daylight-saving change moves the windows
 /// with the local clock.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NotificationSchedule {
     /// The zone whose weekday and clock decide.
     pub timezone: TimezoneId,
@@ -775,6 +984,7 @@ pub struct NotificationSchedule {
 /// window whose `end` equals `start` covers the 24 hours from `start`, ending at `start` of the
 /// next day.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NotificationWindow {
     /// First clock time inside the window.
     pub start: NaiveTime,
@@ -782,7 +992,36 @@ pub struct NotificationWindow {
     pub end: NaiveTime,
 }
 
+impl NotificationWindow {
+    /// The window from `start` up to but excluding `end`.
+    pub fn new(start: NaiveTime, end: NaiveTime) -> Self {
+        Self { start, end }
+    }
+}
+
 impl NotificationSchedule {
+    /// Delivery on `days` inside `windows`, both read on the clock of `timezone`;
+    /// [`is_valid`](Self::is_valid) asks for at least one of each.
+    ///
+    /// ```
+    /// use chrono::{NaiveTime, Weekday};
+    /// use egui_charts::model::{NotificationSchedule, NotificationWindow, TimezoneId};
+    ///
+    /// let window = NotificationWindow::new(
+    ///     NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+    ///     NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+    /// );
+    /// let schedule = NotificationSchedule::new(TimezoneId::utc(), vec![Weekday::Mon], vec![window]);
+    /// assert!(schedule.is_valid());
+    /// ```
+    pub fn new(timezone: TimezoneId, days: Vec<Weekday>, windows: Vec<NotificationWindow>) -> Self {
+        Self {
+            timezone,
+            days,
+            windows,
+        }
+    }
+
     /// Whether at least one weekday and one window are selected.
     pub fn is_valid(&self) -> bool {
         !self.days.is_empty() && !self.windows.is_empty()
@@ -843,6 +1082,43 @@ impl std::fmt::Display for AlertComparison {
             Self::Above => "Greater than",
             Self::Below => "Less than",
         })
+    }
+}
+
+/// An event a host's event source raises for its
+/// [`CustomEvents`](AlertCondition::CustomEvents) alerts: the host's own logic, a Rust custom
+/// study or a strategy's alert call decides when.
+///
+/// ```
+/// use egui_charts::model::CustomAlertEvent;
+///
+/// let time = chrono::DateTime::from_timestamp(0, 0).unwrap();
+/// let mut event = CustomAlertEvent::new(1, time, "RSI divergence confirmed");
+/// event.price = Some(101.5);
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct CustomAlertEvent {
+    /// Increasing number within the source, from one. An event numbered at or below one an
+    /// alert already received is a repeat and ignored.
+    pub sequence: u64,
+    /// When the event happened, which the trigger reports.
+    pub time: DateTime<Utc>,
+    /// The price the event refers to, finite, when it has one.
+    pub price: Option<f64>,
+    /// The text a trigger shows when the alert has no message of its own.
+    pub message: String,
+}
+
+impl CustomAlertEvent {
+    /// The event numbered `sequence` at `time` with `message` and no price.
+    pub fn new(sequence: u64, time: DateTime<Utc>, message: impl Into<String>) -> Self {
+        Self {
+            sequence,
+            time,
+            price: None,
+            message: message.into(),
+        }
     }
 }
 
@@ -1018,7 +1294,7 @@ mod tests {
     #[test]
     fn saved_alerts_require_finite_levels_ordered_channels_and_positive_lookbacks() {
         type Edit = fn(&mut Alert);
-        let rows: [(Edit, bool); 33] = [
+        let rows: [(Edit, bool); 35] = [
             (
                 |a| {
                     a.delivery.webhook = true;
@@ -1053,6 +1329,17 @@ mod tests {
             ),
             (
                 |a| a.condition = AlertCondition::StrategyFills(" ".into()),
+                false,
+            ),
+            (
+                |a| a.condition = AlertCondition::CustomEvents(" ".into()),
+                false,
+            ),
+            (
+                |a| {
+                    a.condition = AlertCondition::DetectorSignals("Big trades".into());
+                    a.frequency = AlertFrequency::OncePerBarClose;
+                },
                 false,
             ),
             (
@@ -1307,6 +1594,16 @@ mod tests {
                 status: AlertStatus::Active,
             }
         );
+        // A stored alert on a strategy run's fills loads as saved and stays armed.
+        let fills: Alert = serde_json::from_str(
+            r#"{"symbol":"AAPL","condition":{"StrategyFills":"run-1"},"frequency":"EveryTime"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            fills.condition,
+            AlertCondition::StrategyFills("run-1".into())
+        );
+        assert!(fills.is_valid());
     }
 
     #[cfg(feature = "timezones")]

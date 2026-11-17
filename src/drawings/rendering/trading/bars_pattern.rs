@@ -304,6 +304,7 @@ mod tests {
                         bar_seconds: 0,
                         instrument: None,
                         bar_to_x: &|bar| bar * 10.,
+                        bar_spacing: 10.0,
                         price_to_y: &|price| price as f32 * 10.,
                         y_to_price: &|y| f64::from(y / 10.),
                         time_axis: true,

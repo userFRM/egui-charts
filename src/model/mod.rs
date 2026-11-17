@@ -57,8 +57,8 @@ mod watchlist;
 
 pub use alert::{
     Alert, AlertCalendar, AlertChannelComparison, AlertComparison, AlertCondition, AlertDelivery,
-    AlertFrequency, AlertId, AlertInputs, AlertRule, AlertSource, AlertStatus, AlertStudy,
-    NotificationSchedule, NotificationWindow,
+    AlertFrequency, AlertId, AlertInputs, AlertRule, AlertSource, AlertSourceName, AlertStatus,
+    AlertStudy, CustomAlertEvent, NotificationSchedule, NotificationWindow,
 };
 pub use bar::{Bar, BarColors, BarData};
 #[cfg(feature = "widget")]
@@ -78,6 +78,7 @@ pub use chart_type::{
     ProfileSession, TradeProfileSettings,
 };
 pub use clock::BarClock;
+pub(crate) use clock::Placement;
 pub use color::ColorType;
 pub use date_range::DateRange;
 #[cfg(any(feature = "studies", feature = "drawings"))]
@@ -143,7 +144,7 @@ pub use trading::{
     TimeInForce, TradingRules,
 };
 
-pub use watchlist::{Watchlist, WatchlistFlag, WatchlistItem};
+pub use watchlist::{Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem};
 
 #[cfg(test)]
 mod tests {

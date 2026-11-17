@@ -18,7 +18,7 @@
 mod exchange;
 
 pub use exchange::ExchangeSessionProvider;
-#[cfg(feature = "widget")]
+#[cfg(any(feature = "widget", feature = "studies"))]
 pub(crate) use exchange::MarketSession;
 
 use crate::model::{Bar, TimezoneId, local_instant, local_time};
@@ -115,6 +115,7 @@ pub enum SessionBreakType {
 /// matching NYSE regular-session close in exchange time, or [`continuous`](Self::continuous)
 /// for 24/7 markets (midnight UTC).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct DailySessionProvider {
     /// Hour of day for session break (0-23)
     pub break_hour: u32,
@@ -325,11 +326,27 @@ impl SessionProvider for CompositeSessionProvider {
     }
 }
 
+impl std::fmt::Debug for CompositeSessionProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompositeSessionProvider")
+            .field("providers", &self.providers.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Scan a bar slice for session breaks.
 ///
 /// Returns a `Vec` of `(bar_index, SessionBreak)` pairs indicating
 /// where each break falls. The `bar_index` is the index of the bar
 /// *after* the break (i.e., the first bar of the new session).
+///
+/// ```
+/// use egui_charts::model::{Bar, DailySessionProvider, find_session_breaks};
+///
+/// let bars: Vec<Bar> = Vec::new();
+/// let breaks = find_session_breaks(&bars, &DailySessionProvider::new(9, 30));
+/// assert!(breaks.is_empty());
+/// ```
 pub fn find_session_breaks(
     bars: &[Bar],
     provider: &dyn SessionProvider,

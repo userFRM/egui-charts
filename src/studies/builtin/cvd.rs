@@ -14,7 +14,7 @@ use egui::Color32;
 ///
 /// Shows the running total of (buy volume - sell volume), with each bar's split
 /// estimated from its open, high, low and close.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CVD {
     /// Values calculated from bars
     values: IndicatorValues,
@@ -29,6 +29,7 @@ pub struct CVD {
 
 /// How [`CVD`] estimates a bar's delta from its prices
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum CVDMode {
     /// Estimate based on bar close position within range
     #[default]

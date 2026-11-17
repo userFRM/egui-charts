@@ -648,18 +648,21 @@ impl Drawing {
     }
 
     /// Price and time rays meet the edges of the anchors' box at complementary ratios; the grid
-    /// and the ratio labels on each side of the box follow their own settings.
+    /// and the ratio labels on each side of the box follow their own settings. A fan saved before
+    /// it had time levels keeps the look it was saved with: bands between its price rays, each
+    /// level's grid in that level's stroke, and one ratio beside and one beyond the far corner.
     pub(crate) fn render_fibonacci_speed_fan(&self, painter: &egui::Painter, chart_rect: Rect) {
         let config = self.fibonacci_config();
         let Some((start, end)) = self.speed_fan_corners(&config) else {
             return;
         };
+        let shared = config.time_levels.is_none();
         let families = [
             (visible_sorted(&config.levels), false),
             (visible_sorted(config.fan_time_levels()), true),
         ];
         if config.show_background || self.fill_color.is_some() {
-            for (levels, time) in &families {
+            for (levels, time) in &families[..if shared { 1 } else { 2 }] {
                 for pair in levels.windows(2) {
                     let a = speed_fan_ray_end(start, end, pair[0].value, *time, chart_rect);
                     let b = speed_fan_ray_end(start, end, pair[1].value, *time, chart_rect);
@@ -673,6 +676,41 @@ impl Drawing {
                     }
                 }
             }
+        }
+        if shared {
+            let d = end - start;
+            let (beside, beside_align) = if d.x >= 0.0 {
+                (4.0, egui::Align2::LEFT_CENTER)
+            } else {
+                (-4.0, egui::Align2::RIGHT_CENTER)
+            };
+            let (beyond, beyond_align) = if d.y >= 0.0 {
+                (4.0, egui::Align2::CENTER_TOP)
+            } else {
+                (-4.0, egui::Align2::CENTER_BOTTOM)
+            };
+            for &level in &families[0].0 {
+                let at = start + d * (1.0 - level.value);
+                let ray = |time| speed_fan_ray_end(start, end, level.value, time, chart_rect);
+                paint_level_line(painter, [start, ray(false)], &config, level);
+                for line in [
+                    [Pos2::new(at.x, start.y), Pos2::new(at.x, end.y)],
+                    [Pos2::new(start.x, at.y), Pos2::new(end.x, at.y)],
+                ] {
+                    paint_level_line(painter, line, &config, level);
+                }
+                // The time ray at 0 is the price ray at 0.
+                if level.value != 0.0 {
+                    paint_level_line(painter, [start, ray(true)], &config, level);
+                }
+                for (at, align) in [
+                    (Pos2::new(end.x + beside, at.y), beside_align),
+                    (Pos2::new(at.x, end.y + beyond), beyond_align),
+                ] {
+                    paint_ratio_label(painter, &config, level, at, align);
+                }
+            }
+            return;
         }
         if config.grid_visible {
             let stroke = Stroke::new(
@@ -1087,7 +1125,7 @@ impl Drawing {
                     .map(|level| ray(level, true)),
             )
             .collect();
-        if config.grid_visible {
+        if config.grid_visible || config.time_levels.is_none() {
             lines.extend(speed_fan_grid(start, end, &config));
         }
         lines.retain(|line| line.iter().all(|p| p.is_finite()));
@@ -1100,7 +1138,8 @@ impl Drawing {
         let &[start, end, ..] = self.points.as_slice() else {
             return None;
         };
-        Some(if config.reverse {
+        // Fans saved before they had time levels ignored Reverse.
+        Some(if config.reverse && config.time_levels.is_some() {
             (Pos2::new(start.x, end.y), Pos2::new(end.x, start.y))
         } else {
             (start, end)
@@ -1588,6 +1627,7 @@ mod tests {
                         bars: &[],
                         revision: 0,
                         bar_to_x: &|x| x,
+                        bar_spacing: 1.0,
                         price_to_y: &|price| 600.0 - price as f32,
                         y_to_price: &|y| 600.0 - f64::from(y),
                         time_axis: true,
@@ -2105,6 +2145,11 @@ mod tests {
                     "extend_left":false,"extend_right":false,"reverse":false,
                     "levels_as_percent":false,"show_prices":false,"level_width":3.0
                 })).unwrap());
+                if tool == Tool::FibonacciSpeedFan {
+                    // A fan placed now has its own time levels; older fans keep their saved look.
+                    let config = drawing.fib_config.as_mut().unwrap();
+                    config.time_levels = Some(config.levels.clone());
+                }
                 let mut output =
                     egui::Context::default().run_ui(egui::RawInput::default(), |ui| match tool {
                         Tool::FibonacciTimeZones => {
@@ -2373,6 +2418,62 @@ mod tests {
         }
     }
 
+    /// A fan from (100,200) to (200,100) saved before it had time levels, with levels 0.382 and
+    /// 0.618 and its background on, keeps its look, also once saved again: one band between its
+    /// two price rays, each ratio once right of x = 200 and once above y = 100, and each level's
+    /// grid in its own stroke, 0.382 across the box at y = 200 - 100 * 0.618 = 138.2.
+    #[test]
+    fn speed_fan_saved_before_time_levels_paints_as_saved() {
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
+        let saved = r#"{"levels":[
+            {"value":0.382,"label":"","color":[211,41,73,255],"visible":true,"show_price":true},
+            {"value":0.618,"label":"","color":[37,157,89,255],"visible":true,"show_price":true}],
+            "level_width":2.0,"level_style":"Solid","show_background":true,
+            "background_opacity":51,"extend_left":false,"extend_right":false,"reverse":false,
+            "show_prices":null,"show_levels":null,"levels_as_percent":false,
+            "labels_on_left":true,"label_size":12.0,"label_vertical":"Middle",
+            "time_label_vertical":"Bottom","show_text":true,"text_position":"Center",
+            "text_vertical":"Middle","trend_visible":true,"close_arcs":false,
+            "spiral_counterclockwise":false,"logarithmic":false}"#;
+        let config: FibonacciConfig = serde_json::from_str(saved).unwrap();
+        let again = serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+        for config in [config, again] {
+            let mut fan = Drawing::new(0, Tool::FibonacciSpeedFan);
+            fan.points = vec![Pos2::new(100.0, 200.0), Pos2::new(200.0, 100.0)];
+            fan.fib_config = Some(config);
+            let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                fan.render_fibonacci_speed_fan(ui.painter(), rect)
+            });
+            output.textures_delta.clear();
+            let bands = output
+                .shapes
+                .iter()
+                .filter(|s| matches!(&s.shape, egui::Shape::Path(path) if path.closed))
+                .count();
+            assert_eq!(bands, 1);
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) => Some(t.pos),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(labels.len(), 4, "{labels:?}");
+            assert_eq!(labels.iter().filter(|pos| pos.x > 200.0).count(), 2);
+            assert_eq!(labels.iter().filter(|pos| pos.y < 100.0).count(), 2);
+            let grid = Stroke::new(2.0, Color32::from_rgb(211, 41, 73));
+            assert!(output.shapes.iter().any(|s| matches!(
+                &s.shape,
+                egui::Shape::LineSegment { points: [a, b], stroke }
+                    if *stroke == grid
+                        && a.distance(Pos2::new(100.0, 138.2)) < 1e-3
+                        && b.distance(Pos2::new(200.0, 138.2)) < 1e-3
+            )));
+            output.drop_without_applying_deltas();
+        }
+    }
+
     /// Channel labels follow the price at their alignment point, including reversed anchors and
     /// log scales: the midpoint of 125 and 225 is 175, or sqrt(125*225) on a log scale.
     #[test]
@@ -2449,6 +2550,7 @@ mod tests {
                             bars: &[],
                             revision: 0,
                             bar_to_x: &|x| x,
+                            bar_spacing: 1.0,
                             price_to_y: &y,
                             y_to_price: &inverse,
                             time_axis: true,
@@ -2652,6 +2754,7 @@ mod tests {
                     bars: &[],
                     revision: 0,
                     bar_to_x: &|b| b,
+                    bar_spacing: 1.0,
                     price_to_y: &y,
                     y_to_price: &|y| map.y_to_price(y),
                     time_axis: true,
@@ -2823,6 +2926,7 @@ mod tests {
                 bars: &[],
                 revision: 0,
                 bar_to_x: &|b| b,
+                bar_spacing: 1.0,
                 price_to_y: &y,
                 y_to_price: &|y| 600.0 - f64::from(y),
                 time_axis: true,
@@ -2883,6 +2987,7 @@ mod tests {
                     bars: &[],
                     revision: 0,
                     bar_to_x: &|x| x,
+                    bar_spacing: 1.0,
                     price_to_y: &|p| 600.0 - p as f32,
                     y_to_price: &|y| 600.0 - f64::from(y),
                     time_axis: true,
@@ -3275,6 +3380,7 @@ mod tests {
                         bars: &[],
                         revision: 0,
                         bar_to_x: &|b| b,
+                        bar_spacing: 1.0,
                         price_to_y: &|p| p as f32,
                         y_to_price: &f64::from,
                         time_axis: true,

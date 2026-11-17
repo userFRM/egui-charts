@@ -30,7 +30,7 @@ enum Action {
     Settings,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(super) struct AxisMenus {
     open: Option<(bool, Pos2)>,
     just_opened: bool,
@@ -339,6 +339,15 @@ impl AxisMenus {
                     }
                 }
                 Action::PlaceLeft(left) => {
+                    // The scale keeps its mode on the other side, whose configured mode would
+                    // otherwise replace it at the next frame.
+                    let mode = chart.state().price_scale().options().mode;
+                    let config = chart.config_mut();
+                    if left {
+                        config.left_axis_scale_mode = mode;
+                    } else {
+                        config.right_axis_scale_mode = mode;
+                    }
                     let options = chart.pane_axis_options(pane).unwrap_or_default();
                     chart.set_pane_axis_options(
                         pane,
@@ -551,6 +560,58 @@ mod tests {
         let main = PaneScale::Named(crate::model::SeriesScale::Right);
         assert_eq!(places(main), 2);
         assert_eq!(places(PaneScale::Named(crate::model::SeriesScale::Left)), 0);
+
+        // A mode chosen in the chart settings moves to the left with the scale, and a later
+        // direct mode survives an update that keeps the configured one.
+        use crate::scales::PriceScaleMode;
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut settings = crate::widget::settings::ChartSettingsState::from_chart(&chart);
+        settings.scales_and_lines.log_scale = true;
+        settings.apply_to_chart(&mut chart).unwrap();
+        let mut harness = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(Vec2::new(800.0, 600.0))
+            .build_ui_state(
+                |ui, (chart, menus): &mut (Chart, AxisMenus)| {
+                    chart.show(ui);
+                    chart.user_action(|chart| menus.show(ui.ctx(), chart));
+                },
+                (chart, AxisMenus::default()),
+            );
+        harness.run();
+        let menus = &mut harness.state_mut().1;
+        menus.open = Some((false, Pos2::new(100.0, 100.0)));
+        menus.target = Some((PaneId::MAIN, main));
+        menus.just_opened = true;
+        harness.run();
+        harness.get_by_label("Place scale on left").click();
+        harness.run();
+        let mode = |chart: &Chart| chart.state().price_scale().options().mode;
+        let chart = &mut harness.state_mut().0;
+        assert!(chart.main_axis_on_left());
+        assert_eq!(mode(chart), PriceScaleMode::Logarithmic);
+        chart.price_scale_mut().options_mut().mode = PriceScaleMode::Normal;
+        let mut config = chart.config().clone();
+        config.show_grid = !config.show_grid;
+        chart.update_config(config);
+        harness.run();
+        assert_eq!(mode(&harness.state().0), PriceScaleMode::Normal);
+
+        // Undoing a move brings the side back and keeps a mode chosen on the scale.
+        let menus = &mut harness.state_mut().1;
+        menus.open = Some((false, Pos2::new(100.0, 100.0)));
+        menus.target = Some((PaneId::MAIN, main));
+        menus.just_opened = true;
+        harness.run();
+        harness.get_by_label("Place scale on right").click();
+        harness.run();
+        let chart = &mut harness.state_mut().0;
+        assert!(!chart.main_axis_on_left());
+        assert!(chart.undo());
+        harness.run();
+        let chart = &harness.state().0;
+        assert!(chart.main_axis_on_left());
+        assert_eq!(mode(chart), PriceScaleMode::Normal);
     }
 
     /// Choosing the active side again returns the pane to placement by assignment, the only

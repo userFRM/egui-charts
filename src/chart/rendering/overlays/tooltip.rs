@@ -23,7 +23,15 @@ use egui::{FontId, Painter, Pos2, Rect, Stroke, Vec2, epaint::StrokeKind};
 /// Host number formatters shared by legends and tooltips. Missing entries retain the
 /// renderer's instrument precision and built-in formatting. Prices use instrument units;
 /// percentages use percentage points, so `5.0` means 5%.
+///
+/// ```
+/// use egui_charts::widget::ValueFormatters;
+///
+/// let formatters = ValueFormatters::default();
+/// assert!(formatters.price.is_none());
+/// ```
 #[derive(Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct ValueFormatters<'a> {
     /// OHLC prices and absolute changes.
     pub price: Option<&'a dyn PriceFormatter>,
@@ -33,8 +41,15 @@ pub struct ValueFormatters<'a> {
     pub percentage: Option<&'a dyn PriceFormatter>,
 }
 
+impl std::fmt::Debug for ValueFormatters<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ValueFormatters").finish_non_exhaustive()
+    }
+}
+
 /// One visible study plot's value at the selected bar. Missing or warming-up values stay absent.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct StudyValue {
     /// Host-formatted text, when supplied by the chart. `None` uses the units and precision.
     pub formatted: Option<String>,
@@ -55,10 +70,22 @@ pub struct StudyValue {
 impl StudyValue {
     /// Study and plot caption, omitting a repeated single-plot title.
     pub fn label(&self) -> String {
+        self.caption(str::to_owned)
+    }
+
+    /// [`Self::label`] with the study and the plot title each looked up through the context's
+    /// translator, so a translation of the study name reaches every plot of the study.
+    pub(crate) fn translated_label(&self, ctx: &egui::Context) -> String {
+        self.caption(|title| l10n::text(ctx, title))
+    }
+
+    /// The caption with each title passed through `title`. The repeated-title test compares the
+    /// English names, so two names that translate alike keep both parts.
+    fn caption(&self, title: impl Fn(&str) -> String) -> String {
         if self.plot.is_empty() || self.plot == self.study {
-            self.study.clone()
+            title(&self.study)
         } else {
-            format!("{}: {}", self.study, self.plot)
+            format!("{}: {}", title(&self.study), title(&self.plot))
         }
     }
 
@@ -231,7 +258,7 @@ pub fn render_floating_tooltip(
         .collect();
     rows.extend(studies.iter().map(|study| {
         (
-            study.label(),
+            study.translated_label(painter.ctx()),
             study.formatted_value(),
             // A fully transparent colour holds no RGB, so it has no opaque form.
             if study.color.a() == 0 {
@@ -464,11 +491,13 @@ pub fn render_tracking_tooltip(
         ));
     }
 
-    parts.extend(
-        studies
-            .iter()
-            .map(|study| format!("{}: {}", study.label(), study.formatted_value())),
-    );
+    parts.extend(studies.iter().map(|study| {
+        format!(
+            "{}: {}",
+            study.translated_label(painter.ctx()),
+            study.formatted_value()
+        )
+    }));
 
     if options.show_change {
         let change_pct = percent_change(candle.open, candle.close);

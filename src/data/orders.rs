@@ -62,6 +62,7 @@ impl RestingOrder {
 /// field it is not filtered on.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct OrderFilter {
     /// Orders smaller than this are left out before aggregation. Must be finite and not
     /// negative, else no order counts.
@@ -128,6 +129,7 @@ impl std::error::Error for OrderFilterUnavailable {}
 
 /// Two sizes that mark an individual resting order as notable and as large.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct OrderSizeTiers {
     /// Orders of at least this size are notable.
     pub notable: f64,
@@ -137,6 +139,7 @@ pub struct OrderSizeTiers {
 
 /// How an order's size compares with [`OrderSizeTiers`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OrderSizeTier {
     /// At least the notable size and below the large size.
     Notable,
@@ -145,6 +148,11 @@ pub enum OrderSizeTier {
 }
 
 impl OrderSizeTiers {
+    /// Orders of at least `notable` are notable, and orders of at least `large` are large.
+    pub const fn new(notable: f64, large: f64) -> Self {
+        Self { notable, large }
+    }
+
     /// The tier of an order of `size`, or `None` below both. Sizes that are not numbers have none.
     pub fn tier(&self, size: f64) -> Option<OrderSizeTier> {
         if size >= self.large {

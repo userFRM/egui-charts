@@ -23,7 +23,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Double Exponential Moving Avg indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DEMA {
     period: usize,
     values: IndicatorValues,
@@ -77,7 +77,7 @@ impl Indicator for DEMA {
     }
 
     fn desc(&self) -> &str {
-        "Double Exponential Moving Avg - Reduces lag compared to EMA"
+        "Double Exponential Moving Average - Reduces lag compared to EMA"
     }
 
     fn calculate(&mut self, data: &[Bar]) {

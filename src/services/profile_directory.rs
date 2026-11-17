@@ -20,6 +20,7 @@ pub enum FollowStatus {
 
 /// A request to follow or unfollow, and how it stands.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct FollowOperation {
     /// True for a follow request, false for an unfollow request.
     pub follow: bool,
@@ -45,6 +46,14 @@ pub struct ProfileDirectory {
     requests: HashMap<u64, ProfileId>,
     /// Requests sent since the last watch, which numbers their keys after the stream's 0.
     sent: u64,
+}
+
+impl std::fmt::Debug for ProfileDirectory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProfileDirectory")
+            .field("profiles", &self.profiles.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl ProfileDirectory {

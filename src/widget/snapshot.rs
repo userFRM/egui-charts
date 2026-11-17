@@ -13,6 +13,7 @@ use std::collections::HashMap;
 
 /// One study of a [`ChartSnapshot`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SavedStudy {
     /// The study's id when saved, used by study sources and drawings in its pane.
     pub id: usize,
@@ -27,7 +28,16 @@ pub struct SavedStudy {
 }
 
 /// The markers and price lines of one bar series of a [`ChartSnapshot`].
+///
+/// ```
+/// use egui_charts::model::MarkerOptions;
+/// use egui_charts::widget::SavedAnnotations;
+///
+/// let mut annotations = SavedAnnotations::default();
+/// annotations.options = MarkerOptions::default();
+/// ```
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SavedAnnotations {
     /// The markers from [`Chart::set_markers`], with their colours.
     pub markers: Vec<Marker>,
@@ -42,6 +52,7 @@ pub struct SavedAnnotations {
 /// [`Chart::set_data`] on [`Chart::restored_series_id`] of [`id`](Self::id), or set
 /// [`fed`](Self::fed) to reconnect its symbol or spread to the chart feed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SavedSeries {
     /// The series' id when saved, which [`SavedPane::members`] and drawings in its pane use.
     pub id: usize,
@@ -65,6 +76,7 @@ pub struct SavedSeries {
 
 /// One pane of a [`ChartSnapshot`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SavedPane {
     /// Whether it is the original price pane. A layout may omit that pane.
     pub main: bool,
@@ -97,6 +109,7 @@ pub struct SavedPane {
 /// The trading and alert settings of the settings dialog belong to the host and are not part
 /// of it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ChartSnapshot {
     /// The main series' assignment within its saved pane. `None` in layouts saved before it was
     /// recorded, which keep the restoring chart's assignment.
@@ -501,6 +514,7 @@ impl Chart {
         }
         self.config.show_volume = show_volume;
         self.restored_studies.clear();
+        self.restored_from = snapshot.saved_by;
         self.pane_layout
             .panes
             .retain(|pane| (main_present && pane.id == PaneId::MAIN) || !pane.members.is_empty());
@@ -809,17 +823,15 @@ fn check(
         .settings
         .validate()
         .map_err(RestoreError::Settings)?;
+    // Margins that together leave no room for prices are kept: the fit ignores them.
     let valid_scale = |scale: &crate::scales::PriceScale| {
         let range = scale.range();
         let margins = scale.options().scale_margins;
         range.min.is_finite()
             && range.max.is_finite()
             && range.min < range.max
-            && margins.top.is_finite()
-            && margins.bottom.is_finite()
-            && margins.top >= 0.0
-            && margins.bottom >= 0.0
-            && margins.top + margins.bottom < 1.0
+            && (0.0..=1.0).contains(&margins.top)
+            && (0.0..=1.0).contains(&margins.bottom)
             && scale.options().tick_marks.max_marks
                 <= crate::scales::PriceMarkGeneratorConfig::MAX_MARKS
     };
@@ -999,6 +1011,7 @@ fn check_source_links(
 /// the chart sizes, as kept in [`StoreKind::Layouts`](crate::services::StoreKind::Layouts)
 /// documents.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SavedLayout {
     /// How the charts are arranged.
     pub mode: ChartLayoutMode,
@@ -1021,6 +1034,16 @@ struct Document<T> {
 impl SavedLayout {
     /// The version of the document [`to_json`](Self::to_json) writes.
     pub const VERSION: u32 = 3;
+
+    /// `charts` in the order of their slots, arranged as `mode` in the preset proportions:
+    /// assign [`sizing`](Self::sizing) to keep other sizes.
+    pub fn new(mode: ChartLayoutMode, charts: Vec<ChartSnapshot>) -> Self {
+        Self {
+            mode,
+            charts,
+            sizing: None,
+        }
+    }
 
     /// The layout as a versioned JSON document.
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
@@ -1442,6 +1465,7 @@ mod tests {
             ("/options/tooltip/font_size", 1e5),
             ("/config/watermark_font_size", 1e5),
             ("/config/axis_font_size", 0.0),
+            ("/price_scale/options/scale_margins/top", 1.5),
         ] {
             let mut invalid = document.clone();
             *invalid.pointer_mut(pointer).unwrap() = value.into();
@@ -1464,6 +1488,29 @@ mod tests {
         .unwrap();
         let layout = SavedLayout::from_json(&json).unwrap();
         chart(&[10.0], &[11.0]).restore(&layout.charts[0]).unwrap();
+    }
+
+    /// Margins that together leave no room for prices, which the fit ignores, save and restore
+    /// as they were.
+    #[test]
+    fn margins_without_room_do_not_block_saving() {
+        use crate::scales::PriceScaleMargins;
+        use crate::widget::test_frames::chart;
+        for (top, bottom) in [(0.6, 0.4), (0.7, 0.7)] {
+            let margins = PriceScaleMargins { top, bottom };
+            let mut original = chart(&[10.0], &[11.0]);
+            original.price_scale_mut().options_mut().scale_margins = margins;
+            let json = serde_json::to_string(&original.snapshot().unwrap()).unwrap();
+            let mut restored = chart(&[10.0], &[11.0]);
+            restored
+                .restore(&serde_json::from_str(&json).unwrap())
+                .unwrap();
+            assert_eq!(
+                restored.state().price_scale().options().scale_margins,
+                margins,
+                "{top} {bottom}"
+            );
+        }
     }
 
     /// Ignored style values save as finite equivalents, and the restored chart keeps their

@@ -7,6 +7,7 @@ use crate::drawings::domain::{
     Drawing, DrawingToolType, GANN_MAX_ARC, GANN_SQUARE_UNITS, GannConfig, GannFanDirection,
     GannLevel,
 };
+use crate::localization as l10n;
 use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -438,10 +439,21 @@ impl Drawing {
                 || format!("{range:.decimals$}"),
                 |formatter| formatter.format(range),
             );
-            let mut label = format!("{range_text}\n{} bars", bars.round() as i64);
+            let mut label = range_text;
+            label.push('\n');
+            label.push_str(&l10n::format_text(
+                painter.ctx(),
+                "{count} bars",
+                &[("count", (bars.round() as i64).to_string())],
+            ));
             if bars > 0.0 {
                 let ratio_decimals = decimals + 2;
-                label.push_str(&format!("\n{:.ratio_decimals$}/bar", range / bars));
+                label.push('\n');
+                label.push_str(&l10n::format_text(
+                    painter.ctx(),
+                    "{ratio}/bar",
+                    &[("ratio", format!("{:.ratio_decimals$}", range / bars))],
+                ));
             }
             let chart = painter.ctx().active_theme().chart;
             super::measurements::boxed_label(
@@ -982,6 +994,7 @@ mod tests {
                         bars: &[],
                         revision: 0,
                         bar_to_x: &|b| b * 10.0,
+                        bar_spacing: 10.0,
                         price_to_y,
                         y_to_price: &|_| f64::NAN,
                         time_axis: true,
@@ -1018,6 +1031,7 @@ mod tests {
                         bars: &[],
                         revision: 0,
                         bar_to_x: &|b| b * 10.0,
+                        bar_spacing: 10.0,
                         price_to_y: &|p| 300.0 - p as f32,
                         y_to_price: &|y| 300.0 - f64::from(y),
                         time_axis: true,

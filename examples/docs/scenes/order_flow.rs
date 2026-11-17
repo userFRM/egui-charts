@@ -130,10 +130,8 @@ impl ExecutionDepth {
         } else {
             ui.label("Latest depth unavailable until a synchronized snapshot arrives.");
         }
-        let config = FootprintConfig {
-            text_color: ui.active_theme().chart.axis_text,
-            ..Default::default()
-        };
+        let mut config = FootprintConfig::default();
+        config.text_color = ui.active_theme().chart.axis_text;
         chart.show_footprint(ui, &self.flow, &config);
     }
 }

@@ -18,6 +18,7 @@ use crate::ui::drawing_toolbar::submenu_builder::{
 };
 
 /// Trend Lines category implementation
+#[derive(Debug)]
 pub struct TrendLinesCategory;
 
 impl ToolCategory for TrendLinesCategory {
@@ -100,22 +101,20 @@ pub(crate) fn render_registered_tool_submenu(
         section_header(ui, section, width);
         for &tool in tools {
             let hint = hint(ui, tool);
-            let response = ui
-                .add_enabled_ui(registry.availability(tool).enabled, |ui| {
-                    flyout_row(
-                        ui,
-                        width,
-                        &FlyoutRow {
-                            icon: Some(toolbar_icons::get_icon(tool)),
-                            label: tool.as_str(),
-                            shortcut: hint.as_deref(),
-                            selected: sel_tool == Some(tool),
-                            star: Some(favorites.contains(&tool)),
-                            ..Default::default()
-                        },
-                    )
-                })
-                .inner;
+            let enabled = registry.availability(tool).enabled;
+            let response = flyout_row(
+                ui,
+                width,
+                &FlyoutRow {
+                    icon: Some(toolbar_icons::get_icon(tool)),
+                    label: tool.as_str(),
+                    shortcut: hint.as_deref(),
+                    selected: sel_tool == Some(tool),
+                    star: Some(favorites.contains(&tool)),
+                    disabled: !enabled,
+                    ..Default::default()
+                },
+            );
             if response.star.as_ref().is_some_and(Response::clicked) {
                 match favorites.iter().position(|&t| t == tool) {
                     Some(index) => {
@@ -124,7 +123,11 @@ pub(crate) fn render_registered_tool_submenu(
                     None => favorites.push(tool),
                 }
             } else if response.row.clicked() {
-                action = DrawingToolbarAction::SelectTool(tool);
+                action = if enabled {
+                    DrawingToolbarAction::SelectTool(tool)
+                } else {
+                    DrawingToolbarAction::ToolUnavailable(tool)
+                };
             }
         }
     }

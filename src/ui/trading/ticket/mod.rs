@@ -8,8 +8,9 @@ mod view;
 
 use super::dom::Ladder;
 use super::format::{Numbers, TradingFormatter};
-use super::widgets::{grouped, side_name};
+use super::widgets::grouped;
 use crate::chart::TradingLineAction;
+use crate::localization as l10n;
 use crate::model::{
     Capabilities, Order, OrderBook, OrderId, OrderPreview, OrderRequest, OrderSide, OrderType,
     Position, TakeProfitLevel, Tick, TimeInForce, TradingRules,
@@ -18,6 +19,7 @@ use crate::scales::{decimals, to_step};
 
 /// How a take-profit or stop-loss distance is entered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum BracketMode {
     /// The exit price itself.
     #[default]
@@ -46,6 +48,7 @@ impl BracketMode {
 
 /// A take-profit or stop-loss as entered in the ticket.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Bracket {
     /// How [`value`](Self::value) is read.
     pub mode: BracketMode,
@@ -54,6 +57,18 @@ pub struct Bracket {
 }
 
 impl Bracket {
+    /// A bracket of `value`, read as `mode` says.
+    ///
+    /// ```
+    /// use egui_charts::ui::trading::{Bracket, BracketMode, OrderPreset};
+    ///
+    /// let mut preset = OrderPreset::new("Scalp", 2.0);
+    /// preset.take_profit = Some(Bracket::new(BracketMode::Ticks, 8.0));
+    /// ```
+    pub fn new(mode: BracketMode, value: f64) -> Self {
+        Self { mode, value }
+    }
+
     /// The direction from the entry to the exit: up for a take profit (`profit`) of a buy and a
     /// stop loss of a sell, down for the other two.
     fn sign(side: OrderSide, profit: bool) -> f64 {
@@ -108,6 +123,7 @@ impl Bracket {
 /// A named quantity and brackets the ticket applies in one step. Hosts persist
 /// [`Trading::presets`](super::Trading::presets) themselves.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct OrderPreset {
     /// Shown in the ticket's preset list.
     pub name: String,
@@ -117,6 +133,18 @@ pub struct OrderPreset {
     pub take_profit: Option<Bracket>,
     /// The stop loss, if the preset sets one.
     pub stop_loss: Option<Bracket>,
+}
+
+impl OrderPreset {
+    /// A preset of `quantity` without a take profit or a stop loss.
+    pub fn new(name: impl Into<String>, quantity: f64) -> Self {
+        Self {
+            name: name.into(),
+            quantity,
+            take_profit: None,
+            stop_loss: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -197,8 +225,8 @@ pub(crate) struct Market<'a> {
     /// Why the ladder has no sizes when the view needs orders the feed does not send.
     pub ladder_unavailable: Option<crate::data::OrderFilterUnavailable>,
     /// Prices whose largest known individual order reaches a tier of the view, as (is bid,
-    /// price, colour).
-    pub highlights: Vec<(bool, f64, egui::Color32)>,
+    /// price, size of that order, colour).
+    pub highlights: Vec<(bool, f64, f64, egui::Color32)>,
     /// The account's working orders and open positions, of every symbol.
     pub orders: &'a [Order],
     pub positions: &'a [Position],
@@ -237,6 +265,7 @@ pub(crate) enum Action {
 }
 
 /// The state of the order ticket panel.
+#[derive(Debug)]
 pub(crate) struct OrderTicket {
     pub open: bool,
     pub symbol: String,
@@ -416,6 +445,7 @@ impl OrderTicket {
     /// a share is not above 0 or a level falls below the minimum quantity.
     fn take_profits(
         &self,
+        ctx: &egui::Context,
         market: &Market<'_>,
         side: OrderSide,
         entry: f64,
@@ -446,9 +476,10 @@ impl OrderTicket {
             .into_iter()
             .map(|(bracket, quantity)| {
                 if quantity < rules.min_quantity {
-                    return Err(format!(
-                        "Each take-profit level needs at least the minimum quantity of {}",
-                        rules.min_quantity
+                    return Err(l10n::format_text(
+                        ctx,
+                        "Each take-profit level needs at least the minimum quantity of {minimum}",
+                        &[("minimum", rules.min_quantity.to_string())],
                     ));
                 }
                 let per_point = quantity * rules.point_value;
@@ -463,6 +494,7 @@ impl OrderTicket {
     /// from the order's own side, entry and quantity.
     fn with_brackets(
         &self,
+        ctx: &egui::Context,
         mut order: OrderRequest,
         market: &Market<'_>,
     ) -> Result<OrderRequest, String> {
@@ -480,12 +512,16 @@ impl OrderTicket {
         .ok_or("Enter a positive price")?;
         order.stop_loss = self.exit(market, order.side, entry, Some(order.quantity), false)?;
         (order.take_profit, order.take_profit_levels) =
-            self.take_profits(market, order.side, entry, order.quantity)?;
+            self.take_profits(ctx, market, order.side, entry, order.quantity)?;
         Ok(order)
     }
 
     /// The order the ticket describes, or what is wrong with it.
-    pub fn request(&self, market: &Market<'_>) -> Result<OrderRequest, String> {
+    pub fn request(
+        &self,
+        ctx: &egui::Context,
+        market: &Market<'_>,
+    ) -> Result<OrderRequest, String> {
         if market.offline.is_some() {
             return Err("Waiting for the broker to connect".into());
         }
@@ -516,11 +552,13 @@ impl OrderTicket {
         let rules = market.rules;
         // Units and value size the order before its exits; risk sizing needs the stop loss first.
         let mut quantity = match self.sizing {
-            Sizing::Units => Some(order_quantity(self.quantity, rules)?),
-            Sizing::Value => Some(order_quantity(
-                self.amount / (entry * rules.point_value),
-                rules,
-            )?),
+            Sizing::Units => {
+                Some(order_quantity(self.quantity, rules).map_err(|limit| limit.message(ctx))?)
+            }
+            Sizing::Value => Some(
+                order_quantity(self.amount / (entry * rules.point_value), rules)
+                    .map_err(|limit| limit.message(ctx))?,
+            ),
             Sizing::Risk => None,
         };
         let stop_loss = self.exit(market, self.side, entry, quantity, false)?;
@@ -533,10 +571,11 @@ impl OrderTicket {
                     .filter(|balance| balance.is_finite() && *balance > 0.0)
                     .ok_or("Sizing by risk needs the account's balance")?;
                 let risk = balance * self.amount / 100.0;
-                order_quantity(risk / ((entry - stop).abs() * rules.point_value), rules)?
+                order_quantity(risk / ((entry - stop).abs() * rules.point_value), rules)
+                    .map_err(|limit| limit.message(ctx))?
             }
         };
-        let (take_profit, levels) = self.take_profits(market, self.side, entry, quantity)?;
+        let (take_profit, levels) = self.take_profits(ctx, market, self.side, entry, quantity)?;
 
         let mut request = OrderRequest::new(&self.symbol, self.side, quantity, order_type);
         request.take_profit = take_profit;
@@ -562,9 +601,9 @@ impl OrderTicket {
             .map_or((false, self.stop_loss.1), |bracket| (true, bracket));
     }
 
-    fn preset(&self, name: String, market: &Market<'_>) -> OrderPreset {
+    fn preset(&self, ctx: &egui::Context, name: String, market: &Market<'_>) -> OrderPreset {
         let quantity = self
-            .request(market)
+            .request(ctx, market)
             .map_or(self.quantity, |request| request.quantity);
         OrderPreset {
             name,
@@ -625,59 +664,107 @@ fn round_down(quantity: f64, step: f64) -> f64 {
     to_step(quantity, step, |steps| (steps + 1e-9).floor())
 }
 
+/// A minimum or maximum order quantity of the symbol's rules that a quantity breaks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum QuantityLimit {
+    /// Below this minimum.
+    Minimum(f64),
+    /// Above this maximum.
+    Maximum(f64),
+}
+
+impl QuantityLimit {
+    /// What the ticket shows for this limit, translated for `ctx`.
+    pub(crate) fn message(self, ctx: &egui::Context) -> String {
+        match self {
+            Self::Minimum(minimum) => l10n::format_text(
+                ctx,
+                "The quantity is below the minimum of {minimum}",
+                &[("minimum", minimum.to_string())],
+            ),
+            Self::Maximum(maximum) => l10n::format_text(
+                ctx,
+                "The quantity is above the maximum of {maximum}",
+                &[("maximum", maximum.to_string())],
+            ),
+        }
+    }
+}
+
 /// Rounds a quantity down to the symbol's step and checks its bounds.
-pub(super) fn order_quantity(quantity: f64, rules: &TradingRules) -> Result<f64, String> {
+pub(super) fn order_quantity(quantity: f64, rules: &TradingRules) -> Result<f64, QuantityLimit> {
     let quantity = round_down(quantity, rules.quantity_step);
     if !quantity.is_finite() || quantity < rules.min_quantity {
-        return Err(format!(
-            "The quantity is below the minimum of {}",
-            rules.min_quantity
-        ));
+        return Err(QuantityLimit::Minimum(rules.min_quantity));
     }
-    if rules.max_quantity.is_some_and(|max| quantity > max) {
-        return Err(format!(
-            "The quantity is above the maximum of {}",
-            rules.max_quantity.unwrap_or_default()
-        ));
+    if let Some(max) = rules.max_quantity.filter(|max| quantity > *max) {
+        return Err(QuantityLimit::Maximum(max));
     }
     Ok(quantity)
 }
 
 /// An order as the send button and the confirmation write it: "1 ES @ 4,000.25 LIMIT".
-fn summary(request: &OrderRequest, numbers: &Numbers<'_>, quantity_decimals: usize) -> String {
-    let at = |price: f64, kind: &str| format!(" @ {} {kind}", numbers.price(price));
-    let order_type = match request.order_type {
-        OrderType::Limit(price) => at(price, "LIMIT"),
-        OrderType::Stop(price) => at(price, "STOP"),
-        OrderType::StopLimit { stop, .. } => at(stop, "STOP LIMIT"),
-        _ => " MKT".to_owned(),
+fn summary(
+    ctx: &egui::Context,
+    request: &OrderRequest,
+    numbers: &Numbers<'_>,
+    quantity_decimals: usize,
+) -> String {
+    let (key, price) = match request.order_type {
+        OrderType::Limit(price) => ("{quantity} {symbol} @ {price} LIMIT", Some(price)),
+        OrderType::Stop(price) => ("{quantity} {symbol} @ {price} STOP", Some(price)),
+        OrderType::StopLimit { stop, .. } => {
+            ("{quantity} {symbol} @ {price} STOP LIMIT", Some(stop))
+        }
+        _ => ("{quantity} {symbol} MKT", None),
     };
-    format!(
-        "{} {}{order_type}",
-        numbers.quantity(request.quantity, quantity_decimals),
-        request.symbol
+    let quantity = numbers.quantity(request.quantity, quantity_decimals);
+    let price = price.map(|price| numbers.price(price)).unwrap_or_default();
+    l10n::format_text(
+        ctx,
+        key,
+        &[
+            ("quantity", quantity.as_str()),
+            ("symbol", request.symbol.as_str()),
+            ("price", price.as_str()),
+        ],
     )
 }
 
 /// The question that confirms an order: "Buy 1 ES @ 4,000.25 LIMIT?", then its exits.
-fn confirmation(request: &OrderRequest, numbers: &Numbers<'_>, quantity_decimals: usize) -> String {
-    let mut text = format!(
-        "{} {}?",
-        side_name(request.side),
-        summary(request, numbers, quantity_decimals)
-    );
+fn confirmation(
+    ctx: &egui::Context,
+    request: &OrderRequest,
+    numbers: &Numbers<'_>,
+    quantity_decimals: usize,
+) -> String {
+    let order = summary(ctx, request, numbers, quantity_decimals);
+    let question = match request.side {
+        OrderSide::Buy => "Buy {order}?",
+        OrderSide::Sell => "Sell {order}?",
+    };
+    let mut text = l10n::format_text(ctx, question, &[("order", order)]);
+    let mut line = |key: &str, values: &[(&str, String)]| {
+        text.push('\n');
+        text.push_str(&l10n::format_text(ctx, key, values));
+    };
     if let Some(price) = request.take_profit {
-        text.push_str(&format!("\nTake profit {}", numbers.price(price)));
+        line("Take profit {price}", &[("price", numbers.price(price))]);
     }
     for level in &request.take_profit_levels {
-        text.push_str(&format!(
-            "\nTake profit {} for {}",
-            numbers.price(level.price),
-            numbers.quantity(level.quantity, quantity_decimals)
-        ));
+        line(
+            "Take profit {price} for {quantity}",
+            &[
+                ("price", numbers.price(level.price)),
+                (
+                    "quantity",
+                    numbers.quantity(level.quantity, quantity_decimals),
+                ),
+            ],
+        );
     }
     if let Some(price) = request.stop_loss {
-        text.push_str(&format!("\nStop loss {}", numbers.price(price)));
+        line("Stop loss {price}", &[("price", numbers.price(price))]);
     }
     text
 }
@@ -685,22 +772,28 @@ fn confirmation(request: &OrderRequest, numbers: &Numbers<'_>, quantity_decimals
 /// What the dialog shows for a previewed order: its confirmation, then the broker's estimates
 /// and warnings.
 pub(super) fn preview_message(
+    ctx: &egui::Context,
     request: &OrderRequest,
     estimate: &OrderPreview,
     rules: &TradingRules,
     numbers: &Numbers<'_>,
     currency: &str,
 ) -> String {
-    let mut text = confirmation(request, numbers, decimals(rules.quantity_step));
-    for (label, value) in [
-        ("Cost", estimate.cost),
-        ("Commission", estimate.commission),
-        ("Margin", estimate.margin),
+    let mut text = confirmation(ctx, request, numbers, decimals(rules.quantity_step));
+    for (key, value) in [
+        ("Cost: {amount} {currency}", estimate.cost),
+        ("Commission: {amount} {currency}", estimate.commission),
+        ("Margin: {amount} {currency}", estimate.margin),
     ] {
         if let Some(value) = value.filter(|value| value.is_finite()) {
-            text.push_str(&format!(
-                "\n{label}: {} {currency}",
-                grouped(value, 2, false)
+            text.push('\n');
+            text.push_str(&l10n::format_text(
+                ctx,
+                key,
+                &[
+                    ("amount", grouped(value, 2, false).as_str()),
+                    ("currency", currency),
+                ],
             ));
         }
     }
@@ -807,13 +900,13 @@ mod tests {
             stop_loss: ticks(8.0),
             ..OrderTicket::default()
         };
-        let request = ticket.request(&market).unwrap();
+        let ctx = egui::Context::default();
+        let request = ticket.request(&ctx, &market).unwrap();
         assert_eq!(
             (request.quantity, request.take_profit, request.stop_loss),
             (50.0, Some(103.0), Some(97.0))
         );
         // The control is on the Order tab for the pending kind.
-        let ctx = egui::Context::default();
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
             ticket.show(ui, &market, &mut vec![], &mut false);
         });
@@ -824,19 +917,19 @@ mod tests {
         assert!(risk, "limit orders offer the risk control");
         // A sell stop from the ladder: exits lie the other way from the buy above.
         let order = OrderRequest::new("ES", OrderSide::Sell, 3.0, OrderType::Stop(98.0));
-        let order = ticket.with_brackets(order, &market).unwrap();
+        let order = ticket.with_brackets(&ctx, order, &market).unwrap();
         assert_eq!(
             (order.take_profit, order.stop_loss),
             (Some(94.0), Some(100.0))
         );
         assert_eq!(
-            confirmation(&order, &market.numbers(), 0),
+            confirmation(&ctx, &order, &market.numbers(), 0),
             "Sell 3 ES @ 98.00 STOP?\nTake profit 94.00\nStop loss 100.00"
         );
         // A level at 24 ticks = 6 points for half of 3: 1.5 rounds down to 1 and the first takes 2.
         ticket.levels = vec![(ticks(24.0).1, 50.0)];
         let order = OrderRequest::new("ES", OrderSide::Sell, 3.0, OrderType::Stop(98.0));
-        let order = ticket.with_brackets(order, &market).unwrap();
+        let order = ticket.with_brackets(&ctx, order, &market).unwrap();
         assert_eq!(order.take_profit, None);
         assert_eq!(
             order.take_profit_levels,
@@ -846,12 +939,19 @@ mod tests {
             ]
         );
         assert_eq!(
-            confirmation(&order, &market.numbers(), 0),
+            confirmation(&ctx, &order, &market.numbers(), 0),
             "Sell 3 ES @ 98.00 STOP?\nTake profit 94.00 for 2\nTake profit 92.00 for 1\nStop loss 100.00"
+        );
+        // Each line reaches the host's lookup as one template.
+        let marked = egui::Context::default();
+        crate::localization::mark_keys(&marked);
+        assert_eq!(
+            confirmation(&marked, &order, &market.numbers(), 0),
+            "~~3~ES~98.00~~\n~94.00~2~\n~92.00~1~\n~100.00~"
         );
         ticket.stop_loss = ticks(0.0);
         let order = OrderRequest::new("ES", OrderSide::Sell, 3.0, OrderType::Stop(98.0));
-        assert!(ticket.with_brackets(order, &market).is_err());
+        assert!(ticket.with_brackets(&ctx, order, &market).is_err());
     }
 
     /// Guards sizing and brackets against the published definitions: value sizing buys
@@ -1044,7 +1144,7 @@ mod tests {
                 ..OrderTicket::default()
             };
             let actual = ticket(take_profit, stop_loss)
-                .request(&market)
+                .request(&egui::Context::default(), &market)
                 .map(|r| (r.quantity, r.take_profit, r.stop_loss))
                 .map_err(|_| ());
             assert_eq!(actual, expected, "{side:?} {sizing:?} {amount}");
@@ -1060,7 +1160,7 @@ mod tests {
                     Bracket::at(mode, price, side, 4_000.0, 0.25, per_point, profit)
                 };
                 let actual = ticket(Some(at(take_profit, true)), Some(at(stop_loss, false)))
-                    .request(&market)
+                    .request(&egui::Context::default(), &market)
                     .map(|r| (r.quantity, r.take_profit, r.stop_loss));
                 assert_eq!(actual, Ok(expected.unwrap()), "{side:?} {mode:?}");
             }
@@ -1186,7 +1286,7 @@ mod tests {
                 stop_loss: (stop_loss.is_some(), stop_loss.unwrap_or(ticks(1.0))),
                 ..OrderTicket::default()
             };
-            let request = ticket.request(&market);
+            let request = ticket.request(&egui::Context::default(), &market);
             let actual = request.as_ref().map_err(|_| ()).map(|request| {
                 (
                     request.take_profit,
@@ -1198,7 +1298,10 @@ mod tests {
             if let Ok(request) = request {
                 let mut reopened = OrderTicket::default();
                 reopened.open(&request);
-                assert_eq!(reopened.request(&market), Ok(request));
+                assert_eq!(
+                    reopened.request(&egui::Context::default(), &market),
+                    Ok(request)
+                );
             }
         }
         // A quoted market order enters a buy at the ask and a sell at the bid: 4 ticks = 1 point.
@@ -1214,7 +1317,7 @@ mod tests {
                 take_profit: (true, ticks(4.0)),
                 ..OrderTicket::default()
             };
-            let request = ticket.request(&quoted).unwrap();
+            let request = ticket.request(&egui::Context::default(), &quoted).unwrap();
             assert_eq!(request.take_profit, Some(take_profit), "{side:?}");
         }
     }

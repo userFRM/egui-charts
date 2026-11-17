@@ -49,7 +49,7 @@ use egui::Color32;
 ///
 /// Applies an exponential weighting to closing prices so that recent bars
 /// have a greater influence. This is an overlay indicator.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EMA {
     period: usize,
     values: IndicatorValues,
@@ -104,7 +104,7 @@ impl Indicator for EMA {
     }
 
     fn desc(&self) -> &str {
-        "Exponential Moving Avg - Weighted avg giving more importance to recent prices"
+        "Exponential Moving Average - Weighted avg giving more importance to recent prices"
     }
 
     fn calculate(&mut self, data: &[Bar]) {

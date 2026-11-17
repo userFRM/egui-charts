@@ -34,10 +34,10 @@ pub fn show(ui: &mut egui::Ui, chart: &mut Chart) {
             }
             if ui.button("UTC minutes 20..59").clicked() {
                 let start = chart.bars(SeriesId::MAIN)[0].time;
-                chart.apply_synced_time_range(VisibleTimeRange {
-                    from: start + TimeDelta::minutes(20),
-                    to: start + TimeDelta::minutes(59),
-                });
+                chart.set_visible_time_range(VisibleTimeRange::new(
+                    start + TimeDelta::minutes(20),
+                    start + TimeDelta::minutes(59),
+                ));
             }
             if ui.button("Future space").clicked() {
                 chart.set_visible_logical_range(LogicalRange {

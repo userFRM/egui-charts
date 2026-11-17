@@ -1,6 +1,7 @@
 //! Host-fed histories and subscriptions used by studies.
 
 use super::Chart;
+use crate::chart::overlays::open_interest_request;
 use crate::data::inbox::Inbox;
 use crate::data::merge::{Origin, merge};
 use crate::data::{
@@ -220,8 +221,8 @@ impl StudyDataCache {
 }
 
 impl Chart {
-    /// Histories required by feed-backed series, study inputs and profile drawings, with chart
-    /// defaults resolved. Hosts without a connected feed supply these through [`Self::set_study_data`]. A connected
+    /// Histories required by feed-backed series, study inputs, profile drawings and the open
+    /// interest rows of the footprint statistics, with chart defaults resolved. Hosts without a connected feed supply these through [`Self::set_study_data`]. A connected
     /// feed receives resolve, history and subscription calls automatically on the next frame.
     pub fn study_data_requests(&self) -> Vec<StudyDataRequest> {
         let mut requests = self.fed_requests();
@@ -240,7 +241,31 @@ impl Chart {
                 requests.push(request);
             }
         }
+        if self.footprint_open_interest {
+            let request = resolved(&open_interest_request(), self.symbol(), self.timeframe());
+            if !requests.contains(&request) {
+                requests.push(request);
+            }
+        }
         requests
+    }
+
+    /// The open interest points the footprint statistics read, up to the replay cutoff; none
+    /// while they have no open interest row.
+    pub(super) fn open_interest_points(&self) -> &[Bar] {
+        if !self.footprint_open_interest {
+            return &[];
+        }
+        self.study_data
+            .data(
+                vec![open_interest_request()],
+                &self.symbol,
+                self.timeframe,
+                self.replay_time(),
+            )
+            .into_iter()
+            .next()
+            .map_or(&[], |data| data.bars)
     }
 
     /// Replace a study history with host-owned historical or streaming bars. Bars are sorted,
@@ -349,6 +374,13 @@ impl Chart {
             match reaches.iter_mut().find(|(known, _)| *known == request) {
                 Some((_, reach)) => *reach = (*reach).min(start),
                 None => reaches.push((request, start)),
+            }
+        }
+        if self.footprint_open_interest {
+            let request = resolved(&open_interest_request(), self.symbol(), self.timeframe());
+            match reaches.iter_mut().find(|(known, _)| *known == request) {
+                Some((_, reach)) => *reach = (*reach).min(first),
+                None => reaches.push((request, first)),
             }
         }
         reaches
@@ -1960,26 +1992,41 @@ pub(super) mod tests {
     }
 
     /// Yearly pivots from daily bars take the high, low and close of the whole previous year,
-    /// which lies before the chart's first bar, from a feed that pages its daily bars. The
-    /// confirmed lines of Projected Pivot Points are the same levels.
+    /// which lies before the chart's first bar, from a feed that answers 150 daily bars a page:
+    /// alone, and after Performance, whose 1Y target of 2023-03-15 the second page, from
+    /// 2023-01-20, already passes. Each page restarts both, and Performance, added first, takes
+    /// the recompute of each frame a page arrives in while the pivots wait emptied, so the third
+    /// page loads only if the pivots still state 2023-01-01 meanwhile (#2941). Each frame pumps
+    /// the histories and then refreshes the studies, as `show` does; the feed answers between
+    /// frames, and the chart repaints only for an answer or a waiting study. The confirmed lines
+    /// of Projected Pivot Points are the same levels.
     #[test]
     fn yearly_pivots_read_the_whole_previous_year_of_paged_daily_bars() {
-        use crate::studies::{PivotPoints, PivotTimeframe, ProjectedPivotPoints};
+        use crate::studies::{
+            Indicator, Performance, PivotPoints, PivotTimeframe, ProjectedPivotPoints,
+        };
         let spike: DateTime<chrono::Utc> = "2023-01-10T00:00:00Z".parse().unwrap();
-        let studies: [Box<dyn crate::studies::Indicator>; 2] = [
+        let pivots = || -> Box<dyn Indicator> {
             Box::new(
                 PivotPoints::new()
                     .with_timeframe(PivotTimeframe::Yearly)
                     .with_daily_bars(true),
-            ),
+            )
+        };
+        let projected = || -> Box<dyn Indicator> {
             Box::new(
                 ProjectedPivotPoints::new()
                     .with_timeframe(PivotTimeframe::Yearly)
                     .with_daily_bars(true),
-            ),
-        ];
+            )
+        };
         let mut observed = Vec::new();
-        for study in studies {
+        for (after_performance, study) in [
+            (false, pivots()),
+            (false, projected()),
+            (true, pivots()),
+            (true, projected()),
+        ] {
             // 2023 trades up to 200 on 10 January and down to 50 on 11 January, closing at 100.
             let (mut chart, daily) = minute_chart(|day| {
                 let high = if day == spike { 200.0 } else { 100.0 };
@@ -1990,21 +2037,51 @@ pub(super) mod tests {
                 };
                 Bar::new(day, 100.0, high, low, 100.0, 1.0)
             });
+            if after_performance {
+                chart.add_indicator(Box::new(Performance::new()));
+            }
             let id = chart.add_indicator(study);
-            let pages = page_daily(&mut chart, &daily, None);
+            let feed = Arc::new(RetryFeed::default());
+            let ctx = egui::Context::default();
+            let mut pages = 0;
+            for second in 1..100_u32 {
+                ctx.run_ui(egui::RawInput::default(), |_| {})
+                    .drop_without_applying_deltas();
+                chart.pump_study_data(&ctx, Some(feed.clone()));
+                let wait = chart.refresh_studies(f64::from(second));
+                let resolve = feed.resolves.lock().unwrap().pop();
+                let history = feed.histories.lock().unwrap().pop();
+                if resolve.is_none() && history.is_none() && wait.is_none() {
+                    break;
+                }
+                if let Some(reply) = resolve {
+                    reply.send(Ok(Instrument::new("MAIN")));
+                }
+                if let Some((request, reply)) = history {
+                    let end = daily.partition_point(|bar| {
+                        request.before.is_none_or(|before| bar.time < before)
+                    });
+                    pages += 1;
+                    reply.send(Ok(HistoryPage::new(
+                        daily[end.saturating_sub(150)..end].to_vec(),
+                        end <= 150,
+                    )));
+                }
+            }
             let study = chart.indicators().find(|(at, _)| *at == id).unwrap().1;
             let levels: Vec<_> = (0..3).map(|line| study.values().value(line, 389)).collect();
-            observed.push((study.name().to_owned(), levels, pages));
+            observed.push((after_performance, study.name().to_owned(), levels, pages));
         }
-        // P = (200 + 50 + 100) / 3 = 350/3, R1 = 2P - L = 550/3, S1 = 2P - H = 100/3.
+        // P = (200 + 50 + 100) / 3 = 350/3, R1 = 2P - L = 550/3, S1 = 2P - H = 100/3, which need
+        // the third page, from 2022-06-24 to 2023-01-19.
         let want = [350.0 / 3.0, 550.0 / 3.0, 100.0 / 3.0];
         assert!(
-            observed.iter().all(|(_, levels, pages)| *pages == 2
+            observed.iter().all(|(_, _, levels, pages)| *pages == 3
                 && levels
                     .iter()
                     .zip(want)
                     .all(|(got, want)| got.is_some_and(|got| (got - want).abs() < 1e-9))),
-            "(study, [P, R1, S1], pages) {observed:?}, want {want:?}"
+            "(after Performance, study, [P, R1, S1], pages) {observed:?}, want 3 pages and {want:?}"
         );
     }
 

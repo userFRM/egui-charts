@@ -1,5 +1,6 @@
 //! Style tab - color, line width, line style.
 
+use crate::drawings::glyphs::GLYPHS;
 use crate::drawings::{ArrowStyle, Drawing, DrawingToolType, FontWeight, LineMeasurementPosition};
 use crate::localization as l10n;
 use crate::model::LineStyle;
@@ -17,6 +18,7 @@ use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid};
 const LINE_WIDTHS: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
 
 /// Style tab renderer
+#[derive(Debug)]
 pub struct StyleTab;
 
 impl StyleTab {
@@ -25,7 +27,7 @@ impl StyleTab {
     pub fn show(
         ui: &mut Ui,
         props: &mut DrawingProps,
-        pickers: &mut [ColorPickerState; 2],
+        pickers: &mut [ColorPickerState; 3],
         badge_pickers: &mut [ColorPickerState; 3],
     ) {
         let tool = props.tool_settings.as_ref().map(|t| t.settings.tool_type);
@@ -35,7 +37,7 @@ impl StyleTab {
             tool,
             Some(DrawingToolType::PriceLabel | DrawingToolType::PriceNote)
         );
-        let [color_picker, fill_picker] = pickers;
+        let [color_picker, fill_picker, glyph_picker] = pickers;
         // Positions style their lines, labels and zones from their own settings below.
         let position = matches!(
             tool,
@@ -44,8 +46,13 @@ impl StyleTab {
         ui.space_md();
 
         FormGrid::new("style_grid").show(ui, |ui| {
+            // A sticker's art and the ghost feed's candles keep their own colours.
             if tool != Some(DrawingToolType::FibonacciChannel)
                 && tool != Some(DrawingToolType::PriceLabel)
+                && !matches!(
+                    tool,
+                    Some(DrawingToolType::Sticker | DrawingToolType::GhostFeed)
+                )
                 && !position
             {
                 ui.label(l10n::text(ui.ctx(), "Color"));
@@ -74,15 +81,12 @@ impl StyleTab {
                 ui.end_row();
             }
 
-            if !position
-                && tool.is_none_or(|tool| {
-                    tool.draws_line() && tool != DrawingToolType::FibonacciChannel
-                })
-            {
+            if tool.is_none_or(|tool| tool.supports_line_width()) {
                 ui.label(l10n::text(ui.ctx(), "Line width"));
                 line_width_row(ui, &mut props.line_width);
                 ui.end_row();
-
+            }
+            if tool.is_none_or(|tool| tool.supports_line_style()) {
                 let label = ui.label(l10n::text(ui.ctx(), "Line style"));
                 ui.label_inputs_by(label.id, |ui| {
                     ui.combo_select(
@@ -171,6 +175,49 @@ impl StyleTab {
                     {
                         settings.fib_config = Some(config);
                     }
+                    ui.end_row();
+                }
+                if settings.tool_type == DrawingToolType::Signpost {
+                    let marker = &mut settings.marker;
+                    let label = ui.label(l10n::text(ui.ctx(), "Emoji"));
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut marker.show_glyph, l10n::text(ui.ctx(), "Show emoji"))
+                            .labelled_by(label.id);
+                        if !marker.show_glyph {
+                            return;
+                        }
+                        // Until a disc colour is chosen, the disc takes the drawing's.
+                        let [r, g, b, a] = marker.glyph_color.unwrap_or(exact);
+                        let disc = Color32::from_rgba_unmultiplied(r, g, b, a);
+                        if let Some(picked) =
+                            color_swatch(ui, glyph_picker, disc, "signpost_glyph_color")
+                        {
+                            marker.glyph_color = Some(
+                                keep_opacity(picked, disc, glyph_picker.custom_mode)
+                                    .to_srgba_unmultiplied(),
+                            );
+                        }
+                        let emoji = || GLYPHS.iter().filter(|g| g.category.starts_with("Emoji"));
+                        // Keep a host-supplied glyph selectable when reopening it.
+                        let mut choices: Vec<String> = emoji().map(|g| g.id.to_owned()).collect();
+                        if !choices.contains(&marker.glyph) {
+                            choices.push(marker.glyph.clone());
+                        }
+                        let ctx = ui.ctx().clone();
+                        let font = egui::TextStyle::Button.resolve(ui.style());
+                        ui.combo_select("signpost_glyph", &mut marker.glyph, choices, |id| {
+                            let Some(glyph) = emoji().find(|g| g.id == id) else {
+                                return id.clone();
+                            };
+                            let name = l10n::text(&ctx, glyph.name);
+                            // Name alone where the fonts cannot draw the emoji.
+                            if ctx.fonts_mut(|f| f.has_glyphs(&font, id)) {
+                                format!("{id} {name}")
+                            } else {
+                                name
+                            }
+                        });
+                    });
                     ui.end_row();
                 }
                 if position {
@@ -275,13 +322,44 @@ impl StyleTab {
                     }
                 }
                 if settings.tool_type.supports_middle_line() {
+                    // A rectangle's middle line keeps the line colour, hairline and dashes.
+                    let styled = settings.tool_type == DrawingToolType::ParallelChannel;
                     let label = ui.label(l10n::text(ui.ctx(), "Middle line"));
-                    ui.checkbox(
-                        &mut settings.channel_midline,
-                        l10n::text(ui.ctx(), "Show middle line"),
-                    )
-                    .labelled_by(label.id);
+                    ui.horizontal(|ui| {
+                        ui.checkbox(
+                            &mut settings.channel_midline,
+                            l10n::text(ui.ctx(), "Show middle line"),
+                        )
+                        .labelled_by(label.id);
+                        if styled && settings.channel_midline {
+                            let [r, g, b, a] = settings.middle_line.color.unwrap_or(exact);
+                            let shown = Color32::from_rgba_unmultiplied(r, g, b, a);
+                            if let Some(picked) =
+                                color_swatch(ui, glyph_picker, shown, "channel_middle_line_color")
+                            {
+                                settings.middle_line.color = Some(
+                                    keep_opacity(picked, shown, glyph_picker.custom_mode)
+                                        .to_srgba_unmultiplied(),
+                                );
+                            }
+                        }
+                    });
                     ui.end_row();
+                    if styled && settings.channel_midline {
+                        ui.label(l10n::text(ui.ctx(), "Middle line width"));
+                        line_width_row(ui, &mut settings.middle_line.width);
+                        ui.end_row();
+                        let label = ui.label(l10n::text(ui.ctx(), "Middle line style"));
+                        ui.label_inputs_by(label.id, |ui| {
+                            ui.combo_select(
+                                "middle_line_style",
+                                &mut settings.middle_line.line_style,
+                                LineStyle::all().iter().copied(),
+                                |v| v.name().to_string(),
+                            );
+                        });
+                        ui.end_row();
+                    }
                 }
                 if settings.tool_type == DrawingToolType::VerticalLine {
                     let label = ui.label(l10n::text(ui.ctx(), "Extend"));
@@ -678,7 +756,7 @@ mod tests {
                 }
             }
             let mut props = DrawingProps::from_drawing(&drawing, &chart);
-            let mut pickers: [ColorPickerState; 2] = Default::default();
+            let mut pickers: [ColorPickerState; 3] = Default::default();
             pickers[picker].is_open = true;
             let swatch = MAIN_COLORS[3];
             let mut frame = |events| {
@@ -769,7 +847,7 @@ mod tests {
             chart.drawings_mut().select_drawings([1, 2]);
             let target = chart.drawings().drawings[opened - 1].clone();
             let mut props = DrawingProps::from_drawing(&target, &chart);
-            let mut pickers: [ColorPickerState; 2] = Default::default();
+            let mut pickers: [ColorPickerState; 3] = Default::default();
             pickers[0].is_open = true;
             let mut frame = |events| {
                 let output = ctx.run_ui(
@@ -917,7 +995,7 @@ mod tests {
                 props.tool_settings = None;
             }
             let paint = props.color;
-            let mut pickers: [ColorPickerState; 2] = Default::default();
+            let mut pickers: [ColorPickerState; 3] = Default::default();
             pickers[0].is_open = true;
             let mut frame = |events| {
                 let output = ctx.run_ui(

@@ -25,6 +25,7 @@ use chrono::{DateTime, Utc};
 
 /// A single vertical segment in a Kagi chart.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct KagiLine {
     /// Timestamp when this segment was created (from the source bar).
     pub ts: DateTime<Utc>,
@@ -75,6 +76,7 @@ impl KagiLine {
 /// The reversal amount can be set directly, derived from ATR, or
 /// computed as a percentage of price.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct KagiConfig {
     /// Reversal amount - price movement needed to create a new line
     pub reversal_amount: f64,
@@ -125,6 +127,14 @@ impl KagiConfig {
 ///
 /// # Safety Limits
 /// - At most the newest 10,000 lines
+///
+/// ```
+/// use egui_charts::model::{Bar, KagiConfig, to_kagi_lines};
+///
+/// let bars: Vec<Bar> = Vec::new();
+/// let lines = to_kagi_lines(&bars, &KagiConfig::new(2.0));
+/// assert!(lines.is_empty());
+/// ```
 pub fn to_kagi_lines(bars: &[Bar], config: &KagiConfig) -> Vec<KagiLine> {
     let reversal = config.reversal_amount;
     if bars.is_empty() || !(reversal > 0.0 && reversal.is_finite()) {

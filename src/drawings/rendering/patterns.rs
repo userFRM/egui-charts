@@ -3,6 +3,7 @@
 //! Includes: XABCD, Cypher, Head & Shoulders, ABCD, Triangle, and Three Drives patterns.
 
 use crate::drawings::domain::{Drawing, DrawingToolType};
+use crate::localization as l10n;
 use crate::painting::dashed_line::draw_dotted_segments;
 use crate::styles::stroke;
 use crate::tokens::DESIGN_TOKENS;
@@ -16,7 +17,7 @@ impl Drawing {
             self.fill_regions(painter, [&[x, a, b][..], &[b, c, d][..]]);
         }
         self.draw_legs_and_anchors(painter);
-        let colors = self.label_colors();
+        let colors = self.pattern_label_colors();
         self.draw_point_labels(painter, &["X", "A", "B", "C", "D"], colors);
         self.draw_ratio_chords(painter, 3, colors);
     }
@@ -33,10 +34,12 @@ impl Drawing {
             self.fill_regions(painter, regions.iter().map(|r| &r[..]));
         }
         self.draw_legs_and_anchors(painter);
+        let [left, head, right] =
+            ["Left Shoulder", "Head", "Right Shoulder"].map(|name| l10n::text(painter.ctx(), name));
         self.draw_point_labels(
             painter,
-            &["", "Left Shoulder", "", "Head", "", "Right Shoulder", ""],
-            self.label_colors(),
+            &["", &left, "", &head, "", &right, ""],
+            self.pattern_label_colors(),
         );
         if let Some((neckline, _)) = outline {
             self.draw_construction_lines(painter, &[neckline]);
@@ -46,7 +49,7 @@ impl Drawing {
     /// Render ABCD Pattern - With its two ratios
     pub(crate) fn render_abcd_pattern(&self, painter: &egui::Painter) {
         self.draw_legs_and_anchors(painter);
-        let colors = self.label_colors();
+        let colors = self.pattern_label_colors();
         self.draw_point_labels(painter, &["A", "B", "C", "D"], colors);
         self.draw_ratio_chords(painter, 3, colors);
     }
@@ -66,13 +69,13 @@ impl Drawing {
         } else if let Some((lines, _)) = &boundaries {
             self.draw_construction_lines(painter, lines);
         }
-        self.draw_point_labels(painter, &["A", "B", "C", "D"], self.label_colors());
+        self.draw_point_labels(painter, &["A", "B", "C", "D"], self.pattern_label_colors());
     }
 
     /// Render Three Drives Pattern - With each drive's ratio to the correction before it
     pub(crate) fn render_three_drives_pattern(&self, painter: &egui::Painter) {
         self.draw_legs_and_anchors(painter);
-        self.draw_ratio_chords(painter, 2, self.label_colors());
+        self.draw_ratio_chords(painter, 2, self.pattern_label_colors());
     }
 
     /// Tints each region with the drawing's fill. Regions under half a square pixel, which would
@@ -131,9 +134,13 @@ impl Drawing {
         );
     }
 
-    /// The fill of the pattern's label boxes, the line colour, and the colour of their text: white,
-    /// or black where white reads at less than 3:1 on the opaque line colour.
-    fn label_colors(&self) -> (Color32, Color32) {
+    /// The fill of the pattern's label boxes, the line colour, and the colour of their text: the
+    /// drawing's text colour, or else white, or black where white reads at less than 3:1 on the
+    /// opaque line colour.
+    pub(crate) fn pattern_label_colors(&self) -> (Color32, Color32) {
+        if let Some([r, g, b, a]) = self.text_color {
+            return (self.color32(), Color32::from_rgba_unmultiplied(r, g, b, a));
+        }
         let [r, g, b, _] = self.color;
         let text = if crate::theme::contrast(Color32::WHITE, Color32::from_rgb(r, g, b)) >= 3.0 {
             Color32::WHITE
@@ -155,8 +162,7 @@ impl Drawing {
             if name.is_empty() {
                 continue;
             }
-            let galley =
-                painter.layout_no_wrap((*name).to_owned(), self.annotation_font(), colors.1);
+            let galley = self.annotation_galley(painter, (*name).to_owned(), colors.1);
             let rect = if label_above(&self.points, i) {
                 Align2::CENTER_BOTTOM.anchor_size(point - gap, label_box_size(&galley))
             } else {
@@ -192,7 +198,7 @@ impl Drawing {
             let Some(label) = ratio.and_then(|ratio| ratio_text(ratio, decimals)) else {
                 continue;
             };
-            let galley = painter.layout_no_wrap(label, self.annotation_font(), colors.1);
+            let galley = self.annotation_galley(painter, label, colors.1);
             let size = label_box_size(&galley);
             let at = |t| Align2::CENTER_CENTER.anchor_size(a.lerp(b, t), size);
             let rect = [0.5, 0.4, 0.6, 0.3, 0.7]
@@ -417,8 +423,11 @@ mod tests {
     }
 
     fn paint(drawing: &Drawing) -> Vec<Shape> {
+        paint_in(&egui::Context::default(), drawing)
+    }
+
+    fn paint_in(ctx: &egui::Context, drawing: &Drawing) -> Vec<Shape> {
         let pane = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
-        let ctx = egui::Context::default();
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
             drawing.render_original(
                 ui.painter(),
@@ -431,6 +440,7 @@ mod tests {
                     bars: &[],
                     revision: 0,
                     bar_to_x: &|x| x,
+                    bar_spacing: 1.0,
                     price_to_y: &|p| (1000.0 / p) as f32,
                     y_to_price: &|y| 1000.0 / f64::from(y),
                     time_axis: true,
@@ -445,20 +455,22 @@ mod tests {
         shapes
     }
 
-    /// The text shapes among painted shapes, by their text.
+    /// The text shapes among painted shapes, by their text, with both copies of bold text.
     fn texts(shapes: &[Shape]) -> Vec<(String, &egui::epaint::TextShape)> {
         shapes
             .iter()
-            .filter_map(|shape| match shape {
-                Shape::Text(t) => Some((t.galley.job.text.clone(), t)),
-                _ => None,
+            .flat_map(|shape| match shape {
+                Shape::Vec(inner) => texts(inner),
+                Shape::Text(t) => vec![(t.galley.job.text.clone(), t)],
+                _ => Vec::new(),
             })
             .collect()
     }
 
     /// Each tool paints exactly its point and ratio labels, on a box of the line colour with
-    /// legible text, on the outer side of each point. Hand values: 99.9792 / 77.2 = 1.29507 and
-    /// 96.8 / 60 = 1.6133.
+    /// legible text, on the outer side of each point; a text colour with its opacity, italic, font
+    /// size and bold reach every label. Hand values: 99.9792 / 77.2 = 1.29507 and 96.8 / 60 =
+    /// 1.6133.
     #[test]
     fn pattern_labels_name_points_and_ratios_only() {
         use DrawingToolType::{
@@ -497,7 +509,7 @@ mod tests {
                 &["1.29", "1.61"],
             ),
         ];
-        let colours = |drawing: &Drawing, expected: Color32| {
+        let colours = |drawing: &Drawing, expected: Color32, italic: bool| {
             let shapes = paint(drawing);
             for (text, shape) in texts(&shapes) {
                 let rect = Rect::from_min_size(shape.pos, shape.galley.size());
@@ -519,20 +531,62 @@ mod tests {
                     "{:?}: {text}",
                     drawing.tool_type
                 );
+                assert!(
+                    shape
+                        .galley
+                        .job
+                        .sections
+                        .iter()
+                        .all(|s| s.format.italics == italic),
+                    "{:?}: {text} italic",
+                    drawing.tool_type
+                );
             }
         };
         for (tool, prices, expected) in cases {
-            let drawing = pattern(tool, prices);
+            let mut drawing = pattern(tool, prices);
+            // The boxes in the stored colour, not its shade on the default dark theme.
+            drawing.theme_shade = false;
             let shapes = paint(&drawing);
             let mut painted: Vec<_> = texts(&shapes).into_iter().map(|(t, _)| t).collect();
             painted.sort();
             assert_eq!(painted, expected, "{tool:?}");
-            colours(&drawing, Color32::WHITE);
+            colours(&drawing, Color32::WHITE, false);
+            // Each text setting reaches every label; bold paints a second, offset copy.
+            drawing.text_color = Some([255, 0, 0, 128]);
+            drawing.italic = true;
+            drawing.font_size = 20.0;
+            drawing.font_weight = crate::drawings::FontWeight::Bold;
+            let shapes = paint(&drawing);
+            let mut painted: Vec<_> = texts(&shapes)
+                .into_iter()
+                .map(|(text, shape)| {
+                    assert_eq!(shape.galley.job.sections[0].format.font_id.size, 20.0);
+                    text
+                })
+                .collect();
+            painted.sort();
+            let doubled: Vec<&str> = expected.iter().flat_map(|&text| [text, text]).collect();
+            assert_eq!(painted, doubled, "{tool:?}");
+            colours(
+                &drawing,
+                Color32::from_rgba_premultiplied(128, 0, 0, 128),
+                true,
+            );
         }
+        // A translator sees the shoulder and head names.
+        let ctx = egui::Context::default();
+        crate::localization::mark_keys(&ctx);
+        let mut marked: Vec<_> = texts(&paint_in(&ctx, &pattern(HeadAndShoulders, cases[3].1)))
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        marked.sort();
+        assert_eq!(marked, ["~", "~", "~"]);
         // White reads at 1.22:1 on this yellow, black at 17:1.
         let mut yellow = pattern(XABCDPattern, cases[0].1);
         yellow.color = [255, 235, 59, 255];
-        colours(&yellow, Color32::BLACK);
+        colours(&yellow, Color32::BLACK, false);
 
         let p = Pos2::new;
         for (points, above) in [

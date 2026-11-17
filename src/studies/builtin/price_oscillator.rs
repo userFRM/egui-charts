@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 /// Average formula of an oscillator's averages and signal line, and of the middle line of
 /// [`KeltnerChannels`](super::KeltnerChannels).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OscillatorAverage {
     /// Alpha 2/(length+1). The Price and Percentage Volume Oscillators and Keltner's middle line
     /// seed it with the mean of the first `length` values, MACD with the first value.
@@ -18,7 +19,7 @@ pub enum OscillatorAverage {
 }
 
 /// Resumable [`OscillatorAverage`] over the finite values it is fed.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct Mean {
     exponential: Smoothing,
     window: VecDeque<f64>,
@@ -62,7 +63,7 @@ impl Mean {
 /// bar 25, the PPO alone on bars 25 to 32, and from bar 33, the mean of the PPO on bars 25 to
 /// 33 being the first signal, the PPO, the signal and the histogram, under either formula. A
 /// bar with a non-finite close has no value and is skipped by the averages.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PriceOscillator {
     /// Short EMA period (typically 12)
     short_period: usize,

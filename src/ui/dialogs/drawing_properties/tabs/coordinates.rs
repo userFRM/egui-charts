@@ -1,5 +1,4 @@
-//! Coordinates tab - staged price (bars only for a regression trend) and UTC time points;
-//! freehand strokes have none.
+//! Coordinates tab - staged price and UTC time points; freehand strokes have none.
 
 use crate::drawings::{ChartPoint, Drawing, DrawingInteractionMode, DrawingToolType};
 use crate::localization as l10n;
@@ -23,8 +22,9 @@ pub struct CoordinatePoint {
     /// Fractional bar index, used when no timestamp is available.
     pub bar_index: String,
     original: Option<(ChartPoint, Option<DateTime<Utc>>)>,
-    /// The price is not editable: the drawing's prices follow its bars.
-    bar_only: bool,
+    /// The drawing's line is fitted to the bars between its points, so their prices do not
+    /// move it.
+    fitted: bool,
 }
 
 /// Coordinates staged independently of the live drawing until Apply.
@@ -55,7 +55,7 @@ impl CoordinatesState {
                         time: time
                             .map_or_else(String::new, |t| t.format("%H:%M:%S%.f").to_string()),
                         original: Some((original, time)),
-                        bar_only: drawing.tool_type == DrawingToolType::RegressionTrend,
+                        fitted: drawing.tool_type == DrawingToolType::RegressionTrend,
                     }
                 })
                 .collect(),
@@ -65,7 +65,7 @@ impl CoordinatesState {
     pub(crate) fn resolve(&self, chart: &Chart) -> Result<Vec<ChartPoint>, &'static str> {
         if self.points.iter().all(|point| {
             point.original.is_some_and(|(original, time)| {
-                (point.bar_only || point.price == original.price.to_string())
+                point.price == original.price.to_string()
                     && point.bar_index == original.bar_idx.to_string()
                     && point.date
                         == time.map_or_else(String::new, |t| t.format("%Y-%m-%d").to_string())
@@ -79,18 +79,12 @@ impl CoordinatesState {
         self.points
             .iter()
             .map(|point| {
-                let price = if let Some((original, _)) = point.original
-                    && point.bar_only
-                {
-                    original.price
-                } else {
-                    point
-                        .price
-                        .parse::<f64>()
-                        .ok()
-                        .filter(|v| v.is_finite())
-                        .ok_or("Enter a finite price for every point")?
-                };
+                let price = point
+                    .price
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|v| v.is_finite())
+                    .ok_or("Enter a finite price for every point")?;
                 if point.date.is_empty() && point.time.is_empty() {
                     let index = point
                         .bar_index
@@ -129,6 +123,7 @@ impl CoordinatesState {
 }
 
 /// Coordinates tab renderer.
+#[derive(Debug)]
 pub struct CoordinatesTab;
 
 impl CoordinatesTab {
@@ -146,6 +141,13 @@ impl CoordinatesTab {
                 "Open a drawing to edit its coordinates.",
             ));
         }
+        if state.points.first().is_some_and(|point| point.fitted) {
+            ui.label(l10n::text(
+                ui.ctx(),
+                "The line is fitted to the bars between the points; their prices do not move it.",
+            ));
+            ui.space_sm();
+        }
         for (i, point) in state.points.iter_mut().enumerate() {
             if i > 0 {
                 ui.space_sm();
@@ -160,9 +162,7 @@ impl CoordinatesTab {
                 FormGrid::new(format!("coord_grid_{i}"))
                     .spacing(ui.active_theme().spacing.lg, ui.active_theme().spacing.sm)
                     .show(ui, |ui| {
-                        if !point.bar_only {
-                            field(ui, "Price", &mut point.price, "");
-                        }
+                        field(ui, "Price", &mut point.price, "");
                         if point.original.is_some_and(|(_, time)| time.is_none()) {
                             field(ui, "Bar index", &mut point.bar_index, "");
                         } else {
@@ -191,8 +191,10 @@ mod tests {
     use super::*;
     use crate::model::BarData;
 
+    /// A regression trend's points take prices and bars like any two-point tool's, under a note
+    /// that the prices do not move its fitted line.
     #[test]
-    fn regression_coordinates_edit_only_the_bar_range() {
+    fn regression_coordinates_edit_prices_and_bars_like_other_tools() {
         let chart = Chart::new(BarData::from_bars(Vec::new()));
         for tool in [DrawingToolType::RegressionTrend, DrawingToolType::TrendLine] {
             let mut drawing = Drawing::new(1, tool);
@@ -202,32 +204,28 @@ mod tests {
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 CoordinatesTab::show(ui, &mut state)
             });
-            let price_labels = output
+            let texts: Vec<_> = output
                 .shapes
                 .iter()
-                .filter(
-                    |s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == "Price"),
-                )
-                .count();
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                    _ => None,
+                })
+                .collect();
             output.drop_without_applying_deltas();
+            assert_eq!(texts.iter().filter(|t| *t == "Price").count(), 2);
             assert_eq!(
-                price_labels,
-                if tool == DrawingToolType::RegressionTrend {
-                    0
-                } else {
-                    2
-                }
+                texts.iter().any(|t| t.starts_with("The line is fitted")),
+                tool == DrawingToolType::RegressionTrend
             );
             state.points[0].price = "NaN".into();
             state.points[0].bar_index = "3".into();
-            if tool == DrawingToolType::RegressionTrend {
-                assert_eq!(
-                    state.resolve(&chart).unwrap(),
-                    vec![ChartPoint::new(3.0, 123.5), ChartPoint::new(8.0, 90.0)]
-                );
-            } else {
-                assert!(state.resolve(&chart).is_err());
-            }
+            assert!(state.resolve(&chart).is_err());
+            state.points[0].price = "120".into();
+            assert_eq!(
+                state.resolve(&chart).unwrap(),
+                vec![ChartPoint::new(3.0, 120.0), ChartPoint::new(8.0, 90.0)]
+            );
         }
     }
 }

@@ -16,7 +16,7 @@ use super::depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig, Sample
 use super::merge::Origin;
 use super::trades::Trades;
 use super::{FeedError, FeedStatus, OrderQueue, SubscriptionId};
-use crate::model::{Bar, BarClock, Level1Quote, OrderBook};
+use crate::model::{Bar, BarClock, Level1Quote, OrderBook, Placement};
 use chrono::{DateTime, TimeDelta, Utc};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -34,6 +34,12 @@ pub(crate) struct Inbox {
     waker: OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
 
+impl std::fmt::Debug for Inbox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Inbox").finish_non_exhaustive()
+    }
+}
+
 #[derive(Default)]
 struct State {
     /// Set by the first push after a drain, so a burst wakes the chart once.
@@ -47,6 +53,8 @@ struct State {
 struct Live {
     symbol: String,
     clock: BarClock,
+    /// The bar of the last trade, quote or heartbeat placed, kept while later ones share its date.
+    placement: Placement,
     /// Open of the newest slot pushed, kept across drains: trades of older slots are late.
     forming: Option<DateTime<Utc>>,
     /// Feed clock minus system clock, as last reported; zero until then.
@@ -311,6 +319,15 @@ pub struct Reply<T: Send + 'static> {
     request: u64,
     sent: bool,
     answer: PhantomData<fn(T)>,
+}
+
+impl<T: Send + 'static> std::fmt::Debug for Reply<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reply")
+            .field("request", &self.request)
+            .field("sent", &self.sent)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T: Send + 'static> Reply<T> {

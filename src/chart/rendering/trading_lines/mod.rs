@@ -38,6 +38,7 @@ pub enum TradingLineAction {
 
 /// What a profit or loss on the trading lines is written in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum PnlUnit {
     /// In the account's currency, such as "+12.50 USD".
     #[default]
@@ -64,6 +65,7 @@ impl PnlUnit {
 
 /// Horizontal placement of trading line labels inside the price pane.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum TradingLabelAlignment {
     /// Place labels beside the left edge.
     Left,
@@ -90,6 +92,8 @@ impl TradingLabelAlignment {
 }
 
 /// What [`render_trading_lines`] drew, and what the user asked for.
+#[derive(Debug)]
+#[non_exhaustive]
 pub struct TradingLines {
     /// What the user asked for on a line in this frame.
     pub action: Option<TradingLineAction>,
@@ -104,7 +108,8 @@ pub struct TradingLines {
 }
 
 /// What [`render_trading_lines`] draws and offers.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TradingLineOptions<'a> {
     /// Draw orders and their brackets. Hidden orders still identify existing position exits.
     pub show_orders: bool,
@@ -146,6 +151,41 @@ pub struct TradingLineOptions<'a> {
     pub currency: &'a str,
     /// The positive tick size used to round dragged prices.
     pub tick_size: f64,
+}
+
+impl<'a> TradingLineOptions<'a> {
+    /// Orders and positions with their labels at the right edge, offering no buttons or drags,
+    /// with no profit or loss, no last price and a [`point_value`](Self::point_value) of one.
+    /// `currency` names the account's currency and `tick_size` rounds dragged prices. Assign
+    /// the other fields to offer more.
+    ///
+    /// ```
+    /// use egui_charts::chart::TradingLineOptions;
+    ///
+    /// let mut options = TradingLineOptions::new("USD", 0.25);
+    /// options.modify = true;
+    /// ```
+    pub fn new(currency: &'a str, tick_size: f64) -> Self {
+        Self {
+            show_orders: true,
+            show_positions: true,
+            extend_lines: false,
+            label_alignment: TradingLabelAlignment::Right,
+            submit: false,
+            modify: false,
+            close: false,
+            reverse: false,
+            take_profit: false,
+            stop_loss: false,
+            order_exits: false,
+            pnl: None,
+            bracket_pnl: None,
+            last_price: None,
+            point_value: 1.0,
+            currency,
+            tick_size,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]

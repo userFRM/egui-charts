@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 
 /// Loaded live bars a host can lend to alerts with the same feed view.
 /// Supply only current, unpaused data, never replay bars or incomplete history.
+#[non_exhaustive]
 pub struct AlertData<'a> {
     /// The symbol, interval, calendar, session and conversion of these bars.
     pub request: crate::data::HistoryRequest,
@@ -18,6 +19,20 @@ pub struct AlertData<'a> {
     /// Current drawings in the same bar coordinates, including edits not yet stored.
     #[cfg(feature = "ui")]
     pub drawings: &'a [crate::drawings::Drawing],
+    /// The signals the host's analytics pushed for these bars, which detector alerts follow.
+    pub signals: Vec<&'a crate::model::Signal>,
+    /// The exchange the feed reports for the symbol, for the messages of detector alerts.
+    pub exchange: Option<&'a str>,
+}
+
+impl std::fmt::Debug for AlertData<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AlertData")
+            .field("request", &self.request)
+            .field("bars", &self.bars.len())
+            .field("history_complete", &self.history_complete)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Historical and streaming inputs for an alert without a rendered chart. Uses the same
@@ -52,6 +67,17 @@ pub struct AlertFeed {
     start: Option<DateTime<Utc>>,
 }
 
+impl std::fmt::Debug for AlertFeed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AlertFeed")
+            .field("request", &self.request)
+            .field("bars", &self.bars.len())
+            .field("ready", &self.ready)
+            .field("stopped", &self.stopped)
+            .finish_non_exhaustive()
+    }
+}
+
 impl AlertFeed {
     /// A latest-history request for 1,000 bars. Set its public calendar, session, conversion
     /// and count fields before passing it to [`new`](Self::new) to match the source chart.
@@ -59,17 +85,7 @@ impl AlertFeed {
         symbol: impl Into<String>,
         timeframe: Timeframe,
     ) -> crate::data::HistoryRequest {
-        crate::data::HistoryRequest {
-            symbol: symbol.into(),
-            timeframe,
-            clock: crate::model::BarClock::new(timeframe),
-            before: None,
-            since: None,
-            count: 1000,
-            extended_hours: false,
-            adjusted: false,
-            conversion: None,
-        }
+        crate::data::HistoryRequest::new(symbol, timeframe, 1000)
     }
 
     /// Requests the symbol's metadata, then its history and updates. `metric` selects a study's

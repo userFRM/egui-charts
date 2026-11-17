@@ -13,6 +13,7 @@ use super::selection::{SeriesHitResult, SeriesId};
 pub const BODY_WIDTH_RATIO: f32 = 0.6;
 
 /// Configuration for series hit testing (tolerance, wick inclusion).
+#[derive(Debug)]
 pub struct HitTestConfig {
     /// Tolerance in pixels for line/wick hits
     pub line_tolerance: f32,
@@ -122,7 +123,7 @@ pub fn hit_test_volume(
         return None;
     }
 
-    let bar_width = coords.bar_spacing_for_width() * 0.8;
+    let bar_width = coords.volume_bar_width();
 
     // Check each visible bar
     for i in visible_range {

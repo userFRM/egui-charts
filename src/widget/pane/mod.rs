@@ -63,7 +63,15 @@ fn upgraded_study(
 
 /// Behaviour and colours of the separators between panes, set with
 /// [`Chart::with_pane_options`] or [`Chart::pane_options_mut`].
+///
+/// ```
+/// use egui_charts::widget::PaneOptions;
+///
+/// let mut options = PaneOptions::default();
+/// options.resizable = false;
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct PaneOptions {
     /// Dragging a separator resizes the panes on either side of it, and a double click returns
     /// both to their default stretch factors. `true` by default.
@@ -105,7 +113,8 @@ impl Default for PaneLayout {
 }
 
 /// A change of a study's place in the draw order of its pane, where each item is drawn over the
-/// ones before it. In the main pane the price series is one of the items.
+/// ones before it. In the main pane the price series is one of the items. The set is closed: an
+/// item moves one step or all the way, to the front or to the back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VisualOrder {
     /// Draw over every other item of the pane.
@@ -281,6 +290,11 @@ impl Chart {
                     .any(|id| self.pane_member(*id) && self.is_series_visible(*id)))
     }
 
+    /// Whether `pane` is drawn when no pane is maximized: the price panes always are.
+    pub(super) fn pane_drawn(&self, pane: &Pane) -> bool {
+        pane.id == PaneId::MAIN || pane.id == self.main_series_pane() || self.pane_shown(pane)
+    }
+
     /// Whether rendering needs the shared layout for panes other than the original price pane.
     pub(super) fn has_panes(&self) -> bool {
         self.pane_index(PaneId::MAIN).is_none()
@@ -373,12 +387,14 @@ impl Chart {
         }
         let main = std::mem::take(&mut self.pane_layout.main);
         self.pane_layout.main = self.main_pane_order(main);
+        // A maximized pane needs a drawn pane to hide, also when undo brings the state back.
         if self.pane_layout.maximized.is_some_and(|id| {
-            !self
+            let mut drawn = self
                 .pane_layout
                 .panes
                 .iter()
-                .any(|pane| pane.id == id && (id == PaneId::MAIN || self.pane_shown(pane)))
+                .filter(|pane| self.pane_drawn(pane));
+            !drawn.clone().any(|pane| pane.id == id) || drawn.nth(1).is_none()
         }) {
             self.pane_layout.maximized = None;
         }
@@ -455,11 +471,12 @@ impl Chart {
     /// Adds an empty pane at the bottom and returns its id. Fill it with
     /// [`move_series_to_pane`](Self::move_series_to_pane). Once its last series or study leaves
     /// it the pane is removed, unless [`set_preserve_empty_pane`](Self::set_preserve_empty_pane)
-    /// keeps it.
+    /// keeps it. A maximized pane is restored, so that the new pane is drawn.
     pub fn add_pane(&mut self) -> PaneId {
         let id = PaneId(self.next_series);
         self.next_series += 1;
         self.pane_layout.panes.push(Pane::new(id));
+        self.pane_layout.maximized = None;
         id
     }
 

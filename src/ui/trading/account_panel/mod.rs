@@ -27,7 +27,7 @@ const ACTIONS_WIDTH: f32 = 64.0;
 pub(super) const HISTORY_LIMIT: usize = 1_000;
 
 /// The account's orders and executions, shared by the ladder, chart and account history.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(super) struct Fills {
     pub(super) orders: HashMap<OrderId, OrderRequest>,
     pub(super) executions: Vec<Execution>,
@@ -166,7 +166,7 @@ pub enum AccountPanelAction {
 /// one, a page at a time, until the broker has nothing older or the history lists 1,000
 /// entries. Each entry is listed once, whether a page or the broker's stream brings it first,
 /// and pages change no working order or position.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct AccountPanel {
     /// The broker's name, shown on the tab and in the account selector.
     pub broker: String,
@@ -337,6 +337,7 @@ struct Column {
 
 /// One table cell: its text and colour, a unit in small muted text after it, and whether it is a
 /// symbol chip.
+#[derive(Debug)]
 struct Cell {
     text: String,
     color: Color32,
@@ -529,6 +530,105 @@ mod tests {
             );
         harness.run();
         harness.get_by_label("Close position");
+    }
+
+    /// Each number field of the Modify order dialog is named after its label or check box, with
+    /// the accessibility check on, for an order with one take profit and for one with
+    /// take-profit levels, every label translated once. A regression leaves a field unnamed,
+    /// names it after another label, or skips or repeats a translation.
+    #[test]
+    fn the_modify_order_dialog_names_its_fields() {
+        use crate::model::TakeProfitLevel;
+        type Row = (
+            OrderType,
+            Vec<TakeProfitLevel>,
+            Option<f64>,
+            &'static [&'static str],
+        );
+        let rows: [Row; 2] = [
+            (
+                OrderType::Limit(100.0),
+                vec![],
+                Some(110.0),
+                &[
+                    "[Quantity]",
+                    "[Limit price]",
+                    "[Take profit]",
+                    "[Stop loss]",
+                ],
+            ),
+            (
+                OrderType::StopLimit {
+                    stop: 101.0,
+                    limit: 100.0,
+                },
+                vec![
+                    TakeProfitLevel::new(110.0, 1.0),
+                    TakeProfitLevel::new(120.0, 1.0),
+                ],
+                None,
+                &[
+                    "[Quantity]",
+                    "[Stop price]",
+                    "[Limit price]",
+                    "[Take profit 1]",
+                    "[Take profit 2]",
+                    "[Stop loss]",
+                ],
+            ),
+        ];
+        for (order_type, levels, take_profit, names) in rows {
+            let mut request = OrderRequest::new("SYM", OrderSide::Buy, 2.0, order_type);
+            request.take_profit = take_profit;
+            request.take_profit_levels = levels;
+            request.stop_loss = Some(90.0);
+            let order = Order::new(OrderId::new("9"), request, OrderStatus::Working);
+            let mut trading = Trading::default();
+            trading.set_service(Arc::new(Recorder {
+                brackets: true,
+                ..Recorder::default()
+            }));
+            trading.poll(&egui::Context::default(), &mut Toasts::new());
+            trading.account_panel.editing = Some((order.clone(), order.request));
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(1000.0, 600.0))
+                .with_context_setup(|ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::localization::set_translator(ctx, |english| {
+                        Some(format!("[{english}]"))
+                    });
+                })
+                .build_ui_state(
+                    |ui, trading: &mut Trading| {
+                        trading.show_account_panel(ui, "SYM");
+                    },
+                    trading,
+                );
+            harness.run();
+            for name in names {
+                harness.get_by_role_and_label(egui::Role::SpinButton, name);
+            }
+        }
+    }
+
+    /// While the host names no broker and before the broker reports the account, the broker and
+    /// account menus show only their chevrons; the accessibility check still finds each named
+    /// after what it chooses. A regression leaves them unnamed.
+    #[test]
+    fn menus_without_text_are_named_after_what_they_choose() {
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1000.0, 400.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, trading: &mut Trading| {
+                    trading.show_account_panel(ui, "SYM");
+                },
+                Trading::default(),
+            );
+        harness.run();
+        for name in ["Broker", "Account"] {
+            harness.get_by_role_and_label(egui::Role::Button, name);
+        }
     }
 
     /// In panels as narrow as the demo gives on 320 and 393 point screens, the Trade, minimize

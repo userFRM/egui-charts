@@ -39,7 +39,7 @@ pub enum DataTableAction {
 
 /// Inputs to the table, without copying bars, study settings or the instrument, whose changes
 /// move the chart's table revision, and the added series, which it reads by their own revisions.
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 struct Source {
     revision: (u64, u64),
     series: Vec<crate::widget::SeriesFingerprint>,
@@ -65,6 +65,7 @@ impl Source {
 }
 
 /// Chart data table dialog.
+#[derive(Debug)]
 pub struct DataTableDialog {
     /// Whether the dialog is currently visible.
     pub is_open: bool,
@@ -220,10 +221,10 @@ impl DataTableDialog {
                 action = DataTableAction::Export(csv);
             }
             ui.label(
-                egui::RichText::new(format!(
-                    "{} {}",
-                    table.rows.len(),
-                    l10n::text(ui.ctx(), "loaded bars")
+                egui::RichText::new(l10n::format_text(
+                    ui.ctx(),
+                    "{count} loaded bars",
+                    &[("count", table.rows.len().to_string())],
                 ))
                 .color(ui.visuals().weak_text_color()),
             );

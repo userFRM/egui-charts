@@ -19,6 +19,7 @@ use egui::{Color32, Pos2};
 
 /// Configuration for selection handle appearance and hit testing.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct HandleConfig {
     /// Handle diameter in pixels.
     pub size: f32,
@@ -48,6 +49,7 @@ impl Default for HandleConfig {
 /// All methods are static (`&self`-free) since `HandleService` carries no state.
 /// It computes handle positions, performs hit testing, updates handle positions
 /// during drags, and renders the handles onto the chart.
+#[derive(Debug)]
 pub struct HandleService;
 
 impl HandleService {

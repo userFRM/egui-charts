@@ -9,10 +9,11 @@
 //! This keeps the domain layer pure and testable.
 
 use super::{
-    ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree, FibonacciConfig,
-    FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig, LineMeasurements,
-    NoteTextStyle, PitchforkConfig, PositionReadout, PositionSize, PositionSizing, PositionStyle,
-    RegressionTrendConfig, TimeframeVisibility, VwapConfig,
+    AnnotationMarker, ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree,
+    FibonacciConfig, FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig,
+    LineMeasurements, MiddleLineStyle, NoteTextStyle, PitchforkConfig, PositionReadout,
+    PositionSize, PositionSizing, PositionStyle, RegressionTrendConfig, TimeframeVisibility,
+    VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -53,6 +54,23 @@ pub enum FolderSync {
 /// completion state are left out, since the anchors are stored as
 /// timestamps by [`persistence`](crate::drawings::persistence). A field added
 /// later needs `#[serde(default)]`, so that saved version 2 files still load.
+///
+/// ```
+/// use egui_charts::drawings::{
+///     ArrowStyle, Drawing, DrawingToolType, FibonacciLevel, GhostFeedConfig,
+/// };
+///
+/// let mut arrow = Drawing::new(1, DrawingToolType::TrendLine);
+/// arrow.arrow_end_style = ArrowStyle::Arrow;
+/// let mut feed = GhostFeedConfig::default();
+/// feed.noise_ticks = 2.0;
+/// let mut ghost = Drawing::new(2, DrawingToolType::GhostFeed);
+/// ghost.ghost_feed = Some(feed);
+/// let mut fib = Drawing::new(3, DrawingToolType::FibonacciRetracement);
+/// if let Some(config) = &mut fib.fib_config {
+///     config.levels.push(FibonacciLevel::new(1.272, "1.272", [41, 98, 255, 255]));
+/// }
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 // The trait impls below wrap the derived ones.
 #[serde(remote = "Self")]
@@ -196,9 +214,11 @@ pub struct Drawing {
     /// drawings keep their size.
     #[serde(default)]
     pub text_follows_zoom: bool,
-    /// Bar spacing, in points, at which text that follows the zoom has its set font size. `None`
-    /// adopts the spacing a Text or Anchored text is first displayed at, including for older
-    /// saved drawings.
+    /// Bar spacing, in points per bar or per spacing unit of a numeric horizontal scale, at which
+    /// text that follows the zoom has its set font size. `None` adopts the spacing a Text or
+    /// Anchored text is first displayed at by the chart or
+    /// [`DrawingManager::update_all_screen_coords`](crate::drawings::DrawingManager::update_all_screen_coords),
+    /// including for older saved drawings.
     #[serde(default)]
     pub text_zoom_spacing: Option<f32>,
     /// Colour, size and emphasis of the text typed on a price note. `None` draws it as the price
@@ -252,11 +272,15 @@ pub struct Drawing {
     /// Lines, labels, zone fill and border of position tools.
     #[serde(default)]
     pub position_style: PositionStyle,
+    /// Text popup of a pin and glyph disc of a signpost. Drawings saved without it show their
+    /// text and no glyph, as new ones do.
+    #[serde(default)]
+    pub marker: AnnotationMarker,
     /// Customizable Fibonacci levels for Fib tools
     pub fib_config: Option<FibonacciConfig>,
     /// Rows and value area of the volume profile tools
     pub volume_profile: Option<VolumeProfileConfig>,
-    /// Band width of the regression trend tool
+    /// Source, bounds, line pattern and correlation precision of the regression trend tool
     pub regression_trend: Option<RegressionTrendConfig>,
     /// Bands of the anchored VWAP. Older drawings use the defaults.
     #[serde(default)]
@@ -269,9 +293,26 @@ pub struct Drawing {
     /// Average range and noise, in ticks, of the candles a Ghost Feed projects.
     #[serde(default)]
     pub ghost_feed: Option<GhostFeedConfig>,
-    /// Whether a rectangle or parallel channel draws its dashed halfway line.
+    /// Whether a rectangle or parallel channel draws its halfway line; a channel's takes
+    /// [`Self::middle_line`].
     #[serde(default)]
     pub channel_midline: bool,
+    /// Colour, size and emphasis of the prices a flat top/bottom or disjoint channel writes
+    /// beside the ends of its lines while `line_measurements.price_labels` is on. `None` writes
+    /// them in the line colour at 12 points, regular and upright, as drawings saved before this
+    /// setting do. Other tools ignore it.
+    #[serde(default)]
+    pub anchor_price_style: Option<NoteTextStyle>,
+    /// Colour, width and pattern of a parallel channel's middle line, drawn while
+    /// `channel_midline` is on. Other tools ignore it; a rectangle keeps its dashed hairline.
+    #[serde(default)]
+    pub middle_line: MiddleLineStyle,
+    /// Whether the tool's default line, level and text colours are drawn in the nearest shade
+    /// that keeps 4:1 contrast on the active theme's chart and panel. New drawings start with
+    /// it on; drawings and saved defaults stored without it load with it off and draw in their
+    /// stored colours.
+    #[serde(default)]
+    pub theme_shade: bool,
     /// Frame size and opacity of the image tool; `None` uses the defaults.
     #[serde(default)]
     pub image: Option<ImageConfig>,
@@ -304,25 +345,6 @@ fn default_text_wrap_width() -> f32 {
     200.0
 }
 
-/// Points between neighbouring bars around screen `x`, starting the search at `bar`; `None` when
-/// the mapping does not advance. Screen coordinates are single precision, which rounds one bar's
-/// step coarsely far from the view, so the step is averaged over 64 bars and measured again
-/// nearer `x`.
-fn bar_spacing_near(bar_to_x: impl Fn(f32) -> f32, mut bar: f32, x: f32) -> Option<f32> {
-    let mut spacing = None;
-    for _ in 0..3 {
-        bar = bar.round();
-        let at = bar_to_x(bar);
-        let step = (bar_to_x(bar + 64.0) - at) / 64.0;
-        if !(step.is_finite() && step > 0.0) {
-            return None;
-        }
-        spacing = Some(step);
-        bar += (x - at) / step;
-    }
-    spacing
-}
-
 pub(super) const BLUE: [u8; 4] = [41, 98, 255, 255];
 pub(super) const RED: [u8; 4] = [242, 54, 69, 255];
 pub(super) const ORANGE: [u8; 4] = [255, 152, 0, 255];
@@ -338,6 +360,19 @@ const WHITE: [u8; 4] = [255, 255, 255, 255];
 /// `color` at `alpha` of 255.
 const fn tint(color: [u8; 4], alpha: u8) -> [u8; 4] {
     [color[0], color[1], color[2], alpha]
+}
+
+/// Where a colour that rendering may shade for the theme sits in a drawing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ColorSlot {
+    /// The line colour.
+    Line,
+    /// The text colour, while it is the tool's default line colour, as on lines and shapes.
+    Text,
+    /// A level by list and value: Fibonacci levels (0) and time levels (1), pitchfork levels
+    /// (2), Gann price levels (3), time levels (4), fan lines (5) and arcs (6), and the upper (7)
+    /// and lower (8) lines of the anchored VWAP bands by index.
+    Level(u8, f32),
 }
 
 /// Line, fill and text defaults of a new drawing, before any default the user saved for its tool.
@@ -596,6 +631,7 @@ impl Drawing {
             position_target_color: None,
             position_stop_color: None,
             position_style: PositionStyle::default(),
+            marker: AnnotationMarker::default(),
             fib_config: matches!(
                 tool_type,
                 DrawingToolType::FibonacciRetracement
@@ -628,6 +664,9 @@ impl Drawing {
             .then(|| PitchforkConfig::for_tool(tool_type)),
             elliott_degree: ElliottDegree::default(),
             channel_midline: tool_type == DrawingToolType::ParallelChannel,
+            anchor_price_style: None,
+            middle_line: MiddleLineStyle::default(),
+            theme_shade: true,
             image: None,
             closed: false,
             gann: None,
@@ -711,6 +750,68 @@ impl Drawing {
         self.color == default_style(self.tool_type).color
     }
 
+    /// Calls `visit` with each line, text and level colour that rendering may shade for the
+    /// theme. A Gann drawing or an anchored VWAP without a stored configuration first takes the
+    /// defaults it draws. Volume profile drawings have none: their colour tints an area.
+    pub(crate) fn visit_theme_colors(&mut self, mut visit: impl FnMut(ColorSlot, &mut [u8; 4])) {
+        use DrawingToolType as T;
+        let tool = self.tool_type;
+        if matches!(tool, T::FixedRangeVolumeProfile | T::AnchoredVolumeProfile) {
+            return;
+        }
+        let line = default_style(tool).color;
+        if let Some(text) = self.text_color.as_mut().filter(|text| **text == line) {
+            visit(ColorSlot::Text, text);
+        }
+        visit(ColorSlot::Line, &mut self.color);
+        // Prices and a middle line set in the tool's line colour take the line's shade.
+        for color in [
+            self.anchor_price_style
+                .as_mut()
+                .map(|style| &mut style.color),
+            self.middle_line.color.as_mut(),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|color| **color == line)
+        {
+            visit(ColorSlot::Line, color);
+        }
+        if let Some(config) = &mut self.fib_config {
+            for level in &mut config.levels {
+                visit(ColorSlot::Level(0, level.value), &mut level.color);
+            }
+            for level in config.time_levels.iter_mut().flatten() {
+                visit(ColorSlot::Level(1, level.value), &mut level.color);
+            }
+        }
+        if let Some(config) = &mut self.pitchfork {
+            for level in &mut config.levels {
+                visit(ColorSlot::Level(2, level.value), &mut level.color);
+            }
+        }
+        if matches!(tool, T::GannBox | T::GannSquare | T::GannFixed | T::GannFan) {
+            let config = self.gann.get_or_insert_with(|| GannConfig::for_tool(tool));
+            for (list, levels) in [
+                (3, &mut config.price_levels),
+                (4, &mut config.time_levels),
+                (5, &mut config.fan_ratios),
+                (6, &mut config.arc_ratios),
+            ] {
+                for level in levels {
+                    visit(ColorSlot::Level(list, level.value), &mut level.color);
+                }
+            }
+        }
+        if tool == T::AnchoredVWAP {
+            let config = self.vwap.get_or_insert_with(VwapConfig::default);
+            for (index, band) in config.bands.iter_mut().enumerate() {
+                visit(ColorSlot::Level(7, index as f32), &mut band.upper.color);
+                visit(ColorSlot::Level(8, index as f32), &mut band.lower.color);
+            }
+        }
+    }
+
     /// Update screen coordinates from chart_points using current transforms
     ///
     /// This should be called each frame before rendering.
@@ -724,15 +825,6 @@ impl Drawing {
             let x = bar_to_x(cp.bar_idx);
             let y = price_to_y(cp.price);
             self.points.push(egui::Pos2::new(x, y));
-        }
-        if self.text_zoom_spacing.is_none()
-            && matches!(
-                self.tool_type,
-                DrawingToolType::TextLabel | DrawingToolType::AnchoredText
-            )
-            && let (Some(anchor), Some(pos)) = (self.chart_points.first(), self.points.first())
-        {
-            self.text_zoom_spacing = bar_spacing_near(&bar_to_x, anchor.bar_idx, pos.x);
         }
         self.level_ys = match (self.tool_type, &self.chart_points[..]) {
             // Five of the first units in price, which a logarithmic scale does not keep linear.
@@ -748,17 +840,33 @@ impl Drawing {
         };
     }
 
-    /// The factor that scales text drawn at screen `x` from its set size: the bar spacing over
-    /// `text_zoom_spacing` for text that follows the zoom, and 1 otherwise.
-    pub(crate) fn text_zoom(&self, bar_to_x: impl Fn(f32) -> f32, x: f32) -> f32 {
-        let (true, Some(reference), Some(anchor)) = (
-            self.text_follows_zoom,
-            self.text_zoom_spacing,
-            self.chart_points.first(),
-        ) else {
-            return 1.0;
-        };
-        bar_spacing_near(bar_to_x, anchor.bar_idx, x).map_or(1.0, |spacing| spacing / reference)
+    /// Records `bar_spacing` as the spacing a Text or Anchored text has its set size at, when it
+    /// has none: the bar spacing it is first displayed at. A spacing that is not a positive
+    /// number is not recorded.
+    pub(crate) fn adopt_text_zoom_spacing(&mut self, bar_spacing: f32) {
+        if self.text_zoom_spacing.is_none()
+            && matches!(
+                self.tool_type,
+                DrawingToolType::TextLabel | DrawingToolType::AnchoredText
+            )
+            && !self.chart_points.is_empty()
+            && bar_spacing.is_finite()
+            && bar_spacing > 0.0
+        {
+            self.text_zoom_spacing = Some(bar_spacing);
+        }
+    }
+
+    /// The factor that scales text from its set size: `bar_spacing`, the chart's current bar
+    /// spacing, over `text_zoom_spacing` for text that follows the zoom, and 1 otherwise or
+    /// when `bar_spacing` is not a positive number.
+    pub(crate) fn text_zoom(&self, bar_spacing: f32) -> f32 {
+        match (self.text_follows_zoom, self.text_zoom_spacing) {
+            (true, Some(reference)) if bar_spacing.is_finite() && bar_spacing > 0.0 => {
+                bar_spacing / reference
+            }
+            _ => 1.0,
+        }
     }
 
     /// Rebuilds anchored text coordinates relative to the pane. Call after
@@ -810,7 +918,7 @@ impl Drawing {
     /// in the level settings. Sloping lines are straight on the price axis `scale` paints, so
     /// they are linear in price except on a logarithmic scale.
     /// Fork levels use two stable slots per configured level (first and second line), with
-    /// only the first slot used by a median. Regression levels require
+    /// only the first slot used by a median. Regression and anchored VWAP levels require
     /// [`Self::alert_levels_with_bars`]. Empty for other drawings and for
     /// geometry with no price at `bar`, such as a vertical line or a sloping line through a
     /// non-positive price on a logarithmic scale.
@@ -867,14 +975,7 @@ impl Drawing {
                     ],
                 )
             }
-            (
-                T::Pitchfork
-                | T::SchiffPitchfork
-                | T::ModifiedSchiffPitchfork
-                | T::InsidePitchfork
-                | T::Pitchfan,
-                _,
-            ) => self.fork_alert_levels(bar, scale),
+            (tool, _) if super::alert_levels::is_fork(tool) => self.fork_alert_levels(bar, scale),
             (T::Rect, [a, b, ..]) => named(
                 &["Top", "Bottom"],
                 &[a.price.max(b.price), a.price.min(b.price)],
@@ -1173,31 +1274,30 @@ impl<'de> Deserialize<'de> for Drawing {
 mod tests {
     use super::*;
 
-    /// Text that follows the zoom keeps the bar spacing it is first shown at and is drawn at the
-    /// ratio of the current spacing to it. The widget maps bars in double precision and hands
-    /// out single-precision coordinates, which are rounded to a quarter of a point or more four
-    /// million bars from the view, so the spacing is read near the text.
+    /// Text and Anchored text keep the first positive bar spacing they are shown at and are drawn
+    /// at the ratio of the current spacing to it; other tools record none.
     #[test]
     fn text_scales_by_the_bar_spacing_it_was_sized_at() {
-        let x = |spacing: f64| move |bar: f32| ((f64::from(bar) - 4e6) * spacing) as f32;
         let mut text = Drawing::new(1, DrawingToolType::AnchoredText);
-        text.chart_points = vec![ChartPoint::new(4_000_010.0, 1.0)];
-        text.update_screen_coords(x(0.73), |price| price as f32);
-        let sized_at = text.text_zoom_spacing.unwrap();
-        assert!((sized_at - 0.73).abs() < 1e-5, "{sized_at}");
-        text.update_screen_coords(x(1.46), |price| price as f32);
-        assert_eq!(text.text_zoom_spacing, Some(sized_at));
-        assert_eq!(text.text_zoom(x(1.46), 100.0), 1.0);
+        text.chart_points = vec![ChartPoint::new(10.0, 1.0)];
+        // A spacing that saving would reject is never recorded.
+        for invalid in [0.0, -3.0, f32::NAN, f32::INFINITY] {
+            text.adopt_text_zoom_spacing(invalid);
+            assert_eq!(text.text_zoom_spacing, None, "{invalid}");
+        }
+        text.adopt_text_zoom_spacing(3.0);
+        text.adopt_text_zoom_spacing(6.0);
+        assert_eq!(text.text_zoom_spacing, Some(3.0));
+        assert_eq!(text.text_zoom(6.0), 1.0);
 
         text.text_follows_zoom = true;
-        // Anchored text keeps the bar it was placed on, here far left of where it is drawn.
-        text.chart_points[0].bar_idx = 0.0;
-        let zoom = text.text_zoom(x(1.46), 100.0);
-        assert!((zoom - 2.0).abs() < 1e-4, "{zoom}");
+        assert_eq!(text.text_zoom(6.0), 2.0);
+        assert_eq!(text.text_zoom(f32::NAN), 1.0);
+        assert_eq!(text.text_zoom(0.0), 1.0);
 
         let mut line = Drawing::new(2, DrawingToolType::TrendLine);
-        line.chart_points = vec![ChartPoint::new(4_000_010.0, 1.0)];
-        line.update_screen_coords(x(0.73), |price| price as f32);
+        line.chart_points = vec![ChartPoint::new(10.0, 1.0)];
+        line.adopt_text_zoom_spacing(3.0);
         assert_eq!(line.text_zoom_spacing, None);
     }
 

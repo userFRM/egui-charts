@@ -280,22 +280,36 @@ pub(super) fn range_bars(
     )
 }
 
-/// Range bars built from executions, kept until the executions, the range size or the replay
-/// cutoff change.
+/// Range bars built from executions, after the range bars the chart's bars approximate before
+/// the first held trade. The executions are built again when they, the range size or the replay
+/// cutoff change, and joined again when the approximated part changes.
 #[derive(Default)]
 pub(crate) struct ExecutionRanges {
     key: Option<(f64, u64, Option<chrono::DateTime<chrono::Utc>>)>,
+    /// The range bars of the held trades, and the time of the first one.
+    executions: Option<(Vec<Bar>, chrono::DateTime<chrono::Utc>)>,
+    /// The approximated range bars before the bar holding the first held trade, as the cache built
+    /// them: a new build gives a new `Arc`. Held instead of the build, whose `Rc` is not `Send`.
+    approximated: Option<Arc<[Bar]>>,
     built: Option<(Arc<[Bar]>, bool)>,
+    /// Whether `built` starts with approximated range bars.
+    mixed: bool,
 }
 
 impl ExecutionRanges {
-    /// One bar per range bar of the trades before `cutoff` (all of them without one), and whether
-    /// older range bars were left out by the bar limit; `trades_revision` identifies `trades`.
-    /// `None` for an invalid range size, one that waits for history or without a trade, when the
-    /// range bars come from the chart's OHLC bars.
+    /// One bar per range bar, and whether older range bars were left out by the bar limit. The
+    /// range bars come from the trades before `cutoff` (all of them without one), after the
+    /// closed range bars approximated from the bars of `history` that open before the bar of
+    /// `clock` that the first such trade joins, on a daily or longer clock with a session the bar
+    /// of its trading date; `trades_revision` identifies `trades` and
+    /// `history_revision` `history`. `None` for an invalid range size, one that waits for
+    /// history or without a trade, when the range bars come from the chart's OHLC bars alone.
     pub(crate) fn bars<'a>(
         &mut self,
         params: &ChartTypeParams,
+        history: &[Bar],
+        history_revision: u64,
+        clock: &crate::model::BarClock,
         trades_revision: u64,
         trades: impl Iterator<Item = &'a crate::model::Tick>,
         cutoff: Option<chrono::DateTime<chrono::Utc>>,
@@ -309,26 +323,67 @@ impl ExecutionRanges {
         let key = (params.range_size, trades_revision, cutoff);
         if self.key != Some(key) {
             let mut builder = RangeBarBuilder::new(params.range_size);
+            let mut first = None;
             for trade in trades.filter(|t| cutoff.is_none_or(|c| t.ts < c)) {
+                first.get_or_insert(trade.ts);
                 builder.push_tick(trade);
             }
-            let bars: Arc<[Bar]> = builder
-                .elements()
-                .iter()
+            let bars: Vec<_> = (builder.elements().iter())
                 .map(range_bar::RangeBar::to_bar)
                 .collect();
-            self.built = (!bars.is_empty()).then(|| {
-                let trimmed = bars.len() >= range_bar::MAX_BARS;
-                (bars, trimmed)
-            });
+            self.executions = first.map(|first| (bars, first));
             self.key = Some(key);
+            self.built = None;
+        }
+        let Some((executions, first)) = &self.executions else {
+            (self.built, self.approximated, self.mixed) = (None, None, false);
+            return None;
+        };
+        // The bar holding the first trade is left out: the trades from it on replace its OHLC. A
+        // trade-based bar opens at its first trade, so the last one open by then holds it.
+        let before = if clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
+            history
+                .partition_point(|bar| bar.time <= *first)
+                .saturating_sub(1)
+        } else {
+            let open = clock.instant_open(*first);
+            history.partition_point(|bar| clock.bar_open(bar.time) < open)
+        };
+        let approximated =
+            (before > 0).then(|| range_bars(&history[..before], history_revision, params));
+        let unchanged = match (&approximated, &self.approximated) {
+            (Some(new), Some(old)) => Arc::ptr_eq(&new.bars, old),
+            (new, old) => new.is_none() && old.is_none(),
+        };
+        if self.built.is_none() || !unchanged {
+            // The range in progress at the first trade is dropped: the trades open the next one.
+            let (closed, late_start) = approximated.as_deref().map_or((&[][..], false), |built| {
+                let open = usize::from(built.builder.has_open_bar());
+                (&built.bars[..built.bars.len() - open], built.late_start)
+            });
+            let all = closed.len() + executions.len();
+            let skipped = all.saturating_sub(range_bar::MAX_BARS);
+            let bars: Arc<[Bar]> = closed
+                .iter()
+                .chain(executions)
+                .skip(skipped)
+                .cloned()
+                .collect();
+            self.built = Some((bars, late_start || all >= range_bar::MAX_BARS));
+            self.mixed = closed.len() > skipped;
+            self.approximated = approximated.map(|built| built.bars.clone());
         }
         self.built.clone()
     }
 
-    /// Whether the last bars came from executions.
-    pub(crate) fn in_use(&self) -> bool {
-        self.built.is_some()
+    /// What the last bars were built from.
+    pub(crate) fn source(&self) -> crate::model::RangeBarSource {
+        use crate::model::RangeBarSource::{Executions, OhlcApproximation, OhlcThenExecutions};
+        match (&self.built, self.mixed) {
+            (None, _) => OhlcApproximation,
+            (Some(_), false) => Executions,
+            (Some(_), true) => OhlcThenExecutions,
+        }
     }
 }
 
@@ -835,6 +890,31 @@ mod tests {
                 if i < 2 { 0.0 } else { 4.0 }
             );
         }
+        // Fourteen flat bars give an ATR(14) of 0, so the size waits for a bar with a range,
+        // streamed in or reached by a replay step: a 15th true range of max(2, 1, 1) = 2 smooths
+        // the seed of 0 to 2 / 14.
+        let mut flat = Chart::new(BarData::new());
+        flat.set_chart_type_params(ChartTypeParams {
+            renko_size_method: BoxSizeMethod::Atr {
+                period: 14,
+                multiplier: 1.0,
+            },
+            ..Default::default()
+        });
+        let mut stream = bars(0, &[100.0; 15], None);
+        (stream[14].high, stream[14].low) = (101.0, 99.0);
+        let last = stream[14].time;
+        for (i, bar) in stream.into_iter().enumerate() {
+            flat.update(SeriesId::MAIN, bar);
+            paint(&mut flat);
+            let size = if i < 14 { 0.0 } else { 2.0 / 14.0 };
+            assert!((flat.chart_type_params().renko_brick_size - size).abs() < 1e-12);
+        }
+        for (cursor, size) in [(last, 0.0), (last + Duration::minutes(1), 2.0 / 14.0)] {
+            flat.set_replay_time(Some(cursor));
+            paint(&mut flat);
+            assert!((flat.chart_type_params().renko_brick_size - size).abs() < 1e-12);
+        }
     }
 
     #[test]
@@ -973,6 +1053,97 @@ mod tests {
                     assert_eq!(resumed.0.last().unwrap().close, 2_000_105.0);
                 }
             }
+        }
+    }
+
+    /// The bar that the first held trade joins is left out of the approximation, so its moves
+    /// after that trade are drawn once, from the trades. A bar of a trade-based interval opens at
+    /// its first trade, so the held trades can start inside a bar that opens before them, as after
+    /// the oldest held trades are dropped. On a daily chart with a session the first trade joins
+    /// the bar of its trading date, which an evening trade opens before the date's calendar day.
+    #[test]
+    fn range_bars_leave_the_bar_of_the_first_trade_to_the_trades() {
+        use crate::model::{BarClock, Tick};
+        // (clock, history bars as (time, open, high, low, close), trades as (time, price),
+        // range bar closes)
+        type Row = (BarClock, Vec<Bar>, Vec<Tick>, Vec<f64>);
+        let bars = |rows: &[(chrono::DateTime<Utc>, f64, f64, f64, f64)]| {
+            Vec::from_iter((rows.iter()).map(|&(at, o, h, l, c)| Bar::new(at, o, h, l, c, 3.0)))
+        };
+        let ticks = |rows: &[(chrono::DateTime<Utc>, f64)]| {
+            Vec::from_iter((rows.iter()).map(|&(at, price)| Tick::new(at, price, 1.0, None)))
+        };
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let at = |second| start + Duration::seconds(second);
+        #[cfg_attr(not(feature = "timezones"), allow(unused_mut))]
+        let mut rows: Vec<Row> = vec![(
+            BarClock::new("3t".parse().unwrap()),
+            // Bars of three trades: 99, 99, 100; 100, 100, 101; 101, 101, 104; then 104, 105.
+            bars(&[
+                (at(0), 99.0, 100.0, 99.0, 100.0),
+                (at(3), 100.0, 101.0, 100.0, 101.0),
+                (at(6), 101.0, 104.0, 101.0, 104.0),
+                (at(9), 104.0, 105.0, 104.0, 105.0),
+            ]),
+            // The trades from the second one of the third bar on.
+            ticks(&[
+                (at(7), 101.0),
+                (at(8), 104.0),
+                (at(9), 104.0),
+                (at(10), 105.0),
+            ]),
+            // The first two bars close range bars at 100 and 101, and the trades at 102 to 105.
+            vec![100.0, 101.0, 102.0, 103.0, 104.0, 105.0],
+        )];
+        // Chicago futures trade 17:00 to 16:00 local, CST being UTC-6, their daily bars opening
+        // at 06:00 UTC: 17:30 on Monday 8 January trades Tuesday, so Monday's rise to 103 closes
+        // range bars at 102 and 103 before the trades take over.
+        #[cfg(feature = "timezones")]
+        {
+            use crate::model::{Session, SessionWindow, Timeframe, TimezoneId};
+            use chrono::{NaiveTime, Weekday::*};
+            let chicago = TimezoneId::named("America/Chicago").unwrap();
+            let hm = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+            let day = |date: u32, hour, minute| {
+                Utc.with_ymd_and_hms(2024, 1, date, hour, minute, 0)
+                    .unwrap()
+            };
+            rows.push((
+                BarClock::new(Timeframe::Day1)
+                    .with_timezone(chicago.clone())
+                    .with_session(
+                        chicago,
+                        Session::new([SessionWindow::new(
+                            [Mon, Tue, Wed, Thu, Fri],
+                            hm(17),
+                            hm(16),
+                        )]),
+                        false,
+                    ),
+                bars(&[
+                    (day(4, 6, 0), 99.0, 100.0, 99.0, 100.0),
+                    (day(5, 6, 0), 100.0, 101.0, 100.0, 101.0),
+                    (day(8, 6, 0), 101.0, 103.0, 101.0, 103.0),
+                    (day(9, 6, 0), 103.0, 105.0, 103.0, 105.0),
+                ]),
+                ticks(&[
+                    (day(8, 23, 30), 103.0),
+                    (day(9, 15, 0), 104.0),
+                    (day(9, 16, 0), 105.0),
+                ]),
+                vec![100.0, 101.0, 102.0, 103.0, 104.0, 105.0],
+            ));
+        }
+        let params = ChartTypeParams {
+            range_size: 1.0,
+            ..Default::default()
+        };
+        for (clock, history, trades, expected) in rows {
+            let (bars, _) = ExecutionRanges::default()
+                .bars(&params, &history, 0, &clock, 0, trades.iter(), None)
+                .unwrap();
+            let closes: Vec<_> = bars.iter().map(|bar| bar.close).collect();
+            assert_eq!(closes, expected, "{:?}", clock.timeframe());
         }
     }
 

@@ -42,6 +42,7 @@ use crate::ui_kit::ext::UiExt;
 /// let action = panel.show(ui, None, &mut sources);
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct ObjectTreePanel {
     /// Configuration
     config: ObjectTreeConfig,
@@ -538,12 +539,15 @@ impl ObjectTreePanel {
                         ("3", format!("{}", visible)),
                         (
                             "4",
-                            (if selected > 0 {
-                                format!(" • {selected} selected")
+                            if selected > 0 {
+                                l10n::format_text(
+                                    ui.ctx(),
+                                    " • {count} selected",
+                                    &[("count", selected.to_string())],
+                                )
                             } else {
                                 String::new()
-                            })
-                            .to_string(),
+                            },
                         ),
                     ],
                 ))

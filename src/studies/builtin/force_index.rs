@@ -7,7 +7,7 @@ use egui::Color32;
 /// Force Index
 /// Measures the force behind price movements using price change and volume
 /// Developed by Alexander Elder
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ForceIndex {
     /// EMA period for smoothing (typically 13)
     period: usize,
@@ -44,6 +44,10 @@ impl Default for ForceIndex {
 }
 
 impl Indicator for ForceIndex {
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Volume
+    }
+
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
             crate::model::PriceSource::Close,
@@ -99,6 +103,13 @@ impl Indicator for ForceIndex {
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if !colors.is_empty() {
             self.color = colors[0];
+        }
+    }
+
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            levels: vec![(0.0, crate::studies::palette::GRAY, "Zero")],
+            ..Default::default()
         }
     }
 

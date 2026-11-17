@@ -34,7 +34,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Parabolic SAR indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ParabolicSAR {
     initial_af: f64,
     af_step: f64,
@@ -90,7 +90,7 @@ impl Default for ParabolicSAR {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     previous: Option<[f64; 3]>,
     before_previous: Option<[f64; 2]>,

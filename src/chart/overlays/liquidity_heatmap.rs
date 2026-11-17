@@ -45,8 +45,16 @@ struct Column {
 /// Brightness and resting-size range of the liquidity heatmap. Defaults shade logarithmically
 /// against an upper cut-off shared by every held column. Does not change the sampled depth, best
 /// bid/ask lines or live book profile. Serializable for host chart settings.
+///
+/// ```
+/// use egui_charts::chart::overlays::LiquidityHeatmapConfig;
+///
+/// let mut config = LiquidityHeatmapConfig::default();
+/// config.brightness = 1.5;
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct LiquidityHeatmapConfig {
     /// Multiplies cell opacity, including order tier marks, saturating at full opacity.
     /// Defaults to 1. Negative values act as zero; non-finite values use the default.
@@ -121,6 +129,14 @@ pub struct LiquidityHeatmap {
     held_rows: usize,
     /// The size tiers, by bit pattern, and the tier colours the held texels were drawn with.
     marks: Option<([u64; 2], [Color32; 2])>,
+}
+
+impl std::fmt::Debug for LiquidityHeatmap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiquidityHeatmap")
+            .field("size", &self.size)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LiquidityHeatmap {

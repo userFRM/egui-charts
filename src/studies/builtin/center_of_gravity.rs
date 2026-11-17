@@ -7,7 +7,7 @@ use egui::Color32;
 /// Center of Gravity Oscillator
 /// Developed by John Ehlers
 /// Uses a weighted moving avg to identify reversal points
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CenterOfGravity {
     /// Lookback period (typically 10)
     period: usize,

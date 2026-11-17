@@ -33,10 +33,12 @@ fn legend_marks_a_chart_only_while_it_replays() {
 }
 
 /// Renders `chart` with a footprint of one two-lot buy at every tick of every bar, the example
-/// of #2458, at `spacing` points per bar, and returns the shapes with the chart.
+/// of #2458, aggregated `input` ticks a row, at `spacing` points per bar, and returns the shapes
+/// with the chart.
 fn host_footprint(
     mut chart: crate::widget::Chart,
     config: &crate::chart::overlays::FootprintConfig,
+    input: u32,
     spacing: f32,
 ) -> (Vec<egui::epaint::ClippedShape>, crate::widget::Chart) {
     use crate::data::Footprint;
@@ -44,7 +46,7 @@ fn host_footprint(
     let ctx = egui::Context::default();
     chart.set_symbol("FLOW");
     chart.apply_synced_time_scale(spacing, 1.0);
-    let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+    let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, input).unwrap();
     for bar in chart.bars(crate::widget::SeriesId::MAIN) {
         for price in bar.low as i32..=bar.high as i32 {
             flow.push(&Tick::new(
@@ -69,21 +71,81 @@ fn host_footprint(
     (std::mem::take(&mut output.shapes), chart)
 }
 
-/// A low of 103 lies in the four-tick row 100..103, whose bottom edge is 99.5.
+/// Asserts that every bar of `chart` with a low of `low` whose column lies in the plot writes its
+/// delta and total below `edge`, the bottom edge of its lowest row, and inside the plot.
+fn assert_lowest_summaries_in_plot(
+    shapes: &[egui::epaint::ClippedShape],
+    chart: &crate::widget::Chart,
+    low: f64,
+    edge: f64,
+    case: &str,
+) {
+    let map = chart.get_chart_mapping();
+    let plot = chart.get_rendered_price_rect();
+    let edge = map.price_to_y(edge);
+    let boxes: Vec<_> = shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            Shape::Text(text) if text.galley.text() == "Delta" => {
+                Some(Rect::from_min_size(text.pos, text.galley.size()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        boxes
+            .iter()
+            .any(|rect| rect.top() > edge && plot.contains_rect(*rect)),
+        "{case}: plot bottom {}, low {low} at {}, row edge at {edge}, Delta at {boxes:?}",
+        plot.bottom(),
+        map.price_to_y(low)
+    );
+    for (index, bar) in chart.bars(crate::widget::SeriesId::MAIN).iter().enumerate() {
+        let x = map.idx_to_x(index);
+        let half = map.bar_spacing * 0.46;
+        if bar.low != low || x - half < plot.left() || x + half > plot.right() {
+            continue;
+        }
+        for label in ["Delta", "Total"] {
+            assert!(
+                shapes.iter().any(|shape| match &shape.shape {
+                    Shape::Text(text) if text.galley.text() == label => {
+                        let rect = Rect::from_min_size(text.pos, text.galley.size());
+                        (rect.center().x - x).abs() < half
+                            && rect.top() > edge
+                            && plot.contains_rect(rect)
+                    }
+                    _ => false,
+                }),
+                "{case}, low {low}: bar {index} keeps {label} below its lowest row"
+            );
+        }
+    }
+}
+
+/// A low of 103 lies in the four-tick row 100..103, whose bottom edge is 99.5, whether
+/// `row_ticks` groups one-tick input rows by four or the input rows hold four ticks each.
 /// The fit must leave the summary's room below that edge, including with single-tick rows and
 /// with automatic rows, which never group below `row_ticks` and ignore an unusable height.
-/// Beside a bar reaching 250, without a bottom scale margin, automatic rows group seven ticks:
-/// the low of 101 then lies in the row 98..104, whose bottom edge is 97.5.
+/// Fixed single-tick rows fit their edges with a `row_ticks` of 0 as with 1, so without a bottom
+/// scale margin the low of 100 keeps its summary too. Beside a bar reaching 250, without a bottom
+/// scale margin, automatic rows group seven ticks, with a `row_ticks` of 0 or 1 too: the low of
+/// 101 then lies in the row 98..104, whose bottom edge is 97.5.
 #[test]
 fn footprint_summary_below_a_grouped_lowest_row_stays_in_the_plot() {
     use crate::chart::overlays::FootprintConfig;
-    for (auto_row_height, row_ticks, low, high, bottom, edge) in [
-        (None, 1, 100.0, 110.0, 0.1, 99.5),
-        (None, 4, 103.0, 113.0, 0.1, 99.5),
-        (Some(16.0), 4, 103.0, 113.0, 0.1, 99.5),
-        (Some(0.0), 4, 103.0, 113.0, 0.1, 99.5),
-        (Some(f32::NAN), 4, 103.0, 113.0, 0.1, 99.5),
-        (Some(16.0), 4, 101.0, 250.0, 0.0, 97.5),
+    for (auto_row_height, row_ticks, input, low, high, bottom, edge) in [
+        (None, 1, 1, 100.0, 110.0, 0.1, 99.5),
+        (None, 0, 1, 100.0, 110.0, 0.0, 99.5),
+        (None, 4, 1, 103.0, 113.0, 0.1, 99.5),
+        (Some(16.0), 4, 1, 103.0, 113.0, 0.1, 99.5),
+        (Some(0.0), 4, 1, 103.0, 113.0, 0.1, 99.5),
+        (Some(f32::NAN), 4, 1, 103.0, 113.0, 0.1, 99.5),
+        (Some(16.0), 4, 1, 101.0, 250.0, 0.0, 97.5),
+        (Some(16.0), 0, 1, 101.0, 250.0, 0.0, 97.5),
+        (Some(16.0), 1, 1, 101.0, 250.0, 0.0, 97.5),
+        (Some(16.0), 0, 4, 103.0, 113.0, 0.1, 99.5),
+        (None, 0, 4, 103.0, 113.0, 0.1, 99.5),
     ] {
         let config = FootprintConfig {
             auto_row_height,
@@ -92,48 +154,14 @@ fn footprint_summary_below_a_grouped_lowest_row_stays_in_the_plot() {
         };
         let mut bars = chart(&[low, low + 4.0], &[low + 6.0, high]);
         bars.price_scale_mut().options_mut().scale_margins.bottom = bottom;
-        let (shapes, chart) = host_footprint(bars, &config, 160.0);
-        let map = chart.get_chart_mapping();
-        let plot = chart.get_rendered_price_rect();
-        let edge = map.price_to_y(edge);
-        let boxes: Vec<_> = shapes
-            .iter()
-            .filter_map(|shape| match &shape.shape {
-                Shape::Text(text) if text.galley.text() == "Delta" => {
-                    Some(Rect::from_min_size(text.pos, text.galley.size()))
-                }
-                _ => None,
-            })
-            .collect();
-        assert!(
-            boxes
-                .iter()
-                .any(|rect| rect.top() > edge && plot.contains_rect(*rect)),
-            "auto {auto_row_height:?}, row_ticks {row_ticks}: plot bottom {}, low {low} at {}, row edge at {edge}, Delta at {boxes:?}",
-            plot.bottom(),
-            map.price_to_y(low)
+        let (shapes, chart) = host_footprint(bars, &config, input, 160.0);
+        assert_lowest_summaries_in_plot(
+            &shapes,
+            &chart,
+            low,
+            edge,
+            &format!("auto {auto_row_height:?}, row_ticks {row_ticks}, input {input}"),
         );
-        for (index, bar) in chart.bars(crate::widget::SeriesId::MAIN).iter().enumerate() {
-            let x = map.idx_to_x(index);
-            let half = map.bar_spacing * 0.46;
-            if bar.low != low || x - half < plot.left() || x + half > plot.right() {
-                continue;
-            }
-            for label in ["Delta", "Total"] {
-                assert!(
-                    shapes.iter().any(|shape| match &shape.shape {
-                        Shape::Text(text) if text.galley.text() == label => {
-                            let rect = Rect::from_min_size(text.pos, text.galley.size());
-                            (rect.center().x - x).abs() < half
-                                && rect.top() > edge
-                                && plot.contains_rect(rect)
-                        }
-                        _ => false,
-                    }),
-                    "auto {auto_row_height:?}, row_ticks {row_ticks}, low {low}: bar {index} keeps {label} below its lowest row"
-                );
-            }
-        }
     }
 }
 
@@ -150,7 +178,7 @@ fn footprint_drawn_as_candles_keeps_the_candle_fit() {
                 ..Default::default()
             };
             let bars = chart(&[103.0, 107.0], &[109.0, 113.0]);
-            let (_, chart) = host_footprint(bars, &config, 3.0);
+            let (_, chart) = host_footprint(bars, &config, 1, 3.0);
             chart.get_chart_mapping().price_to_y(103.0)
         })
         .collect();
@@ -178,7 +206,7 @@ fn footprint_short_of_two_automatic_rows_keeps_the_minimum_group_fit() {
             };
             let mut bars = chart(&[101.0, 105.0], &[107.0, 250.0]);
             bars.set_size(Some(egui::vec2(1440.0, 105.0)));
-            let (_, mut chart) = host_footprint(bars, &config, 160.0);
+            let (_, mut chart) = host_footprint(bars, &config, 1, 160.0);
             chart.price_scale_mut().range()
         })
         .collect();
@@ -186,6 +214,99 @@ fn footprint_short_of_two_automatic_rows_keeps_the_minimum_group_fit() {
         ranges[0], ranges[1],
         "fixed four-tick rows, then automatic rows"
     );
+}
+
+/// Rows that zoom leaves one tick tall keep the candles' fit. Bars 100..110 in a plot 465 points
+/// high, with a top scale margin of 46.5 points and none at the bottom, leave 370.5 points for
+/// 10 ticks, rows of 37 points, so the low of 100 sits the summary's room, 48 points, above the
+/// plot bottom; fitting the edge 99.5 of its row would lift it a further 16.8.
+#[test]
+fn one_tick_automatic_rows_keep_the_candle_fit() {
+    use crate::chart::overlays::FootprintConfig;
+    let mut bars = chart(&[100.0, 104.0], &[106.0, 110.0]);
+    bars.price_scale_mut().options_mut().scale_margins.bottom = 0.0;
+    let (_, chart) = host_footprint(bars, &FootprintConfig::default(), 1, 160.0);
+    let plot = chart.get_rendered_price_rect();
+    let low = chart.get_chart_mapping().price_to_y(100.0);
+    assert!(
+        (low - (plot.bottom() - 48.0)).abs() < 0.1,
+        "low 100 at y {low}, plot bottom {}",
+        plot.bottom()
+    );
+}
+
+/// The Volume Footprint chart type's default parameters size its rows by zoom from one-tick
+/// executions. Over bars alternating 101..107 and 105..250 without a bottom scale margin, as in
+/// the summary test above, rows group seven ticks, so the low of 101 lies in the row 98..104,
+/// whose bottom edge is 97.5, and the fit must leave the summary's room below that edge.
+#[test]
+fn zoom_sized_rows_keep_the_lowest_summary_in_the_plot() {
+    use crate::data::{Datafeed, HistoryPage, HistoryRequest, Reply, TradePage, TradeRequest};
+    use crate::model::{Bar, ChartType, Instrument, OrderSide, Tick, Timeframe};
+    use crate::widget::ChartBuilder;
+    use chrono::{DateTime, TimeDelta, Utc};
+    /// 100 one-minute bars from 10:00 alternating 101..107 and 105..250.
+    fn bars() -> Vec<Bar> {
+        let start = "2026-01-05T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        (0..100)
+            .map(|i| {
+                let (low, high) = if i % 2 == 0 {
+                    (101.0, 107.0)
+                } else {
+                    (105.0, 250.0)
+                };
+                Bar::new(start + TimeDelta::minutes(i), low, high, low, high, 1.0)
+            })
+            .collect()
+    }
+    struct Executions;
+    impl Datafeed for Executions {
+        fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+            reply.send(Ok(Instrument::new(symbol).with_tick_size(1.0)));
+        }
+        fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+            reply.send(Ok(HistoryPage::new(bars(), true)));
+        }
+        fn trades(&self, _: TradeRequest, reply: Reply<TradePage>) {
+            // One two-lot buy at every tick of every bar.
+            let trades = bars()
+                .iter()
+                .flat_map(|bar| {
+                    (bar.low as i32..=bar.high as i32).map(move |price| {
+                        Tick::new(bar.time, f64::from(price), 2.0, Some(OrderSide::Buy))
+                    })
+                })
+                .collect();
+            reply.send(Ok(TradePage::new(trades, true)));
+        }
+    }
+    let ctx = egui::Context::default();
+    let mut chart = ChartBuilder::new()
+        .with_feed(std::sync::Arc::new(Executions))
+        .with_symbol("FLOW")
+        .with_timeframe(Timeframe::Min1)
+        .with_chart_type(ChartType::VolumeFootprint)
+        .build();
+    chart.set_server_time(Some(
+        "2026-01-05T11:41:00Z".parse::<DateTime<Utc>>().unwrap(),
+    ));
+    chart.price_scale_mut().options_mut().scale_margins.bottom = 0.0;
+    let mut shapes = Vec::new();
+    for _ in 0..5 {
+        chart.apply_synced_time_scale(160.0, 1.0);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 500.0))),
+                ..Default::default()
+            },
+            |ui| {
+                chart.show(ui);
+            },
+        );
+        output.textures_delta.clear();
+        shapes = output.shapes;
+    }
+    assert_lowest_summaries_in_plot(&shapes, &chart, 101.0, 97.5, "feed, default parameters");
 }
 
 #[test]
@@ -919,6 +1040,109 @@ fn zoomed_out_bars_merge_per_pixel_and_keep_their_extremes() {
     assert!(chart.merge_groups.groups.is_empty());
 }
 
+/// A line-based main series runs on to both plot edges while bars exist beyond them, as an
+/// added series does, its fill follows, and Line with markers marks only the bars in view.
+#[test]
+fn line_based_main_series_reach_the_plot_edges() {
+    use crate::model::{BarData, ChartType, ChartTypeStyles};
+    use egui::{Color32, epaint::ColorMode};
+    type Row = (ChartType, fn(&ChartTypeStyles) -> [Color32; 2], bool);
+    let rows: [Row; 6] = [
+        (ChartType::Line, |s| [s.line.color; 2], false),
+        (ChartType::StepLine, |s| [s.step_line.color; 2], false),
+        (
+            ChartType::LineWithMarkers,
+            |s| [s.line_with_markers.color; 2],
+            false,
+        ),
+        (ChartType::Area, |s| [s.area.line.color; 2], true),
+        (
+            ChartType::Baseline,
+            |s| [s.baseline.above.color, s.baseline.below.color],
+            true,
+        ),
+        (
+            ChartType::HlcArea,
+            |s| [s.hlc_area.close_line.color; 2],
+            false,
+        ),
+    ];
+    let ctx = egui::Context::default();
+    // 30.1 bars back neither edge cuts a bar's point; 30.9 bars back the left edge falls 9
+    // points before the first point in view.
+    for offset in [-30.1, -30.9] {
+        for (chart_type, colors, fills) in rows {
+            let mut chart = chart(&[100.0, 104.0], &[110.0, 108.0]);
+            chart.set_chart_type(chart_type);
+            // The price line spans the plot in the series' colour.
+            chart.main_series_style.price_line_visible = false;
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            chart.apply_synced_time_scale(40.0, offset);
+            let shapes = shapes(&ctx, &mut chart, 0.1, Vec::new());
+            let plot = chart.get_rendered_price_rect();
+            let colors = colors(&chart.chart_type_params.styles);
+            let xs: Vec<f32> = shapes
+                .iter()
+                .flat_map(|shape| match shape {
+                    Shape::Path(path)
+                        if colors
+                            .iter()
+                            .any(|c| path.stroke.color == ColorMode::Solid(*c)) =>
+                    {
+                        path.points.iter().map(|p| p.x).collect()
+                    }
+                    Shape::LineSegment { points, stroke } if colors.contains(&stroke.color) => {
+                        points.iter().map(|p| p.x).collect()
+                    }
+                    _ => Vec::new(),
+                })
+                .collect();
+            let left = xs.iter().copied().fold(f32::INFINITY, f32::min);
+            let right = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let row = format!("{chart_type:?} at {offset}");
+            assert!(
+                left < plot.left() && right > plot.right(),
+                "{row}: {left}..{right}"
+            );
+            if fills {
+                // The fill has a vertex at each end of the line.
+                let vertex_at = |x: f32| {
+                    shapes.iter().any(|shape| {
+                        matches!(shape, Shape::Mesh(mesh)
+                            if mesh.vertices.iter().any(|v| v.pos.x == x))
+                    })
+                };
+                assert!(vertex_at(left) && vertex_at(right), "{row}");
+            }
+            if chart_type == ChartType::LineWithMarkers {
+                let half = chart.state.time_scale().bar_spacing() / 2.0;
+                let marked = |x: f32| x > plot.left() - half && x < plot.right() + half;
+                assert!(
+                    shapes.iter().all(|shape| match shape {
+                        Shape::Circle(circle) if circle.fill == colors[0] =>
+                            marked(circle.center.x),
+                        _ => true,
+                    }),
+                    "{row}"
+                );
+            }
+        }
+    }
+    // Without bars of its own the chart draws the whitespace slots of its added series.
+    let bars = chart(&[100.0], &[110.0])
+        .bars(crate::widget::SeriesId::MAIN)
+        .to_vec();
+    let mut chart = crate::widget::Chart::new(BarData::new());
+    let added = chart.add_series(crate::widget::SeriesOptions::default());
+    chart.set_data(added, bars);
+    chart.set_chart_type(ChartType::Line);
+    frame(&ctx, &mut chart, 0.0, Vec::new());
+    assert!(chart.state.shows_fallback());
+    // Scrolled into history, the first slot in view is past the empty `full_data`.
+    chart.apply_synced_time_scale(40.0, -10.0);
+    shapes(&ctx, &mut chart, 0.1, Vec::new());
+}
+
 /// Bars whose footprint cells are not drawn show candles: all bars, merged per pixel column,
 /// at the minimum spacing, and only the bars without complete executions at a wide one.
 #[test]
@@ -1001,10 +1225,16 @@ fn first_frame_is_settled_and_an_idle_chart_repaints_only_for_a_drawn_countdown(
     // A host that repaints only on input or new data shows this frame until the next event.
     use crate::model::{Bar, BarData, ChartType};
     use std::time::Duration;
+    // A drawn countdown repaints when its label next changes. Each frame sets the server clock
+    // half a second into a second, so that is half a second less the frame's own time.
+    let countdown = Duration::from_millis(250)..=Duration::from_millis(500);
+    let settled = || Duration::MAX..=Duration::MAX;
     let cases = [
-        (false, true, Duration::MAX, None, ChartType::Candles),
-        (true, true, Duration::from_secs(1), None, ChartType::Candles),
-        (true, false, Duration::MAX, None, ChartType::Candles),
+        (false, true, false, settled(), None, ChartType::Candles),
+        (true, true, false, countdown, None, ChartType::Candles),
+        (true, false, false, settled(), None, ChartType::Candles),
+        // A paused replay's clock stands still, so its countdown never changes.
+        (true, true, true, settled(), None, ChartType::Candles),
     ]
     .into_iter()
     .chain([0, 1, 128].into_iter().flat_map(|count| {
@@ -1014,9 +1244,9 @@ fn first_frame_is_settled_and_an_idle_chart_repaints_only_for_a_drawn_countdown(
             ChartType::Area,
             ChartType::Heikin,
         ]
-        .map(move |kind| (false, true, Duration::MAX, Some(count), kind))
+        .map(move |kind| (false, true, false, settled(), Some(count), kind))
     }));
-    for (server_time, axis, delay, flat_count, kind) in cases {
+    for (server_time, axis, replay, delay, flat_count, kind) in cases {
         let ctx = egui::Context::default();
         let mut chart = if let Some(count) = flat_count {
             let bars = (0..count)
@@ -1033,12 +1263,21 @@ fn first_frame_is_settled_and_an_idle_chart_repaints_only_for_a_drawn_countdown(
         chart.set_visible_bars(50);
         chart.set_timeframe(crate::model::Timeframe::Min1);
         chart.config.show_right_axis = axis;
-        chart.set_server_time(
-            server_time.then(|| {
-                chart.state.data().bars.last().unwrap().time + chrono::Duration::seconds(30)
-            }),
-        );
+        let last = chart.state.data().bars.last().map(|bar| bar.time);
+        if replay {
+            // Bar replay forms the newest bar from the finer bars before its cursor.
+            let last = last.unwrap();
+            chart.set_replay_time(Some(last + chrono::Duration::seconds(30)));
+            let source = vec![Bar::new(last, 104.0, 108.0, 104.0, 108.0, 1.0)];
+            let clock = crate::model::BarClock::new(crate::model::Timeframe::Sec5);
+            assert!(chart.set_replay_source(source, clock));
+            assert!(chart.current_bar_countdown().is_some());
+        }
         let mut run = || {
+            // Set in each frame, so the frame's own time is all that has run of the second.
+            chart.set_server_time(
+                server_time.then(|| last.unwrap() + chrono::Duration::milliseconds(30_500)),
+            );
             let input = egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
                 ..Default::default()
@@ -1079,13 +1318,16 @@ fn first_frame_is_settled_and_an_idle_chart_repaints_only_for_a_drawn_countdown(
             let (shapes, actual) = run();
             if flat_count.is_none() {
                 // A drawn countdown changes its text as the clock runs.
-                if delay == Duration::MAX {
+                if *delay.start() == Duration::MAX {
                     assert!(
                         shapes == first,
                         "the first frame must draw the settled chart"
                     );
                 }
-                assert_eq!(actual, delay, "server time {server_time}, axis {axis}");
+                assert!(
+                    delay.contains(&actual),
+                    "server time {server_time}, axis {axis}, replay {replay}: {actual:?}"
+                );
             }
         }
     }
@@ -1207,6 +1449,16 @@ fn volume_uses_themes_alpha_and_pitch_above_a_configured_baseline() {
 }
 
 /// Saved settings drive feed footprints, selected statistics and session profiles together.
+///
+/// Rows from the average true range take the bars before the newest, which may still be
+/// forming. Their true ranges are 103 - 98 = 5, then max(102 - 97, |102 - 100|, |97 - 100|) = 5,
+/// then max(124 - 114, |124 - 99|, |114 - 99|) = 25 from the close of 99 below the gap. Length
+/// 14 averages the three bars there are: 35 / 3 = 11.67, a fifth is 2.33, so rows of 2 ticks.
+/// Length 2 averages the last two, the older by its own range of 5: (5 + 25) / 2 = 15, a fifth
+/// is 3, so rows of 3.
+///
+/// Open interest of 500 from 09:59 is in effect at the 10:00 open and 507 is published at
+/// 10:00:30, so the bar reads 507 and 500; without open interest its rows stay out of the table.
 #[cfg(feature = "ui")]
 #[test]
 fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
@@ -1217,7 +1469,14 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
     };
     use crate::widget::{Chart, ChartBuilder, ChartSnapshot};
     use chrono::{TimeDelta, Utc};
-    struct Executions(bool);
+    /// One traded bar, a session profile, or the bars of the average true range above.
+    #[derive(PartialEq)]
+    enum Flow {
+        Bar,
+        Profile,
+        Atr,
+    }
+    struct Executions(Flow);
     impl Datafeed for Executions {
         fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
             reply.send(Ok(Instrument::new(symbol).with_tick_size(1.0)));
@@ -1226,20 +1485,32 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
             let time = "2026-01-05T10:00:00Z"
                 .parse::<chrono::DateTime<Utc>>()
                 .unwrap();
-            let high = if self.0 { 102.0 } else { 101.0 };
-            reply.send(Ok(HistoryPage::new(
-                vec![Bar::new(time, 100.0, high, 100.0, 101.0, 10.0)],
-                true,
-            )));
+            let bars: Vec<_> = match self.0 {
+                Flow::Atr => [
+                    (100.0, 103.0, 98.0, 100.0),
+                    (100.0, 102.0, 97.0, 99.0),
+                    (115.0, 124.0, 114.0, 115.0),
+                    (104.0, 105.0, 100.0, 101.0),
+                ]
+                .into_iter()
+                .zip((-3..=0).map(|minutes| time + TimeDelta::minutes(minutes)))
+                .map(|((open, high, low, close), time)| {
+                    Bar::new(time, open, high, low, close, 10.0)
+                })
+                .collect(),
+                Flow::Profile => vec![Bar::new(time, 100.0, 102.0, 100.0, 101.0, 10.0)],
+                Flow::Bar => vec![Bar::new(time, 100.0, 101.0, 100.0, 101.0, 10.0)],
+            };
+            reply.send(Ok(HistoryPage::new(bars, true)));
         }
         fn trades(&self, _: TradeRequest, reply: Reply<TradePage>) {
             let time = "2026-01-05T10:00:00Z"
                 .parse::<chrono::DateTime<Utc>>()
                 .unwrap();
-            let levels = if self.0 {
-                vec![(100.0, 1.0), (101.0, 6.0), (102.0, 3.0)]
-            } else {
-                vec![(100.0, 2.0), (101.0, 3.0)]
+            let levels = match self.0 {
+                Flow::Atr => (0..6).map(|i| (100.0 + i as f64, 2f64.powi(i))).collect(),
+                Flow::Profile => vec![(100.0, 1.0), (101.0, 6.0), (102.0, 3.0)],
+                Flow::Bar => vec![(100.0, 2.0), (101.0, 3.0)],
             };
             reply.send(Ok(TradePage::new(
                 levels
@@ -1264,7 +1535,7 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
     }
     let ctx = egui::Context::default();
     let mut chart = ChartBuilder::new()
-        .with_feed(std::sync::Arc::new(Executions(false)))
+        .with_feed(std::sync::Arc::new(Executions(Flow::Bar)))
         .with_symbol("FLOW")
         .with_timeframe(Timeframe::Min1)
         .with_chart_type(ChartType::VolumeFootprint)
@@ -1328,7 +1599,7 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
                 .as_ref()
                 .unwrap();
             assert_eq!(
-                flow.price_step(),
+                flow.live.price_step(),
                 1.0,
                 "display grouping keeps the source executions"
             );
@@ -1354,30 +1625,116 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
         lows[0],
         lows[1]
     );
+    let mut atr = ChartBuilder::new()
+        .with_feed(std::sync::Arc::new(Executions(Flow::Atr)))
+        .with_symbol("ATR")
+        .with_timeframe(Timeframe::Min1)
+        .with_chart_type(ChartType::VolumeFootprint)
+        .build();
+    atr.set_server_time(Some(
+        "2026-01-05T10:02:00Z"
+            .parse::<chrono::DateTime<Utc>>()
+            .unwrap(),
+    ));
+    for _ in 0..5 {
+        draw(&mut atr);
+    }
+    // Rows of 100..105 traded 1, 2, 4, 8, 16 and 32, so every row has a number at its centre.
+    for (length, ticks) in [(14, 2.0), (2, 3.0)] {
+        atr.set_chart_type_params(ChartTypeParams {
+            footprint_modes: vec![FootprintMode::Volume],
+            footprint_row_atr: true,
+            footprint_row_atr_length: length,
+            footprint_poc: false,
+            ..Default::default()
+        });
+        // A zoom in time, and a zoom and a pan in price.
+        for (spacing, low, high) in [(160.0, 90.0, 120.0), (120.0, 80.0, 140.0)] {
+            atr.price_scale_mut().set_range(low, high);
+            draw_at(&mut atr, spacing);
+            let shapes = draw_at(&mut atr, spacing);
+            let map = atr.get_chart_mapping();
+            let mut centres: Vec<_> = shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(text)
+                        if (text.pos.x - map.idx_to_x(3)).abs() < 70.0
+                            && text.pos.y > map.rect.top() + 40.0
+                            && text.pos.y < map.rect.bottom() - 20.0
+                            && text.galley.text().parse::<u32>().is_ok() =>
+                    {
+                        Some(map.y_to_price(text.pos.y + text.galley.size().y / 2.0))
+                    }
+                    _ => None,
+                })
+                .collect();
+            centres.sort_by(f64::total_cmp);
+            let heights: Vec<_> = centres.windows(2).map(|pair| pair[1] - pair[0]).collect();
+            assert!(
+                heights.len() >= 2 && heights.iter().all(|row| (row - ticks).abs() < 0.25),
+                "length {length}, spacing {spacing}, prices {low} to {high}: rows {heights:?}"
+            );
+        }
+    }
     let params = ChartTypeParams {
         footprint_modes: vec![FootprintMode::Delta],
         footprint_row_ticks: 1,
+        footprint_row_atr: true,
+        footprint_row_atr_length: 30,
         footprint_statistics: true,
-        footprint_statistics_rows: vec![FootprintStatistic::Volume, FootprintStatistic::Delta],
+        footprint_statistics_rows: vec![
+            FootprintStatistic::Volume,
+            FootprintStatistic::Delta,
+            FootprintStatistic::OpenInterestHigh,
+            FootprintStatistic::OpenInterestLow,
+        ],
         profile: TradeProfileSettings {
             value_area: Some(0.5),
             ..Default::default()
         },
         ..Default::default()
     };
+    let table = |chart: &mut Chart| {
+        let shapes = draw(chart);
+        let bottom = chart.get_rendered_price_rect().bottom();
+        shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Text(text) if text.pos.y >= bottom && text.pos.y < bottom + 52.0 => {
+                    Some(text.galley.text().to_owned())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let open_interest = crate::data::StudyDataRequest {
+        symbol: String::new(),
+        timeframe: None,
+        metric: Some("open_interest".to_owned()),
+    };
+    // Open interest supplied before a row reads it is kept by the frame that selects the rows.
+    chart.set_study_data(
+        open_interest.clone(),
+        [
+            ("2026-01-05T09:59:00Z", 500.0),
+            ("2026-01-05T10:00:30Z", 507.0),
+        ]
+        .into_iter()
+        .map(|(at, value)| Bar::new(at.parse().unwrap(), value, value, value, value, 0.0))
+        .collect(),
+        None,
+    );
     chart.user_action(|chart| chart.set_chart_type_params(params.clone()));
-    let shapes = draw(&mut chart);
-    let bottom = chart.get_rendered_price_rect().bottom();
-    let labels: Vec<_> = shapes
-        .iter()
-        .filter_map(|s| match &s.shape {
-            Shape::Text(text) if text.pos.y >= bottom && text.pos.y < bottom + 28.0 => {
-                Some(text.galley.text().to_owned())
-            }
-            _ => None,
-        })
-        .collect();
-    assert_eq!(labels, ["Vol", "Delta", "5", "1"]);
+    table(&mut chart);
+    assert_eq!(
+        table(&mut chart),
+        ["Vol", "Delta", "OI high", "OI low", "5", "1", "507", "500"]
+    );
+    let four_rows = chart.get_rendered_price_rect().bottom();
+    // Without open interest the rows are left out, and the table is two rows shorter.
+    chart.set_study_data(open_interest, Vec::new(), None);
+    assert_eq!(table(&mut chart), ["Vol", "Delta", "5", "1"]);
+    assert_eq!(chart.get_rendered_price_rect().bottom() - four_rows, 24.0);
     assert_eq!(chart.trade_profile_settings().value_area, Some(0.5));
     let saved = serde_json::to_vec(&chart.snapshot().unwrap()).unwrap();
     let snapshot: ChartSnapshot = serde_json::from_slice(&saved).unwrap();
@@ -1386,10 +1743,11 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
     assert_eq!(restored.chart_type_params(), &params);
     assert!(chart.undo());
     assert_eq!(chart.trade_profile_settings().value_area, Some(0.7));
+    assert!(!chart.chart_type_params().footprint_row_atr);
     assert!(chart.redo());
     assert_eq!(chart.chart_type_params(), &params);
     let mut profile = ChartBuilder::new()
-        .with_feed(std::sync::Arc::new(Executions(true)))
+        .with_feed(std::sync::Arc::new(Executions(Flow::Profile)))
         .with_symbol("PROFILE")
         .with_timeframe(Timeframe::Min1)
         .with_chart_type(ChartType::SessionVolumeProfile)

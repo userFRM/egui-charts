@@ -352,6 +352,7 @@ impl fmt::Display for ChartType {
 
 /// Numbers shown in a footprint column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FootprintMode {
     /// Sell volume on the left, buy volume on the right.
     BidAsk,
@@ -377,6 +378,7 @@ pub enum FootprintMode {
 
 /// What determines a footprint cell's colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FootprintColor {
     /// Volume relative to the largest row of this bar.
     Volume,
@@ -401,7 +403,15 @@ pub enum FootprintColor {
 ///
 /// The default compares each price row with its immediate neighbours, which is the most
 /// sensitive setting. Raising `smoothing` or `prominence` leaves only the broader nodes.
+///
+/// ```
+/// use egui_charts::data::NodeSensitivity;
+///
+/// let mut sensitivity = NodeSensitivity::default();
+/// sensitivity.smoothing = 3;
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NodeSensitivity {
     /// Rows on each side of a row that are averaged with it before comparing; zero compares
     /// the rows as traded. Untraded rows count as zero volume.
@@ -417,6 +427,7 @@ pub struct NodeSensitivity {
 /// A window that ends at or before its start spans midnight and belongs to the day it ends on.
 /// Clock changes in `zone` move the window with them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CustomProfileSession {
     /// Wall-clock time each session opens, in `zone`.
     pub start: chrono::NaiveTime,
@@ -426,12 +437,43 @@ pub struct CustomProfileSession {
     pub zone: Option<super::TimezoneId>,
 }
 
+impl CustomProfileSession {
+    /// Sessions from `start` to `end` on the instrument's exchange clock, or in UTC without one:
+    /// assign [`zone`](Self::zone) to read them in another zone.
+    ///
+    /// ```
+    /// use chrono::NaiveTime;
+    /// use egui_charts::model::CustomProfileSession;
+    ///
+    /// let open = NaiveTime::from_hms_opt(9, 30, 0).unwrap();
+    /// let close = NaiveTime::from_hms_opt(16, 0, 0).unwrap();
+    /// let session = CustomProfileSession::new(open, close);
+    /// assert_eq!(session.zone, None);
+    /// ```
+    pub fn new(start: chrono::NaiveTime, end: chrono::NaiveTime) -> Self {
+        Self {
+            start,
+            end,
+            zone: None,
+        }
+    }
+}
+
 /// Which hours divide a session volume profile chart into sessions.
 ///
 /// Only intraday charts are divided this way: daily and longer bars profile by trading date.
-/// Bars outside the chosen hours still join the session before them, so a host that wants
-/// them left out should not supply them.
+/// Bars outside regular, extended or custom hours still join the session before them, so a host
+/// that wants them left out should not supply them. The pre-market, post-market and segment
+/// choices profile only the bars of their hours, each bar in the hours it opens in.
+///
+/// ```
+/// use egui_charts::model::{ProfileSession, TradeProfileSettings};
+///
+/// let mut settings = TradeProfileSettings::default();
+/// settings.session = ProfileSession::Segments;
+/// ```
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ProfileSession {
     /// The chart's own calendar: its instrument's hours, with extended hours as the chart shows
     /// them, or calendar days in the instrument's zone without hours.
@@ -444,12 +486,102 @@ pub enum ProfileSession {
     Extended,
     /// The same hours every day, whatever the instrument trades.
     Custom(CustomProfileSession),
+    /// The instrument's pre-market hours alone, one profile per trading date: its extended hours
+    /// that the date's regular hours follow. The chart's calendar without extended hours.
+    PreMarket,
+    /// The instrument's post-market hours alone, one profile per trading date: its extended hours
+    /// after the date's regular hours. The chart's calendar without extended hours.
+    PostMarket,
+    /// One profile for each of the pre-market, regular and post-market hours of every trading
+    /// date. The chart's calendar without extended hours.
+    Segments,
+}
+
+#[cfg(feature = "studies")]
+impl ProfileSession {
+    /// `clock` dividing intraday bars at the opens of the hours this choice selects, for an
+    /// instrument trading `hours` in `zone`: a window opening every day, in its own zone or else
+    /// `zone`, or `hours` with or without their extended windows. `None` for [`Self::Chart`],
+    /// for regular or extended hours without `hours`, and for the pre-market, post-market and
+    /// segment choices without extended windows in `hours`.
+    pub(crate) fn session_clock(
+        &self,
+        clock: &super::BarClock,
+        zone: &super::TimezoneId,
+        hours: Option<&super::Session>,
+    ) -> Option<super::BarClock> {
+        use chrono::Weekday::*;
+        let (zone, session, extended) = match self {
+            Self::Chart => return None,
+            Self::Custom(custom) => {
+                let every_day = [Mon, Tue, Wed, Thu, Fri, Sat, Sun];
+                let window = super::SessionWindow::new(every_day, custom.start, custom.end);
+                let zone = custom.zone.as_ref().unwrap_or(zone);
+                (zone, super::Session::new([window]), false)
+            }
+            Self::Regular | Self::Extended => (zone, hours?.clone(), *self == Self::Extended),
+            Self::PreMarket | Self::PostMarket | Self::Segments => {
+                let hours = hours.filter(|hours| !hours.extended_windows.is_empty())?;
+                (zone, hours.clone(), true)
+            }
+        };
+        Some(clock.clone().with_session(zone.clone(), session, extended))
+    }
+
+    /// The parts of the bars `range`, one session of `sessions`, that this choice profiles, each a
+    /// profile of its own: the runs of pre-market, of regular and of post-market bars for
+    /// [`Self::Segments`], only the pre-market or post-market runs for [`Self::PreMarket`] and
+    /// [`Self::PostMarket`], and for the other choices the whole range, or with `hours_only` its
+    /// bars from the first inside the hours to the last. A bar belongs to the hours it opens in.
+    /// Bars of no hours are left out before, after and between parts; those inside a part, such
+    /// as bars of a midday break, stay in it.
+    pub(crate) fn profiled(
+        &self,
+        bars: &[super::Bar],
+        range: std::ops::Range<usize>,
+        sessions: &super::ExchangeSessionProvider,
+        hours_only: bool,
+    ) -> Vec<std::ops::Range<usize>> {
+        use super::session::MarketSession;
+        let segments = matches!(self, Self::PreMarket | Self::PostMarket | Self::Segments);
+        if !segments && !hours_only {
+            return vec![range];
+        }
+        let mut parts: Vec<(MarketSession, std::ops::Range<usize>)> = Vec::new();
+        for (i, bar) in range.clone().zip(&bars[range]) {
+            let hours = if segments {
+                sessions
+                    .market_session(bar.time)
+                    .filter(|hours| *hours != MarketSession::Closed)
+            } else {
+                // The clock keeps only the windows this choice selects.
+                sessions
+                    .is_open(bar.time, true)
+                    .then_some(MarketSession::Open)
+            };
+            let Some(hours) = hours else { continue };
+            match parts.last_mut() {
+                Some((last, part)) if *last == hours => part.end = i + 1,
+                _ => parts.push((hours, i..i + 1)),
+            }
+        }
+        parts
+            .into_iter()
+            .filter(|(hours, _)| match self {
+                Self::PreMarket => *hours == MarketSession::PreMarket,
+                Self::PostMarket => *hours == MarketSession::PostMarket,
+                _ => true,
+            })
+            .map(|(_, part)| part)
+            .collect()
+    }
 }
 
 /// How a session volume profile groups executions into price rows, in instrument ticks.
 ///
 /// Rows are never finer than the feed's own rows, and align to multiples of their height.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ProfileRows {
     /// The rows the feed groups executions into.
     #[default]
@@ -462,8 +594,16 @@ pub enum ProfileRows {
 
 /// Display settings of the chart's execution-based session profiles.
 /// Defaults retain the stacked session histogram, with optional annotations hidden.
+///
+/// ```
+/// use egui_charts::model::TradeProfileSettings;
+///
+/// let mut settings = TradeProfileSettings::default();
+/// settings.developing_poc = true;
+/// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct TradeProfileSettings {
     /// Hours that divide the chart into sessions.
     pub session: ProfileSession,
@@ -513,7 +653,19 @@ impl Default for TradeProfileSettings {
 }
 
 /// A row of the per-bar execution statistics table.
+///
+/// ```
+/// use egui_charts::model::FootprintStatistic;
+///
+/// let rows = [
+///     FootprintStatistic::Volume,
+///     FootprintStatistic::OpenInterestHigh,
+///     FootprintStatistic::OpenInterestLow,
+/// ];
+/// assert_eq!(rows.map(FootprintStatistic::label), ["Vol", "OI high", "OI low"]);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FootprintStatistic {
     /// Total executed volume, including unknown sides.
     Volume,
@@ -548,11 +700,17 @@ pub enum FootprintStatistic {
     /// The change of total volume from the previous bar with executions, in percent; the first
     /// such bar has none.
     VolumeChange,
+    /// The highest open interest of the bar: the value in effect at its open and every value
+    /// published before its close, from the metric `open_interest` of the chart symbol.
+    OpenInterestHigh,
+    /// The lowest open interest of the bar, from the same values as
+    /// [`OpenInterestHigh`](Self::OpenInterestHigh).
+    OpenInterestLow,
 }
 
 impl FootprintStatistic {
     /// All available rows in their display order.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 18] = [
         Self::Volume,
         Self::Bid,
         Self::Ask,
@@ -569,6 +727,8 @@ impl FootprintStatistic {
         Self::Range,
         Self::PointOfControl,
         Self::VolumeChange,
+        Self::OpenInterestHigh,
+        Self::OpenInterestLow,
     ];
 
     /// Shared table label.
@@ -590,12 +750,15 @@ impl FootprintStatistic {
             Self::Range => "Range",
             Self::PointOfControl => "POC",
             Self::VolumeChange => "Vol change %",
+            Self::OpenInterestHigh => "OI high",
+            Self::OpenInterestLow => "OI low",
         }
     }
 }
 
 /// Where the Baseline chart draws its base line.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum BaselineLevel {
     /// A price.
     Price(f64),
@@ -619,8 +782,17 @@ pub struct ChartTypeParams {
     /// Footprint: buy and sell colours of imbalance strips, imbalance colouring and stacked
     /// imbalance zones. None follows the buy or sell colour.
     pub footprint_imbalance_colors: [Option<egui::Color32>; 2],
-    /// Footprint: instrument ticks per row; zero groups automatically with zoom.
+    /// Footprint: instrument ticks per row; zero groups automatically with zoom. Rows sized by
+    /// `footprint_row_atr` use it only until the chart holds a complete bar.
     pub footprint_row_ticks: u32,
+    /// Footprint: size rows from the average true range of the last `footprint_row_atr_length`
+    /// complete bars the chart holds, not the bars in view, so panning, zooming and loading
+    /// older history keep them. A row is a fifth of the average, in whole instrument ticks and
+    /// at least one. The newest bar, which may still be forming, is left out.
+    pub footprint_row_atr: bool,
+    /// Footprint: length of the average true range that sizes rows, 1 to 200; with fewer
+    /// complete bars the average takes as many as there are.
+    pub footprint_row_atr_length: u32,
     /// Footprint: put a strip along the outer edge of a side that dominates under the imbalance
     /// settings, under [`FootprintColor::VolumeSteps`].
     pub footprint_imbalance: bool,
@@ -762,6 +934,8 @@ impl Default for ChartTypeParams {
             footprint_colors: [None; 4],
             footprint_imbalance_colors: [None; 2],
             footprint_row_ticks: 0,
+            footprint_row_atr: false,
+            footprint_row_atr_length: 14,
             footprint_imbalance: true,
             footprint_poc: true,
             footprint_value_area: Some(0.7),
@@ -882,27 +1056,53 @@ impl ChartTypeParams {
         ]
     }
 
-    /// Resolve pending sizes only when their history is ready. Each successful calculation is
-    /// frozen until explicitly armed again; prepending history and live corrections keep it.
+    /// Resolves the pending sizes from `bars`. A size stays pending while the bars give it no
+    /// positive value, too few bars for its method included, and once they give one it is kept
+    /// until armed again, through prepends and live corrections.
     #[cfg(feature = "widget")]
     pub(crate) fn resolve_sizes(&mut self, bars: &[super::Bar], pending: &mut [bool; 4]) {
         let methods = self.size_methods();
-        // Whitespace bars have no price and do not count, as in `BoxSizeMethod::resolve`. This
-        // runs every frame, so it reads only as many bars as a pending size needs.
-        let loaded = bars.iter().filter(|bar| !bar.is_whitespace());
         for ((method, size), pending) in methods.into_iter().zip(self.sizes_mut()).zip(pending) {
-            if !*pending {
-                continue;
+            if *pending {
+                let resolved = method.resolve(*size, bars);
+                *size = resolved.unwrap_or(0.0);
+                *pending = resolved.is_none();
             }
-            let waiting = match method {
-                super::BoxSizeMethod::Atr { period, .. } => {
-                    loaded.clone().take(period).count() < period
-                }
-                super::BoxSizeMethod::Percentage(_) => loaded.clone().next().is_none(),
-                super::BoxSizeMethod::Fixed => false,
-            };
-            *size = method.resolve(*size, bars).unwrap_or(0.0);
-            *pending = waiting;
+        }
+    }
+
+    /// Instrument ticks per footprint row on `bars` with instrument ticks of `tick`: from the
+    /// average true range of their last complete bars when `footprint_row_atr` chooses it and
+    /// there is one, otherwise `footprint_row_ticks`.
+    #[cfg(feature = "widget")]
+    pub(crate) fn footprint_row_size(&self, bars: &[super::Bar], tick: f64) -> u32 {
+        if !self.footprint_row_atr {
+            return self.footprint_row_ticks;
+        }
+        // The newest bar may still be forming. Of the bars before it only the last `length`
+        // count, so older history that a pan loads leaves the rows as they are. Whitespace bars
+        // have no range, and `BoxSizeMethod::resolve` skips them too.
+        let length = self.footprint_row_atr_length.clamp(1, 200) as usize;
+        let mut loaded = (0..bars.len())
+            .rev()
+            .filter(|&at| !bars[at].is_whitespace());
+        let newest = loaded.next().unwrap_or(0);
+        let complete = loaded.take(length);
+        let first = complete.clone().last().unwrap_or(newest);
+        let count = complete.count();
+        let average = super::BoxSizeMethod::Atr {
+            period: count,
+            multiplier: 0.2,
+        };
+        match average
+            .resolve(0.0, &bars[first..newest])
+            .map(|size| size / tick)
+            .filter(|ticks| ticks.is_finite())
+        {
+            Some(ticks) => ticks.round().clamp(1.0, 1_000_000.0) as u32,
+            // The chart holds valid bars only, so complete bars without a size never moved.
+            None if count > 0 => 1,
+            None => self.footprint_row_ticks,
         }
     }
 
@@ -969,6 +1169,7 @@ mod tests {
     fn saved_execution_settings_keep_choices_and_legacy_defaults() {
         let settings = serde_json::json!({
             "footprint_modes": ["Delta", "BidAskTrades", "Trades", "AverageSize"], "footprint_row_ticks": 2,
+            "footprint_row_atr": true, "footprint_row_atr_length": 30,
             "footprint_value_area": 0.010003969988090037,
             "footprint_statistics": true,
             "footprint_statistics_rows": ["Volume", "Delta", "Trades", "AverageSize", "PointOfControl", "VolumeChange"],
@@ -1019,6 +1220,8 @@ mod tests {
         let legacy = serde_json::to_value(legacy).unwrap();
         assert_eq!(legacy["footprint_statistics"], false);
         assert_eq!(legacy["footprint_row_ticks"], 0);
+        assert_eq!(legacy["footprint_row_atr"], false);
+        assert_eq!(legacy["footprint_row_atr_length"], 14);
         assert_eq!(legacy["tpo_letters"], false);
         assert_eq!(
             legacy["footprint_colors"],
@@ -1048,6 +1251,46 @@ mod tests {
         ] {
             assert_eq!(legacy["profile"][field], false);
         }
+    }
+
+    /// Rows from the average true range take the last `footprint_row_atr_length` complete bars,
+    /// so older bars that a pan loads leave them as they are. Every bar closes at 100 with its
+    /// range centred on it, so its true range is its own range. At length 3 the three bars of
+    /// 10 before the newest, whose 50 may still be forming, average 10, and a fifth of that is 2
+    /// ticks, also with bars of 100 loaded before them. Bars that never moved have no positive
+    /// average and get rows of one tick; with no complete bar the ticks per row apply.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn footprint_rows_average_the_last_complete_bars() {
+        use crate::model::Bar;
+        use chrono::{Duration, TimeZone, Utc};
+        let start = Utc.with_ymd_and_hms(2024, 3, 5, 9, 30, 0).unwrap();
+        let bar = |minute, range: f64| {
+            let (time, half) = (start + Duration::minutes(minute), range / 2.0);
+            Bar::new(time, 100.0, 100.0 + half, 100.0 - half, 100.0, 1.0)
+        };
+        let recent = [
+            bar(3, 10.0),
+            bar(4, 10.0),
+            bar(5, 10.0),
+            Bar::whitespace(start + Duration::minutes(6)),
+            bar(7, 10.0),
+            bar(8, 50.0),
+        ];
+        let paged: Vec<_> = (0..3)
+            .map(|minute| bar(minute, 100.0))
+            .chain(recent.clone())
+            .collect();
+        let flat: Vec<_> = (0..4).map(|minute| bar(minute, 0.0)).collect();
+        let params = ChartTypeParams {
+            footprint_row_ticks: 4,
+            footprint_row_atr: true,
+            footprint_row_atr_length: 3,
+            ..Default::default()
+        };
+        let rows = [&recent[..], &paged[..], &flat[..], &recent[5..]]
+            .map(|bars| params.footprint_row_size(bars, 1.0));
+        assert_eq!(rows, [2, 2, 1, 4], "recent, paged, flat, newest only");
     }
 
     /// A zone chosen from the session zone list is listed once when the list is opened again,

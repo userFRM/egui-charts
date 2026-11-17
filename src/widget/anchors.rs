@@ -104,7 +104,8 @@ impl Chart {
     /// step by calendar months in the display time zone. Numeric and custom axes use key
     /// spacing regardless of the chart timeframe. Empty charts export retained
     /// anchors; an index with no loaded mapping returns an error rather than clamping or
-    /// inventing time.
+    /// inventing time. The document names this chart as its writer in
+    /// [`DrawingStorage::saved_by`].
     pub fn save_drawings(&self) -> Result<DrawingStorage, SaveError> {
         self.store_drawings(
             self.drawings
@@ -122,6 +123,7 @@ impl Chart {
         storage.timeframe = self
             .timeframe()
             .map(|timeframe| timeframe.as_str().into_owned());
+        storage.saved_by = Some(self.data_table_identity);
         for drawing in drawings {
             for (at, point) in drawing.chart_points.iter().enumerate() {
                 if point
@@ -165,12 +167,15 @@ impl Chart {
     /// Restored drawings do not queue writes or enter undo history. Screen coordinates follow
     /// on the next frame. Account, filesystem and cloud storage remain the host's responsibility.
     pub fn load_drawings(&mut self, json: &str) -> Result<Vec<SkippedDrawing>, LoadError> {
-        self.load_drawings_remapped(json, false)
+        let skipped = self.load_drawings_remapped(json, false)?;
+        self.drawing_resets += 1;
+        Ok(skipped)
     }
 
     /// [`Self::load_drawings`]; with `remap`, a drawing whose study was replaced when a snapshot
     /// was restored takes the replacement before its stored pane is matched, since a study's
-    /// input naming another study as its source holds that study's local id.
+    /// input naming another study as its source holds that study's local id. Pass `remap` only
+    /// for drawings whose study ids are those of the chart that took that snapshot.
     pub(super) fn load_drawings_remapped(
         &mut self,
         json: &str,
@@ -734,35 +739,41 @@ mod tests {
     /// are read as a study template reads them; then an input the record does not list must hold
     /// the default its study declares. A different value puts the drawing in the price pane, and
     /// a host study under a built-in's name, which never had the renamed inputs, is matched as
-    /// stored. Loading and pasting agree.
+    /// stored. An SMI record with equal `smooth1` and `smooth2`, as written before an equal pair
+    /// shared one input, matches the SMI that lists them as `smoothing`. Loading and pasting
+    /// agree.
     #[cfg(feature = "studies")]
     #[test]
     fn stored_pane_survives_a_new_study_input() {
-        use crate::studies::{CustomIndicator, IndicatorValue, InputValue, RSI};
+        use crate::studies::{
+            CustomIndicator, Indicator, IndicatorValue, InputValue, RSI, StochasticMomentumIndex,
+        };
         let bars = [0, 60, 180]
             .map(|s| Bar::new(Utc.timestamp_opt(s, 0).unwrap(), 10.0, 11.0, 9.0, 10.0, 1.0))
             .to_vec();
-        let chart = |host: bool| {
+        type Study = fn() -> Box<dyn Indicator>;
+        let rsi: Study = || Box::new(RSI::new(14));
+        let host: Study = || {
+            Box::new(
+                CustomIndicator::new("RSI", |bars: &[Bar]| {
+                    vec![IndicatorValue::Single(50.0); bars.len()]
+                })
+                .with_overlay(false),
+            )
+        };
+        let smi: Study = || Box::new(StochasticMomentumIndex::new(10, 3, 3, 10));
+        let chart = |study: Study| {
             let mut chart = Chart::new(BarData::from_bars(bars.clone()));
             chart.set_symbol("A");
-            let rsi = if host {
-                chart.add_indicator(Box::new(
-                    CustomIndicator::new("RSI", |bars: &[Bar]| {
-                        vec![IndicatorValue::Single(50.0); bars.len()]
-                    })
-                    .with_overlay(false),
-                ))
-            } else {
-                chart.add_indicator(Box::new(RSI::new(14)))
-            };
-            (chart, rsi)
+            let pane = chart.add_indicator(study());
+            (chart, pane)
         };
-        let copied = |host: bool| {
-            let (mut source, rsi) = chart(host);
+        let copied = |study: Study| {
+            let (mut source, pane) = chart(study);
             let mut line = Drawing::new(0, DrawingToolType::HorizontalLine);
             line.chart_points = vec![ChartPoint::new(1.0, 50.0)];
             line.completed = true;
-            line.pane = Some(rsi.0);
+            line.pane = Some(pane.0);
             let id = source.drawings_mut().add_drawing(line).unwrap();
             source.drawings_mut().select(id);
             source.copy_selected_drawings().unwrap().unwrap()
@@ -798,42 +809,62 @@ mod tests {
             period[1] = serde_json::to_value(InputValue::Length(21)).unwrap();
         };
         let unchanged = |_: &mut Vec<serde_json::Value>| {};
+        // The SMI smoothing as written before an equal pair shared one input: the stored length
+        // under `smooth1`, and `second` under `smooth2`.
+        let split = |second: usize| {
+            move |inputs: &mut Vec<serde_json::Value>| {
+                let at = inputs
+                    .iter()
+                    .position(|input| input[0] == "smoothing")
+                    .unwrap();
+                inputs[at][0] = "smooth1".into();
+                let second = serde_json::to_value(InputValue::Length(second)).unwrap();
+                inputs.insert(at + 1, serde_json::json!(["smooth2", second]));
+            }
+        };
         let (last, inner) = (without("wait_for_close"), without("smoothing_deviation"));
         let (no_average, sma, ema) = (without("smoothing"), earlier(1), earlier(2));
+        let (equal, unequal) = (split(3), split(4));
         let wait = |on| Some(("wait_for_close", InputValue::Toggle(on)));
         let smoothing = |choice| Some(("smoothing", InputValue::Choice(choice)));
-        // (host study, stored inputs edit, chart's input, study pane expected)
+        let length = |id, length| Some((id, InputValue::Length(length)));
+        // (chart's study, stored inputs edit, chart's input, study pane expected)
         type Case<'a> = (
-            bool,
+            Study,
             &'a dyn Fn(&mut Vec<serde_json::Value>),
             Option<(&'a str, InputValue)>,
             bool,
         );
-        let cases: [Case<'_>; 8] = [
+        let cases: [Case<'_>; 11] = [
             // From before an input existed: the last one, which the chart adds after the study's
             // own, or one of the study's own, which comes before the chart's.
-            (false, &last, None, true),
-            (false, &inner, None, true),
-            (false, &last, wait(false), false),
-            (false, &other_period, None, false),
+            (rsi, &last, None, true),
+            (rsi, &inner, None, true),
+            (rsi, &last, wait(false), false),
+            (rsi, &other_period, None, false),
             // From before the RSI average took the shared smoothing inputs, where EMA was 2.
-            (false, &sma, smoothing(1), true),
-            (false, &ema, smoothing(3), true),
+            (rsi, &sma, smoothing(1), true),
+            (rsi, &ema, smoothing(3), true),
             // From before the RSI had an average: it drew none, whatever the default is now.
-            (false, &no_average, smoothing(1), false),
+            (rsi, &no_average, smoothing(1), false),
             // A host study named like the built-in, without the inputs its upgrade adds.
-            (true, &unchanged, None, true),
+            (host, &unchanged, None, true),
+            // From before an SMI with equal smoothing lengths listed them as one input. Unequal
+            // lengths are listed apart still, and must equal the chart's.
+            (smi, &equal, None, true),
+            (smi, &unequal, length("smooth2", 4), true),
+            (smi, &equal, length("smoothing", 4), false),
         ];
-        for (at, (host, edit, input, shown)) in cases.into_iter().enumerate() {
-            let text = copied(host);
+        for (at, (study, edit, input, shown)) in cases.into_iter().enumerate() {
+            let text = copied(study);
             let (prefix, json) = text.split_once('\n').unwrap();
             let mut json: serde_json::Value = serde_json::from_str(json).unwrap();
             let inputs = &mut json["drawings"][0]["pane"]["studies"][0][1];
             edit(inputs.as_array_mut().unwrap());
             for paste in [false, true] {
-                let (mut target, rsi) = chart(host);
+                let (mut target, pane) = chart(study);
                 if let Some((id, value)) = &input {
-                    let study = target.indicator_mut(rsi).unwrap();
+                    let study = target.indicator_mut(pane).unwrap();
                     study.set_input(id, value.clone()).unwrap();
                 }
                 if paste {
@@ -841,8 +872,8 @@ mod tests {
                 } else {
                     target.load_drawings(&json.to_string()).unwrap();
                 }
-                let pane = target.drawings().drawings[0].pane;
-                assert_eq!(pane, shown.then_some(rsi.0), "case {at}, paste {paste}");
+                let drawn = target.drawings().drawings[0].pane;
+                assert_eq!(drawn, shown.then_some(pane.0), "case {at}, paste {paste}");
             }
         }
     }

@@ -211,6 +211,14 @@ pub struct SettingsStore {
     error: Option<String>,
 }
 
+impl std::fmt::Debug for SettingsStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SettingsStore")
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
+
 impl SettingsStore {
     /// How long settings stay the same before they are written.
     pub const DELAY: Duration = Duration::from_secs(1);
@@ -715,6 +723,43 @@ mod tests {
             );
             assert_eq!(store.take_error(), None, "{case}");
         }
+    }
+
+    /// A fractional drawing default reads back as the value written, so the settings are saved
+    /// once, a second after they changed, and restoring and keeping them saves nothing more.
+    #[test]
+    fn finite_drawing_default_saved_once() {
+        let mut settings = UserSettings {
+            theme: Some("Dark".into()),
+            ..UserSettings::default()
+        };
+        settings.drawing_defaults.insert(
+            "TrendLine".into(),
+            serde_json::json!({ "stroke_width": 3.9_f32 }),
+        );
+        let ctx = egui::Context::default();
+        let host = Arc::new(Counted::default());
+        let saves = || host.1.load(std::sync::atomic::Ordering::Relaxed);
+        let mut store = SettingsStore::new(host.clone());
+        poll_at(&ctx, &mut store, 0.0, &UserSettings::default());
+        for tenth in 1..=100 {
+            poll_at(&ctx, &mut store, f64::from(tenth) / 10.0, &settings);
+            if tenth < 11 {
+                assert_eq!(saves(), 0, "at {tenth}");
+            }
+        }
+        assert_eq!(saves(), 1);
+        assert!(store.flush(&settings));
+        assert_eq!(saves(), 1);
+        let mut store = SettingsStore::new(host.clone());
+        let restored = poll_at(&ctx, &mut store, 20.0, &UserSettings::default());
+        assert_eq!(restored.as_ref(), Some(&settings));
+        for tenth in 201..=300 {
+            poll_at(&ctx, &mut store, f64::from(tenth) / 10.0, &settings);
+        }
+        assert_eq!(saves(), 1);
+        assert!(store.flush(&settings));
+        assert_eq!(store.take_error(), None);
     }
 
     #[test]

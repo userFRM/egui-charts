@@ -52,6 +52,7 @@ const DAY_MS: i64 = 86_400_000;
 
 /// The period at whose start [`RelativeVolumeAtTime`] restarts its comparison.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RelativeVolumeAnchor {
     /// Each trading day.
     #[default]
@@ -93,7 +94,7 @@ pub enum RelativeVolumeMode {
 /// instrument's time zone and session through [`Indicator::set_instrument`] and its interval
 /// through [`Indicator::set_bar_clock`]. Without them trading days are UTC days, and direct
 /// callers on daily bars stamped away from UTC midnight pass a daily clock.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RelativeVolumeAtTime {
     length: usize,
     anchor: RelativeVolumeAnchor,
@@ -109,7 +110,7 @@ pub struct RelativeVolumeAtTime {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     source: usize,
     key: Option<(i32, u32)>,
@@ -118,7 +119,7 @@ struct State {
     opens: Vec<(chrono::DateTime<chrono::Utc>, NaiveDate)>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct Undo {
     appended: bool,
     new_period: bool,

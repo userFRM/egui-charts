@@ -76,7 +76,7 @@ use std::collections::VecDeque;
 /// interval through [`Indicator::set_bar_clock`] and the candles through
 /// [`Indicator::update_data`]; a direct caller on bars longer than a day passes a clock of that
 /// interval, without which every bar is summed as an intraday bar.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Volume24h {
     values: IndicatorValues,
     stepper: Stepper<State>,
@@ -98,7 +98,7 @@ pub struct Volume24h {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     /// Open time and amount of each bar in the window, oldest first; None is invalid quote data.
     window: VecDeque<(DateTime<Utc>, Option<f64>)>,
@@ -217,6 +217,7 @@ impl Volume24h {
                 }
                 Some(_) => "Quote amount unavailable".into(),
             })]],
+            ..Default::default()
         });
     }
 

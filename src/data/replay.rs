@@ -302,6 +302,12 @@ pub struct ReplayDriver {
     dispatch: Mutex<()>,
 }
 
+impl std::fmt::Debug for ReplayDriver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReplayDriver").finish_non_exhaustive()
+    }
+}
+
 struct Playback {
     clock: ReplayClock,
     instruments: HashMap<String, Instrument>,

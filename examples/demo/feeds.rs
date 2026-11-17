@@ -10,9 +10,9 @@ use egui_charts::data::{
     Importance, NewsQuery, NewsStory, Reply, ScreenerColumn, ScreenerColumnSet, ScreenerOp,
     ScreenerQuery, ScreenerRow,
 };
-use egui_charts::model::{Bar, Quote};
+use egui_charts::model::{Bar, PostContent, Quote};
 use egui_charts::services::{
-    ChatEvent, ChatMessage, Chats, Events, Notification, Notifications, Quotes,
+    ChatEvent, ChatMessage, Chats, Events, Notification, Notifications, Posts, Quotes,
 };
 
 use egui_charts::ui::widget_bar::{PeriodReturn, Seasonality, SeasonalityMonth};
@@ -27,22 +27,25 @@ pub(super) fn search_catalog(
     let mut symbols = DemoSymbol::symbols();
     for symbol in &mut symbols {
         symbol.source = Some("Synthetic".into());
-        if matches!(symbol.exchange.as_deref(), Some("NASDAQ" | "CME" | "Index")) {
+        if matches!(
+            symbol.exchange.as_deref(),
+            Some("Stocks" | "Futures" | "Index")
+        ) {
             symbol.country = Some("US".into());
         }
         symbol.sector = match symbol.symbol.as_str() {
-            "AAPL" | "MSFT" | "NVDA" => Some("Technology".into()),
-            "TSLA" => Some("Consumer discretionary".into()),
+            "STOCKA" | "STOCKB" | "STOCKC" => Some("Technology".into()),
+            "STOCKD" => Some("Consumer discretionary".into()),
             _ => None,
         };
-        if symbol.symbol == "AAPL" {
-            symbol.root = Some("AAPL".into());
+        if symbol.symbol == "STOCKA" {
+            symbol.root = Some("STOCKA".into());
         }
     }
     // A second synthetic provider serves the same security and historical series.
     let mut mirror = symbols
         .iter()
-        .find(|symbol| symbol.symbol == "AAPL")
+        .find(|symbol| symbol.symbol == "STOCKA")
         .unwrap()
         .clone();
     mirror.source = Some("Synthetic mirror".into());
@@ -296,26 +299,30 @@ const HIGHLIGHTS: &[(&str, &str)] = &[
 
 /// Up to `query.limit` synthetic stories, newest first, published on the hour before `now`.
 pub(super) fn news(query: &NewsQuery, now: DateTime<Utc>) -> Vec<NewsStory> {
-    let symbols: Vec<&DemoSymbol> = if query.symbols.is_empty() {
+    let mut stories = stories(&query.symbols, query.highlights, now);
+    stories.sort_by(|a, b| b.time.cmp(&a.time));
+    stories.truncate(query.limit);
+    stories
+}
+
+/// The synthetic headlines, or highlights, of `symbols`, or of every catalog symbol when it is
+/// empty, published on the hour before `now`.
+fn stories(symbols: &[String], highlights: bool, now: DateTime<Utc>) -> Vec<NewsStory> {
+    let specs: Vec<&DemoSymbol> = if symbols.is_empty() {
         DemoSymbol::catalog().iter().collect()
     } else {
         DemoSymbol::catalog()
             .iter()
             .filter(|spec| {
-                query
-                    .symbols
+                symbols
                     .iter()
                     .any(|symbol| spec.symbol.eq_ignore_ascii_case(symbol))
             })
             .collect()
     };
-    let templates = if query.highlights {
-        HIGHLIGHTS
-    } else {
-        HEADLINES
-    };
+    let templates = if highlights { HIGHLIGHTS } else { HEADLINES };
     let hour = now.duration_trunc(TimeDelta::hours(1)).unwrap_or(now);
-    let mut stories: Vec<NewsStory> = symbols
+    specs
         .iter()
         .flat_map(|spec| {
             templates
@@ -336,10 +343,28 @@ pub(super) fn news(query: &NewsQuery, now: DateTime<Utc>) -> Vec<NewsStory> {
                     story
                 })
         })
-        .collect();
-    stories.sort_by(|a, b| b.time.cmp(&a.time));
-    stories.truncate(query.limit);
-    stories
+        .collect()
+}
+
+/// Resolves the links of post and idea cards that name a demo news story into that story, as a
+/// host would from its own feed. The demo has no content for other links.
+pub(super) struct DemoPosts;
+
+impl Posts for DemoPosts {
+    fn resolve(&self, link: &str, reply: Reply<PostContent>) {
+        let story = stories(&[], false, Utc::now())
+            .into_iter()
+            .find(|story| story.url.as_deref() == Some(link));
+        reply.send(
+            story
+                .map(|story| {
+                    let mut content = PostContent::new(story.source, story.time, story.body);
+                    content.title = story.headline;
+                    content
+                })
+                .ok_or(FeedError::NotSupported),
+        );
+    }
 }
 
 /// The countries the demo calendar knows.
@@ -403,7 +428,7 @@ pub(super) fn calendar(query: &CalendarQuery, now: DateTime<Utc>) -> Vec<Calenda
                 CalendarKind::Earnings | CalendarKind::Dividends => {
                     let stocks: Vec<_> = DemoSymbol::catalog()
                         .iter()
-                        .filter(|spec| spec.exchange == "NASDAQ")
+                        .filter(|spec| spec.exchange == "Stocks")
                         .collect();
                     let spec = stocks[n % stocks.len()];
                     let dividends = query.kind == CalendarKind::Dividends;
@@ -498,6 +523,8 @@ pub(super) fn screen(
                 value(spec, &filter.column).is_some_and(|v| match filter.op {
                     ScreenerOp::Above => v > filter.value,
                     ScreenerOp::Below => v < filter.value,
+                    // A comparison added later matches no row.
+                    _ => false,
                 })
             })
         })
@@ -652,6 +679,23 @@ impl Notifications for DemoNotifications {
         }
         state.1 = Some(events);
     }
+
+    /// Hands the notification to the desktop's notification service. The web build keeps the
+    /// default answer, so it reports desktop notifications as unsupported.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn deliver(&self, notification: Notification, reply: Reply<()>) {
+        std::thread::spawn(move || {
+            // After `--`, a title or message that starts with a dash is text, not an option.
+            let shown = std::process::Command::new("notify-send")
+                .args(["--", &notification.title, &notification.body])
+                .status();
+            reply.send(match shown {
+                Ok(status) if status.success() => Ok(()),
+                Ok(status) => Err(FeedError::Other(format!("notify-send {status}"))),
+                Err(error) => Err(FeedError::Other(format!("notify-send: {error}"))),
+            });
+        });
+    }
 }
 
 /// Two rooms with a few synthetic messages, echoing what the user posts.
@@ -669,7 +713,7 @@ impl DemoChats {
                     "General",
                     "Ravi",
                     37,
-                    "SPX holding above yesterday's close so far.",
+                    "INDEXA holding above yesterday's close so far.",
                 ),
                 message(
                     "General",
@@ -677,7 +721,7 @@ impl DemoChats {
                     12,
                     "Volume looks light ahead of the CPI release.",
                 ),
-                message("Crypto", "Lee", 25, "BTCUSD testing the range high again."),
+                message("Crypto", "Lee", 25, "TOKENA testing the range high again."),
                 message(
                     "Crypto",
                     "Mia",
@@ -719,17 +763,17 @@ pub(super) fn heatmap_universes() -> Vec<egui_charts::ui::widget_bar::MarketHeat
             .filter(|spec| {
                 !stocks_only || !matches!(spec.exchange, "Crypto" | "Index" | "Forex" | "Synthetic")
             })
-            .map(|spec| MarketHeatmapEntry {
-                symbol: spec.symbol.into(),
-                group: match spec.symbol {
-                    "AAPL" | "MSFT" | "NVDA" => "Technology",
-                    "TSLA" => "Consumer",
+            .map(|spec| {
+                let group = match spec.symbol {
+                    "STOCKA" | "STOCKB" | "STOCKC" => "Technology",
+                    "STOCKD" => "Consumer",
                     _ => spec.exchange,
-                }
-                .into(),
-                values: [("weight", (spec.seed % 4 + 1) as f64)]
-                    .map(|(id, value)| (id.to_owned(), value))
-                    .into(),
+                };
+                let mut entry = MarketHeatmapEntry::new(spec.symbol, group);
+                entry
+                    .values
+                    .insert("weight".to_owned(), (spec.seed % 4 + 1) as f64);
+                entry
             })
             .collect()
     };
@@ -991,23 +1035,16 @@ mod tests {
                 crate::sampledata::us_equity_session(),
                 false,
             );
+        let mut shifted = daily.clone();
+        shifted.time = "2026-11-02T05:00:00Z".parse().unwrap();
         assert_eq!(
             crate::sampledata::calendar_history(&[daily.clone()], &[], clock.clone()),
-            vec![Bar {
-                time: "2026-11-02T05:00:00Z".parse().unwrap(),
-                ..daily.clone()
-            }]
+            vec![shifted]
         );
+        let mut sunday = daily;
+        sunday.time = "2026-11-01T00:00:00Z".parse().unwrap();
         assert!(
-            crate::sampledata::calendar_history(
-                &[Bar {
-                    time: "2026-11-01T00:00:00Z".parse().unwrap(),
-                    ..daily
-                }],
-                &[],
-                clock
-            )
-            .is_empty(),
+            crate::sampledata::calendar_history(&[sunday], &[], clock).is_empty(),
             "a shifted stock calendar must not invent Sunday bars"
         );
         let feed = Arc::new(LiveFeed::new("SAMPLE", now));
@@ -1105,12 +1142,15 @@ mod tests {
     fn evicted_news_stays_quiet_when_history_is_reloaded_or_replayed() {
         use egui_charts::model::{EventKind, TimeScaleEvent};
         let notifications = DemoNotifications::default();
-        let event = |minute| TimeScaleEvent {
-            id: format!("sample-{minute}"),
-            time: DateTime::UNIX_EPOCH + TimeDelta::minutes(minute),
-            kind: EventKind::News,
-            title: format!("Headline {minute}"),
-            details: "Synthetic news".into(),
+        let event = |minute| {
+            let mut event = TimeScaleEvent::new(
+                format!("sample-{minute}"),
+                DateTime::UNIX_EPOCH + TimeDelta::minutes(minute),
+                EventKind::News,
+                format!("Headline {minute}"),
+            );
+            event.details = "Synthetic news".into();
+            event
         };
         for minute in 0..120 {
             notifications.notify_event("SAMPLE", &event(minute));
@@ -1121,7 +1161,7 @@ mod tests {
         assert_eq!(state.0.len(), 100);
         assert_eq!(state.0.last().unwrap().time, event(119).time);
         drop(state);
-        notifications.notify_event("BTCUSD", &event(0));
+        notifications.notify_event("TOKENA", &event(0));
         assert_eq!(
             notifications
                 .0
@@ -1132,7 +1172,7 @@ mod tests {
                 .unwrap()
                 .symbol
                 .as_deref(),
-            Some("BTCUSD")
+            Some("TOKENA")
         );
     }
 
@@ -1195,7 +1235,7 @@ mod tests {
             egui_charts::widget::ChartLayoutMode::TwoHorizontal,
         ));
         app.activate_chart_slot(1);
-        app.switch_symbol("MSFT");
+        app.switch_symbol("STOCKB");
         for slot in [1, 0, 1] {
             app.activate_chart_slot(slot);
             app.live.set_paused(true);
@@ -1218,13 +1258,17 @@ mod tests {
         (1..=40)
             .find(|step| {
                 app.live.advance(now + TimeDelta::milliseconds(step * 100));
-                app.live.market_quote("MSFT", app.live.now()).unwrap().last != frozen.last
+                app.live
+                    .market_quote("STOCKB", app.live.now())
+                    .unwrap()
+                    .last
+                    != frozen.last
             })
             .expect("the other slot advances the market beyond the paused quote");
         for _ in 0..4 {
             demo_frame(&mut app, &ctx, vec![]);
         }
-        assert_ne!(app.watchlist.quote("MSFT").unwrap().last, frozen.last);
+        assert_ne!(app.watchlist.quote("STOCKB").unwrap().last, frozen.last);
         app.activate_chart_slot(1);
         let texts = demo_frame(&mut app, &ctx, vec![]);
         assert!(
@@ -1236,8 +1280,8 @@ mod tests {
         app.live.set_paused(true);
         let now = app.live.now();
         app.handle_layout_action(LayoutAction::CreateNew);
-        app.switch_symbol("EURUSD");
-        app.watchlist = WatchlistPanel::new(vec![Watchlist::from_text("Other", "AAPL")]);
+        app.switch_symbol("FOREXA");
+        app.watchlist = WatchlistPanel::new(vec![Watchlist::from_text("Other", "STOCKA")]);
         app.watchlist.set_service(app.quotes.clone());
         super::super::tests::finish_feed(&app.live);
         let before = app.live.quote(app.live.now()).unwrap();
@@ -1246,7 +1290,7 @@ mod tests {
         }
         let texts = demo_frame(&mut app, &ctx, vec![]);
         assert_eq!(
-            app.watchlist.quote("EURUSD"),
+            app.watchlist.quote("FOREXA"),
             app.live.quote(app.live.now()).as_ref()
         );
         assert!(
@@ -1295,8 +1339,8 @@ mod tests {
             let now = start + TimeDelta::seconds(2);
             live.advance(now);
             live.set_view(egui_charts::ui::timeframe_toolbar::SessionType::RTH, false);
-            for symbol in ["MSFT", "BTCUSD"] {
-                if symbol == "MSFT" {
+            for symbol in ["STOCKB", "TOKENA"] {
+                if symbol == "STOCKB" {
                     assert!(live.market_quote(symbol, now).is_none());
                     assert!(
                         live.loading(),
@@ -1336,7 +1380,7 @@ mod tests {
                     output.drop_without_applying_deltas();
                 }
                 assert!(displayed, "the screener must share {symbol}'s price basis");
-                if symbol == "MSFT" {
+                if symbol == "STOCKB" {
                     assert_eq!(
                         after.extended.is_some(),
                         at == "2026-10-23T13:00:00Z" || at == "2026-10-23T22:00:00Z"
@@ -1357,13 +1401,13 @@ mod tests {
             now,
             true,
         );
-        app.switch_symbol("BTCUSD");
+        app.switch_symbol("TOKENA");
         app.trading.set_service(app.paper.clone());
         app.trading.display.instant_orders = true;
         demo_frame(&mut app, &ctx, vec![]);
         let price = app.live.quote(now).unwrap().last;
-        app.paper.set_price("BTCUSD", price);
-        let reference = LiveFeed::new("BTCUSD", now);
+        app.paper.set_price("TOKENA", price);
+        let reference = LiveFeed::new("TOKENA", now);
         super::super::tests::finish_feed(&reference);
         reference.set_paused(false);
         let (at, trigger) = (1..=40)
@@ -1380,7 +1424,7 @@ mod tests {
             OrderType::Limit(trigger)
         };
         app.trading
-            .open_ticket(OrderRequest::new("BTCUSD", OrderSide::Buy, 1.0, kind));
+            .open_ticket(OrderRequest::new("TOKENA", OrderSide::Buy, 1.0, kind));
         let mut texts = Vec::new();
         for _ in 0..3 {
             texts = demo_frame(&mut app, &ctx, vec![]);
@@ -1388,7 +1432,7 @@ mod tests {
         let point = texts
             .iter()
             .find(|(text, _)| {
-                text.contains("BTCUSD @") && (text.contains("STOP") || text.contains("LIMIT"))
+                text.contains("TOKENA @") && (text.contains("STOP") || text.contains("LIMIT"))
             })
             .expect("the pending order submit button")
             .1
@@ -1408,9 +1452,9 @@ mod tests {
                 .iter()
                 .any(|toast| toast.message.starts_with("Filled:"))
         );
-        app.switch_symbol("MSFT");
+        app.switch_symbol("STOCKB");
         super::super::tests::finish_feed(&app.live);
-        app.watchlist = WatchlistPanel::new(vec![Watchlist::from_text("Other", "AAPL")]);
+        app.watchlist = WatchlistPanel::new(vec![Watchlist::from_text("Other", "STOCKA")]);
         app.watchlist.set_service(app.quotes.clone());
         app.live.set_paused(false);
         super::super::tests::finish_feed(&app.live);
@@ -1420,7 +1464,7 @@ mod tests {
             app.toasts
                 .toasts()
                 .iter()
-                .any(|toast| toast.message.starts_with("Filled: Buy 1 BTCUSD")),
+                .any(|toast| toast.message.starts_with("Filled: Buy 1 TOKENA")),
             "the off-chart order must fill: {:?}",
             app.toasts.toasts()
         );
@@ -1436,7 +1480,7 @@ mod tests {
         app.live.advance(next_time);
         demo_frame(&mut app, &ctx, vec![]);
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let _ = app.trading.show_account_panel(ui, "MSFT");
+            let _ = app.trading.show_account_panel(ui, "STOCKB");
         });
         // One unit bought at the trigger has unrealized P&L = current price - trigger.
         let pnl = format!("{:+.2}", next_price - trigger);
@@ -1476,14 +1520,14 @@ mod tests {
         app.feed_market_panels(&ctx);
         app.trading.poll(&ctx, &mut app.toasts);
         for _ in 0..2 {
-            app.trading.trade("MSFT".into(), OrderSide::Buy);
+            app.trading.trade("STOCKB".into(), OrderSide::Buy);
             app.trading.poll(&ctx, &mut app.toasts);
         }
         assert!(
             app.toasts
                 .toasts()
                 .iter()
-                .any(|toast| toast.message == "Filled: Buy 1 MSFT at 100.00"),
+                .any(|toast| toast.message == "Filled: Buy 1 STOCKB at 100.00"),
             "the broker must keep the replay price: {:?}",
             app.toasts.toasts()
         );

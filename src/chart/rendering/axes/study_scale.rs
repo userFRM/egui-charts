@@ -130,11 +130,12 @@ pub(crate) fn render_study_axis(
     };
     let mut width = 0.0_f32;
     let mut labels = Vec::new();
+    let last_in_view = super::last_bar_in_view(coords);
     for &member in studies {
         if !axis_options.show_study_values {
             continue;
         }
-        let Some(bar) = member.values().len().checked_sub(1) else {
+        let Some(bar) = super::study_tag_bar(member, last_in_view) else {
             continue;
         };
         for line in 0..member.line_count() {
@@ -165,7 +166,8 @@ pub(crate) fn render_study_axis(
                             .study_value_color
                             .unwrap_or(member.plot_style(line).color),
                     ),
-                    crate::chart::rendering::axes::named_label(
+                    crate::chart::rendering::axes::study_named_label(
+                        painter.ctx(),
                         axis_options.show_study_names,
                         member.name(),
                         label,

@@ -20,11 +20,16 @@ pub struct DrawingProps {
     pub symbol: Option<String>,
     /// Tool-specific settings, edited by the Inputs page.
     pub tool_settings: Option<Box<DrawingTemplate>>,
+    /// Template loaded from the Template menu, or the tool's defaults after Reset to defaults.
+    /// Applying gives every unlocked selected drawing of the template's tool all of the template
+    /// first, then the edited values; drawings of other tools take the edited values.
+    pub template: Option<Box<DrawingTemplate>>,
     /// Instrument tick size for position level inputs; absent disables editing by ticks.
     pub tick_size: Option<f64>,
     /// Staged anchor edits, applied only to the drawing whose dialog was opened.
     pub coordinates: CoordinatesState,
-    /// Save these properties as the default for new drawings of this tool.
+    /// Save these properties as the default for new drawings of this tool. Built-in tools only:
+    /// a host-registered tool has no default of its own, so the flag is ignored for one.
     pub save_as_default: bool,
     /// Primary color
     pub color: Color32,
@@ -54,6 +59,7 @@ impl Default for DrawingProps {
             symbol: None,
             tick_size: None,
             tool_settings: None,
+            template: None,
             coordinates: CoordinatesState::default(),
             save_as_default: false,
             color: crate::theme::Theme::default().ui.accent,
@@ -143,7 +149,8 @@ impl DrawingProps {
     /// Validate and apply one undoable edit to the unlocked selection. A value that differs from
     /// drawing `id`'s, which these properties were read from, was edited, and only edited values
     /// change the drawings: text only those that show text, tool inputs only drawings of the same
-    /// tool, coordinates only `id`. Errors leave all live drawings unchanged.
+    /// tool, coordinates only `id`. A loaded `template` first gives every unlocked selected
+    /// drawing of its tool all of its values. Errors leave all live drawings unchanged.
     pub fn apply_to_chart(&self, id: DrawingId, chart: &mut Chart) -> Result<(), &'static str> {
         let edits = self.edited_drawings(id, chart)?;
         chart.user_action(|chart| {
@@ -159,6 +166,7 @@ impl DrawingProps {
             });
             if self.save_as_default
                 && let Some(drawing) = manager.drawings.iter().find(|d| d.id == id.0)
+                && drawing.custom_tool.is_none()
             {
                 let mut defaults = DrawingTemplate::from_drawing(drawing);
                 defaults.settings.visible = true;
@@ -169,8 +177,8 @@ impl DrawingProps {
     }
 
     /// Prepare validated edits without history or persistence side effects, for live preview.
-    /// Values compare with drawing `id` as `chart` holds it, so a preview restores its drawings
-    /// before calling this.
+    /// Values compare with drawing `id` as `chart` holds it, with a loaded `template` applied, so
+    /// a preview restores its drawings before calling this.
     pub(super) fn edited_drawings(
         &self,
         id: DrawingId,
@@ -210,6 +218,11 @@ impl DrawingProps {
         if !points.is_empty() && points.len() != target.chart_points.len() && !adds_position_stop {
             return Err("Drawing anchors changed; reopen its properties");
         }
+        // A loaded template gives the drawings all of its values, and edits compare with it.
+        let mut target = target.clone();
+        if let Some(template) = &self.template {
+            template.apply_to(&mut target)?;
+        }
         let selected = chart.drawings().is_selected(id.0);
         let fill = self.fill_enabled.then(|| {
             self.fill_color.unwrap_or_else(|| {
@@ -239,6 +252,10 @@ impl DrawingProps {
             })
             .cloned()
         {
+            if let Some(template) = &self.template {
+                // A drawing of another tool refuses it and takes the edited values only.
+                let _ = template.apply_to(&mut drawing);
+            }
             // The dialog opened with the target's values: one that differs from them was edited,
             // and only edited values are written, so each drawing keeps the rest of its own.
             if hue_edited {
@@ -318,10 +335,17 @@ impl DrawingProps {
                     position_target_color,
                     position_stop_color,
                     position_style,
+                    marker.show_text,
+                    marker.glyph,
+                    marker.show_glyph,
+                    marker.glyph_color,
                     volume_profile,
                     regression_trend,
                     vwap,
                     channel_midline,
+                    anchor_price_style,
+                    middle_line,
+                    theme_shade,
                     line_measurements.price_change,
                     line_measurements.percent_change,
                     line_measurements.pip_change,
@@ -359,6 +383,12 @@ impl DrawingProps {
                         let edited = settings.fibonacci_config();
                         let mut config = drawing.fibonacci_config().into_owned();
                         config.apply_edits(&original, &edited);
+                        // An edited fan saved before it had time levels takes the current look.
+                        if drawing.tool_type == crate::drawings::DrawingToolType::FibonacciSpeedFan
+                            && config.time_levels.is_none()
+                        {
+                            config.time_levels = Some(config.levels.clone());
+                        }
                         drawing.fib_config = Some(config);
                     } else {
                         drawing.fib_config.clone_from(&settings.fib_config);
@@ -477,8 +507,21 @@ impl DrawingProps {
             {
                 return Err("Price note text size must be 1 to 256");
             }
+            if settings
+                .anchor_price_style
+                .is_some_and(|style| !style.is_valid())
+            {
+                return Err("Price text size must be 1 to 256");
+            }
+            if !(settings.middle_line.width > 0.0 && settings.middle_line.width <= MAX_STROKE_WIDTH)
+            {
+                return Err("Middle line width must be above 0 and at most 100");
+            }
             if !settings.position_style.is_valid() {
                 return Err("Position line width must be 1 to 100 and font size 1 to 256");
+            }
+            if !settings.marker.is_valid() {
+                return Err("Glyph must be 1 to 32 bytes");
             }
             if !settings.position_sizing.is_valid() {
                 return Err(
@@ -592,6 +635,7 @@ mod tests {
             DrawingToolType::FixedRangeVolumeProfile,
             DrawingToolType::RegressionTrend,
             DrawingToolType::ParallelChannel,
+            DrawingToolType::DisjointChannel,
             DrawingToolType::Rect,
             DrawingToolType::TrendLine,
             DrawingToolType::Ray,
@@ -607,7 +651,10 @@ mod tests {
             DrawingToolType::CrossLine,
         ] {
             chart.drawings_mut().drawings.clear();
-            chart.drawings_mut().drawings.push(Drawing::new(7, tool));
+            let mut drawing = Drawing::new(7, tool);
+            // A shown middle line, so that its style rows would show on a rectangle if offered.
+            drawing.channel_midline = true;
+            chart.drawings_mut().drawings.push(drawing);
             let mut peer = Drawing::new(8, DrawingToolType::TextLabel);
             // A boxed label, so that the settings below would show on it if they leaked.
             (peer.background, peer.border, peer.border_color) = (true, true, None);
@@ -617,10 +664,8 @@ mod tests {
             chart.drawings_mut().select_drawings([7, 8]);
             let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
             let output = egui::Context::default().run_ui(Default::default(), |ui| {
-                let mut pickers = [
-                    crate::ui_kit::ColorPickerState::new(props.color),
-                    crate::ui_kit::ColorPickerState::new(props.color),
-                ];
+                let mut pickers =
+                    [(); 3].map(|_| crate::ui_kit::ColorPickerState::new(props.color));
                 super::super::tabs::StyleTab::show(
                     ui,
                     &mut props,
@@ -641,6 +686,12 @@ mod tests {
             assert_eq!(labels.contains(&"Line end"), line, "{tool:?}");
             let middle = tool.supports_middle_line();
             assert_eq!(labels.contains(&"Middle line"), middle, "{tool:?}");
+            // A new parallel channel shows its middle line and styles it; a rectangle's is fixed.
+            assert_eq!(
+                labels.contains(&"Middle line width"),
+                tool == DrawingToolType::ParallelChannel,
+                "{tool:?}"
+            );
             use DrawingToolType as T;
             let (price, time) = (
                 matches!(
@@ -708,6 +759,13 @@ mod tests {
             settings.position_target_color = Some([40, 100, 220, 255]);
             settings.position_stop_color = Some([220, 140, 40, 255]);
             settings.position_style.font_size = 16.0;
+            let marker = crate::drawings::AnnotationMarker {
+                show_text: false,
+                glyph: "🚀".into(),
+                show_glyph: true,
+                glyph_color: Some([7, 8, 9, 255]),
+            };
+            settings.marker = marker.clone();
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
@@ -781,7 +839,8 @@ mod tests {
             assert_eq!(saved.position_target_color, Some([40, 100, 220, 255]));
             assert_eq!(saved.position_stop_color, Some([220, 140, 40, 255]));
             assert_eq!(saved.position_style.font_size, 16.0);
-            assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
+            assert_eq!(saved.marker, marker);
+            assert_eq!(saved.regression_trend.unwrap().upper_deviation(), 3.0);
             assert!(saved.channel_midline);
             assert_eq!(saved.line_measurements, measurements);
             assert!(saved.bars_pattern.unwrap().mirrored);
@@ -1018,6 +1077,19 @@ mod tests {
             assert_eq!(config.levels[1].value, 0.25 + index as f32);
             assert_eq!(config.level_width, 2.0 + index as f32);
         }
+        // A fan saved before it had time levels takes its price levels as time levels, and with
+        // them the current look, on any edit of its settings.
+        let mut fan = Drawing::new(0, DrawingToolType::FibonacciSpeedFan);
+        fan.fib_config.as_mut().unwrap().time_levels = None;
+        chart.drawings_mut().drawings = vec![fan];
+        chart.drawings_mut().select_drawings([0]);
+        let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+        let settings = &mut props.tool_settings.as_mut().unwrap().settings;
+        settings.fib_config.as_mut().unwrap().grid_visible = false;
+        let edits = props.edited_drawings(DrawingId(0), &chart).unwrap();
+        let config = edits[0].fib_config.as_ref().unwrap();
+        assert!(!config.grid_visible);
+        assert_eq!(config.time_levels.as_ref(), Some(&config.levels));
         // A rate belongs to an account currency; changing the currency also replaces its rate.
         for currency_changed in [false, true] {
             chart.drawings_mut().drawings = [("EUR", 0.8), ("GBP", 0.6), ("EUR", 0.7)]

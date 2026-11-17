@@ -10,6 +10,7 @@ use crate::studies::IndicatorFactory;
 /// and restore them with [`IndicatorDialog::set_preferences`](super::IndicatorDialog::set_preferences).
 /// Unknown study names are retained so temporarily unavailable host studies keep their stars.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct IndicatorPreferences {
     /// Favourite factory names, sorted for stable saved documents.
     #[serde(default)]
@@ -80,5 +81,46 @@ impl IndicatorInfo {
             .collect();
         infos.sort_by_key(|info| info.name.to_lowercase());
         infos
+    }
+
+    /// Further names a built-in study is found by in the browser: conventional full names its
+    /// description does not carry, and the same names with the qualifier last, as study lists
+    /// often order them.
+    pub(super) fn search_names(&self) -> &'static [&'static str] {
+        match self.id.as_str() {
+            "52W High/Low" => &["52 Week High/Low"],
+            "ASI" => &["Accumulative Swing Index"],
+            "Auto Fibonacci Extension" => &["Auto Fib Extension"],
+            "Auto Fibonacci Retracement" => &["Auto Fib Retracement"],
+            "C2C Vol" => &["Volatility Close-to-Close"],
+            "EMA Cross" | "MA Cross" => &["Double Moving Average", "Moving Average Double"],
+            "GK Vol" => &["Volatility O-H-L-C"],
+            "Hamming MA" => &["Hamming Moving Average", "Moving Average Hamming"],
+            "KAMA" => &[
+                "Kaufman's Adaptive Moving Average",
+                "Moving Average Adaptive",
+            ],
+            "Klinger" => &["Klinger Oscillator"],
+            "LinReg" => &["Linear Regression Curve"],
+            "Lunar Phases" => &["Moon Phases"],
+            "MA Ribbon" => &["Moving Average Ribbon"],
+            "Multi MA" => &["Moving Average Multiple"],
+            "OHLC4" => &["Average Price"],
+            "SMA/EMA Cross" => &[
+                "MA with EMA Cross",
+                "Double Moving Average",
+                "Moving Average Double",
+            ],
+            "Triple MA" => &["Triple Moving Average", "Moving Average Triple"],
+            "Vol Profile Anchored" => &["Anchored Volume Profile"],
+            "Vol Profile Auto Anchored" => &["Auto Anchored Volume Profile"],
+            "Vol Profile FR" => &["Fixed Range Volume Profile"],
+            "Vol Profile VR" => &[
+                "Visible Range Volume Profile",
+                "Volume Profile Visible Range",
+            ],
+            "Zero-Trend Vol" => &["Volatility Zero Trend Close-to-Close"],
+            _ => &[],
+        }
     }
 }

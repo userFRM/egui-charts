@@ -4,22 +4,24 @@ use crate::model::{Bar, PriceSource};
 use crate::studies::palette;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
-use std::borrow::Cow;
 
-/// Linear regression channel fitted to the closes of the last `period` bars.
+/// Linear regression channel fitted to the source prices of the last `period` bars.
 ///
 /// Outputs upper, middle and lower lines across that window, with no value on
 /// earlier bars or until a full window is available. The upper band is
 /// `upper_multiplier` and the lower band `lower_multiplier` residual standard deviations
-/// from the line, using an n - 1 denominator, and the band above and the band below the
-/// line are filled.
+/// from the line, using an n - 1 denominator; a band whose deviation is switched off passes
+/// through the high furthest above the line or the low furthest below it instead. The band
+/// above and the band below the line are filled.
 /// Every calculation or update refits the whole channel. A window containing
-/// a non-finite close has no values.
-#[derive(Clone)]
+/// a non-finite source price has no values.
+#[derive(Clone, Debug)]
 pub struct LinearRegressionChannel {
     period: usize,
     upper_multiplier: f64,
     lower_multiplier: f64,
+    use_upper: bool,
+    use_lower: bool,
     values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
@@ -36,6 +38,8 @@ impl LinearRegressionChannel {
             period: period.max(2),
             upper_multiplier: clamp_param(multiplier, 0.0, f64::MAX),
             lower_multiplier: clamp_param(multiplier, 0.0, f64::MAX),
+            use_upper: true,
+            use_lower: true,
             values: IndicatorValues::new(),
             colors: vec![
                 palette::ACCENT,
@@ -56,6 +60,21 @@ impl LinearRegressionChannel {
     pub fn with_multipliers(mut self, upper: f64, lower: f64) -> Self {
         self.upper_multiplier = clamp_param(upper, 0.0, f64::MAX);
         self.lower_multiplier = clamp_param(lower, 0.0, f64::MAX);
+        self
+    }
+
+    /// Bound the upper band by its deviation when `upper` is set and the lower band by its
+    /// deviation when `lower` is set; a band without one passes through the high furthest
+    /// above the line or the low furthest below it. Both default to set.
+    ///
+    /// ```
+    /// use egui_charts::studies::LinearRegressionChannel;
+    ///
+    /// let channel = LinearRegressionChannel::new(100, 2.0).with_deviations_used(false, true);
+    /// ```
+    pub fn with_deviations_used(mut self, upper: bool, lower: bool) -> Self {
+        self.use_upper = upper;
+        self.use_lower = lower;
         self
     }
 
@@ -97,6 +116,8 @@ impl Indicator for LinearRegressionChannel {
         period: length("Period", 2, usize::MAX),
         upper_multiplier: number("Upper deviation", 0.0, f64::MAX),
         lower_multiplier: number("Lower deviation", 0.0, f64::MAX),
+        use_upper: toggle("Use upper deviation"),
+        use_lower: toggle("Use lower deviation"),
         source: choice("Source", crate::model::PriceSource::all()),
         extend: toggle("Extend")
     ; {});
@@ -140,29 +161,26 @@ impl Indicator for LinearRegressionChannel {
             return;
         }
         let start = data.len() - self.period;
-        let window: Cow<'_, [Bar]> = if self.source == PriceSource::Close {
-            Cow::Borrowed(&data[start..])
-        } else {
-            Cow::Owned(
-                data[start..]
-                    .iter()
-                    .map(|bar| {
-                        let mut sourced = bar.clone();
-                        sourced.close = self.source.compute(bar.open, bar.high, bar.low, bar.close);
-                        sourced
-                    })
-                    .collect(),
-            )
-        };
-        if window.iter().any(|bar| !bar.close.is_finite()) {
+        let window = &data[start..];
+        if window.iter().any(|bar| {
+            !self
+                .source
+                .compute(bar.open, bar.high, bar.low, bar.close)
+                .is_finite()
+        }) {
             return;
         }
-        let Some(fit) = Moments::of(&window).fit() else {
+        let Some(fit) = Moments::of(window, self.source).fit() else {
             return;
         };
         self.fit = Some(fit);
-        let upper = self.upper_multiplier * fit.sigma;
-        let lower = self.lower_multiplier * fit.sigma;
+        let [upper, lower] = fit.bounds(
+            window,
+            [
+                self.use_upper.then_some(self.upper_multiplier),
+                self.use_lower.then_some(self.lower_multiplier),
+            ],
+        );
         for i in 0..self.period {
             let middle = fit.intercept + fit.slope * i as f64;
             self.values.set(

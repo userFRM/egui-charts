@@ -49,6 +49,7 @@ impl NotificationPosition {
 }
 
 /// Configuration for the notification panel
+#[derive(Debug)]
 pub struct NotificationPanelConfig {
     /// Position on screen
     pub position: NotificationPosition,
@@ -81,6 +82,7 @@ enum StackAction {
 ///
 /// Two or more toasts collapse into a stack showing the newest; a pill expands it and a button
 /// beside it dismisses every dismissible toast.
+#[derive(Debug)]
 pub struct NotificationPanel {
     config: NotificationPanelConfig,
 }
@@ -149,8 +151,10 @@ impl NotificationPanel {
             toasts.expanded = false;
         }
 
-        // Request repaint if there are toasts
-        ctx.request_repaint();
+        // A timed toast animates its progress bar and expires, also behind the collapsed stack.
+        if toasts.toasts().iter().any(|toast| toast.duration > 0.0) {
+            ctx.request_repaint();
+        }
     }
 
     /// Internal: show toasts and return IDs of dismissed toasts and the stack control pressed
@@ -688,6 +692,41 @@ mod tests {
                     .is_none(),
                 "{gone} is gone"
             );
+        }
+    }
+
+    /// The panel asks for a repaint only while a queued toast counts down, also one hidden behind
+    /// the collapsed stack, so a permanent notice leaves an idle app idle.
+    #[test]
+    fn only_a_timed_toast_keeps_the_panel_repainting() {
+        use std::time::Duration;
+        let cases = [
+            (vec![Toast::info("Saved").permanent()], Duration::MAX),
+            (vec![Toast::info("Saved")], Duration::ZERO),
+            (
+                vec![Toast::info("Older"), Toast::info("Saved").permanent()],
+                Duration::ZERO,
+            ),
+        ];
+        for (queued, expected) in cases {
+            let ctx = Context::default();
+            let mut toasts = Toasts::new();
+            for toast in queued {
+                toasts.add(toast);
+            }
+            let mut delay = Duration::ZERO;
+            for pass in 0..3 {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        time: Some(f64::from(pass)),
+                        ..Default::default()
+                    },
+                    |ui| NotificationPanel::new().show_with_toasts(ui.ctx(), &mut toasts),
+                );
+                delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+                output.drop_without_applying_deltas();
+            }
+            assert_eq!(delay, expected, "{} queued", toasts.len());
         }
     }
 

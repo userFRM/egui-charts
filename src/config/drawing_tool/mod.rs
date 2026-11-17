@@ -15,6 +15,7 @@ pub use interaction_mode::DrawingInteractionMode;
 
 /// The order of a list of drawings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum DrawingSort {
     /// Alphabetically by name, ignoring case.
     Name,
@@ -273,12 +274,15 @@ pub enum DrawingToolType {
     /// Flag/mark note at a specific chart location.
     FlagNote,
 
-    // ============ CONTENT (3 tools - placeholders) ============
-    /// Image embed identifier; built-in rendering draws a frame without loading an image.
+    // ============ CONTENT (3 tools) ============
+    /// Picture from the address in the drawing's text, loaded by the egui image loaders the
+    /// host installs, or the picture the host supplies with `Chart::set_drawing_image`.
     Image,
-    /// Social post embed identifier; built-in rendering draws a card without fetching content.
+    /// Social post card showing the post its link resolves to through the host's
+    /// [`Posts`](crate::services::Posts) service, or the text typed on it.
     Tweet,
-    /// Idea embed identifier; built-in rendering draws a badge without fetching content.
+    /// Idea card showing the idea its link resolves to through the host's
+    /// [`Posts`](crate::services::Posts) service, or the text typed on it.
     Idea,
 
     // ============ ICONS (2 tools) ============

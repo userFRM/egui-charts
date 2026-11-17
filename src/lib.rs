@@ -130,8 +130,20 @@
 //!
 //! Construct extensible options with their constructors or `Default`, then assign
 //! public fields. Include a fallback arm when matching a `#[non_exhaustive]` enum.
+//!
+//! A few types stay exhaustive on purpose. `widget::SeriesOptions`,
+//! `chart::overlays::VolumeBubblesConfig`, `model::ChartTypeParams`, `theme::Theme` and
+//! `drawings::{FibonacciConfig, PitchforkConfig, GannConfig}` are built in one expression
+//! that ends in `..Default::default()` or `..Theme::light()`, which keeps compiling when a
+//! field is added. The records a custom study returns from `studies::Indicator` methods,
+//! such as `studies::PlotStyle` and `studies::StudyZone`, stay exhaustive so that a study
+//! can build them directly; studies grow through new default trait methods instead.
+//! `widget::MismatchDirection`, `model::PriceLineSource`, `model::LogicalRange` and the
+//! enums whose documentation says their set is closed, such as `model::AxisSide`, are
+//! complete by meaning.
 
 // ─── Crate-level lint configuration ──────────────────────────────────────────
+#![warn(missing_debug_implementations)]
 #![warn(unnameable_types)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::module_inception)]

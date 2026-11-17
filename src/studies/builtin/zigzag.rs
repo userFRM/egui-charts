@@ -7,6 +7,7 @@ use egui::Color32;
 
 /// ZigZag mode - what price to use
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ZigZagMode {
     /// Use high/low for zigzag points
     #[default]
@@ -30,6 +31,7 @@ pub enum ZigZagChange {
 
 /// One swing extreme in source-bar order. The last pivot is provisional and can move.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ZigZagPivot {
     /// Index in the bars passed to [`Indicator::calculate`], including skipped bars.
     pub bar_index: usize,
@@ -67,7 +69,7 @@ pub struct ZigZagPivot {
 ///   Bars before the first pivot and after the last have no value.
 /// - Optional labels show each pivot's price, change and leg volume; the last leg, whose end
 ///   still moves, is drawn dashed.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ZigZag {
     /// Min percentage change to register a swing
     deviation_percent: f64,
@@ -95,13 +97,13 @@ pub struct ZigZag {
     labels: Vec<StudyLabel>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 struct Detector {
     extremes: Option<((usize, f64), (usize, f64))>,
     trend: Option<(bool, (usize, f64))>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct Checkpoint {
     detector: Detector,
     finite: usize,

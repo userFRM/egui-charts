@@ -36,6 +36,7 @@ fn level_slot(id: &str) -> Option<usize> {
 
 /// Construction to place on the latest Zig Zag pivots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AutoDrawingKind {
     /// Last two pivots of the same kind, including the moving last extreme.
     TrendLine,
@@ -93,7 +94,7 @@ impl AutoDrawingKind {
 /// rebuilds the anchors; generated drawings belong to the study, not the editable drawing list.
 /// Output 0 contains anchor prices for scaling and readouts; the drawing renderer paints the
 /// construction instead of joining these values. Its colour, width and visibility use plot 0.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AutoDrawing {
     kind: AutoDrawingKind,
     zigzag: ZigZag,
@@ -895,6 +896,30 @@ mod tests {
                 visible
             );
         }
+
+        // The study's colours are drawn as its inputs set them on every theme, so a saved study
+        // keeps its look: the 0.382 level stays orange on the light chart.
+        let mut retracement = AutoDrawing::new(AutoDrawingKind::FibonacciRetracement, 5.0, 3);
+        retracement.calculate(&data);
+        let study = ConfiguredStudy::new(Box::new(retracement));
+        let ctx = egui::Context::default();
+        crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::light());
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            IndicatorRenderer::render_study(
+                &RenderContext::new(ui.painter(), rect),
+                &study,
+                &data,
+                0,
+                &price,
+                &coords,
+            );
+        });
+        let orange = egui::Color32::from_rgb(255, 152, 0);
+        let painted = output.shapes.iter().any(|s| {
+            matches!(&s.shape, egui::Shape::LineSegment { stroke, .. } if stroke.color == orange)
+        });
+        output.drop_without_applying_deltas();
+        assert!(painted);
 
         // Zoom between anchors: the construction still supplies the independent scale's range.
         automatic.drawings[0].visible = true;

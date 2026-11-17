@@ -8,11 +8,14 @@ use egui_charts::model::{Timeframe, TimezoneId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::Secrets;
+
 /// Version written into every profile. A file with a higher version is refused on import.
 pub(crate) const VERSION: u32 = 1;
 
 /// The names every template knows. A key cannot take one of them.
-pub(crate) const PLACEHOLDERS: [&str; 5] = ["symbol", "interval", "from", "to", "limit"];
+pub(crate) const PLACEHOLDERS: [&str; 6] =
+    ["symbol", "symbol_lower", "interval", "from", "to", "limit"];
 
 /// One step of a path into a JSON value.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -43,6 +46,12 @@ pub(crate) struct Profile {
     /// Zone of every time that names none: a date with a time of day, ISO 8601 text without an
     /// offset, and `{from}` and `{to}` printed as dates. UTC by default.
     pub(crate) time_zone: TimezoneId,
+    /// The price step of the symbols: the smallest change of their price, such as 0.01. The
+    /// footprint and the volume profiles group trades by it. `None` when unknown; the footprint
+    /// then draws candles.
+    // shortcut: one step for every symbol of the profile; upgrade to a step per symbol when a
+    // profile's symbols need different ones.
+    pub(crate) tick_size: Option<f64>,
     /// The interval table, in the order the interval picker offers. The chart opens on the
     /// first row.
     pub(crate) intervals: Vec<Interval>,
@@ -62,6 +71,7 @@ impl Default for Profile {
             name: String::new(),
             symbols: Vec::new(),
             time_zone: TimezoneId::utc(),
+            tick_size: None,
             intervals: Vec::new(),
             keys: Vec::new(),
             history: None,
@@ -86,8 +96,8 @@ pub(crate) struct Interval {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct History {
-    /// URL template. `{symbol}`, `{interval}`, `{from}`, `{to}`, `{limit}` and the key names are
-    /// replaced, each value percent-encoded.
+    /// URL template. `{symbol}`, `{symbol_lower}`, `{interval}`, `{from}`, `{to}`, `{limit}` and
+    /// the key names are replaced, each value percent-encoded.
     pub(crate) url: String,
     /// Request headers as a name and a value template. Values are sent as typed.
     pub(crate) headers: Vec<(String, String)>,
@@ -144,7 +154,8 @@ pub(crate) enum RangeFormat {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Rows {
-    /// From the root of the response to the rows. Empty when the root holds them.
+    /// From the root of the response to the rows. Empty when the root holds them. A key may be
+    /// `{symbol}` or `{symbol_lower}`; see [`Rows::for_symbol`].
     pub(crate) path: FieldPath,
     /// How the rows are laid out there.
     pub(crate) layout: Layout,
@@ -259,15 +270,15 @@ pub(crate) enum ClockUnit {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Stream {
-    /// `ws://` or `wss://` URL template. `{symbol}`, `{interval}` and the key names are replaced,
-    /// each value percent-encoded.
+    /// `ws://` or `wss://` URL template. `{symbol}`, `{symbol_lower}`, `{interval}` and the key
+    /// names are replaced, each value percent-encoded.
     pub(crate) url: String,
     /// Subprotocols offered in the handshake, as templates. A browser cannot send headers when
     /// it opens a socket, so a key travels in the URL, in a subprotocol or in a connect message.
     pub(crate) protocols: Vec<String>,
     /// Messages sent in this order every time the socket opens: the login first, then the
-    /// subscribe message. Templates with `{symbol}`, `{interval}` and the key names, sent as
-    /// typed.
+    /// subscribe message. Templates with `{symbol}`, `{symbol_lower}`, `{interval}` and the key
+    /// names, sent as typed.
     pub(crate) connect: Vec<String>,
     /// Keep-alive message, sent as typed. Empty sends none.
     pub(crate) keep_alive: String,
@@ -303,6 +314,7 @@ impl Default for Stream {
 #[serde(default)]
 pub(crate) struct Route {
     /// The value, compared as text: a string as it is, a number or a boolean as JSON prints it.
+    /// An empty value also takes the records that have no routing field.
     pub(crate) value: String,
     pub(crate) kind: RouteKind,
 }
@@ -316,7 +328,7 @@ pub(crate) enum RouteKind {
     Ignore,
     /// Bars of the chart's interval, merged into the bar with the same open time.
     Bars(BarFields),
-    /// Trades, aggregated into bars of the chart's interval.
+    /// Trades, folded into bars of the chart's interval and fed to the chart as trades.
     Trades(TradeFields),
 }
 
@@ -332,6 +344,12 @@ pub(crate) struct TradeFields {
     /// The rule of each condition value, compared as text. A value that is not listed counts
     /// price and volume.
     pub(crate) conditions: Vec<(String, ConditionRule)>,
+    /// Empty when trades carry no side. The field holds the side of the trade's aggressor.
+    pub(crate) side: FieldPath,
+    /// The value of `side` that marks a buy, compared as text. Empty marks none.
+    pub(crate) buy: String,
+    /// The value of `side` that marks a sell, compared as text. Empty marks none.
+    pub(crate) sell: String,
 }
 
 /// What a trade with a given condition does to the bar it falls in.
@@ -352,8 +370,8 @@ impl Profile {
     /// can: an empty name, no symbol, no interval, an interval listed twice or one without a
     /// duration, neither history nor a stream, a URL that does not start with `http://`,
     /// `https://`, `ws://` or `wss://` as its kind needs, a page size or keep-alive period of
-    /// zero, or a key name that is empty, has other characters than lower-case letters, digits
-    /// and `_`, or is one of [`PLACEHOLDERS`].
+    /// zero, a price step that is not a number above zero, or a key name that is empty, has
+    /// other characters than lower-case letters, digits and `_`, or is one of [`PLACEHOLDERS`].
     pub(crate) fn problem(&self) -> Option<String> {
         if self.name.trim().is_empty() {
             return Some("Give the profile a name.".to_owned());
@@ -395,6 +413,12 @@ impl Profile {
         if period == Some(0) {
             return Some("The keep-alive period must be at least 1 second.".to_owned());
         }
+        if self
+            .tick_size
+            .is_some_and(|step| !(step.is_finite() && step > 0.0))
+        {
+            return Some("The price step must be a number above zero.".to_owned());
+        }
         for key in &self.keys {
             if key.is_empty() {
                 return Some("Every key needs a name.".to_owned());
@@ -418,6 +442,60 @@ impl Profile {
     pub(crate) fn service_interval(&self, timeframe: Timeframe) -> Option<&str> {
         let row = self.intervals.iter().find(|row| row.chart == timeframe)?;
         Some(&row.service)
+    }
+
+    /// Whether the stream has a trades route, so that the chart receives trades.
+    pub(crate) fn has_trades(&self) -> bool {
+        let mut routes = self.stream.iter().flat_map(|stream| &stream.routes);
+        routes.any(|route| matches!(route.kind, RouteKind::Trades(_)))
+    }
+}
+
+/// The values of a stream's templates for `symbol` at `interval`: `{symbol}` as listed,
+/// `{symbol_lower}` in lower case, `{interval}` as the interval table has it, and the key values
+/// of `secrets`. The feed's subscriptions and the dialog's Test fill with them, so a Test opens
+/// the socket the chart opens.
+pub(crate) fn stream_values(
+    symbol: &str,
+    interval: &str,
+    secrets: &Secrets,
+) -> Vec<(String, String)> {
+    let mut values = vec![
+        ("symbol".to_owned(), symbol.to_owned()),
+        ("symbol_lower".to_owned(), symbol.to_lowercase()),
+        ("interval".to_owned(), interval.to_owned()),
+    ];
+    values.extend(secrets.iter().cloned());
+    values
+}
+
+impl Rows {
+    /// Where the rows of a response for `symbol` are: `{symbol}` and `{symbol_lower}` in a key
+    /// of the path, or of the header's path, become the symbol as listed and in lower case, for
+    /// a service that files the rows under the symbol, such as `["result", "{symbol}"]`. Other
+    /// keys stay as they are.
+    pub(crate) fn for_symbol(&self, symbol: &str) -> Rows {
+        let lower = symbol.to_lowercase();
+        let values = [("symbol", symbol), ("symbol_lower", lower.as_str())];
+        let filled = |path: &FieldPath| -> FieldPath {
+            let step = |segment: &Segment| match segment {
+                Segment::Key(key) => Segment::Key(fill(key, &values)),
+                index => index.clone(),
+            };
+            path.iter().map(step).collect()
+        };
+        let layout = match &self.layout {
+            Layout::Arrays {
+                header: Some(header),
+            } => Layout::Arrays {
+                header: Some(filled(header)),
+            },
+            layout => layout.clone(),
+        };
+        Rows {
+            path: filled(&self.path),
+            layout,
+        }
     }
 }
 

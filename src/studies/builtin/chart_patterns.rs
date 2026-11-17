@@ -30,6 +30,7 @@ const MAX_CONFIRMED: usize = 64;
 
 /// The formation a detector looks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FormationKind {
     /// A rise, then a falling channel; confirms above it.
     BullFlag,
@@ -187,6 +188,7 @@ pub enum PatternDirection {
 
 /// Whether a formation has broken out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FormationStatus {
     /// All its pivots are known but no close has broken its boundary yet.
     Developing,
@@ -196,6 +198,7 @@ pub enum FormationStatus {
 
 /// A detected formation, with bar indices into the calculated bars.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Formation {
     /// The formation's shape.
     pub kind: FormationKind,
@@ -226,7 +229,7 @@ struct Config {
 }
 
 /// A straight line in position and price.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Line {
     seq: f64,
     price: f64,
@@ -247,14 +250,14 @@ impl Line {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Outcome {
     Confirm(PatternDirection),
     Fail,
 }
 
 /// A formation whose pivots are known, waiting for a close beyond a boundary.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Candidate {
     kind: FormationKind,
     anchors: Vec<Swing>,
@@ -643,7 +646,7 @@ fn cup(config: &Config, pivots: &VecDeque<Swing>, bull: bool) -> Option<Candidat
 
 /// The detectors' state after a bar: the bars of the latest pivot test, the pivots,
 /// the formations waiting for a break and the confirmed ones.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     /// Bars seen, finite or not.
     index: usize,
@@ -821,7 +824,7 @@ impl State {
 /// high, each labelled with the abbreviations of the formations it confirms. Boundaries are
 /// also generated as drawings, dashed while developing; a reversal formation draws only its
 /// neckline or breakout level.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ChartPatterns {
     family: PatternFamily,
     config: Config,

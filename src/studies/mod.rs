@@ -24,6 +24,36 @@
 //! # }
 //! ```
 //!
+//! # Configuring a built-in study
+//!
+//! Built-in studies take their options through constructors and `with_*` methods.
+//!
+//! ```
+//! # #[cfg(feature = "studies")] {
+//! use ecolor::Color32;
+//! use egui_charts::studies::{
+//!     AutoDrawing, AutoDrawingKind, AverageLine, AverageType, CVD, CVDMode, FootprintStudyConfig,
+//!     MACD, MACombination, OscillatorAverage, RelativeVolumeAnchor, RelativeVolumeAtTime, Volume,
+//!     VolumeAverage, ZigZag, ZigZagMode,
+//! };
+//!
+//! let channel = AutoDrawing::new(AutoDrawingKind::ParallelChannel, 5.0, 10);
+//! let delta = CVD::new().with_mode(CVDMode::BodyRatio);
+//! let ribbon = MACombination::new(vec![
+//!     AverageLine::new(AverageType::Exponential, 20, Color32::YELLOW),
+//!     AverageLine::new(AverageType::Simple, 50, Color32::LIGHT_BLUE),
+//! ])
+//! .unwrap();
+//! let macd = MACD::new(12, 26, 9)
+//!     .with_averages(OscillatorAverage::Simple, OscillatorAverage::Simple);
+//! let relative = RelativeVolumeAtTime::new(10).with_anchor(RelativeVolumeAnchor::Week);
+//! let volume = Volume::new(20).with_average(Some(VolumeAverage::Exponential));
+//! let zigzag = ZigZag::new(5.0, 10).with_mode(ZigZagMode::Close);
+//! let mut footprint = FootprintStudyConfig::default();
+//! footprint.naked_poc = true;
+//! # }
+//! ```
+//!
 //! [`helpers`] provides scalar calculations for custom studies, and [`Stepper`]
 //! provides incremental calculation state. [`StudyData`] carries auxiliary data
 //! requested from the host's feed.
@@ -59,7 +89,7 @@ pub use settings::{
     ConfiguredStudy, FillStyle, GradientStyle, LevelStyle, PlotStyle, PlotType, PlotVariant,
     StudyIntervalRange, StudySettings, StudySettingsSnapshot,
 };
-pub use table::{StudyCell, StudyTable};
+pub use table::{StudyCell, StudyTable, TablePosition, TableTextSize};
 mod values;
 pub use values::IndicatorValues;
 #[cfg(all(test, feature = "studies"))]
@@ -82,7 +112,7 @@ pub use indicator_trait::{
 };
 
 mod chart_state;
-pub use chart_state::{ChartState, ZoomState};
+pub use chart_state::ChartState;
 
 #[cfg(feature = "studies")]
 mod template;
@@ -117,6 +147,14 @@ use crate::model::Bar;
 /// ```
 pub struct IndicatorRegistry {
     indicators: Vec<Box<dyn Indicator>>,
+}
+
+impl std::fmt::Debug for IndicatorRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IndicatorRegistry")
+            .field("indicators", &self.indicators.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl IndicatorRegistry {

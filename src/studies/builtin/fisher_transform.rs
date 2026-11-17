@@ -7,7 +7,7 @@ use egui::Color32;
 /// Fisher Transform
 /// Converts prices into a Gaussian normal distribution
 /// Creates sharper turning points for identifying reversals
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct FisherTransform {
     /// Lookback period
     period: usize,

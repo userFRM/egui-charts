@@ -40,6 +40,7 @@ pub struct TPOLetter {
 /// Contains all TPO letters, statistical levels (POC, value area,
 /// initial balance), and structural flags (poor high/low, single prints).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TPOProfile {
     /// Session timestamp
     pub session_date: DateTime<Utc>,
@@ -89,6 +90,7 @@ pub struct TPOProfile {
 
 /// Configuration for TPO chart generation and rendering.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TPOConfig {
     /// Row height for price grouping, such as 0.25 for one ES tick or 1.0 for four. With
     /// `instrument_tick` it rounds up to whole ticks. [`to_tpo_profiles`] widens it to bound the
@@ -414,6 +416,16 @@ pub(crate) fn session_starts(
 ///
 /// # Returns
 /// Vector of TPO profiles, one per session
+///
+/// ```
+/// use egui_charts::model::{Bar, BarClock, TPOConfig, Timeframe, to_tpo_profiles};
+///
+/// let mut config = TPOConfig::default();
+/// config.tick_size = 0.25;
+/// let bars: Vec<Bar> = Vec::new();
+/// let profiles = to_tpo_profiles(&bars, &config, &BarClock::new(Timeframe::Min30));
+/// assert!(profiles.is_empty());
+/// ```
 pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Vec<TPOProfile> {
     if bars.is_empty() {
         return Vec::new();

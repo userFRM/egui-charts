@@ -26,72 +26,72 @@ impl DemoSymbol {
     pub fn catalog() -> &'static [DemoSymbol] {
         &[
             DemoSymbol {
-                symbol: "BTCUSD",
-                company_name: "Bitcoin / US Dollar",
+                symbol: "TOKENA",
+                company_name: "Sample token A / US Dollar",
                 exchange: "Crypto",
                 start_price: 42_500.0,
                 seed: 1,
             },
             DemoSymbol {
-                symbol: "ETHUSD",
-                company_name: "Ethereum / US Dollar",
+                symbol: "TOKENB",
+                company_name: "Sample token B / US Dollar",
                 exchange: "Crypto",
                 start_price: 2_300.0,
                 seed: 7,
             },
             DemoSymbol {
-                symbol: "AAPL",
-                company_name: "Apple Inc.",
-                exchange: "NASDAQ",
+                symbol: "STOCKA",
+                company_name: "Sample stock A",
+                exchange: "Stocks",
                 start_price: 189.0,
                 seed: 13,
             },
             DemoSymbol {
-                symbol: "MSFT",
-                company_name: "Microsoft Corporation",
-                exchange: "NASDAQ",
+                symbol: "STOCKB",
+                company_name: "Sample stock B",
+                exchange: "Stocks",
                 start_price: 415.0,
                 seed: 23,
             },
             DemoSymbol {
-                symbol: "NVDA",
-                company_name: "NVIDIA Corporation",
-                exchange: "NASDAQ",
+                symbol: "STOCKC",
+                company_name: "Sample stock C",
+                exchange: "Stocks",
                 start_price: 880.0,
                 seed: 29,
             },
             DemoSymbol {
-                symbol: "TSLA",
-                company_name: "Tesla, Inc.",
-                exchange: "NASDAQ",
+                symbol: "STOCKD",
+                company_name: "Sample stock D",
+                exchange: "Stocks",
                 start_price: 175.0,
                 seed: 37,
             },
             DemoSymbol {
-                symbol: "SPX",
-                company_name: "S&P 500 Index",
+                symbol: "INDEXA",
+                company_name: "Sample index A",
                 exchange: "Index",
                 start_price: 5_100.0,
                 seed: 41,
             },
             DemoSymbol {
-                symbol: "EURUSD",
-                company_name: "Euro / US Dollar",
+                symbol: "FOREXA",
+                company_name: "Sample currency A / US Dollar",
                 exchange: "Forex",
                 start_price: 1.08,
                 seed: 53,
             },
             DemoSymbol {
-                symbol: "ESZ2026",
-                company_name: "S&P 500 futures, December 2026",
-                exchange: "CME",
+                symbol: "INDEXFZ2026",
+                company_name: "Sample index A futures, December 2026",
+                exchange: "Futures",
                 start_price: 5_100.0,
                 seed: 59,
             },
             DemoSymbol {
-                symbol: "ESH2027",
-                company_name: "S&P 500 futures, March 2027",
-                exchange: "CME",
+                symbol: "INDEXFH2027",
+                company_name: "Sample index A futures, March 2027",
+                exchange: "Futures",
                 start_price: 5_120.0,
                 seed: 61,
             },
@@ -115,12 +115,67 @@ impl DemoSymbol {
             .unwrap_or(&cat[0])
     }
 
+    /// The tickers of earlier releases of the demo, which saved layouts, watchlists, alerts and
+    /// drawings may still name, with the ticker that replaced each.
+    pub(crate) const FORMER: [(&'static str, &'static str); 10] = [
+        ("BTCUSD", "TOKENA"),
+        ("ETHUSD", "TOKENB"),
+        ("AAPL", "STOCKA"),
+        ("MSFT", "STOCKB"),
+        ("NVDA", "STOCKC"),
+        ("TSLA", "STOCKD"),
+        ("SPX", "INDEXA"),
+        ("EURUSD", "FOREXA"),
+        ("ESZ2026", "INDEXFZ2026"),
+        ("ESH2027", "INDEXFH2027"),
+    ];
+
+    /// `text` with each former ticker in it replaced by the current one. `text` is a symbol, a
+    /// spread over symbols or a caption; symbols are runs of the characters a `SymbolExpression`
+    /// reads as a symbol, so only whole symbols are replaced.
+    pub fn current(text: &str) -> String {
+        let symbol_char = |c: char| c.is_alphanumeric() || matches!(c, '.' | ':' | '_' | '!');
+        let mut current = String::with_capacity(text.len());
+        for run in text.split_inclusive(|c: char| !symbol_char(c)) {
+            let symbol = run.trim_end_matches(|c: char| !symbol_char(c));
+            current.push_str(
+                Self::FORMER
+                    .iter()
+                    .find(|(former, _)| *former == symbol)
+                    .map_or(symbol, |(_, new)| new),
+            );
+            current.push_str(&run[symbol.len()..]);
+        }
+        current
+    }
+
+    /// Points a chart saved before the instruments were renamed at the current ones: its symbol,
+    /// its drawings document and the symbol inputs and captions of its studies.
+    pub fn rename_former(snapshot: &mut egui_charts::widget::ChartSnapshot) {
+        snapshot.symbol = Self::current(&snapshot.symbol);
+        if let Some(serde_json::Value::String(symbol)) = snapshot
+            .drawings
+            .as_mut()
+            .and_then(|drawings| drawings.get_mut("symbol"))
+        {
+            *symbol = Self::current(symbol);
+        }
+        for saved in &mut snapshot.studies {
+            for (_, value) in &mut saved.study.inputs {
+                if let egui_charts::studies::InputValue::Symbol(symbol) = value {
+                    *symbol = Self::current(symbol);
+                }
+            }
+            saved.caption = Self::current(&saved.caption);
+        }
+    }
+
     fn kind(&self) -> SymbolType {
         match self.exchange {
             "Crypto" => SymbolType::Crypto,
             "Index" => SymbolType::Index,
             "Forex" => SymbolType::Forex,
-            "CME" => SymbolType::Futures,
+            "Futures" => SymbolType::Futures,
             "Synthetic" => SymbolType::Fund,
             _ => SymbolType::Stock,
         }
@@ -149,7 +204,7 @@ impl DemoSymbol {
                     instrument = instrument.with_logo(SAMPLE_LOGO);
                 }
                 if kind == SymbolType::Futures {
-                    instrument = instrument.with_root("ES");
+                    instrument = instrument.with_root("INDEXF");
                 }
                 instrument
             })
@@ -292,7 +347,8 @@ pub fn daily_history(symbol: &str, before: DateTime<Utc>) -> Vec<Bar> {
 /// Combine the coarse archive with recent minutes on the requested calendar.
 /// Split synthetic days follow open, low, high, close at 0, 1/4, 3/4 and 1 of their span,
 /// with uniform volume, so a shifted calendar boundary consumes only its share of a UTC day.
-/// Session calendars place coarse daily samples in the demo's regular exchange window.
+/// Session calendars place coarse daily samples in the demo's regular exchange window and the
+/// recent minutes in the bar of their trading date.
 pub fn calendar_history(
     daily: &[Bar],
     minutes: &[Bar],
@@ -382,10 +438,9 @@ pub fn calendar_history(
                 to = DateTime::from_timestamp_millis(hi).unwrap();
             }
             if from == start && to == end {
-                push(Bar {
-                    time: slot,
-                    ..bar.clone()
-                });
+                let mut whole = bar.clone();
+                whole.time = slot;
+                push(whole);
             } else {
                 let a = (from - start).num_milliseconds();
                 let b = (to - start).num_milliseconds();
@@ -410,9 +465,17 @@ pub fn calendar_history(
             from = to;
         }
     }
-    for bar in egui_charts::data::resample(minutes, egui_charts::model::Timeframe::Min1, clock)
-        .expect("nested minute history")
-    {
+    let minute = egui_charts::model::Timeframe::Min1;
+    let recent = if clock.has_session() {
+        // Live trades join the bar of their trading date, so the recent minutes do too.
+        let instrument = Instrument::new("")
+            .with_time_zone(zone)
+            .with_session(session.clone());
+        egui_charts::data::resample_with_session(minutes, minute, clock, &instrument, true)
+    } else {
+        egui_charts::data::resample(minutes, minute, clock)
+    };
+    for bar in recent.expect("nested minute history") {
         push(bar);
     }
     result
@@ -544,11 +607,11 @@ mod tests {
                 }
             }
             // Stocks keep the same hours with a dividend of their own; continuous markets are untouched.
-            let msft = session_bars("MSFT", &source, SessionType::RTH, true, dividend);
-            assert_eq!(msft.len(), 2);
-            assert!((msft[0].close - 101.0 * 0.97).abs() < 1e-9);
+            let stock = session_bars("STOCKB", &source, SessionType::RTH, true, dividend);
+            assert_eq!(stock.len(), 2);
+            assert!((stock[0].close - 101.0 * 0.97).abs() < 1e-9);
             assert_eq!(
-                session_bars("BTCUSD", &source, SessionType::RTH, true, dividend),
+                session_bars("TOKENA", &source, SessionType::RTH, true, dividend),
                 source
             );
             for (range, count) in [
@@ -599,7 +662,7 @@ mod tests {
             ),
         ] {
             let now = now.parse().unwrap();
-            for (symbol, date) in ["AAPL", "MSFT", "NVDA", "TSLA", "SAMPLE"]
+            for (symbol, date) in ["STOCKA", "STOCKB", "STOCKC", "STOCKD", "SAMPLE"]
                 .into_iter()
                 .zip(dates)
             {

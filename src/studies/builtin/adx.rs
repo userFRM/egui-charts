@@ -34,7 +34,7 @@ use egui::Color32;
 ///
 /// The `period` input sets both lengths, as studies saved with a single length expect;
 /// `adx_smoothing`, which follows it in `inputs()`, then sets the smoothing alone.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ADX {
     period: usize,
     /// Length of Wilder's average of DX that forms the ADX line.
@@ -47,7 +47,7 @@ pub struct ADX {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     previous: Option<[f64; 3]>,
     count: usize,

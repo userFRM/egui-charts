@@ -49,6 +49,7 @@ use egui::Color32;
 
 /// A phase of the Moon with a published instant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MoonPhase {
     /// The Moon passes between the Earth and the Sun.
     New,
@@ -58,6 +59,7 @@ pub enum MoonPhase {
 
 /// One new or full moon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LunarPhase {
     /// Which phase.
     pub phase: MoonPhase,
@@ -221,7 +223,7 @@ pub fn lunar_phases(from: DateTime<Utc>, to: DateTime<Utc>) -> Vec<LunarPhase> {
 
 /// Lunar phases: a marker at the low of the bar holding each new moon and at the high of the bar
 /// holding each full moon.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LunarPhases {
     values: IndicatorValues,
     new_color: Color32,

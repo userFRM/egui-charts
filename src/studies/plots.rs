@@ -4,6 +4,7 @@ use egui::Color32;
 
 /// One boundary of a study band, in the study's value scale.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum FillBoundary {
     /// A zero-based output line, including its offset. Its visibility does not hide the fill.
     Plot(usize),
@@ -25,7 +26,8 @@ pub struct StudyFill {
 }
 
 /// A vertical colour ramp between a plot and a fixed baseline, beneath the plot.
-/// Values outside the ramp retain the nearest endpoint colour.
+/// Values outside the ramp retain the nearest endpoint colour. Exhaustive, so that a custom study
+/// can build it in [`Indicator::gradients`](crate::studies::Indicator::gradients).
 #[derive(Clone, Copy, Debug)]
 pub struct StudyGradient {
     /// Caption in the style editor.
@@ -132,7 +134,8 @@ pub enum LabelPlacement {
 
 /// Text beside a study value, stored once per label instead of per bar.
 ///
-/// The text is written when the study calculates, so drawing a frame formats nothing.
+/// The text is written when the study calculates, so drawing a frame formats nothing. Exhaustive,
+/// so that a custom study can build it in [`Indicator::labels`](crate::studies::Indicator::labels).
 #[derive(Clone, Debug, PartialEq)]
 pub struct StudyLabel {
     /// Source bar the text is attached to; may lie past the last bar, in future whitespace.

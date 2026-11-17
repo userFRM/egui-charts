@@ -171,7 +171,11 @@ fn render_group(
         };
         if IconButton::new(icon)
             .size(ButtonSize::SM)
-            .tooltip(format!("Toggle {name}"))
+            .tooltip(l10n::format_text(
+                ui.ctx(),
+                "Toggle {name}",
+                &[("name", l10n::text(ui.ctx(), name))],
+            ))
             .show(ui)
             .clicked()
         {
@@ -368,5 +372,34 @@ mod tests {
                 output.drop_without_applying_deltas();
             }
         }
+    }
+
+    /// The group's toggle names the group as its header shows it, in the host's language.
+    #[test]
+    fn group_toggle_names_the_translated_group() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut harness = Harness::builder()
+            .with_context_setup(|ctx| {
+                crate::icons::install_loader(ctx);
+                l10n::set_translator(ctx, |english| match english {
+                    "Indicators" => Some("Indikatoren".into()),
+                    "Toggle {name}" => Some("{name} umschalten".into()),
+                    _ => None,
+                });
+            })
+            .build_ui(|ui| {
+                let mut sources = [SourceItem::indicator(1, "SMA", egui::Color32::RED)];
+                render_source_tree(
+                    ui,
+                    &mut sources,
+                    &ObjectTreeConfig {
+                        group_by_type: true,
+                        ..Default::default()
+                    },
+                    &mut ObjectTreeState::new(),
+                );
+            });
+        harness.run();
+        assert!(harness.query_by_label("Indikatoren umschalten").is_some());
     }
 }

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 /// The units a series writes, independently of its price scale's transform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SeriesFormat {
     /// Fixed decimal prices.
     #[default]
@@ -19,8 +20,16 @@ pub enum SeriesFormat {
 }
 
 /// Saved numeric display settings for a bar series. Values and scale modes stay unchanged.
+///
+/// ```
+/// use egui_charts::model::SeriesDisplayFormat;
+///
+/// let mut format = SeriesDisplayFormat::default();
+/// format.precision = 4;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct SeriesDisplayFormat {
     /// The units and suffix to display.
     pub kind: SeriesFormat,
@@ -59,6 +68,7 @@ pub enum PriceLineSource {
 /// Negative and non-finite requests are ignored. Manual ranges ignore these margins;
 /// a pane too short to leave room for prices keeps its ordinary fit.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[non_exhaustive]
 pub struct AutoscaleMargins {
     /// Extra space at the top of the plot.
     pub top: f32,
@@ -79,7 +89,17 @@ impl AutoscaleMargins {
 }
 
 /// Prices and extra screen space contributed to one automatically fitted price scale.
+///
+/// ```
+/// use egui_charts::model::{AutoscaleInfo, AutoscaleMargins};
+///
+/// let mut info = AutoscaleInfo::from((90.0, 110.0));
+/// let mut margins = AutoscaleMargins::default();
+/// margins.top = 12.0;
+/// info.margins = margins;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct AutoscaleInfo {
     /// The lowest and highest raw prices to include.
     pub price_range: (f64, f64),
@@ -150,6 +170,7 @@ impl PartialEq for AutoscaleProvider {
 /// `chart::render_alert_levels` (requires `widget`) with these `labels` and `color`,
 /// and draws none while `visible` is unset.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SeriesAlerts {
     /// Draw the series' alert levels.
     pub visible: bool,
@@ -174,8 +195,16 @@ impl Default for SeriesAlerts {
 ///
 /// The chart-wide `ChartConfig::show_symbol_last_val` and `show_price_line` switches hide every
 /// series' labels and price lines.
+///
+/// ```
+/// use egui_charts::model::SeriesStyle;
+///
+/// let mut style = SeriesStyle::default();
+/// style.base_line_visible = false;
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct SeriesStyle {
     /// Raw-value display for ticks, tags, legends and readouts. `None` retains instrument or
     /// scale formatting. Explicit series formatters take precedence, followed by the chart's

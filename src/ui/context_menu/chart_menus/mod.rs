@@ -15,6 +15,7 @@ use egui::{Context, Id};
 
 /// The original click retained while a host menu action is being chosen.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct HostMenuContext {
     /// Background, series, study or drawing that was clicked, including its screen position.
     pub target: RightClickTarget,
@@ -22,6 +23,33 @@ pub struct HostMenuContext {
     pub time: Option<chrono::DateTime<chrono::Utc>>,
     /// Value at the click, using the clicked pane's scale for drawings.
     pub price: f64,
+}
+
+impl HostMenuContext {
+    /// A click on `target` at `price`, near the bar or element at `time` if there is one.
+    ///
+    /// ```
+    /// use egui_charts::ui::context_menu::HostMenuContext;
+    /// use egui_charts::widget::RightClickTarget;
+    ///
+    /// let target = RightClickTarget::Background {
+    ///     pos: egui::pos2(10.0, 20.0),
+    ///     price: 100.0,
+    /// };
+    /// let context = HostMenuContext::new(target, None, 100.0);
+    /// assert_eq!(context.price, 100.0);
+    /// ```
+    pub fn new(
+        target: RightClickTarget,
+        time: Option<chrono::DateTime<chrono::Utc>>,
+        price: f64,
+    ) -> Self {
+        Self {
+            target,
+            time,
+            price,
+        }
+    }
 }
 
 /// A host row appended to the chart, series and drawing menus in registration order.
@@ -36,6 +64,16 @@ pub struct HostMenuEntry {
     /// Optional icon painted with the built-in tint and size.
     pub icon: Option<&'static Icon>,
     condition: Box<dyn Fn(&HostMenuContext) -> bool>,
+}
+
+impl std::fmt::Debug for HostMenuEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostMenuEntry")
+            .field("id", &self.id)
+            .field("label", &self.label)
+            .field("icon", &self.icon)
+            .finish_non_exhaustive()
+    }
 }
 
 impl HostMenuEntry {
@@ -123,7 +161,7 @@ pub enum ChartContextAction {
 ///     .when(|click| matches!(click.target, RightClickTarget::Background { .. })));
 /// // After chart.show(ui), handle ChartContextAction::Host { id, context } from menus.show.
 /// ```
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct ChartMenus {
     chart: ChartContextMenu,
     series: SeriesContextMenu,

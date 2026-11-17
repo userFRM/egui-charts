@@ -63,6 +63,7 @@ impl Default for ImageExportOptions {
 /// bind any user textures referenced by their image sources whose pixels were not supplied in
 /// [`ImageExportOptions::textures`] before drawing.
 #[must_use = "Render the frame and apply its texture deltas, or clear them before dropping"]
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct ChartImage {
     /// Exact output dimensions in pixels.
@@ -163,6 +164,17 @@ fn add_host_textures(
     Ok(())
 }
 
+/// Decimals that write each finite price of `prices` as the number it holds, ignoring binary
+/// noise past 15 significant digits: at least two and at most twelve.
+fn held_decimals(prices: impl IntoIterator<Item = f64>) -> usize {
+    prices
+        .into_iter()
+        .filter(|price| price.is_finite())
+        .map(crate::scales::decimals)
+        .fold(2, usize::max)
+        .min(12)
+}
+
 /// Why [`Chart::export_image`], `Chart::export_png` (with `png-export`) or
 /// [`Chart::export_svg`] made no image.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -220,8 +232,12 @@ impl Chart {
     /// Times include the chart's UTC offset, including DST changes and subsecond timestamps; on a
     /// [horizontal scale](Self::set_horizontal_scale) other than time, keys read as the crosshair
     /// label does.
-    /// Prices inherit instrument precision (two decimals without metadata); study overrides and
-    /// non-price units retain their precision. Missing/non-finite values are empty cells.
+    /// Prices use the instrument's decimals. Without `price_decimals` or a valid `tick_size`, the
+    /// main series and price studies write the decimals the main series' prices hold, and an
+    /// added series those its closes hold, at least two and at most twelve, so a price the chart
+    /// shows does not read as another number; an added series keeps at least four significant
+    /// digits. Study overrides and non-price units retain their precision. Missing/non-finite
+    /// values are empty cells.
     #[cfg(feature = "csv")]
     #[cfg_attr(docsrs, doc(cfg(feature = "csv")))]
     pub fn export_csv(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -240,10 +256,17 @@ impl Chart {
     /// Build cells and the identity of each column from the same calculated studies.
     pub(crate) fn data_table_with_columns(&self) -> (DataTable, Vec<ColumnId>) {
         let bars = &self.state.data().bars;
-        let price_precision = self
+        let instrument_precision = self
             .instrument()
             .and_then(crate::scales::instrument_price_precision)
-            .map_or(2, usize::from);
+            .map(usize::from);
+        // Without metadata, prices keep the decimals they hold, so none reads as another number.
+        let price_precision = instrument_precision.unwrap_or_else(|| {
+            held_decimals(
+                bars.iter()
+                    .flat_map(|bar| [bar.open, bar.high, bar.low, bar.close]),
+            )
+        });
         let mut studies: Vec<_> = self
             .indicators()
             .map(|(_, study)| study.clone_box())
@@ -258,13 +281,18 @@ impl Chart {
                 name => name.to_owned(),
             };
             let place = series.iter().filter(|other| other.1 == title).count();
-            // A series of another scale keeps four significant digits of its smallest close.
+            // A series of another scale keeps the decimals its closes hold without metadata, and
+            // four significant digits of its smallest close.
             let precision = item
                 .bars
                 .iter()
                 .filter(|bar| !bar.is_whitespace() && bar.close.is_finite() && bar.close != 0.0)
                 .map(|bar| (3.0 - bar.close.abs().log10().floor()).clamp(0.0, 12.0) as usize)
-                .fold(price_precision, usize::max);
+                .fold(
+                    instrument_precision
+                        .unwrap_or_else(|| held_decimals(item.bars.iter().map(|bar| bar.close))),
+                    usize::max,
+                );
             series.push((item.bars.as_slice(), title, place, precision));
         }
         let mut header = vec![
@@ -738,7 +766,7 @@ impl Chart {
         chart.apply_visible_bars_once = self.apply_visible_bars_once;
         chart.start_idx = self.start_idx;
         for (_, study) in self.indicators() {
-            chart.add_indicator(study.clone_box());
+            chart.add_indicator(study.clone_for_export());
         }
         chart.study_ids = self.study_ids.clone();
         chart.study_inputs = self.study_inputs.clone();
@@ -964,6 +992,76 @@ mod tests {
         }
         let empty = Chart::new(BarData::new()).export_csv().unwrap();
         assert_eq!(empty, "time,open,high,low,close,volume\n");
+    }
+
+    /// Without instrument decimals, exported prices keep the decimals they hold, so a sub-cent
+    /// close does not read 0.00; an instrument's tick size still sets them.
+    #[test]
+    #[cfg(feature = "csv")]
+    fn csv_prices_keep_their_decimals_without_instrument_metadata() {
+        type Row = (&'static str, Option<f64>, [f64; 2], [&'static str; 3]);
+        // Last row's close, added series close and price study cells.
+        let cases: [Row; 4] = [
+            (
+                "sub-cent",
+                None,
+                [0.000123, 0.000162],
+                ["0.000162", "0.0001620", "0.000162"],
+            ),
+            (
+                "four decimals",
+                None,
+                [1.0812, 1.0851],
+                ["1.0851", "1.0851", "1.0851"],
+            ),
+            (
+                "binary noise",
+                None,
+                [0.1, 0.1 + 0.2],
+                ["0.30", "0.3000", "0.30"],
+            ),
+            (
+                "tick size",
+                Some(0.01),
+                [1.0812, 1.0851],
+                ["1.09", "1.085", "1.09"],
+            ),
+        ];
+        let start = DateTime::parse_from_rfc3339("2024-01-02T00:00:00Z")
+            .unwrap()
+            .to_utc();
+        for (case, tick_size, closes, expected) in cases {
+            let bars: Vec<_> = (0..)
+                .zip(closes)
+                .map(|(minute, close)| {
+                    let time = start + chrono::Duration::minutes(minute);
+                    Bar::new(time, close, close, close, close, 1.0)
+                })
+                .collect();
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            if tick_size.is_some() {
+                let mut instrument = Instrument::new("TEST");
+                instrument.tick_size = tick_size;
+                chart.set_instrument(Some(instrument));
+            }
+            let peer = chart.add_series(crate::widget::SeriesOptions {
+                name: "Peer".into(),
+                ..Default::default()
+            });
+            chart.set_data(peer, bars);
+            chart.add_indicator(Box::new(CustomIndicator::new("Close", |bars| {
+                bars.iter()
+                    .map(|bar| IndicatorValue::Single(bar.close))
+                    .collect()
+            })));
+            let csv = chart.export_csv().unwrap();
+            let last = csv::Reader::from_reader(csv.as_bytes())
+                .records()
+                .last()
+                .unwrap()
+                .unwrap();
+            assert_eq!([&last[4], &last[6], &last[7]], expected, "{case}");
+        }
     }
 
     /// An export's studies read the events the chart holds, as on screen, not the mark source page

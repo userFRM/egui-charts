@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 /// Options whose traded contract volumes the host sums at each strike.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct OptionsVolumeQuery {
     /// Underlying symbol as the feed knows it.
     pub symbol: String,
@@ -13,9 +14,20 @@ pub struct OptionsVolumeQuery {
     pub expiries: RangeInclusive<NaiveDate>,
 }
 
+impl OptionsVolumeQuery {
+    /// The options on `symbol` that expire in `expiries`, both dates included.
+    pub fn new(symbol: impl Into<String>, expiries: RangeInclusive<NaiveDate>) -> Self {
+        Self {
+            symbol: symbol.into(),
+            expiries,
+        }
+    }
+}
+
 /// Traded contract volume at one strike, summed over the requested expiries.
 /// This is turnover, not open interest, premium or the underlying's bar volume.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct OptionsVolume {
     /// Strike in the underlying's price units.
     pub strike: f64,
@@ -25,9 +37,26 @@ pub struct OptionsVolume {
     pub puts: f64,
 }
 
+impl OptionsVolume {
+    /// The call and put contract volumes traded at `strike`.
+    pub fn new(strike: f64, calls: f64, puts: f64) -> Self {
+        Self {
+            strike,
+            calls,
+            puts,
+        }
+    }
+}
+
 pub(super) struct Snapshot<T> {
     values: Mutex<T>,
     wake: Box<dyn Fn() + Send + Sync>,
+}
+
+impl<T> std::fmt::Debug for Snapshot<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Snapshot").finish_non_exhaustive()
+    }
 }
 
 impl<T> Snapshot<T> {
@@ -53,7 +82,7 @@ impl<T> Snapshot<T> {
 
 /// A feed's options snapshots for one underlying and expiry query. Cheap to clone.
 /// Only the latest snapshot is retained, so updates cannot accumulate between frames.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct OptionsVolumeSink(Weak<Snapshot<Arc<[OptionsVolume]>>>);
 
 impl OptionsVolumeSink {
@@ -75,7 +104,7 @@ impl OptionsVolumeSink {
 }
 
 #[cfg(feature = "studies")]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct OptionsVolumeSource(Arc<Snapshot<Arc<[OptionsVolume]>>>);
 
 #[cfg(feature = "studies")]

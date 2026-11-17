@@ -508,11 +508,9 @@ impl Terminal {
             .saved_sizes()
             .into_iter()
             .find(|sizes| sizes.mode == mode);
-        Ok(SavedLayout {
-            mode,
-            charts,
-            sizing,
-        })
+        let mut layout = SavedLayout::new(mode, charts);
+        layout.sizing = sizing;
+        Ok(layout)
     }
 
     /// Saves the layout on show under its tab's name.
@@ -809,24 +807,18 @@ mod tests {
         settle(&mut terminal);
         terminal.chart_mut().set_study_limit(Some(3));
         terminal.chart_mut().set_main_series_visible(false);
-        terminal
-            .chart_mut()
-            .set_event_visibility(egui_charts::model::EventVisibility {
-                show_earnings: true,
-                show_economic_events: true,
-                ..Default::default()
-            });
+        let mut visibility = egui_charts::model::EventVisibility::default();
+        visibility.show_earnings = true;
+        visibility.show_economic_events = true;
+        terminal.chart_mut().set_event_visibility(visibility);
+        let mut hidden = ToolAvailability::default();
+        hidden.visible = false;
+        hidden.enabled = false;
         terminal
             .chart_mut()
             .drawings_mut()
             .registry
-            .set_availability(
-                DrawingToolType::TrendLine,
-                ToolAvailability {
-                    visible: false,
-                    enabled: false,
-                },
-            );
+            .set_availability(DrawingToolType::TrendLine, hidden);
         let mut drawing = Drawing::new(7, DrawingToolType::HorizontalLine);
         drawing.completed = true;
         drawing.chart_points.push(ChartPoint::new(10.0, 42.0));
@@ -1055,10 +1047,7 @@ mod tests {
     fn opening_a_saved_layout_again_restores_its_chart_sizes() {
         let mode = ChartLayoutMode::TwoHorizontal;
         let resize = |terminal: &mut Terminal, columns: [f32; 2]| {
-            let sizes = ChartLayoutSizing {
-                mode,
-                weights: vec![vec![1.0], columns.to_vec()],
-            };
+            let sizes = ChartLayoutSizing::new(mode, vec![vec![1.0], columns.to_vec()]);
             terminal.layout.set_sizes(&[sizes], false).unwrap();
             settle(terminal);
         };

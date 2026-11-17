@@ -31,6 +31,13 @@ from the history bar in its slot, takes the place of the first live execution; a
 to the history bar in its slot changes nothing. Page executions without ids at the time of the
 first live execution cannot be told from the live ones, so the chart leaves them out; the bar
 before then counts as one the page does not reach, and bars only its end would prove draw candles.
+The chart keeps every instant where executions may be missing this way, or where a stream began
+before its trade page reached it, across interval changes and resumes: no grouping takes such an
+instant in, only the newest executions between two of them that prove bars draw cells, and the bar
+holding one draws a candle. When the interval changes again before the trade page answers, that
+page fills the time of both changes, and until it answers no grouping crosses the time of the
+first. After three or more such changes the time of those in between stays without executions, and
+no grouping crosses it.
 History bars newer than everything the trade page reaches draw candles too, so a host should answer
 both pages up to the same time.
 
@@ -53,6 +60,48 @@ display only. By default a bar is a ladder: sell volume left and buy volume righ
 side shaded in four strengths by where its volume falls in that side's range. The POC row is filled, a side that
 dominates under the imbalance settings gets a strip along its outer edge, and two dotted lines mark the value area.
 `text_color` defaults to white, so set the theme's text colour on a light chart.
+
+### Prepared history
+
+The built-in time-based footprint chart can request already aggregated history through
+[`Datafeed::footprints`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#method.footprints).
+Use [`FootprintPage::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FootprintPage.html#method.new)
+for owned bars, or [`FootprintPage::from_shared`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FootprintPage.html#method.from_shared)
+for an immutable [`FootprintSource`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.FootprintSource.html).
+Its bar views borrow sorted native rows; storage and byte conversion stay in the host. The
+constructor docs include examples of both forms. `FootprintPage::bars` is a
+[`FootprintBars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/enum.FootprintBars.html);
+its `iter` method reads either form.
+
+A bounded request names `[since, before)`. Each reply answers one contiguous suffix ending
+at `before`: its first bar starts the answered span, or an empty page uses
+`with_continue_before(from)`. An available empty span certifies that no executions occurred.
+Earlier unanswered history remains requestable; `count` still limits the number of bars.
+Use [`FootprintPage::unavailable(from, before)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FootprintPage.html#method.unavailable)
+when the recording cannot supply that span. This is not empty history or a transport error.
+The chart skips automatic retries of that span until refresh/reconnect and continues loading
+other required history. `is_available()` distinguishes the two answers.
+
+The chart requests missing spans needed by its viewport or footprint studies, including
+internal gaps. Internal fills use clock-aligned boundaries and leave the initial exclusive
+prepared/live cutoff unchanged. Existing row owners remain retained; closing even an empty
+gap updates coverage and invalidates affected study results. Older end-of-history does not
+prevent an internal gap from being filled after resuming a paused feed. Resume retains
+prepared owners; an explicit `Chart::reload_feed()` instead discards the old bars, trades and
+prepared history and requests the latest pages again. Invalid replies preserve accepted
+data and stop footprint requests until refresh; they never certify empty or unavailable history.
+
+A shared owner can serve several charts. Admission validates its clock, grid, rows, totals and
+exclusive execution cutoff when each page is accepted. Of the shared page's bars, only an
+unfinished boundary is copied into mutable rows; subsequent live trades use the existing accumulator.
+The owner must remain unchanged, and reading it must not allocate or perform I/O. Footprint
+cells, statistics and annotations use the same complete bars,
+including valid history before a missing join. `Footprint::bars()` keeps its existing owned
+store API. Fixed range and anchored volume profile drawings also read these shared rows through
+[`ChartView::executions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/drawings/rendering/struct.ChartView.html#structfield.executions).
+A selected span across missing history stays labelled partial. Hosts constructing a `ChartView`
+from an owned footprint pass `executions: Some((&footprint).into())`. Replay and independent
+trade-driven studies still require individual executions.
 
 ## Liquidity
 
@@ -86,7 +135,7 @@ orders.
 A feed that sends order events through [`Sink::push_order_snapshot`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html#method.push_order_snapshot) and [`push_order_event`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html#method.push_order_event) lets the
 book, the heatmap and the ladder count individual resting orders. [`RestingOrder::with_participant`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.RestingOrder.html#method.with_participant)
 and [`with_placed`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.RestingOrder.html#method.with_placed) carry the participant id and placement time the venue supplies; neither is ever
-inferred from changes between snapshots. The demo's ESZ2026 futures contract is fed this way:
+inferred from changes between snapshots. The demo's INDEXFZ2026 futures contract is fed this way:
 `examples/demo/orders.rs` turns each change of its synthetic book into order events with placement
 times and rests a few large orders beside them, so the size tiers, the largest-order profile and
 the Book Size study's age inputs can be tried there. The other demo instruments send aggregate
@@ -135,12 +184,10 @@ heatmap:
 use chrono::TimeDelta;
 use egui_charts::data::{DepthHistory, DepthHistoryConfig};
 
-let config = DepthHistoryConfig {
-    cadence: TimeDelta::milliseconds(50),
-    rows: 1000,
-    columns: 240,
-    ..Default::default()
-};
+let mut config = DepthHistoryConfig::default();
+config.cadence = TimeDelta::milliseconds(50);
+config.rows = 1000;
+config.columns = 240;
 chart.set_depth_history(Some(DepthHistory::new(config).unwrap()));
 chart.set_liquidity_heatmap(true);
 ```
@@ -191,9 +238,9 @@ by skipping updates silently:
 [`TradeProfileRanges::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradeProfileRanges.html#method.new) takes ordered, non-overlapping half-open ranges of bar opening times.
 Supply exchange session boundaries, including any pre-market or post-market splits, aligned
 with the footprint's bar clock. [`trade_profiles`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/fn.trade_profiles.html) sums the existing exact rows over each range.
-Bars before [`Footprint::complete_from`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Footprint.html#method.complete_from), whose executions are not all held, are left out, and
-[`TradeProfile::complete`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradeProfile.html#structfield.complete) is false for a range that starts before it; the chart labels such a
-profile "Partial executions".
+Incomplete bars are left out; complete prepared bars before a missing join still contribute.
+[`TradeProfile::complete`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradeProfile.html#structfield.complete) is false when the range starts outside known coverage or includes incomplete bars; the chart labels such a
+profile "Partial executions". [`Footprint::complete_from`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Footprint.html#method.complete_from) names the complete suffix after the last gap, not every usable prepared bar.
 [`merge_next`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradeProfileRanges.html#method.merge_next) combines neighbours; [`split`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradeProfileRanges.html#method.split) divides a composite at an interior bar boundary.
 [`ui::trade_profile_menu`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/fn.trade_profile_menu.html) exposes these operations to a host's menu and returns whether it changed
 the ranges. Recompute profiles when trades or ranges change.
@@ -235,7 +282,7 @@ reaches back to the loss. Custom hosts
 can push chronological events and book loss through the same handle, then call [`calculate`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#tymethod.calculate) or
 [`update`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.update). Cloned studies share their market-data source, which receives each event once.
 Replacing aggregation inputs creates a new source; hosts replay their history, while a chart replays the executions it still retains
-for a newly attached rate study, and for one restored by undo, which then shows the values it would have had if it had stayed. On a tick, volume, range or delta interval, once the store has dropped executions, it shows those values on the chart's bars whose executions are all held and leaves the bars that lost one empty. Other studies keep their sources and accumulated bar totals
+for a newly attached rate study, and for one restored by undo, which then shows the values it would have had if it had stayed. On a tick, volume, range or delta interval, once the store has dropped executions, it shows those values on the chart's bars whose executions are all held and leaves the bars that lost one empty; a rolling rate gives no value while its window reaches an execution it leaves out. Other studies keep their sources and accumulated bar totals
 when the catalogue changes, including totals of executions that aged out of the raw store.
 Quote and book history before a study was connected must come from the host. Bars alone give
 no substitute values. Counts of orders require fills grouped by order by the host; [`Tick`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/quote/struct.Tick.html) has
@@ -280,6 +327,15 @@ synchronized update; a loss after it, or an update with an invalid level, leaves
 one. Footprint and book sources keep at most 11,000 bars and 110,000 price rows, then drop their
 oldest bars at once, down to 10,000 bars and 100,000 rows.
 
+[`footprint_snapshot`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowInput.html#method.footprint_snapshot)
+returns an owned reader whose `bars(range)` and `span_is_complete(start, end)` methods read
+after the input lock is released. It shares completed source bars and accepted prepared pages,
+and copies only mutable rows. `footprints_from` remains available when a caller needs owned
+price trees. Prepared pages have the chart's retention, independently of the raw-source limits.
+On time intervals, a footprint input also requests `Datafeed::footprints`, including on a candle
+chart. Studies attached after history arrives share the same pages; raw-page replies and eviction
+preserve them, and only trades at or after the page's exclusive cutoff continue its totals.
+
 ### Volume profile studies
 
 Vol Profile VR, FR, Session, Periodic, Anchored and Auto Anchored each return a footprint
@@ -295,6 +351,12 @@ input. A host without a feed gives the source the tick size with [`OrderFlowInpu
 and pushes executions with [`OrderFlowInput::push_trade`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowInput.html#method.push_trade) and the bar clock it gives the study
 through [`Indicator::set_bar_clock`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.set_bar_clock) (by default [`BarClock::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.BarClock.html#method.new) of the study's interval), then
 updates the study from the first bar that changed.
+
+Profile studies use the shared reader for painting, extended levels and autoscale. Frozen chart
+exports call `Indicator::clone_for_export`; profile studies use `OrderFlowInput::frozen` there,
+so even a first query after later live updates sees the saved state. Ordinary study clones still
+share their live input. Other indicators keep their existing clone behavior unless they override
+the export hook.
 
 ### Replay
 

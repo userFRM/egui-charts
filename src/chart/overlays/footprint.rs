@@ -2,13 +2,15 @@
 
 use crate::chart::coords::ChartMapping;
 use crate::chart::rendering::draw_dashed_line;
-use crate::data::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
+use crate::data::{
+    Footprint, FootprintBar, FootprintBarView, FootprintLevel, FootprintView, NodeSensitivity,
+};
+use crate::localization as l10n;
 use crate::model::{Bar, ChartTypeParams, FootprintStatistic, SessionProvider};
 use crate::theme::ThemeExt;
 use egui::epaint::{Galley, Mesh, Shape};
 use egui::{Align2, Color32, FontId, Painter, Rect, Stroke, StrokeKind, pos2, vec2};
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -18,6 +20,11 @@ const FONT_LIMITS: [f32; 2] = [8.0, 24.0];
 const LADDER_CELL_SHARE: f32 = 0.39;
 /// The height of a ladder bar's totals and box, three rows of the 10 point font and their margins.
 const INFO_BOX_HEIGHT: f32 = 46.0;
+/// How far a bar's two threshold-marker rows reach beyond its outer row: 4.5 radii of at most
+/// 4 points.
+const MARKER_ROOM: f32 = 18.0;
+/// The height of a bar's extreme ratio, one line of the 10 point font.
+const RATIO_TEXT_HEIGHT: f32 = 14.0;
 
 pub use crate::model::{FootprintColor, FootprintMode};
 
@@ -25,6 +32,7 @@ pub use crate::model::{FootprintColor, FootprintMode};
 /// it with its chart settings; fields missing from older documents take their defaults.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct FootprintConfig {
     /// One to four columns per bar; only the first four entries are drawn.
     pub modes: Vec<FootprintMode>,
@@ -98,8 +106,9 @@ pub struct FootprintConfig {
     /// within 8 and 24 points. Fitting to the cell can reduce the size to 8 points; columns that
     /// cannot fit readable numbers use an overview without them.
     pub font_size: [f32; 2],
-    /// Write the ask/bid ratio of the highest and lowest row of each bar above and below it,
-    /// or `n/a` when the bid is zero and the ratio is undefined.
+    /// Write the ask/bid ratio of the highest and lowest row of each bar beyond those rows, or
+    /// `n/a` when the bid is zero and the ratio is undefined. With annotations that mark delta
+    /// percentages or bid/ask ratios, the ratios are written beyond their markers.
     pub extreme_ratio: bool,
     /// Outline the rows of the bar's pullback range, see [`pullback_range`].
     pub pullback: bool,
@@ -164,7 +173,13 @@ impl Default for FootprintConfig {
 }
 
 impl FootprintConfig {
-    pub(crate) fn from_chart_params(params: &ChartTypeParams, colors: [Color32; 4]) -> Self {
+    /// The footprint of the chart type under `params`, its rows `row_ticks` instrument ticks
+    /// tall, as `ChartTypeParams::footprint_row_size` resolves them, or grouped by zoom at zero.
+    pub(crate) fn from_chart_params(
+        params: &ChartTypeParams,
+        colors: [Color32; 4],
+        row_ticks: u32,
+    ) -> Self {
         let [ask_color, bid_color, text_color, neutral_color] =
             std::array::from_fn(|i| params.footprint_colors[i].unwrap_or(colors[i]));
         Self {
@@ -177,8 +192,8 @@ impl FootprintConfig {
             imbalance_bid_color: params.footprint_imbalance_colors[1],
             text_color,
             neutral_color,
-            auto_row_height: (params.footprint_row_ticks == 0).then_some(16.0),
-            row_ticks: params.footprint_row_ticks,
+            auto_row_height: (row_ticks == 0).then_some(16.0),
+            row_ticks,
             imbalance_ratio: params.footprint_imbalance_ratio,
             imbalance_min_volume: params.footprint_imbalance_min_volume,
             diagonal: params.footprint_diagonal,
@@ -238,6 +253,10 @@ impl FootprintConfig {
 /// follows the bar as it develops, and it only selects rows: their executed volume is never
 /// changed.
 pub fn pullback_range(bar: &Bar, flow: &Footprint) -> Option<(i64, i64)> {
+    pullback_range_read(bar, flow.into())
+}
+
+pub(crate) fn pullback_range_read(bar: &Bar, flow: FootprintView<'_>) -> Option<(i64, i64)> {
     let source = flow.bar_at(bar.time)?;
     let low = *source.levels.first_key_value()?.0;
     let high = *source.levels.last_key_value()?.0;
@@ -284,6 +303,16 @@ pub fn render_footprint(
     flow: &Footprint,
     config: &FootprintConfig,
 ) {
+    render_footprint_read(painter, mapping, bars, flow.into(), config)
+}
+
+pub(crate) fn render_footprint_read(
+    painter: &Painter,
+    mapping: &ChartMapping,
+    bars: &[Bar],
+    flow: FootprintView<'_>,
+    config: &FootprintConfig,
+) {
     let Some(width) = footprint_column_width(mapping.bar_spacing, config) else {
         return;
     };
@@ -313,12 +342,8 @@ pub fn render_footprint(
     // Use the existing half-gap so price markers do not shrink execution columns.
     let gutter = (mapping.bar_spacing * 0.04).min(2.5);
     // Bars cut by dropped executions are drawn as candles, not as complete footprint bars.
-    let complete_from = flow.complete_from();
     for (index, bar) in bars.iter().enumerate().take(end).skip(first) {
-        let Some(source) = flow
-            .bar_at(bar.time)
-            .filter(|_| complete_from.is_some_and(|from| bar.time >= from))
-        else {
+        let Some(source) = flow.complete_bar_at(bar.time) else {
             continue;
         };
         let x = mapping.idx_to_x(index);
@@ -350,7 +375,8 @@ pub fn render_footprint(
         }
         // Automatic grouping uses the local price mapping, including log and inverted scales.
         let group = row_group(mapping, bar, flow, config);
-        let shown = group_bar(source, group);
+        let grouped = group_bar(source, group);
+        let shown = grouped.view();
         let max_volume = shown
             .levels
             .values()
@@ -375,7 +401,7 @@ pub fn render_footprint(
         let poc = config.show_poc.then(|| shown.poc()).flatten();
         let pullback = config
             .pullback
-            .then(|| pullback_range(bar, flow))
+            .then(|| pullback_range_read(bar, flow))
             .flatten()
             .map(|(low, high)| (low.div_euclid(group), high.div_euclid(group)));
         let text_rows: Vec<_> = shown
@@ -744,7 +770,7 @@ pub fn render_footprint(
                         Stroke::NONE,
                     ));
                     let galley = painter.layout_no_wrap(
-                        label.to_owned(),
+                        l10n::text(painter.ctx(), label),
                         FontId::monospace(FONT_LIMITS[0]),
                         config.text_color,
                     );
@@ -758,6 +784,9 @@ pub fn render_footprint(
             }
         }
         if config.extreme_ratio {
+            let offset = ratio_offset(config);
+            // An inverted scale puts the highest row at the bottom.
+            let inverted = mapping.price.is_inverted();
             let step = flow.price_step() * group as f64;
             let first = shown.levels.first_key_value();
             let last = shown.levels.last_key_value();
@@ -772,22 +801,26 @@ pub fn render_footprint(
                 let edge = mapping
                     .price_to_y((level + i64::from(high)) as f64 * step - flow.tick_size() * 0.5);
                 let text = row.ratio().map_or_else(
-                    || "A/B n/a".to_owned(),
+                    || l10n::text(painter.ctx(), "A/B n/a"),
                     |ratio| {
-                        format!(
-                            "A/B {}",
-                            egui::emath::format_with_decimals_in_range(ratio, 0..=2)
+                        l10n::format_text(
+                            painter.ctx(),
+                            "A/B {ratio}",
+                            &[(
+                                "ratio",
+                                egui::emath::format_with_decimals_in_range(ratio, 0..=2),
+                            )],
                         )
                     },
                 );
                 let galley =
                     painter.layout_no_wrap(text, FontId::monospace(10.0), config.text_color);
-                let anchor = if high {
-                    Align2::CENTER_BOTTOM
+                let (anchor, at) = if high != inverted {
+                    (Align2::CENTER_BOTTOM, edge - offset)
                 } else {
-                    Align2::CENTER_TOP
+                    (Align2::CENTER_TOP, edge + offset)
                 };
-                let bounds = anchor.anchor_size(pos2(x, edge), galley.size());
+                let bounds = anchor.anchor_size(pos2(x, at), galley.size());
                 if edge.is_finite()
                     && galley.size().x <= mapping.bar_spacing
                     && mapping.rect.contains_rect(bounds)
@@ -960,7 +993,7 @@ fn volume_text(value: f64, abbreviate: bool) -> String {
 
 /// Input rows per displayed row holding at least `row_ticks` instrument ticks; zero keeps the
 /// input rows.
-pub(crate) fn fixed_row_group(flow: &Footprint, row_ticks: u32) -> i64 {
+pub(crate) fn fixed_row_group(flow: FootprintView<'_>, row_ticks: u32) -> i64 {
     let input_ticks = (flow.price_step() / flow.tick_size()).round() as u32;
     i64::from(row_ticks.div_ceil(input_ticks).clamp(1, 1_000_000))
 }
@@ -976,7 +1009,7 @@ pub(crate) fn automatic_row_height(config: &FootprintConfig) -> Option<f32> {
 pub(crate) fn row_group(
     mapping: &ChartMapping,
     bar: &Bar,
-    flow: &Footprint,
+    flow: FootprintView<'_>,
     config: &FootprintConfig,
 ) -> i64 {
     let raw_height =
@@ -990,20 +1023,26 @@ pub(crate) fn row_group(
 }
 
 /// The prices of the bottom edge of the lowest row and the top edge of the highest row of each
-/// complete bar of `bars`, its rows holding `group(bar)` input rows.
+/// complete bar of `bars`, its rows holding `group(bar)` input rows. A bar whose rows a usable
+/// automatic height of `config` keeps one tick tall has none: it keeps the candles' fit.
 pub(crate) fn row_edges<'a>(
     bars: &'a [Bar],
-    flow: &'a Footprint,
+    flow: FootprintView<'a>,
+    config: &FootprintConfig,
     group: impl Fn(&Bar) -> i64 + 'a,
 ) -> impl Iterator<Item = f64> + 'a {
+    let zoomed = automatic_row_height(config).is_some();
     bars.iter()
-        .filter(move |bar| flow.complete_from().is_some_and(|from| bar.time >= from))
         .filter_map(move |bar| {
-            let rows = &flow.bar_at(bar.time)?.levels;
+            let rows = &flow.complete_bar_at(bar.time)?.levels;
             let (&low, _) = rows.first_key_value()?;
             let (&high, _) = rows.last_key_value()?;
             let group = group(bar);
             let step = flow.price_step() * group as f64;
+            // A price step is a whole number of ticks, so one tick is exactly `tick_size`.
+            if zoomed && step <= flow.tick_size() {
+                return None;
+            }
             Some(
                 [
                     low.div_euclid(group) as f64,
@@ -1015,9 +1054,22 @@ pub(crate) fn row_edges<'a>(
         .flatten()
 }
 
-fn group_bar(source: &FootprintBar, group: i64) -> Cow<'_, FootprintBar> {
+enum GroupedBar<'a> {
+    Borrowed(FootprintBarView<'a>),
+    Owned(FootprintBar),
+}
+impl GroupedBar<'_> {
+    fn view(&self) -> FootprintBarView<'_> {
+        match self {
+            Self::Borrowed(bar) => *bar,
+            Self::Owned(bar) => bar.into(),
+        }
+    }
+}
+
+fn group_bar(source: FootprintBarView<'_>, group: i64) -> GroupedBar<'_> {
     if group == 1 {
-        return Cow::Borrowed(source);
+        return GroupedBar::Borrowed(source);
     }
     let mut shown = FootprintBar {
         time: source.time,
@@ -1036,7 +1088,7 @@ fn group_bar(source: &FootprintBar, group: i64) -> Cow<'_, FootprintBar> {
         });
         target.absorb(row);
     }
-    Cow::Owned(shown)
+    GroupedBar::Owned(shown)
 }
 
 fn has_ladder(config: &FootprintConfig) -> bool {
@@ -1047,17 +1099,41 @@ fn has_ladder(config: &FootprintConfig) -> bool {
         .any(|mode| *mode == FootprintMode::Ladder)
 }
 
-/// How far below a bar's lowest row its summary starts: past the extreme ratio and threshold
-/// marker rows, which sit directly below the bar, when they are on.
+/// How far below a bar's lowest row its summary starts: past the threshold marker rows and the
+/// extreme ratio, which sit below the bar, when they are on.
 fn info_box_offset(config: &FootprintConfig) -> f32 {
     #[cfg(feature = "studies")]
     let studies = config.studies.is_some();
     #[cfg(not(feature = "studies"))]
     let studies = false;
     if config.extreme_ratio || studies {
-        20.0
+        outer_room(config) + 2.0
     } else {
         2.0
+    }
+}
+
+/// How far beyond its outer row a bar's extreme ratio starts: past the threshold markers when
+/// the annotations can paint them, that is when they mark delta percentages or bid/ask ratios at
+/// a threshold the study accepts.
+fn ratio_offset(
+    #[cfg_attr(not(feature = "studies"), allow(unused_variables))] config: &FootprintConfig,
+) -> f32 {
+    #[cfg(feature = "studies")]
+    let markers = config.studies.as_ref().is_some_and(|studies| {
+        studies.delta_percent.is_some_and(|t| t >= 0.0) || studies.ratio.is_some_and(|r| r >= 1.0)
+    });
+    #[cfg(not(feature = "studies"))]
+    let markers = false;
+    if markers { MARKER_ROOM + 2.0 } else { 0.0 }
+}
+
+/// How far a bar's threshold markers and extreme ratios reach beyond either of its outer rows.
+fn outer_room(config: &FootprintConfig) -> f32 {
+    if config.extreme_ratio {
+        MARKER_ROOM.max(ratio_offset(config) + RATIO_TEXT_HEIGHT)
+    } else {
+        MARKER_ROOM
     }
 }
 
@@ -1123,8 +1199,8 @@ fn contrasting_text(fill: Color32) -> Color32 {
 fn render_info_box(
     painter: &Painter,
     mapping: &ChartMapping,
-    flow: &Footprint,
-    shown: &FootprintBar,
+    flow: FootprintView<'_>,
+    shown: &FootprintBarView<'_>,
     group: i64,
     block: Rect,
     config: &FootprintConfig,
@@ -1168,8 +1244,13 @@ fn render_info_box(
     } else {
         config.text_color
     };
-    let labels = ["Delta", "Total"]
-        .map(|label| painter.layout_no_wrap(label.to_owned(), font.clone(), config.text_color));
+    let labels = ["Delta", "Total"].map(|label| {
+        painter.layout_no_wrap(
+            l10n::text(painter.ctx(), label),
+            font.clone(),
+            config.text_color,
+        )
+    });
     let line = labels[0].size().y;
     let labels_width = labels[0].size().x.max(labels[1].size().x) + 6.0;
     let bounds = Rect::from_x_y_ranges(block.x_range(), top + line + 3.0..=top + line * 3.0 + 9.0);
@@ -1223,7 +1304,7 @@ fn render_info_box(
 }
 
 fn cell_color(
-    bar: &FootprintBar,
+    bar: &FootprintBarView<'_>,
     row: &FootprintLevel,
     max_volume: f64,
     max_delta: f64,
@@ -1275,8 +1356,8 @@ fn cell_color(
 /// Rows show total, bid, ask, delta, minimum and maximum intrabar delta, cumulative delta,
 /// delta percentage and ask/bid ratio (undefined without a denominator). Select other rows with
 /// [`render_footprint_statistics_rows`] or [`FootprintConfig::statistics_rows`] in
-/// [`crate::widget::Chart::show_footprint`]. Bars before
-/// [`Footprint::complete_from`] get no column and no share of the cumulative delta.
+/// [`crate::widget::Chart::show_footprint`]. Bars with incomplete executions get no column. Cumulative delta is unavailable across a
+/// missing join until it is filled, or a later complete session restarts the sum.
 /// Shared labels occupy the left margin. Numeric columns stay aligned with their bars and
 /// use unabbreviated volume values when they fit, then compact units. Percentages have one
 /// decimal and ask/bid ratios two decimals.
@@ -1295,7 +1376,22 @@ pub fn render_footprint_statistics(
         text_color,
         ..Default::default()
     };
-    render_footprint_statistics_rows(painter, mapping, bars, flow, &config, None);
+    render_footprint_statistics_rows(painter, mapping, bars, flow, &config, None, &[]);
+}
+
+/// The rows that read open interest, left out of the table without it.
+pub(crate) const OPEN_INTEREST_ROWS: [FootprintStatistic; 2] = [
+    FootprintStatistic::OpenInterestHigh,
+    FootprintStatistic::OpenInterestLow,
+];
+
+/// The open interest the statistics read: the metric `open_interest` of the chart symbol.
+pub(crate) fn open_interest_request() -> crate::data::StudyDataRequest {
+    crate::data::StudyDataRequest {
+        symbol: String::new(),
+        timeframe: None,
+        metric: Some("open_interest".to_owned()),
+    }
 }
 
 /// Draws the rows of [`FootprintConfig::statistics_rows`] in their order and in
@@ -1303,13 +1399,20 @@ pub fn render_footprint_statistics(
 /// clipping rules as [`render_footprint_statistics`]; an undefined value is shown as `n/a`.
 ///
 /// The cumulative delta sums every complete bar. With `sessions` it restarts at the first bar of
-/// each session, so a bar's value no longer depends on how much earlier history is loaded.
+/// each session, so a bar's value no longer depends on how much earlier history is loaded, and
+/// reads `n/a` through a session whose first bar on the chart may be missing executions that were
+/// dropped or never received.
 /// Buy and sell percentages are shares of the bar's total volume, and the volume change is
 /// relative to the previous bar with executions and blank for the first; all percentages have
 /// one decimal. The range is the bar's high minus its low. The point of control is the lowest
 /// price of the highest-volume row among the rows [`render_footprint`] groups for `config` under
 /// the price mapping of `mapping`, so it names the row marked in the bar. Range and point of
 /// control are written at the decimals of the instrument's tick.
+///
+/// `open_interest` holds the open interest points as study data bars, sorted by time with the
+/// value in `close`, each in effect until the next. A bar's high and low are taken over the point
+/// in effect at its open and every point published before its close; a bar before the first point
+/// has an empty cell. With no points both open interest rows are left out of the table.
 pub fn render_footprint_statistics_rows(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -1317,18 +1420,46 @@ pub fn render_footprint_statistics_rows(
     flow: &Footprint,
     config: &FootprintConfig,
     sessions: Option<&dyn SessionProvider>,
+    open_interest: &[Bar],
 ) {
-    let (rows, text_color) = (config.statistics_rows.as_slice(), config.text_color);
+    render_footprint_statistics_rows_read(
+        painter,
+        mapping,
+        bars,
+        flow.into(),
+        config,
+        sessions,
+        open_interest,
+    )
+}
+
+pub(crate) fn render_footprint_statistics_rows_read(
+    painter: &Painter,
+    mapping: &ChartMapping,
+    bars: &[Bar],
+    flow: FootprintView<'_>,
+    config: &FootprintConfig,
+    sessions: Option<&dyn SessionProvider>,
+    open_interest: &[Bar],
+) {
+    let mut rows = config.statistics_rows.clone();
+    if open_interest.is_empty() {
+        rows.retain(|row| !OPEN_INTEREST_ROWS.contains(row));
+    }
+    let (rows, text_color) = (rows.as_slice(), config.text_color);
     if rows.is_empty() {
         return;
     }
     let painter = painter.with_clip_rect(mapping.rect.intersect(painter.clip_rect()));
-    let labels: Vec<_> = rows.iter().map(|row| row.label()).collect();
+    let labels: Vec<_> = rows
+        .iter()
+        .map(|row| l10n::text(painter.ctx(), row.label()))
+        .collect();
     let row_height = (mapping.rect.height() / labels.len() as f32).min(12.0);
     let font = FontId::monospace(10.0);
     let labels: Vec<_> = labels
         .into_iter()
-        .map(|label| painter.layout_no_wrap(label.into(), font.clone(), text_color))
+        .map(|label| painter.layout_no_wrap(label, font.clone(), text_color))
         .collect();
     let rows_fit = labels.iter().all(|label| label.size().y <= row_height);
     let label_width = labels
@@ -1364,24 +1495,33 @@ pub fn render_footprint_statistics_rows(
                 .map(|(i, _)| first + i),
         );
     }
-    let mut cumulative = 0.0;
+    let (mut ask, mut bid) = (0.0, 0.0);
     let mut last_volume = None;
-    let complete = flow.complete_from();
+    let mut cumulative_start = None;
     let mut has_data = false;
     let mut columns = Vec::new();
-    for (i, bar) in bars.iter().enumerate() {
+    for (i, (bar, row)) in bars.iter().zip(flow.matching(bars)).enumerate() {
         if restarts.binary_search(&i).is_ok() {
-            cumulative = 0.0;
+            (ask, bid) = (0.0, 0.0);
+            cumulative_start = Some(flow.clock().bar_open(bar.time));
         }
-        let Some(row) = flow
-            .bar_at(bar.time)
-            .filter(|_| complete.is_some_and(|from| bar.time >= from))
-        else {
+        let Some(row) = row.filter(|row| flow.complete_at(row.time)) else {
             continue;
         };
-        cumulative += row.delta();
+        // Sides summed over the run, so a run balanced up to rounding reads 0 as a bar does.
+        ask += row.ask;
+        bid += row.bid;
         let volume = row.volume();
-        let previous = last_volume.replace(volume);
+        let first_volume = last_volume.is_none();
+        let previous = last_volume
+            .replace((bar.time, volume))
+            .filter(|(time, _)| !flow.span_has_gap(*time, Some(bar.time)))
+            .map(|(_, volume)| volume);
+        let cumulative_known = cumulative_start.is_none_or(|start| flow.complete_at(start))
+            && !flow.span_has_gap(
+                cumulative_start.unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC),
+                Some(bar.time),
+            );
         let x = mapping.idx_to_x(i);
         if !mapping.is_x_visible(x) {
             continue;
@@ -1398,7 +1538,37 @@ pub fn render_footprint_statistics_rows(
             .then(|| {
                 let group = row_group(mapping, bar, flow, config);
                 let step = flow.price_step() * group as f64;
-                group_bar(row, group).poc().map(|level| level as f64 * step)
+                group_bar(row, group)
+                    .view()
+                    .poc()
+                    .map(|level| level as f64 * step)
+            })
+            .flatten();
+        // The point in effect at the open, then every point published before the bar's end.
+        let interest = rows
+            .iter()
+            .any(|row| OPEN_INTEREST_ROWS.contains(row))
+            .then(|| {
+                let end = flow
+                    .clock()
+                    .next_open(bar.time)
+                    .or_else(|| bars.get(i + 1).map(|next| next.time));
+                let start = open_interest
+                    .partition_point(|point| point.time <= bar.time)
+                    .saturating_sub(1);
+                let stop = end.map_or(open_interest.len(), |end| {
+                    open_interest.partition_point(|point| point.time < end)
+                });
+                open_interest
+                    .get(start..stop)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|point| point.close)
+                    .fold(None, |range: Option<(f64, f64)>, value| {
+                        Some(range.map_or((value, value), |(high, low)| {
+                            (high.max(value), low.min(value))
+                        }))
+                    })
             })
             .flatten();
         let values = [
@@ -1408,7 +1578,7 @@ pub fn render_footprint_statistics_rows(
             Some(row.delta()),
             Some(row.min_delta),
             Some(row.max_delta),
-            Some(cumulative),
+            cumulative_known.then(|| crate::data::side_delta(ask, bid)),
             row.delta_percent(),
             (row.bid > 0.0).then(|| row.ask / row.bid),
             Some(row.trades() as f64),
@@ -1420,14 +1590,17 @@ pub fn render_footprint_statistics_rows(
             previous
                 .filter(|previous| *previous > 0.0)
                 .map(|previous| (volume - previous) / previous * 100.0),
+            interest.map(|(high, _)| high),
+            interest.map(|(_, low)| low),
         ];
         let values: Vec<_> = rows.iter().map(|row| values[*row as usize]).collect();
-        columns.push((x, previous.is_none(), values));
+        columns.push((x, first_volume, values));
     }
     let decimals = crate::scales::decimals(flow.tick_size());
     let mut size = 10.0;
     let mut fitted = Vec::new();
     if mapping.bar_spacing >= 22.0 && rows_fit {
+        let unavailable = l10n::text(painter.ctx(), "n/a");
         'fitting: for abbreviate in [false, true] {
             for font_size in [10.0, FONT_LIMITS[0]] {
                 size = font_size;
@@ -1446,14 +1619,25 @@ pub fn render_footprint_statistics_rows(
                                         (FootprintStatistic::VolumeChange, None) if *first => {
                                             String::new()
                                         }
-                                        (_, None) => "n/a".to_owned(),
+                                        // No open interest was published yet.
+                                        (
+                                            FootprintStatistic::OpenInterestHigh
+                                            | FootprintStatistic::OpenInterestLow,
+                                            None,
+                                        ) => String::new(),
+                                        (_, None) => unavailable.clone(),
                                         (
                                             FootprintStatistic::DeltaPercent
                                             | FootprintStatistic::BidPercent
                                             | FootprintStatistic::AskPercent
                                             | FootprintStatistic::VolumeChange,
                                             Some(value),
-                                        ) => format!("{value:.1}%"),
+                                        ) => match format!("{value:.1}%") {
+                                            // A negative value that rounds to zero has no sign
+                                            // to show.
+                                            text if text == "-0.0%" => "0.0%".to_owned(),
+                                            text => text,
+                                        },
                                         (FootprintStatistic::AskBidRatio, Some(value)) => {
                                             format!("{value:.2}:1")
                                         }
@@ -1494,13 +1678,16 @@ pub fn render_footprint_statistics_rows(
         painter.text(
             mapping.rect.center(),
             Align2::CENTER_CENTER,
-            if !has_data {
-                "Execution statistics unavailable"
-            } else if !rows_fit {
-                "Enlarge chart for per-bar statistics"
-            } else {
-                "Zoom in for per-bar statistics"
-            },
+            l10n::text(
+                painter.ctx(),
+                if !has_data {
+                    "Execution statistics unavailable"
+                } else if !rows_fit {
+                    "Enlarge chart for per-bar statistics"
+                } else {
+                    "Zoom in for per-bar statistics"
+                },
+            ),
             font,
             text_color,
         );
@@ -1542,7 +1729,7 @@ pub(crate) fn render_footprint_annotations(
     painter: &Painter,
     mapping: &ChartMapping,
     bars: &[Bar],
-    flow: &Footprint,
+    flow: FootprintView<'_>,
     config: &FootprintConfig,
     chart_id: egui::Id,
 ) {
@@ -1553,12 +1740,11 @@ pub(crate) fn render_footprint_annotations(
         imbalance_min_volume: config.imbalance_min_volume,
         ..settings.clone()
     };
-    let complete = flow.complete_from();
     let source: Vec<_> = bars
         .iter()
-        .filter(|bar| complete.is_some_and(|from| bar.time >= from))
-        .filter_map(|bar| {
-            flow.bar_at(bar.time)
+        .zip(flow.matching(bars))
+        .filter_map(|(bar, row)| {
+            row.filter(|row| flow.complete_at(row.time))
                 .map(|row| (bar.time, row, row_group(mapping, bar, flow, config)))
         })
         .collect();
@@ -1580,19 +1766,20 @@ pub(crate) fn render_footprint_annotations(
                 .collect();
             let grouped: Vec<_> = source
                 .iter()
-                .map(|(_, bar, group)| (group_bar(bar, *group), *group))
+                .map(|(_, bar, group)| (group_bar(*bar, *group), *group))
                 .collect();
             let rows: Vec<_> = grouped
                 .iter()
-                .map(|(bar, group)| (bar.as_ref(), *group))
+                .map(|(bar, group)| (bar.view(), *group))
                 .collect();
-            cache.studies = crate::studies::footprint_studies_on_rows(&rows, &settings).into();
+            cache.studies =
+                crate::studies::footprint_studies_on_rows(&rows, &settings, flow).into();
             cache.config = Some(settings);
             cache.revision = Some(flow.revision());
         }
         cache.studies.clone()
     });
-    render_footprint_studies(painter, mapping, bars, flow, &studies, config);
+    render_footprint_studies_read(painter, mapping, bars, flow, &studies, config);
 }
 
 /// Paints footprint study levels and zones. Compute `studies` only after executions change.
@@ -1601,7 +1788,8 @@ pub(crate) fn render_footprint_annotations(
 /// stacks take the imbalance colour of their side;
 /// local annotations stay anchored to their originating bar. Delta percentage and ratio markers
 /// are triangles outside the bar: buy markers above it, sell markers below, the delta marker
-/// nearest and the ratio marker beyond it. Captions avoid every footprint and its marker rows; details are
+/// nearest and the ratio marker beyond it. Extreme ratios written by [`render_footprint`] with the
+/// same `config` go beyond both. Captions avoid every footprint and its marker rows; details are
 /// available on hover when a caption has no room. Overview marks shrink with bar spacing and
 /// zones become faint centre lines. Prices use the aggregation's row step.
 #[cfg(feature = "studies")]
@@ -1614,17 +1802,34 @@ pub fn render_footprint_studies(
     studies: &[crate::studies::FootprintStudy],
     config: &FootprintConfig,
 ) {
+    render_footprint_studies_read(painter, mapping, bars, flow.into(), studies, config)
+}
+
+#[cfg(feature = "studies")]
+pub(crate) fn render_footprint_studies_read(
+    painter: &Painter,
+    mapping: &ChartMapping,
+    bars: &[Bar],
+    flow: FootprintView<'_>,
+    studies: &[crate::studies::FootprintStudy],
+    config: &FootprintConfig,
+) {
     use crate::studies::{FootprintStudyKind, FootprintStudyState};
     let painter = painter.with_clip_rect(mapping.rect.intersect(painter.clip_rect()));
-    let indices: BTreeMap<_, _> = bars
-        .iter()
+    let indices: BTreeMap<_, _> = flow
+        .matching(bars)
         .enumerate()
-        .filter_map(|(i, bar)| flow.bar_at(bar.time).map(|flow_bar| (flow_bar.time, i)))
+        .filter_map(|(i, row)| row.map(|row| (row.time, i)))
         .collect();
     let occupied: BTreeMap<_, _> = bars
         .iter()
         .enumerate()
         .filter_map(|(index, bar)| {
+            let x = mapping.idx_to_x(index);
+            let half_width = mapping.bar_spacing * 0.46;
+            if x + half_width < mapping.rect.left() || x - half_width > mapping.rect.right() {
+                return None;
+            }
             let source = flow.bar_at(bar.time)?;
             let group = row_group(mapping, bar, flow, config);
             let low = source.levels.first_key_value()?.0.div_euclid(group);
@@ -1633,14 +1838,14 @@ pub fn render_footprint_studies(
             let y1 = mapping.price_to_y((low as f64 * step - flow.tick_size() * 0.5).min(bar.low));
             let y2 = mapping
                 .price_to_y(((high as f64 + 1.0) * step - flow.tick_size() * 0.5).max(bar.high));
-            let x = mapping.idx_to_x(index);
             let rect = Rect::from_min_max(
                 pos2(x - mapping.bar_spacing * 0.46, y1.min(y2)),
                 pos2(x + mapping.bar_spacing * 0.46, y1.max(y2)),
             );
-            // The two threshold-marker rows extend up to 18 points beyond either extreme, and a
-            // ladder's summary below the bar takes the same space or more.
-            let mut reserved = rect.expand2(vec2(0.0, 18.0));
+            // The two threshold-marker rows and an extreme ratio beyond them reach `outer_room`
+            // beyond either extreme, and a ladder's summary below the bar takes the same space or
+            // more.
+            let mut reserved = rect.expand2(vec2(0.0, outer_room(config)));
             let summary = summary_room(config);
             if summary > 0.0 {
                 reserved.max.y = rect.max.y + summary;
@@ -1738,7 +1943,7 @@ pub fn render_footprint_studies(
                 let source = flow.bar_at(bars[start].time);
                 let value = match study.kind {
                     FootprintStudyKind::DeltaAsk | FootprintStudyKind::DeltaBid => source
-                        .and_then(FootprintBar::delta_percent)
+                        .and_then(|bar| bar.delta_percent())
                         .map(|value| format!("{value:.1}%")),
                     _ => source.and_then(|bar| {
                         let (side, opposite) = if above {
@@ -1749,21 +1954,32 @@ pub fn render_footprint_studies(
                         (opposite > 0.0).then(|| format!("{:.2}:1", side / opposite))
                     }),
                 };
-                hovered.push(format!("{label}: {}", value.as_deref().unwrap_or("n/a")));
+                let ctx = painter.ctx();
+                let value = value.unwrap_or_else(|| l10n::text(ctx, "n/a"));
+                hovered.push(l10n::format_text(
+                    ctx,
+                    "{label}: {value}",
+                    &[("label", l10n::text(ctx, label)), ("value", value)],
+                ));
             }
             continue;
         }
         if pointer.is_some_and(|p| rect.expand(2.0).contains(p)) {
-            let state = match study.state {
-                FootprintStudyState::Unvisited => "unvisited",
-                FootprintStudyState::Revisited => "revisited",
-                FootprintStudyState::Expired => "expired",
-                FootprintStudyState::Local => "this bar",
+            let key = match study.state {
+                FootprintStudyState::Unvisited => "{label}: {low} to {high} (unvisited)",
+                FootprintStudyState::Revisited => "{label}: {low} to {high} (revisited)",
+                FootprintStudyState::Expired => "{label}: {low} to {high} (expired)",
+                FootprintStudyState::Local => "{label}: {low} to {high} (this bar)",
             };
-            hovered.push(format!(
-                "{label}: {} to {} ({state})",
-                study.low as f64 * flow.price_step(),
-                study.high as f64 * flow.price_step(),
+            let ctx = painter.ctx();
+            hovered.push(l10n::format_text(
+                ctx,
+                key,
+                &[
+                    ("label", l10n::text(ctx, label)),
+                    ("low", (study.low as f64 * flow.price_step()).to_string()),
+                    ("high", (study.high as f64 * flow.price_step()).to_string()),
+                ],
             ));
         }
         if !detail {
@@ -1794,7 +2010,11 @@ pub fn render_footprint_studies(
             } else {
                 (rect.left_center() - vec2(3.0, 0.0), Align2::RIGHT_CENTER)
             };
-            let galley = painter.layout_no_wrap(label.into(), FontId::monospace(10.0), color);
+            let galley = painter.layout_no_wrap(
+                l10n::text(painter.ctx(), label),
+                FontId::monospace(10.0),
+                color,
+            );
             let bounds = anchor.anchor_size(at, galley.size());
             let bar = occupied.get(&start).copied().unwrap_or(rect);
             let alternatives = [
@@ -1859,7 +2079,7 @@ mod tests {
     ) -> Arc<[crate::studies::FootprintStudy]> {
         let id = egui::Id::unique("cache regression");
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            render_footprint_annotations(ui.painter(), mapping, bars, flow, config, id);
+            render_footprint_annotations(ui.painter(), mapping, bars, flow.into(), config, id);
         });
         output.textures_delta.clear();
         ctx.data_mut(|data| {
@@ -1924,22 +2144,26 @@ mod tests {
         let eager = |selected: &[Bar], flow: &Footprint, config: &FootprintConfig| {
             let grouped: Vec<_> = selected
                 .iter()
-                .filter(|bar| flow.complete_from().is_some_and(|from| bar.time >= from))
                 .filter_map(|bar| {
-                    flow.bar_at(bar.time).map(|source| {
-                        let group = row_group(&map, bar, flow, config);
-                        let mut owned = FootprintBar::empty(source.time);
-                        owned.absorb_grouped(source, group);
-                        (owned, group)
-                    })
+                    FootprintView::from(flow)
+                        .complete_bar_at(bar.time)
+                        .map(|source| {
+                            let group = row_group(&map, bar, flow.into(), config);
+                            let mut owned = FootprintBar::empty(source.time);
+                            owned.absorb_grouped(source, group);
+                            (owned, group)
+                        })
                 })
                 .collect();
-            let rows: Vec<_> = grouped.iter().map(|(bar, group)| (bar, *group)).collect();
+            let rows: Vec<_> = grouped
+                .iter()
+                .map(|(bar, group)| (bar.into(), *group))
+                .collect();
             let settings = crate::studies::FootprintStudyConfig {
                 imbalance_min_volume: config.imbalance_min_volume,
                 ..config.studies.clone().unwrap()
             };
-            crate::studies::footprint_studies_on_rows(&rows, &settings)
+            crate::studies::footprint_studies_on_rows(&rows, &settings, flow.into())
         };
         for selected in [
             bars.clone(),
@@ -2187,6 +2411,17 @@ mod tests {
         inverted: bool,
         config: &FootprintConfig,
     ) -> (Vec<Shape>, f32) {
+        paint_ladder_in(&egui::Context::default(), rows, spacing, inverted, config)
+    }
+
+    /// [`paint_ladder`] on `ctx`.
+    fn paint_ladder_in(
+        ctx: &egui::Context,
+        rows: &[(f64, f64, f64)],
+        spacing: f32,
+        inverted: bool,
+        config: &FootprintConfig,
+    ) -> (Vec<Shape>, f32) {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
         // Open and close match so the candle takes the text colour, not a side's.
         let bars = [Bar::new(time, 102.0, 104.0, 100.0, 102.0, 1.0)];
@@ -2212,7 +2447,7 @@ mod tests {
                     .unwrap();
             }
         }
-        let mut output = egui::Context::default().run_ui(
+        let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(rect),
                 ..Default::default()
@@ -2351,6 +2586,19 @@ mod tests {
                 .unwrap_or_else(|| panic!("{total} missing from {text:?}"));
             assert!(!rect.intersects(below), "{total} over the extreme ratio");
         }
+        // A translator sees the summary labels.
+        let ctx = egui::Context::default();
+        crate::localization::mark_keys(&ctx);
+        let (shapes, _) = paint_ladder_in(&ctx, &rows, 120.0, false, &config);
+        let text: Vec<_> = painted_text(&shapes)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        assert_eq!(
+            text.iter().filter(|text| text.as_str() == "~").count(),
+            2,
+            "{text:?}"
+        );
         // At 80 points per bar the labelled summary needs 80 points in a block of 73.1.
         let rows = [(106.0, 2_340.0, 2_510.0), (105.0, 3_201.0, 1_200.0)];
         let (shapes, _) = paint_ladder(&rows, 80.0, false, &config);
@@ -2791,7 +3039,7 @@ mod tests {
                             ui.painter(),
                             &map,
                             &bars,
-                            &flow,
+                            (&flow).into(),
                             &config,
                             egui::Id::unique("minimum"),
                         );
@@ -2830,6 +3078,12 @@ mod tests {
     /// footprint draws them in pairs and both bars have their point of control in the row at
     /// 100.00, where the busiest price of the first is 100.25. The second bar trades 2500 after
     /// 16, a change of 2484 / 16 = 15525%, all of it sold, at one price.
+    ///
+    /// Open interest of 1000 from 09:58, 1004 from 10:00:20, 998 from 10:00:40, 1006 from 10:01
+    /// and 1010 from 10:05: the first bar opens at 1000 and publishes 1004 and 998 before 10:01,
+    /// so its high is 1004 and its low 998. The second holds 1006, published at its open, with
+    /// nothing else before 10:02; 10:05 is after both. Without the points the open interest rows
+    /// are left out.
     #[test]
     fn statistics_keep_shared_rows_and_aligned_values_or_explain_the_overview() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
@@ -2847,26 +3101,40 @@ mod tests {
             Bar::new(time, 100.0, 100.25, 100.0, 100.25, 16.0),
             Bar::new(next, 100.0, 100.0, 100.0, 100.0, 2500.0),
         ];
+        let points: Vec<_> = [
+            ("2026-01-05T09:58:00Z", 1000.0),
+            ("2026-01-05T10:00:20Z", 1004.0),
+            ("2026-01-05T10:00:40Z", 998.0),
+            ("2026-01-05T10:01:00Z", 1006.0),
+            ("2026-01-05T10:05:00Z", 1010.0),
+        ]
+        .into_iter()
+        .map(|(at, value)| Bar::new(at.parse().unwrap(), value, value, value, value, 0.0))
+        .collect();
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 136.0));
         let empty = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
-        for (spacing, available, large, height) in [
-            (60.0, true, false, 136.0),
-            (40.0, true, false, 136.0),
-            (3.0, true, false, 136.0),
-            (60.0, false, false, 136.0),
-            (40.0, true, true, 136.0),
-            (60.0, true, false, 90.0),
-            (60.0, true, false, 112.0),
-            (60.0, true, false, 196.0),
+        // Marked rows run with a translator that turns each name and message into "~".
+        for (spacing, available, large, height, marked) in [
+            (60.0, true, false, 136.0, false),
+            (40.0, true, false, 136.0, false),
+            (3.0, true, false, 136.0, false),
+            (60.0, false, false, 136.0, false),
+            (40.0, true, true, 136.0, false),
+            (60.0, true, false, 90.0, false),
+            (60.0, true, false, 112.0, false),
+            (60.0, true, false, 196.0, false),
+            (60.0, true, false, 196.0, true),
+            (60.0, false, false, 196.0, true),
+            (60.0, true, false, 220.0, false),
         ] {
             // The default renderer keeps its nine rows, which fit the panes hosts already reserve.
-            let count = if height == 112.0 {
-                9
-            } else if height == 196.0 {
-                16
-            } else {
-                11
+            let (selected, count) = match height {
+                112.0 => (9, 9),
+                196.0 => (18, 16),
+                220.0 => (18, 18),
+                _ => (11, 11),
             };
+            let interest = if count == 18 { &points[..] } else { &[] };
             let rect = Rect::from_min_size(rect.min, vec2(rect.width(), height));
             let mut shown = flow.clone();
             let mut bars = bars.clone();
@@ -2895,7 +3163,11 @@ mod tests {
                     false,
                 ),
             );
-            let mut output = egui::Context::default().run_ui(
+            let ctx = egui::Context::default();
+            if marked {
+                crate::localization::mark_keys(&ctx);
+            }
+            let mut output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(rect),
                     ..Default::default()
@@ -2907,7 +3179,7 @@ mod tests {
                     } else {
                         let config = FootprintConfig {
                             text_color: Color32::WHITE,
-                            statistics_rows: FootprintStatistic::ALL[..count].to_vec(),
+                            statistics_rows: FootprintStatistic::ALL[..selected].to_vec(),
                             ..Default::default()
                         };
                         render_footprint_statistics_rows(
@@ -2917,6 +3189,7 @@ mod tests {
                             flow,
                             &config,
                             None,
+                            interest,
                         )
                     }
                 },
@@ -2942,7 +3215,9 @@ mod tests {
                 assert_eq!(texts.len(), 1);
                 assert_eq!(
                     texts[0].galley.text(),
-                    if !available {
+                    if marked {
+                        "~"
+                    } else if !available {
                         "Execution statistics unavailable"
                     } else if height == 90.0 {
                         "Enlarge chart for per-bar statistics"
@@ -2957,27 +3232,32 @@ mod tests {
                 count * 3,
                 "{count} labels and two complete columns at {spacing}"
             );
-            assert_eq!(
-                texts
-                    .iter()
-                    .filter(|t| t.galley.text() == "Delta %")
-                    .count(),
-                1
-            );
+            if marked {
+                assert!(texts[..count].iter().all(|t| t.galley.text() == "~"));
+            } else {
+                assert_eq!(
+                    texts
+                        .iter()
+                        .filter(|t| t.galley.text() == "Delta %")
+                        .count(),
+                    1
+                );
+            }
             for (column, expected) in [
                 [
                     "16", "3", "13", "10", "-3", "10", "10", "62.5%", "4.33:1", "3", "5.333",
-                    "18.8%", "81.2%", "0.25", "100.00", "",
+                    "18.8%", "81.2%", "0.25", "100.00", "", "1004", "998",
                 ],
                 if large {
                     [
                         "123.5M", "123.5M", "0", "-123.5M", "-123.5M", "0", "-123.5M", "-100.0%",
-                        "0.00:1", "2", "61.7M", "", "", "", "", "",
+                        "0.00:1", "2", "61.7M", "", "", "", "", "", "", "",
                     ]
                 } else {
                     [
                         "2500", "2500", "0", "-2500", "-2500", "0", "-2490", "-100.0%", "0.00:1",
-                        "1", "2500", "100.0%", "0.0%", "0.00", "100.00", "15525.0%",
+                        "1", "2500", "100.0%", "0.0%", "0.00", "100.00", "15525.0%", "1006",
+                        "1006",
                     ]
                 },
             ]
@@ -2996,18 +3276,204 @@ mod tests {
         }
     }
 
-    /// A delta of 5 in the last bar of a UTC day and 2 in the first bar of the next: summed over
-    /// every bar the row reads 5 and then 7, restarted with the day 5 and then 2.
+    #[test]
+    fn sums_equal_up_to_rounding_read_as_equal_in_the_statistics() {
+        let start: chrono::DateTime<chrono::Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let minute = chrono::TimeDelta::minutes(1);
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        // Sells of 0.1 and 0.2 sum to 0.30000000000000004 against a buy of 0.3, then buys of the
+        // same sizes and one sell of 0.3: every delta and the run's last one are balanced.
+        for (at, size, side) in [
+            (start, 0.1, OrderSide::Sell),
+            (start, 0.2, OrderSide::Sell),
+            (start, 0.3, OrderSide::Buy),
+            (start + minute, 0.1, OrderSide::Buy),
+            (start + minute, 0.2, OrderSide::Buy),
+            (start + minute * 2, 0.3, OrderSide::Sell),
+        ] {
+            flow.push(&Tick::new(at, 100.0, size, Some(side))).unwrap();
+        }
+        let bars = [start, start + minute, start + minute * 2]
+            .map(|time| Bar::new(time, 100.0, 100.0, 100.0, 100.0, 1.0));
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(360.0, 48.0));
+        let map = ChartMapping::new(
+            rect,
+            60.0,
+            0,
+            2,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(99.0, 102.0),
+                0.0,
+                48.0,
+                false,
+            ),
+        );
+        let config = FootprintConfig {
+            statistics_rows: vec![
+                FootprintStatistic::Delta,
+                FootprintStatistic::CumulativeDelta,
+                FootprintStatistic::VolumeChange,
+            ],
+            ..Default::default()
+        };
+        let mut output = egui::Context::default().run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ui| {
+                render_footprint_statistics_rows(
+                    ui.painter(),
+                    &map,
+                    &bars,
+                    &flow,
+                    &config,
+                    None,
+                    &[],
+                )
+            },
+        );
+        output.textures_delta.clear();
+        let texts: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Text(t) => Some(t.galley.text()),
+                _ => None,
+            })
+            .collect();
+        // The sides of the run end at 0.6000000000000001 each, where bar deltas of 0, 0.3 and
+        // -0.3 would sum to 5.55e-17. The volume of 0.3 after 0.30000000000000004 changes by
+        // -1.85e-14%.
+        assert_eq!(
+            texts,
+            [
+                "Delta",
+                "CVD",
+                "Vol change %",
+                "0",
+                "0",
+                "",
+                "0.3",
+                "0.3",
+                "-50.0%",
+                "-0.3",
+                "0",
+                "0.0%"
+            ]
+        );
+    }
+
+    /// Buys of 1, 5 and 3 at 23:59, 00:00 and 00:01 UTC: summed over every bar the row reads 1, 6
+    /// and 9, restarted with the day 1, 5 and 8. Once the 00:00 bar is incomplete the day's running
+    /// delta at 00:01 is unknown, while the sum over every bar starts at 00:01. A day that opens
+    /// after the incomplete bars keeps its values, also when its first bar on the chart has no
+    /// executions.
     #[test]
     fn cumulative_delta_restarts_with_the_session_when_given_sessions() {
-        let last: chrono::DateTime<chrono::Utc> = "2026-01-05T23:59:00Z".parse().unwrap();
-        let first = last + chrono::TimeDelta::minutes(1);
-        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
-        for (at, size) in [(last, 5.0), (first, 2.0)] {
-            flow.push(&Tick::new(at, 100.0, size, Some(OrderSide::Buy)))
-                .unwrap();
+        let late: chrono::DateTime<chrono::Utc> = "2026-01-05T23:59:00Z".parse().unwrap();
+        let open = late + chrono::TimeDelta::minutes(1);
+        let times = [late, open, open + chrono::TimeDelta::minutes(1)];
+        let bars = times.map(|time| Bar::new(time, 100.0, 100.0, 100.0, 100.0, 1.0));
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 16.0));
+        let map = ChartMapping::new(
+            rect,
+            60.0,
+            0,
+            2,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(99.0, 102.0),
+                0.0,
+                16.0,
+                false,
+            ),
+        );
+        let config = FootprintConfig {
+            statistics_rows: vec![FootprintStatistic::CumulativeDelta],
+            ..Default::default()
+        };
+        let days =
+            crate::model::ExchangeSessionProvider::new(crate::model::TimezoneId::utc(), None);
+        let days = Some(&days as &dyn SessionProvider);
+        for (sizes, received, sessions, expected) in [
+            ([1.0, 5.0, 3.0], None, None, &["CVD", "1", "6", "9"][..]),
+            ([1.0, 5.0, 3.0], None, days, &["CVD", "1", "5", "8"]),
+            ([1.0, 5.0, 3.0], Some(open), None, &["CVD", "3"]),
+            ([1.0, 5.0, 3.0], Some(open), days, &["CVD", "n/a"]),
+            ([1.0, 5.0, 3.0], Some(late), days, &["CVD", "5", "8"]),
+            ([1.0, 0.0, 3.0], Some(late), days, &["CVD", "3"]),
+        ] {
+            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+            for (at, size) in times.into_iter().zip(sizes).filter(|(_, size)| *size > 0.0) {
+                flow.push(&Tick::new(at, 100.0, size, Some(OrderSide::Buy)))
+                    .unwrap();
+            }
+            if let Some(at) = received {
+                flow.received_from(at);
+            }
+            let mut output = egui::Context::default().run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ui| {
+                    render_footprint_statistics_rows(
+                        ui.painter(),
+                        &map,
+                        &bars,
+                        &flow,
+                        &config,
+                        sessions,
+                        &[],
+                    );
+                },
+            );
+            output.textures_delta.clear();
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(t) => Some(t.galley.text()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                texts,
+                expected,
+                "{sizes:?} from {received:?}, restarting: {}",
+                sessions.is_some()
+            );
         }
-        let bars = [last, first].map(|time| Bar::new(time, 100.0, 100.0, 100.0, 100.0, 1.0));
+    }
+
+    #[test]
+    fn prepared_gap_before_the_session_bar_stamp_keeps_cumulative_unknown() {
+        let start: chrono::DateTime<chrono::Utc> = "2026-01-05T00:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for minute in 0..2 {
+            flow.push(&Tick::new(
+                start + chrono::TimeDelta::minutes(minute),
+                100.0,
+                2.0,
+                Some(OrderSide::Buy),
+            ))
+            .unwrap();
+        }
+        flow.add_missing(start, start + chrono::TimeDelta::seconds(20));
+        let bars = [0, 1].map(|minute| {
+            Bar::new(
+                start + chrono::TimeDelta::seconds(minute * 60 + 30),
+                100.0,
+                100.0,
+                100.0,
+                100.0,
+                1.0,
+            )
+        });
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 16.0));
         let map = ChartMapping::new(
             rect,
@@ -3029,10 +3495,108 @@ mod tests {
         };
         let days =
             crate::model::ExchangeSessionProvider::new(crate::model::TimezoneId::utc(), None);
-        for (sessions, expected) in [
-            (None, ["CVD", "5", "7"]),
-            (Some(&days as &dyn SessionProvider), ["CVD", "5", "2"]),
+        let mut output = egui::Context::default().run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ui| {
+                render_footprint_statistics_rows(
+                    ui.painter(),
+                    &map,
+                    &bars,
+                    &flow,
+                    &config,
+                    Some(&days),
+                    &[],
+                );
+            },
+        );
+        output.textures_delta.clear();
+        let texts: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Text(t) => Some(t.galley.text()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["CVD", "n/a"]);
+    }
+
+    #[test]
+    fn prepared_gap_draws_known_statistics_without_a_partial_cumulative_total() {
+        use chrono::TimeDelta;
+        let start: chrono::DateTime<chrono::Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let cutoff = start + TimeDelta::seconds(90);
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for (second, size) in [(0, 5.0), (60, 7.0)] {
+            flow.push(&Tick::new(
+                start + TimeDelta::seconds(second),
+                100.0,
+                size,
+                Some(OrderSide::Buy),
+            ))
+            .unwrap();
+        }
+        let mut tape = crate::data::trades::Trades::new(10);
+        for (second, size) in [(130, 11.0), (180, 13.0)] {
+            tape.push(Tick::new(
+                start + TimeDelta::seconds(second),
+                100.0,
+                size,
+                Some(OrderSide::Buy),
+            ));
+        }
+        flow.prepare_history(cutoff, &tape, false);
+        let bars = [0, 1, 2, 3].map(|minute| {
+            Bar::new(
+                start + TimeDelta::minutes(minute),
+                100.0,
+                100.0,
+                100.0,
+                100.0,
+                1.0,
+            )
+        });
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(420.0, 16.0));
+        let map = ChartMapping::new(
+            rect,
+            60.0,
+            0,
+            3,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(99.0, 102.0),
+                0.0,
+                16.0,
+                false,
+            ),
+        );
+        // Fixed rows, so that `row_edges` gives the edges of every complete bar.
+        let config = FootprintConfig {
+            statistics_rows: vec![FootprintStatistic::CumulativeDelta],
+            auto_row_height: None,
+            ..Default::default()
+        };
+        for (filled, expected) in [
+            (false, vec!["CVD", "5", "n/a"]),
+            (true, vec!["CVD", "5", "14", "25", "38"]),
         ] {
+            if filled {
+                tape.prepend(
+                    vec![Tick::new(cutoff, 100.0, 2.0, Some(OrderSide::Buy))],
+                    &mut |_, _| (),
+                );
+            }
+            if filled {
+                flow.cover_missing(
+                    cutoff,
+                    start + TimeDelta::seconds(130) + TimeDelta::nanoseconds(1),
+                );
+            }
+            flow.rebuild_prepared(&tape);
             let mut output = egui::Context::default().run_ui(
                 egui::RawInput {
                     screen_rect: Some(rect),
@@ -3045,7 +3609,8 @@ mod tests {
                         &bars,
                         &flow,
                         &config,
-                        sessions,
+                        None,
+                        &[],
                     );
                 },
             );
@@ -3053,12 +3618,16 @@ mod tests {
             let texts: Vec<_> = output
                 .shapes
                 .iter()
-                .filter_map(|s| match &s.shape {
-                    Shape::Text(t) => Some(t.galley.text()),
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Text(text) => Some(text.galley.text()),
                     _ => None,
                 })
                 .collect();
-            assert_eq!(texts, expected, "restarting: {}", sessions.is_some());
+            assert_eq!(texts, expected);
+            assert_eq!(
+                row_edges(&bars, (&flow).into(), &config, |_| 1).count(),
+                if filled { 8 } else { 4 }
+            );
         }
     }
 
@@ -3312,7 +3881,7 @@ mod tests {
                 color_by,
                 ..Default::default()
             };
-            (cell_color(&bar, &row, 10.0, 6.0, &config), config)
+            (cell_color(&(&bar).into(), &row, 10.0, 6.0, &config), config)
         };
         let (color, config) = colors(FootprintColor::DeltaOpacity, row(2.0, 8.0, 0.0));
         assert_eq!(color, config.ask_color.gamma_multiply(1.0));
@@ -3349,6 +3918,143 @@ mod tests {
         ] {
             let bar = Bar::new(time, open, 100.5, 100.0, close, 3.0);
             assert_eq!(pullback_range(&bar, &flow), expected, "{open} to {close}");
+        }
+    }
+
+    /// A bar's extreme ratios are written beyond its rows, its threshold markers and its
+    /// summary, with the highest row's ratio on the side of that row, also on an inverted scale.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn extreme_ratios_clear_their_bar_and_threshold_markers() {
+        use crate::studies::{
+            FootprintStudy, FootprintStudyConfig, FootprintStudyKind, FootprintStudyState,
+        };
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let bars = [Bar::new(time, 105.0, 106.0, 105.0, 105.0, 1.0)];
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        // Ask/bid 250,100 / 223,400 is 1.12 at 106 and 120,000 / 320,100 is 0.37 at 105.
+        for (price, sell, buy) in [(106.0, 223_400.0, 250_100.0), (105.0, 320_100.0, 120_000.0)] {
+            for (size, side) in [(sell, OrderSide::Sell), (buy, OrderSide::Buy)] {
+                flow.push(&Tick::new(time, price, size, Some(side)))
+                    .unwrap();
+            }
+        }
+        let config = FootprintConfig {
+            extreme_ratio: true,
+            auto_row_height: None,
+            studies: Some(FootprintStudyConfig {
+                delta_percent: Some(10.0),
+                ratio: Some(1.5),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let studies = [
+            FootprintStudyKind::DeltaAsk,
+            FootprintStudyKind::RatioAsk,
+            FootprintStudyKind::DeltaBid,
+            FootprintStudyKind::RatioBid,
+        ]
+        .map(|kind| FootprintStudy {
+            start: time,
+            end: Some(time),
+            low: 105,
+            high: 106,
+            kind,
+            state: FootprintStudyState::Local,
+        });
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(480.0, 320.0));
+        let ctx = egui::Context::default();
+        for spacing in [60.0, 120.0] {
+            for inverted in [false, true] {
+                let map = ChartMapping::new(
+                    rect,
+                    spacing,
+                    0,
+                    0,
+                    0.0,
+                    PriceMap::new(
+                        PriceTransform::default(),
+                        PriceRange::new(98.0, 110.0),
+                        0.0,
+                        320.0,
+                        inverted,
+                    ),
+                );
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(rect),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        render_footprint(ui.painter(), &map, &bars, &flow, &config);
+                        render_footprint_studies(
+                            ui.painter(),
+                            &map,
+                            &bars,
+                            &flow,
+                            &studies,
+                            &config,
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+                let shapes: Vec<_> = output.shapes.into_iter().map(|s| s.shape).collect();
+                let markers: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        // The value-area markers in the gap are text coloured.
+                        Shape::Path(path)
+                            if path.fill == config.ask_color || path.fill == config.bid_color =>
+                        {
+                            Some(Rect::from_points(&path.points))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    markers.len(),
+                    4,
+                    "markers at {spacing}, inverted {inverted}"
+                );
+                let text = painted_text(&shapes);
+                // The rows run from 104.5 to 106.5, y 146.67 to 93.33, or 173.33 to 226.67.
+                let x = map.idx_to_x(0);
+                let [low, high] = [104.5, 106.5].map(|price| map.price_to_y(price));
+                let rows = Rect::from_x_y_ranges(
+                    x - spacing * 0.5..=x + spacing * 0.5,
+                    low.min(high)..=low.max(high),
+                );
+                for (label, side) in [("A/B 1.12", high), ("A/B 0.37", low)] {
+                    let (_, bounds) =
+                        text.iter()
+                            .find(|(text, _)| text == label)
+                            .unwrap_or_else(|| {
+                                panic!("{label} missing at {spacing}, inverted {inverted}")
+                            });
+                    assert!(
+                        !bounds.intersects(rows),
+                        "{label} over the rows at {spacing}, inverted {inverted}"
+                    );
+                    assert_eq!(
+                        bounds.center().y < rows.center().y,
+                        side < rows.center().y,
+                        "{label} beyond its own row at {spacing}, inverted {inverted}"
+                    );
+                    for marker in &markers {
+                        assert!(
+                            !bounds.intersects(*marker),
+                            "{label} over a marker at {spacing}, inverted {inverted}"
+                        );
+                    }
+                    for (other, rect) in &text {
+                        assert!(
+                            other == label || !bounds.intersects(*rect),
+                            "{label} over {other} at {spacing}, inverted {inverted}"
+                        );
+                    }
+                }
+            }
         }
     }
 

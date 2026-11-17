@@ -1,13 +1,17 @@
 //! Demo menu controls and sample commands shared with quick search.
 
-use super::{DemoApp, TopToolbarAction};
+use super::{
+    DemoApp, DrawingToolbarAction, RightBarIcon, TimeframeToolbarAction, TopToolbarAction,
+};
 use eframe::egui;
+use egui_charts::config::KeyboardAction;
 use egui_charts::drawings::DrawingToolType;
 use egui_charts::icons::{Icon, icons};
 use egui_charts::studies::IndicatorFactory;
 use egui_charts::theme::ThemeExt;
-use egui_charts::ui_kit::command_palette::Command;
+use egui_charts::ui_kit::command_palette::{Command, CommandPaletteHandler};
 use egui_charts::ui_kit::list_item::ListItem;
+use egui_charts::widget::ShortcutMap;
 
 /// A top-left menu row with an icon and an optional trailing icon at the right edge.
 pub(super) fn menu_item(
@@ -94,16 +98,51 @@ const SAMPLES: &[(&str, &str, &str)] = &[
     (
         "targets",
         "Analyst price targets",
-        "Requires SAMPLE on the daily interval.",
+        "Synthetic high, average and low targets for SAMPLE on the daily interval.",
     ),
     (
         "financials",
         "Company financials",
-        "Synthetic income statement, balance sheet and statistics for AAPL.",
+        "Synthetic income statement, balance sheet and statistics for STOCKA.",
     ),
 ];
 
-pub(super) fn quick_search_commands() -> Vec<Command> {
+/// The quick search rows whose action has a key binding.
+const ROW_KEYS: &[(&str, KeyboardAction)] = &[
+    ("symbols", KeyboardAction::OpenSymbolSearch),
+    ("indicators", KeyboardAction::OpenIndicatorSearch),
+    ("reset", KeyboardAction::ResetChart),
+    ("date", KeyboardAction::GoToDate),
+    ("help", KeyboardAction::ShowKeyboardHelp),
+    ("log", KeyboardAction::ToggleLogScale),
+    ("invert", KeyboardAction::InvertScale),
+    ("grid", KeyboardAction::ToggleGrid),
+    ("undo", KeyboardAction::Undo),
+    ("redo", KeyboardAction::Redo),
+    ("snapshot", KeyboardAction::Snapshot),
+    ("alert", KeyboardAction::CreateAlert),
+    ("interval", KeyboardAction::OpenIntervalSearch),
+    ("percent", KeyboardAction::TogglePercentageScale),
+    ("auto-scale", KeyboardAction::ToggleAutoScale),
+    ("data-window", KeyboardAction::OpenDataWindow),
+    ("fullscreen", KeyboardAction::MaximizeChart),
+    ("save-layout", KeyboardAction::SaveLayout),
+    ("open-layout", KeyboardAction::OpenLayout),
+    ("hide-drawings", KeyboardAction::ToggleDrawings),
+];
+
+/// The quick search rows. A row whose action has a key shows the first one bound in `shortcuts`,
+/// and each saved indicator template of `templates` (id and name) has a row of its own.
+pub(super) fn quick_search_commands(
+    shortcuts: &ShortcutMap,
+    templates: &[(String, String)],
+) -> Vec<Command> {
+    let keyed = |command: Command, action: Option<KeyboardAction>| match action
+        .and_then(|action| shortcuts.shortcut(action))
+    {
+        Some(shortcut) => command.shortcut(shortcut),
+        None => command,
+    };
     let mut commands: Vec<_> = [
         ("symbols", "Symbol search", "Actions"),
         ("indicators", "Indicators", "Actions"),
@@ -119,10 +158,45 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
         ("samples", "Toggle all sample overlays", "Showcase"),
         ("heatmap", "Market heatmap", "Actions"),
         ("price-workspace", "Return to price chart", "Showcase"),
+        ("undo", "Undo", "Actions"),
+        ("redo", "Redo", "Actions"),
+        ("snapshot", "Take a snapshot", "Actions"),
+        ("alert", "Create alert", "Actions"),
+        ("compare", "Compare or add symbol", "Actions"),
+        ("interval", "Change interval", "Actions"),
+        ("timezone", "Time zone", "Settings"),
+        ("session", "Trading session", "Settings"),
+        ("percent", "Toggle percent scale", "Settings"),
+        ("auto-scale", "Toggle auto scale", "Settings"),
+        ("data-window", "Data window", "Actions"),
+        ("object-tree", "Object tree", "Actions"),
+        ("watchlist", "Watchlist", "Actions"),
+        ("fullscreen", "Toggle fullscreen", "Actions"),
+        ("save-layout", "Save layout", "Actions"),
+        ("open-layout", "Open layout", "Actions"),
+        ("hide-drawings", "Hide all drawings", "Drawing tools"),
+        ("remove-drawings", "Remove all drawings", "Drawing tools"),
+        ("lock-drawings", "Lock all drawings", "Drawing tools"),
+        ("magnet", "Toggle magnet", "Drawing tools"),
+        ("remove-indicators", "Remove all indicators", "Studies"),
+        ("save-template", "Save indicator template", "Studies"),
     ]
     .into_iter()
-    .map(|(id, label, category)| Command::new(id, label).category(category))
+    .map(|(id, label, category)| {
+        let action = ROW_KEYS
+            .iter()
+            .find(|(row, _)| *row == id)
+            .map(|(_, key)| *key);
+        keyed(Command::new(id, label).category(category), action)
+    })
     .collect();
+    commands.extend(templates.iter().map(|(id, name)| {
+        Command::new(
+            format!("template:{id}"),
+            format!("Indicator template: {name}"),
+        )
+        .category("Studies")
+    }));
     commands.extend(SAMPLES.iter().map(|(id, label, description)| {
         Command::new(*id, *label)
             .category("Showcase")
@@ -141,11 +215,12 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
     for category in DrawingToolType::categories() {
         for tool in DrawingToolType::by_category(category) {
             if !tool.is_cursor() {
-                commands.push(
+                commands.push(keyed(
                     Command::new(format!("tool:{}", tool.data_name()), tool.as_str())
                         .category("Drawing tools")
                         .keywords([*category]),
-                );
+                    Some(KeyboardAction::DrawingTool(tool)),
+                ));
             }
         }
     }
@@ -201,12 +276,26 @@ impl DemoApp {
         }
     }
 
+    /// Opens quick search with the chart's current key bindings and saved templates.
+    pub(super) fn open_quick_search(&mut self) {
+        self.quick_search = CommandPaletteHandler::new(quick_search_commands(
+            self.chart.shortcuts(),
+            &self.top_toolbar.indicator_templates,
+        ));
+        self.quick_search.open();
+    }
+
     pub(super) fn execute_search_command(&mut self, ctx: &egui::Context, id: &str) {
         // The appearance is the interface's, on every chart: choosing it is no chart's edit.
         if id.starts_with("appearance:") {
             return self.execute_search_edit(ctx, id);
         }
-        self.user_action(|app| app.execute_search_edit(ctx, id));
+        // Undo and redo step through the history, so they cannot run inside an edit.
+        match id {
+            "undo" => self.handle_top_toolbar(ctx, TopToolbarAction::Undo),
+            "redo" => self.handle_top_toolbar(ctx, TopToolbarAction::Redo),
+            _ => self.user_action(|app| app.execute_search_edit(ctx, id)),
+        }
     }
 
     fn execute_search_edit(&mut self, ctx: &egui::Context, id: &str) {
@@ -228,6 +317,13 @@ impl DemoApp {
             {
                 self.chart.drawings_mut().set_active_tool(Some(*tool));
             }
+            return;
+        }
+        if let Some(template) = id.strip_prefix("template:") {
+            self.handle_top_toolbar(
+                ctx,
+                TopToolbarAction::ApplyIndicatorTemplate(template.to_owned()),
+            );
             return;
         }
         if let Some(name) = id.strip_prefix("study:") {
@@ -260,6 +356,33 @@ impl DemoApp {
             self.sample_scene = None;
             return;
         }
+        let drawing_action = match id {
+            "hide-drawings" => {
+                // The toolbar's hide menu flips its state before it reports the choice.
+                let state = &mut self.drawing_toolbar.state;
+                state.hide_drawings = !state.hide_drawings;
+                Some(DrawingToolbarAction::HideAllDrawings)
+            }
+            "remove-drawings" => Some(DrawingToolbarAction::RemoveAllDrawings),
+            "lock-drawings" => Some(DrawingToolbarAction::LockAllDrawings),
+            "magnet" => Some(DrawingToolbarAction::ToggleMagnet),
+            "remove-indicators" => Some(DrawingToolbarAction::RemoveAllIndicators),
+            _ => None,
+        };
+        if let Some(action) = drawing_action {
+            self.handle_drawing_toolbar(action);
+            return;
+        }
+        let shortcut = match id {
+            "interval" => Some(KeyboardAction::OpenIntervalSearch),
+            "data-window" => Some(KeyboardAction::OpenDataWindow),
+            "open-layout" => Some(KeyboardAction::OpenLayout),
+            _ => None,
+        };
+        if let Some(action) = shortcut {
+            self.handle_shortcut_action(ctx, action);
+            return;
+        }
         // These switch to a catalog symbol or show the sample annotations.
         if matches!(
             id,
@@ -278,6 +401,41 @@ impl DemoApp {
             "symbols" => TopToolbarAction::OpenSymbolSearch,
             "indicators" => TopToolbarAction::OpenIndicators,
             "settings" => TopToolbarAction::OpenSettings,
+            "snapshot" => TopToolbarAction::TakeScreenshot,
+            "alert" => TopToolbarAction::CreateAlert,
+            "compare" => TopToolbarAction::OpenCompare,
+            "fullscreen" => TopToolbarAction::ToggleFullscreen,
+            "save-layout" => TopToolbarAction::Save,
+            "save-template" => TopToolbarAction::SaveIndicatorTemplate,
+            "timezone" | "session" => {
+                self.handle_timeframe_toolbar(if id == "timezone" {
+                    TimeframeToolbarAction::OpenTimezoneMenu
+                } else {
+                    TimeframeToolbarAction::OpenSessionMenu
+                });
+                return;
+            }
+            "percent" | "auto-scale" => {
+                // The scale boxes of the chart settings, applied as their Ok button does.
+                let mut settings = self.chart_settings_state();
+                let scales = &mut settings.scales_and_lines;
+                if id == "percent" {
+                    scales.percentage_scale = !scales.percentage_scale;
+                    scales.log_scale &= !scales.percentage_scale;
+                } else {
+                    scales.auto_scale = !scales.auto_scale;
+                }
+                self.apply_chart_settings(settings);
+                return;
+            }
+            "object-tree" | "watchlist" => {
+                self.toggle_panel(if id == "watchlist" {
+                    RightBarIcon::Watchlist
+                } else {
+                    RightBarIcon::ObjectTree
+                });
+                return;
+            }
             "export" => {
                 self.screenshot_requested = None;
                 self.export_dialog.open();
@@ -326,10 +484,10 @@ impl DemoApp {
             }
             "options-volume" => {
                 let expiry = chrono::Utc::now().date_naive() + chrono::TimeDelta::days(30);
-                let query = egui_charts::data::OptionsVolumeQuery {
-                    symbol: self.chart.symbol().into(),
-                    expiries: expiry..=expiry,
-                };
+                let query = egui_charts::data::OptionsVolumeQuery::new(
+                    self.chart.symbol(),
+                    expiry..=expiry,
+                );
                 let price = self
                     .chart
                     .state()
@@ -350,8 +508,26 @@ impl DemoApp {
                 return;
             }
             "targets" => {
-                if self.chart.symbol() != "SAMPLE" {
-                    self.notify("Analyst targets require SAMPLE. Select SAMPLE, then try again.");
+                let symbol = self.chart.symbol().to_owned();
+                if symbol != super::live::TARGETS_SYMBOL {
+                    self.notify(format!(
+                        "{symbol} has no analyst targets in this demo. Select {}, then try again.",
+                        super::live::TARGETS_SYMBOL
+                    ));
+                    return;
+                }
+                if self.chart.chart_type().is_time_independent() {
+                    self.notify(
+                        "Analyst targets need a time-based chart type, such as candles. Change \
+                         the chart type, then try again.",
+                    );
+                    return;
+                }
+                if !self.chart.is_main_series_visible() {
+                    self.notify(
+                        "Analyst targets start at the last close. Show the price series, then try \
+                         again.",
+                    );
                     return;
                 }
                 self.switch_timeframe(egui_charts::model::Timeframe::Day1);
@@ -367,7 +543,7 @@ impl DemoApp {
                 return;
             }
             "financials" => {
-                self.switch_symbol("AAPL");
+                self.switch_symbol("STOCKA");
                 self.open_financials();
                 return;
             }
@@ -473,7 +649,7 @@ impl DemoApp {
             });
         });
         if search {
-            self.quick_search.open();
+            self.open_quick_search();
         }
         if let Some(id) = self.quick_search.show(ui.ctx()) {
             self.sample_scene = None;
@@ -534,6 +710,7 @@ impl DemoApp {
 mod tests {
     use super::*;
     use egui::{Event, RawInput};
+    use egui_charts::model::ChartType;
     use egui_charts::widget::{Chart, ChartLayoutMode, ImageExportOptions};
 
     fn choose_scope(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
@@ -1070,8 +1247,8 @@ mod tests {
         app.live.set_paused(true);
         frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
         app.execute_search_command(&ctx, "financials");
-        assert_eq!(app.chart.symbol(), "AAPL");
-        assert_eq!(app.financials.as_ref().unwrap().0, "AAPL");
+        assert_eq!(app.chart.symbol(), "STOCKA");
+        assert_eq!(app.financials.as_ref().unwrap().0, "STOCKA");
         frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
         for (page, row) in [
             ("Income statement", "Total revenue"),
@@ -1090,13 +1267,13 @@ mod tests {
         click(&mut app, &ctx, "Back to chart");
         assert!(app.financials.is_none());
         frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
-        assert_eq!(app.chart.symbol(), "AAPL");
+        assert_eq!(app.chart.symbol(), "STOCKA");
         assert!(!app.chart.state().shown().is_empty());
         for (symbol, available) in [
-            ("MSFT", true),
-            ("BTCUSD", false),
-            ("EURUSD", false),
-            ("SPX", false),
+            ("STOCKB", true),
+            ("TOKENA", false),
+            ("FOREXA", false),
+            ("INDEXA", false),
             ("SAMPLE", false),
         ] {
             app.execute_search_command(&ctx, "financials");
@@ -1111,7 +1288,22 @@ mod tests {
 
     #[test]
     fn showcase_routes_enable_samples_once_and_check_target_prerequisite() {
-        let commands = quick_search_commands();
+        // A row shows the key its action is bound to now, and no key once the binding is gone.
+        let mut shortcuts = ShortcutMap::default();
+        let edited = egui::KeyboardShortcut::new(egui::Modifiers::ALT, egui::Key::U);
+        for (key, action) in &mut shortcuts.bindings {
+            if *action == KeyboardAction::Undo {
+                *key = edited;
+            }
+        }
+        shortcuts
+            .bindings
+            .retain(|(_, action)| *action != KeyboardAction::Snapshot);
+        let commands = quick_search_commands(&shortcuts, &[]);
+        let shortcut = |id: &str| commands.iter().find(|row| row.id == id).unwrap().shortcut;
+        assert_eq!(shortcut("undo"), Some(edited));
+        assert_eq!(shortcut("snapshot"), None);
+        assert!(shortcut("percent").is_some());
         let ids: std::collections::HashSet<_> =
             commands.iter().map(|command| &command.id).collect();
         assert_eq!(ids.len(), commands.len(), "commands must have unique ids");
@@ -1158,10 +1350,54 @@ mod tests {
             );
         }
         assert!(app.open_panel == Some(super::super::SidePanel::TimeAndSales));
-        app.switch_symbol("BTCUSD");
-        let before = app.state.timeframe;
+        let refused = [
+            (
+                "TOKENA",
+                ChartType::Candles,
+                true,
+                "TOKENA has no analyst targets",
+            ),
+            ("SAMPLE", ChartType::Renko, true, "time-based chart type"),
+            ("SAMPLE", ChartType::Candles, false, "Show the price series"),
+        ];
+        for (symbol, kind, series, reason) in refused {
+            app.switch_symbol(symbol);
+            app.chart.set_chart_type(kind);
+            app.chart.set_main_series_visible(series);
+            frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+            let (interval, range) = (app.state.timeframe, app.chart.visible_logical_range());
+            app.execute_search_command(&ctx, "targets");
+            assert_eq!(app.state.timeframe, interval, "{symbol} {kind:?}");
+            assert_eq!(
+                app.chart.visible_logical_range(),
+                range,
+                "{symbol} {kind:?}"
+            );
+            assert!(!app.chart.price_targets_visible(), "{symbol} {kind:?}");
+            assert!(
+                app.toasts
+                    .toasts()
+                    .last()
+                    .is_some_and(|toast| toast.message.contains(reason)),
+                "{reason}"
+            );
+        }
+        app.chart.set_main_series_visible(true);
         app.execute_search_command(&ctx, "targets");
-        assert_eq!(app.state.timeframe, before);
-        assert!(!app.chart.price_targets_visible());
+        let output = frame(&mut app, &ctx, vec![]);
+        for name in ["High ", "Average ", "Low "] {
+            assert!(
+                output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.text().starts_with(name))),
+                "{name}"
+            );
+        }
+        output.drop_without_applying_deltas();
+        let horizon = app.chart.price_targets().unwrap().horizon;
+        let horizon = horizon.and_hms_opt(0, 0, 0).unwrap().and_utc();
+        assert!(
+            f64::from(app.chart.visible_logical_range().unwrap().right)
+                >= app.chart.time_to_index(horizon).unwrap()
+        );
     }
 }

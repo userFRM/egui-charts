@@ -116,8 +116,16 @@ of the display zone. Bars given with `Chart::new`, `ChartBuilder` or
 sit at its midnight, and in the display zone otherwise, which gives a 00:00 UTC
 stamp the same date. A bar stamped at 00:00 UTC on its trading date therefore
 keeps that date in the crosshair, the tooltip, `Chart::format_time` and the time
-axis marks in every display zone, and so does a bar that bar replay forms at the
-display zone's midnight. Intraday bars always read in the display zone.
+axis marks in every display zone. `Chart::bar_clock` runs on the same dates, so
+bar replay completes such a bar when its date ends and forms the bar of the
+cursor's date there, and studies group the bars into weeks and months by those
+dates; pass it to `ReplayController::cutoff`. When the instrument has a session,
+bar replay completes such a bar when its last trading window closes, extended
+hours included when `Chart::set_extended_hours` selects them, and the finer bars
+given with `Chart::set_replay_source` form the bar of their trading date
+instead, as `data::resample_with_session` dates them. The trades and heartbeats
+of the chart's feed join the bar of their trading date too. Intraday bars always
+read in the display zone.
 Synchronize charts using the
 [UTC time range](time-scale.mdx#logical-indices-and-utc-instants), even when their
 display clocks differ.

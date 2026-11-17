@@ -12,6 +12,7 @@ use egui::Pos2;
 
 /// Options for snap behavior
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SnapOptions {
     /// Enable snap to OHLC prices
     pub snap_to_price: bool,
@@ -39,6 +40,7 @@ impl Default for SnapOptions {
 
 /// Snap targets - prices and times to snap to
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct SnapTargets {
     /// Y-coordinates of OHLC prices in screen space
     pub prices: Vec<f32>,
@@ -113,6 +115,17 @@ impl SnapService {
     }
 
     /// Create with custom options
+    ///
+    /// ```
+    /// use egui_charts::drawings::services::{SnapOptions, SnapService, SnapTargets};
+    ///
+    /// let mut options = SnapOptions::default();
+    /// options.snap_to_price = true;
+    /// options.snap_distance = 12.0;
+    /// let snap = SnapService::with_options(options);
+    /// let targets = SnapTargets::with_price_time(vec![100.0, 200.0], vec![50.0]);
+    /// let point = snap.snap_point(egui::pos2(52.0, 104.0), &targets);
+    /// ```
     pub fn with_options(options: SnapOptions) -> Self {
         Self { options }
     }

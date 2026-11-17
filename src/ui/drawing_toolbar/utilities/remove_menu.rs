@@ -16,6 +16,7 @@ use crate::ui_kit::modal::Modal;
 use egui::{Response, Ui};
 
 /// Remove objects dropdown menu component.
+#[derive(Debug)]
 pub struct RemoveMenu;
 
 impl RemoveMenu {

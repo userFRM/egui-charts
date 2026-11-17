@@ -381,6 +381,12 @@ jobs:
       - name: Run library tests (widget only)
         if: needs.changes.outputs.rust == 'true'
         run: cargo test --no-default-features --features widget --lib
+      - name: Run library tests (drawings and studies without ui)
+        if: needs.changes.outputs.rust == 'true'
+        run: cargo test --no-default-features --features drawings,studies --lib
+      - name: Run library tests (drawings without studies)
+        if: needs.changes.outputs.rust == 'true'
+        run: cargo test --no-default-features --features drawings --lib
       - name: Run library tests (PNG export only)
         if: needs.changes.outputs.rust == 'true'
         run: cargo test --no-default-features --features png-export --lib
@@ -650,11 +656,6 @@ jobs:
         with:
           ref: ${{ needs.changes.outputs.base }}
           path: performance-base
-      - uses: Swatinem/rust-cache@v2
-        if: needs.changes.outputs.rust == 'true' && github.event_name != 'push' && steps.cached.outputs.cache-hit != 'true'
-        with:
-          key: base
-          workspaces: performance-base -> target
       - name: Use the same workloads for the base library
         if: needs.changes.outputs.rust == 'true' && github.event_name != 'push' && steps.cached.outputs.cache-hit != 'true'
         run: |
@@ -676,8 +677,14 @@ jobs:
           if ! grep -q 'fn add_synced_drawing.*-> Result' performance-base/src/drawings/manager/edit.rs; then
             sed -i 's/\.expect("bench drawings are valid")//' performance-base/benches/frame_time.rs
           fi
+          if ! grep -q 'impl TimeScaleEvent {' performance-base/src/model/time_scale_event.rs; then
+            sed -z -E -i 's/TimeScaleEvent::new\(\s*index\.to_string\(\),\s*time,\s*EventKind::News,\s*"Headline",?\s*\)/TimeScaleEvent { id: index.to_string(), time, kind: EventKind::News, title: "Headline".into(), details: String::new() }/' performance-base/benches/frame_time.rs
+          fi
+      # The head's target already holds the dependencies, so only the base library and bench build.
       - name: Build the base workload
         if: needs.changes.outputs.rust == 'true' && github.event_name != 'push' && steps.cached.outputs.cache-hit != 'true'
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: cargo build --release --locked --manifest-path performance-base/Cargo.toml --bench frame_time --message-format=json-render-diagnostics > performance.json
       - name: Measure base instructions
         if: needs.changes.outputs.rust == 'true' && github.event_name != 'push' && steps.cached.outputs.cache-hit != 'true'

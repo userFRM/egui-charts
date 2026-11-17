@@ -31,7 +31,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Chaikin Money Flow indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ChaikinMoneyFlow {
     period: usize,
     values: IndicatorValues,
@@ -186,6 +186,13 @@ impl Indicator for ChaikinMoneyFlow {
         }
         if colors.len() > 1 {
             self.negative_color = colors[1];
+        }
+    }
+
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            levels: vec![(0.0, palette::GRAY, "Zero")],
+            ..Default::default()
         }
     }
 

@@ -132,6 +132,11 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(ParkinsonVol::new(l(0))),
         Box::new(ZeroTrendVol::new(l(0)).with_trading_days(x(252.0))),
         Box::new(RelativeVolatilityIndex::new(l(0))),
+        Box::new(VolatilityIndex::new(l(0), x(3.0))),
+        Box::new(
+            VolatilityIndex::new(l(0), x(3.0))
+                .with_smoothing(VolatilityIndexSmoothing::Exponential),
+        ),
         Box::new(
             CommoditySelectionIndex::new(l(0))
                 .with_point_value(x(1.0))
@@ -236,6 +241,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(Gaps::new(l(0), x(30.0)).with_partial_closing(true)),
         Box::new(RsiDivergence::new(l(0), l(1), l(2), l(3), 60)),
         Box::new(TechnicalRatings::new(l(0), l(1), l(2))),
+        Box::new(TechnicalRatings::new(l(0), l(1), l(2)).with_basis(RatingBasis::Oscillators)),
         Box::new(Reversal::new(l(0))),
         Box::new(ElliottWave::new(l(0), l(1), l(2))),
         Box::new(RisingWedge::new(l(0), l(1), l(2), l(3), l(4), l(5))),
@@ -245,6 +251,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(PriceChannel::new(l(0))),
         Box::new(LinearRegression::new(l(0))),
         Box::new(LinearRegressionChannel::new(l(0), x(2.0)).with_multipliers(x(2.0), x(1.0))),
+        Box::new(LinearRegressionChannel::new(l(0), x(2.0)).with_deviations_used(false, true)),
         Box::new(LinearRegressionSlope::new(l(0))),
         Box::new(TrendStrengthIndex::new(l(0))),
         Box::new(StandardError::new(l(0))),

@@ -1,12 +1,12 @@
 //! Symbol and status line tabs of the chart settings dialog.
 
 use super::super::SettingsDialog;
-use super::{checkbox, styled_checkbox, styled_dropdown};
+use super::{checkbox, pick_color, styled_checkbox, styled_dropdown};
 use crate::localization as l10n;
+use crate::scales::TimezoneMode;
 use crate::theme::Theme;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui_kit::ColorPicker;
 use crate::widget::settings::PrecisionMode;
 use egui::{RichText, Ui};
 
@@ -18,12 +18,14 @@ impl SettingsDialog {
         ui.horizontal(|ui| {
             ui.add_space(0.0);
             ui.vertical(|ui| {
-                styled_checkbox(
-                    ui,
-                    &mut self.settings.show_price_targets,
-                    "Analyst price targets",
-                    theme.ui.text,
-                );
+                if self.price_targets_offered {
+                    styled_checkbox(
+                        ui,
+                        &mut self.settings.show_price_targets,
+                        "Analyst price targets",
+                        theme.ui.text,
+                    );
+                }
                 let kind = self.settings.chart_type;
                 if kind.is_time_independent()
                     || !kind.uses_ohlc()
@@ -36,21 +38,25 @@ impl SettingsDialog {
                             | crate::model::ChartType::SessionVolumeProfile
                     )
                 {
+                    // Settings without a shared source take the one the dialog shows, so Ok
+                    // applies the source shown.
+                    let shared = *self.settings.price_source.get_or_insert_default();
+                    let params = self.settings.chart_type_params.clone().unwrap_or_default();
                     let mut series = crate::chart::series::SeriesSettings {
                         chart_type: kind,
-                        chart_type_params: self
-                            .settings
-                            .chart_type_params
-                            .clone()
-                            .unwrap_or_default(),
-                        price_source: self.settings.price_source.unwrap_or_default(),
+                        price_source: params.styles.line_source(kind, shared),
+                        chart_type_params: params,
                         bullish_color: self.settings.candle_colors.body_up,
                         bearish_color: self.settings.candle_colors.body_down,
                         ..Default::default()
                     };
                     crate::ui::dialogs::series_settings::SymbolTab::show(ui, &mut series);
+                    series.chart_type_params.styles.set_line_source(
+                        kind,
+                        series.price_source,
+                        shared,
+                    );
                     self.settings.chart_type_params = Some(series.chart_type_params);
-                    self.settings.price_source = Some(series.price_source);
                     self.settings.candle_colors.body_up = series.bullish_color;
                     self.settings.candle_colors.body_down = series.bearish_color;
                     ui.add_space(ui.active_theme().spacing.xxl);
@@ -197,11 +203,7 @@ impl SettingsDialog {
                                     for (color, picker, id) in
                                         [(up, up_picker, up_id), (down, down_picker, down_id)]
                                     {
-                                        if let Some(picked) =
-                                            ColorPicker::new(picker, id).show(ui).inner
-                                        {
-                                            *color = picked;
-                                        }
+                                        pick_color(ui, picker, id, color);
                                     }
                                 });
                             });
@@ -264,20 +266,34 @@ impl SettingsDialog {
                 self.draw_section_header(ui, "TIMEZONE", theme);
 
                 self.draw_setting_row_with_controls(ui, "Timezone", theme, |ui, dialog| {
-                    let curr_tz = dialog.settings.timezone.clone();
+                    // A zone this build cannot read is shown as saved, with no row selected.
+                    let current = dialog.settings.timezone_mode().ok();
+                    let rows = crate::ui::timeframe_toolbar::toolbar::zone_rows(
+                        &dialog.timezones,
+                        current.as_ref().unwrap_or(&TimezoneMode::Utc),
+                    );
+                    let shown = rows
+                        .iter()
+                        .find(|(_, mode)| Some(mode) == current.as_ref())
+                        .map_or_else(
+                            || dialog.settings.timezone.clone(),
+                            |(label, _)| label.clone(),
+                        );
                     styled_dropdown(
                         ui,
                         "timezone",
                         DESIGN_TOKENS.sizing.settings_dialog.dropdown_width,
                         theme.ui.text,
-                        &curr_tz,
+                        &shown,
                         |ui| {
-                            for tz in &dialog.timezones {
-                                ui.selectable_value(
-                                    &mut dialog.settings.timezone,
-                                    tz.clone(),
-                                    l10n::text(ui.ctx(), tz.as_str()),
-                                );
+                            for (label, mode) in rows {
+                                let selected = Some(&mode) == current.as_ref();
+                                if ui
+                                    .selectable_label(selected, l10n::text(ui.ctx(), &label))
+                                    .clicked()
+                                {
+                                    dialog.settings.set_timezone_mode(&mode);
+                                }
                             }
                         },
                     );
@@ -810,7 +826,7 @@ mod tests {
             config.show_price_line = false;
             config.bullish_color = up;
             config.bearish_color = down;
-            // Line charts keep their own source, which the Columns control must leave alone.
+            // The line charts' shared source, which the Columns control must leave alone.
             config.price_source = PriceSource::OHLC4;
             chart
         };
@@ -970,6 +986,152 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// Each line-based chart type keeps the price source chosen for it in the chart or series
+    /// settings: switching to another of them draws that type's own source, and switching back
+    /// draws the chosen one again. Settings saved while one source served them all draw it on
+    /// every one of them.
+    #[test]
+    fn line_chart_types_keep_their_own_price_source() {
+        use crate::model::PriceSource;
+        use egui::epaint::ColorMode;
+
+        // Every high is above every close, so the two sources never share a height.
+        let bars: Vec<Bar> = [
+            (10.0, 18.0, 8.0, 14.0),
+            (13.0, 17.0, 8.5, 11.0),
+            (11.0, 16.0, 6.0, 12.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (o, h, l, c))| {
+            let time = chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(i as i64);
+            Bar::new(time, o, h, l, c, 0.0)
+        })
+        .collect();
+        let (highs, closes) = ([18.0, 17.0, 16.0], [14.0, 11.0, 12.0]);
+        let theme = Theme::dark();
+        type Edit = fn(&Context, &mut Chart, &Theme);
+        let edits: [(&str, Edit); 2] = [
+            ("chart settings", |ctx, chart, theme| {
+                let mut dialog = SettingsDialog::new();
+                dialog.set_control_visible(crate::ui::Control::Templates, false);
+                dialog.open(ChartSettingsState::from_chart(chart));
+                for _ in 0..3 {
+                    frame(ctx, chart, &mut dialog, theme, vec![], &[]);
+                }
+                for control in ["Close", "High", "Ok"] {
+                    click(ctx, chart, &mut dialog, theme, control);
+                }
+                assert!(!dialog.is_open);
+            }),
+            ("series settings", |_, chart, _| {
+                let mut settings = chart.series_settings();
+                settings.price_source = PriceSource::High;
+                chart.apply_series_settings(&settings);
+            }),
+        ];
+        for (via, edit) in edits {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            chart.set_chart_type(ChartType::Line);
+            let config = chart.config_mut();
+            config.show_volume = false;
+            config.show_price_line = false;
+            edit(&ctx, &mut chart, &theme);
+            for (t, (kind, source, drawn, other)) in [
+                (ChartType::StepLine, PriceSource::Close, closes, highs),
+                (ChartType::Line, PriceSource::High, highs, closes),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let row = format!("{via}: {kind:?}");
+                chart.set_chart_type(kind);
+                assert_eq!(chart.series_settings().price_source, source, "{row}");
+                let painted =
+                    crate::widget::test_frames::shapes(&ctx, &mut chart, 1.0 + t as f64, vec![]);
+                let plot = chart.get_rendered_price_rect();
+                let styles = &chart.chart_type_params().styles;
+                let color = match kind {
+                    ChartType::Line => styles.line.color,
+                    _ => styles.step_line.color,
+                };
+                let ys: Vec<f32> = painted
+                    .iter()
+                    .flat_map(|shape| match shape {
+                        Shape::Path(path) if path.stroke.color == ColorMode::Solid(color) => {
+                            path.points.clone()
+                        }
+                        Shape::LineSegment { points, stroke } if stroke.color == color => {
+                            points.to_vec()
+                        }
+                        _ => Vec::new(),
+                    })
+                    .filter(|point| plot.x_range().contains(point.x))
+                    .map(|point| point.y)
+                    .collect();
+                let mapping = chart.get_chart_mapping();
+                let near = |price: f64| {
+                    ys.iter()
+                        .any(|y| (y - mapping.price_to_y(price)).abs() < 0.5)
+                };
+                assert!(drawn.into_iter().all(near), "{row} must draw {source:?}");
+                assert!(!other.into_iter().any(near), "{row} draws another source");
+            }
+        }
+        // Each line-based chart type keeps a source of its own. Settings saved while one source
+        // served them all hold none, so they draw the shared one on every one of them.
+        let kinds = [
+            ChartType::Line,
+            ChartType::StepLine,
+            ChartType::LineWithMarkers,
+            ChartType::Area,
+            ChartType::Baseline,
+        ];
+        let sources = [
+            PriceSource::Open,
+            PriceSource::High,
+            PriceSource::HL2,
+            PriceSource::HLC3,
+            PriceSource::OHLC4,
+        ];
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        for (kind, source) in kinds.into_iter().zip(sources) {
+            chart.set_chart_type(kind);
+            let mut settings = chart.series_settings();
+            settings.price_source = source;
+            chart.apply_series_settings(&settings);
+        }
+        for (kind, source) in kinds.into_iter().zip(sources) {
+            chart.set_chart_type(kind);
+            assert_eq!(chart.series_settings().price_source, source, "{kind:?}");
+        }
+        let mut saved = Chart::new(BarData::from_bars(bars));
+        saved.config_mut().price_source = PriceSource::Low;
+        let mut json = serde_json::to_value(ChartSettingsState::from_chart(&saved)).unwrap();
+        let styles = json["chart_type_params"]["styles"].as_object_mut().unwrap();
+        for key in [
+            "line_price_source",
+            "step_line_price_source",
+            "line_with_markers_price_source",
+            "area_price_source",
+            "baseline_price_source",
+        ] {
+            assert!(styles.remove(key).is_some(), "{key}");
+        }
+        let older: ChartSettingsState = serde_json::from_value(json).unwrap();
+        older.apply_to_chart(&mut chart).unwrap();
+        for kind in kinds {
+            chart.set_chart_type(kind);
+            assert_eq!(
+                chart.series_settings().price_source,
+                PriceSource::Low,
+                "saved {kind:?}"
+            );
         }
     }
 

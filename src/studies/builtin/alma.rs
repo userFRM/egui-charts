@@ -30,7 +30,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Arnaud Legoux Moving Avg indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ALMA {
     period: usize,
     offset: f64,
@@ -134,7 +134,7 @@ impl Indicator for ALMA {
     }
 
     fn desc(&self) -> &str {
-        "Arnaud Legoux Moving Avg - Gaussian weighted moving avg"
+        "Arnaud Legoux Moving Average - Gaussian weighted moving avg"
     }
 
     fn calculate(&mut self, data: &[Bar]) {

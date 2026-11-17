@@ -2,12 +2,12 @@
 
 use super::super::SettingsDialog;
 use super::{
-    TRADING_INDENT, TRADING_LABEL_WIDTH, styled_checkbox, styled_dropdown, trading_option,
+    TRADING_INDENT, TRADING_LABEL_WIDTH, pick_color, styled_checkbox, styled_dropdown,
+    trading_option,
 };
 use crate::chart::PnlUnit;
 use crate::localization as l10n;
 use crate::theme::{Theme, ThemeExt};
-use crate::ui_kit::ColorPicker;
 use crate::ui_kit::ext::UiExt;
 use crate::widget::settings::TradingNotifications;
 use egui::{Color32, RichText, Ui};
@@ -181,13 +181,12 @@ impl SettingsDialog {
                 );
 
                 self.draw_setting_row_with_controls(ui, "Color", theme, |ui, dialog| {
-                    if let Some(color) =
-                        ColorPicker::new(&mut dialog.color_picker_states.alert, "alert")
-                            .show(ui)
-                            .inner
-                    {
-                        dialog.settings.alerts.alert_color = color;
-                    }
+                    pick_color(
+                        ui,
+                        &mut dialog.color_picker_states.alert,
+                        "alert",
+                        &mut dialog.settings.alerts.alert_color,
+                    );
                 });
 
                 ui.add_space(ui.active_theme().spacing.xxl);
@@ -215,9 +214,23 @@ impl SettingsDialog {
                 ui.add_space(ui.active_theme().spacing.xxl);
                 self.draw_section_header(ui, "NOTIFICATIONS", theme);
 
+                styled_checkbox(
+                    ui,
+                    &mut self.settings.alerts.desktop_notifications,
+                    "Also notify on the desktop",
+                    theme.ui.text,
+                );
+                styled_checkbox(
+                    ui,
+                    &mut self.settings.alerts.close_toasts,
+                    "Close toasts after their lifetime",
+                    theme.ui.text,
+                );
                 self.draw_setting_row_with_controls(ui, "Lifetime", theme, |ui, dialog| {
-                    ui.add(
-                        egui::DragValue::new(&mut dialog.settings.alerts.notification_seconds)
+                    let alerts = &mut dialog.settings.alerts;
+                    ui.add_enabled(
+                        alerts.close_toasts,
+                        egui::DragValue::new(&mut alerts.notification_seconds)
                             .range(1..=300)
                             .suffix(l10n::text(ui.ctx(), " s")),
                     );

@@ -1,11 +1,12 @@
 //! Levels and zones derived only from executed volume.
 
-use crate::data::{Footprint, FootprintBar, meets_threshold};
+use crate::data::{Footprint, FootprintBarView, FootprintView, meets_threshold};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Meaning of a footprint annotation. Sells trade on the bid and buys on the ask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FootprintStudyKind {
     /// Consecutive sell imbalances.
     StackedBid,
@@ -17,7 +18,8 @@ pub enum FootprintStudyKind {
     UnfinishedLow,
     /// Highest-volume level, extended until a later bar trades through it.
     NakedPoc,
-    /// Price with the largest absolute delta, ties resolved toward the lower price.
+    /// Price with the largest absolute delta, ties resolved toward the lower price. A bar without
+    /// a nonzero row delta has none.
     DeltaPoc,
     /// Row volume exceeds the configured share of this bar's volume.
     VolumeCluster,
@@ -35,6 +37,7 @@ pub enum FootprintStudyKind {
 
 /// Where a level or zone stands against later trading.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FootprintStudyState {
     /// A marker that stays inside its own bar.
     Local,
@@ -48,6 +51,7 @@ pub enum FootprintStudyState {
 
 /// A level or zone beginning at one bar and optionally ending at its first revisit.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct FootprintStudy {
     /// Bar that created the level or zone.
     pub start: DateTime<Utc>,
@@ -69,6 +73,7 @@ pub struct FootprintStudy {
 /// imbalances at 300%, unfinished highs and lows, naked and delta POCs, and leaves the rest off.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct FootprintStudyConfig {
     /// Mark consecutive imbalance zones.
     pub stacked_imbalances: bool,
@@ -107,7 +112,8 @@ pub struct FootprintStudyConfig {
     /// at equality too. A side with volume against none meets any multiple, two empty sides
     /// none, and unknown side counts in neither. Below 1 or not a number, or `None`, none.
     pub ratio: Option<f64>,
-    /// The delta POC needs at least this absolute net delta; below it the bar has none.
+    /// The delta POC needs at least this absolute net delta, and more than zero; below it the bar
+    /// has none.
     pub min_delta: f64,
 }
 
@@ -133,40 +139,29 @@ impl Default for FootprintStudyConfig {
 }
 
 /// Finds stacked imbalances, unfinished highs and lows, naked POCs, delta POCs, clusters, single
-/// prints and bars whose delta percentage or bid/ask ratio reaches a threshold, in the bars from
-/// [`Footprint::complete_from`] on.
+/// prints and bars whose delta percentage or bid/ask ratio reaches a threshold, from complete
+/// execution bars. Outcomes that depend on a missing history join are withheld.
 ///
 /// Missing price rows break a stack. Stacks, POCs and unfinished levels end at the first
 /// subsequent bar whose executed range revisits them, or expire as `config.extend_bars` says;
 /// their `state` tells which. Call after trades change, not every paint: extending old zones
 /// scans subsequent bars.
 pub fn footprint_studies(flow: &Footprint, config: &FootprintStudyConfig) -> Vec<FootprintStudy> {
+    let flow = FootprintView::from(flow);
     let bars: Vec<_> = flow.complete_bars(..).map(|bar| (bar, 1)).collect();
-    footprint_studies_on_rows(&bars, config)
+    footprint_studies_on_rows(&bars, config, flow)
 }
 
 /// Each bar's row keys are in multiples of its display grouping; output keys use input rows.
 pub(crate) fn footprint_studies_on_rows(
-    bars: &[(&FootprintBar, i64)],
+    bars: &[(FootprintBarView<'_>, i64)],
     config: &FootprintStudyConfig,
+    flow: FootprintView<'_>,
 ) -> Vec<FootprintStudy> {
     let mut result = Vec::new();
+    let mut asks = Vec::new();
     for (index, &(bar, group)) in bars.iter().enumerate() {
         let mut add = |low: i64, high: i64, kind, extended| {
-            let enabled = match kind {
-                FootprintStudyKind::StackedBid | FootprintStudyKind::StackedAsk => {
-                    config.stacked_imbalances
-                }
-                FootprintStudyKind::NakedPoc => config.naked_poc,
-                FootprintStudyKind::DeltaPoc => config.delta_poc,
-                FootprintStudyKind::UnfinishedHigh | FootprintStudyKind::UnfinishedLow => {
-                    config.unfinished_auctions
-                }
-                _ => true,
-            };
-            if !enabled {
-                return;
-            }
             let low = low.saturating_mul(group);
             let high = high.saturating_mul(group).saturating_add(group - 1);
             let (end, state) = if extended {
@@ -210,26 +205,29 @@ pub(crate) fn footprint_studies_on_rows(
         else {
             continue;
         };
-        if let Some(poc) = bar.poc() {
+        if config.naked_poc
+            && let Some(poc) = bar.poc()
+        {
             add(poc, poc, FootprintStudyKind::NakedPoc, true);
         }
-        if let Some(row) = bar
-            .levels
-            .values()
-            .max_by(|a, b| {
-                a.delta()
-                    .abs()
-                    .total_cmp(&b.delta().abs())
-                    .then_with(|| b.level.cmp(&a.level))
-            })
-            .filter(|row| row.delta().abs() >= config.min_delta)
+        if config.delta_poc
+            && let Some(row) = bar
+                .levels
+                .values()
+                .max_by(|a, b| {
+                    a.delta()
+                        .abs()
+                        .total_cmp(&b.delta().abs())
+                        .then_with(|| b.level.cmp(&a.level))
+                })
+                .filter(|row| row.delta() != 0.0 && row.delta().abs() >= config.min_delta)
         {
             add(row.level, row.level, FootprintStudyKind::DeltaPoc, false);
         }
-        if last_row.bid > 0.0 {
+        if last_row.bid > 0.0 && config.unfinished_auctions {
             add(last, last, FootprintStudyKind::UnfinishedHigh, true);
         }
-        if first_row.ask > 0.0 {
+        if first_row.ask > 0.0 && config.unfinished_auctions {
             add(first, first, FootprintStudyKind::UnfinishedLow, true);
         }
         if let Some(max) = config.single_print_max.filter(|max| max.is_finite()) {
@@ -272,7 +270,7 @@ pub(crate) fn footprint_studies_on_rows(
             add(first, last, kind, false);
         }
         if let Some(ratio) = config.ratio.filter(|r| *r >= 1.0) {
-            let dominant = |a: f64, b: f64| a > b && meets_threshold(a, b * ratio);
+            let dominant = |a: f64, b: f64| !meets_threshold(b, a) && meets_threshold(a, b * ratio);
             if dominant(bar.ask, bar.bid) {
                 add(first, last, FootprintStudyKind::RatioAsk, false);
             }
@@ -280,41 +278,55 @@ pub(crate) fn footprint_studies_on_rows(
                 add(first, last, FootprintStudyKind::RatioBid, false);
             }
         }
-        for (side, kind) in [
-            (0, FootprintStudyKind::StackedBid),
-            (1, FootprintStudyKind::StackedAsk),
-        ] {
-            let mut run: Option<(i64, i64, usize)> = None;
-            for row in bar.levels.values() {
-                let imbalance = bar.imbalance(
-                    row.level,
-                    config.imbalance_ratio,
-                    config.diagonal,
-                    config.imbalance_min_volume,
-                );
-                let active = if side == 0 { imbalance.0 } else { imbalance.1 };
-                if let Some((low, high, count)) = run
+        if !config.stacked_imbalances {
+            continue;
+        }
+        let mut runs: [Option<(i64, i64, usize)>; 2] = [None; 2];
+        let mut finish = |side, (low, high, count): (i64, i64, usize)| {
+            if count >= config.stack.max(1) {
+                if side == 0 {
+                    add(low, high, FootprintStudyKind::StackedBid, true);
+                } else {
+                    asks.push((low, high));
+                }
+            }
+        };
+        for row in bar.levels.values() {
+            let (bid, ask) = bar.imbalance(
+                row.level,
+                config.imbalance_ratio,
+                config.diagonal,
+                config.imbalance_min_volume,
+            );
+            for (side, active) in [bid, ask].into_iter().enumerate() {
+                if let Some((low, high, count)) = runs[side]
                     && (!active || high.checked_add(1) != Some(row.level))
                 {
-                    if count >= config.stack.max(1) {
-                        add(low, high, kind, true);
-                    }
-                    run = None;
+                    finish(side, (low, high, count));
+                    runs[side] = None;
                 }
                 if active {
-                    run = Some(match run {
+                    runs[side] = Some(match runs[side] {
                         Some((low, _, count)) => (low, row.level, count + 1),
                         None => (row.level, row.level, 1),
                     });
                 }
             }
-            if let Some((low, high, count)) = run
-                && count >= config.stack.max(1)
-            {
-                add(low, high, kind, true);
+        }
+        for (side, run) in runs.into_iter().enumerate() {
+            if let Some(run) = run {
+                finish(side, run);
             }
         }
+        // Ask zones follow bid zones, as the two loops emitted them;
+        // only the buffer's allocation outlives the bar.
+        for (low, high) in asks.drain(..) {
+            add(low, high, FootprintStudyKind::StackedAsk, true);
+        }
     }
+    result.retain(|study| {
+        study.state == FootprintStudyState::Local || !flow.span_has_gap(study.start, study.end)
+    });
     result
 }
 
@@ -323,6 +335,57 @@ mod tests {
     use super::*;
     use crate::model::{BarClock, OrderSide, Tick, Timeframe};
     use chrono::TimeDelta;
+
+    #[cfg(feature = "widget")]
+    #[test]
+    fn missing_join_withholds_only_unproven_annotation_outcomes() {
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        for (price, expiry) in [(110.0, None), (100.0, None), (110.0, Some(1))] {
+            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+            for (minute, price) in [(0, 100.0), (1, 100.0), (4, price)] {
+                flow.push(&Tick::new(
+                    start + TimeDelta::minutes(minute),
+                    price,
+                    5.0,
+                    Some(OrderSide::Buy),
+                ))
+                .unwrap();
+            }
+            let rows: Vec<_> = flow.complete_bars(..).map(|bar| (bar.into(), 1)).collect();
+            let config = FootprintStudyConfig {
+                extend_bars: expiry,
+                ..Default::default()
+            };
+            let all = footprint_studies_on_rows(&rows, &config, (&flow).into());
+            flow.add_missing(start + TimeDelta::minutes(2), start + TimeDelta::minutes(4));
+            let certain = footprint_studies(&flow, &config);
+            assert!(all.iter().any(|s| s.start == start + TimeDelta::minutes(1)
+                && s.kind == FootprintStudyKind::NakedPoc));
+            assert!(
+                !certain
+                    .iter()
+                    .any(|s| s.start == start + TimeDelta::minutes(1)
+                        && s.kind == FootprintStudyKind::NakedPoc)
+            );
+            assert!(
+                certain
+                    .iter()
+                    .any(|s| s.start == start && s.state == FootprintStudyState::Revisited)
+            );
+            assert!(
+                certain
+                    .iter()
+                    .any(|s| s.start == start + TimeDelta::minutes(1)
+                        && s.state == FootprintStudyState::Local)
+            );
+            assert!(
+                certain
+                    .iter()
+                    .any(|s| s.start == start + TimeDelta::minutes(4)
+                        && s.kind == FootprintStudyKind::NakedPoc)
+            );
+        }
+    }
 
     #[test]
     fn adjacent_diagonals_extend_only_until_a_later_revisit() {
@@ -429,6 +492,150 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn stacks_keep_side_order_across_price_gaps() {
+        use FootprintStudyKind::*;
+        use FootprintStudyState::*;
+        let (buy, sell) = (Some(OrderSide::Buy), Some(OrderSide::Sell));
+        let mut trades = Vec::new();
+        for level in (100..112).chain([113, 115]) {
+            let ask = level < 103 || (106..109).contains(&level) || level > 111;
+            trades.push((0, level as f64, if ask { 1.0 } else { 4.0 }, sell));
+            trades.push((0, level as f64, if ask { 4.0 } else { 1.0 }, buy));
+        }
+        trades.extend([(0, 106.0, 7.0, None), (60, 102.0, 1.0, buy)]);
+        let flow = flow(&trades);
+        let owned: Vec<_> = flow.complete_bars(..).map(FootprintBarView::from).collect();
+        let slices: Vec<Vec<_>> = owned
+            .iter()
+            .map(|bar| bar.levels.values().cloned().collect())
+            .collect();
+        for (diagonal, expected) in [
+            (
+                false,
+                vec![
+                    (StackedBid, 103, 105, None, Unvisited),
+                    (StackedBid, 109, 111, None, Unvisited),
+                    (StackedAsk, 100, 102, Some(1), Revisited),
+                    (StackedAsk, 106, 108, None, Unvisited),
+                ],
+            ),
+            (
+                true,
+                vec![
+                    (StackedBid, 103, 104, None, Unvisited),
+                    (StackedBid, 109, 110, None, Unvisited),
+                    (StackedAsk, 101, 102, Some(1), Revisited),
+                    (StackedAsk, 107, 108, None, Unvisited),
+                ],
+            ),
+        ] {
+            for shared in [false, true] {
+                let bars: Vec<_> = owned
+                    .iter()
+                    .zip(&slices)
+                    .map(|(&bar, rows)| {
+                        let bar = if shared {
+                            FootprintBarView {
+                                levels: crate::data::FootprintRows::Slice(rows),
+                                ..bar
+                            }
+                        } else {
+                            bar
+                        };
+                        (bar, 1)
+                    })
+                    .collect();
+                // Four against one must also pass exactly at the requested ratio and minimum.
+                for ratio in [3.0, 4.0] {
+                    let config = FootprintStudyConfig {
+                        naked_poc: false,
+                        delta_poc: false,
+                        unfinished_auctions: false,
+                        stack: 2,
+                        diagonal,
+                        imbalance_ratio: ratio,
+                        imbalance_min_volume: 4.0,
+                        ..Default::default()
+                    };
+                    let actual: Vec<_> = footprint_studies_on_rows(&bars, &config, (&flow).into())
+                        .into_iter()
+                        .map(|study| {
+                            assert_eq!(study.start, owned[0].time);
+                            let end = study.end.map(|end| (end - study.start).num_minutes());
+                            (study.kind, study.low, study.high, end, study.state)
+                        })
+                        .collect();
+                    assert_eq!(actual, expected, "diagonal={diagonal}, shared={shared}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn annotation_switches_preserve_other_kinds_and_order() {
+        use FootprintStudyKind::*;
+        use FootprintStudyState::*;
+        let (buy, sell) = (Some(OrderSide::Buy), Some(OrderSide::Sell));
+        let flow = flow(&[
+            (0, 100.0, 1.0, sell),
+            (1, 100.0, 1.0, buy),
+            (2, 101.0, 1.0, sell),
+            (3, 101.0, 4.0, buy),
+            (4, 102.0, 1.0, sell),
+            (5, 102.0, 4.0, buy),
+            (6, 103.0, 1.0, sell),
+            (7, 103.0, 4.0, buy),
+            (8, 103.0, 4.0, None),
+            (60, 110.0, 1.0, buy),
+            (120, 102.0, 1.0, sell),
+        ]);
+        let start = flow.bars().first_key_value().unwrap().0;
+        for mask in 0..16 {
+            let config = FootprintStudyConfig {
+                naked_poc: mask & 1 != 0,
+                delta_poc: mask & 2 != 0,
+                unfinished_auctions: mask & 4 != 0,
+                stacked_imbalances: mask & 8 != 0,
+                single_print_max: Some(2.0),
+                cluster_share: Some(0.3),
+                delta_percent: Some(40.0),
+                ratio: Some(3.0),
+                ..Default::default()
+            };
+            let actual: Vec<_> = footprint_studies(&flow, &config)
+                .into_iter()
+                .filter(|s| s.start == *start)
+                .map(|s| {
+                    (
+                        s.kind,
+                        s.low,
+                        s.high,
+                        s.end.map(|end| (end - *start).num_minutes()),
+                        s.state,
+                    )
+                })
+                .collect();
+            // Unknown volume makes 103 the volume POC; equal deltas at 101..103 pick 101.
+            let expected: Vec<_> = [
+                (mask & 1 != 0, NakedPoc, 103, 103, None, Unvisited),
+                (mask & 2 != 0, DeltaPoc, 101, 101, Some(0), Local),
+                (mask & 4 != 0, UnfinishedHigh, 103, 103, None, Unvisited),
+                (mask & 4 != 0, UnfinishedLow, 100, 100, None, Unvisited),
+                (true, SinglePrint, 100, 100, Some(0), Local),
+                (true, VolumeCluster, 103, 103, Some(0), Local),
+                (true, DeltaAsk, 100, 103, Some(0), Local),
+                (true, RatioAsk, 100, 103, Some(0), Local),
+                (mask & 8 != 0, StackedAsk, 101, 103, Some(2), Revisited),
+            ]
+            .into_iter()
+            .filter(|row| row.0)
+            .map(|(_, kind, low, high, end, state)| (kind, low, high, end, state))
+            .collect();
+            assert_eq!(actual, expected, "enabled mask {mask}");
+        }
+    }
+
     /// Guards the level rules against hand-worked bars: the thresholds include equality and count
     /// unknown volume only in the delta percentage's denominator, a side against an empty one
     /// meets any ratio, the delta POC needs its minimum and breaks ties toward the lower price,
@@ -481,6 +688,18 @@ mod tests {
         ));
         assert!(!marked(&[(0, 100.0, 5.0, None)], &ratio(1.0), RatioAsk));
         assert!(!marked(&flat, &ratio(1.0), RatioAsk) && !marked(&flat, &ratio(1.0), RatioBid));
+        // Sells of 0.1 and 0.2 sum to 0.30000000000000004 and balance a buy of 0.3.
+        let rounded = [
+            (0, 100.0, 0.1, sell),
+            (1, 100.0, 0.2, sell),
+            (2, 100.0, 0.3, buy),
+        ];
+        for kind in [DeltaAsk, DeltaBid] {
+            assert!(!marked(&rounded, &delta(0.0), kind), "{kind:?}");
+        }
+        for kind in [RatioAsk, RatioBid] {
+            assert!(!marked(&rounded, &ratio(1.0), kind), "{kind:?}");
+        }
         // 29 of 100 is 29%, 33 against 30 and 55 against 50 are 1.1, also with fractional sizes.
         for scale in [1.0, 0.1] {
             for (side, other, delta_kind, ratio_kind) in [
@@ -689,6 +908,41 @@ mod tests {
             if expected {
                 assert_eq!(zones, [(101, 103, None, Unvisited)]);
             }
+        }
+    }
+
+    /// A bar whose rows carry no net delta, because their side is unknown, their sides balance or
+    /// they differ only by the rounding of their sums, has no delta POC with the default minimum.
+    #[test]
+    fn delta_poc_needs_a_row_with_net_delta() {
+        let (buy, sell) = (Some(OrderSide::Buy), Some(OrderSide::Sell));
+        let unknown = [(0, 100.0, 2.0, None), (1, 101.0, 3.0, None)];
+        let balanced = [
+            (0, 100.0, 2.0, buy),
+            (1, 100.0, 2.0, sell),
+            (2, 101.0, 1.0, buy),
+            (3, 101.0, 1.0, sell),
+        ];
+        // Sells of 0.1 and 0.2 sum to 0.30000000000000004 against a buy of 0.3.
+        let rounded = [
+            (0, 100.0, 0.1, sell),
+            (1, 100.0, 0.2, sell),
+            (2, 100.0, 0.3, buy),
+        ];
+        for (case, trades) in [
+            ("unknown side", &unknown[..]),
+            ("balanced", &balanced[..]),
+            ("rounding", &rounded[..]),
+        ] {
+            assert!(
+                found(
+                    &flow(trades),
+                    &FootprintStudyConfig::default(),
+                    FootprintStudyKind::DeltaPoc
+                )
+                .is_empty(),
+                "{case}"
+            );
         }
     }
 }

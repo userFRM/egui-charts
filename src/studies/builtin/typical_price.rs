@@ -8,7 +8,7 @@ use egui::Color32;
 /// Also known as pivot point
 /// Note: Same formula as [`HLC3`](super::HLC3) in average_price; kept for
 /// backwards compatibility under the "TP" indicator name.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TypicalPrice {
     values: IndicatorValues,
     color: Color32,
@@ -100,7 +100,7 @@ impl Indicator for TypicalPrice {
 }
 
 /// Weighted Close
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WeightedClose {
     values: IndicatorValues,
     color: Color32,
@@ -194,7 +194,7 @@ impl Indicator for WeightedClose {
 /// Median Price (HL/2)
 /// Note: Same formula as [`HL2`](super::HL2) in average_price; kept for
 /// backwards compatibility under the "MP" indicator name.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MedianPrice {
     values: IndicatorValues,
     color: Color32,

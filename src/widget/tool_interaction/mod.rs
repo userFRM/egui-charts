@@ -56,6 +56,7 @@ impl Chart {
                 bars: self.state.shown(),
                 revision: self.state.revision(),
                 bar_to_x: &|bar| timescale.idx_to_coord_precise(bar, clip.min.x, clip.width()),
+                bar_spacing: timescale.bar_spacing(),
                 // The card's text and place read the anchors' screen points, not these.
                 price_to_y: &|_| 0.0,
                 y_to_price: &|_| 0.0,
@@ -224,7 +225,7 @@ impl Chart {
         let translate_price = |price, from, to| price_map.translate_price(price, from, to);
 
         // Update all drawings' screen coords before rendering (handles pan/zoom)
-        drawing_manager.update_pane_screen_coords(bar_to_x, price_to_y);
+        drawing_manager.update_pane_screen_coords(bar_to_x, price_to_y, timescale.bar_spacing());
         drawing_manager.anchor_pins_to_bars(x_to_bar_precise, |y| price_map.y_to_price(y));
 
         // Only gather bars within the pointer's screen-space tolerance. Rebuild after pan/zoom.
@@ -318,6 +319,22 @@ impl Chart {
                                     drawing_manager.snap_targets.push(point);
                                 }
                             }
+                        }
+                    }
+                }
+                // Without studies the chart paints the volume itself, on the map the frame keeps.
+                #[cfg(not(feature = "studies"))]
+                if pane.is_none()
+                    && self.main_series_visible
+                    && let Some(map) = self.host_events.volume_map
+                {
+                    for (i, bar) in bars.iter().enumerate().take(end).skip(first) {
+                        let point = Pos2::new(bar_to_x(i as f32), map.price_to_y(bar.volume));
+                        if bar.volume.is_finite()
+                            && point.is_finite()
+                            && (strong || price_rect.contains(point))
+                        {
+                            drawing_manager.snap_targets.push(point);
                         }
                     }
                 }
@@ -445,7 +462,7 @@ impl Chart {
             text::begin_edit(drawing_manager, id, placed);
         }
 
-        drawing_manager.update_pane_screen_coords(bar_to_x, price_to_y);
+        drawing_manager.update_pane_screen_coords(bar_to_x, price_to_y, timescale.bar_spacing());
 
         let finer = self.study_data.data(
             self.profile_histories(drawing_manager)
@@ -469,14 +486,15 @@ impl Chart {
             bars: self.state.shown(),
             revision: self.state.revision(),
             bar_to_x: &bar_to_x,
+            bar_spacing: timescale.bar_spacing(),
             price_to_y: &price_to_y,
             y_to_price: &|y| price_map.y_to_price(y),
             time_axis: self.horizontal_scale.is_none(),
             executions: self.feed_link.as_ref().and_then(|link| {
                 if self.replay.is_some() {
-                    link.replay_footprint.as_ref()?.1.as_ref()
+                    link.replay_footprint.as_ref()?.1.as_ref().map(Into::into)
                 } else {
-                    link.footprint.as_ref()
+                    link.footprint.as_ref().map(|flow| flow.view())
                 }
             }),
             timeframe: self.drawing_timeframe(),
@@ -966,22 +984,56 @@ mod tests {
         }
     }
 
-    /// Closing uses placed anchors, Escape keeps paths with at least two, and two clicks place
-    /// curves with editable controls between their endpoints.
+    /// Closing uses placed anchors, Escape keeps paths with at least two, a double click
+    /// finishes without reporting itself to the host while a later one does, and two clicks
+    /// place curves with editable controls between their endpoints.
     #[test]
     fn multi_point_shapes_close_finish_on_escape_and_curves_take_two_clicks() {
+        use crate::widget::{Chart, ChartEvent, PointerTarget};
         use DrawingToolType::{Curve, DoubleCurve, Path, Polyline};
+        #[derive(PartialEq)]
+        enum End {
+            Click,
+            Escape,
+            DoubleClick,
+        }
         let a = (30, 16.0);
         let b = (50, 14.0);
         let c = (40, 12.0);
-        for (tool, clicks, escape, kept) in [
-            (Polyline, vec![a, b, c, a], false, Some((3, true, 40.0))),
-            (Polyline, vec![a, b, a], true, Some((3, false, 30.0))),
-            (Polyline, vec![a], true, None),
-            (Path, vec![a, b], true, Some((2, false, 50.0))),
-            (Path, vec![a], true, None),
-            (Curve, vec![a, b], false, Some((3, false, 50.0))),
-            (DoubleCurve, vec![a, b], false, Some((4, false, 50.0))),
+        let doubles = |chart: &mut Chart| {
+            chart
+                .drain_events()
+                .filter_map(|event| match event {
+                    ChartEvent::DoubleClick { position } => Some(position.target),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        for (tool, clicks, end, kept) in [
+            (
+                Polyline,
+                vec![a, b, c, a],
+                End::Click,
+                Some((3, true, 40.0)),
+            ),
+            (Polyline, vec![a, b, a], End::Escape, Some((3, false, 30.0))),
+            (Polyline, vec![a], End::Escape, None),
+            (Path, vec![a, b], End::Escape, Some((2, false, 50.0))),
+            (Path, vec![a], End::Escape, None),
+            (
+                Path,
+                vec![a, b, c],
+                End::DoubleClick,
+                Some((3, false, 40.0)),
+            ),
+            (
+                Polyline,
+                vec![a, b, c, a],
+                End::DoubleClick,
+                Some((3, true, 40.0)),
+            ),
+            (Curve, vec![a, b], End::Click, Some((3, false, 50.0))),
+            (DoubleCurve, vec![a, b], End::Click, Some((4, false, 50.0))),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
@@ -994,14 +1046,23 @@ mod tests {
                 pressed,
                 modifiers: Modifiers::NONE,
             };
-            for (i, (bar, price)) in clicks.into_iter().enumerate() {
-                let pos = egui::pos2(map.idx_to_x(bar), map.price_to_y(price));
+            let at =
+                |(bar, price): (usize, f64)| egui::pos2(map.idx_to_x(bar), map.price_to_y(price));
+            let mut last = (egui::Pos2::ZERO, 0.0);
+            for (i, &point) in clicks.iter().enumerate() {
+                let pos = at(point);
                 let time = 1.0 + i as f64;
                 frame(&ctx, &mut chart, time, vec![Event::PointerMoved(pos)]);
                 frame(&ctx, &mut chart, time + 0.1, vec![button(pos, true)]);
                 frame(&ctx, &mut chart, time + 0.2, vec![button(pos, false)]);
+                last = (pos, time);
             }
-            if escape {
+            if end == End::DoubleClick {
+                let (pos, time) = last;
+                frame(&ctx, &mut chart, time + 0.3, vec![button(pos, true)]);
+                frame(&ctx, &mut chart, time + 0.4, vec![button(pos, false)]);
+            }
+            if end == End::Escape {
                 frame(
                     &ctx,
                     &mut chart,
@@ -1016,6 +1077,11 @@ mod tests {
                 );
             }
             assert!(chart.drawings().curr_drawing.is_none(), "{tool:?}");
+            assert_eq!(
+                doubles(&mut chart),
+                [],
+                "{tool:?}: placement reports no double click"
+            );
             let Some((count, closed, last_bar)) = kept else {
                 assert!(chart.drawings().drawings.is_empty(), "{tool:?}");
                 continue;
@@ -1032,6 +1098,18 @@ mod tests {
                     .set_drawing_points(id, &chart.drawing_points(id).unwrap())
                     .is_ok()
             );
+            if end == End::DoubleClick {
+                let mid = at(a).lerp(at(b), 0.5);
+                for (i, pressed) in [true, false, true, false].into_iter().enumerate() {
+                    let events = vec![Event::PointerMoved(mid), button(mid, pressed)];
+                    frame(&ctx, &mut chart, 7.0 + 0.1 * i as f64, events);
+                }
+                assert_eq!(
+                    doubles(&mut chart),
+                    [Some(PointerTarget::Drawing(id))],
+                    "{tool:?}"
+                );
+            }
         }
     }
 
@@ -1495,24 +1573,33 @@ mod tests {
     }
 
     /// Hiding the main series hides its volume, so neither its bars nor its volume columns are
-    /// magnet targets while it is hidden.
+    /// magnet targets while it is hidden. Shown, the magnet snaps to the painted column tops, also
+    /// when every visible volume is below 1.
     #[test]
     fn magnet_ignores_hidden_main_series_bars_and_volume() {
+        use crate::model::Bar;
+        use crate::widget::SeriesId;
         use egui::Pos2;
 
         let mut observed = Vec::new();
-        for (visible, strong, target) in [
-            (true, false, "volume"),
-            (true, true, "volume"),
-            (true, false, "high"),
-            (true, true, "high"),
-            (false, false, "volume"),
-            (false, true, "volume"),
-            (false, false, "high"),
-            (false, true, "high"),
+        for (visible, strong, target, volume) in [
+            (true, false, "volume", 1.0),
+            (true, true, "volume", 1.0),
+            (true, false, "volume", 0.25),
+            (true, false, "high", 1.0),
+            (true, true, "high", 1.0),
+            (false, false, "volume", 1.0),
+            (false, true, "volume", 1.0),
+            (false, false, "high", 1.0),
+            (false, true, "high", 1.0),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
+            let bars = chart.bars(SeriesId::MAIN).iter().map(|bar| Bar {
+                volume,
+                ..bar.clone()
+            });
+            assert!(chart.set_data(SeriesId::MAIN, bars.collect()));
             chart.config_mut().show_volume = true;
             chart.drawings_mut().options.magnet_mode = true;
             chart.drawings_mut().options.strong_magnet = strong;
@@ -1521,7 +1608,7 @@ mod tests {
             chart.set_main_series_visible(visible);
             frame(&ctx, &mut chart, 0.2, vec![]);
             let map = chart.get_chart_mapping();
-            // Every bar has volume 1, the visible maximum, so each column reaches the top of the
+            // Every bar has the visible maximum volume, so each column reaches the top of the
             // overlay: 12% of the plot above its 12 point baseline inset.
             let bottom = map.rect.bottom() - 12.0;
             let y = if target == "volume" {
@@ -1544,23 +1631,25 @@ mod tests {
                 visible,
                 strong,
                 target,
+                volume,
                 ((anchor - y) * 100.0).round() / 100.0,
             ));
         }
         // Shown, the anchor lands on the value; hidden, it stays 1 point from where it was clicked.
         let expected = [
-            (true, false, "volume", 0.0),
-            (true, true, "volume", 0.0),
-            (true, false, "high", 0.0),
-            (true, true, "high", 0.0),
-            (false, false, "volume", -1.0),
-            (false, true, "volume", -1.0),
-            (false, false, "high", 1.0),
-            (false, true, "high", 1.0),
+            (true, false, "volume", 1.0, 0.0),
+            (true, true, "volume", 1.0, 0.0),
+            (true, false, "volume", 0.25, 0.0),
+            (true, false, "high", 1.0, 0.0),
+            (true, true, "high", 1.0, 0.0),
+            (false, false, "volume", 1.0, -1.0),
+            (false, true, "volume", 1.0, -1.0),
+            (false, false, "high", 1.0, 1.0),
+            (false, true, "high", 1.0, 1.0),
         ];
         assert!(
             observed == expected,
-            "(main series visible, strong magnet, target, first anchor below the target) \
+            "(main series visible, strong magnet, target, volume, first anchor below the target) \
              observed {observed:?} expected {expected:?}"
         );
     }

@@ -140,6 +140,10 @@ fn host_defaults_are_atomic_and_follow_the_constructor_lifetime() {
         let input = inputs.iter().find(|input| input.id == id).unwrap();
         assert_eq!(input.value, InputValue::Number(3.0));
     }
+    for id in ["use_upper", "use_lower"] {
+        let input = inputs.iter().find(|input| input.id == id).unwrap();
+        assert_eq!(input.value, InputValue::Toggle(true));
+    }
     factory.set_defaults(&[]).unwrap();
     factory
         .set_defaults(&[defaults.clone(), replacement])

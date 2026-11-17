@@ -5,16 +5,23 @@ use crate::model::{Bar, math::Moments};
 use crate::scales::PriceScaleMode;
 
 impl Drawing {
-    /// [`Self::alert_levels`] with the main-series bars needed by a regression drawing. The
-    /// fitted median is level 0, upper band 1 and lower band 2. Regression uses the same closes,
-    /// residual deviation and axis interpolation between fitted endpoints as its painted lines.
-    /// Empty when the anchored range has fewer than two bars or invalid geometry.
+    /// [`Self::alert_levels`] with the main-series bars needed by a regression drawing or an
+    /// anchored VWAP. The fitted median is level 0, upper band 1 and lower band 2. Regression
+    /// uses the same source prices, bounds and axis interpolation between fitted endpoints as
+    /// its painted lines, and is empty when the anchored range has fewer than two bars or
+    /// invalid geometry. The anchored VWAP is level 0 and the upper and lower lines of each
+    /// enabled band `n` (from zero) levels `2n + 1` and `2n + 2`, at the values the painted lines
+    /// have at `bar`; they are empty before the anchor, past the last bar and before volume
+    /// trades.
     pub fn alert_levels_with_bars(
         &self,
         bar: f64,
         scale: PriceScaleMode,
         bars: &[Bar],
     ) -> Vec<(usize, String, f64)> {
+        if self.tool_type == DrawingToolType::AnchoredVWAP {
+            return self.vwap_alert_levels(bar, bars);
+        }
         if self.tool_type != DrawingToolType::RegressionTrend {
             return self.alert_levels(bar, scale);
         }
@@ -29,33 +36,74 @@ impl Drawing {
         else {
             return Vec::new();
         };
-        let Some(fit) = Moments::of(bars).fit() else {
+        let config = self.regression_trend.unwrap_or_default();
+        let Some(fit) = Moments::of(bars, config.source).fit() else {
             return Vec::new();
         };
         if !fit.intercept.is_finite() || !fit.slope.is_finite() || !fit.sigma.is_finite() {
             return Vec::new();
         }
-        let deviations = self.regression_trend.unwrap_or_default().deviations();
+        let [above, below] = fit.bounds(bars, config.band_deviations());
         let last = (bars.len() - 1) as f64;
-        [
-            ("Median", 0.0),
-            ("Upper", deviations),
-            ("Lower", -deviations),
-        ]
-        .into_iter()
-        .enumerate()
-        .filter_map(|(level, (name, k))| {
-            let start = fit.intercept + k * fit.sigma;
-            let end = start + fit.slope * last;
-            axis_line(
-                [first as f64, start],
-                [first as f64 + last, end],
-                bar,
-                scale,
-            )
-            .map(|price| (level, name.to_owned(), price))
-        })
-        .collect()
+        [("Median", 0.0), ("Upper", above), ("Lower", -below)]
+            .into_iter()
+            .enumerate()
+            .filter_map(|(level, (name, offset))| {
+                let start = fit.intercept + offset;
+                let end = start + fit.slope * last;
+                axis_line(
+                    [first as f64, start],
+                    [first as f64 + last, end],
+                    bar,
+                    scale,
+                )
+                .map(|price| (level, name.to_owned(), price))
+            })
+            .collect()
+    }
+
+    fn vwap_alert_levels(&self, bar: f64, bars: &[Bar]) -> Vec<(usize, String, f64)> {
+        let Some(anchor) = self.chart_points.first() else {
+            return Vec::new();
+        };
+        // Painted lines start at the rounded anchor and have a value on each loaded bar.
+        let bar = bar.round();
+        if !(f64::from(anchor.bar_idx).round() <= bar && bar < bars.len() as f64) {
+            return Vec::new();
+        }
+        let Some((_, span)) =
+            crate::drawings::rendering::bars_between(bars, anchor.bar_idx, bar as f32)
+        else {
+            return Vec::new();
+        };
+        let config = self.vwap.unwrap_or_default();
+        let Some((vwap, unit)) = crate::drawings::rendering::anchored_vwap_through(span, &config)
+        else {
+            return Vec::new();
+        };
+        let bands = config
+            .bands
+            .iter()
+            .enumerate()
+            .filter(|(_, band)| band.enabled);
+        std::iter::once((0, "VWAP".to_owned(), vwap))
+            .chain(bands.flat_map(|(index, band)| {
+                let offset = band.multiplier() * unit;
+                [
+                    (
+                        2 * index + 1,
+                        format!("Upper band {}", index + 1),
+                        vwap + offset,
+                    ),
+                    (
+                        2 * index + 2,
+                        format!("Lower band {}", index + 1),
+                        vwap - offset,
+                    ),
+                ]
+            }))
+            .filter(|(.., price)| price.is_finite())
+            .collect()
     }
 
     pub(super) fn fork_alert_levels(
@@ -142,6 +190,43 @@ impl Drawing {
         }
         levels
     }
+
+    /// The alert source name template of fork level `level` of [`Self::alert_levels`] and the
+    /// value of its setting, which fills `{value}`; `None` for a median and other drawings. With
+    /// `{tool}` and `{id}` filled, its English is the drawing's name and the level's name, as
+    /// alerts and presets saved before names kept their parts hold it.
+    pub(crate) fn fork_line(&self, level: usize) -> Option<(&'static str, String)> {
+        if !is_fork(self.tool_type) {
+            return None;
+        }
+        let config = self
+            .pitchfork
+            .clone()
+            .unwrap_or_else(PitchforkConfig::legacy);
+        let value = config.levels.get(level / 2)?.value;
+        (value != 0.0).then(|| {
+            (
+                [
+                    "{tool} {id}: {value}: first line",
+                    "{tool} {id}: {value}: second line",
+                ][level % 2],
+                value.to_string(),
+            )
+        })
+    }
+}
+
+/// Whether [`Drawing::fork_alert_levels`] gives the alert levels of `tool`.
+pub(super) fn is_fork(tool: DrawingToolType) -> bool {
+    use DrawingToolType as T;
+    matches!(
+        tool,
+        T::Pitchfork
+            | T::SchiffPitchfork
+            | T::ModifiedSchiffPitchfork
+            | T::InsidePitchfork
+            | T::Pitchfan
+    )
 }
 
 /// A straight painted segment in axis coordinates, extended to the requested bar.

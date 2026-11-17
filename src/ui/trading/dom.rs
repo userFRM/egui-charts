@@ -23,7 +23,7 @@ use crate::theme::ThemeExt;
 const ROW: f32 = 20.0;
 
 /// What the price column's profile draws from the traded volume at each price.
-#[derive(Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 enum Profile {
     /// All volume, including unclassified prints.
     #[default]
@@ -35,7 +35,7 @@ enum Profile {
 }
 
 /// Which trades the profile and the traded column sum.
-#[derive(Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 enum Accumulation {
     /// Every trade the chart retains.
     #[default]
@@ -51,10 +51,10 @@ enum Accumulation {
 const EXTRAS: [&str; 3] = ["Orders", "Obs. chg", "Traded"];
 
 /// Where the ladder stands between frames.
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(super) struct Ladder {
-    /// The tick of the middle row, until the ladder has a price to centre on.
+    /// A tick of the middle row, until the ladder has a price to centre on.
     centre: Option<i64>,
     /// Keeps the ladder where the user scrolled it instead of re-centring on the market.
     locked: bool,
@@ -64,7 +64,7 @@ pub(super) struct Ladder {
     /// The Details section is open.
     #[serde(skip)]
     details: bool,
-    /// The previous observed sizes, and the last change at each level.
+    /// The previous observed sizes, and the last change, of each row.
     #[serde(skip)]
     sizes: [BTreeMap<i64, f64>; 2],
     #[serde(skip)]
@@ -78,16 +78,20 @@ pub(super) struct Ladder {
     columns: [bool; 3],
     profile: Profile,
     accumulation: Accumulation,
+    /// Instrument ticks per row: a row covers this many ticks from a multiple of them upwards,
+    /// as footprint rows do. 0, as in panels saved before rows were grouped, counts as 1.
+    ticks_per_row: u32,
     /// The newest trade at the last reset: later trades accumulate, however often the feed updates.
     reset_after: Option<DateTime<Utc>>,
 }
 
-/// Sell aggressors trade at the bid, buys at the ask. Unclassified prints contribute only to
-/// total volume. The profile covers the given trades, not inferred bar volume.
-fn traded(trades: &[&Tick], tick: f64, top: i64, rows: usize) -> Vec<[f64; 3]> {
+/// The volume traded in each of `rows` rows of `step` ticks, from the row `top` down. Sell
+/// aggressors trade at the bid, buys at the ask. Unclassified prints contribute only to total
+/// volume. The profile covers the given trades, not inferred bar volume.
+fn traded(trades: &[&Tick], tick: f64, step: i64, top: i64, rows: usize) -> Vec<[f64; 3]> {
     let mut volumes = vec![[0.0; 3]; rows];
     for trade in trades {
-        let level = (trade.price / tick).round() as i64;
+        let level = ((trade.price / tick).round() as i64).div_euclid(step);
         if let Some(row) = top
             .checked_sub(level)
             .and_then(|row| usize::try_from(row).ok())
@@ -136,7 +140,7 @@ fn format_size(value: f64) -> String {
 /// No broker is required and no order actions are emitted. Prices stay fixed until Center
 /// (Shift+Alt+C) is pressed. Keep one panel per chart; serialize it with the workspace to retain
 /// the view and profile choices.
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct DepthPanel {
     symbol: String,
@@ -184,6 +188,7 @@ impl DepthPanel {
                 columns: self.ladder.columns,
                 profile: self.ladder.profile,
                 accumulation: self.ladder.accumulation,
+                ticks_per_row: self.ladder.ticks_per_row,
                 ..Default::default()
             };
         }
@@ -218,6 +223,7 @@ impl DepthPanel {
                         Some((
                             order.side == OrderSide::Buy,
                             order.price,
+                            order.size,
                             view.tier_color(tier, &theme.chart),
                         ))
                     })
@@ -304,7 +310,11 @@ impl Ladder {
         let tif = entry.as_ref().map_or(TimeInForce::Day, |(_, tif)| **tif);
         let theme = ui.active_theme();
         let tick = market.tick;
+        let step = i64::from(self.ticks_per_row.max(1));
         let ticks = |price: f64| (price / tick).round() as i64;
+        // The row a price falls in: rows of `step` ticks from a multiple of `step` upwards, below
+        // zero too, as footprint rows group.
+        let row_key = |price: f64| ticks(price).div_euclid(step);
         let price = |tick_index: i64| to_step(tick_index as f64 * tick, tick, f64::round);
         let buy = side_color(&theme, OrderSide::Buy);
         let sell = side_color(&theme, OrderSide::Sell);
@@ -314,6 +324,7 @@ impl Ladder {
         let position = (market.positions.iter()).find(|position| position.symbol == symbol);
         let quantity_decimals = decimals(market.rules.quantity_step);
         let numbers = market.numbers();
+        let ctx = ui.ctx().clone();
         let order = |side, order_type| -> Result<OrderRequest, String> {
             if market.offline.is_some() {
                 return Err("Waiting for the broker to connect".into());
@@ -327,7 +338,8 @@ impl Ladder {
             if entry_price(&order_type).is_some_and(|price| !price.is_finite() || price <= 0.0) {
                 return Err("Enter a positive price".into());
             }
-            let quantity = order_quantity(wanted, market.rules)?;
+            let quantity =
+                order_quantity(wanted, market.rules).map_err(|limit| limit.message(&ctx))?;
             let mut request = OrderRequest::new(symbol, side, quantity, order_type);
             request.time_in_force = tif;
             Ok(request)
@@ -377,22 +389,25 @@ impl Ladder {
             self.scroll -= moved * ROW;
             if let Some(centre) = &mut self.centre {
                 let floor = middle.map_or(*centre >= 0, |middle| middle >= 0.0);
-                *centre = centre.saturating_add(moved as i64);
+                *centre = centre.saturating_add((moved as i64).saturating_mul(step));
                 if floor {
                     *centre = (*centre).max(0);
                 }
             }
         }
-        let last = last.map(ticks);
+        let last = last.map(row_key);
         let middle = middle.map(ticks);
-        let top = |centre: i64| centre.saturating_add(rows / 2);
-        let visible = |centre: i64, tick_index: i64| {
-            (top(centre).saturating_sub(rows - 1)..=top(centre)).contains(&tick_index)
+        let top = |centre: i64| centre.div_euclid(step).saturating_add(rows / 2);
+        let visible = |centre: i64, key: i64| {
+            (top(centre).saturating_sub(rows - 1)..=top(centre)).contains(&key)
         };
         match (self.centre, middle) {
             (None, Some(middle)) => self.centre = Some(middle),
             (Some(centre), Some(middle))
-                if !read_only && !self.locked && !interacting && !visible(centre, middle) =>
+                if !read_only
+                    && !self.locked
+                    && !interacting
+                    && !visible(centre, middle.div_euclid(step)) =>
             {
                 self.centre = Some(middle);
             }
@@ -400,12 +415,23 @@ impl Ladder {
         }
         let centre = self.centre.unwrap_or_default();
         let top = top(centre);
-        let row_of =
-            |tick_index: i64| (visible(centre, tick_index)).then(|| (top - tick_index) as usize);
+        // The row index from the top of a visible row key.
+        let row_of = |key: i64| (visible(centre, key)).then(|| (top - key) as usize);
+        // A buy takes a row's highest price and a sell its lowest. The ladder then offers a limit
+        // only for a row that lies wholly at or inside the touch, priced nearest the market, and a
+        // stop only beyond it.
+        let row_price = |row: usize, side: OrderSide| {
+            let lowest = top.saturating_sub(row as i64).saturating_mul(step);
+            price(match side {
+                OrderSide::Buy => lowest.saturating_add(step - 1),
+                OrderSide::Sell => lowest,
+            })
+        };
 
         let volumes = traded(
             self.accumulated(market.trades, market.session_open),
             tick,
+            step,
             top,
             rows as usize,
         );
@@ -422,14 +448,18 @@ impl Ladder {
         }
         // Size changes are between observed book states; unchanged frames retain the last change.
         for side in 0..2 {
-            let current: BTreeMap<_, _> = book
+            let mut current = BTreeMap::new();
+            let levels = book
                 .into_iter()
-                .flat_map(|book| if side == 0 { &book.bids } else { &book.asks })
-                .map(|level| (ticks(level.price), level.size))
-                .collect();
+                .flat_map(|book| if side == 0 { &book.bids } else { &book.asks });
+            for level in levels {
+                *current.entry(row_key(level.price)).or_insert(0.0) += level.size;
+            }
             for (&level, &size) in &current {
                 let old = self.sizes[side].get(&level).copied().unwrap_or_default();
-                if size != old && self.observed {
+                // A row adds its levels, so an unchanged total can differ from the last one by
+                // rounding alone.
+                if (size - old).abs() > 1e-12 * size.max(old) && self.observed {
                     self.changes[side].insert(level, size - old);
                 }
             }
@@ -444,28 +474,32 @@ impl Ladder {
         }
         self.observed = book.is_some();
         // Size and order count per visible row and side.
-        let mut sizes = vec![[(0.0, None::<u32>); 2]; rows as usize];
+        let mut sizes = vec![[(0.0, Some(0_u32)); 2]; rows as usize];
         if let Some(book) = book {
             for (side, levels) in [(0, &book.bids), (1, &book.asks)] {
                 for level in levels {
-                    if let Some(row) = row_of(ticks(level.price)) {
+                    if let Some(row) = row_of(row_key(level.price)) {
                         let (size, count) = &mut sizes[row][side];
                         *size += level.size;
-                        *count = match (*count, level.order_cnt) {
-                            (Some(old), Some(new)) => Some(old.saturating_add(new)),
-                            (None, value) => value,
-                            (old, None) => old,
-                        };
+                        // A count the feed left out of one level leaves the row's count unavailable.
+                        *count = count
+                            .zip(level.order_cnt)
+                            .map(|(held, more)| held.saturating_add(more));
                     }
                 }
             }
         }
 
-        let highlights: HashMap<(usize, i64), Color32> = market
-            .highlights
-            .iter()
-            .map(|(bid, price, color)| ((usize::from(!bid), ticks(*price)), *color))
-            .collect();
+        // A row takes the tier of its largest order.
+        let mut highlights = HashMap::<(usize, i64), (f64, Color32)>::new();
+        for &(bid, at, size, color) in &market.highlights {
+            let held = highlights
+                .entry((usize::from(!bid), row_key(at)))
+                .or_insert((size, color));
+            if size > held.0 {
+                *held = (size, color);
+            }
+        }
         // The columns and the hover text of a row say the same: a side with no resting size has
         // no order count, and a count the feed did not send is unavailable.
         let order_count = |row: usize, side: usize| {
@@ -473,11 +507,16 @@ impl Ladder {
             (size > 0.0).then_some(count)
         };
         let change = |row: usize, side: usize| {
-            (self.changes[side].get(&(top - row as i64))).map(|n| format!("{n:+}"))
+            (self.changes[side].get(&top.saturating_sub(row as i64))).map(|&n| {
+                // Signed, with the sizes' separators and at most four decimals.
+                let text = grouped(n, 4, true);
+                text.trim_end_matches('0').trim_end_matches('.').to_owned()
+            })
         };
+        // A row is labelled with its lowest price.
         let prices: Vec<_> = if self.centre.is_some() {
             (0..rows)
-                .map(|row| numbers.price(price(top - row)))
+                .map(|row| numbers.price(price(top.saturating_sub(row).saturating_mul(step))))
                 .collect()
         } else {
             Vec::new()
@@ -649,7 +688,21 @@ impl Ladder {
                         ink,
                         false,
                     );
-                    egui::Popup::menu(&view).show(|ui| {
+                    // A click inside keeps the menu open, so that the step can be typed.
+                    let menu = egui::Popup::menu(&view)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+                    menu.show(|ui| {
+                        muted(ui, "Price step");
+                        let mut ticks_per_row = self.ticks_per_row.max(1);
+                        ui.horizontal(|ui| {
+                            let label = ui.label(l10n::text(ui.ctx(), "Ticks per row"));
+                            ui.add(egui::DragValue::new(&mut ticks_per_row).range(1..=1_000_000))
+                                .labelled_by(label.id);
+                            // The price step of a row.
+                            let increment = price(i64::from(ticks_per_row));
+                            ui.label(format!("= {}", numbers.price(increment)));
+                        });
+                        self.ticks_per_row = ticks_per_row;
                         muted(ui, "Columns");
                         for (i, label) in [
                             "Order count",
@@ -716,7 +769,7 @@ impl Ladder {
                     let painter = ui.painter();
                     let grid = Stroke::new(1.0, theme.ui.border);
                     for (row, [bid, ask]) in sizes.iter().enumerate() {
-                        let tick_index = top - row as i64;
+                        let key = top.saturating_sub(row as i64);
                         for (side, ((size, _), column, color)) in
                             [(bid, bid_column, buy), (ask, ask_column, sell)]
                                 .into_iter()
@@ -725,7 +778,7 @@ impl Ladder {
                             if *size > 0.0 {
                                 let cell = row_rect(row, column);
                                 painter.rect_filled(cell, 0.0, color.gamma_multiply(0.3));
-                                if let Some(tier) = highlights.get(&(side, tick_index)) {
+                                if let Some((_, tier)) = highlights.get(&(side, key)) {
                                     painter.rect_stroke(
                                         cell.shrink(1.0),
                                         0.0,
@@ -795,10 +848,10 @@ impl Ladder {
                             );
                         }
                         let color = match last {
-                            Some(last) if tick_index > last => sell,
-                            Some(last) if tick_index < last => buy,
+                            Some(last) if key > last => sell,
+                            Some(last) if key < last => buy,
                             Some(_) => {
-                                // The price of the last trade.
+                                // The row of the last trade.
                                 painter.rect_filled(cell, 0.0, theme.ui.btn_bg_active);
                                 theme.ui.text
                             }
@@ -814,7 +867,7 @@ impl Ladder {
                         );
                         if market
                             .last_fill
-                            .is_some_and(|fill| ticks(fill) == tick_index)
+                            .is_some_and(|fill| row_key(fill) == key)
                         {
                             painter.rect_stroke(
                                 cell.shrink(1.0),
@@ -868,7 +921,7 @@ impl Ladder {
                                 Accumulation::Session => "current session",
                                 Accumulation::Manual => "since reset",
                             };
-                            response.clone().on_hover_text(l10n::format_text(ui.ctx(), "Bid orders: {0} · Ask orders: {1}\nObserved size change, not confirmed execution or cancellation: bid {2}, ask {3}\nTraded at bid: {4} · at ask: {5}\nUnclassified: {6} · Total: {7}\nProfile: {8}{9}", &[("0", counts(0)), ("1", counts(1)), ("2", delta(0)), ("3", delta(1)), ("4", format_size(bid_traded)), ("5", format_size(ask_traded)), ("6", format_size(unknown)), ("7", format_size(bid_traded + ask_traded + unknown)), ("8", span.to_owned()), ("9", (if market.last_fill.is_some_and(|fill| ticks(fill) == top - row as i64) {
+                            response.clone().on_hover_text(l10n::format_text(ui.ctx(), "Bid orders: {0} · Ask orders: {1}\nObserved size change, not confirmed execution or cancellation: bid {2}, ask {3}\nTraded at bid: {4} · at ask: {5}\nUnclassified: {6} · Total: {7}\nProfile: {8}{9}", &[("0", counts(0)), ("1", counts(1)), ("2", delta(0)), ("3", delta(1)), ("4", format_size(bid_traded)), ("5", format_size(ask_traded)), ("6", format_size(unknown)), ("7", format_size(bid_traded + ask_traded + unknown)), ("8", span.to_owned()), ("9", (if market.last_fill.is_some_and(|fill| row_key(fill) == top.saturating_sub(row as i64)) {
                                     "\nLast account fill"
                                 } else { "" }).to_string())]));
                         }
@@ -893,7 +946,7 @@ impl Ladder {
                             return None;
                         };
                         let row = pointer_row(pos);
-                        let at = price(top - row as i64);
+                        let at = row_price(row, side);
                         let touch = match side {
                             OrderSide::Buy => market.ask,
                             OrderSide::Sell => market.bid,
@@ -962,7 +1015,7 @@ impl Ladder {
                     for working in &orders {
                         if let Some(at) = entry_price(&working.request.order_type) {
                             groups
-                                .entry((ticks(at), working.request.side == OrderSide::Buy))
+                                .entry((row_key(at), working.request.side == OrderSide::Buy))
                                 .or_default()
                                 .push(*working);
                         }
@@ -984,7 +1037,7 @@ impl Ladder {
                         let dragging = ui.ctx().is_being_dragged(id);
                         let row = match pointer.filter(|_| dragging) {
                             Some(pos) => Some(pointer_row(pos)),
-                            None => row_of(ticks(at)),
+                            None => row_of(row_key(at)),
                         };
                         let Some(row) = row else {
                             continue;
@@ -1014,13 +1067,17 @@ impl Ladder {
                                 ui.label(l10n::text(ui.ctx(), "Choose an order to drag or cancel"));
                                 for order in group {
                                     let label = format!(
-                                        "{} {} · {}",
+                                        "{} {} @ {} · {}",
                                         format_size(order.request.quantity - order.filled),
-                                        tag(&order.request.order_type),
+                                        l10n::text(ui.ctx(), tag(&order.request.order_type)),
+                                        numbers.price(
+                                            entry_price(&order.request.order_type)
+                                                .expect("a priced order"),
+                                        ),
                                         order.id.0,
                                     );
                                     if ui
-                                        .selectable_label(order.id == working.id, l10n::text(ui.ctx(), label))
+                                        .selectable_label(order.id == working.id, label)
                                         .clicked()
                                     {
                                         self.selected = Some(order.id.clone());
@@ -1038,7 +1095,12 @@ impl Ladder {
                             && market.capabilities.modify
                             && let Some(pos) = pointer
                         {
-                            let moved = price(top - pointer_row(pos) as i64);
+                            // Whole rows: the order keeps its place within its row.
+                            let rows_moved = top
+                                .saturating_sub(pointer_row(pos) as i64)
+                                .saturating_sub(row_key(at));
+                            let moved =
+                                price(ticks(at).saturating_add(rows_moved.saturating_mul(step)));
                             if moved > 0.0 && moved != at {
                                 let shift = |other: f64| to_step(other + moved - at, tick, f64::round);
                                 let mut changed = working.request.clone();
@@ -1188,6 +1250,12 @@ impl Ladder {
 
                 });
         });
+        if i64::from(self.ticks_per_row.max(1)) != step {
+            // Sizes and changes are kept per row, and a row of another step is another price.
+            self.sizes = Default::default();
+            self.changes = Default::default();
+            self.observed = false;
+        }
         if read_only {
             let last = market
                 .last
@@ -1446,8 +1514,9 @@ mod tests {
         use crate::model::{Capabilities, TradingRules};
 
         for read_only in [true, false] {
-            for (last, bid, ask, initial, down, back) in [
+            for (step, last, bid, ask, initial, down, back) in [
                 (
+                    1,
                     Some(-10.0),
                     Some(-10.25),
                     Some(-10.0),
@@ -1455,11 +1524,13 @@ mod tests {
                     if read_only { -42 } else { -43 },
                     if read_only { -40 } else { -41 },
                 ),
-                (Some(-0.1), None, None, 0, -2, 0),
-                (None, None, None, -40, -42, -40),
-                (Some(0.25), Some(0.0), Some(0.25), 1, 0, 2),
-                (Some(0.0), Some(0.0), Some(0.0), 0, 0, 2),
-                (None, None, None, 1, 0, 2),
+                (1, Some(-0.1), None, None, 0, -2, 0),
+                (1, None, None, None, -40, -42, -40),
+                (1, Some(0.25), Some(0.0), Some(0.25), 1, 0, 2),
+                (1, Some(0.0), Some(0.0), Some(0.0), 0, 0, 2),
+                (1, None, None, None, 1, 0, 2),
+                (4, None, None, None, -40, -48, -40),
+                (4, Some(0.25), Some(0.0), Some(0.25), 1, 0, 8),
             ] {
                 let ctx = egui::Context::default();
                 let rules = TradingRules::new("SPREAD");
@@ -1491,6 +1562,7 @@ mod tests {
                 let mut ladder = Ladder {
                     centre: last.is_none().then_some(initial),
                     locked: !read_only,
+                    ticks_per_row: step,
                     ..Default::default()
                 };
                 let frame = |ladder: &mut Ladder, events| {
@@ -1514,7 +1586,8 @@ mod tests {
                 };
                 frame(&mut ladder, vec![]);
                 assert_eq!(ladder.centre, Some(initial));
-                // 40 points / 20 points per row = two ticks, or 0.50 at this price step.
+                // 40 points / 20 points per row = two rows: two ticks at one tick per row, eight at
+                // four.
                 for (delta, expected) in [(-40.0, down), (40.0, back)] {
                     frame(
                         &mut ladder,
@@ -1535,7 +1608,7 @@ mod tests {
                     assert_eq!(
                         ladder.centre,
                         Some(expected),
-                        "read_only={read_only} last={last:?} initial={initial}"
+                        "read_only={read_only} step={step} last={last:?} initial={initial}"
                     );
                 }
             }
@@ -1617,7 +1690,9 @@ mod tests {
             output.drop_without_applying_deltas();
             labels
         };
-        let mut ladder = DepthPanel::default().ladder;
+        // A panel saved before rows were grouped restores with one tick per row.
+        let saved = r#"{"symbol":"","tick":0.0,"ladder":{"centre":null,"locked":false,"columns":[false,false,false],"profile":"Total","accumulation":"Retained","reset_after":null}}"#;
+        let mut ladder = serde_json::from_str::<DepthPanel>(saved).unwrap().ladder;
         let mut labels = frame(&mut ladder, &market, vec![]);
         for label in [
             "100.25",
@@ -1773,6 +1848,7 @@ mod tests {
         ladder.profile = Profile::Delta;
         ladder.accumulation = Accumulation::Manual;
         ladder.reset_after = Some(now);
+        ladder.ticks_per_row = 4;
         let panel = DepthPanel {
             symbol: "ES".into(),
             tick: 0.25,
@@ -1785,6 +1861,7 @@ mod tests {
         assert!(restored.ladder.profile == Profile::Delta);
         assert!(restored.ladder.accumulation == Accumulation::Manual);
         assert_eq!(restored.ladder.reset_after, Some(now));
+        assert_eq!(restored.ladder.ticks_per_row, 4);
         let mut chart = crate::widget::ChartBuilder::new()
             .with_symbol("OTHER")
             .build();
@@ -1799,6 +1876,7 @@ mod tests {
         assert_eq!(restored.ladder.reset_after, None);
         assert_eq!(restored.ladder.columns, [true; 3]);
         assert!(restored.ladder.profile == Profile::Delta);
+        assert_eq!(restored.ladder.ticks_per_row, 4);
 
         // A depth-only host need not paint the chart to receive its pending book and executions.
         struct Feed(OrderBook);
@@ -1990,7 +2068,7 @@ mod tests {
                     );
                 }
                 assert!(labels.iter().any(|(text, _)| text == "1,018 | 1,637"));
-                assert!(labels.iter().any(|(text, _)| text == "+1234 | -"));
+                assert!(labels.iter().any(|(text, _)| text == "+1,234 | -"));
                 assert_eq!(
                     labels
                         .iter()
@@ -2258,7 +2336,7 @@ mod tests {
                         frame(vec![click(start, true)], 100.0);
                         frame(vec![click(start, false)], 100.0);
                         let (_, menu) = frame(vec![], 100.0);
-                        let choice = menu["3 LIMIT · second"];
+                        let choice = menu["3 LIMIT @ 99.50 · second"];
                         frame(vec![egui::Event::PointerMoved(choice)], 100.0);
                         frame(vec![click(choice, true)], 100.0);
                         frame(vec![click(choice, false)], 100.0);
@@ -2336,85 +2414,117 @@ mod tests {
     #[test]
     fn size_changes_distinguish_empty_sides_from_missing_snapshots() {
         use crate::model::{Capabilities, OrderBook, OrderBookLevel, TradingRules};
-        let ctx = egui::Context::default();
-        let mut ladder = Ladder::default();
-        ladder.columns[1] = true;
         let rules = TradingRules::new("ES");
-        for (size, expected) in [
-            (Some(5.0), "- | -"),
-            (Some(0.0), "-5 | -"),
-            (Some(3.0), "+3 | -"),
-            (None, "- | -"),
-            (Some(4.0), "- | -"),
-            (Some(2.0), "-2 | -"),
+        // The bid levels of each book, `None` for a missing snapshot. A row changes by the change
+        // of its total: at four ticks a row, 100.25 and 100.00 share the row 100.00 to 100.75.
+        let at_100 = |size: f64| {
+            Some(if size > 0.0 {
+                vec![(100.0, size)]
+            } else {
+                vec![]
+            })
+        };
+        for (step, books) in [
+            (
+                1,
+                vec![
+                    (at_100(5.0), "- | -"),
+                    (at_100(0.0), "-5 | -"),
+                    (at_100(3.0), "+3 | -"),
+                    (None, "- | -"),
+                    (at_100(4.0), "- | -"),
+                    (at_100(2.0), "-2 | -"),
+                    (at_100(0.3), "-1.7 | -"),
+                    (at_100(0.1), "-0.2 | -"),
+                ],
+            ),
+            (
+                4,
+                vec![
+                    (Some(vec![(100.25, 1.0), (100.0, 5.0)]), "- | -"),
+                    (Some(vec![(100.25, 3.0), (100.0, 5.0)]), "+2 | -"),
+                    (Some(vec![(100.25, 3.0), (100.0, 4.0)]), "-1 | -"),
+                    (Some(vec![(100.0, 4.0)]), "-3 | -"),
+                    // 0.1 + 0.2 adds to 0.30000000000000004, so the 0.2 joining the 0.1 at
+                    // 100.25 leaves the row's total, and its last change, as they were.
+                    (Some(vec![(100.25, 0.1), (100.0, 0.2)]), "-3.7 | -"),
+                    (Some(vec![(100.25, 0.3)]), "-3.7 | -"),
+                ],
+            ),
         ] {
-            let book = size.map(|size| OrderBook {
-                ts: chrono::Utc::now(),
-                symbol: "ES".into(),
-                bids: if size > 0.0 {
-                    vec![OrderBookLevel {
-                        price: 100.0,
-                        size,
-                        order_cnt: Some(1),
-                    }]
-                } else {
-                    vec![]
-                },
-                asks: vec![],
-            });
-            let market = Market {
-                symbol: "ES",
-                formatter: None,
-                pip_value: None,
-                last: Some(100.0),
-                bid: None,
-                ask: None,
-                tick: 0.25,
-                decimals: 2,
-                currency: "USD",
-                balance: None,
-                capabilities: Capabilities::default(),
-                rules: &rules,
-                rules_ready: true,
-                offline: None,
-                ladder: book.as_ref().map(std::borrow::Cow::Borrowed),
-                ladder_unavailable: None,
-                highlights: Vec::new(),
-                orders: &[],
-                positions: &[],
-                trades: &[],
-                session_open: None,
-                last_fill: None,
-                logo: None,
+            let ctx = egui::Context::default();
+            let mut ladder = Ladder {
+                ticks_per_row: step,
+                ..Default::default()
             };
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                ladder.show(ui, "ES", &market, &mut 1.0, &mut TimeInForce::Day);
-            });
-            let labels: Vec<_> = output
-                .shapes
-                .iter()
-                .filter_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) => Some((
-                        text.galley.text().to_owned(),
-                        text.pos + text.galley.size() / 2.0,
-                    )),
-                    _ => None,
-                })
-                .collect();
-            output.drop_without_applying_deltas();
-            let price = labels
-                .iter()
-                .find(|(label, _)| label == "100.00")
-                .unwrap()
-                .1;
-            let change = labels
-                .iter()
-                .find(|(_, pos)| pos.x > price.x && (pos.y - price.y).abs() < 0.5);
-            assert_eq!(
-                change.map(|(label, _)| label.as_str()),
-                Some(expected),
-                "size {size:?}"
-            );
+            ladder.columns[1] = true;
+            for (bids, expected) in books {
+                let book = bids.as_ref().map(|bids| OrderBook {
+                    ts: chrono::Utc::now(),
+                    symbol: "ES".into(),
+                    bids: (bids.iter())
+                        .map(|&(price, size)| OrderBookLevel {
+                            price,
+                            size,
+                            order_cnt: Some(1),
+                        })
+                        .collect(),
+                    asks: vec![],
+                });
+                let market = Market {
+                    symbol: "ES",
+                    formatter: None,
+                    pip_value: None,
+                    last: Some(100.0),
+                    bid: None,
+                    ask: None,
+                    tick: 0.25,
+                    decimals: 2,
+                    currency: "USD",
+                    balance: None,
+                    capabilities: Capabilities::default(),
+                    rules: &rules,
+                    rules_ready: true,
+                    offline: None,
+                    ladder: book.as_ref().map(std::borrow::Cow::Borrowed),
+                    ladder_unavailable: None,
+                    highlights: Vec::new(),
+                    orders: &[],
+                    positions: &[],
+                    trades: &[],
+                    session_open: None,
+                    last_fill: None,
+                    logo: None,
+                };
+                let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    ladder.show(ui, "ES", &market, &mut 1.0, &mut TimeInForce::Day);
+                });
+                let labels: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some((
+                            text.galley.text().to_owned(),
+                            text.pos + text.galley.size() / 2.0,
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                let price = labels
+                    .iter()
+                    .find(|(label, _)| label == "100.00")
+                    .unwrap()
+                    .1;
+                let change = labels
+                    .iter()
+                    .find(|(_, pos)| pos.x > price.x && (pos.y - price.y).abs() < 0.5);
+                assert_eq!(
+                    change.map(|(label, _)| label.as_str()),
+                    Some(expected),
+                    "bids {bids:?} at {step} ticks a row"
+                );
+            }
         }
     }
 
@@ -2428,13 +2538,241 @@ mod tests {
             Tick::new(now, 100.0, 11.0, None),
             Tick::new(now, 100.25, 13.0, Some(OrderSide::Buy)),
             Tick::new(now, 99.5, 17.0, Some(OrderSide::Sell)),
+            Tick::new(now, -0.25, 19.0, Some(OrderSide::Sell)),
         ];
-        // Rows descend by 0.25: 100.25, 100, 99.75. At 100 the bid has 2 + 3,
-        // the ask 7 and unknown 11, so the profile is 23; 99.5 is outside the view.
+        // One tick a row descends by 0.25: 100.25, 100, 99.75. At 100 the bid has 2 + 3, the ask
+        // 7 and unknown 11, so the profile is 23; 99.5 and -0.25 are outside the view. Four ticks
+        // a row: 100.00 to 100.75 adds the buy of 13 at 100.25, 99.00 to 99.75 holds the sell at
+        // 99.5, and -0.25 lies in -1.00 to -0.25, the row below 0.00 to 0.75.
         let refs: Vec<_> = trades.iter().collect();
-        assert_eq!(
-            traded(&refs, 0.25, 401, 3),
-            vec![[0.0, 13.0, 0.0], [5.0, 7.0, 11.0], [0.0, 0.0, 0.0],]
+        for (step, top, expected) in [
+            (
+                1,
+                401,
+                vec![[0.0, 13.0, 0.0], [5.0, 7.0, 11.0], [0.0, 0.0, 0.0]],
+            ),
+            (4, 100, vec![[5.0, 20.0, 11.0], [17.0, 0.0, 0.0]]),
+            (4, 0, vec![[0.0, 0.0, 0.0], [19.0, 0.0, 0.0]]),
+        ] {
+            assert_eq!(
+                traded(&refs, 0.25, step, top, expected.len()),
+                expected,
+                "{step} ticks a row from {top}"
+            );
+        }
+    }
+
+    /// A price step groups rows from a multiple of the step upwards, below zero too. A row sums
+    /// the sizes and order counts of its ticks, takes the tier of its largest order and one tag
+    /// for its working orders, prices a click at its highest price for a buy and its lowest for a
+    /// sell, and a drag moves an order by whole rows.
+    #[test]
+    fn price_steps_group_rows_and_price_their_orders() {
+        use crate::model::{Capabilities, OrderBook, OrderBookLevel, OrderStatus, TradingRules};
+
+        let level = |price, size, order_cnt| OrderBookLevel {
+            price,
+            size,
+            order_cnt,
+        };
+        let frame = |ctx: &egui::Context, ladder: &mut Ladder, market: &Market<'_>, events| {
+            let mut action = None;
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 700.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| action = ladder.show(ui, "ES", market, &mut 1.0, &mut TimeInForce::Day),
+            );
+            let (mut labels, mut strokes) = (Vec::new(), Vec::new());
+            for shape in &output.shapes {
+                match &shape.shape {
+                    egui::Shape::Text(text) => labels.push((
+                        text.galley.text().to_owned(),
+                        text.galley.rect.translate(text.pos.to_vec2()),
+                    )),
+                    egui::Shape::Rect(rect) => strokes.push(rect.stroke.color),
+                    _ => {}
+                }
+            }
+            output.drop_without_applying_deltas();
+            (action, labels, strokes)
+        };
+        let find = |labels: &[(String, Rect)], text: &str| {
+            labels
+                .iter()
+                .find(|(label, _)| label == text)
+                .expect(text)
+                .1
+        };
+        // `text` in the row labelled `price`: left of the price for a bid, right of it otherwise.
+        let in_row = |labels: &[(String, Rect)], price: &str, text: &str, bid: bool| {
+            let row = find(labels, price);
+            labels.iter().any(|(label, rect)| {
+                label == text
+                    && (rect.center().y - row.center().y).abs() < 0.5
+                    && if bid {
+                        rect.right() < row.left()
+                    } else {
+                        rect.left() > row.right()
+                    }
+            })
+        };
+        let rules = TradingRules::new("ES");
+        let buy_limit = |id, at| {
+            let request = OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Limit(at));
+            Order::new(OrderId::new(id), request, OrderStatus::Working)
+        };
+        let working = [buy_limit("far", 99.5), buy_limit("near", 99.75)];
+        let book = OrderBook {
+            ts: Utc::now(),
+            symbol: "ES".into(),
+            bids: vec![level(100.0, 5.0, Some(1)), level(99.75, 3.0, Some(1))],
+            asks: vec![level(100.25, 4.0, Some(1))],
+        };
+        let market = Market {
+            symbol: "ES",
+            formatter: None,
+            pip_value: None,
+            last: Some(100.0),
+            bid: Some(100.0),
+            ask: Some(100.25),
+            tick: 0.25,
+            decimals: 2,
+            currency: "USD",
+            balance: None,
+            capabilities: Capabilities {
+                market: true,
+                limit: true,
+                stop: true,
+                modify: true,
+                ..Default::default()
+            },
+            rules: &rules,
+            rules_ready: true,
+            offline: None,
+            ladder: Some(std::borrow::Cow::Borrowed(&book)),
+            ladder_unavailable: None,
+            highlights: Vec::new(),
+            orders: &working,
+            positions: &[],
+            trades: &[],
+            session_open: None,
+            last_fill: None,
+            logo: None,
+        };
+        let ctx = egui::Context::default();
+        let mut ladder = Ladder {
+            ticks_per_row: 4,
+            ..Default::default()
+        };
+        // The issue's book: at four ticks a row, 100.00 to 100.75 holds the bid of 5 and the ask
+        // of 4, and 99.00 to 99.75 the bid of 3 and both working orders, under one tag.
+        let (_, labels, _) = frame(&ctx, &mut ladder, &market, vec![]);
+        assert!(in_row(&labels, "100.00", "5", true), "{labels:?}");
+        assert!(in_row(&labels, "100.00", "4", false), "{labels:?}");
+        assert!(in_row(&labels, "99.00", "3", true), "{labels:?}");
+        let tags: Vec<_> = (labels.iter())
+            .filter(|(text, _)| text.starts_with("LIMIT"))
+            .map(|(text, _)| text.as_str())
+            .collect();
+        assert_eq!(tags, ["LIMIT +1"]);
+        let cell = |column, row| {
+            pos2(
+                find(&labels, column).center().x,
+                find(&labels, row).center().y,
+            )
+        };
+        let click = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        // A buy takes the row's highest price and a sell its lowest: a limit inside the touch, and
+        // a stop for the buy in the row that holds the ask.
+        for (column, row, side, order_type) in [
+            ("Bid size", "99.00", OrderSide::Buy, OrderType::Limit(99.75)),
+            (
+                "Ask size",
+                "101.00",
+                OrderSide::Sell,
+                OrderType::Limit(101.0),
+            ),
+            (
+                "Bid size",
+                "100.00",
+                OrderSide::Buy,
+                OrderType::Stop(100.75),
+            ),
+        ] {
+            let pos = cell(column, row);
+            frame(
+                &ctx,
+                &mut ladder,
+                &market,
+                vec![egui::Event::PointerMoved(pos)],
+            );
+            frame(&ctx, &mut ladder, &market, vec![click(pos, true)]);
+            let (action, _, _) = frame(&ctx, &mut ladder, &market, vec![click(pos, false)]);
+            let expected = Action::Place(OrderRequest::new("ES", side, 1.0, order_type));
+            assert_eq!(action, Some(expected), "{column} at {row}");
+        }
+        // The tag's first order, mid row at 99.50, dragged one row down keeps its place in the
+        // row instead of taking an edge of 98.00 to 98.75.
+        let start = find(&labels, "LIMIT +1").center();
+        let end = pos2(start.x, find(&labels, "98.00").center().y);
+        frame(
+            &ctx,
+            &mut ladder,
+            &market,
+            vec![egui::Event::PointerMoved(start)],
         );
+        frame(&ctx, &mut ladder, &market, vec![click(start, true)]);
+        frame(
+            &ctx,
+            &mut ladder,
+            &market,
+            vec![egui::Event::PointerMoved(end)],
+        );
+        let (action, _, _) = frame(&ctx, &mut ladder, &market, vec![click(end, false)]);
+        let mut moved = working[0].request.clone();
+        moved.order_type = OrderType::Limit(98.5);
+        let modify = TradingLineAction::Modify(working[0].clone(), moved);
+        assert_eq!(action, Some(Action::Confirm(Box::new(modify))));
+
+        // Below zero, -0.25 and -0.75 lie in -1.00 to -0.25, the row below 0.00 to 0.75. That row
+        // has no order count, since the feed left one out, and the tier of its largest order.
+        let (large, notable) = (Color32::from_rgb(4, 5, 6), Color32::from_rgb(1, 2, 3));
+        let book = OrderBook {
+            ts: Utc::now(),
+            symbol: "ES".into(),
+            bids: vec![level(-0.25, 2.0, Some(1)), level(-0.75, 1.0, None)],
+            asks: vec![level(0.0, 6.0, Some(2))],
+        };
+        let market = Market {
+            last: Some(-0.25),
+            bid: Some(-0.25),
+            ask: Some(0.0),
+            ladder: Some(std::borrow::Cow::Borrowed(&book)),
+            highlights: vec![(true, -0.25, 80.0, large), (true, -0.75, 30.0, notable)],
+            orders: &[],
+            ..market
+        };
+        let mut ladder = Ladder {
+            ticks_per_row: 4,
+            columns: [true, false, false],
+            ..Default::default()
+        };
+        let (_, labels, strokes) = frame(&egui::Context::default(), &mut ladder, &market, vec![]);
+        assert!(in_row(&labels, "-1.00", "3", true), "{labels:?}");
+        assert!(in_row(&labels, "0.00", "6", false), "{labels:?}");
+        assert!(in_row(&labels, "-1.00", "n/a | -", false), "{labels:?}");
+        assert!(in_row(&labels, "0.00", "- | 2", false), "{labels:?}");
+        let tiers: Vec<_> = (strokes.into_iter())
+            .filter(|color| [large, notable].contains(color))
+            .collect();
+        assert_eq!(tiers, [large]);
     }
 }

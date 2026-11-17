@@ -1,11 +1,10 @@
 //! Scales and lines tab of the chart settings dialog.
 
 use super::super::SettingsDialog;
-use super::{price_line_dropdown, styled_checkbox, styled_dropdown, trading_option};
+use super::{pick_color, price_line_dropdown, styled_checkbox, styled_dropdown, trading_option};
 use crate::localization as l10n;
 use crate::model::PriceLineSource;
 use crate::theme::Theme;
-use crate::ui_kit::ColorPicker;
 use crate::widget::settings::ThousandsSeparator;
 use egui::Ui;
 
@@ -47,12 +46,17 @@ impl SettingsDialog {
                     |ui, dialog| {
                         use ThousandsSeparator::{Apostrophe, Comma, Off, Other, Space};
                         let separator = &mut dialog.settings.scales_and_lines.thousands_sep;
+                        let ctx = ui.ctx().clone();
                         let name = |separator| match separator {
                             Off => "None".to_owned(),
                             Comma => "Comma".to_owned(),
                             Space => "Space".to_owned(),
                             Apostrophe => "Apostrophe".to_owned(),
-                            Other(character) => format!("Other ({character})"),
+                            Other(character) => l10n::format_text(
+                                &ctx,
+                                "Other ({character})",
+                                &[("character", character.to_string())],
+                            ),
                         };
                         // A separator the host set stays listed while it is the chart's.
                         let host = separator.filter(|separator| matches!(separator, Other(_)));
@@ -192,13 +196,9 @@ impl SettingsDialog {
                     },
                 );
                 self.draw_setting_row_with_controls(ui, "Symbol color", theme, |ui, dialog| {
-                    if let Some(color) = ColorPicker::new(
-                        &mut dialog.color_picker_states.symbol_value,
-                        "symbol_value_color",
-                    )
-                    .show(ui)
-                    .inner
-                    {
+                    let state = &mut dialog.color_picker_states.symbol_value;
+                    let mut color = state.sel_color;
+                    if pick_color(ui, state, "symbol_value_color", &mut color) {
                         dialog.settings.scales_and_lines.symbol_price_color = Some(color);
                     }
                     if ui.button(l10n::text(ui.ctx(), "Automatic")).clicked() {
@@ -224,13 +224,9 @@ impl SettingsDialog {
                         "Show",
                         theme.ui.text,
                     );
-                    if let Some(color) = ColorPicker::new(
-                        &mut dialog.color_picker_states.study_value,
-                        "study_value_color",
-                    )
-                    .show(ui)
-                    .inner
-                    {
+                    let state = &mut dialog.color_picker_states.study_value;
+                    let mut color = state.sel_color;
+                    if pick_color(ui, state, "study_value_color", &mut color) {
                         dialog.settings.scales_and_lines.study_value_color = Some(color);
                     }
                     if ui.button(l10n::text(ui.ctx(), "Automatic")).clicked() {
@@ -248,18 +244,15 @@ impl SettingsDialog {
                             "Show",
                             theme.ui.text,
                         );
-                        if let Some(color) = ColorPicker::new(
+                        pick_color(
+                            ui,
                             &mut dialog.color_picker_states.extended_value,
                             "extended_value_color",
-                        )
-                        .show(ui)
-                        .inner
-                        {
-                            dialog
+                            &mut dialog
                                 .settings
                                 .scales_and_lines
-                                .extended_session_price_color = color;
-                        }
+                                .extended_session_price_color,
+                        );
                     },
                 );
                 self.draw_setting_row_with_controls(ui, "Previous close", theme, |ui, dialog| {

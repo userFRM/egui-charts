@@ -94,6 +94,7 @@ pub enum KeyboardShortcutsAction {
 }
 
 /// Keyboard shortcuts help dialog
+#[derive(Debug)]
 pub struct KeyboardShortcutsDialog {
     /// Whether the dialog is currently open
     pub is_open: bool,

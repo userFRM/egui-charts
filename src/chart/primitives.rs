@@ -103,6 +103,17 @@ pub struct PanePrimitiveView<'a> {
     mapping: &'a ChartMapping,
 }
 
+impl std::fmt::Debug for PanePrimitiveView<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PanePrimitiveView")
+            .field("pane", &self.pane)
+            .field("rect", &self.rect)
+            .field("visible", &self.visible)
+            .field("bars", &self.bars.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'a> PanePrimitiveView<'a> {
     pub(crate) fn new(pane: PaneId, view: &'a PrimitiveView<'_>) -> Self {
         Self {
@@ -192,6 +203,7 @@ pub trait PanePrimitive: Send {
 /// [`draw_background`](Primitive::draw_background) runs in attachment order before any
 /// [`draw`](Primitive::draw).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum PrimitivePass {
     /// Behind the series and studies of the pane, above its background, grid and sessions.
     Below,
@@ -212,7 +224,15 @@ pub enum PrimitivePass {
 /// Drawings retain priority; built-in series still follow series visual order.
 /// Within a renderer, return its best object using these same pass and distance rules,
 /// breaking ties in reverse paint order. Object ids are local to the pointer's target.
+///
+/// ```
+/// use egui_charts::widget::PrimitiveHit;
+///
+/// let mut hit = PrimitiveHit::new(egui::CursorIcon::PointingHand);
+/// hit.object_id = Some("level".into());
+/// ```
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct PrimitiveHit {
     /// Cursor to display while hovering the object.
     pub cursor: CursorIcon,
@@ -311,6 +331,17 @@ pub struct PrimitiveView<'a> {
     pub(crate) custom: Option<CustomView<'a>>,
 }
 
+impl std::fmt::Debug for PrimitiveView<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrimitiveView")
+            .field("series", &self.series)
+            .field("mapping", &self.mapping)
+            .field("visible", &self.visible)
+            .field("bars", &self.bars.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl PrimitiveView<'_> {
     /// The points of a series added with
     /// [`Chart::add_custom_data_series`](crate::widget::Chart::add_custom_data_series), in key
@@ -363,12 +394,15 @@ impl PrimitiveView<'_> {
     }
 }
 
-/// A label a primitive puts on the price axis of its pane, on a tag in `color`.
+/// A label a primitive puts on the price axis of its pane, on a tag in `color`. A primitive of a
+/// bar series tags the axis of the series' price scale.
 ///
 /// Automatic tags avoid earlier tags and stay inside the pane. Fixed tags keep their centre,
 /// are clipped to the axis and paint above automatic tags without reserving an overlap slot.
-/// Later fixed tags paint above earlier ones. Hidden series and hidden axes omit their tags.
+/// Later fixed tags paint above earlier ones. Hidden series, hidden axes and bar series on a
+/// scale without an axis, such as an overlay scale, omit their tags.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct PriceAxisLabel {
     /// Price at the centre of the tag, on the scale of the primitive's series.
     pub price: f64,
@@ -405,6 +439,7 @@ impl PriceAxisLabel {
 /// and are clipped to the axis instead. Both cover ordinary time marks; fixed tags paint
 /// above automatic primitive tags, with later fixed tags on top. Hidden series omit their tags.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TimeAxisLabel {
     /// Time at the centre of the tag.
     pub time: DateTime<Utc>,
@@ -483,9 +518,9 @@ pub trait Primitive: Send {
         self.draw_background(painter, view, pass);
     }
 
-    /// Labels for the price axis of the pane, placed at their prices next to the chart's own
-    /// tags. An automatic label off the scale or without room is left out; fixed labels follow
-    /// [`PriceAxisLabel`]'s clipping and overlap rules.
+    /// Labels for the price axis that [`PriceAxisLabel`] describes, placed at their prices next
+    /// to the chart's own tags there. An automatic label off the scale or without room is left
+    /// out; fixed labels follow [`PriceAxisLabel`]'s clipping and overlap rules.
     fn price_axis_labels(&self, view: &PrimitiveView<'_>) -> Vec<PriceAxisLabel> {
         let _ = view;
         Vec::new()
@@ -501,7 +536,8 @@ pub trait Primitive: Send {
         Vec::new()
     }
 
-    /// Draws inside `axis`, the price axis of the pane, behind its labels.
+    /// Draws inside `axis`, the column of the price axis that [`PriceAxisLabel`] describes,
+    /// behind its labels. Not called while that axis is not shown.
     fn draw_price_axis(&self, painter: &Painter, axis: Rect, view: &PrimitiveView<'_>) {
         let _ = (painter, axis, view);
     }

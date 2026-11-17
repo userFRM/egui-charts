@@ -49,6 +49,7 @@ use std::fmt;
 /// these values are independent of chart pan/zoom and of the loaded history,
 /// making them suitable for long-term storage and cross-device synchronization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StoredCoord {
     /// Timestamp in Unix epoch milliseconds.
     pub ts_ms: i64,
@@ -97,6 +98,7 @@ fn is_zero(value: &u32) -> bool {
 /// type and every setting. Convert between the two with [`drawing_to_stored`]
 /// and [`stored_to_drawing`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StoredDrawing {
     /// Unique identifier (string for backend compatibility).
     pub id: String,
@@ -120,6 +122,7 @@ pub struct StoredDrawing {
 
 /// A study pane identified by its studies rather than by a chart's study ids.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StoredPane {
     /// The name of each study in the pane, in legend order, with its input ids and their values
     /// as serialized [`InputValue`](crate::studies::InputValue)s.
@@ -200,6 +203,12 @@ impl StoredDrawing {
         if d.note_text_style.is_some_and(|style| !style.is_valid()) {
             return Some("note_text_style.font_size".into());
         }
+        if d.anchor_price_style.is_some_and(|style| !style.is_valid()) {
+            return Some("anchor_price_style.font_size".into());
+        }
+        if !(d.middle_line.width > 0.0 && d.middle_line.width <= MAX_STROKE_WIDTH) {
+            return Some("middle_line.width".into());
+        }
         if let Some(i) = self.points.iter().position(|p| bad(p.price)) {
             return Some(format!("points[{i}].price"));
         }
@@ -211,6 +220,9 @@ impl StoredDrawing {
         }
         if !d.position_style.is_valid() {
             return Some("position_style".into());
+        }
+        if !d.marker.is_valid() {
+            return Some("marker".into());
         }
         let sizing = d.position_sizing;
         if [
@@ -317,6 +329,7 @@ impl StoredDrawing {
 /// It is read only through [`Self::from_json`], which checks the version,
 /// migrates older files and loads each drawing on its own.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct DrawingStorage {
     /// Format version, [`Self::CURRENT_VERSION`] once loaded
     pub version: u32,
@@ -328,10 +341,21 @@ pub struct DrawingStorage {
     pub drawings: Vec<StoredDrawing>,
     /// Metadata
     pub metadata: StorageMetadata,
+    /// The chart that wrote the document, by the identifier the snapshots it takes record as
+    /// their `saved_by`, which no other chart has, also in another run. The study ids in each
+    /// `drawing.pane` are that chart's. A chart reading the document from its storage (see
+    /// [`Chart::set_storage`](crate::widget::Chart::set_storage)) maps them to the studies its
+    /// last restore added if that restore showed a snapshot the writing chart took, and
+    /// otherwise finds each drawing's study pane by its [`StoredDrawing::pane`]. `None` in
+    /// documents written before it was recorded and in those built with [`Self::new`], whose
+    /// ids such a chart maps after any restore, as before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saved_by: Option<u64>,
 }
 
 /// Storage metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StorageMetadata {
     /// When the storage was created
     pub created_at: i64,
@@ -355,7 +379,9 @@ impl Default for StorageMetadata {
 impl DrawingStorage {
     /// Current storage format version. Version 10 draws a price label without a border colour
     /// with a border in its own colour; those saved before that change load with the border off,
-    /// as drawn. Version 9 draws a callout's border at its stored width; those saved before that
+    /// as drawn. It also reads a long or short position's target and stop colour alpha as the
+    /// opacity of its zone; earlier versions load at the 20% their zones were drawn at on a dark
+    /// theme. Version 9 draws a callout's border at its stored width; those saved before that
     /// change load with the 1 px border they were drawn with. Version 8
     /// extends a trend line past the anchor its Left or Right names; those saved before that
     /// change load with the reach they were drawn with.
@@ -371,6 +397,20 @@ impl DrawingStorage {
     pub const CURRENT_VERSION: u32 = 10;
 
     /// Create new storage for a symbol
+    ///
+    /// ```
+    /// use egui_charts::drawings::persistence::{DrawingStorage, StoredCoord, StoredDrawing};
+    /// use egui_charts::drawings::{Drawing, DrawingToolType};
+    ///
+    /// let mut line = StoredDrawing::new("line", Drawing::new(1, DrawingToolType::TrendLine));
+    /// line.add_point(StoredCoord::new(1_700_000_000_000, 101.5));
+    /// line.add_point(StoredCoord::new(1_700_003_600_000, 103.0));
+    /// let mut storage = DrawingStorage::new("AAPL");
+    /// storage.add_drawing(line);
+    /// let (read, skipped) = DrawingStorage::from_json(&storage.to_json().unwrap()).unwrap();
+    /// assert!(skipped.is_empty());
+    /// assert_eq!((read.drawings().len(), read.saved_by), (1, None));
+    /// ```
     pub fn new(symbol: impl Into<String>) -> Self {
         Self {
             version: Self::CURRENT_VERSION,
@@ -378,6 +418,7 @@ impl DrawingStorage {
             timeframe: None,
             drawings: Vec::new(),
             metadata: StorageMetadata::default(),
+            saved_by: None,
         }
     }
 
@@ -479,9 +520,9 @@ impl DrawingStorage {
     }
 
     /// Deserialize from JSON, migrating earlier versions to the current format.
-    /// Fails as a whole with a [`LoadError`]: [`LoadError::Json`] for invalid JSON or a missing
-    /// or invalid version, symbol, timeframe or metadata, and [`LoadError::UnsupportedVersion`]
-    /// for a version this release does not know. A
+    /// Fails as a whole with a [`LoadError`]: [`LoadError::Json`] for invalid JSON, a missing or
+    /// invalid version, symbol, timeframe or metadata, or an invalid `saved_by`, and
+    /// [`LoadError::UnsupportedVersion`] for a version this release does not know. A
     /// drawing that cannot be read (a missing field, a `null` an earlier release
     /// wrote for a non-finite number, a number out of the range of its field, a
     /// tool type from a newer release, a cursor, fewer anchors than the tool
@@ -504,6 +545,8 @@ impl DrawingStorage {
             timeframe: Option<String>,
             drawings: Vec<serde_json::Value>,
             metadata: StorageMetadata,
+            #[serde(default)]
+            saved_by: Option<u64>,
         }
         let version = serde_json::from_str::<Version>(json)
             .map_err(LoadError::Json)?
@@ -641,6 +684,20 @@ impl DrawingStorage {
                             // colour, which now follows the label's colour.
                             drawing.drawing.border = false;
                         }
+                        if version < 10 && matches!(tool, T::LongPos | T::ShortPos) {
+                            // Earlier renderers filled each zone with its colour at 20% on a dark
+                            // theme; the alpha now is the zone's opacity.
+                            let settings = &mut drawing.drawing;
+                            for color in [
+                                &mut settings.position_target_color,
+                                &mut settings.position_stop_color,
+                            ]
+                            .into_iter()
+                            .flatten()
+                            {
+                                color[3] = (f32::from(color[3]) * 0.2).round() as u8;
+                            }
+                        }
                         if ((version < 7
                             && matches!(tool, T::InfoLine | T::TrendAngle)
                             && !has_price_labels)
@@ -751,6 +808,7 @@ impl DrawingStorage {
             timeframe: container.timeframe,
             drawings,
             metadata: container.metadata,
+            saved_by: container.saved_by,
         };
         Ok((storage, skipped))
     }
@@ -764,6 +822,7 @@ impl DrawingStorage {
 
 /// Why [`DrawingStorage::to_json`] did not save.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum SaveError {
     /// A drawing holds NaN or an infinity, which JSON cannot store, or a size or pitchfork
     /// level out of the range drawings are drawn at, and loading skips it.
@@ -846,6 +905,7 @@ impl std::error::Error for SaveError {
 /// A drawing [`DrawingStorage::from_json`] left out because it could not be
 /// read or its id was already taken.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct SkippedDrawing {
     /// The position of the entry in the file's list of drawings, counted from 0.
     pub index: usize,
@@ -1118,6 +1178,7 @@ mod v1 {
         drawing.border = true;
         drawing.border_color = None;
         drawing.channel_midline = false;
+        drawing.theme_shade = false;
         // Info lines already displayed readouts; other lines keep their old text placement.
         drawing.line_measurements = if tool_type == DrawingToolType::InfoLine {
             LineMeasurements::for_tool(tool_type)
@@ -1346,7 +1407,14 @@ mod tests {
         let mut vwap = VwapConfig::default();
         vwap.bands[0].enabled = false;
         vwap.bands[1] = VwapBand::new(true, 2.5).unwrap();
-        vwap.bands[2].color = [21, 22, 23, 24];
+        vwap.bands[2].lower = VwapBandLine::new([21, 22, 23, 24])
+            .with_width(2.5)
+            .and_then(|line| line.with_opacity(0.25))
+            .unwrap();
+        vwap.bands[2].lower.visible = false;
+        vwap.bands[2].lower.line_style = LineStyle::LargeDashed;
+        vwap.bands[2].lower.plot_type = crate::drawings::VwapPlotType::Crosses;
+        vwap.bands[2].lower.track_price = true;
         d.vwap = Some(vwap);
         if tool == DrawingToolType::DoubleCurve {
             d.chart_points.push(ChartPoint::new(12.0, 115.0));
@@ -1373,6 +1441,16 @@ mod tests {
             bold: true,
             italic: true,
         });
+        d.anchor_price_style = Some(crate::drawings::NoteTextStyle::new([25, 26, 27, 28], 16.0));
+        d.middle_line.color = Some([29, 30, 31, 32]);
+        d.middle_line.width = 2.5;
+        d.middle_line.line_style = crate::model::LineStyle::Dotted;
+        d.marker = crate::drawings::AnnotationMarker {
+            show_text: false,
+            glyph: "🚀".into(),
+            show_glyph: true,
+            glyph_color: Some([21, 22, 23, 24]),
+        };
         d.z_order = -3;
         d.update_screen_coords(bar_to_x, price_to_y);
         d
@@ -1622,6 +1700,7 @@ mod tests {
             want.border = true;
             want.border_color = None;
             want.position_readout.persistent = true; // Earlier files always showed statistics.
+            want.theme_shade = false; // Earlier files draw their stored colours on every theme.
             want.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(10.0, 110.0)];
             want.update_screen_coords(bar_to_x, price_to_y);
             want.stroke_width = 3.0;
@@ -1632,6 +1711,20 @@ mod tests {
             want.visible = tool != DrawingToolType::Arrow;
             assert_eq!(format!("{:?}", restore(stored, 1)), format!("{want:?}"));
         }
+        // A version 1 anchored VWAP stored one point and neither a line style nor bands: it
+        // loads with a solid line and the default bands.
+        let mut value: serde_json::Value = serde_json::from_str(v1_json).unwrap();
+        let records = value["drawings"].as_array_mut().unwrap();
+        records.truncate(1);
+        records[0]["tool_type"] = "Anchored VWAP".into();
+        records[0]["points"].as_array_mut().unwrap().truncate(1);
+        let (loaded, skipped) = DrawingStorage::from_json(&value.to_string()).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let drawing = &loaded.drawings[0].drawing;
+        assert_eq!(
+            (drawing.tool_type, drawing.line_style, drawing.vwap),
+            (DrawingToolType::AnchoredVWAP, LineStyle::Solid, None)
+        );
 
         let (v2, skipped) =
             DrawingStorage::from_json(include_str!("fixtures/storage_v2.json")).unwrap();
@@ -1648,6 +1741,7 @@ mod tests {
             want.position_sizing = PositionSizing::default(); // Earlier files use unit sizing.
             want.position_readout.persistent = true; // Earlier files always showed statistics.
             want.vwap = None; // Earlier files use the default bands.
+            want.theme_shade = false; // Earlier files draw their stored colours on every theme.
             // Earlier files show their axis labels.
             want.price_axis_label = true;
             want.time_axis_label = true;
@@ -1662,6 +1756,16 @@ mod tests {
             want.text_follows_zoom = false;
             want.text_zoom_spacing = None;
             want.note_text_style = None;
+            // Earlier files draw no channel prices and the default middle line.
+            want.anchor_price_style = None;
+            want.middle_line = crate::drawings::MiddleLineStyle::default();
+            // Earlier files show a pin's text and carry no glyph on a signpost.
+            want.marker = crate::drawings::AnnotationMarker {
+                show_text: true,
+                glyph: "🙂".into(),
+                show_glyph: false,
+                glyph_color: None,
+            };
             let config = want.fib_config.as_mut().unwrap();
             config.logarithmic = false;
             config.level_width = 2.0;
@@ -2334,6 +2438,7 @@ mod tests {
                         finer: &[],
                         revision: 0,
                         bar_to_x: &bar_to_x,
+                        bar_spacing: 8.0,
                         price_to_y: &price_to_y,
                         y_to_price: &|y| (500.0 - f64::from(y)) / 2.0,
                         time_axis: false,
@@ -2551,6 +2656,66 @@ mod tests {
         assert_eq!((colors.text, colors.fill), (Color32::WHITE, blue));
     }
 
+    /// The fixture is a parallel channel and a flat top/bottom as the release before their middle
+    /// line and price settings saved them. They restore with the default middle line, a dashed
+    /// hairline in the line colour, and no price style, as they were drawn.
+    #[test]
+    fn channels_saved_before_their_middle_line_and_price_settings_keep_their_look() {
+        let saved = include_str!("fixtures/storage_v10_channels.json");
+        let (storage, skipped) = DrawingStorage::from_json(saved).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let tools = [
+            DrawingToolType::ParallelChannel,
+            DrawingToolType::FlatTopBottom,
+        ];
+        for (i, tool) in tools.into_iter().enumerate() {
+            let drawing = restore(&storage.drawings[i], i + 1);
+            assert_eq!(drawing.tool_type, tool);
+            assert_eq!(drawing.middle_line, MiddleLineStyle::default(), "{tool:?}");
+            assert_eq!(drawing.anchor_price_style, None, "{tool:?}");
+            assert_eq!(
+                drawing.channel_midline,
+                tool == DrawingToolType::ParallelChannel
+            );
+        }
+    }
+
+    /// Before version 10 a position filled its zones with the target and stop colours at 20% on a
+    /// dark theme, and a palette pick saved alpha 255: such a zone loads at alpha 51, and 128 at
+    /// 25.6, rounded to 26, also once saved again. Version 10 alphas are the zone opacity.
+    #[test]
+    fn position_colours_saved_before_zone_opacity_keep_their_zones() {
+        for (version, tool, saved, want) in [
+            (9, DrawingToolType::LongPos, [255, 255], [51, 51]),
+            (9, DrawingToolType::ShortPos, [255, 255], [51, 51]),
+            (3, DrawingToolType::ShortPos, [255, 128], [51, 26]),
+            (10, DrawingToolType::LongPos, [255, 128], [255, 128]),
+        ] {
+            let mut file: serde_json::Value =
+                serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
+            file["version"] = version.into();
+            let records = file["drawings"].as_array_mut().unwrap();
+            // The fixture's second drawing is its long position.
+            records.remove(0);
+            records.truncate(1);
+            let settings = &mut records[0]["drawing"];
+            settings["tool_type"] = serde_json::to_value(tool).unwrap();
+            settings["position_target_color"] = serde_json::json!([40, 100, 220, saved[0]]);
+            settings["position_stop_color"] = serde_json::json!([220, 140, 40, saved[1]]);
+            let (loaded, skipped) = DrawingStorage::from_json(&file.to_string()).unwrap();
+            assert!(skipped.is_empty(), "{tool:?} v{version}: {skipped:?}");
+            let (again, _) = DrawingStorage::from_json(&loaded.to_json().unwrap()).unwrap();
+            for storage in [&loaded, &again] {
+                let drawing = &storage.drawings[0].drawing;
+                assert_eq!(
+                    (drawing.position_target_color, drawing.position_stop_color),
+                    (Some([40, 100, 220, want[0]]), Some([220, 140, 40, want[1]])),
+                    "{tool:?} v{version}"
+                );
+            }
+        }
+    }
+
     /// Builds that wrote versions 3 to 6 carried a sloping ray's Left and Right towards the
     /// pane's sides: Right from its right-hand anchor to the right edge, Left from its left-hand
     /// anchor to the left edge. Anchors at bar 10, price 100 and bar 3, price 110 paint at
@@ -2645,7 +2810,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 38] = [
+        let cases: [(Spoil, &str); 41] = [
             (
                 |s| {
                     first(s)
@@ -2700,6 +2865,7 @@ mod tests {
                 |s| first(s).drawing.position_style.font_size = f32::NAN,
                 "invalid position_style",
             ),
+            (|s| first(s).drawing.marker.glyph.clear(), "invalid marker"),
             (
                 |s| first(s).drawing.position_sizing.leverage = f64::NAN,
                 "invalid position_sizing",
@@ -2743,6 +2909,17 @@ mod tests {
                     style.font_size = 0.0;
                 },
                 "invalid note_text_style.font_size",
+            ),
+            (
+                |s| {
+                    first(s).drawing.anchor_price_style =
+                        Some(crate::drawings::NoteTextStyle::new([0; 4], 0.0));
+                },
+                "invalid anchor_price_style.font_size",
+            ),
+            (
+                |s| first(s).drawing.middle_line.width = f32::NAN,
+                "invalid middle_line.width",
             ),
             (
                 |s| first(s).points[1].price = f64::NAN,

@@ -24,7 +24,7 @@ use egui::Color32;
 const PERIODS: [&str; 6] = ["1W", "1M", "3M", "6M", "YTD", "1Y"];
 
 /// Latest close's percentage change over six calendar periods, shown as a table.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Performance {
     days: ExchangeDays,
     values: IndicatorValues,
@@ -43,7 +43,7 @@ pub struct Performance {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     source: usize,
     previous_date: Option<NaiveDate>,
@@ -69,6 +69,7 @@ impl Performance {
                 title: "Performance".into(),
                 columns: vec!["Period".into(), "Change".into()],
                 rows: Vec::new(),
+                ..Default::default()
             },
             colors: [palette::BLUE; 6],
             visible: true,

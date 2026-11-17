@@ -31,7 +31,7 @@ use egui::Color32;
 ///
 /// A fixed 4-bar weighted average with weights `[1, 2, 2, 1] / 6`.
 /// Overlay indicator.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SWMA {
     values: IndicatorValues,
     color: Color32,
@@ -111,7 +111,7 @@ impl Indicator for SWMA {
     }
 
     fn desc(&self) -> &str {
-        "Symmetrically Weighted Moving Avg - 4-bar symmetric weighted MA"
+        "Symmetrically Weighted Moving Average - 4-bar symmetric weighted MA"
     }
 
     fn calculate(&mut self, data: &[Bar]) {

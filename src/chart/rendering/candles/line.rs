@@ -6,19 +6,25 @@ use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::epaint::CubicBezierShape;
 use egui::{Color32, Painter, Pos2, Shape, Stroke};
+use std::ops::Range;
 
 use super::helpers::valued_runs;
 use super::volume::render_volume_bars;
 use crate::chart::rendering::{RenderContext, StyleColors};
 use crate::model::{Bar, ChartTypeStyles, LinePlotStyle, LineType, PriceSource};
 
+/// `bars`, the first at `start_idx`, are the bars in view at `in_view` and the bar beyond each
+/// edge where there is one: the line runs through all of them, volume columns stand under the
+/// bars in view.
 pub(super) fn render_line(
     painter: &Painter,
     volume_ctx: &RenderContext,
-    visible_data: &[Bar],
+    bars: &[Bar],
     start_idx: usize,
+    in_view: Range<usize>,
     show_volume: bool,
     max_volume: f64,
+    volume_width: f32,
     colors: &StyleColors,
     price_scale: &PriceMap,
     chart_rect_min_x: f32,
@@ -26,7 +32,7 @@ pub(super) fn render_line(
     style: &LinePlotStyle,
     price_source: PriceSource,
 ) {
-    let points: Vec<Pos2> = visible_data
+    let points: Vec<Pos2> = bars
         .iter()
         .enumerate()
         .map(|(i, bar)| {
@@ -37,14 +43,15 @@ pub(super) fn render_line(
         })
         .collect();
 
-    draw_bar_line(painter, visible_data, &points, style, false);
+    draw_bar_line(painter, bars, &points, style, false);
 
     if show_volume {
         render_volume_bars(
             volume_ctx,
-            visible_data,
-            start_idx,
+            &bars[in_view.clone()],
+            start_idx + in_view.start,
             max_volume,
+            volume_width,
             colors,
             chart_rect_min_x,
             &idx_to_coord,
@@ -52,14 +59,16 @@ pub(super) fn render_line(
     }
 }
 
-/// Line with circular markers at each data point
+/// Line with circular markers at each bar in view, its bars as [`render_line`] takes them
 pub(super) fn render_line_with_markers(
     painter: &Painter,
     volume_ctx: &RenderContext,
-    visible_data: &[Bar],
+    bars: &[Bar],
     start_idx: usize,
+    in_view: Range<usize>,
     show_volume: bool,
     max_volume: f64,
+    volume_width: f32,
     colors: &StyleColors,
     price_scale: &PriceMap,
     chart_rect_min_x: f32,
@@ -68,7 +77,7 @@ pub(super) fn render_line_with_markers(
     price_source: PriceSource,
     marker_radius: f32,
 ) {
-    let points: Vec<Pos2> = visible_data
+    let points: Vec<Pos2> = bars
         .iter()
         .enumerate()
         .map(|(i, bar)| {
@@ -79,9 +88,9 @@ pub(super) fn render_line_with_markers(
         })
         .collect();
 
-    draw_bar_line(painter, visible_data, &points, style, false);
+    draw_bar_line(painter, bars, &points, style, false);
 
-    for (point, bar) in points.iter().zip(visible_data) {
+    for (point, bar) in points[in_view.clone()].iter().zip(&bars[in_view.clone()]) {
         if !bar.is_whitespace() {
             draw_point_marker(painter, *point, marker_radius, line_color(bar, style));
         }
@@ -90,9 +99,10 @@ pub(super) fn render_line_with_markers(
     if show_volume {
         render_volume_bars(
             volume_ctx,
-            visible_data,
-            start_idx,
+            &bars[in_view.clone()],
+            start_idx + in_view.start,
             max_volume,
+            volume_width,
             colors,
             chart_rect_min_x,
             &idx_to_coord,
@@ -100,14 +110,16 @@ pub(super) fn render_line_with_markers(
     }
 }
 
-/// Step line: horizontal then vertical movement
+/// Step line: horizontal then vertical movement, its bars as [`render_line`] takes them
 pub(super) fn render_step_line(
     painter: &Painter,
     volume_ctx: &RenderContext,
-    visible_data: &[Bar],
+    bars: &[Bar],
     start_idx: usize,
+    in_view: Range<usize>,
     show_volume: bool,
     max_volume: f64,
+    volume_width: f32,
     colors: &StyleColors,
     price_scale: &PriceMap,
     chart_rect_min_x: f32,
@@ -115,11 +127,11 @@ pub(super) fn render_step_line(
     style: &LinePlotStyle,
     price_source: PriceSource,
 ) {
-    if visible_data.is_empty() {
+    if bars.is_empty() {
         return;
     }
 
-    let points: Vec<Pos2> = visible_data
+    let points: Vec<Pos2> = bars
         .iter()
         .enumerate()
         .map(|(i, bar)| {
@@ -128,14 +140,15 @@ pub(super) fn render_step_line(
             Pos2::new(x, price_scale.price_to_y(value))
         })
         .collect();
-    draw_bar_line(painter, visible_data, &points, style, true);
+    draw_bar_line(painter, bars, &points, style, true);
 
     if show_volume {
         render_volume_bars(
             volume_ctx,
-            visible_data,
-            start_idx,
+            &bars[in_view.clone()],
+            start_idx + in_view.start,
             max_volume,
+            volume_width,
             colors,
             chart_rect_min_x,
             &idx_to_coord,

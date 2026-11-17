@@ -46,6 +46,7 @@ pub(crate) fn last_with_value(bars: &[Bar]) -> Option<&Bar> {
 /// assert!(bar.is_bullish()); // close > open
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Bar {
     /// Timestamp of the bar. Read from JSON as an RFC 3339 time, or as a date alone
     /// (`"2024-03-15"`), which is midnight UTC of that day, the open of its day bar.
@@ -78,8 +79,16 @@ pub struct Bar {
 /// Colours of one bar that replace the colours of its series for that bar, in
 /// [`Bar::colors`]. A colour left `None` keeps the series' colour, and each chart type reads the
 /// colours that apply to it.
+///
+/// ```
+/// use egui_charts::model::BarColors;
+///
+/// let colors = BarColors::default();
+/// assert_eq!(colors.color, None);
+/// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct BarColors {
     /// The body of a candle; an OHLC bar, a column or a line's marker; or the line from this bar
     /// to the next on line, step line and area charts, and each line on HLC area charts.

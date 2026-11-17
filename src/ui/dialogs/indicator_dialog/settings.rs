@@ -10,7 +10,7 @@ use crate::theme::Theme;
 use crate::ui_kit::{FormGrid, dialog::DialogFooter, modal::Modal};
 use crate::widget::SeriesId;
 
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum Tab {
     #[default]
     Inputs,
@@ -19,7 +19,8 @@ enum Tab {
 }
 
 /// A complete edit for the host to apply to the original study id.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct StudyEdit {
     /// Stable id of the applied study.
     pub id: SeriesId,
@@ -31,11 +32,12 @@ pub struct StudyEdit {
 
 /// Inputs, Style and Visibility editor for an applied study. Closing or cancelling discards
 /// staged values. Chart-aware previews retain an opening settings snapshot for restoration.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct IndicatorSettingsDialog {
     edit: Option<StudyEdit>,
     inputs: Vec<StudyInput>,
-    title: String,
+    /// The edited study's name, for the title.
+    study: String,
     line_names: Vec<String>,
     levels: Vec<(f64, &'static str)>,
     gradient_names: Vec<&'static str>,
@@ -95,7 +97,7 @@ impl IndicatorSettingsDialog {
             settings: study.settings(),
         });
         self.inputs = study.inputs();
-        self.title = format!("{} settings", study.name());
+        self.study = study.name().to_owned();
         self.line_names = study.line_names();
         self.gradient_names = study.gradients().iter().map(|fill| fill.name).collect();
         self.levels = study
@@ -243,7 +245,8 @@ impl IndicatorSettingsDialog {
         let mut open = true;
         let mut apply = false;
         let mut cancel = false;
-        Modal::new("indicator_settings", &self.title)
+        let title = l10n::format_text(ctx, "{name} settings", &[("name", self.study.as_str())]);
+        Modal::new("indicator_settings", title)
             .width(620.0)
             .height(560.0)
             .top(120.0)
@@ -509,10 +512,10 @@ impl IndicatorSettingsDialog {
                                     ui.horizontal_wrapped(|ui| {
                                         ui.checkbox(
                                             &mut fill.visible,
-                                            format!(
-                                                "{} {}",
-                                                l10n::text(ui.ctx(), "Band"),
-                                                index + 1
+                                            l10n::format_text(
+                                                ui.ctx(),
+                                                "Band {number}",
+                                                &[("number", (index + 1).to_string())],
                                             ),
                                         );
                                         ui.color_edit_button_srgba(&mut fill.color)
@@ -1146,7 +1149,8 @@ mod tests {
                 loaded.apply_settings(&[], hidden).unwrap();
                 assert!(loaded.fills().is_empty());
                 assert_eq!(loaded.settings().fills[0].color, edited.fills[0].color);
-                // Older templates without band settings inherit the newly declared band.
+                // Older templates without band settings restore without the band they did not
+                // draw, which keeps the declared colour for when it is shown.
                 let mut old =
                     serde_json::to_value(StudyTemplate::from_study(loaded.as_ref())).unwrap();
                 old["settings"].as_object_mut().unwrap().remove("fills");
@@ -1154,7 +1158,8 @@ mod tests {
                     .unwrap()
                     .create()
                     .unwrap();
-                assert_eq!(restored.fills()[0].color, defaults.fills[0].color);
+                assert!(restored.fills().is_empty());
+                assert_eq!(restored.settings().fills[0].color, defaults.fills[0].color);
             } else {
                 assert_eq!(
                     loaded.drawings()[0]
@@ -1434,49 +1439,77 @@ mod tests {
         );
     }
 
-    /// Oscillators preview real inputs and independent guide styles, then cancel or commit
+    /// Studies preview real inputs and independent guide styles, then cancel or commit
     /// as one undoable edit. Reference values use rational EMA, SMA and Wilder calculations.
     #[test]
-    fn smi_and_stochastic_preview_cancel_apply_and_stream_restore() {
+    fn study_preview_cancel_apply_and_stream_restore() {
         use crate::model::{Bar, BarData, PriceSource};
         use crate::studies::{IndicatorFactory, StudySource, StudyTemplate};
         use crate::widget::Chart;
         use egui_kittest::{Harness, kittest::Queryable};
 
-        for (name, expected) in [
+        // Volume cases use highs of 20, lows of zero and volumes 1..=9. At bar 7 the
+        // three-bar CMF is (3 + 1.4 + 4.8)/21 = 46/105; ADL sums to 13.
+        // EFI(3) seeds from forces 4, -3, 12 (mean 13/3), then uses alpha 1/2.
+        let cases: [(&str, [&[f64]; 3]); 8] = [
             (
                 "SMI",
                 [
-                    [24300.0 / 4577.0, -90248918812.0 / 92919667995.0],
-                    [-72900.0 / 4253.0, -1376112074668.0 / 86342003055.0],
-                    [92300.0 / 4969.0, 9100832864927708.0 / 1287100239540885.0],
+                    &[24300.0 / 4577.0, -90248918812.0 / 92919667995.0],
+                    &[-72900.0 / 4253.0, -1376112074668.0 / 86342003055.0],
+                    &[92300.0 / 4969.0, 9100832864927708.0 / 1287100239540885.0],
                 ],
             ),
             (
                 "Stochastic",
                 [
-                    [925.0 / 21.0, 865.0 / 21.0],
-                    [100.0 / 3.0, 215.0 / 6.0],
-                    [125.0 / 2.0, 575.0 / 12.0],
+                    &[925.0 / 21.0, 865.0 / 21.0],
+                    &[100.0 / 3.0, 215.0 / 6.0],
+                    &[125.0 / 2.0, 575.0 / 12.0],
                 ],
             ),
             (
                 "StochRSI",
                 [
-                    [15370.0 / 369.0, 860855.0 / 21402.0],
-                    [38425.0 / 1269.0, 1270975.0 / 36801.0],
-                    [101875.0 / 1269.0, 70150.0 / 1269.0],
+                    &[15370.0 / 369.0, 860855.0 / 21402.0],
+                    &[38425.0 / 1269.0, 1270975.0 / 36801.0],
+                    &[101875.0 / 1269.0, 70150.0 / 1269.0],
                 ],
             ),
-        ] {
+            ("A/D", [&[13.0], &[57.0 / 5.0], &[177.0 / 10.0]]),
+            ("CMF", [&[46.0 / 105.0], &[38.0 / 105.0], &[109.0 / 240.0]]),
+            (
+                "Chaikin Oscillator",
+                [
+                    &[387487.0 / 279936.0],
+                    &[1564187.0 / 1399680.0],
+                    &[15412753.0 / 8398080.0],
+                ],
+            ),
+            (
+                "Force Index",
+                [&[293.0 / 24.0], &[101.0 / 24.0], &[749.0 / 48.0]],
+            ),
+            (
+                "VPT",
+                [
+                    &[36919.0 / 12012.0],
+                    &[20903.0 / 12012.0],
+                    &[44069.0 / 12012.0],
+                ],
+            ),
+        ];
+        for (name, expected) in cases {
+            let oscillator = matches!(name, "SMI" | "Stochastic" | "StochRSI");
+            let zero_guide = matches!(name, "CMF" | "Chaikin Oscillator" | "Force Index");
             let bar = |i, p| {
                 Bar::new(
                     chrono::DateTime::from_timestamp(i * 60, 0).unwrap(),
                     p + if i % 2 == 0 { 1.0 } else { -0.5 },
-                    p + 2.0,
-                    p - 1.0,
+                    if oscillator { p + 2.0 } else { 20.0 },
+                    if oscillator { p - 1.0 } else { 0.0 },
                     p,
-                    1.0,
+                    if oscillator { 1.0 } else { (i + 1) as f64 },
                 )
             };
             let mut bars: Vec<_> = [10.0, 12.0, 11.0, 14.0, 13.0, 15.0, 12.0, 16.0]
@@ -1499,21 +1532,63 @@ mod tests {
                 .unwrap()
                 .1
                 .settings();
-            assert_eq!(defaults.levels.len(), 3, "{name}");
-            assert!(defaults.fill_between_levels);
-            assert_eq!(defaults.precision, Some(2));
+            assert_eq!(
+                defaults.levels.len(),
+                if oscillator {
+                    3
+                } else {
+                    usize::from(zero_guide)
+                },
+                "{name}"
+            );
+            assert_eq!(defaults.fill_between_levels, oscillator);
+            if oscillator {
+                assert_eq!(defaults.precision, Some(2));
+            }
+            if !oscillator {
+                assert_eq!(
+                    chart
+                        .indicators()
+                        .find(|(i, _)| *i == id)
+                        .unwrap()
+                        .1
+                        .value_format(),
+                    if name == "CMF" {
+                        crate::scales::StudyFormat::Fixed(2)
+                    } else {
+                        crate::scales::StudyFormat::Volume
+                    },
+                    "{name} units"
+                );
+            }
+            if zero_guide {
+                let guide = defaults.levels[0];
+                assert_eq!(guide.value, None);
+                assert_eq!(guide.color, crate::studies::palette::GRAY);
+                assert_eq!(guide.pattern, LineStyle::Dashed);
+                assert_eq!(guide.width, 1.0);
+                assert!(guide.visible);
+            }
             assert!(defaults.price_line_plots.is_empty());
             let mut edited = defaults.clone();
-            edited.levels[0].value = Some(85.0);
-            edited.levels[0].pattern = LineStyle::Solid;
-            edited.levels[0].width = 3.0;
-            edited.levels[0].color = egui::Color32::RED;
-            edited.levels[1].value = Some(15.0);
-            edited.levels[1].pattern = LineStyle::Dotted;
-            edited.levels[1].width = 2.0;
-            edited.levels[1].visible = false;
-            edited.levels[2].value = Some(120.0);
-            edited.level_fill_color = egui::Color32::from_rgba_unmultiplied(20, 120, 80, 60);
+            if oscillator {
+                edited.levels[0].value = Some(85.0);
+                edited.levels[0].pattern = LineStyle::Solid;
+                edited.levels[0].width = 3.0;
+                edited.levels[0].color = egui::Color32::RED;
+                edited.levels[1].value = Some(15.0);
+                edited.levels[1].pattern = LineStyle::Dotted;
+                edited.levels[1].width = 2.0;
+                edited.levels[1].visible = false;
+                edited.levels[2].value = Some(120.0);
+                edited.level_fill_color = egui::Color32::from_rgba_unmultiplied(20, 120, 80, 60);
+            } else if zero_guide {
+                edited.levels[0].value = Some(0.25);
+                edited.levels[0].pattern = LineStyle::Dotted;
+                edited.levels[0].width = 3.0;
+                edited.levels[0].color = egui::Color32::RED;
+                edited.levels[0].visible = false;
+            }
             edited.plots[0].plot_type = PlotType::StepLine;
             if name == "SMI" {
                 let mut json = serde_json::to_value(&edited).unwrap();
@@ -1537,7 +1612,14 @@ mod tests {
                 json["gradients"][1]["visible"] = false.into();
                 edited = serde_json::from_value(json).unwrap();
             }
-            edited.price_line_plots = vec![1];
+            let value_line = usize::from(oscillator);
+            edited.price_line_plots = vec![value_line];
+            if !oscillator {
+                edited.untagged_plots = vec![0];
+                edited.plots[0].width = 2.0;
+                edited.plots[0].color = egui::Color32::BLUE;
+                edited.precision = Some(3);
+            }
             let mut dialog = IndicatorSettingsDialog::default();
             for (action, theme, size) in [
                 ("Cancel", Theme::light(), egui::vec2(320.0, 450.0)),
@@ -1550,7 +1632,10 @@ mod tests {
                 for input in &mut dialog.inputs {
                     if matches!(input.value, InputValue::Length(_)) {
                         input.value = InputValue::Length(
-                            if matches!(input.id.as_str(), "k_period" | "stoch_period" | "period") {
+                            if matches!(
+                                input.id.as_str(),
+                                "k_period" | "stoch_period" | "period" | "slow_length"
+                            ) {
                                 3
                             } else {
                                 2
@@ -1578,9 +1663,18 @@ mod tests {
                 drop(harness);
                 let study = chart.indicators().find(|(i, _)| *i == id).unwrap().1;
                 assert_eq!(study.settings(), edited);
-                assert_eq!(study.level_fill_indices(), Some([0, 1]));
-                assert!(study.plot_price_line(1));
-                assert!(!study.plot_price_line(0));
+                if oscillator {
+                    assert_eq!(study.level_fill_indices(), Some([0, 1]));
+                    assert!(!study.plot_price_line(0));
+                } else {
+                    assert!(!study.plot_tagged(0));
+                }
+                assert!(study.plot_price_line(value_line));
+                if zero_guide {
+                    assert_eq!(study.level_stroke(0, 0.25), (LineStyle::Dotted, 3.0));
+                    assert_eq!(study.pane().levels[0].0, 0.25);
+                    assert_eq!(study.pane().levels[0].1, egui::Color32::TRANSPARENT);
+                }
                 for (line, value) in expected[0].iter().enumerate() {
                     assert!(
                         (study.values().value(line, 7).unwrap() - value).abs() < 1e-9,
@@ -1603,33 +1697,50 @@ mod tests {
                         }
                     });
                 harness.run();
-                for caption in [
-                    if name == "SMI" {
-                        "Upper guide"
+                let guide_captions: &[&str] = if !oscillator {
+                    if zero_guide {
+                        &[
+                            "Zero",
+                            "Level value",
+                            "Level colour",
+                            "Line pattern",
+                            "Line width",
+                        ]
                     } else {
-                        "Overbought"
-                    },
-                    if name == "SMI" {
-                        "Lower guide"
-                    } else {
-                        "Oversold"
-                    },
-                    "Middle guide",
-                    "Fill colour",
-                    "Latest value line",
-                ]
-                .into_iter()
-                .chain(
-                    (name == "SMI")
-                        .then_some([
-                            "Upper shading",
-                            "Lower shading",
-                            "First colour",
-                            "Second colour",
-                        ])
-                        .into_iter()
-                        .flatten(),
-                ) {
+                        &[]
+                    }
+                } else {
+                    &[
+                        if name == "SMI" {
+                            "Upper guide"
+                        } else {
+                            "Overbought"
+                        },
+                        if name == "SMI" {
+                            "Lower guide"
+                        } else {
+                            "Oversold"
+                        },
+                        "Middle guide",
+                        "Fill colour",
+                    ]
+                };
+                for caption in guide_captions
+                    .iter()
+                    .copied()
+                    .chain(["Latest value line"])
+                    .chain(
+                        (name == "SMI")
+                            .then_some([
+                                "Upper shading",
+                                "Lower shading",
+                                "First colour",
+                                "Second colour",
+                            ])
+                            .into_iter()
+                            .flatten(),
+                    )
+                {
                     assert!(
                         harness.query_all_by_label(caption).next().is_some(),
                         "{name}: {caption}"
@@ -1694,13 +1805,27 @@ mod tests {
                 .unwrap();
             loaded.calculate(&bars);
             assert_eq!(loaded.settings(), edited);
-            for line in 0..2 {
+            for line in 0..expected[2].len() {
                 for i in 0..bars.len() {
                     assert_eq!(
                         loaded.values().value(line, i),
                         study.values().value(line, i)
                     );
                 }
+            }
+            if matches!(name, "CMF" | "Force Index") {
+                // Saved before the zero guide, with no levels: it stays hidden until shown.
+                let mut older = serde_json::to_value(StudyTemplate::from_study(study)).unwrap();
+                older["settings"]["levels"] = serde_json::json!([]);
+                let older = serde_json::from_value::<StudyTemplate>(older)
+                    .unwrap()
+                    .create()
+                    .unwrap();
+                let mut hidden = defaults.levels.clone();
+                hidden[0].visible = false;
+                assert_eq!(older.settings().levels, hidden, "{name}");
+                assert_eq!(older.pane().levels[0].1, egui::Color32::TRANSPARENT);
+                assert_eq!(older.settings().plots, edited.plots);
             }
             if name == "StochRSI" {
                 loaded
@@ -1716,6 +1841,24 @@ mod tests {
                 // Alternating open/close changes give this independent Wilder/SMA result.
                 assert!((loaded.plot_value(0, 10).unwrap() - 66.0).abs() < 1e-9);
             }
+            if matches!(name, "Force Index" | "VPT") {
+                loaded
+                    .set_input(
+                        "source",
+                        InputValue::Source(StudySource::Price(PriceSource::Open)),
+                    )
+                    .unwrap();
+                loaded
+                    .set_input("plot_offset", InputValue::Integer(2))
+                    .unwrap();
+                loaded.calculate(&bars);
+                let want = if name == "Force Index" {
+                    487.0 / 24.0
+                } else {
+                    66778696.0 / 18027009.0
+                };
+                assert!((loaded.plot_value(0, 10).unwrap() - want).abs() < 1e-9);
+            }
             let mut hidden = loaded.settings();
             hidden.fill_between_levels = false;
             loaded.apply_settings(&[], hidden).unwrap();
@@ -1727,7 +1870,7 @@ mod tests {
     /// CRSI declares its guides so the shared editor can stage, cancel, save and undo them.
     #[test]
     fn crsi_bands_and_calculation_survive_edits_and_restore() {
-        use crate::studies::{ConnorsRSI, IndicatorFactory, StudyTemplate, palette};
+        use crate::studies::{IndicatorFactory, StudyTemplate, palette};
         use egui_kittest::{Harness, kittest::Queryable};
 
         let mut study =
@@ -1737,7 +1880,6 @@ mod tests {
             study.pane().levels,
             [
                 (70.0, palette::MUTED, "Upper guide"),
-                (50.0, palette::MUTED.gamma_multiply_u8(128), "Middle guide"),
                 (30.0, palette::MUTED, "Lower guide"),
             ]
         );
@@ -1761,7 +1903,6 @@ mod tests {
         let mut edited = defaults.clone();
         for (level, (value, color, pattern, width, visible)) in edited.levels.iter_mut().zip([
             (80.0, egui::Color32::RED, LineStyle::Solid, 3.0, false),
-            (45.0, egui::Color32::GRAY, LineStyle::Dashed, 1.5, true),
             (20.0, egui::Color32::GREEN, LineStyle::Dotted, 2.0, true),
         ]) {
             level.value = Some(value);
@@ -1799,7 +1940,6 @@ mod tests {
             for caption in [
                 "Upper guide",
                 "Lower guide",
-                "Middle guide",
                 "Fill between levels",
                 "Latest value line",
                 "Fill colour",
@@ -1809,6 +1949,7 @@ mod tests {
                     "{caption}"
                 );
             }
+            assert!(harness.query_all_by_label("Middle guide").next().is_none());
             assert!(
                 egui::Rect::from_min_size(egui::Pos2::ZERO, size)
                     .contains_rect(harness.get_by_label(action).rect())
@@ -1906,7 +2047,8 @@ mod tests {
         assert_eq!(study.settings(), defaults);
         study.restore_settings(&after).unwrap();
         assert_eq!(study.settings(), edited);
-        // A saved study without level fields inherits the declared guides on restore.
+        // A saved study without level fields restores without the guides and band it did not
+        // draw; shown, they are the declared ones.
         let mut older = serde_json::to_value(StudyTemplate::from_study(&study)).unwrap();
         for key in ["levels", "fill_between_levels", "level_fill_color"] {
             older["settings"].as_object_mut().unwrap().remove(key);
@@ -1915,8 +2057,22 @@ mod tests {
             .unwrap()
             .create()
             .unwrap();
-        assert_eq!(older.pane().levels, ConnorsRSI::default().pane().levels);
-        assert!(older.pane().fill_between_levels);
+        let pane = older.pane();
+        assert!(
+            pane.levels
+                .iter()
+                .all(|level| level.1 == egui::Color32::TRANSPARENT)
+        );
+        assert!(!pane.fill_between_levels);
+        let mut shown = older.settings();
+        for level in &mut shown.levels {
+            level.visible = true;
+        }
+        shown.fill_between_levels = true;
+        assert_eq!(
+            (shown.levels, shown.level_fill_color),
+            (defaults.levels, defaults.level_fill_color)
+        );
     }
 
     #[test]

@@ -20,6 +20,8 @@ use egui::{Color32, FontId, ImageSource, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 use std::sync::Arc;
 
 /// A host-supplied status mark. Its text and colours carry no built-in market meaning.
+#[derive(Debug)]
+#[non_exhaustive]
 pub struct LegendStatus<'a> {
     /// Short text shown beside the instrument title.
     pub text: &'a str,
@@ -29,8 +31,28 @@ pub struct LegendStatus<'a> {
     pub background: Color32,
 }
 
+impl<'a> LegendStatus<'a> {
+    /// A mark showing `text` in `color` on `background`.
+    ///
+    /// ```
+    /// use egui::Color32;
+    /// use egui_charts::widget::LegendStatus;
+    ///
+    /// let status = LegendStatus::new("Halted", Color32::WHITE, Color32::DARK_RED);
+    /// assert_eq!(status.text, "Halted");
+    /// ```
+    pub fn new(text: &'a str, color: Color32, background: Color32) -> Self {
+        Self {
+            text,
+            color,
+            background,
+        }
+    }
+}
+
 /// The quote control clicked by the user. The host decides how to handle the intent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum QuoteSide {
     /// Sell at the displayed bid.
     Sell,
@@ -149,6 +171,16 @@ pub struct Legend<'a> {
     /// The colour of the chart background at a point under the legend, which the backdrops take.
     /// The chart sets it; a legend shown on its own has the theme's chart background.
     pub(crate) background: Option<&'a dyn Fn(Pos2) -> Color32>,
+}
+
+impl std::fmt::Debug for Legend<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Legend")
+            .field("symbol", &self.symbol)
+            .field("timeframe", &self.timeframe)
+            .field("bar", &self.bar)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a> Legend<'a> {
@@ -377,7 +409,7 @@ impl<'a> Legend<'a> {
         if self.show_ohlc {
             if plot.width() < 600.0 {
                 layout.field(
-                    "C ",
+                    &format!("{} ", l10n::text(ui.ctx(), "C")),
                     self.formatters.price.map_or_else(
                         || {
                             crate::scales::group_thousands(
@@ -694,11 +726,14 @@ impl<'a> Legend<'a> {
                 let (row_start, row_end) = (layout.pos, layout.row_end);
                 if self.show_indicator_titles {
                     layout.text(
-                        if study.is_volume() {
-                            l10n::text(ui.ctx(), "Vol")
-                        } else {
-                            study.name().to_owned()
-                        },
+                        l10n::text(
+                            ui.ctx(),
+                            if study.is_volume() {
+                                "Vol"
+                            } else {
+                                study.name()
+                            },
+                        ),
                         theme.text.ohlc,
                         colors.text,
                         bounds.width(),
@@ -1144,13 +1179,13 @@ impl<'a> Layout<'a> {
     ) {
         let color = self.bar_color(bar);
         for (label, value) in [
-            ("O ", bar.open),
-            ("H ", bar.high),
-            ("L ", bar.low),
-            ("C ", bar.close),
+            ("O", bar.open),
+            ("H", bar.high),
+            ("L", bar.low),
+            ("C", bar.close),
         ] {
             self.field(
-                label,
+                &format!("{} ", l10n::text(self.painter.ctx(), label)),
                 formatter.map_or_else(
                     || {
                         crate::scales::group_thousands(
