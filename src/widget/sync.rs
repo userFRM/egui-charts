@@ -238,7 +238,11 @@ impl Chart {
     /// the minimum spacing. Unlike [`Self::apply_synced_time_range`], which fits a range from
     /// another chart, it has no 50-pixel cap.
     pub fn set_visible_time_range(&mut self, range: VisibleTimeRange) -> bool {
-        self.fit_time_range(range, f64::INFINITY)
+        let fitted = self.fit_time_range(range, f64::INFINITY);
+        if fitted {
+            self.cancel_view_motion();
+        }
+        fitted
     }
 
     /// Fits the receiver's bars to a UTC range from another chart, using its own plot width.
@@ -298,7 +302,7 @@ impl Chart {
         }
         scale.fit_logical_range(from, to, default_max);
         self.tracking_mode_active = false;
-        self.cancel_view_motion();
+        self.kinetic_scroll = super::state::KineticScrollState::new();
         true
     }
 
