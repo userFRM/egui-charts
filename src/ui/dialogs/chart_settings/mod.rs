@@ -1103,12 +1103,12 @@ mod tests {
         }
     }
 
-    /// A palette swatch recolours a Canvas colour at the opacity its well shows, which no other
-    /// control of the tab sets; an invisible colour takes the swatch's opacity. Expected: the
-    /// swatch rgb(49, 27, 146) at the seeded alpha of 128, and opaque where the well showed an
-    /// invisible colour or the theme's opaque crosshair.
+    /// A palette swatch recolours a colour of the Canvas, Symbol, Scales and lines or Alerts tab at
+    /// the opacity its well shows, which no other control of the tab sets; an invisible colour
+    /// takes the swatch's opacity. Expected: the swatch rgb(49, 27, 146) at the seeded alpha of
+    /// 128, and opaque where the well showed an invisible colour or the theme's opaque crosshair.
     #[test]
-    fn palette_colour_keeps_the_watermark_opacity() {
+    fn palette_colour_keeps_the_opacity_the_well_shows_on_every_tab() {
         use crate::widget::settings::{BackgroundType, GridLinesMode};
         use egui::accesskit::Role;
         use egui_kittest::{Harness, kittest::Queryable};
@@ -1116,7 +1116,7 @@ mod tests {
         type Row = fn(&mut ChartSettingsState) -> &mut Color32;
         let translucent = Color32::from_rgba_unmultiplied(255, 0, 255, 128);
         let theme = Theme::light();
-        let rows: [(&str, Row, Color32, u8); 11] = [
+        let rows: [(&str, Row, Color32, u8); 18] = [
             ("watermark", |s| &mut s.watermark.color, translucent, 128),
             (
                 "background",
@@ -1174,6 +1174,51 @@ mod tests {
                 Color32::PLACEHOLDER,
                 255,
             ),
+            (
+                "rising body",
+                |s| &mut s.candle_colors.body_up,
+                translucent,
+                128,
+            ),
+            (
+                "falling border",
+                |s| &mut s.candle_colors.border_down,
+                translucent,
+                128,
+            ),
+            (
+                "rising wick",
+                |s| &mut s.candle_colors.wick_up,
+                translucent,
+                128,
+            ),
+            (
+                "symbol price",
+                |s| {
+                    s.scales_and_lines
+                        .symbol_price_color
+                        .get_or_insert(Color32::TRANSPARENT)
+                },
+                translucent,
+                128,
+            ),
+            (
+                "study values",
+                |s| {
+                    s.scales_and_lines
+                        .study_value_color
+                        .get_or_insert(Color32::TRANSPARENT)
+                },
+                translucent,
+                128,
+            ),
+            (
+                "extended-session price",
+                |s| &mut s.scales_and_lines.extended_session_price_color,
+                translucent,
+                128,
+            ),
+            ("alert", |s| &mut s.alerts.alert_color, translucent, 128),
         ];
         for (name, row, seeded, alpha) in rows {
             let shown = if seeded == Color32::PLACEHOLDER {
@@ -1186,11 +1231,19 @@ mod tests {
             if name.starts_with("gradient") {
                 settings.chart_basic_styles.background_type = BackgroundType::VerticalGradient;
             }
+            settings.candle_colors.show_border = true;
             *row(&mut settings) = seeded;
             let mut dialog = SettingsDialog::new();
             dialog.set_control_visible(Control::Templates, false);
             dialog.open(settings);
-            dialog.active_tab = SettingsTab::Canvas;
+            dialog.active_tab = match name {
+                "rising body" | "falling border" | "rising wick" => SettingsTab::Symbol,
+                "symbol price" | "study values" | "extended-session price" => {
+                    SettingsTab::ScalesAndLines
+                }
+                "alert" => SettingsTab::Alerts,
+                _ => SettingsTab::Canvas,
+            };
             let (shown_theme, setup_theme) = (theme.clone(), theme.clone());
             let mut harness = Harness::builder()
                 .with_context_setup(move |ctx| {
@@ -1210,6 +1263,11 @@ mod tests {
             harness.run();
             let [r, g, b, _] = shown.to_srgba_unmultiplied();
             let well = format!("#{r:02X}{g:02X}{b:02X}");
+            // Some wells of the Scales and lines tab sit below the fold of a 900 px window.
+            harness
+                .get_by_role_and_label(Role::ColorWell, &well)
+                .scroll_to_me();
+            harness.run();
             harness
                 .get_by_role_and_label(Role::ColorWell, &well)
                 .click();
