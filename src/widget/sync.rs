@@ -211,6 +211,7 @@ impl Chart {
     /// The visible UTC range, including whitespace mapped by [`Self::index_to_time`].
     /// Empty charts return `None`.
     /// Between bars, time is interpolated, so session gaps retain fractional edge positions.
+    /// [`Self::set_visible_time_range`] shows a range.
     pub fn visible_time_range(&self) -> Option<VisibleTimeRange> {
         let scale = self.state.time_scale();
         // Keep fractional indices in f64: a rounded edge can move minutes across a session gap.
@@ -224,13 +225,30 @@ impl Chart {
         })
     }
 
-    /// Fits the receiver's bars to a UTC range using its own plot width.
+    /// Shows `range` across the plot width of the last frame, `from` at the leftmost plot pixel
+    /// and `to` at the rightmost, as [`Self::visible_time_range`] reports them. Like
+    /// [`Self::set_visible_logical_range`], it ends tracking mode and pending scrolls.
+    ///
+    /// Returns `false` without changing the view for empty data, reversed or zero ranges, a
+    /// range that ends before the first bar's slot or starts after the last bar's period, or
+    /// endpoints mapping to the same element. The spacing and edge limits of the time scale
+    /// options still apply: a span above the maximum spacing is centred, and the fit keeps a
+    /// bar in view, so a view that would start after the last bar's open moves left to show
+    /// that bar, or the newest bars across the plot when the range is longer than the plot at
+    /// the minimum spacing. Unlike [`Self::apply_synced_time_range`], which fits a range from
+    /// another chart, it has no 50-pixel cap.
+    pub fn set_visible_time_range(&mut self, range: VisibleTimeRange) -> bool {
+        self.fit_time_range(range, f64::INFINITY)
+    }
+
+    /// Fits the receiver's bars to a UTC range from another chart, using its own plot width.
     /// Returns `false` without changing the view for empty data, reversed or zero ranges,
     /// a range that ends before the first bar's slot or starts after the last bar's period,
     /// or endpoints mapping to the same element.
     /// Spacing stops at the configured maximum, or 50 pixels when unlimited, centring short
     /// spans. The minimum spacing and local edge constraints still apply, and the fit keeps a
     /// bar in view: a range longer than the plot at the minimum spacing shows the newest bars.
+    /// Use [`Self::set_visible_time_range`] to show dates on this chart without the cap.
     pub fn apply_synced_time_range(&mut self, range: VisibleTimeRange) -> bool {
         self.apply_synced_time_range_from(range, None)
     }
@@ -280,7 +298,7 @@ impl Chart {
         }
         scale.fit_logical_range(from, to, default_max);
         self.tracking_mode_active = false;
-        self.kinetic_scroll = super::state::KineticScrollState::new();
+        self.cancel_view_motion();
         true
     }
 
@@ -659,5 +677,58 @@ mod tests {
         let t = time(1_700_000_000) + Duration::nanoseconds(150);
         assert_eq!(time_at(fine.state.shown(), 1.5), Some(t));
         assert_eq!(index_at(fine.state.shown(), t), Some(1.5));
+    }
+
+    /// The dates of ten daily bars need more than the 50 px per bar that a synchronised receiver
+    /// stops at, yet show exactly on a chart with default options; setting the dates of a view
+    /// zoomed further keeps its spacing and edges, and a scroll requested before the dates does
+    /// not move them on the next frame.
+    #[test]
+    fn set_visible_time_range_shows_the_requested_dates() {
+        use crate::model::LogicalRange;
+        use crate::widget::test_frames::frame;
+        let day = |day: f64| time((day * 86_400.0) as i64);
+        let mut chart = Chart::new(BarData::from_bars(
+            (0..200)
+                .map(|i| Bar::new(day(f64::from(i)), 10.0, 11.0, 9.0, 10.0, 1.0))
+                .collect(),
+        ));
+        let ctx = egui::Context::default();
+        for t in [0.0, 0.1] {
+            frame(&ctx, &mut chart, t, Vec::new());
+        }
+        let plot = f64::from(chart.state.time_scale().width()) - 1.0;
+        assert!(plot / 10.0 > 50.0, "{plot}");
+        let assert_view = |chart: &Chart, range: VisibleTimeRange, spacing: f64| {
+            let shown = chart.visible_time_range().unwrap();
+            for (actual, expected) in [(shown.from, range.from), (shown.to, range.to)] {
+                assert!(
+                    (actual - expected).num_milliseconds().abs() < 1,
+                    "{shown:?} != {range:?}"
+                );
+            }
+            let actual = f64::from(chart.get_time_scale_state().0);
+            assert!((actual - spacing).abs() < 1e-3, "{actual} != {spacing}");
+        };
+        // From the open of bar 100 to the close of bar 109.
+        let requested = VisibleTimeRange::new(day(100.0), day(110.0));
+        chart.scroll_to_time(day(20.0));
+        assert!(chart.set_visible_time_range(requested));
+        frame(&ctx, &mut chart, 0.2, Vec::new());
+        assert_view(&chart, requested, plot / 10.0);
+        // Five slots from index 99.5 to 104.5: noon of day 99 to noon of day 104, within the
+        // rounding of the spacing to f32.
+        assert!(chart.set_visible_logical_range(LogicalRange::new(100.0, 104.0)));
+        let zoomed = chart.visible_time_range().unwrap();
+        for (actual, expected) in [(zoomed.from, day(99.5)), (zoomed.to, day(104.5))] {
+            assert!(
+                (actual - expected).num_milliseconds().abs() < 100,
+                "{zoomed:?}"
+            );
+        }
+        let (spacing, offset) = chart.get_time_scale_state();
+        assert!(chart.set_visible_time_range(zoomed));
+        assert_view(&chart, zoomed, f64::from(spacing));
+        assert!((chart.get_time_scale_state().1 - offset).abs() < 1e-4);
     }
 }
