@@ -366,11 +366,12 @@ impl ChartLayout {
     /// the [issues](Self::copy_issues) of the charts it reached or skipped. The source keeps its
     /// study ids, and charts the preset hides keep what they have.
     ///
-    /// The whole copy is one edit. [`Chart::undo`] on any chart it reached reverses it on all of
-    /// them at the next [`Self::show`], and [`Chart::redo`] brings it back; a chart edited since
-    /// the copy undoes those later edits with it, which its own redo restores. A chart that was
-    /// edited after the undo has no copy to redo and keeps that edit. A symbol or interval such
-    /// an undo or redo restores on a chart reaches the charts linked to it.
+    /// The whole copy is one edit of the charts it changed and of the source, and a copy that
+    /// changes no chart leaves no step to undo. [`Chart::undo`] on any of these charts reverses
+    /// it on all of them at the next [`Self::show`], and [`Chart::redo`] brings it back; a chart
+    /// edited since the copy undoes those later edits with it, which its own redo restores. A
+    /// chart that was edited after the undo has no copy to redo and keeps that edit. A symbol or
+    /// interval such an undo or redo restores on a chart reaches the charts linked to it.
     pub fn apply_copy(
         &mut self,
         charts: &mut [&mut Chart],
@@ -390,7 +391,8 @@ impl ChartLayout {
         let from_decimals = from.instrument().and_then(instrument_price_precision);
         let from_feed = from.feed_link.is_some();
         let edit = self.edits.start();
-        let mut reached = false;
+        // Only the charts the copy changes take part in the edit, so that it leaves no empty step.
+        let mut changed = false;
         let count = self.preset_charts(charts);
         for (slot, chart) in charts.iter_mut().enumerate().take(count) {
             if slot == source
@@ -400,9 +402,13 @@ impl ChartLayout {
             {
                 continue;
             }
-            reached = true;
+            // A chart inside a user action of the host's cannot tell yet whether this changes it.
+            let nested = chart.history.recording();
+            let edits = chart.edit_count();
             chart.user_action(|chart| {
-                chart.history.join_layout_edit(edit.clone());
+                if nested {
+                    chart.history.join_layout_edit(edit.clone());
+                }
                 // The issues above already refused what would fail here.
                 match (copy, &studies) {
                     (LayoutCopy::Settings(settings), _) => {
@@ -425,6 +431,12 @@ impl ChartLayout {
                     _ => {}
                 }
             });
+            if nested {
+                changed = true;
+            } else if chart.edit_count() != edits {
+                chart.history.join_last_to_layout_edit(edit.clone());
+                changed = true;
+            }
         }
         let source_refused = issues.iter().any(|i| i.slot == source);
         if let LayoutCopy::Settings(settings) = copy
@@ -432,10 +444,12 @@ impl ChartLayout {
         {
             let chart = &mut charts[source];
             chart.user_action(|chart| {
-                chart.history.join_layout_edit(edit.clone());
+                if changed {
+                    chart.history.join_layout_edit(edit.clone());
+                }
                 settings.apply_to_chart(chart).ok();
             });
-        } else if reached {
+        } else if changed {
             // An undo from the chart the user copied from reverses the copy too.
             charts[source].user_action(|chart| chart.history.join_layout_edit(edit));
         }
@@ -923,6 +937,23 @@ mod tests {
         show(&mut layout, &mut charts);
         assert_eq!(charts[1].config().background_color, before);
         assert_eq!(charts[0].config().background_color, before);
+    }
+
+    /// Settings every chart already has change none of them and leave no step to undo.
+    #[test]
+    fn unchanged_settings_copy_leaves_no_step() {
+        let (mut a, mut b) = (chart(50), chart(50));
+        let mut layout = pair();
+        let mut charts = [&mut a, &mut b];
+        show(&mut layout, &mut charts);
+        let edits = charts.each_ref().map(|chart| chart.edit_count());
+        let copy = LayoutCopy::Settings(Box::new(ChartSettingsState::from_chart(charts[0])));
+        assert_eq!(
+            layout.apply_copy(&mut charts, 0, &copy, &IndicatorFactory::new()),
+            []
+        );
+        assert_eq!(charts.each_ref().map(|chart| chart.edit_count()), edits);
+        assert!(!charts[0].can_undo() && !charts[1].can_undo());
     }
 
     fn pair() -> ChartLayout {
