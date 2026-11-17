@@ -579,13 +579,16 @@ mod tests {
         let mut saved = serde_json::to_value(&channel).unwrap();
         saved.as_object_mut().unwrap().remove("middle_line");
         let saved: Drawing = serde_json::from_value(saved).unwrap();
-        let mut set = MiddleLineStyle::default();
-        set.color = Some([10, 20, 30, 128]);
-        set.width = 2.5;
-        set.line_style = LineStyle::Solid;
-        let mut large = MiddleLineStyle::default();
-        large.width = 2.0;
-        large.line_style = LineStyle::LargeDashed;
+        let set = MiddleLineStyle {
+            color: Some([10, 20, 30, 128]),
+            width: 2.5,
+            line_style: LineStyle::Solid,
+        };
+        let large = MiddleLineStyle {
+            color: None,
+            width: 2.0,
+            line_style: LineStyle::LargeDashed,
+        };
         let dashes = |period: f32, dash: f32, count: usize| -> Vec<[f32; 2]> {
             (0..count)
                 .map(|i| {
