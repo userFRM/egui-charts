@@ -446,7 +446,7 @@ Order flow,Order flow,Delta POC per bar,unverified,library,src/studies/builtin/f
 Order flow,Order flow,Delta split into trade-size ranges,incomplete,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/data/order_flow.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/chart/rendering/legend/mod.rs;src/widget/pane/indicator/paint.rs,
 Order flow,Order flow,Depth ladder liquidity and execution columns sized to content,unverified,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs,3191
 Order flow,Order flow,"Depth ladder order entry, editing and brackets",incomplete,host,src/ui/trading/dom.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs;src/ui/trading/mod.rs,236;3156
-Order flow,Order flow,Depth ladder session and resettable profiles,incomplete,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs,3192
+Order flow,Order flow,Depth ladder session and resettable profiles,unverified,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs,3192
 Order flow,Order flow,Depth ladder with configurable visible levels and negative-price scrolling,incomplete,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/data/depth.rs,236;1756;2533;3155;3156
 Order flow,Order flow,Developing POC line through the session,verified,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/data/footprint.rs;src/widget/trade_profile.rs;src/widget/frame/mod.rs,
 Order flow,Order flow,Diagonal imbalance detection and highlighting,incomplete,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame/mod.rs,
