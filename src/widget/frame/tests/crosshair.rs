@@ -2535,6 +2535,8 @@ fn study_titles_reach_the_translator_apart_from_plot_names() {
     let mut chart = chart(&[100.0], &[110.0, 120.0]);
     chart.config.price_axis.show_study_names = true;
     chart.add_indicator(Box::new(crate::studies::WilliamsAlligator::default()));
+    // A study in its own pane paints its title in that pane's legend.
+    chart.add_indicator(Box::new(crate::studies::OnBalanceVolume::default()));
     frame(&ctx, &mut chart, 0.0, vec![]);
     let map = chart.get_chart_mapping();
     let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
@@ -2569,7 +2571,7 @@ fn study_titles_reach_the_translator_apart_from_plot_names() {
     );
     texts.extend(window);
     // Legend titles and axis tags included: no study or plot name is painted in English.
-    for english in ["Alligator", "Jaw", "Teeth", "Lips", "olume"] {
+    for english in ["Alligator", "Jaw", "Teeth", "Lips", "olume", "OBV"] {
         assert!(
             !texts.iter().any(|text| text.contains(english)),
             "{english}: {texts:?}"
