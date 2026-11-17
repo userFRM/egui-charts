@@ -739,7 +739,7 @@ impl Chart {
         chart.apply_visible_bars_once = self.apply_visible_bars_once;
         chart.start_idx = self.start_idx;
         for (_, study) in self.indicators() {
-            chart.add_indicator(study.clone_box());
+            chart.add_indicator(study.clone_for_export());
         }
         chart.study_ids = self.study_ids.clone();
         chart.study_inputs = self.study_inputs.clone();
