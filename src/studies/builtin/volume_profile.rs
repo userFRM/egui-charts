@@ -24,9 +24,8 @@
 use super::AutoAnchor;
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
 use crate::data::{
-    FootprintBar, FootprintLevel, OrderFlowFootprints, OrderFlowInput, ProfileDisplay,
-    ProfileLevel, ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile,
-    VolumeProfileConfig, grid_row,
+    FootprintBar, OrderFlowFootprints, OrderFlowInput, ProfileDisplay, ProfileLevel,
+    ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile, VolumeProfileConfig, grid_row,
 };
 use crate::model::{
     Bar, BarClock, CustomProfileSession, Instrument, ProfileResolution, ProfileSession, Session,
@@ -776,8 +775,8 @@ impl ProfileStudy {
     }
 
     /// The profile of chart bars `range` from the executions in `flow`, in rows of whole ticks
-    /// (`ticks_per_row`). `None` without them ([`Self::executions_of`]), with a volume that is
-    /// not finite, or past 10,000 rows.
+    /// (`VolumeProfile::of_executions`). `None` without them ([`Self::executions_of`]), with a
+    /// volume that is not finite, or past 10,000 rows.
     fn executed_profile(
         &self,
         range: &Range<usize>,
@@ -786,12 +785,7 @@ impl ProfileStudy {
     ) -> Option<VolumeProfile> {
         let tick = flow.tick_size?;
         let (bar, complete) = self.executions_of(range, flow)?;
-        let (&first, &last) = (bar.levels.keys().next()?, bar.levels.keys().next_back()?);
-        if !bar.volume().is_finite() {
-            return None;
-        }
-        let ticks = ticks_per_row(config, tick, first, last)?;
-        VolumeProfile::from_executions(&grouped(&bar, ticks), ticks as f64 * tick, tick, complete)
+        VolumeProfile::of_executions(&bar, config, tick, tick, complete)
     }
 
     /// The choice of the Sessions input and the calendar it divides intraday bars by: `None` for
@@ -1379,52 +1373,6 @@ fn restarted(
         });
     }
     groups
-}
-
-/// Ticks per row of an executed profile over the traded levels `first..=last`: the row height in
-/// whole ticks, at least one. With equal rows, the levels over the row count, rounded up, when
-/// rows of that many ticks, counted from its multiples as a footprint groups them, stay within
-/// the row count; else the levels over one row fewer, which always do. Asked for one row, levels
-/// that straddle a multiple keep two.
-fn ticks_per_row(config: &VolumeProfileConfig, tick: f64, first: i64, last: i64) -> Option<i64> {
-    if let Some(height) = config.row_size() {
-        let ticks = (height / tick).round();
-        return (ticks < i64::MAX as f64).then(|| (ticks as i64).max(1));
-    }
-    let (first, last, rows) = (i128::from(first), i128::from(last), config.rows() as i128);
-    let count = |ticks: i128| last.div_euclid(ticks) - first.div_euclid(ticks) + 1;
-    let span = last - first + 1;
-    let even = (span + rows - 1) / rows;
-    let ticks = if rows == 1 || count(even) <= rows {
-        even
-    } else {
-        (span + rows - 2) / (rows - 1)
-    };
-    i64::try_from(ticks).ok()
-}
-
-/// `bar` with its levels summed into rows of `ticks` levels, level `n` into row
-/// `n.div_euclid(ticks)`, as a footprint with that many ticks per row groups them. Totals and the
-/// delta path are unchanged.
-fn grouped(bar: &FootprintBar, ticks: i64) -> FootprintBar {
-    let mut levels = BTreeMap::new();
-    for (&level, row) in &bar.levels {
-        let key = level.div_euclid(ticks);
-        let target = levels.entry(key).or_insert_with(|| FootprintLevel {
-            level: key,
-            ..Default::default()
-        });
-        target.absorb(row);
-    }
-    FootprintBar {
-        time: bar.time,
-        levels,
-        bid: bar.bid,
-        ask: bar.ask,
-        unknown: bar.unknown,
-        min_delta: bar.min_delta,
-        max_delta: bar.max_delta,
-    }
 }
 
 macro_rules! profile_study {
