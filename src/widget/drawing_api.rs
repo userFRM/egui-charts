@@ -182,13 +182,14 @@ impl Chart {
         if !config.is_valid() {
             return Err(DrawingError::Invalid("Invalid Fibonacci settings"));
         }
+        // A fan given changed settings saved before it had time levels takes the current look.
+        if drawing.tool_type == crate::drawings::DrawingToolType::FibonacciSpeedFan
+            && config.time_levels.is_none()
+            && drawing.fib_config.as_ref() != Some(&config)
+        {
+            config.time_levels = Some(config.levels.clone());
+        }
         if drawing.fib_config.as_ref() != Some(&config) {
-            // A fan given settings saved before it had time levels takes the current look.
-            if drawing.tool_type == crate::drawings::DrawingToolType::FibonacciSpeedFan
-                && config.time_levels.is_none()
-            {
-                config.time_levels = Some(config.levels.clone());
-            }
             self.user_action(|chart| {
                 chart
                     .drawings_mut()
@@ -1013,10 +1014,13 @@ mod tests {
                 // Settings saved before fans had time levels take the price levels as theirs.
                 let mut shared = edited.clone();
                 shared.time_levels = None;
-                chart.set_fibonacci_config(7, shared).unwrap();
+                chart.set_fibonacci_config(7, shared.clone()).unwrap();
                 let config = chart.drawings().drawings[0].fib_config.as_ref().unwrap();
                 assert_eq!(config.time_levels.as_ref(), Some(&edited.levels));
+                // Setting them again changes nothing, so one undo restores the fan.
+                chart.set_fibonacci_config(7, shared).unwrap();
                 assert!(chart.undo());
+                assert!(!chart.can_undo());
             }
             chart.drawings_mut().drawings[0].tool_type = DrawingToolType::TrendLine;
             assert!(chart.set_fibonacci_config(7, edited).is_err());
