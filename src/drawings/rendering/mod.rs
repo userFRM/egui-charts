@@ -2013,4 +2013,15 @@ mod tests {
         }
         assert_eq!(inert, []);
     }
+
+    /// A sticker's art keeps its solid outlines whatever line style the drawing stored.
+    #[test]
+    fn sticker_ignores_a_stored_line_style() {
+        let mut sticker = Drawing::new(7, DrawingToolType::Sticker);
+        sticker.text = Some("sticker:bull".into());
+        sticker.points = vec![Pos2::new(100.0, 100.0)];
+        let solid = format!("{:?}", paint(&sticker));
+        sticker.line_style = crate::model::LineStyle::Dashed;
+        assert_eq!(format!("{:?}", paint(&sticker)), solid);
+    }
 }

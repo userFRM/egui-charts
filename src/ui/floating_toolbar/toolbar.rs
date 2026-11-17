@@ -762,8 +762,8 @@ mod tests {
     }
 
     /// The colour of a text annotation is its text's; a label on a line does not make the line's
-    /// colour a text colour, although the colour paints both. A sticker and a ghost feed keep their own colours. Width
-    /// and style are offered apart, each where the tool draws it.
+    /// colour a text colour, although the colour paints both. A sticker and a ghost feed keep
+    /// their own colours. Width and style are offered apart, each where the tool draws it.
     #[test]
     fn colour_slot_names_what_the_colour_paints() {
         use crate::drawings::{Drawing, DrawingToolType as Tool};
