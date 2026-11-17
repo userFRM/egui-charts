@@ -43,6 +43,14 @@ fn explicit_partial_slots_preserve_rows_but_exclude_only_marked_executions() {
                     .unwrap(),
             );
             frames.run(&mut chart);
+            // Confirm the raw-history join before admission: an open-ended missing span
+            // would otherwise hide a copying reader that leaks marked prepared slots.
+            #[cfg(feature = "studies")]
+            feed.trades
+                .lock()
+                .unwrap()
+                .remove(0)
+                .send(Ok(TradePage::new(recorded(0..3), true)));
             let page = partial_page(shared, 0..3, slots);
             assert!(!page.is_available());
             assert_eq!(
@@ -98,7 +106,8 @@ fn explicit_partial_slots_preserve_rows_but_exclude_only_marked_executions() {
             );
             #[cfg(feature = "studies")]
             {
-                let read = missing_history_input(&chart).footprint_snapshot(at(0));
+                let input = missing_history_input(&chart);
+                let read = input.footprint_snapshot(at(0));
                 assert_eq!(
                     read.bars(..)
                         .map(|bar| (bar.time, bar.unknown))
@@ -106,6 +115,22 @@ fn explicit_partial_slots_preserve_rows_but_exclude_only_marked_executions() {
                     expected
                 );
                 assert!(!read.span_is_complete(at(0), at(2)));
+                let copied = input.footprints_from(at(0));
+                let suffix: Vec<_> = expected
+                    .iter()
+                    .copied()
+                    .filter(|(time, _)| *time > at(*slots.last().unwrap()))
+                    .collect();
+                assert_eq!(
+                    copied
+                        .bars
+                        .values()
+                        .map(|bar| (bar.time, bar.unknown))
+                        .collect::<Vec<_>>(),
+                    suffix,
+                    "the copying reader exposes only the complete suffix"
+                );
+                assert_eq!(copied.complete_from, suffix.first().map(|(time, _)| *time));
             }
         }
     }
@@ -450,117 +475,298 @@ fn painter_displays_only_explicit_partial_rows_not_ordinary_loss_fragments() {
     use crate::chart::overlays::{FootprintConfig, FootprintMode, render_footprint_read};
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
     use crate::widget::ChartMapping;
-    let (feed, mut chart, mut frames) = prepared_chart();
-    deliver(
-        &feed,
-        &mut chart,
-        &mut frames,
-        partial_page(true, 0..3, &[1]),
-    );
-    chart
-        .feed_link
-        .as_mut()
-        .unwrap()
-        .footprint
-        .as_mut()
-        .unwrap()
-        .live
-        .add_missing(at(0), at(1));
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 240.0));
-    let mapping = ChartMapping::new(
-        rect,
-        120.0,
-        0,
-        2,
-        0.0,
-        PriceMap::new(
-            PriceTransform::default(),
-            PriceRange::new(98.0, 104.0),
+    for partial in [false, true] {
+        let (feed, mut chart, mut frames) = prepared_chart();
+        let page = prepared_page(&recorded(0..3), at(3), true);
+        let page = if partial {
+            FootprintPage::partial(page.bars, at(3), true, vec![at(1)])
+        } else {
+            page
+        };
+        deliver(&feed, &mut chart, &mut frames, page);
+        chart
+            .feed_link
+            .as_mut()
+            .unwrap()
+            .footprint
+            .as_mut()
+            .unwrap()
+            .live
+            .received_from(at(0) + TimeDelta::seconds(30));
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 240.0));
+        let mapping = ChartMapping::new(
+            rect,
+            120.0,
+            0,
+            2,
             0.0,
-            240.0,
-            false,
-        ),
-    );
-    let config = FootprintConfig {
-        modes: vec![FootprintMode::Volume],
-        auto_row_height: None,
-        value_area: None,
-        show_poc: false,
-        ..Default::default()
-    };
-    let ohlc: Vec<_> = (0..3)
-        .map(|minute| Bar::new(at(minute), 100.0, 100.0, 100.0, 100.0, 0.0))
-        .collect();
-    let mut output = frames.ctx.run_ui(
-        egui::RawInput {
-            screen_rect: Some(rect),
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(98.0, 104.0),
+                0.0,
+                240.0,
+                false,
+            ),
+        );
+        let config = FootprintConfig {
+            modes: vec![FootprintMode::Volume],
+            auto_row_height: None,
+            value_area: None,
+            show_poc: false,
             ..Default::default()
-        },
-        |ui| {
-            render_footprint_read(
-                ui.painter(),
-                &mapping,
-                &ohlc,
-                prepared_view(&chart),
-                &config,
+        };
+        for seconds in [0, 30] {
+            let ohlc: Vec<_> = (0..3)
+                .map(|minute| {
+                    Bar::new(
+                        at(minute) + TimeDelta::seconds(seconds),
+                        100.0,
+                        100.0,
+                        100.0,
+                        100.0,
+                        0.0,
+                    )
+                })
+                .collect();
+            let mut output = frames.ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ui| {
+                    render_footprint_read(
+                        ui.painter(),
+                        &mapping,
+                        &ohlc,
+                        prepared_view(&chart),
+                        &config,
+                    );
+                },
             );
-        },
-    );
-    output.textures_delta.clear();
-    let texts: Vec<_> = output
-        .shapes
-        .iter()
-        .filter_map(|shape| match &shape.shape {
-            egui::Shape::Text(text) => Some(text.galley.text()),
-            _ => None,
-        })
-        .collect();
-    assert!(
-        texts.contains(&"5"),
-        "explicit partial cells must remain visible"
-    );
-    assert!(
-        texts.contains(&"7"),
-        "complete neighbors must remain visible"
-    );
-    assert!(
-        !texts.contains(&"3"),
-        "ordinary loss fragments must stay hidden"
-    );
-    assert_eq!(prepared_view(&chart).profile(at(0), at(2)).unknown, 7.0);
+            output.textures_delta.clear();
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text()),
+                    _ => None,
+                })
+                .collect();
+            assert!(texts.contains(&"5"), "admitted rows stay visible");
+            assert!(texts.contains(&"7"), "complete neighbors stay visible");
+            assert!(
+                !texts.contains(&"3"),
+                "ordinary join fragments stay hidden, partial={partial}, stamp=:{seconds}"
+            );
+            assert_eq!(texts.contains(&"Partial data"), partial, "stamp=:{seconds}");
+        }
+        assert_eq!(
+            prepared_view(&chart).profile(at(0), at(2)).unknown,
+            if partial { 7.0 } else { 12.0 }
+        );
+    }
 }
 
 #[test]
-fn chart_paints_an_entirely_partial_page_and_omits_its_statistics() {
-    let (feed, mut chart, mut frames) = prepared_chart();
-    let page = prepared_page(&[Tick::new(at(4), 104.0, 777.0, None)], at(5), true);
-    deliver(
-        &feed,
-        &mut chart,
-        &mut frames,
-        FootprintPage::partial(page.bars, at(5), true, vec![at(4)]),
-    );
-    chart.set_chart_type_params(crate::model::ChartTypeParams {
-        footprint_modes: vec![crate::model::FootprintMode::Volume],
-        footprint_row_ticks: 1,
-        footprint_poc: false,
-        ..Default::default()
-    });
-    chart.apply_synced_time_scale(160.0, 1.0);
-    let mut output = frames.ctx.run_ui(
-        egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(1440.0, 900.0),
-            )),
+fn partial_marker_replaces_poc_value_area_and_imbalance_highlights() {
+    use crate::chart::overlays::{
+        FootprintColor, FootprintConfig, FootprintMode, render_footprint_read,
+    };
+    use crate::model::OrderSide;
+    use crate::scales::{PriceMap, PriceRange, PriceTransform};
+    use crate::widget::ChartMapping;
+    use egui::{Color32, Shape};
+    let mut trades = Vec::new();
+    for minute in 0..2 {
+        // POC 102, value-area edges 100.5/104.5, sell imbalance 100, buy imbalance 104.
+        for (price, sell, buy) in [
+            (104.0, 10.0, 50.0),
+            (103.0, 10.0, 20.0),
+            (102.0, 50.0, 50.0),
+            (101.0, 20.0, 10.0),
+            (100.0, 30.0, 10.0),
+        ] {
+            for (size, side) in [(sell, OrderSide::Sell), (buy, OrderSide::Buy)] {
+                trades.push(Tick::new(at(minute), price, size, Some(side)));
+            }
+        }
+    }
+    for shared in [false, true] {
+        let (feed, mut chart, mut frames) = prepared_chart();
+        let FootprintBars::Owned(rows) = prepared_page(&trades, at(2), true).bars else {
+            unreachable!()
+        };
+        let rows = if shared {
+            FootprintBars::Shared(Arc::new(rows))
+        } else {
+            FootprintBars::Owned(rows)
+        };
+        deliver(
+            &feed,
+            &mut chart,
+            &mut frames,
+            FootprintPage::partial(rows, at(2), true, vec![at(0)]),
+        );
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 320.0));
+        let mapping = ChartMapping::new(
+            rect,
+            240.0,
+            0,
+            0,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(98.0, 106.0),
+                0.0,
+                320.0,
+                false,
+            ),
+        );
+        for color_by in [FootprintColor::VolumeSteps, FootprintColor::Imbalance] {
+            let config = FootprintConfig {
+                modes: vec![FootprintMode::BidAsk],
+                auto_row_height: None,
+                profile: false,
+                show_poc: true,
+                value_area: Some(0.7),
+                show_imbalance: true,
+                color_by,
+                text_color: Color32::from_rgb(1, 2, 3),
+                neutral_color: Color32::from_rgb(61, 73, 89),
+                imbalance_ask_color: Some(Color32::from_rgb(151, 37, 211)),
+                imbalance_bid_color: Some(Color32::from_rgb(19, 209, 229)),
+                ..Default::default()
+            };
+            for seconds in [0, 30] {
+                for minute in 0..2 {
+                    let partial = minute == 0;
+                    let ohlc = [Bar::new(
+                        at(minute) + TimeDelta::seconds(seconds),
+                        101.0,
+                        104.0,
+                        100.0,
+                        103.0,
+                        260.0,
+                    )];
+                    let mut output = frames.ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(rect),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            render_footprint_read(
+                                ui.painter(),
+                                &mapping,
+                                &ohlc,
+                                prepared_view(&chart),
+                                &config,
+                            )
+                        },
+                    );
+                    output.textures_delta.clear();
+                    let mesh_has = |color| {
+                        output.shapes.iter().any(|s| matches!(
+                        &s.shape, Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| v.color == color)
+                    ))
+                    };
+                    assert_eq!(
+                        output.shapes.iter().any(|s| matches!(
+                            &s.shape, Shape::Text(text) if text.galley.text() == "Partial data"
+                        )),
+                        partial
+                    );
+                    let steps = color_by == FootprintColor::VolumeSteps;
+                    let poc = if steps {
+                        mesh_has(config.text_color)
+                    } else {
+                        output.shapes.iter().any(|s| {
+                            matches!(
+                                &s.shape, Shape::Rect(r) if r.stroke.color == config.text_color
+                            )
+                        })
+                    };
+                    assert_eq!(poc, !partial, "POC: {color_by:?}, stamp=:{seconds}");
+                    let area =
+                        if steps {
+                            output.shapes.iter().any(|s| matches!(
+                            &s.shape, Shape::LineSegment { points, stroke }
+                                if stroke.color == config.text_color
+                                    && (points[0].y - mapping.price_to_y(100.5)).abs() <= 1.0
+                        ))
+                        } else {
+                            mesh_has(config.neutral_color.gamma_multiply(0.12))
+                        };
+                    assert_eq!(area, !partial, "value area: {color_by:?}, stamp=:{seconds}");
+                    for color in [
+                        config.imbalance_ask_color.unwrap(),
+                        config.imbalance_bid_color.unwrap(),
+                    ] {
+                        let color = if steps {
+                            color
+                        } else {
+                            color.gamma_multiply(0.5)
+                        };
+                        assert_eq!(
+                            mesh_has(color),
+                            !partial,
+                            "imbalance: {color_by:?}, stamp=:{seconds}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn chart_paints_an_entirely_partial_page_without_fallback_candles() {
+    let mut candle_geometry = Vec::new();
+    for seconds in [0, 30] {
+        let feed = Arc::new(Script::default());
+        feed.prepared_footprints.store(true, Ordering::Relaxed);
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_chart_type(ChartType::VolumeFootprint);
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        let ohlc = bars(5)
+            .into_iter()
+            .map(|mut bar| {
+                bar.time += TimeDelta::seconds(seconds);
+                bar
+            })
+            .collect();
+        feed.page().send(page(ohlc, true));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        let page = prepared_page(&[Tick::new(at(4), 104.0, 777.0, None)], at(5), true);
+        deliver(
+            &feed,
+            &mut chart,
+            &mut frames,
+            FootprintPage::partial(page.bars, at(5), true, vec![at(4)]),
+        );
+        chart.set_chart_type_params(crate::model::ChartTypeParams {
+            footprint_modes: vec![crate::model::FootprintMode::Volume],
+            footprint_row_ticks: 1,
+            footprint_poc: false,
             ..Default::default()
-        },
-        |ui| {
-            chart.show(ui);
-        },
+        });
+        chart.apply_synced_time_scale(160.0, 1.0);
+        let painted = shapes(&frames.ctx, &mut chart, 1.0, Vec::new());
+        for label in ["777", "Partial data"] {
+            assert!(painted.iter().any(|shape| matches!(shape,
+                egui::Shape::Text(text) if text.galley.text() == label)));
+        }
+        assert_eq!(prepared_view(&chart).profile(at(0), at(4)).unknown, 0.0);
+        candle_geometry.push(
+            [chart.config().bullish_color, chart.config().bearish_color]
+                .map(|color| candle_ys(&painted, color)),
+        );
+    }
+    assert_eq!(
+        candle_geometry[0], candle_geometry[1],
+        "an intra-slot timestamp must not add fallback candles over partial cells"
     );
-    output.textures_delta.clear();
-    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
-        egui::Shape::Text(text) if text.galley.text() == "777")));
-    assert_eq!(prepared_view(&chart).profile(at(0), at(4)).unknown, 0.0);
 }

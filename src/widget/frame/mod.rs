@@ -2256,8 +2256,9 @@ impl Chart {
                 if let Some((flow, config, candles)) = executions {
                     let has_cells = |bar: &crate::model::Bar| {
                         session_profiles
-                            || flow.complete_bar_at(bar.time).is_some()
-                            || flow.partial_at(bar.time)
+                            || flow.bar_at(bar.time).is_some_and(|source| {
+                                flow.complete_at(source.time) || flow.partial_at(source.time)
+                            })
                     };
                     let mut first = start_idx + candles;
                     // A bar nothing traded in shows its candle among the cells.

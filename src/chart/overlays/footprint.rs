@@ -345,13 +345,13 @@ pub(crate) fn render_footprint_read(
     let mut partial_hovered = false;
     // Ordinary loss fragments stay hidden; only explicit prepared partial rows opt in.
     for (index, bar) in bars.iter().enumerate().take(end).skip(first) {
-        let partial = flow.partial_at(bar.time);
-        let Some(source) = flow
-            .bar_at(bar.time)
-            .filter(|_| partial || flow.complete_at(bar.time))
-        else {
+        let Some(source) = flow.bar_at(bar.time) else {
             continue;
         };
+        let partial = flow.partial_at(source.time);
+        if !partial && !flow.complete_at(source.time) {
+            continue;
+        }
         let x = mapping.idx_to_x(index);
         let left = x - mapping.bar_spacing * 0.46;
         let price_left = (left - gutter).max(mapping.rect.left());
