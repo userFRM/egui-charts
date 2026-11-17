@@ -53,12 +53,16 @@ copy them between charts with different slots.
 
 [`visible_time_range`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.visible_time_range)
 returns a [`VisibleTimeRange`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.VisibleTimeRange.html)
-in UTC, including whitespace. Use
-[`apply_synced_time_range`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.apply_synced_time_range)
-to fit those instants to another chart's width. Check its boolean result:
+in UTC, including whitespace, and
+[`set_visible_time_range`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_visible_time_range)
+shows one, so a range read back sets the same view. Check its boolean result:
 empty data, invalid or wholly disjoint ranges, and endpoints mapping to one
-element are rejected. Its maximum spacing is the configured limit, or 50 points
-when unlimited, so very short spans may be centred rather than filling the plot.
+element are rejected. Spacing and edge limits still apply, and a range starting
+after the last bar's open keeps that bar in view. To fit another chart's range, use
+[`apply_synced_time_range`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.apply_synced_time_range):
+its maximum spacing is the configured limit, or 50 points when unlimited, so a
+coarser chart stays readable and very short spans are centred rather than
+filling the plot.
 
 [`index_to_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.index_to_time)
 and [`time_to_index`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.time_to_index)
