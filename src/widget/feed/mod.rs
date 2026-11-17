@@ -295,10 +295,11 @@ impl FeedLink {
             let ended = self.trades.retained_until().is_none();
             // The sink opened the bars from the oldest live execution the store kept apart, where
             // the page may hold executions the stream never sent, so the page fills none of them.
-            // Without a loss the sink's allocations fill them, as `OrderFlowInput::chart_run`
-            // rebuilds them; after one `OrderFlowInput::replace_trades` waits for the sink's next
-            // allocations, and the executions already received fill none of them. A chart that
-            // starts after it holds no bar with the page's executions of that instant.
+            // The sink's allocations fill them, as `OrderFlowInput::chart_run` rebuilds them,
+            // unless the store lost an execution at or after the open of the first: then the run
+            // starts at the oldest bar after the loss whose executions are all held, and without
+            // one `OrderFlowInput::replace_trades` waits for the sink's next allocations. A chart
+            // that starts after it holds no bar with the page's executions of that instant.
             let stream_from = (self.trades.unheld_live())
                 .and_then(|(_, kept)| kept.first())
                 .map(|trade| trade.ts)
