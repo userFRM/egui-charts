@@ -55,6 +55,7 @@ impl Trading {
                         Some((
                             o.side == OrderSide::Buy,
                             o.price,
+                            o.size,
                             view.tier_color(tier, colors),
                         ))
                     })

@@ -1,6 +1,7 @@
 //! Host-fed histories and subscriptions used by studies.
 
 use super::Chart;
+use crate::chart::overlays::open_interest_request;
 use crate::data::inbox::Inbox;
 use crate::data::merge::{Origin, merge};
 use crate::data::{
@@ -220,8 +221,8 @@ impl StudyDataCache {
 }
 
 impl Chart {
-    /// Histories required by feed-backed series, study inputs and profile drawings, with chart
-    /// defaults resolved. Hosts without a connected feed supply these through [`Self::set_study_data`]. A connected
+    /// Histories required by feed-backed series, study inputs, profile drawings and the open
+    /// interest rows of the footprint statistics, with chart defaults resolved. Hosts without a connected feed supply these through [`Self::set_study_data`]. A connected
     /// feed receives resolve, history and subscription calls automatically on the next frame.
     pub fn study_data_requests(&self) -> Vec<StudyDataRequest> {
         let mut requests = self.fed_requests();
@@ -240,7 +241,31 @@ impl Chart {
                 requests.push(request);
             }
         }
+        if self.footprint_open_interest {
+            let request = resolved(&open_interest_request(), self.symbol(), self.timeframe());
+            if !requests.contains(&request) {
+                requests.push(request);
+            }
+        }
         requests
+    }
+
+    /// The open interest points the footprint statistics read, up to the replay cutoff; none
+    /// while they have no open interest row.
+    pub(super) fn open_interest_points(&self) -> &[Bar] {
+        if !self.footprint_open_interest {
+            return &[];
+        }
+        self.study_data
+            .data(
+                vec![open_interest_request()],
+                &self.symbol,
+                self.timeframe,
+                self.replay_time(),
+            )
+            .into_iter()
+            .next()
+            .map_or(&[], |data| data.bars)
     }
 
     /// Replace a study history with host-owned historical or streaming bars. Bars are sorted,
@@ -349,6 +374,13 @@ impl Chart {
             match reaches.iter_mut().find(|(known, _)| *known == request) {
                 Some((_, reach)) => *reach = (*reach).min(start),
                 None => reaches.push((request, start)),
+            }
+        }
+        if self.footprint_open_interest {
+            let request = resolved(&open_interest_request(), self.symbol(), self.timeframe());
+            match reaches.iter_mut().find(|(known, _)| *known == request) {
+                Some((_, reach)) => *reach = (*reach).min(first),
+                None => reaches.push((request, first)),
             }
         }
         reaches
