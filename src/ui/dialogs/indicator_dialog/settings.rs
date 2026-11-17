@@ -1948,8 +1948,8 @@ mod tests {
                     harness.query_all_by_label(caption).next().is_some(),
                     "{caption}"
                 );
-                assert!(harness.query_all_by_label("Middle guide").next().is_none());
             }
+            assert!(harness.query_all_by_label("Middle guide").next().is_none());
             assert!(
                 egui::Rect::from_min_size(egui::Pos2::ZERO, size)
                     .contains_rect(harness.get_by_label(action).rect())
