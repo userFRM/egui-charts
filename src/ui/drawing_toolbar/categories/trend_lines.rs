@@ -45,9 +45,8 @@ impl ToolCategory for TrendLinesCategory {
 }
 
 /// Draw a tool list into the flyout: a header per section, one row per tool with its shortcut
-/// and favourite star. A click on a row selects the tool, or returns
-/// [`DrawingToolbarAction::ToolUnavailable`] for a tool the registry disables; a click on its
-/// star toggles the favourite in `favorites` and selects nothing.
+/// and favourite star. A click on a row selects the tool; a click on its star toggles the
+/// favourite in `favorites` and selects nothing.
 pub fn render_tool_submenu(
     ui: &mut Ui,
     sections: Vec<(&'static str, Vec<DrawingToolType>)>,
