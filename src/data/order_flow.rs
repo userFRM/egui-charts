@@ -1041,6 +1041,46 @@ impl OrderFlowInput {
         }
     }
 
+    /// Publish only the admitted prepared span; received live rows outlive the raw tape.
+    #[cfg(feature = "widget")]
+    pub(crate) fn apply_prepared_span(
+        &self,
+        clock: &BarClock,
+        trades: &super::trades::Trades,
+        history: &[crate::model::Bar],
+        prepared: &FootprintState,
+        span: std::ops::Range<DateTime<Utc>>,
+        available: bool,
+    ) -> Result<(), super::FeedError> {
+        let mut state = self.state();
+        if !matches!(state.source, Source::Footprint) {
+            return Ok(());
+        }
+        if state
+            .footprint
+            .as_ref()
+            .and_then(|flow| flow.live.prepared_before())
+            .is_none()
+        {
+            drop(state);
+            self.replace_trades(clock, trades, history, Some(prepared));
+            return Ok(());
+        }
+        let flow = state.footprint.as_mut().unwrap();
+        if available {
+            flow.insert_prepared(
+                prepared.snapshot(span.start, Some(span.end)),
+                span.start,
+                span.end,
+            )?;
+        }
+        flow.record_prepared_span(span.start, span.end, available);
+        state.revision = state.revision.wrapping_add(1);
+        let revision = state.revision;
+        state.changes.insert(clock.bar_open(span.start), revision);
+        Ok(())
+    }
+
     /// Groups the executions the sink allocated along `history`, the chart's bars, on a
     /// trade-based interval: the live ones, after a loss only those after it. Without a loss a
     /// page's copy stands in for a live execution the store dropped as a repeat, so paged ones
@@ -1640,7 +1680,7 @@ impl State {
             covered_from: self
                 .footprint
                 .as_ref()
-                .and_then(|flow| flow.view().first_time())
+                .and_then(|flow| flow.view().covered_from())
                 .map(|first| first.max(open)),
             replay_open: self.replay.as_ref().map(|replay| replay.open),
             flow,

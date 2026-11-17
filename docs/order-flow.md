@@ -56,16 +56,6 @@ dominates under the imbalance settings gets a strip along its outer edge, and tw
 
 ### Prepared history
 
-The next bounded-history extension is being developed in
-[#2967](https://github.com/userFRM/egui-charts/issues/2967), after the shared study inputs.
-Its agreed contract keeps `Reply<FootprintPage>` and the existing constructors: each reply
-answers one contiguous suffix `[from, before)` as either complete (possibly empty) or
-unavailable. Unavailable means the recording cannot supply that span, not that nothing traded.
-Pending requests, transport failures and invalid data remain in the existing request/error
-lifecycle. Internal fills will use clock-aligned boundaries, preserve accepted row owners and
-the initial exclusive live cutoff, and invalidate coverage-dependent results when a gap closes.
-This paragraph records the agreed extension, not support in the current implementation.
-
 The built-in time-based footprint chart can request already aggregated history through
 [`Datafeed::footprints`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#method.footprints).
 Use [`FootprintPage::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FootprintPage.html#method.new)
@@ -75,6 +65,22 @@ Its bar views borrow sorted native rows; storage and byte conversion stay in the
 constructor docs include examples of both forms. `FootprintPage::bars` is a
 [`FootprintBars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/enum.FootprintBars.html);
 its `iter` method reads either form.
+
+A bounded request names `[since, before)`. Each reply answers one contiguous suffix ending
+at `before`: its first bar starts the answered span, or an empty page uses
+`with_continue_before(from)`. An available empty span certifies that no executions occurred.
+Earlier unanswered history remains requestable; `count` still limits the number of bars.
+Use [`FootprintPage::unavailable(from, before)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FootprintPage.html#method.unavailable)
+when the recording cannot supply that span. This is not empty history or a transport error.
+The chart skips automatic retries of that span until refresh/reconnect and continues loading
+other required history. `is_available()` distinguishes the two answers.
+
+The chart requests missing spans needed by its viewport or footprint studies, including
+internal gaps. Internal fills use clock-aligned boundaries and leave the initial exclusive
+prepared/live cutoff unchanged. Existing row owners remain retained; closing even an empty
+gap updates coverage and invalidates affected study results. Older end-of-history does not
+prevent an internal gap from being filled after refresh. Invalid replies preserve accepted
+data and stop footprint requests until refresh; they never certify empty or unavailable history.
 
 A shared owner can serve several charts. Admission validates its clock, grid, rows, totals and
 exclusive execution cutoff when each page is accepted. Of the shared page's bars, only an

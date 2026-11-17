@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Bounded prepared-footprint history can fill internal gaps without replacing retained rows or the initial live cutoff. `FootprintPage::unavailable` distinguishes unavailable recordings from confirmed-empty spans; refresh retries unavailable spans, and chart/profile coverage updates when a gap closes. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
+
 - `Indicator::clone_for_export` lets studies freeze live state for deferred export rendering; its default preserves existing implementations. `OrderFlowInput::frozen` shares immutable footprint history and copies mutable state, and volume profile studies use it without changing ordinary clones. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
 
 - `OrderFlowInput::footprint_snapshot` shares prepared pages and completed source bars, copying only mutable rows. Volume profile studies request prepared history on time-based candle charts too and calculate after releasing the source lock. History survives raw-trade eviction and studies attached later; `footprints_from` keeps its copying interface. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))

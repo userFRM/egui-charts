@@ -563,6 +563,520 @@ fn prepared_page(trades: &[Tick], before: DateTime<Utc>, end: bool) -> Footprint
     FootprintPage::new(flow.bars().values().cloned().collect(), before, end)
 }
 
+fn footprint_requests(feed: &Script) -> Vec<FootprintRequest> {
+    feed.calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            Call::Footprints(request) => Some(request),
+            _ => None,
+        })
+        .collect()
+}
+
+fn prepared_view(chart: &Chart) -> FootprintView<'_> {
+    chart
+        .feed_link
+        .as_ref()
+        .unwrap()
+        .footprint
+        .as_ref()
+        .unwrap()
+        .view()
+}
+
+fn missing_history_page(
+    shared: bool,
+    from: DateTime<Utc>,
+    before: DateTime<Utc>,
+    volume: f64,
+    end: bool,
+) -> (FootprintPage, *const crate::data::FootprintLevel) {
+    use crate::data::FootprintBars;
+    let mut page = prepared_page(&[Tick::new(from, 100.0, volume, None)], before, end);
+    let FootprintBars::Owned(bars) = page.bars else {
+        unreachable!()
+    };
+    let row = bars[0].levels.get(&100).unwrap() as *const crate::data::FootprintLevel;
+    page.bars = if shared {
+        FootprintBars::Shared(Arc::new(bars))
+    } else {
+        FootprintBars::Owned(bars)
+    };
+    (page, row)
+}
+
+/// A provider can traverse an outage without claiming it was quiet. Both surrounding
+/// owners arrive through normal replies; no test reaches into the pending request state.
+fn missing_history_chart(
+    shared: bool,
+) -> (
+    Arc<Script>,
+    Chart,
+    Frames,
+    [*const crate::data::FootprintLevel; 2],
+) {
+    let (feed, mut chart, mut frames) = prepared_chart();
+    #[cfg(feature = "studies")]
+    {
+        chart.add_indicator(
+            crate::studies::IndicatorFactory::new()
+                .create("Vol Profile FR")
+                .unwrap(),
+        );
+        frames.run(&mut chart);
+    }
+    let start = bars(1)[0].time;
+    let at = |minute| start + TimeDelta::minutes(minute);
+    assert_eq!(footprint_requests(&feed).len(), 1);
+    let (newer, newer_row) = missing_history_page(shared, at(3), at(4), 7.0, false);
+    feed.footprints.lock().unwrap().remove(0).send(Ok(newer));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    let requests = footprint_requests(&feed);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].before, Some(at(3)));
+    let unavailable = FootprintPage::unavailable(at(1), at(3));
+    assert!(!unavailable.is_available());
+    feed.footprints
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(unavailable));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    let requests = footprint_requests(&feed);
+    assert_eq!(requests.len(), 1, "an outage must not block older history");
+    assert_eq!(requests[0].before, Some(at(1)));
+    let (older, older_row) = missing_history_page(shared, start, at(1), 3.0, true);
+    feed.footprints.lock().unwrap().remove(0).send(Ok(older));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    assert!(footprint_requests(&feed).is_empty());
+    (feed, chart, frames, [older_row, newer_row])
+}
+
+#[cfg(feature = "studies")]
+fn missing_history_input(chart: &Chart) -> crate::data::OrderFlowInput {
+    let mut inputs = chart
+        .indicators()
+        .flat_map(|(_, study)| study.order_flow_inputs())
+        .filter(|input| input.is_footprint());
+    let input = inputs
+        .next()
+        .expect("the fixed-range profile has a footprint input")
+        .clone();
+    assert!(inputs.next().is_none());
+    input
+}
+
+fn assert_missing_history_rows(
+    chart: &Chart,
+    owners: [*const crate::data::FootprintLevel; 2],
+    complete: bool,
+) {
+    let start = bars(1)[0].time;
+    let last = start + TimeDelta::minutes(3);
+    let view = prepared_view(chart);
+    assert_eq!(
+        view.complete_bars(..)
+            .map(|bar| (bar.time, bar.volume()))
+            .collect::<Vec<_>>(),
+        [(start, 3.0), (last, 7.0)]
+    );
+    for (time, owner) in [start, last].into_iter().zip(owners) {
+        assert_eq!(
+            view.bar_at(time).unwrap().levels.get(&100).unwrap()
+                as *const crate::data::FootprintLevel,
+            owner,
+            "admitting coverage must not replace completed price rows"
+        );
+    }
+    assert_eq!(view.span_is_complete(start, last), complete);
+    #[cfg(feature = "studies")]
+    {
+        let read = missing_history_input(chart).footprint_snapshot(start);
+        assert_eq!(read.span_is_complete(start, last), complete);
+        assert_eq!(
+            read.bars(..)
+                .map(|bar| (bar.time, bar.volume()))
+                .collect::<Vec<_>>(),
+            [(start, 3.0), (last, 7.0)]
+        );
+        for (bar, owner) in read.bars(..).zip(owners) {
+            assert_eq!(
+                bar.levels.get(&100).unwrap() as *const crate::data::FootprintLevel,
+                owner,
+                "the chart and study must share admitted owners"
+            );
+        }
+    }
+}
+
+fn refresh_missing_history(feed: &Script, chart: &mut Chart, frames: &mut Frames) {
+    chart.reload_feed();
+    frames.run(chart);
+    feed.resolve()
+        .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+    feed.page().send(page(bars(5), true));
+    frames.run(chart);
+    frames.run(chart);
+    let start = bars(1)[0].time;
+    let requests = footprint_requests(feed);
+    assert_eq!(
+        requests.len(),
+        1,
+        "chart and study coalesce their gap demand"
+    );
+    assert_eq!(requests[0].since, Some(start + TimeDelta::minutes(1)));
+    assert_eq!(requests[0].before, Some(start + TimeDelta::minutes(3)));
+}
+
+#[test]
+fn unavailable_prepared_history_skips_only_its_span_and_refresh_retries_it() {
+    for shared in [false, true] {
+        let (feed, mut chart, mut frames, owners) = missing_history_chart(shared);
+        assert_missing_history_rows(&chart, owners, false);
+        for _ in 0..6 {
+            frames.run(&mut chart);
+        }
+        assert!(footprint_requests(&feed).is_empty());
+        assert!(feed.footprints.lock().unwrap().is_empty());
+        refresh_missing_history(&feed, &mut chart, &mut frames);
+        assert_missing_history_rows(&chart, owners, false);
+        for _ in 0..6 {
+            frames.run(&mut chart);
+        }
+        assert!(
+            footprint_requests(&feed).is_empty(),
+            "a pending gap must not issue duplicate requests"
+        );
+        assert_eq!(feed.footprints.lock().unwrap().len(), 1);
+        assert_missing_history_rows(&chart, owners, false);
+    }
+}
+
+#[test]
+fn confirmed_empty_internal_history_invalidates_coverage_without_fabricating_rows() {
+    for shared in [false, true] {
+        let (feed, mut chart, mut frames, owners) = missing_history_chart(shared);
+        refresh_missing_history(&feed, &mut chart, &mut frames);
+        let start = bars(1)[0].time;
+        let before = start + TimeDelta::minutes(3);
+        let candles = chart.bars(SeriesId::MAIN).to_vec();
+        assert_missing_history_rows(&chart, owners, false);
+        let mut frozen = chart.export_snapshot(&frames.ctx, &Default::default());
+        #[cfg(feature = "studies")]
+        let input_and_revision = {
+            let input = missing_history_input(&chart);
+            // Populate the consumer's cached snapshot before the coverage-only answer.
+            assert!(
+                !input
+                    .footprint_snapshot(start)
+                    .span_is_complete(start, before)
+            );
+            let revision = input.revision();
+            (input, revision)
+        };
+        let empty = FootprintPage::new(Vec::new(), before, false)
+            .with_continue_before(start + TimeDelta::minutes(1));
+        assert!(empty.is_available());
+        feed.footprints.lock().unwrap().remove(0).send(Ok(empty));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        assert_missing_history_rows(&chart, owners, true);
+        assert_eq!(chart.bars(SeriesId::MAIN), candles);
+        assert!(
+            prepared_view(&chart)
+                .bar_at(start + TimeDelta::minutes(1))
+                .is_none()
+        );
+        assert!(
+            prepared_view(&chart)
+                .bar_at(start + TimeDelta::minutes(2))
+                .is_none()
+        );
+        #[cfg(feature = "studies")]
+        {
+            let (input, revision) = input_and_revision;
+            assert_ne!(input.revision(), revision);
+            assert!(
+                input
+                    .footprint_snapshot(start)
+                    .span_is_complete(start, before),
+                "a cached incomplete profile must observe a coverage-only answer"
+            );
+        }
+        assert!(footprint_requests(&feed).is_empty());
+        frames.run(&mut frozen);
+        assert!(feed.calls().is_empty(), "exports must never refill a gap");
+        assert_missing_history_rows(&frozen, owners, false);
+        drop(chart);
+        assert_missing_history_rows(&frozen, owners, false);
+    }
+}
+
+#[test]
+fn partial_internal_history_answers_advance_the_remaining_bounded_request() {
+    for shared in [false, true] {
+        let (feed, mut chart, mut frames, owners) = missing_history_chart(shared);
+        refresh_missing_history(&feed, &mut chart, &mut frames);
+        let start = bars(1)[0].time;
+        let at = |minute| start + TimeDelta::minutes(minute);
+        feed.footprints
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(
+                FootprintPage::new(Vec::new(), at(3), false).with_continue_before(at(2))
+            ));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        assert_missing_history_rows(&chart, owners, false);
+        assert!(prepared_view(&chart).span_is_complete(at(2), at(3)));
+        assert!(!prepared_view(&chart).span_is_complete(at(1), at(2)));
+        let requests = footprint_requests(&feed);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].since, Some(at(1)));
+        assert_eq!(requests[0].before, Some(at(2)));
+        let (answer, row) = missing_history_page(shared, at(1), at(2), 11.0, false);
+        feed.footprints.lock().unwrap().remove(0).send(Ok(answer));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        let view = prepared_view(&chart);
+        assert!(view.span_is_complete(start, at(3)));
+        assert_eq!(
+            view.complete_bars(..)
+                .map(|bar| bar.volume())
+                .collect::<Vec<_>>(),
+            [3.0, 11.0, 7.0]
+        );
+        for (time, owner) in [start, at(1), at(3)]
+            .into_iter()
+            .zip([owners[0], row, owners[1]])
+        {
+            assert_eq!(
+                view.bar_at(time).unwrap().levels.get(&100).unwrap()
+                    as *const crate::data::FootprintLevel,
+                owner
+            );
+        }
+        #[cfg(feature = "studies")]
+        {
+            let read = missing_history_input(&chart).footprint_snapshot(start);
+            assert!(read.span_is_complete(start, at(3)));
+            assert_eq!(
+                read.bars(..).map(|bar| bar.volume()).collect::<Vec<_>>(),
+                [3.0, 11.0, 7.0]
+            );
+        }
+        assert!(footprint_requests(&feed).is_empty());
+    }
+}
+
+#[test]
+fn invalid_internal_history_preserves_complete_rows_and_the_unknown_gap() {
+    for shared in [false, true] {
+        for invalid in 0..5 {
+            let (feed, mut chart, mut frames, owners) = missing_history_chart(shared);
+            refresh_missing_history(&feed, &mut chart, &mut frames);
+            let start = bars(1)[0].time;
+            let at = |minute| start + TimeDelta::minutes(minute);
+            let mut answer = missing_history_page(shared, at(1), at(3), 11.0, false).0;
+            match invalid {
+                // An overlapping old owner is not a correction/replacement.
+                0 => answer = missing_history_page(shared, start, at(3), 999.0, false).0,
+                1 => answer.complete_before = at(3) + TimeDelta::seconds(1),
+                2 => {
+                    answer =
+                        FootprintPage::new(Vec::new(), at(3), false).with_continue_before(at(3));
+                }
+                3 => {
+                    let rows = answer.bars;
+                    answer = FootprintPage::unavailable(at(1), at(3));
+                    answer.bars = rows;
+                }
+                _ => {
+                    answer = FootprintPage::new(Vec::new(), at(3), false)
+                        .with_continue_before(at(1) + TimeDelta::seconds(1));
+                }
+            }
+            feed.footprints.lock().unwrap().remove(0).send(Ok(answer));
+            frames.run(&mut chart);
+            assert!(
+                matches!(chart.feed.last_error, Some(FeedError::InvalidData(_))),
+                "shared={shared}, invalid={invalid}"
+            );
+            assert_missing_history_rows(&chart, owners, false);
+            for _ in 0..3 {
+                frames.run(&mut chart);
+            }
+            assert!(footprint_requests(&feed).is_empty());
+            assert_missing_history_rows(&chart, owners, false);
+        }
+    }
+}
+
+#[test]
+fn internal_history_replies_cannot_cross_context_changes_or_same_drain_replay_reset() {
+    for shared in [false, true] {
+        for change in 0..7 {
+            let (feed, mut chart, mut frames, _) = missing_history_chart(shared);
+            refresh_missing_history(&feed, &mut chart, &mut frames);
+            let start = bars(1)[0].time;
+            let answer = missing_history_page(
+                shared,
+                start + TimeDelta::minutes(1),
+                start + TimeDelta::minutes(3),
+                999.0,
+                false,
+            )
+            .0;
+            let stale = feed.footprints.lock().unwrap().remove(0);
+            match change {
+                0 => chart.set_symbol("B"),
+                1 => chart.set_timeframe(Timeframe::Min5),
+                2 => chart.set_extended_hours(true),
+                3 => chart.set_dividend_adjusted(true),
+                4 => chart.set_conversion(Some("EUR".into())),
+                // Both inbox orders matter: reply admission must see a reset in the drain.
+                5 => {
+                    stale.send(Ok(answer));
+                    feed.sink().reset_replay(start);
+                    frames.run(&mut chart);
+                    assert!(
+                        chart
+                            .feed_link
+                            .as_ref()
+                            .unwrap()
+                            .footprint
+                            .as_ref()
+                            .is_none_or(|flow| flow
+                                .view()
+                                .bars(..)
+                                .all(|bar| bar.volume() != 999.0))
+                    );
+                    assert!(chart.feed.last_error.is_none());
+                    continue;
+                }
+                _ => feed.sink().reset_replay(start),
+            }
+            if change < 5 {
+                frames.run(&mut chart);
+            }
+            stale.send(Ok(answer));
+            frames.run(&mut chart);
+            assert!(
+                chart
+                    .feed_link
+                    .as_ref()
+                    .unwrap()
+                    .footprint
+                    .as_ref()
+                    .is_none_or(|flow| flow.view().bars(..).all(|bar| bar.volume() != 999.0)),
+                "shared={shared}, change={change}"
+            );
+            #[cfg(feature = "studies")]
+            {
+                assert!(
+                    missing_history_input(&chart)
+                        .footprint_snapshot(start)
+                        .bars(..)
+                        .all(|bar| bar.volume() != 999.0)
+                );
+            }
+            assert!(chart.feed.last_error.is_none());
+        }
+    }
+}
+
+#[cfg(feature = "studies")]
+#[test]
+fn later_gap_page_keeps_the_studys_live_suffix_after_raw_eviction() {
+    for shared in [false, true] {
+        let (feed, mut chart, mut frames, owners) = missing_history_chart(shared);
+        refresh_missing_history(&feed, &mut chart, &mut frames);
+        let start = bars(1)[0].time;
+        let at = |minute| start + TimeDelta::minutes(minute);
+        feed.trades
+            .lock()
+            .unwrap()
+            .pop()
+            .unwrap()
+            .send(Ok(TradePage::new(Vec::new(), true)));
+        frames.run(&mut chart);
+        let input = missing_history_input(&chart);
+        let reset = input.reset_revision();
+        chart.feed_link.as_mut().unwrap().trades = Trades::new(3);
+        for minute in 4..=10 {
+            feed.sink()
+                .push_tick(Tick::new(at(minute), 100.0, 5.0, None).with_id(minute as u64));
+            frames.run(&mut chart);
+        }
+        assert!(
+            chart.trades(SeriesId::MAIN).count() < 7,
+            "the fixture must actually evict raw executions"
+        );
+        let volumes = |input: &crate::data::OrderFlowInput| {
+            input
+                .footprint_snapshot(start)
+                .bars(..)
+                .map(|bar| (bar.time, bar.volume()))
+                .collect::<Vec<_>>()
+        };
+        let mut expected = vec![(start, 3.0), (at(3), 7.0)];
+        expected.extend((4..=10).map(|minute| (at(minute), 5.0)));
+        assert_eq!(volumes(&input), expected);
+        assert!(
+            !input
+                .footprint_snapshot(start)
+                .span_is_complete(start, at(10))
+        );
+        assert_eq!(input.reset_revision(), reset);
+        let mut frozen = chart.export_snapshot(&frames.ctx, &Default::default());
+        let frozen_input = missing_history_input(&frozen);
+        let (answer, row) = missing_history_page(shared, at(1), at(3), 11.0, false);
+        feed.footprints.lock().unwrap().remove(0).send(Ok(answer));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        assert_eq!(
+            input.reset_revision(),
+            reset,
+            "a gap fill is not an input reset"
+        );
+        assert_eq!(volumes(&frozen_input), expected);
+        expected.insert(1, (at(1), 11.0));
+        assert_eq!(
+            volumes(&input),
+            expected,
+            "a new prepared page must not rebuild a study from the truncated raw tape"
+        );
+        let read = input.footprint_snapshot(start);
+        assert!(read.span_is_complete(start, at(10)));
+        for (time, owner) in [start, at(1), at(3)]
+            .into_iter()
+            .zip([owners[0], row, owners[1]])
+        {
+            assert_eq!(
+                read.bars(time..=time)
+                    .next()
+                    .unwrap()
+                    .levels
+                    .get(&100)
+                    .unwrap() as *const crate::data::FootprintLevel,
+                owner
+            );
+        }
+        feed.calls();
+        frames.run(&mut frozen);
+        assert!(feed.calls().is_empty());
+        assert!(
+            !frozen_input
+                .footprint_snapshot(start)
+                .span_is_complete(start, at(10))
+        );
+    }
+}
+
 #[test]
 fn frozen_export_shares_prepared_rows_and_keeps_its_live_boundary() {
     use crate::data::{FootprintBars, FootprintLevel};
