@@ -2548,5 +2548,14 @@ mod tests {
         );
         let complete = (prepared.view().complete_bars(..)).map(|bar| bar.time);
         assert_eq!(complete.collect::<Vec<_>>(), [monday, tuesday]);
+        // History cut at Tuesday's midnight holds only Tuesday's bar, which an older page ends
+        // at: Tuesday stays complete when that page is unavailable.
+        let page = [ask_bar(tuesday, 2.0, 1)];
+        let mut prepared =
+            FootprintState::new(Footprint::from_bars(clock.clone(), 1.0, 1, page).unwrap());
+        prepared.prepare_history(tuesday, &tape, true);
+        prepared.record_prepared_span(monday, tuesday, false);
+        let complete = (prepared.view().complete_bars(..)).map(|bar| bar.time);
+        assert_eq!(complete.collect::<Vec<_>>(), [tuesday]);
     }
 }

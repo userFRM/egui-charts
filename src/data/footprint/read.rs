@@ -604,8 +604,11 @@ impl FootprintState {
             return;
         }
         let held = self.live.covered_from.unwrap_or(before);
-        let (cutoff, clock) = (self.live.prepared_before(), &self.live.clock);
-        // A bar of a trading date can start on either side of its open.
+        // A bar of a trading date can start on either side of its open. When the prepared bar
+        // holding the cutoff opens exactly there, a bound at the cutoff is that bar's open.
+        let cutoff = (self.live.prepared_before())
+            .filter(|&cutoff| (self.live.prepared_boundary()).is_none_or(|bar| bar.time != cutoff));
+        let clock = &self.live.clock;
         let first_instant = |time| {
             if Some(time) == cutoff {
                 time
