@@ -240,10 +240,15 @@ impl Chart {
             } else {
                 *height
             };
-            let rect = Rect::from_min_size(
-                Pos2::new(available.left(), top),
-                egui::vec2(available.width(), height),
-            );
+            let rect = if *id == main_pane && maximized.is_some_and(|pane| pane != main_pane) {
+                // Hidden by the maximized pane: away from the time axis, which its clip shows.
+                Rect::from_min_size(available.min, egui::vec2(available.width(), 0.0))
+            } else {
+                Rect::from_min_size(
+                    Pos2::new(available.left(), top),
+                    egui::vec2(available.width(), height),
+                )
+            };
             top += height;
             self.pane_layout.panes[*idx].rect = rect;
             rects.push(rect);
