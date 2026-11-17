@@ -592,3 +592,69 @@ fn optimisation_counts_decimal_grid_yields_sorts_and_applies_inputs() {
         "range edits discard previous trials"
     );
 }
+
+#[test]
+fn zone_levels_run_in_either_order_and_optimisation_skips_refused_pairs() {
+    use InputValue::Number;
+    // Each oversold level is above the strategy's default overbought level.
+    for (name, oversold) in [("RSI", 75.0), ("Stochastic Slow", 85.0)] {
+        let mut tester = StrategyTester::default();
+        tester.select_strategy(name).unwrap();
+        tester.set_input("overbought", Number(90.0)).unwrap();
+        tester.set_input("oversold", Number(oversold)).unwrap();
+        let mut h = Harness::builder()
+            .with_max_steps(16)
+            .with_size(Vec2::new(1440.0, 900.0))
+            .build_ui_state(
+                |ui, tester: &mut StrategyTester| {
+                    tester.show(ui, "TEST", Timeframe::Min1, &bars());
+                },
+                tester,
+            );
+        h.get_by_role_and_label(Role::Button, "Run").click();
+        h.run();
+        let properties = &h.state().report().expect(name).properties;
+        assert!(
+            properties.contains(&("Input: Oversold".into(), oversold.to_string())),
+            "{name}"
+        );
+        assert!(
+            properties.contains(&("Input: Overbought".into(), "90".into())),
+            "{name}"
+        );
+        for range in &mut h.state_mut().ranges {
+            (range.enabled, range.from, range.to, range.step) = match range.input.id.as_str() {
+                "oversold" => (true, Number(20.0), Number(40.0), Number(20.0)),
+                "overbought" => (true, Number(30.0), Number(70.0), Number(40.0)),
+                _ => continue,
+            };
+        }
+        h.state_mut().tab = Tab::Optimisation;
+        h.run();
+        h.get_by_role_and_label(Role::Button, "Run optimisation")
+            .click();
+        h.run();
+        // Oversold varies fastest: (20, 30), (40, 30), (20, 70), (40, 70); (40, 30) is refused.
+        let level = |trial: &Trial, id: &str| match trial.inputs.iter().find(|i| i.id == id) {
+            Some(StudyInput {
+                value: Number(value),
+                ..
+            }) => *value,
+            _ => panic!("{name}: {id}"),
+        };
+        let mut pairs: Vec<_> = h
+            .state()
+            .trials
+            .iter()
+            .map(|trial| (level(trial, "oversold"), level(trial, "overbought")))
+            .collect();
+        pairs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(pairs, [(20.0, 30.0), (20.0, 70.0), (40.0, 70.0)], "{name}");
+        h.get_by_label("1 skipped: oversold must be below overbought");
+        h.state_mut().set_input("overbought", Number(95.0)).unwrap();
+        assert!(
+            h.state().skipped.is_empty() && h.state().trials.is_empty(),
+            "{name}"
+        );
+    }
+}

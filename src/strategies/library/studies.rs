@@ -140,13 +140,6 @@ impl Strategy for StudyStrategy {
 
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
         if self.inputs.iter().any(|input| input.id == id) {
-            if matches!(id, "oversold" | "overbought")
-                && let InputValue::Number(v) = value
-                && ((id == "oversold" && v >= number(&self.inputs, "overbought"))
-                    || (id == "overbought" && v <= number(&self.inputs, "oversold")))
-            {
-                return Err("oversold must be below overbought");
-            }
             set_input(&mut self.inputs, id, value)?;
         } else if matches!(self.rule, Rule::TwoAverages) {
             let (prefix, id) = id.split_once('.').ok_or("unknown strategy input")?;
@@ -164,6 +157,15 @@ impl Strategy for StudyStrategy {
                 .map_err(|_| "invalid strategy study input")?;
         }
         self.signals.clear();
+        Ok(())
+    }
+
+    fn validate_inputs(&self) -> Result<(), &'static str> {
+        if matches!(self.rule, Rule::Rsi | Rule::Stochastic)
+            && number(&self.inputs, "oversold") >= number(&self.inputs, "overbought")
+        {
+            return Err("oversold must be below overbought");
+        }
         Ok(())
     }
 

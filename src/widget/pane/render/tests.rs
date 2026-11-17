@@ -501,24 +501,48 @@ fn pane_separators_resize_neighbors_and_maximize_restores_the_layout() {
         assert!(chart.undo());
         assert_eq!(chart.pane_layout.maximized, Some(chart.main_series_pane()));
         assert!(chart.redo());
-        // A double-click that finishes a drawing only finishes it.
+        // A double-click that places or finishes a drawing only does that, in the price and a study
+        // pane: a path double-clicked with no earlier point, and a sector whose finishing click
+        // selects it, so the second click lands on its handle.
         #[cfg(feature = "drawings")]
-        {
-            use crate::drawings::DrawingToolType;
-            chart
-                .drawings_mut()
-                .set_active_tool(Some(DrawingToolType::Path));
-            click(&ctx, &mut chart, empty - egui::vec2(0.0, 40.0));
-            for pressed in [None, Some(true), Some(false), Some(true), Some(false), None] {
-                pointer(&ctx, &mut chart, empty, pressed);
+        use crate::drawings::DrawingToolType;
+        #[cfg(feature = "drawings")]
+        for (tool, points, last, completed) in [
+            (
+                DrawingToolType::Path,
+                &[empty - egui::vec2(0.0, 40.0)][..],
+                empty,
+                1,
+            ),
+            (DrawingToolType::Path, &[], inside, 1),
+            (
+                DrawingToolType::Sector,
+                &[
+                    inside + egui::vec2(40.0, 0.0),
+                    inside + egui::vec2(60.0, 0.0),
+                ],
+                inside + egui::vec2(80.0, 0.0),
+                2,
+            ),
+        ] {
+            chart.drawings_mut().set_active_tool(Some(tool));
+            for at in points {
+                click(&ctx, &mut chart, *at);
             }
-            assert_eq!(chart.get_rendered_indicator_panes().len(), 2);
-            assert!(
+            for pressed in [None, Some(true), Some(false), Some(true), Some(false), None] {
+                pointer(&ctx, &mut chart, last, pressed);
+            }
+            assert_eq!(chart.pane_layout.maximized, None, "{tool:?} {last:?}");
+            assert_eq!(chart.get_rendered_indicator_panes().len(), 2, "{tool:?}");
+            assert_eq!(
                 chart
                     .drawings_mut()
                     .drawings
                     .iter()
-                    .any(|drawing| drawing.completed)
+                    .filter(|drawing| drawing.completed)
+                    .count(),
+                completed,
+                "{tool:?}"
             );
             chart.drawings_mut().set_active_tool(None);
         }

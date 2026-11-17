@@ -460,6 +460,9 @@ pub struct Chart {
     pub(crate) layout_inactive: bool,
     /// The layout's field selectors occupy the right end of the status line's first row this frame.
     pub(crate) layout_link_controls: bool,
+    /// `Control::Settings` is hidden: the legend's series settings button and the price axis
+    /// corner's scale settings button are not drawn.
+    pub(crate) settings_hidden: bool,
     /// Tells `ChartLayout` this is another chart: new for each chart and each restored snapshot,
     /// whose symbol and interval are no change for the layout to send to linked charts.
     pub(crate) layout_identity: u64,
@@ -756,6 +759,14 @@ impl Chart {
     /// Enables the configured values readout without changing pan or zoom.
     pub fn set_tooltip_enabled(&mut self, enabled: bool) {
         self.chart_options.tooltip.enabled = enabled;
+    }
+
+    /// Shows or hides the chart's own settings buttons: the series settings button among the
+    /// legend's title controls and the scale settings button in the price axis corner. Hidden,
+    /// they are not drawn and take no keyboard focus, while the legend's other controls stay.
+    /// Hosts call it with the visibility they give `Control::Settings`. Both start visible.
+    pub fn set_settings_buttons_visible(&mut self, visible: bool) {
+        self.settings_hidden = !visible;
     }
 
     /// The rising and falling body, border and wick colors of a chart type that series settings

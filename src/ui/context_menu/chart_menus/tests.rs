@@ -160,6 +160,120 @@ fn hidden_menu_controls_remove_rows_and_empty_sections() {
     }
 }
 
+/// Guards #3245: hiding `Alerts` drops the drawing menu's alert row with its separator, hiding
+/// `Settings` drops the chart's series and scale settings buttons from paint and from the Tab
+/// order while the other legend buttons stay, and showing either control restores them.
+#[test]
+fn hidden_alerts_and_settings_leave_the_drawing_menu_and_chart() {
+    fn drawing_menu_head(chart: &mut Chart, menus: &mut ChartMenus) -> Vec<String> {
+        let ctx = Context::default();
+        chart.right_click = Some(RightClickTarget::Drawing {
+            drawing_id: 7,
+            pos: Pos2::new(30.0, 30.0),
+        });
+        let output = ctx.run_ui(Default::default(), |ui| {
+            menus.show(ui.ctx(), chart);
+        });
+        output.drop_without_applying_deltas();
+        menus
+            .build_menu_items(&ctx, chart.shortcuts(), menus.context.unwrap())
+            .into_iter()
+            .take(3)
+            .map(|entry| match entry {
+                MenuEntry::Item(item) => item.label,
+                MenuEntry::Separator => "-".into(),
+                MenuEntry::Submenu { label, .. } => label,
+            })
+            .collect()
+    }
+    fn settings_focus_order(chart: &mut Chart, menus: &mut ChartMenus) -> Vec<String> {
+        const NAMES: [&str; 4] = [
+            "Hide series",
+            "Series settings",
+            "Remove series",
+            "Scale settings",
+        ];
+        let ctx = Context::default();
+        let mut order = Vec::new();
+        for stop in 0..40 {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                time: Some(stop as f64 * 0.01),
+                events: vec![Event::Key {
+                    key: egui::Key::Tab,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }],
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    chart.show(ui);
+                });
+                menus.show(ui.ctx(), chart);
+            });
+            for event in &output.platform_output.events {
+                if let egui::output::OutputEvent::FocusGained(info) = event
+                    && let Some(label) = info.label.as_deref()
+                    && NAMES.contains(&label)
+                    && !order.iter().any(|seen| seen == label)
+                {
+                    order.push(label.to_owned());
+                }
+            }
+            output.drop_without_applying_deltas();
+        }
+        order
+    }
+    type Observe = fn(&mut Chart, &mut ChartMenus) -> Vec<String>;
+    type Row = (
+        Control,
+        &'static [&'static str],
+        &'static [&'static str],
+        Observe,
+    );
+    let rows: [Row; 2] = [
+        (
+            Control::Alerts,
+            &["Add alert on Horizontal Line…", "-", "Edit…"],
+            &["Edit…", "-", "Bring to front"],
+            drawing_menu_head,
+        ),
+        (
+            Control::Settings,
+            &[
+                "Hide series",
+                "Series settings",
+                "Remove series",
+                "Scale settings",
+            ],
+            &["Hide series", "Remove series"],
+            settings_focus_order,
+        ),
+    ];
+    for (control, shown, hidden, observe) in rows {
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        chart.symbol = "SYNTH".into();
+        let mut line =
+            crate::drawings::Drawing::new(7, crate::drawings::DrawingToolType::HorizontalLine);
+        line.completed = true;
+        line.chart_points = vec![crate::drawings::ChartPoint::new(0.0, 105.0)];
+        chart.drawings_mut().drawings.push(line);
+        let mut menus = ChartMenus::default();
+        for visible in [true, false, true] {
+            menus.set_control_visible(control, visible);
+            chart.set_settings_buttons_visible(control != Control::Settings || visible);
+            assert_eq!(
+                observe(&mut chart, &mut menus),
+                if visible { shown } else { hidden },
+                "{control:?} visible: {visible}"
+            );
+        }
+    }
+}
+
 #[test]
 fn host_menu_entries_filter_targets_and_return_the_original_click() {
     use egui::{Event, PointerButton, RawInput, Shape};
