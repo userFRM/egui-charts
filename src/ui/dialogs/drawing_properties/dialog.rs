@@ -134,6 +134,7 @@ impl DrawingPropertiesDialog {
                 Ok(edits) => {
                     if self.props.save_as_default
                         && let Some(mut template) = self.current_template()
+                        && template.settings.custom_tool.is_none()
                     {
                         template.settings.visible = true;
                         chart
@@ -366,16 +367,26 @@ impl DrawingPropertiesDialog {
                 self.saving_template = true;
                 ui.close();
             }
-            if ui
-                .button(l10n::text(ui.ctx(), "Save as default for this tool"))
-                .clicked()
+            let tool = self.props.tool_settings.as_ref().map(|t| &t.settings);
+            // A host-registered tool has no default of its own.
+            let built_in = tool.is_some_and(|tool| tool.custom_tool.is_none());
+            // The check `load_template` makes: another tool's default would not load.
+            let defaults = self.default_template.as_ref().map(|t| &t.settings);
+            let resets = tool.zip(defaults).is_some_and(|(tool, defaults)| {
+                tool.tool_type == defaults.tool_type && tool.custom_tool == defaults.custom_tool
+            });
+            if built_in
+                && ui
+                    .button(l10n::text(ui.ctx(), "Save as default for this tool"))
+                    .clicked()
             {
                 self.props.save_as_default = true;
                 ui.close();
             }
-            if ui
-                .button(l10n::text(ui.ctx(), "Reset to defaults"))
-                .clicked()
+            if resets
+                && ui
+                    .button(l10n::text(ui.ctx(), "Reset to defaults"))
+                    .clicked()
             {
                 load = self.default_template.clone();
                 ui.close();
@@ -1111,6 +1122,26 @@ mod tests {
         );
         assert!(chart.undo());
         assert_eq!(chart.drawings().drawings[0].stroke_width, 2.0);
+        // A host tool has no default of its own: saving one keeps the built-in polyline's.
+        let polyline =
+            DrawingTemplate::from_drawing(&chart.drawings().new_drawing(0, Tool::Polyline));
+        chart
+            .drawings_mut()
+            .tool_defaults
+            .insert(Tool::Polyline, polyline.clone());
+        let mut custom = Drawing::custom("host-path");
+        custom.id = 8;
+        chart.drawings_mut().drawings.push(custom);
+        dialog.open_for_chart(&chart, DrawingId(8));
+        dialog.props.line_width = 5.0;
+        // The menu hides the row for a host tool, but a host may still set the flag.
+        dialog.props.save_as_default = true;
+        click(&mut dialog, &mut chart, &ctx, "Ok");
+        assert_eq!(
+            serde_json::to_value(&chart.drawings().tool_defaults[&Tool::Polyline]).unwrap(),
+            serde_json::to_value(&polyline).unwrap()
+        );
+        assert_eq!(chart.drawings().drawings[1].stroke_width, 5.0);
     }
 
     /// Several tools keep a template of one name apart in the host's storage, and each lists and
