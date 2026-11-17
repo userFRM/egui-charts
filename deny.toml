@@ -8,6 +8,10 @@ ignore = [
     { id = "RUSTSEC-2026-0371", reason = "zbus_names 4.3.5 via eframe 0.37 accessibility; awaiting backend migration to zbus 6" },
     { id = "RUSTSEC-2026-0370", reason = "zvariant 5.15.1 via eframe 0.37 accessibility; awaiting backend migration to zbus 6" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5.15.1 via eframe 0.37 accessibility; awaiting backend migration to zbus 6" },
+    # chrono and chrono-tz carry the library's date and time zone handling. Both are now marked
+    # unmaintained with no successor release; moving to another time library is a separate change.
+    { id = "RUSTSEC-2026-0543", reason = "chrono 0.4.45 unmaintained notice; no patched release, replacement is a separate change" },
+    { id = "RUSTSEC-2026-0555", reason = "chrono-tz 0.10.4 unmaintained notice; no patched release, replacement is a separate change" },
 ]
 
 [licenses]
