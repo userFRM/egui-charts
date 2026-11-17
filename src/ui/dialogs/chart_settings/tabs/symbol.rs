@@ -38,7 +38,8 @@ impl SettingsDialog {
                             | crate::model::ChartType::SessionVolumeProfile
                     )
                 {
-                    // Settings without a shared source take the one the dialog shows, as before.
+                    // Settings without a shared source take the one the dialog shows, so Ok
+                    // applies the source shown.
                     let shared = *self.settings.price_source.get_or_insert_default();
                     let params = self.settings.chart_type_params.clone().unwrap_or_default();
                     let mut series = crate::chart::series::SeriesSettings {
@@ -825,7 +826,7 @@ mod tests {
             config.show_price_line = false;
             config.bullish_color = up;
             config.bearish_color = down;
-            // Line charts keep their own source, which the Columns control must leave alone.
+            // The line charts' shared source, which the Columns control must leave alone.
             config.price_source = PriceSource::OHLC4;
             chart
         };
