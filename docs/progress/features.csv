@@ -844,9 +844,9 @@ Studies,Strategy tester,Parameter optimisation,incomplete,library,src/ui/strateg
 Studies,Strategy tester,Performance summary,incomplete,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs,
 Studies,Strategy tester,Position sizing,verified,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md,1152
 Studies,Strategy tester,Pyramiding limit,verified,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md,1152
-Studies,Strategy tester,Slippage models,incomplete,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md,1152;3291
+Studies,Strategy tester,Slippage models,unverified,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md;src/ui/strategy_report/properties.rs,1152;3291
 Studies,Strategy tester,Strategy properties,incomplete,library,src/strategies/backtest.rs;src/model/strategy.rs;src/ui/strategy_report/properties.rs;src/ui/strategy_report/tester.rs;src/ui/strategy_report/mod.rs;docs/strategy-report.md,1152;2059;2285;3184;3185
-Studies,Strategy tester,Strategy tester panel,verified,library,src/ui/strategy_report/tester.rs;src/ui/strategy_report/inputs.rs;src/ui/strategy_report/properties.rs;src/ui/strategy_report/mod.rs;examples/demo/strategy.rs,2059
+Studies,Strategy tester,Strategy tester panel,unverified,library,src/ui/strategy_report/tester.rs;src/ui/strategy_report/inputs.rs;src/ui/strategy_report/properties.rs;src/ui/strategy_report/mod.rs;examples/demo/strategy.rs,2059;3291
 Studies,Strategy tester,Trade markers on the chart,verified,library,src/model/strategy.rs;src/ui/strategy_report/tester.rs;src/widget/signals.rs;examples/demo/strategy.rs;src/widget/frame/mod.rs;terminal/src/trading.rs,
 Terminal,Alerts,"Alert editing, pause, resume and duplication",incomplete,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/dialogs/alert_dialog/dialog.rs;terminal/src/alerts.rs,2534
 Terminal,Alerts,Alert evaluation engine,incomplete,library,src/services/alerts.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs;terminal/src/alerts.rs;src/widget/alerts.rs,1132;2130
