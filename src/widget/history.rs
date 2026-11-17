@@ -1054,6 +1054,9 @@ impl Chart {
         }
         if let Some(config) = &mut action.config {
             std::mem::swap(&mut self.config, config);
+            // This configured mode was applied when the state was recorded, and the scale is
+            // restored on its own, so the next frame must not apply it over the scale again.
+            self.applied_config_scale_mode = self.config_scale_mode();
         }
         // The theme is not part of an action: the colours brought back follow the chart's.
         if let Some(palette) = &mut action.palette {

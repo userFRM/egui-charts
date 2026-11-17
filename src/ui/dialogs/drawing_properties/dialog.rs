@@ -720,8 +720,8 @@ mod tests {
         }
     }
 
-    /// A trend angle's Text tab styles its own labels: it has no text to write, align or box.
-    /// Text also offers to follow the zoom and to wrap.
+    /// A trend angle's or chart pattern's Text tab styles its own labels: it has no text to write,
+    /// align or box. Text also offers to follow the zoom and to wrap.
     #[test]
     fn text_tab_rows_follow_the_tool() {
         let ctx = Context::default();
@@ -731,6 +731,7 @@ mod tests {
             (Tool::TrendAngle, false, true, false),
             (Tool::TrendLine, true, true, false),
             (Tool::TextLabel, true, true, true),
+            (Tool::XABCDPattern, false, true, false),
         ] {
             let mut drawing = Drawing::new(7, tool);
             drawing.chart_points = vec![ChartPoint::new(1.0, 100.0); 2];
