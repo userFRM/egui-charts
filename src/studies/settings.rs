@@ -278,17 +278,19 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
         }));
 }
 
+/// Guides as [`StudyPane::levels`](super::StudyPane::levels) declares them.
+type Guides = Vec<(f64, Color32, &'static str)>;
+
 /// The guides a built-in study declared before it opened with fewer, and the levels its band
 /// filled between, for settings saved with that many levels. A host study under the same name,
 /// which declares other guides, keeps its own.
-fn former_guides(
-    study: &dyn Indicator,
-    saved: usize,
-) -> Option<(Vec<(f64, Color32, &'static str)>, Option<[usize; 2]>)> {
+fn former_guides(study: &dyn Indicator, saved: usize) -> Option<(Guides, Option<[usize; 2]>)> {
     use super::palette::{GRAY, MUTED};
+    // The guides each built-in study declares now, written out because the built-in studies are
+    // compiled only with the `studies` feature.
     let (current, former, fill) = match (study.name(), saved) {
         ("Connors RSI", 3) => (
-            super::ConnorsRSI::default().pane().levels,
+            vec![(70.0, MUTED, "Upper guide"), (30.0, MUTED, "Lower guide")],
             vec![
                 (70.0, MUTED, "Upper guide"),
                 (50.0, MUTED.gamma_multiply_u8(128), "Middle guide"),
@@ -297,7 +299,7 @@ fn former_guides(
             Some([0, 2]),
         ),
         ("Correlation Coefficient", 3) => (
-            super::Correlation::default().pane().levels,
+            vec![(0.0, GRAY.gamma_multiply_u8(128), "Zero")],
             vec![
                 (1.0, GRAY, "Upper guide"),
                 (-1.0, GRAY, "Lower guide"),
