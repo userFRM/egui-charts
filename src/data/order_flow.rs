@@ -390,6 +390,9 @@ struct State {
     trade_bars: super::inbox::TradeBars,
     /// A footprint that lost the stream's anchor adds only the sink's allocations.
     awaits_sink: bool,
+    /// Open of the newest bar a rebuild left out because the store had lost executions of it:
+    /// later executions of that bar or an older one add to no bar.
+    cut: Option<DateTime<Utc>>,
     bars: BTreeMap<DateTime<Utc>, ([f64; 3], u64)>,
     last: Option<DateTime<Utc>>,
     inside: Option<(f64, f64)>,
@@ -889,16 +892,18 @@ impl OrderFlowInput {
     }
 
     /// Rebuilds the source from the executions the chart holds, in place of what it holds. A
-    /// bar that lost an execution to the store's limit is left out, and a rolling window gives no
-    /// value while it reaches back to the loss, or to a held execution the rebuild leaves out, as
-    /// when the window overflows. On a trade-based interval it rebuilds only a source the sink has
-    /// not allocated an execution to yet, from the executions that arrived live, grouped along
-    /// `history`, the chart's bars, from the oldest bar whose executions are all held. A page's
-    /// copy of a live execution the store dropped as a repeat counts in its place, except at the
-    /// first instant where it dropped one, where the dropped ones count themselves. A footprint
-    /// source that lost some live executions waits for the sink's allocations, leaving out the
-    /// executions still queued: they open no bar of their own. Without a loss, a source whose
-    /// executions do not match the chart's bars groups them from the oldest live one.
+    /// bar that lost an execution to the store's limit is left out, with the executions of it
+    /// that arrive later, and a rolling window gives no value while it reaches back to the loss,
+    /// or to a held execution the rebuild leaves out, as when the window overflows. On a
+    /// trade-based interval it rebuilds only a source the sink has not allocated an execution to
+    /// yet, from the executions that arrived live, grouped along `history`, the chart's bars, from
+    /// the oldest bar whose executions are all held, and when they rebuild no bar after a loss,
+    /// the newest bar is left out as well. A page's copy of a live execution the store dropped as
+    /// a repeat counts in its place, except at the first instant where it dropped one, where the
+    /// dropped ones count themselves. A footprint source that lost some live executions waits for
+    /// the sink's allocations, leaving out the executions still queued: they open no bar of their
+    /// own. Without a loss, a source whose executions do not match the chart's bars groups them
+    /// from the oldest live one.
     #[cfg(feature = "widget")]
     pub(crate) fn replace_trades(
         &self,
@@ -1000,6 +1005,7 @@ impl OrderFlowInput {
                     distinct.lost_until = lost;
                 }
             }
+            let rebuilt = run.is_some();
             if let Some((parts, bars)) = run {
                 let mut state = self.state();
                 let mut previous: Option<&Tick> = None;
@@ -1022,10 +1028,19 @@ impl OrderFlowInput {
                 }
             }
             if let Some(lost) = lost {
-                let cut = clock.instant_open(lost);
+                let mut cut = clock.instant_open(lost);
+                // Without a run the held executions of the chart's newest bar, which the sink adds
+                // to next, never reached the source either.
+                if trade_based
+                    && !rebuilt
+                    && let Some(bar) = history.last()
+                {
+                    cut = cut.max(bar.time);
+                }
                 let mut state = self.state();
                 state.bars.retain(|open, _| *open > cut);
                 state.changes.retain(|open, _| *open > cut);
+                state.cut = Some(cut);
             }
         }
         if let Some(now) = as_of {
@@ -1575,8 +1590,12 @@ impl State {
             }
             _ => return,
         };
-        self.bars.insert(open, (row, 0));
         let latest = self.last.map_or(trade.ts, |t| t.max(trade.ts));
+        if self.cut.is_some_and(|cut| open <= cut) {
+            self.last = Some(latest);
+            return;
+        }
+        self.bars.insert(open, (row, 0));
         self.finish(latest, open);
     }
 
@@ -1585,6 +1604,7 @@ impl State {
             source,
             trade_bars: super::inbox::TradeBars::default(),
             awaits_sink: false,
+            cut: None,
             bars: BTreeMap::new(),
             last: None,
             inside: None,
@@ -2908,7 +2928,12 @@ mod tests {
     /// of 2, which the rebuild leaves out, and gives no value either. On 3t the streamed buys of
     /// 2, 1 and 1 from 01:05 reach a store of four only as a page's copies, and the sell drops the
     /// page's buy of 00:00: the rebuild starts at the sell and leaves out the copies, which the 60
-    /// second window reaches. The footprint of 1min keeps bar 10:01 only.
+    /// second window reaches. Later executions of a bar the rebuild left out add nothing to it: on
+    /// 1min the sell of 01:30 drops the buy of 01:10, so the buy of 01:40 adds no bar 10:01, and
+    /// the sell of 02:05 opens bar 10:02 alone. On 4t the sell of 01:10 drops the buy of 00:00
+    /// from the chart's forming bar, so nothing rebuilds, the sink's buy of 01:15 to that bar adds
+    /// nothing, and its sell of 01:20 opens the next bar alone. The footprint of 1min keeps bar
+    /// 10:01 only.
     #[cfg(feature = "widget")]
     #[test]
     fn rebuilt_sources_leave_out_what_the_store_dropped() {
@@ -2940,22 +2965,44 @@ mod tests {
             .chain([(70, 4.0, Sell)])
             .for_each(|trade| drained.push(tick(trade)));
         copied.append(drained, &mut |_, _| ());
+        // The 4t chart's forming bar: the buys of 1 and 2, then the sell.
+        let forming = [(0, 7.0)].map(|(second, volume)| {
+            crate::model::Bar::new(at(second), 100.0, 100.0, 100.0, 100.0, volume)
+        });
+        // The interval, the store, the chart's bars, the bar expected, and executions after the
+        // rebuild: pushed by time, or as the sink's part of a chart bar.
         let rows = [
             (
                 "1min",
                 held([(10, 1.0, Buy), (50, 2.0, Buy), (65, 4.0, Sell)]),
                 &[][..],
                 60,
+                &[][..],
             ),
             (
                 "2t",
                 held([(0, 1.0, Buy), (65, 2.0, Buy), (70, 4.0, Sell)]),
                 &bars[..],
                 70,
+                &[],
             ),
-            ("3t", copied, &streamed[..], 70),
+            ("3t", copied, &streamed[..], 70, &[]),
+            (
+                "1min",
+                held([(70, 1.0, Buy), (80, 2.0, Buy), (90, 4.0, Sell)]),
+                &[],
+                120,
+                &[(100, 1.0, Buy, None), (125, 4.0, Sell, None)],
+            ),
+            (
+                "4t",
+                held([(0, 1.0, Buy), (65, 2.0, Buy), (70, 4.0, Sell)]),
+                &forming[..],
+                80,
+                &[(75, 1.0, Buy, Some(0)), (80, 4.0, Sell, Some(80))],
+            ),
         ];
-        for (interval, store, history, open) in &rows {
+        for (interval, store, history, open, later) in &rows {
             let clock = BarClock::new(interval.parse().unwrap());
             let rate = OrderFlowInput::new(OrderFlowKind::TradeRate {
                 volume: true,
@@ -2963,6 +3010,13 @@ mod tests {
                 instant: 3,
             });
             rate.replace_trades(&clock, store, history, None);
+            for &(second, size, side, bar) in *later {
+                let trade = Tick::new(at(second), 100.0, size, Some(side));
+                match bar {
+                    Some(bar) => rate.push_trade_part(&clock, &trade, at(bar), size, true),
+                    None => rate.push_trade(&clock, &trade),
+                }
+            }
             let values = rate.values();
             assert_eq!(
                 values.keys().copied().collect::<Vec<_>>(),
