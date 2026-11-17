@@ -455,8 +455,15 @@ jobs:
         if: needs.changes.outputs.rust == 'true'
         with:
           tool: wasm-pack
+      - name: Build browser widget tests
+        if: needs.changes.outputs.rust == 'true'
+        run: >-
+          cargo build --tests --lib --target wasm32-unknown-unknown
+          ${{ matrix.features == 'all' && '--all-features' || '--no-default-features --features widget' }}
       - name: Run browser widget tests
         if: needs.changes.outputs.rust == 'true'
+        # The tests run in seconds once built: a stalled page or driver fails the step instead of holding the job.
+        timeout-minutes: 5
         env:
           # The default of 5 seconds for the browser driver to open its port is too short on a busy runner,
           # and the job then fails before any test runs. A longer budget also lets the runner restart a stuck driver.

@@ -758,9 +758,23 @@ fn only_connection_attempts_report_connecting() {
 /// A cancelled browser retry releases its captured state without waiting for Retry-After.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen_test::wasm_bindgen_test]
-async fn cancelled_browser_retry_releases_its_callback() {
-    use wasm_bindgen::{JsCast as _, closure::Closure};
-    use wasm_bindgen_futures::{JsFuture, js_sys::Promise};
+fn cancelled_browser_retry_releases_its_callback() {
+    use std::{cell::RefCell, rc::Rc};
+    use wasm_bindgen::{JsValue, closure::Closure};
+    use wasm_bindgen_futures::js_sys::{Function, Reflect};
+
+    // Record the timers instead of waiting on them, so the test does not depend on when the page fires them.
+    let window = web_sys::window().unwrap();
+    let set_timeout = Reflect::get(&window, &"setTimeout".into()).unwrap();
+    let timers = Rc::new(RefCell::new(Vec::new()));
+    let record = Closure::<dyn FnMut(Function, i32) -> i32>::new({
+        let timers = timers.clone();
+        move |callback, millis| {
+            timers.borrow_mut().push((callback, millis));
+            0
+        }
+    });
+    Reflect::set(&window, &"setTimeout".into(), record.as_ref()).unwrap();
 
     let cancelled = Arc::new(AtomicBool::new(false));
     let held = Arc::new(());
@@ -774,15 +788,17 @@ async fn cancelled_browser_retry_releases_its_callback() {
         }),
     );
     cancelled.store(true, Ordering::Release);
-    let wait = Promise::new(&mut |resolve, _| {
-        let done = Closure::once_into_js(move || {
-            resolve.call0(&wasm_bindgen::JsValue::NULL).unwrap();
-        });
-        web_sys::window()
-            .unwrap()
-            .set_timeout_with_callback_and_timeout_and_arguments_0(done.unchecked_ref(), 1500)
-            .unwrap();
-    });
-    JsFuture::from(wait).await.unwrap();
+    let first = timers.borrow().first().cloned();
+    let fired = first
+        .as_ref()
+        .map(|(callback, _)| callback.call0(&JsValue::NULL));
+    Reflect::set(&window, &"setTimeout".into(), &set_timeout).unwrap();
+
+    let timers = timers.borrow();
+    assert_eq!(
+        timers.iter().map(|(_, millis)| *millis).collect::<Vec<_>>(),
+        [1000]
+    );
+    assert!(fired.is_some_and(|result| result.is_ok()));
     assert_eq!(Arc::strong_count(&held), 1);
 }
