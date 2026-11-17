@@ -540,7 +540,7 @@ mod tests {
                     terminal = terminal.with_indicator_factory(factory);
                     ("Host average", "Host average", 42)
                 } else {
-                    ("SMA", "Simple Moving Avg", 9)
+                    ("SMA", "Simple Moving Average", 9)
                 };
                 for _ in 0..4 {
                     frame(&mut terminal, SIZE, vec![]);
