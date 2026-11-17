@@ -977,22 +977,16 @@ impl OrderFlowInput {
             }
         } else {
             let run = chart_run();
-            // After a loss on a trade-based interval the run leaves the held executions before
-            // its first bar to the bars the loss cut, and all of them without a run. It also
-            // leaves out the streamed executions the store kept apart as repeats of a page, and
-            // the page's copies after their instant, which stand for streamed ones: a rolling
-            // window gives no value while it reaches one, as while it reaches the loss.
+            // After a loss on a trade-based interval the run counts only the live executions after
+            // it, from the oldest chart bar whose executions are all held, and none without a run:
+            // a rolling window gives no value while it reaches a held execution the run leaves
+            // out, a page's included, as while it reaches the loss.
             let left_out = lost.filter(|_| trade_based).and_then(|_| {
                 let counted: std::collections::HashSet<*const Tick> =
                     (run.iter().flat_map(|(parts, _)| parts))
                         .map(|(trade, ..)| std::ptr::from_ref(*trade))
                         .collect();
-                let (kept_at, kept) = trades.unheld_live().unzip();
-                let paged = trades.iter().count() - trades.live().count();
-                let copies = (trades.iter().take(paged))
-                    .filter(|trade| kept_at.is_some_and(|at| trade.ts > at));
-                let streamed = trades.live().chain(kept.into_iter().flatten());
-                (streamed.chain(copies))
+                (trades.iter())
                     .filter(|trade| !counted.contains(&std::ptr::from_ref(*trade)))
                     .map(|trade| trade.ts)
                     .max()
