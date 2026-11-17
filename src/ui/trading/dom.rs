@@ -457,7 +457,9 @@ impl Ladder {
             }
             for (&level, &size) in &current {
                 let old = self.sizes[side].get(&level).copied().unwrap_or_default();
-                if size != old && self.observed {
+                // A row adds its levels, so an unchanged total can differ from the last one by
+                // rounding alone.
+                if (size - old).abs() > 1e-12 * size.max(old) && self.observed {
                     self.changes[side].insert(level, size - old);
                 }
             }
@@ -2443,6 +2445,10 @@ mod tests {
                     (Some(vec![(100.25, 3.0), (100.0, 5.0)]), "+2 | -"),
                     (Some(vec![(100.25, 3.0), (100.0, 4.0)]), "-1 | -"),
                     (Some(vec![(100.0, 4.0)]), "-3 | -"),
+                    // 0.1 + 0.2 adds to 0.30000000000000004, so the 0.2 joining the 0.1 at
+                    // 100.25 leaves the row's total, and its last change, as they were.
+                    (Some(vec![(100.25, 0.1), (100.0, 0.2)]), "-3.7 | -"),
+                    (Some(vec![(100.25, 0.3)]), "-3.7 | -"),
                 ],
             ),
         ] {
