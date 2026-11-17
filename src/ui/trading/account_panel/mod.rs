@@ -532,6 +532,85 @@ mod tests {
         harness.get_by_label("Close position");
     }
 
+    /// Each number field of the Modify order dialog is named after its label or check box, with
+    /// the accessibility check on, for an order with one take profit and for one with
+    /// take-profit levels, every label translated once. A regression leaves a field unnamed,
+    /// names it after another label, or skips or repeats a translation.
+    #[test]
+    fn the_modify_order_dialog_names_its_fields() {
+        use crate::model::TakeProfitLevel;
+        type Row = (
+            OrderType,
+            Vec<TakeProfitLevel>,
+            Option<f64>,
+            &'static [&'static str],
+        );
+        let rows: [Row; 2] = [
+            (
+                OrderType::Limit(100.0),
+                vec![],
+                Some(110.0),
+                &[
+                    "[Quantity]",
+                    "[Limit price]",
+                    "[Take profit]",
+                    "[Stop loss]",
+                ],
+            ),
+            (
+                OrderType::StopLimit {
+                    stop: 101.0,
+                    limit: 100.0,
+                },
+                vec![
+                    TakeProfitLevel::new(110.0, 1.0),
+                    TakeProfitLevel::new(120.0, 1.0),
+                ],
+                None,
+                &[
+                    "[Quantity]",
+                    "[Stop price]",
+                    "[Limit price]",
+                    "[Take profit 1]",
+                    "[Take profit 2]",
+                    "[Stop loss]",
+                ],
+            ),
+        ];
+        for (order_type, levels, take_profit, names) in rows {
+            let mut request = OrderRequest::new("SYM", OrderSide::Buy, 2.0, order_type);
+            request.take_profit = take_profit;
+            request.take_profit_levels = levels;
+            request.stop_loss = Some(90.0);
+            let order = Order::new(OrderId::new("9"), request, OrderStatus::Working);
+            let mut trading = Trading::default();
+            trading.set_service(Arc::new(Recorder {
+                brackets: true,
+                ..Recorder::default()
+            }));
+            trading.poll(&egui::Context::default(), &mut Toasts::new());
+            trading.account_panel.editing = Some((order.clone(), order.request));
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(1000.0, 600.0))
+                .with_context_setup(|ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::localization::set_translator(ctx, |english| {
+                        Some(format!("[{english}]"))
+                    });
+                })
+                .build_ui_state(
+                    |ui, trading: &mut Trading| {
+                        trading.show_account_panel(ui, "SYM");
+                    },
+                    trading,
+                );
+            harness.run();
+            for name in names {
+                harness.get_by_role_and_label(egui::Role::SpinButton, name);
+            }
+        }
+    }
+
     /// In panels as narrow as the demo gives on 320 and 393 point screens, the Trade, minimize
     /// and maximize buttons stay apart and inside the panel, with or without the broker's
     /// connection mark.

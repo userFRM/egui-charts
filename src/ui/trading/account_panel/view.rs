@@ -899,29 +899,33 @@ impl Trading {
                 .num_columns(2)
                 .spacing([12.0, 8.0])
                 .show(ui, |ui| {
-                    let price = |ui: &mut Ui, label: &str, value: &mut f64| {
-                        ui.label(l10n::text(ui.ctx(), label));
+                    let price = |ui: &mut Ui, name: &str, value: &mut f64| {
+                        let label = ui.label(name);
                         ui.add(
                             egui::DragValue::new(value)
                                 .range(0.0..=f64::MAX)
                                 .max_decimals(decimals)
                                 .speed(10f64.powi(-(decimals as i32))),
-                        );
+                        )
+                        .labelled_by(label.id);
                         ui.end_row();
                     };
-                    ui.label(l10n::text(ui.ctx(), "Quantity"));
+                    let quantity = ui.label(l10n::text(ctx, "Quantity"));
                     // The levels' quantities add up to it; they are changed on the chart.
                     ui.add_enabled(
                         request.take_profit_levels.is_empty(),
                         egui::DragValue::new(&mut request.quantity).range(0.0..=f64::MAX),
-                    );
+                    )
+                    .labelled_by(quantity.id);
                     ui.end_row();
                     match &mut request.order_type {
-                        OrderType::Limit(limit) => price(ui, "Limit price", limit),
-                        OrderType::Stop(stop) => price(ui, "Stop price", stop),
+                        OrderType::Limit(limit) => {
+                            price(ui, &l10n::text(ctx, "Limit price"), limit)
+                        }
+                        OrderType::Stop(stop) => price(ui, &l10n::text(ctx, "Stop price"), stop),
                         OrderType::StopLimit { stop, limit } => {
-                            price(ui, "Stop price", stop);
-                            price(ui, "Limit price", limit);
+                            price(ui, &l10n::text(ctx, "Stop price"), stop);
+                            price(ui, &l10n::text(ctx, "Limit price"), limit);
                         }
                         _ => {}
                     }
@@ -948,7 +952,7 @@ impl Trading {
                             .chain([("Stop loss", &mut request.stop_loss)])
                         {
                             let mut on = bracket.is_some();
-                            ui.checkbox(&mut on, label);
+                            let toggle = ui.checkbox(&mut on, l10n::text(ctx, label));
                             if on {
                                 let value = bracket.get_or_insert(reference);
                                 ui.add(
@@ -956,7 +960,8 @@ impl Trading {
                                         .range(0.0..=f64::MAX)
                                         .max_decimals(decimals)
                                         .speed(10f64.powi(-(decimals as i32))),
-                                );
+                                )
+                                .labelled_by(toggle.id);
                             } else {
                                 *bracket = None;
                             }
