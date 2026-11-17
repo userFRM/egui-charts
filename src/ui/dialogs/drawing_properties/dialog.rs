@@ -255,6 +255,8 @@ impl DrawingPropertiesDialog {
                 drawing.regression_trend = old.regression_trend;
                 drawing.vwap = old.vwap;
                 drawing.channel_midline = old.channel_midline;
+                drawing.anchor_price_style = old.anchor_price_style;
+                drawing.middle_line = old.middle_line;
                 drawing.theme_shade = old.theme_shade;
                 drawing.line_measurements = old.line_measurements;
                 drawing.price_axis_label = old.price_axis_label;
@@ -844,6 +846,8 @@ mod tests {
                 settings.text_color = Some([1, 2, 3, 255]);
                 settings.line_measurements.price_labels = true;
                 settings.theme_shade = true;
+                settings.anchor_price_style = Some(note_text);
+                settings.middle_line.width = 3.0;
                 dialog.coordinates.points[1].price = "125".into();
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
                 assert_eq!(
@@ -865,6 +869,8 @@ mod tests {
                 assert_eq!(preview.text_color, Some([1, 2, 3, 255]));
                 assert!(preview.line_measurements.price_labels);
                 assert!(preview.theme_shade);
+                assert_eq!(preview.anchor_price_style, Some(note_text));
+                assert_eq!(preview.middle_line.width, 3.0);
                 assert_eq!(chart.drawings().drawings[2].stroke_width, 6.0);
                 assert!(!chart.can_undo());
                 assert!(chart.can_redo(), "preview must retain existing redo");
@@ -923,6 +929,12 @@ mod tests {
             assert_eq!(restored.text_color, Some([41, 98, 255, 255]), "{finish}");
             assert_eq!(restored.line_measurements, Default::default(), "{finish}");
             assert!(!restored.theme_shade, "{finish}");
+            assert_eq!(restored.anchor_price_style, None, "{finish}");
+            assert_eq!(
+                restored.middle_line,
+                crate::drawings::MiddleLineStyle::default(),
+                "{finish}"
+            );
             assert_eq!(chart.drawings().drawings[0].stroke_width, 20.0, "{finish}");
             assert_eq!(chart.drawings().drawings[1].stroke_width, 4.0, "{finish}");
             assert_eq!(

@@ -176,6 +176,8 @@ impl DrawingToolType {
                 | Self::Arrow
                 | Self::Path
                 | Self::Polyline
+                | Self::FlatTopBottom
+                | Self::DisjointChannel
         )
     }
 
