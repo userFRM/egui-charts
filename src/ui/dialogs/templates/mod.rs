@@ -11,7 +11,7 @@ pub use crate::drawings::DrawingTemplate;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+    use crate::drawings::{ChartPoint, Drawing, DrawingToolType, ImageConfig};
     use crate::studies::{ConfiguredStudy, Indicator, StudyTemplate};
 
     #[test]
@@ -75,5 +75,37 @@ mod tests {
         assert_eq!(drawing.folder, ["Analysis", "Levels"]);
         assert_eq!(drawing.chart_points[0].bar_idx, 3.0);
         assert!(drawing.completed);
+        // A template styles a picture without locking or hiding it, or replacing it or its frame.
+        let image = |url: &str, size, opacity| {
+            let mut picture = Drawing::new(1, DrawingToolType::Image);
+            picture.text = Some(url.into());
+            picture.image = Some(ImageConfig {
+                size: Some(size),
+                opacity,
+            });
+            picture
+        };
+        let mut source = image("https://example.invalid/a.png", [10.0, 10.0], 128);
+        (source.locked, source.visible, source.modified_at) = (true, false, Some(5));
+        let mut picture = image("https://example.invalid/b.png", [40.0, 30.0], 255);
+        picture.modified_at = Some(9);
+        DrawingTemplate::from_drawing(&source)
+            .apply_to(&mut picture)
+            .unwrap();
+        assert_eq!(
+            (picture.locked, picture.visible, picture.modified_at),
+            (false, true, Some(9))
+        );
+        assert_eq!(
+            picture.text.as_deref(),
+            Some("https://example.invalid/b.png")
+        );
+        assert_eq!(
+            picture.image,
+            Some(ImageConfig {
+                size: Some([40.0, 30.0]),
+                opacity: 128
+            })
+        );
     }
 }

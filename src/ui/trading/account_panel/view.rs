@@ -151,17 +151,29 @@ impl Trading {
                     .frame_when_inactive(false)
                     .image_tint_follows_text_color(true),
                 );
+                // Without the broker's name, or before the broker reports the account, a menu
+                // shows only its chevron, so it is named after what it chooses.
+                let broker = match panel.broker.trim().is_empty() {
+                    true => broker.accessible_name(l10n::text(selectors.ctx(), "Broker")),
+                    false => broker,
+                };
                 egui::Popup::menu(&broker).show(|ui| {
                     if ui.button(l10n::text(ui.ctx(), "Disconnect")).clicked() {
                         action = Some(AccountPanelAction::Disconnect);
                     }
                 });
                 let name = panel.accounts.get(panel.active).map_or("", String::as_str);
+                let text = format!("{name} {currency}").trim().to_owned();
+                let unnamed = text.is_empty();
                 let account = selectors.add(
-                    egui::Button::new((format!("{name} {currency}").trim().to_owned(), chevron()))
+                    egui::Button::new((text, chevron()))
                         .frame_when_inactive(false)
                         .image_tint_follows_text_color(true),
                 );
+                let account = match unnamed {
+                    true => account.accessible_name(l10n::text(selectors.ctx(), "Account")),
+                    false => account,
+                };
                 egui::Popup::menu(&account).show(|ui| {
                     for (index, name) in panel.accounts.iter().enumerate() {
                         if ui
@@ -899,29 +911,33 @@ impl Trading {
                 .num_columns(2)
                 .spacing([12.0, 8.0])
                 .show(ui, |ui| {
-                    let price = |ui: &mut Ui, label: &str, value: &mut f64| {
-                        ui.label(l10n::text(ui.ctx(), label));
+                    let price = |ui: &mut Ui, name: &str, value: &mut f64| {
+                        let label = ui.label(name);
                         ui.add(
                             egui::DragValue::new(value)
                                 .range(0.0..=f64::MAX)
                                 .max_decimals(decimals)
                                 .speed(10f64.powi(-(decimals as i32))),
-                        );
+                        )
+                        .labelled_by(label.id);
                         ui.end_row();
                     };
-                    ui.label(l10n::text(ui.ctx(), "Quantity"));
+                    let quantity = ui.label(l10n::text(ctx, "Quantity"));
                     // The levels' quantities add up to it; they are changed on the chart.
                     ui.add_enabled(
                         request.take_profit_levels.is_empty(),
                         egui::DragValue::new(&mut request.quantity).range(0.0..=f64::MAX),
-                    );
+                    )
+                    .labelled_by(quantity.id);
                     ui.end_row();
                     match &mut request.order_type {
-                        OrderType::Limit(limit) => price(ui, "Limit price", limit),
-                        OrderType::Stop(stop) => price(ui, "Stop price", stop),
+                        OrderType::Limit(limit) => {
+                            price(ui, &l10n::text(ctx, "Limit price"), limit)
+                        }
+                        OrderType::Stop(stop) => price(ui, &l10n::text(ctx, "Stop price"), stop),
                         OrderType::StopLimit { stop, limit } => {
-                            price(ui, "Stop price", stop);
-                            price(ui, "Limit price", limit);
+                            price(ui, &l10n::text(ctx, "Stop price"), stop);
+                            price(ui, &l10n::text(ctx, "Limit price"), limit);
                         }
                         _ => {}
                     }
@@ -948,7 +964,7 @@ impl Trading {
                             .chain([("Stop loss", &mut request.stop_loss)])
                         {
                             let mut on = bracket.is_some();
-                            ui.checkbox(&mut on, label);
+                            let toggle = ui.checkbox(&mut on, l10n::text(ctx, label));
                             if on {
                                 let value = bracket.get_or_insert(reference);
                                 ui.add(
@@ -956,7 +972,8 @@ impl Trading {
                                         .range(0.0..=f64::MAX)
                                         .max_decimals(decimals)
                                         .speed(10f64.powi(-(decimals as i32))),
-                                );
+                                )
+                                .labelled_by(toggle.id);
                             } else {
                                 *bracket = None;
                             }
