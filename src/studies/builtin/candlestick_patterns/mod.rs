@@ -22,14 +22,14 @@
 //!
 //! | Abbr. | Pattern | Side | Rule (`b` the bar, `p1`, `p2`, ... the bars before it) |
 //! |---|---|---|---|
-//! | AB | Abandoned Baby | bearish | `p2` white in an uptrend, `p1` a doji body whose low gaps above `p2`'s high, `b` black whose high gaps below `p1`'s low |
-//! | AB | Abandoned Baby | bullish | mirror: `p2` black in a downtrend, `p1` doji body gapping below, `b` white gapping above |
+//! | AB | Abandoned Baby | bearish | `p2` long white in an uptrend, `p1` a doji body whose low gaps above `p2`'s high, `b` black whose high gaps below `p1`'s low |
+//! | AB | Abandoned Baby | bullish | mirror: `p2` long black in a downtrend, `p1` doji body gapping below, `b` white gapping above |
 //! | DCC | Dark Cloud Cover | bearish | `p1` long white in an uptrend; `b` black, opening at or above `p1`'s high, closing below the middle of `p1`'s body and above its open |
 //! | D | Doji | neutral | a doji that is neither a dragonfly nor a gravestone doji |
 //! | DS | Doji Star | bearish | `b` in an uptrend; `p1` long white; `b` a doji body gapping above `p1`'s body |
 //! | DS | Doji Star | bullish | `b` in a downtrend; `p1` long black; `b` a doji body gapping below `p1`'s body |
 //! | DTG | Downside Tasuki Gap | bearish | `b` in a downtrend; `p2` long black; `p1` small black, its body gapping below `p2`'s; `b` white, opening inside `p1`'s body and closing inside the gap |
-//! | DD | Dragonfly Doji | bullish | a doji body with an upper shadow no longer than the body |
+//! | DD | Dragonfly Doji | bullish | in a downtrend: a doji body with an upper shadow no longer than the body |
 //! | BE | Engulfing | bearish | `b` long black in an uptrend; `p1` small white; `b`'s body covers `p1`'s, extending past at least one end |
 //! | BE | Engulfing | bullish | `b` long white in a downtrend; `p1` small black; `b`'s body covers `p1`'s, extending past at least one end |
 //! | EDS | Evening Doji Star | bearish | as Evening Star with a doji body for `p1` |
@@ -495,10 +495,12 @@ mod tests {
         let cases: [Case; 44] = [
             ("Abandoned Baby - Bearish", 1, "AB",
                 &[(100.0, 103.0, 99.5, 102.5), (104.0, 105.0, 103.5, 104.0625), (103.0, 103.25, 100.0, 100.5)],
-                &[&[(100.0, 103.0, 99.5, 102.5), (104.0, 105.0, 103.5, 104.0625), (103.0, 103.5, 100.0, 100.5)]]),
+                &[&[(100.0, 103.0, 99.5, 102.5), (104.0, 105.0, 103.5, 104.0625), (103.0, 103.5, 100.0, 100.5)],
+                  &[(102.0, 103.0, 99.5, 102.5), (104.0, 105.0, 103.5, 104.0625), (103.0, 103.25, 100.0, 100.5)]]),
             ("Abandoned Baby - Bullish", 0, "AB",
                 &[(102.5, 103.0, 99.5, 100.0), (98.5, 99.0, 97.5, 98.5625), (99.5, 102.5, 99.25, 102.0)],
-                &[&[(102.5, 103.0, 99.5, 100.0), (98.5, 99.0, 97.5, 98.5625), (99.5, 102.5, 99.0, 102.0)]]),
+                &[&[(102.5, 103.0, 99.5, 100.0), (98.5, 99.0, 97.5, 98.5625), (99.5, 102.5, 99.0, 102.0)],
+                  &[(100.5, 103.0, 99.5, 100.0), (98.5, 99.0, 97.5, 98.5625), (99.5, 102.5, 99.25, 102.0)]]),
             ("Dark Cloud Cover - Bearish", 1, "DCC",
                 &[(100.0, 103.5, 99.5, 103.0), (104.0, 104.5, 101.0, 101.25)],
                 &[&[(100.0, 103.5, 99.5, 103.0), (104.0, 104.5, 101.5, 101.75)]]),
@@ -617,7 +619,8 @@ mod tests {
         let none = PatternTrend::NoDetection;
         // Bars near 100 are in a downtrend after closes falling to 90 and in an uptrend after
         // closes rising to 99. A reversal needs the trend it ends, a continuation the trend
-        // it continues, and the shapes below need none.
+        // it continues, and the shapes below need none. Without detection every pattern is
+        // marked after either history.
         let falling = walk((90..150).rev().map(f64::from));
         let rising = walk((40..100).map(f64::from));
         for (label, line, abbr, hit, miss) in cases {
@@ -636,7 +639,7 @@ mod tests {
                 }
             }
             let trendless = [
-                "D", "DD", "GD", "K", "LLS", "LUS", "MB", "MW", "STB", "STW", "3BC", "3WS",
+                "D", "GD", "K", "LLS", "LUS", "MB", "MW", "STB", "STW", "3BC", "3WS",
             ];
             let continuation = ["DTG", "FTM", "FW", "ON", "RTM", "RW", "UTG"];
             let (with, against) = if (line == 0) != continuation.contains(&abbr) {
@@ -655,6 +658,13 @@ mod tests {
                 trendless.contains(&abbr).then_some(abbr),
                 "{label} against trend"
             );
+            for history in [with, against] {
+                assert_eq!(
+                    text(none, history, hit, label, line).as_deref(),
+                    Some(abbr),
+                    "{label} without trend detection"
+                );
+            }
         }
 
         // The trend is checked on the bar the definition names: a window rising from a bar
