@@ -890,6 +890,18 @@ pub trait Indicator: Send {
     ///
     /// This enables cloning of heterogeneous indicator collections.
     fn clone_box(&self) -> Box<dyn Indicator>;
+
+    /// Clone for an export that can be drawn after the live chart changes or is dropped.
+    /// The result must have no live subscription and share nothing that later events can
+    /// mutate. Immutable history owners may remain shared.
+    ///
+    /// The default calls [`clone_box`](Self::clone_box). Override when the study holds live
+    /// state; [`OrderFlowInput::frozen`](crate::data::OrderFlowInput::frozen) detaches stream
+    /// inputs while preserving their current data. Ordinary presentation and undo clones
+    /// continue to use `clone_box`.
+    fn clone_for_export(&self) -> Box<dyn Indicator> {
+        self.clone_box()
+    }
 }
 
 /// Blanket `Clone` implementation for boxed indicators, delegating to
