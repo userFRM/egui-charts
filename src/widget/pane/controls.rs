@@ -255,8 +255,17 @@ impl Chart {
         plot: Rect,
         collapsed: bool,
     ) {
-        self.pane_maximize_button(ui, id, rect, plot);
         let visible = self.pane_buttons_visible(ui, rect);
+        let [drawn_above, drawn_below] =
+            [false, true].map(|down| self.drawn_neighbour(pane_idx, down));
+        // As on the price pane, the top row is left to the corner menu and link controls of a
+        // `ChartLayout`.
+        let rect = if drawn_above.is_none() && rect.height() >= 48.0 {
+            Rect::from_min_max(rect.min + egui::vec2(0.0, 24.0), rect.max)
+        } else {
+            rect
+        };
+        self.pane_maximize_button(ui, id, rect, plot);
         let button = Rect::from_min_size(
             Pos2::new(plot.right() - 42.0, rect.top() + 2.0),
             egui::vec2(20.0, 20.0),
@@ -280,8 +289,6 @@ impl Chart {
             .or_else(|| self.series_pane(SeriesId::MAIN));
         let above = pane_idx.checked_sub(1).map(|at| panes[at].id);
         let below = panes.get(pane_idx + 1).map(|pane| pane.id);
-        let [drawn_above, drawn_below] =
-            [false, true].map(|down| self.drawn_neighbour(pane_idx, down));
         child.menu_button("...", |ui| {
             let members = self.pane_series(id);
             let editable = members.iter().all(|member| {
@@ -815,6 +822,74 @@ mod tests {
             harness.get_by_label("Move pane up").click();
             harness.run();
             assert_eq!(harness.state().panes(), expected, "{hide_rsi}");
+        }
+    }
+
+    /// The menu of the pane drawn at the top of a chart in a layout opens from any point of its
+    /// button, which the layout's corner menu covered, and the corner menu still opens.
+    #[test]
+    fn top_pane_menu_opens_beside_the_layout_corner_menu() {
+        use crate::studies::RSI;
+        use crate::widget::layout::ChartLayout;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        for (top, entry, moved_to) in [(false, "Move pane up", 0), (true, "Move pane down", 1)] {
+            let mut chart = crate::widget::test_frames::chart(&[100.0, 105.0], &[110.0, 115.0]);
+            let study = chart.add_indicator(Box::new(RSI::new(14)));
+            let pane = chart.series_pane(study).unwrap();
+            if top {
+                assert!(chart.move_pane(pane, 0));
+            }
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(800.0, 600.0))
+                // The RSI legend writes a missing value as "∅", and the text field of the layout
+                // menu has no accessible name.
+                .allow_missing_glyphs()
+                .with_accessibility_check(false)
+                .build_ui_state(
+                    |ui, state: &mut (ChartLayout, Chart)| {
+                        let (layout, chart) = state;
+                        layout.show(ui, &mut [chart]);
+                    },
+                    (ChartLayout::default(), chart),
+                );
+            let rect = harness.state().1.pane_layout.panes[usize::from(!top)].rect;
+            harness.hover_at(rect.center());
+            harness.run();
+            // The point of the pane's menu button nearest the corner button.
+            let corner = harness.get_by_label("\u{2026}").rect();
+            let at = harness
+                .get_by_label("...")
+                .rect()
+                .shrink(1.0)
+                .clamp(corner.center());
+            harness.hover_at(at);
+            harness.run();
+            for pressed in [true, false] {
+                harness.event(Event::PointerButton {
+                    pos: at,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                });
+            }
+            harness.run();
+            harness.get_by_label(entry).click();
+            harness.run();
+            let order = harness.state().1.panes();
+            assert_eq!(
+                order.iter().position(|id| *id == pane),
+                Some(moved_to),
+                "top={top}"
+            );
+            harness.hover_at(rect.center());
+            harness.run();
+            harness.get_by_label("\u{2026}").click();
+            harness.run();
+            assert!(
+                harness.query_by_label("Detach chart").is_some(),
+                "top={top}"
+            );
         }
     }
 

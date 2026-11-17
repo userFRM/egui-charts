@@ -446,7 +446,7 @@ mod tests {
                 trading.set_service(next.clone());
                 &next
             } else {
-                trading.connect();
+                trading.listen();
                 &broker
             };
             let old = JournalEntry::new(at(0), "Old account");
