@@ -24,7 +24,7 @@
 
 use crate::data::OrderFlowKind;
 use crate::studies::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Type alias for indicator constructor closures stored in the factory.
 type IndicatorConstructor = Box<dyn Fn() -> Box<dyn Indicator> + Send + Sync>;
@@ -76,6 +76,8 @@ pub struct IndicatorFactory {
     constructors: HashMap<String, (Option<&'static str>, IndicatorConstructor)>,
     help_urls: HashMap<&'static str, &'static str>,
     defaults: HashMap<String, StudyTemplate>,
+    /// The names the host registered, a built-in's name included once the host replaces it.
+    hosts: HashSet<String>,
 }
 
 impl std::fmt::Debug for IndicatorFactory {
@@ -107,6 +109,7 @@ impl IndicatorFactory {
             constructors: HashMap::new(),
             help_urls: HashMap::new(),
             defaults: HashMap::new(),
+            hosts: HashSet::new(),
         };
 
         factory.register_builtin();
@@ -462,9 +465,16 @@ impl IndicatorFactory {
             return false;
         }
         self.defaults.remove(&name);
+        self.hosts.insert(name.clone());
         self.constructors
             .insert(name, (Some(category), Box::new(constructor)));
         true
+    }
+
+    /// Whether the host registered `name`, so that it resolves to a study whose saved templates
+    /// never went through the changes of a built-in of that name.
+    pub(crate) fn is_host(&self, name: &str) -> bool {
+        self.hosts.contains(name)
     }
 
     /// Set the inputs and presentation used by subsequent [`create`](Self::create) calls.
@@ -552,12 +562,14 @@ impl IndicatorFactory {
     /// Returns `true` if it was present and removed, `false` otherwise.
     pub fn unregister(&mut self, name: &str) -> bool {
         self.defaults.remove(name);
+        self.hosts.remove(name);
         self.constructors.remove(name).is_some()
     }
 
     /// Remove all registered indicators, including built-ins.
     pub fn clear(&mut self) {
         self.defaults.clear();
+        self.hosts.clear();
         self.constructors.clear();
     }
 
