@@ -1293,6 +1293,7 @@ fn marker_autoscale_keeps_shapes_and_text_inside_each_pane() {
                                 || p.stroke.color == egui::epaint::ColorMode::Solid(Color32::RED)
                         }
                         Shape::LineSegment { stroke, .. } => stroke.color == Color32::RED,
+                        Shape::Mesh(mesh) => mesh.vertices.iter().any(|v| v.color == Color32::RED),
                         Shape::Text(t) if t.galley.text().starts_with("edge ") => {
                             labels += 1;
                             true
