@@ -712,8 +712,10 @@ fn assert_missing_history_rows(
     }
 }
 
-fn refresh_missing_history(feed: &Script, chart: &mut Chart, frames: &mut Frames) {
-    chart.reload_feed();
+fn resume_missing_history(feed: &Script, chart: &mut Chart, frames: &mut Frames) {
+    chart.set_feed_paused(true);
+    frames.run(chart);
+    chart.set_feed_paused(false);
     frames.run(chart);
     feed.resolve()
         .send(Ok(Instrument::new("A").with_tick_size(1.0)));
@@ -732,7 +734,7 @@ fn refresh_missing_history(feed: &Script, chart: &mut Chart, frames: &mut Frames
 }
 
 #[test]
-fn unavailable_prepared_history_skips_only_its_span_and_refresh_retries_it() {
+fn unavailable_prepared_history_skips_only_its_span_and_resume_retries_it() {
     for shared in [false, true] {
         let (feed, mut chart, mut frames, owners) = missing_history_chart(shared);
         assert_missing_history_rows(&chart, owners, false);
@@ -741,7 +743,7 @@ fn unavailable_prepared_history_skips_only_its_span_and_refresh_retries_it() {
         }
         assert!(footprint_requests(&feed).is_empty());
         assert!(feed.footprints.lock().unwrap().is_empty());
-        refresh_missing_history(&feed, &mut chart, &mut frames);
+        resume_missing_history(&feed, &mut chart, &mut frames);
         assert_missing_history_rows(&chart, owners, false);
         for _ in 0..6 {
             frames.run(&mut chart);
@@ -753,18 +755,150 @@ fn unavailable_prepared_history_skips_only_its_span_and_refresh_retries_it() {
         assert_eq!(feed.footprints.lock().unwrap().len(), 1);
         assert_missing_history_rows(&chart, owners, false);
     }
+
+    // A clipped viewport can answer only the older prefix of an internal gap.
+    // Panning right must still request the newer, unanswered suffix.
+    for shared in [false, true] {
+        let (feed, mut chart, mut frames) = prepared_chart();
+        let start = bars(1)[0].time;
+        let at = |minute| start + TimeDelta::minutes(minute);
+        footprint_requests(&feed);
+        let (newer, _) = missing_history_page(shared, at(3), at(4), 7.0, false);
+        feed.footprints.lock().unwrap().remove(0).send(Ok(newer));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        let requests = footprint_requests(&feed);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].before, Some(at(3)));
+        feed.footprints
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(FootprintPage::unavailable(at(1), at(3))));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        let requests = footprint_requests(&feed);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].before, Some(at(1)));
+        let (older, _) = missing_history_page(shared, start, at(1), 3.0, true);
+        feed.footprints.lock().unwrap().remove(0).send(Ok(older));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        assert!(footprint_requests(&feed).is_empty());
+
+        chart.set_visible_logical_range(crate::model::LogicalRange {
+            left: 1.0,
+            right: 1.0,
+        });
+        chart.set_feed_paused(true);
+        frames.run(&mut chart);
+        chart.set_feed_paused(false);
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        feed.page().send(page(bars(5), true));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        let requests = footprint_requests(&feed);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].since, Some(at(1)));
+        assert_eq!(requests[0].before, Some(at(2)));
+        feed.footprints
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(FootprintPage::unavailable(at(1), at(2))));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        assert!(footprint_requests(&feed).is_empty());
+        chart.set_visible_logical_range(crate::model::LogicalRange {
+            left: 1.0,
+            right: 2.0,
+        });
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        let requests = footprint_requests(&feed);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].since, Some(at(2)));
+        assert_eq!(requests[0].before, Some(at(3)));
+    }
+}
+
+#[test]
+fn explicit_reload_replaces_prepared_history_and_requests_the_latest_page() {
+    for shared in [false, true] {
+        let (feed, mut chart, mut frames) = prepared_chart();
+        let start = bars(1)[0].time;
+        let (old, _) = missing_history_page(
+            shared,
+            start + TimeDelta::minutes(3),
+            start + TimeDelta::minutes(4),
+            7.0,
+            true,
+        );
+        feed.footprints.lock().unwrap().remove(0).send(Ok(old));
+        feed.sink()
+            .push_tick(Tick::new(start + TimeDelta::minutes(4), 100.0, 9.0, None));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        footprint_requests(&feed);
+
+        chart.reload_feed();
+        frames.run(&mut chart);
+        assert!(chart.bars(SeriesId::MAIN).is_empty());
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        let replacement = bars(2)
+            .into_iter()
+            .map(|bar| Bar::new(bar.time, 50.0, 50.0, 50.0, 50.0, 2.0))
+            .collect::<Vec<_>>();
+        feed.page().send(page(replacement.clone(), true));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        assert_eq!(chart.bars(SeriesId::MAIN), replacement);
+        assert!(prepared_view(&chart).complete_bars(..).next().is_none());
+        let requests = footprint_requests(&feed);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].since, None);
+        assert_eq!(requests[0].before, None);
+
+        let (fresh, _) =
+            missing_history_page(shared, start, start + TimeDelta::minutes(1), 11.0, true);
+        feed.footprints.lock().unwrap().remove(0).send(Ok(fresh));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        assert_eq!(
+            prepared_view(&chart)
+                .complete_bars(..)
+                .map(|bar| (bar.time, bar.volume()))
+                .collect::<Vec<_>>(),
+            [(start, 11.0)]
+        );
+    }
 }
 
 #[test]
 fn confirmed_empty_internal_history_invalidates_coverage_without_fabricating_rows() {
     for shared in [false, true] {
         let (feed, mut chart, mut frames, owners) = missing_history_chart(shared);
-        refresh_missing_history(&feed, &mut chart, &mut frames);
+        resume_missing_history(&feed, &mut chart, &mut frames);
         let start = bars(1)[0].time;
         let before = start + TimeDelta::minutes(3);
         let candles = chart.bars(SeriesId::MAIN).to_vec();
         assert_missing_history_rows(&chart, owners, false);
         let mut frozen = chart.export_snapshot(&frames.ctx, &Default::default());
+        // Owned-only exports clone mutable storage; shared exports retain their source.
+        let frozen_owners = [start, before].map(|time| {
+            prepared_view(&frozen)
+                .bar_at(time)
+                .unwrap()
+                .levels
+                .get(&100)
+                .unwrap() as *const crate::data::FootprintLevel
+        });
+        if shared {
+            assert_eq!(frozen_owners, owners);
+        }
         #[cfg(feature = "studies")]
         let input_and_revision = {
             let input = missing_history_input(&chart);
@@ -809,9 +943,9 @@ fn confirmed_empty_internal_history_invalidates_coverage_without_fabricating_row
         assert!(footprint_requests(&feed).is_empty());
         frames.run(&mut frozen);
         assert!(feed.calls().is_empty(), "exports must never refill a gap");
-        assert_missing_history_rows(&frozen, owners, false);
+        assert_missing_history_rows(&frozen, frozen_owners, false);
         drop(chart);
-        assert_missing_history_rows(&frozen, owners, false);
+        assert_missing_history_rows(&frozen, frozen_owners, false);
     }
 }
 
@@ -819,7 +953,7 @@ fn confirmed_empty_internal_history_invalidates_coverage_without_fabricating_row
 fn partial_internal_history_answers_advance_the_remaining_bounded_request() {
     for shared in [false, true] {
         let (feed, mut chart, mut frames, owners) = missing_history_chart(shared);
-        refresh_missing_history(&feed, &mut chart, &mut frames);
+        resume_missing_history(&feed, &mut chart, &mut frames);
         let start = bars(1)[0].time;
         let at = |minute| start + TimeDelta::minutes(minute);
         feed.footprints
@@ -878,7 +1012,7 @@ fn invalid_internal_history_preserves_complete_rows_and_the_unknown_gap() {
     for shared in [false, true] {
         for invalid in 0..5 {
             let (feed, mut chart, mut frames, owners) = missing_history_chart(shared);
-            refresh_missing_history(&feed, &mut chart, &mut frames);
+            resume_missing_history(&feed, &mut chart, &mut frames);
             let start = bars(1)[0].time;
             let at = |minute| start + TimeDelta::minutes(minute);
             let mut answer = missing_history_page(shared, at(1), at(3), 11.0, false).0;
@@ -921,7 +1055,7 @@ fn internal_history_replies_cannot_cross_context_changes_or_same_drain_replay_re
     for shared in [false, true] {
         for change in 0..7 {
             let (feed, mut chart, mut frames, _) = missing_history_chart(shared);
-            refresh_missing_history(&feed, &mut chart, &mut frames);
+            resume_missing_history(&feed, &mut chart, &mut frames);
             let start = bars(1)[0].time;
             let answer = missing_history_page(
                 shared,
@@ -994,7 +1128,7 @@ fn internal_history_replies_cannot_cross_context_changes_or_same_drain_replay_re
 fn later_gap_page_keeps_the_studys_live_suffix_after_raw_eviction() {
     for shared in [false, true] {
         let (feed, mut chart, mut frames, owners) = missing_history_chart(shared);
-        refresh_missing_history(&feed, &mut chart, &mut frames);
+        resume_missing_history(&feed, &mut chart, &mut frames);
         let start = bars(1)[0].time;
         let at = |minute| start + TimeDelta::minutes(minute);
         feed.trades

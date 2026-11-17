@@ -554,7 +554,8 @@ impl Chart {
             && !link.reload_pending
             && !clock.timeframe().is_some_and(|tf| tf.is_trade_based());
         link.reload_pending = false;
-        let mut retain_prepared = link.clock == clock
+        let mut retain_prepared = resumed
+            && link.clock == clock
             && link.extended_hours == self.extended_hours
             && link.conversion == self.conversion
             && link
@@ -565,7 +566,7 @@ impl Chart {
                 .footprint
                 .as_ref()
                 .is_some_and(|flow| flow.live.prepared_before().is_some());
-        let mut retain_trades = (resumed || retain_prepared || link.clock != clock)
+        let mut retain_trades = (resumed || link.clock != clock)
             && link.extended_hours == self.extended_hours
             && link.conversion == self.conversion
             && link.clock.sessions().with_timeframe(Timeframe::Min1)
@@ -593,6 +594,7 @@ impl Chart {
                 .is_some_and(|i| i.symbol == self.symbol);
         }
         let resume = resumed && retain_trades;
+        retain_prepared &= resume;
         // The feed-wide answer does not depend on the symbol or interval.
         let feed_wide = |request: &Request| matches!(request, Request::Capabilities);
         link.pending.retain(|(_, request, _)| feed_wide(request));
@@ -630,7 +632,7 @@ impl Chart {
         link.depth_complete = false;
         link.footprints_stopped = false;
         link.footprint_unavailable.clear();
-        if !resume && !retain_prepared {
+        if !resume {
             link.footprints_complete = false;
             link.footprint = link
                 .footprint(None, &[])
@@ -650,7 +652,7 @@ impl Chart {
             link.resumed_from = last.first().map(|bar| link.clock.bar_open(bar.time));
             // Kept bars from the stream are history now: the latest page counts their trades too.
             self.from_ticks.clear();
-        } else if !retain_prepared {
+        } else {
             // Timestamp anchors survive the empty interval between history requests.
             self.replace_main_data(Vec::new());
             link.resumed_from = None;

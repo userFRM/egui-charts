@@ -79,7 +79,9 @@ The chart requests missing spans needed by its viewport or footprint studies, in
 internal gaps. Internal fills use clock-aligned boundaries and leave the initial exclusive
 prepared/live cutoff unchanged. Existing row owners remain retained; closing even an empty
 gap updates coverage and invalidates affected study results. Older end-of-history does not
-prevent an internal gap from being filled after refresh. Invalid replies preserve accepted
+prevent an internal gap from being filled after resuming a paused feed. Resume retains
+prepared owners; an explicit `Chart::reload_feed()` instead discards the old bars, trades and
+prepared history and requests the latest pages again. Invalid replies preserve accepted
 data and stop footprint requests until refresh; they never certify empty or unavailable history.
 
 A shared owner can serve several charts. Admission validates its clock, grid, rows, totals and
