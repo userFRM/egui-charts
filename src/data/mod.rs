@@ -686,11 +686,14 @@ impl FootprintRequest {
 
 /// Prepared footprint history, validated as [`Footprint::from_bars`] before it is displayed.
 ///
-/// An available page covers every execution from its first bar's open (or an empty page's
-/// `continue_before`) to `complete_before`, exclusive. Missing bars in that range had no
-/// executions. Use [`unavailable`](Self::unavailable) for a gap in the host's recording;
-/// do not describe missing data as empty history. A bounded answer ends at the requested
-/// `before` and may leave an earlier suffix request to finish the range.
+/// An available page covers every execution from its first bar's first instant (or an empty
+/// page's `continue_before`) to `complete_before`, exclusive: the bar's open, or on a daily or
+/// longer clock with a session the open of its first trading date, which can come before it, as
+/// `data::resample_with_session` dates history. Missing bars in that range had no executions.
+/// Use [`unavailable`](Self::unavailable) for a gap in the host's recording; do not describe
+/// missing data as empty history. A bounded answer ends at the requested `before`, with the
+/// executions of the bars that open before it, and may leave an earlier suffix request to
+/// finish the range.
 ///
 /// Supply matching OHLC through [`Datafeed::history`]. Individual trades remain available
 /// through [`Datafeed::trades`] for consumers such as the tape and volume bubbles.
@@ -701,13 +704,14 @@ pub struct FootprintPage {
     /// range. Owned bars may arrive in any order; shared bars must be strictly chronological.
     /// Unknown-side volume stays separate from bid and ask.
     pub bars: FootprintBars,
-    /// Exclusive end of the answered span, later than every supplied bar's open.
+    /// Exclusive end of the answered span, later than every supplied bar's first instant.
     /// On an available page, every eligible trade before this instant is included, and
     /// none at this instant is. Held or live trades at or after it continue the initial
     /// page; trade IDs do not order or define this boundary.
     /// If a snapshot ends partway through one timestamp, exclude that entire instant.
-    /// A bounded answer must end at [`FootprintRequest::before`]. Internal fills must be
-    /// clock-aligned and do not move the initial prepared/live boundary.
+    /// A bounded answer must end at [`FootprintRequest::before`], and leaves out the trades of
+    /// the bar opening there. Internal fills must be clock-aligned and do not move the initial
+    /// prepared/live boundary.
     pub complete_before: DateTime<Utc>,
     /// Nothing exists before the oldest returned bar, or the requested boundary for an empty
     /// terminal page. This does not certify or suppress internal recording gaps.
