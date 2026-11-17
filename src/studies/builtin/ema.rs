@@ -104,7 +104,7 @@ impl Indicator for EMA {
     }
 
     fn desc(&self) -> &str {
-        "Exponential Moving Avg - Weighted avg giving more importance to recent prices"
+        "Exponential Moving Average - Weighted avg giving more importance to recent prices"
     }
 
     fn calculate(&mut self, data: &[Bar]) {
