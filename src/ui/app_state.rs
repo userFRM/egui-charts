@@ -64,7 +64,9 @@ pub enum Control {
     Theme,
     /// The top toolbar's quick search button.
     QuickSearch,
-    /// Chart and series settings buttons and menu entries.
+    /// Chart and series settings buttons and menu entries, including the series settings button
+    /// among a chart's legend controls and the scale settings button in its price axis corner,
+    /// which [`Chart::set_control_visible`](crate::widget::Chart::set_control_visible) hides.
     Settings,
     /// The top toolbar's fullscreen button.
     Fullscreen,
@@ -83,7 +85,7 @@ pub enum Control {
     /// CSV export entries in the chart menu.
     ExportData,
     /// Alert creation: the top toolbar's Alert button, the right rail's Alerts button and the
-    /// add alert rows of the chart and series menus.
+    /// add alert rows of the chart, series, study and drawing menus.
     Alerts,
     /// Positions and orders: the top toolbar's Trade button, the drawing toolbar's hide rows for
     /// them and the chart menu's order rows.
