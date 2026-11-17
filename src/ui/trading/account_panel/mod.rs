@@ -589,9 +589,6 @@ mod tests {
                 ..Recorder::default()
             }));
             trading.poll(&egui::Context::default(), &mut Toasts::new());
-            // The accessibility check covers the whole panel, whose broker menu is named after
-            // the broker the host sets.
-            trading.account_panel.broker = "Broker".into();
             trading.account_panel.editing = Some((order.clone(), order.request));
             let mut harness = Harness::builder()
                 .with_size(egui::vec2(1000.0, 600.0))
@@ -611,6 +608,26 @@ mod tests {
             for name in names {
                 harness.get_by_role_and_label(egui::Role::SpinButton, name);
             }
+        }
+    }
+
+    /// While the host names no broker and before the broker reports the account, the broker and
+    /// account menus show only their chevrons; the accessibility check still finds each named
+    /// after what it chooses. A regression leaves them unnamed.
+    #[test]
+    fn menus_without_text_are_named_after_what_they_choose() {
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1000.0, 400.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, trading: &mut Trading| {
+                    trading.show_account_panel(ui, "SYM");
+                },
+                Trading::default(),
+            );
+        harness.run();
+        for name in ["Broker", "Account"] {
+            harness.get_by_role_and_label(egui::Role::Button, name);
         }
     }
 

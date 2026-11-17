@@ -151,17 +151,29 @@ impl Trading {
                     .frame_when_inactive(false)
                     .image_tint_follows_text_color(true),
                 );
+                // Without the broker's name, or before the broker reports the account, a menu
+                // shows only its chevron, so it is named after what it chooses.
+                let broker = match panel.broker.trim().is_empty() {
+                    true => broker.accessible_name(l10n::text(selectors.ctx(), "Broker")),
+                    false => broker,
+                };
                 egui::Popup::menu(&broker).show(|ui| {
                     if ui.button(l10n::text(ui.ctx(), "Disconnect")).clicked() {
                         action = Some(AccountPanelAction::Disconnect);
                     }
                 });
                 let name = panel.accounts.get(panel.active).map_or("", String::as_str);
+                let text = format!("{name} {currency}").trim().to_owned();
+                let unnamed = text.is_empty();
                 let account = selectors.add(
-                    egui::Button::new((format!("{name} {currency}").trim().to_owned(), chevron()))
+                    egui::Button::new((text, chevron()))
                         .frame_when_inactive(false)
                         .image_tint_follows_text_color(true),
                 );
+                let account = match unnamed {
+                    true => account.accessible_name(l10n::text(selectors.ctx(), "Account")),
+                    false => account,
+                };
                 egui::Popup::menu(&account).show(|ui| {
                     for (index, name) in panel.accounts.iter().enumerate() {
                         if ui
