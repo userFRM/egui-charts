@@ -9,16 +9,20 @@ use egui::{Context, Ui};
 
 use super::preset::{self, AlertPreset, MAX_PRESETS, PresetFields};
 use super::{AlertDialogAction, AlertDialogConfig};
-use crate::data::{FeedError, inbox::Inbox};
+use crate::data::inbox::Inbox;
 use crate::model::{
     Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertFrequency, AlertRule,
     AlertSource, AlertSourceName, NotificationSchedule, NotificationWindow, Timeframe, TimezoneId,
 };
-use crate::services::{Storage, StoreKind};
+use crate::services::revisions::{Revisions, Settled, Written};
+use crate::services::{ConflictChoice, Storage, StoreKind};
 use crate::ui_kit::FormGrid;
 use crate::ui_kit::dialog::{DialogFooter, dialog_header};
 use crate::ui_kit::modal::Modal;
 use crate::ui_kit::status_message::{MessageKind, status_message};
+
+/// The name of the presets document.
+const PRESETS: &str = "presets";
 
 /// A dialog that creates or edits the same alert type the host stores and evaluates.
 pub struct AlertDialog {
@@ -74,6 +78,10 @@ pub struct AlertDialog {
     initial: Option<Alert>,
     storage: Option<Arc<dyn Storage>>,
     inbox: Arc<Inbox>,
+    /// The revision the presets were read or written at, and a write the host refused.
+    revisions: Revisions,
+    /// The presets document being written, until the host answers.
+    writing: Option<String>,
     pending: bool,
     loaded: bool,
     error: Option<String>,
@@ -149,6 +157,8 @@ impl AlertDialog {
             initial: None,
             storage: None,
             inbox: Arc::default(),
+            revisions: Revisions::new(StoreKind::AlertPresets),
+            writing: None,
             pending: false,
             loaded: false,
             error: None,
@@ -163,8 +173,29 @@ impl AlertDialog {
         self.error = None;
         self.loaded = false;
         self.pending = true;
-        storage.load(StoreKind::AlertPresets, "presets", self.inbox.reply(1));
+        self.revisions = Revisions::new(StoreKind::AlertPresets);
+        self.writing = None;
+        self.revisions.load(&*storage, PRESETS, &self.inbox, 1);
         self.storage = Some(storage);
+    }
+
+    /// Whether the host refused to write the presets because another client changed them since
+    /// they were read. Until it is settled the unsaved presets stay in memory and no preset can
+    /// be saved or deleted; show a
+    /// [`StorageConflictDialog`](crate::ui::dialogs::StorageConflictDialog) and pass the choice
+    /// to [`resolve_storage_conflict`](Self::resolve_storage_conflict).
+    pub fn storage_conflict(&self) -> bool {
+        self.revisions.conflicts().next().is_some()
+    }
+
+    /// Settles the refused write of the presets, taking effect at the next [`show`](Self::show):
+    /// [`ConflictChoice::ReloadRemote`] takes the stored presets,
+    /// [`ConflictChoice::KeepLocalCopy`] first saves the unsaved ones as `presets (local copy)`,
+    /// and [`ConflictChoice::Retry`] writes them over the stored ones.
+    pub fn resolve_storage_conflict(&mut self, choice: ConflictChoice) {
+        if let Some(storage) = self.storage.clone() {
+            self.revisions.resolve(&*storage, PRESETS, choice);
+        }
     }
 
     /// Open a fresh price alert at the last or hovered price, discarding earlier cancelled edits.
@@ -360,35 +391,94 @@ impl AlertDialog {
     fn poll(&mut self, ctx: &Context) {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
-        for (key, answer) in self.inbox.drain().answers {
-            self.pending = false;
-            if key == 1 {
-                let result = *answer
-                    .downcast::<Result<Option<String>, FeedError>>()
-                    .expect("preset load");
-                let loaded = result.map_err(|error| error.to_string()).and_then(|doc| {
-                    doc.map_or_else(
+        let Some(storage) = self.storage.clone() else {
+            return;
+        };
+        for (_, settled) in self.revisions.poll(&*storage, ctx) {
+            match settled {
+                Settled::Overwrite(document) => {
+                    self.pending = true;
+                    self.writing = Some(document.clone());
+                    self.revisions
+                        .save(&*storage, PRESETS, document, &self.inbox, 2);
+                }
+                // The copy stays in the host's storage, as a copy of the settings does.
+                Settled::Copied(_) => {}
+                Settled::Reload(stored) => {
+                    self.unsaved_presets = None;
+                    let read = stored.map_or_else(
                         || Ok(Default::default()),
                         |doc| preset::from_document(&doc, Utc::now()),
-                    )
-                });
-                match loaded {
-                    Ok((presets, last_schedule)) => {
-                        self.presets = presets;
-                        // A schedule saved before the load finished is newer.
-                        self.last_schedule = self.last_schedule.take().or(last_schedule);
-                        self.loaded = true;
+                    );
+                    match read {
+                        // The schedule of the unsaved presets is dropped with them.
+                        Ok((presets, last_schedule)) => {
+                            self.presets = presets;
+                            self.last_schedule = last_schedule;
+                        }
+                        Err(error) => {
+                            self.error = Some(error);
+                            self.loaded = false;
+                        }
                     }
-                    Err(error) => self.error = Some(error),
                 }
-            } else {
-                let saved = *answer
-                    .downcast::<Result<(), FeedError>>()
-                    .expect("preset save");
-                let presets = self.unsaved_presets.take();
-                match saved {
-                    Ok(()) => self.presets = presets.unwrap_or_default(),
-                    Err(error) => self.error = Some(error.to_string()),
+                Settled::CopyFailed(reason) => {
+                    self.error = Some(format!("Could not keep a copy of the presets: {reason}"));
+                }
+            }
+        }
+        loop {
+            let answers = self.inbox.drain().answers;
+            if answers.is_empty() {
+                break;
+            }
+            for (key, answer) in answers {
+                if key == 1 {
+                    let Some(result) =
+                        self.revisions
+                            .loaded(&*storage, PRESETS, answer, &self.inbox, 1)
+                    else {
+                        continue;
+                    };
+                    self.pending = false;
+                    let loaded = result.map_err(|error| error.to_string()).and_then(|doc| {
+                        doc.map_or_else(
+                            || Ok(Default::default()),
+                            |doc| preset::from_document(&doc, Utc::now()),
+                        )
+                    });
+                    match loaded {
+                        Ok((presets, last_schedule)) => {
+                            self.presets = presets;
+                            // A schedule saved before the load finished is newer.
+                            self.last_schedule = self.last_schedule.take().or(last_schedule);
+                            self.loaded = true;
+                        }
+                        Err(error) => self.error = Some(error),
+                    }
+                } else {
+                    let document = self.writing.take().expect("preset write in flight");
+                    let Some(written) =
+                        self.revisions
+                            .saved(&*storage, PRESETS, &document, answer, &self.inbox, 2)
+                    else {
+                        self.writing = Some(document);
+                        continue;
+                    };
+                    self.pending = false;
+                    match written {
+                        Written::Saved => {
+                            self.presets = self.unsaved_presets.take().unwrap_or_default();
+                        }
+                        // The unsaved presets stay until the user's choice.
+                        Written::Refused(stored) => {
+                            self.revisions.refuse(PRESETS, document, stored)
+                        }
+                        Written::Failed(error) => {
+                            self.unsaved_presets = None;
+                            self.error = Some(error.to_string());
+                        }
+                    }
                 }
             }
         }
@@ -424,7 +514,7 @@ impl AlertDialog {
     fn remember_schedule(&mut self) {
         if let Some(schedule) = &self.alert.schedule {
             self.last_schedule = Some((**schedule).clone());
-            if self.loaded && !self.pending {
+            if self.loaded && !self.pending && !self.revisions.unsettled() {
                 self.write_presets(self.presets.clone());
             }
         }
@@ -438,12 +528,9 @@ impl AlertDialog {
                     self.pending = true;
                     self.error = None;
                     self.unsaved_presets = Some(presets);
-                    storage.save(
-                        StoreKind::AlertPresets,
-                        "presets",
-                        document,
-                        self.inbox.reply(2),
-                    );
+                    self.writing = Some(document.clone());
+                    self.revisions
+                        .save(&**storage, PRESETS, document, &self.inbox, 2);
                 }
             }
             Err(error) => self.error = Some(error.to_string()),
@@ -952,7 +1039,7 @@ impl AlertDialog {
                 let now = Utc::now();
                 let (expiry, schedule) = (self.expiry(now), self.schedule());
                 let stored = self.presets.contains_key(self.preset_name.trim());
-                let ready = self.loaded && !self.pending;
+                let ready = self.loaded && !self.pending && !self.revisions.unsettled();
                 let fields = self.preset_fields;
                 if ui
                     .add_enabled(
@@ -1409,7 +1496,7 @@ pub(crate) fn rule_form(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::Reply;
+    use crate::data::{FeedError, Reply};
     use std::sync::Mutex;
 
     #[derive(Default)]
@@ -2189,5 +2276,45 @@ mod tests {
         restored.poll(&ctx);
         assert!(!restored.loaded);
         assert!(restored.error.is_some());
+    }
+
+    #[test]
+    fn presets_changed_elsewhere_wait_for_the_users_choice() {
+        use crate::services::document::tests::Revised;
+        let ctx = Context::default();
+        let now = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap();
+        let stored = |host: &Revised| {
+            let (presets, _) = preset::from_document(&host.get(PRESETS).unwrap(), now).unwrap();
+            presets.into_keys().collect::<Vec<_>>()
+        };
+        for (choice, kept) in [
+            (ConflictChoice::ReloadRemote, "Remote"),
+            (ConflictChoice::Retry, "Local"),
+        ] {
+            let host = Arc::new(Revised::default());
+            let mut dialog = AlertDialog::new();
+            dialog.set_storage(host.clone());
+            dialog.poll(&ctx);
+            // Another client saves a preset after this one read that there were none.
+            let mut other = AlertDialog::new();
+            other.set_storage(host.clone());
+            other.poll(&ctx);
+            other.open("AAPL".into(), 1.0);
+            other.preset_name = "Remote".into();
+            other.save_preset(now);
+            other.poll(&ctx);
+            dialog.open("EURUSD".into(), 1.125);
+            dialog.preset_name = "Local".into();
+            dialog.save_preset(now);
+            dialog.poll(&ctx);
+            assert!(dialog.storage_conflict());
+            assert!(dialog.presets.is_empty());
+            assert_eq!(stored(&host), ["Remote"]);
+            dialog.resolve_storage_conflict(choice);
+            dialog.poll(&ctx);
+            assert!(!dialog.storage_conflict());
+            assert_eq!(dialog.presets.keys().collect::<Vec<_>>(), [kept]);
+            assert_eq!(stored(&host), [kept]);
+        }
     }
 }

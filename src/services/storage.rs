@@ -26,7 +26,8 @@ pub enum StoreKind {
     /// Named chart layouts: the arrangement of the charts and the symbol, interval, chart type,
     /// studies, panes, scales, settings and drawings of each.
     Layouts,
-    /// Recently opened instruments, newest first.
+    /// Recently opened instruments, newest first. Written without revisions even by a host that
+    /// keeps them: the newest list of any client replaces the stored one.
     RecentSymbols,
     /// Named screener screens: the universe, column set, filters, sort order and description.
     Screens,
@@ -105,11 +106,15 @@ pub enum ConflictChoice {
 /// A host shared by several clients can also keep revisions, with
 /// [`load_versioned`](Storage::load_versioned), [`save_versioned`](Storage::save_versioned) and
 /// [`watch`](Storage::watch). The library then writes a document only over the revision it read,
-/// so a client never overwrites a newer version unnoticed: a refused save keeps the unsaved
-/// document in memory and is settled with a [`ConflictChoice`]. A host that answers
-/// `load_versioned` with [`FeedError::NotSupported`], as the default does, keeps the plain
-/// behaviour above. Switching accounts means a new `Storage`; the library drops the old one's
-/// pending answers and streams, so nothing of the old account reaches the new one.
+/// and one it never read only as a new document, so a client never overwrites a newer version
+/// unnoticed: a refused save keeps the unsaved document in memory until it is settled with a
+/// [`ConflictChoice`]. `Chart::storage_conflict`, `SettingsStore::conflict` and the
+/// `storage_conflict` methods of `LayoutMenu`, `TemplateStore`, `AlertDialog`,
+/// `SymbolDetailsPanel` and `ScreenerPanel` name the refused documents. Recent symbols are the
+/// exception: each client writes its newest list over the stored one. A host that answers
+/// `load_versioned` or `save_versioned` with [`FeedError::NotSupported`], as the defaults do,
+/// keeps the plain behaviour above. Switching accounts means a new `Storage`; the library drops
+/// the old one's pending answers and streams, so nothing of the old account reaches the new one.
 ///
 /// ```
 /// use std::collections::HashMap;
