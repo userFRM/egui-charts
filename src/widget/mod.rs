@@ -479,6 +479,10 @@ pub struct Chart {
     pub(crate) last_hover_bar_idx: Option<f64>,
     /// Time of the hovered whitespace slot after the last bar, sent to linked charts.
     pub(crate) last_hover_whitespace: Option<DateTime<Utc>>,
+    /// Shown bar the status line, legends and data window read this frame: the one under the
+    /// local pointer, else under a crosshair from a linked chart or the host; `None` reads the
+    /// latest bar.
+    pub(crate) readout_index: Option<usize>,
 
     // =========================================================================
     // Marks (Widget API)
