@@ -6899,7 +6899,7 @@ mod tests {
                 let output = frame(&mut app, vec![Event::Text("Simple Moving".into())]);
                 output.drop_without_applying_deltas();
                 let output = frame(&mut app, vec![]);
-                let row = text_at(&output, "Simple Moving Avg");
+                let row = text_at(&output, "Simple Moving Average");
                 output.drop_without_applying_deltas();
                 let click = |app: &mut DemoApp, pos| {
                     for pressed in [true, false] {

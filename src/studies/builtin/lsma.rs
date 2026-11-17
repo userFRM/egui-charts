@@ -149,7 +149,7 @@ impl Indicator for LSMA {
     }
 
     fn desc(&self) -> &str {
-        "Least Squares Moving Avg - Linear regression line"
+        "Least Squares Moving Average - Linear regression line"
     }
 
     fn calculate(&mut self, data: &[Bar]) {
