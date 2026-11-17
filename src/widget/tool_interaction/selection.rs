@@ -13,7 +13,9 @@ use egui::{Painter, Rect, Response, Stroke, Ui, epaint::StrokeKind};
 /// Handle drawing selection, handle dragging, and eraser-mode deletion.
 ///
 /// When no drawing tool is active, clicks are interpreted as selection attempts.
-/// An unlocked drawing can be selected and moved in one drag. In eraser mode,
+/// An unlocked drawing can be selected and moved in one drag. A press on a handle of any
+/// selected drawing drags that handle alone; the move handle of one of several selected
+/// drawings moves them all, as their bodies do. In eraser mode,
 /// clicking on a drawing deletes it instead, whatever is selected, unless it is locked.
 /// Ctrl/Command-drag on empty space adds drawings intersecting the visible area. Releasing
 /// the modifier continues the gesture; Escape cancels it. Locked drawings can be selected,
@@ -100,29 +102,37 @@ pub fn handle_selection<F1, F2, F3>(
         }
         cursor_modes.eraser.set_hover(None);
 
+        // Every selected drawing paints its handles, in drawing order, so the last is on top.
         let selected: Vec<_> = drawing_manager.selected_ids().collect();
-        let handle = (selected.len() == 1)
-            .then(|| drawing_manager.hit_test_handle_by_id(origin, selected[0]))
-            .flatten();
+        let handle = selected.iter().rev().find_map(|&id| {
+            drawing_manager
+                .hit_test_handle_by_id(origin, id)
+                .map(|handle| (id, handle))
+        });
         let hit = drawing_manager.hit_test(origin).filter(|&id| {
             drawing_manager
                 .drawings
                 .iter()
                 .any(|d| d.id == id && !d.locked)
         });
-        if let Some(handle) = handle {
+        if let Some((id, handle)) = handle {
             ui.ctx().set_cursor_icon(if handle == HandlePos::Middle {
                 egui::CursorIcon::Grab
             } else {
-                handle_cursor(drawing_manager, selected[0], handle)
+                handle_cursor(drawing_manager, id, handle)
             });
         } else if hit.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
 
         if response.drag_started() {
-            if let Some(handle) = handle {
-                drawing_manager.start_drag_handle(selected[0], handle);
+            if let Some((id, handle)) = handle {
+                // A selection moves whole from any member's move handle, as from its body.
+                if handle == HandlePos::Middle && selected.len() > 1 {
+                    drawing_manager.start_drag_body(id, origin);
+                } else {
+                    drawing_manager.start_drag_handle(id, handle);
+                }
             } else if let Some(id) = hit {
                 if !drawing_manager.is_selected(id) {
                     drawing_manager.select(id);
@@ -835,33 +845,52 @@ mod tests {
     }
 
     /// Edge handles and bodies follow an outward drag from its first frame, just as inward drags do.
+    /// With a second drawing selected, the end handle shows its resize cursor and moves only its
+    /// own anchor, while a body or move-handle grab moves both drawings; each drag is one undo step
+    /// and keeps the selection.
     #[test]
-    fn edge_drags_start_from_the_press_origin_and_clamp_every_update() {
-        use egui::{pos2, vec2};
+    fn handle_and_body_drags_follow_the_press_alone_or_in_a_selection() {
+        use egui::{CursorIcon, pos2, vec2};
         let pane = Rect::from_min_max(pos2(40.0, 40.0), pos2(540.0, 440.0));
         for (points, outward) in [
             ([pos2(537.0, 140.0), pos2(537.0, 340.0)], vec2(1.0, 0.0)),
             ([pos2(140.0, 43.0), pos2(440.0, 43.0)], vec2(0.0, -1.0)),
             ([pos2(140.0, 437.0), pos2(440.0, 437.0)], vec2(0.0, 1.0)),
         ] {
-            for body in [false, true] {
+            // 1.0 grabs the end handle, 0.5 the move handle the shown midpoint adds and 0.25 the
+            // body.
+            for (grab, multi) in [1.0, 0.5, 0.25]
+                .into_iter()
+                .flat_map(|grab| [false, true].map(|multi| (grab, multi)))
+            {
+                let body = grab < 1.0;
                 for direction in [-1.0, 1.0] {
                     let ctx = Context::default();
                     let mut manager = DrawingManager::new();
                     let mut cursors = CursorModeState::default();
                     let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+                    drawing.line_measurements.midpoint = true;
                     drawing.points = points.to_vec();
                     drawing.chart_points = points
                         .iter()
                         .map(|p| ChartPoint::new(p.x, f64::from(p.y)))
                         .collect();
                     manager.drawings.push(drawing);
-                    manager.select(7);
-                    let from = if body {
-                        points[0].lerp(points[1], 0.25)
+                    let others = points.map(|p| p - outward * 200.0);
+                    if multi {
+                        let mut other = Drawing::new(8, DrawingToolType::TrendLine);
+                        other.line_measurements.midpoint = true;
+                        other.points = others.to_vec();
+                        other.chart_points = others
+                            .iter()
+                            .map(|p| ChartPoint::new(p.x, f64::from(p.y)))
+                            .collect();
+                        manager.drawings.push(other);
+                        manager.select_drawings([7, 8]);
                     } else {
-                        points[1]
-                    };
+                        manager.select(7);
+                    }
+                    let from = points[0].lerp(points[1], grab);
                     let first = from + outward * (9.0 * direction);
                     let to = from + outward * 30.0 + outward.rot90() * 40.0;
                     let button = |pos, pressed| Event::PointerButton {
@@ -880,7 +909,7 @@ mod tests {
                     .into_iter()
                     .enumerate()
                     {
-                        ctx.run_ui(
+                        let output = ctx.run_ui(
                             RawInput {
                                 screen_rect: Some(pane.expand(40.0)),
                                 events,
@@ -904,8 +933,25 @@ mod tests {
                                     &|price, from, to| price + f64::from(to - from),
                                 );
                             },
-                        )
-                        .drop_without_applying_deltas();
+                        );
+                        let cursor = output.platform_output.cursor_icon;
+                        output.drop_without_applying_deltas();
+                        let case = format!(
+                            "grab {grab}, multi {multi}, direction {direction}, edge {outward:?}, \
+                             frame {frame}"
+                        );
+                        // Hover is hit-tested on the previous frame's widgets, so the press
+                        // frame, still below the drag threshold, shows the hover cursor.
+                        let expected_cursor = match frame {
+                            1..=3 if !body => Some(CursorIcon::ResizeNwSe),
+                            1 if grab == 0.5 => Some(CursorIcon::Grab),
+                            1 => Some(CursorIcon::PointingHand),
+                            2 | 3 => Some(CursorIcon::Grabbing),
+                            _ => None,
+                        };
+                        if let Some(expected_cursor) = expected_cursor {
+                            assert_eq!(cursor, expected_cursor, "{case}");
+                        }
                         if frame >= 2 {
                             let target = pane.clamp(if frame == 2 { first } else { to });
                             let expected = if body {
@@ -913,15 +959,26 @@ mod tests {
                             } else {
                                 target
                             };
-                            assert_eq!(
-                                manager.drawings[0].points[1], expected,
-                                "body {body}, direction {direction}, edge {outward:?}, frame {frame}"
-                            );
+                            assert_eq!(manager.drawings[0].points[1], expected, "{case}");
+                            if multi {
+                                let expected = if body {
+                                    others[1] + (target - from)
+                                } else {
+                                    others[1]
+                                };
+                                assert_eq!(manager.drawings[1].points[1], expected, "{case}");
+                            }
                         }
                     }
                     assert!(manager.dragging_handle.is_none());
+                    if multi {
+                        assert_eq!(manager.selected_ids().collect::<Vec<_>>(), [7, 8]);
+                    }
                     assert!(manager.undo());
                     assert_eq!(manager.drawings[0].points, points);
+                    if multi {
+                        assert_eq!(manager.drawings[1].points, others);
+                    }
                     assert!(!manager.undo());
                 }
             }
