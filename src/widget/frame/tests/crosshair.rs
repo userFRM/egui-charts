@@ -1080,6 +1080,119 @@ fn held_values_follow_press_release_and_switch() {
     }
 }
 
+/// An added series' status row reads the bar the main values read: the latest one until a
+/// touch hold engages, then the held bar for as long as the readout stays latched.
+#[test]
+fn added_series_row_follows_the_held_readout() {
+    use crate::model::Bar;
+    use crate::widget::{SeriesId, SeriesOptions};
+    use egui::TouchPhase::{End, Start};
+
+    let ctx = egui::Context::default();
+    ctx.options_mut(|options| options.input_options.max_click_duration = 0.3);
+    let mut chart = chart(&[100.0], &[110.0, 120.0]);
+    chart.chart_options.tooltip.on_long_press = true;
+    chart.chart_options.tooltip.long_press_delay = std::time::Duration::from_millis(800);
+    chart.chart_options.tooltip.touch_exit_mode = crate::config::TouchTrackingExitMode::OnNextTap;
+    let id = chart.add_series(SeriesOptions {
+        name: "CMP".into(),
+        ..Default::default()
+    });
+    // Bar `i` of the series closes at 200 + i.
+    let bars = chart
+        .bars(SeriesId::MAIN)
+        .iter()
+        .enumerate()
+        .map(|(i, bar)| Bar::from_value(bar.time, 200.0 + i as f64))
+        .collect();
+    chart.set_data(id, bars);
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    let map = chart.get_chart_mapping();
+    let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+    let touch = |phase| {
+        vec![
+            Event::Touch {
+                device_id: egui::TouchDeviceId(1),
+                id: egui::TouchId(1),
+                phase,
+                pos,
+                force: None,
+            },
+            Event::PointerMoved(pos),
+            Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: phase == Start,
+                modifiers: Default::default(),
+            },
+        ]
+        .into_iter()
+        .chain((phase == End).then_some(Event::PointerGone))
+        .collect()
+    };
+    // Bar 50 closes at 110 and its series bar at 250; bar 99 at 120 and 299.
+    for (time, events, close, series) in [
+        (1.0, touch(Start), "C 120.00", "CMP  299.00"),
+        (1.81, vec![], "C 110.00", "CMP  250.00"),
+        (2.0, touch(End), "C 110.00", "CMP  250.00"),
+        (2.1, vec![], "C 110.00", "CMP  250.00"),
+    ] {
+        let texts: Vec<_> = shapes(&ctx, &mut chart, time, events)
+            .into_iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts.iter().any(|text| text == close) && texts.iter().any(|text| text == series),
+            "time {time}: {texts:?}"
+        );
+    }
+}
+
+/// On a Heikin Ashi chart the status line and tooltip describe the drawn candle.
+/// Bars alternate between open 150, close 151 and open 146.5, close 147.5, with lows at the opens
+/// and highs at the closes, so the averaged closes alternate between 150.5 and 147. The averaged
+/// opens settle where e = (o + 147) / 2 and o = (e + 150.5) / 2: bar 50 opens at
+/// 444.5 / 3 = 148.17, its low, and closes at 150.50, 3.50 or 2.38% above the averaged 147 before
+/// it. Studies keep the source closes: SMA(2) at bar 50 is (147.5 + 151) / 2 = 149.25.
+#[test]
+fn heikin_ashi_readouts_describe_the_drawn_candle() {
+    let ctx = egui::Context::default();
+    let mut chart = chart(&[150.0, 146.5], &[151.0, 147.5]);
+    chart.set_chart_type(crate::model::ChartType::Heikin);
+    #[cfg(feature = "studies")]
+    let average = chart.add_indicator(Box::new(crate::studies::SMA::new(2)));
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    let map = chart.get_chart_mapping();
+    let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+    let texts: Vec<_> = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)])
+        .into_iter()
+        .filter_map(|shape| match shape {
+            Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    for expected in [
+        "O 148.17",
+        "H 151.00",
+        "L 148.17",
+        "C 150.50",
+        "+3.50 (+2.38%)",
+        // The tooltip's open and close.
+        "148.17",
+        "150.50",
+    ] {
+        assert!(
+            texts.iter().any(|text| text == expected),
+            "{expected}: {texts:?}"
+        );
+    }
+    #[cfg(feature = "studies")]
+    assert_eq!(chart.indicator_value_at(average, 50), Some((0, 149.25)));
+}
+
 /// Touch holds respect their delay, move without panning, and exit by release or a later tap.
 /// Short taps, cancelled contacts and a pan started before the delay cannot latch a readout.
 #[test]

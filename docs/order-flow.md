@@ -31,6 +31,13 @@ from the history bar in its slot, takes the place of the first live execution; a
 to the history bar in its slot changes nothing. Page executions without ids at the time of the
 first live execution cannot be told from the live ones, so the chart leaves them out; the bar
 before then counts as one the page does not reach, and bars only its end would prove draw candles.
+The chart keeps every instant where executions may be missing this way, or where a stream began
+before its trade page reached it, across interval changes and resumes: no grouping takes such an
+instant in, only the newest executions between two of them that prove bars draw cells, and the bar
+holding one draws a candle. When the interval changes again before the trade page answers, that
+page fills the time of both changes, and until it answers no grouping crosses the time of the
+first. After three or more such changes the time of those in between stays without executions, and
+no grouping crosses it.
 History bars newer than everything the trade page reaches draw candles too, so a host should answer
 both pages up to the same time.
 
@@ -257,7 +264,7 @@ reaches back to the loss. Custom hosts
 can push chronological events and book loss through the same handle, then call [`calculate`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#tymethod.calculate) or
 [`update`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.update). Cloned studies share their market-data source, which receives each event once.
 Replacing aggregation inputs creates a new source; hosts replay their history, while a chart replays the executions it still retains
-for a newly attached rate study, and for one restored by undo, which then shows the values it would have had if it had stayed. On a tick, volume, range or delta interval, once the store has dropped executions, it shows those values on the chart's bars whose executions are all held and leaves the bars that lost one empty. Other studies keep their sources and accumulated bar totals
+for a newly attached rate study, and for one restored by undo, which then shows the values it would have had if it had stayed. On a tick, volume, range or delta interval, once the store has dropped executions, it shows those values on the chart's bars whose executions are all held and leaves the bars that lost one empty; a rolling rate gives no value while its window reaches an execution it leaves out. Other studies keep their sources and accumulated bar totals
 when the catalogue changes, including totals of executions that aged out of the raw store.
 Quote and book history before a study was connected must come from the host. Bars alone give
 no substitute values. Counts of orders require fills grouped by order by the host; [`Tick`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/quote/struct.Tick.html) has

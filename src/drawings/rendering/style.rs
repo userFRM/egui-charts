@@ -333,6 +333,7 @@ impl Drawing {
             || matches!(
                 self.tool_type,
                 DrawingToolType::RegressionTrend
+                    | DrawingToolType::Sticker
                     | DrawingToolType::FibonacciRetracement
                     | DrawingToolType::FibonacciExtension
                     | DrawingToolType::FibonacciChannel

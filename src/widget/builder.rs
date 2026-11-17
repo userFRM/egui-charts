@@ -129,6 +129,7 @@ impl Chart {
                 (chrono::Utc::now(), crate::model::next_revision()),
             ),
             study_data: Default::default(),
+            footprint_open_interest: false,
             element_studies: Default::default(),
             execution_ranges: Default::default(),
             #[cfg(feature = "studies")]
@@ -249,6 +250,7 @@ impl Chart {
             last_crosshair_series: None,
             last_hover_bar_idx: None,
             last_hover_whitespace: None,
+            readout_index: None,
             // Marks (Widget API)
             marks: Default::default(),
             marker_options: Default::default(),

@@ -327,8 +327,18 @@ impl SourceItem {
 
 /// Data Window information (OHLCV at cursor position)
 ///
-/// Displays real-time price data for the bar under the cursor.
+/// Displays real-time price data for the bar under the cursor. Build it with
+/// [`Self::from_chart`], [`Self::from_pointer`] or [`Self::new`].
+///
+/// ```
+/// use egui_charts::ui::widget_bar::panels::object_tree::{DataWindowInfo, DataWindowSeries};
+///
+/// let mut info = DataWindowInfo::new("XAUUSD").with_ohlcv(2400.0, 2410.0, 2395.0, 2405.0, 9.0);
+/// let value = Some("5,000.00".to_owned());
+/// info.series.push(DataWindowSeries::new("SPX", egui::Color32::GOLD, value));
+/// ```
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct DataWindowInfo {
     /// Symbol name (e.g., "XAUUSD")
     pub symbol: String,
@@ -346,6 +356,9 @@ pub struct DataWindowInfo {
     pub close: f64,
     /// Volume
     pub volume: f64,
+    /// The chart type hides volume, as Renko, Kagi, Line Break, Point and Figure and Range
+    /// charts do, so the panel shows no volume row.
+    pub volume_hidden: bool,
     /// Change from previous close (absolute)
     pub change: f64,
     /// Change from previous close (percentage)
@@ -356,14 +369,43 @@ pub struct DataWindowInfo {
     pub prev_close: f64,
     /// Instrument price decimals; `None` keeps magnitude-based formatting.
     pub price_decimals: Option<u8>,
-    /// Host-formatted open, high, low and close values, or `None` for instrument formatting.
+    /// Open, high, low and close as the chart's status line writes them, set by
+    /// [`Self::with_chart_formatters`]; `None` formats them with [`Self::price_decimals`].
     pub formatted_prices: Option<[String; 4]>,
     /// Host-formatted volume, or `None` for instrument formatting.
     pub formatted_volume: Option<String>,
-    /// Host-formatted absolute and percentage change, or `None` for instrument formatting.
+    /// Absolute and percentage change as the chart's status line writes them, set by
+    /// [`Self::with_chart_formatters`]; `None` formats it with [`Self::price_decimals`].
     pub formatted_change: Option<String>,
+    /// Visible series added with `Chart::add_series` or `Chart::add_comparison`, in status line
+    /// order, listed between the OHLCV values and the studies.
+    pub series: Vec<DataWindowSeries>,
     /// Visible study plots at the same bar as the OHLCV values.
     pub studies: Vec<crate::chart::rendering::StudyValue>,
+}
+
+/// An added series' row in the data window.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DataWindowSeries {
+    /// Series name, as its status row shows it.
+    pub name: String,
+    /// Series colour, which its value is written in.
+    pub color: Color32,
+    /// The value its status row shows at the inspected time, or `None` when it has no bar then,
+    /// which the panel shows as the empty mark.
+    pub value: Option<String>,
+}
+
+impl DataWindowSeries {
+    /// Creates a row for the series `name` in `color` showing `value`.
+    pub fn new(name: impl Into<String>, color: Color32, value: Option<String>) -> Self {
+        Self {
+            name: name.into(),
+            color,
+            value,
+        }
+    }
 }
 
 impl DataWindowInfo {
