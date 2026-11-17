@@ -185,6 +185,34 @@ impl Chart {
         if storage.symbol != self.symbol() {
             return Err(LoadError::OtherSymbol);
         }
+        let drawings = storage
+            .drawings()
+            .iter()
+            .map(|stored| self.restored_drawing(stored, remap))
+            .collect();
+        // The n-th loaded drawing is the n-th entry of the file that was not skipped.
+        let read: Vec<usize> = (0..)
+            .filter(|index| skipped.iter().all(|s| s.index != *index))
+            .take(storage.drawings().len())
+            .collect();
+        for (at, error) in self.replace_drawings(drawings) {
+            skipped.push(SkippedDrawing {
+                index: read[at],
+                id: Some(storage.drawings()[at].id.clone()),
+                error: SkipReason::Invalid(serde::de::Error::custom(error)),
+            });
+        }
+        skipped.sort_by_key(|skipped| skipped.index);
+        Ok(skipped)
+    }
+
+    /// Replaces the drawings with `drawings`, in their order, keeping the drawing tools, options
+    /// and defaults, and clears undo history. Returns the position in `drawings` and the reason
+    /// of each drawing the manager refused, which it leaves out.
+    pub(super) fn replace_drawings(
+        &mut self,
+        drawings: Vec<Drawing>,
+    ) -> Vec<(usize, &'static str)> {
         let mut manager = DrawingManager::new();
         manager.set_sync_enabled(self.drawings.sync_enabled);
         manager.registry = self.drawings.registry.clone();
@@ -197,23 +225,14 @@ impl Chart {
         manager.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
         manager.eraser_mode = self.drawings.eraser_mode;
         manager.curr_timeframe = self.drawings.curr_timeframe.clone();
-        let mut refused = Vec::new();
-        // The n-th loaded drawing is the n-th entry of the file that was not skipped.
-        let read = (0..).filter(|index| skipped.iter().all(|s| s.index != *index));
-        for (index, stored) in read.zip(storage.drawings()) {
-            if let Err(error) = manager.add_synced_drawing(self.restored_drawing(stored, remap)) {
-                refused.push(SkippedDrawing {
-                    index,
-                    id: Some(stored.id.clone()),
-                    error: SkipReason::Invalid(serde::de::Error::custom(error)),
-                });
-            }
-        }
-        skipped.extend(refused);
-        skipped.sort_by_key(|skipped| skipped.index);
+        let refused = drawings
+            .into_iter()
+            .enumerate()
+            .filter_map(|(at, drawing)| Some((at, manager.add_synced_drawing(drawing).err()?)))
+            .collect();
         self.drawings = manager;
         self.history.clear();
-        Ok(skipped)
+        refused
     }
 
     /// `stored` as a drawing of this chart: anchors at the bars of their times, exact once bars

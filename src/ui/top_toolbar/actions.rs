@@ -27,7 +27,9 @@ pub enum TopToolbarAction {
     AddIndicator(String),
     /// Ask the host to save the current indicator set.
     SaveIndicatorTemplate,
-    /// Ask the host to apply the saved indicator set with this id.
+    /// Ask the host to apply the saved indicator set with this id, for example with
+    /// [`Chart::apply_chosen_study_template_set`](crate::widget::Chart::apply_chosen_study_template_set),
+    /// which keeps the studies the user may not edit.
     ApplyIndicatorTemplate(String),
     /// Create a new price alert
     CreateAlert,

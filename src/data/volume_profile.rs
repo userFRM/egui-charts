@@ -217,7 +217,7 @@ pub enum ProfileSource {
     /// Bar volume spread over each bar's high-low range, split by candle direction, from the
     /// chart's bars or from finer bars where they cover the chart bars.
     Estimated,
-    /// Executed volume at each price, split by aggressor side, with unclassified volume
+    /// Executed volume in each price row, split by aggressor side, with unclassified volume
     /// apart. `complete` is false when the span starts before held coverage or includes a bar
     /// whose executions may be missing. Prepared bars before a later gap can still form a complete span.
     Executions {
@@ -416,6 +416,31 @@ impl VolumeProfile {
             profile.down[i] = row.bid;
         }
         Some(profile)
+    }
+
+    /// [`Self::from_executions`] of `bar` in the rows `config` lays out, as volume profile
+    /// studies and drawings group executions. `bar`'s levels are rows of `step`, a footprint's
+    /// [`price_step`](super::Footprint::price_step), so the rows here are whole steps: the row
+    /// height in steps, rounded, at least one, or the traded steps over the row count, rounded
+    /// up, counted from multiples of the row as a footprint groups them and widened where that
+    /// would exceed the row count. `None` without executed volume, with a volume that is not
+    /// finite, or past 10,000 rows.
+    #[cfg(any(feature = "studies", feature = "drawings"))]
+    pub(crate) fn of_executions(
+        bar: &FootprintBar,
+        config: &VolumeProfileConfig,
+        step: f64,
+        tick_size: f64,
+        complete: bool,
+    ) -> Option<Self> {
+        let (&first, &last) = (bar.levels.keys().next()?, bar.levels.keys().next_back()?);
+        if !bar.volume().is_finite() {
+            return None;
+        }
+        let steps = steps_per_row(config, step, first, last)?;
+        let mut rows = FootprintBar::empty(bar.time);
+        rows.absorb_grouped(bar, steps);
+        Self::from_executions(&rows, steps as f64 * step, tick_size, complete)
     }
 
     /// Whether the volumes are estimated from bars, executed or option turnover.
@@ -673,6 +698,29 @@ fn fixed_grid(low: f64, high: f64, height: f64) -> Option<(f64, f64, usize)> {
         bounds.1,
         count as usize,
     ))
+}
+
+/// Steps per row of an executed profile over the traded levels `first..=last`, levels `step`
+/// apart: the row height in whole steps, at least one. With equal rows, the levels over the row
+/// count, rounded up, when rows of that many levels, counted from its multiples as a footprint
+/// groups them, stay within the row count; else the levels over one row fewer, which always do.
+/// Asked for one row, levels that straddle a multiple keep two.
+#[cfg(any(feature = "studies", feature = "drawings"))]
+fn steps_per_row(config: &VolumeProfileConfig, step: f64, first: i64, last: i64) -> Option<i64> {
+    if let Some(height) = config.row_size() {
+        let steps = (height / step).round();
+        return (steps < i64::MAX as f64).then(|| (steps as i64).max(1));
+    }
+    let (first, last, rows) = (i128::from(first), i128::from(last), config.rows() as i128);
+    let count = |steps: i128| last.div_euclid(steps) - first.div_euclid(steps) + 1;
+    let span = last - first + 1;
+    let even = (span + rows - 1) / rows;
+    let steps = if rows == 1 || count(even) <= rows {
+        even
+    } else {
+        (span + rows - 2) / (rows - 1)
+    };
+    i64::try_from(steps).ok()
 }
 
 /// Rows around the POC that hold `target` volume. Market Profile rule: grow

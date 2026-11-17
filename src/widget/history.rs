@@ -267,6 +267,14 @@ impl ChartHistory {
         }
     }
 
+    /// Makes the last recorded action this chart's part of a cross-chart edit.
+    #[cfg(feature = "studies")]
+    pub(super) fn join_last_to_layout_edit(&mut self, edit: super::layout::LayoutEditLink) {
+        if let Some(action) = self.undo.last_mut() {
+            action.layout_edit = Some(edit);
+        }
+    }
+
     /// Makes every state of drawing `id` that an undo or redo of the shown symbol's actions can
     /// bring back saveable, once the drawing is stored on this chart, so that neither leaves it
     /// stored nowhere.
