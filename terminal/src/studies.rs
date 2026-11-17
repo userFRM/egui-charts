@@ -555,7 +555,7 @@ mod tests {
                         .expect("the browser offers the study's category");
                     click(&mut terminal, SIZE, tab);
                     let row = frame(&mut terminal, SIZE, vec![])
-                        .text_at("Simple Moving Avg")
+                        .text_at("Simple Moving Average")
                         .expect("the browser lists the study in its category");
                     click(&mut terminal, SIZE, row);
                 } else {
@@ -607,7 +607,7 @@ mod tests {
             vec![Event::Text("Simple Moving".into())],
         );
         let row = frame(&mut terminal, SIZE, vec![])
-            .text_at("Simple Moving Avg")
+            .text_at("Simple Moving Average")
             .expect("the dialog lists the study");
         click(&mut terminal, SIZE, row);
         let child = terminal
