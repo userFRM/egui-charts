@@ -671,17 +671,21 @@ mod tests {
             crate::theme::apply_to_egui(&ctx, &theme);
             let mut chart = Chart::new(BarData::new());
             let mut dialog = DrawingPropertiesDialog::new();
-            for (tool, fill, extend, text, stroke) in [
-                (Tool::HorizontalLine, false, false, true, true),
-                (Tool::Rect, true, true, true, true),
-                (Tool::Brush, true, false, false, true),
-                (Tool::TrendLine, false, true, true, true),
-                (Tool::TrendAngle, false, true, true, true),
-                (Tool::TextLabel, false, false, true, false),
-                (Tool::Highlighter, false, false, false, true),
-                (Tool::ArrowMarker, false, false, true, false),
-                (Tool::ArrowMarkDown, false, false, true, false),
-                (Tool::FibonacciChannel, true, false, true, false),
+            for (tool, fill, extend, text, (width, style)) in [
+                (Tool::HorizontalLine, false, false, true, (true, true)),
+                (Tool::Rect, true, true, true, (true, true)),
+                (Tool::Brush, true, false, false, (true, true)),
+                (Tool::TrendLine, false, true, true, (true, true)),
+                (Tool::TrendAngle, false, true, true, (true, true)),
+                (Tool::TextLabel, false, false, true, (false, false)),
+                (Tool::Highlighter, false, false, false, (true, true)),
+                (Tool::ArrowMarker, false, false, true, (false, false)),
+                (Tool::ArrowMarkDown, false, false, true, (false, false)),
+                (Tool::FibonacciChannel, true, false, true, (false, false)),
+                (Tool::Pitchfork, false, true, false, (true, false)),
+                (Tool::Tweet, true, false, true, (false, true)),
+                (Tool::Sticker, false, false, false, (false, false)),
+                (Tool::GhostFeed, false, false, false, (false, false)),
             ] {
                 let mut drawing = Drawing::new(7, tool);
                 drawing.chart_points = vec![ChartPoint::new(1.0, 100.0); 3];
@@ -699,9 +703,15 @@ mod tests {
                     ("Fill", fill),
                     ("Extend", extend),
                     ("Text", text),
-                    ("Color", tool != Tool::FibonacciChannel),
-                    ("Line width", stroke),
-                    ("Line style", stroke),
+                    (
+                        "Color",
+                        !matches!(
+                            tool,
+                            Tool::FibonacciChannel | Tool::Sticker | Tool::GhostFeed
+                        ),
+                    ),
+                    ("Line width", width),
+                    ("Line style", style),
                     ("Coordinates", !freehand),
                     ("Template", true),
                     ("Ok", true),
