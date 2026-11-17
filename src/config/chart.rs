@@ -275,7 +275,9 @@ pub struct ChartConfig {
     pub bullish_wick_color: Option<Color32>,
     /// Wick color for bearish candles (None = same as border or body)
     pub bearish_wick_color: Option<Color32>,
-    /// Price source for line-based charts (Line, Area, StepLine, etc.)
+    /// The price the Line, Step line, Line with markers, Area and Baseline charts draw while
+    /// their own source in [`ChartTypeStyles`](crate::model::ChartTypeStyles) is `None`, as in
+    /// settings, templates and layouts saved before each had one. Close by default.
     pub price_source: PriceSource,
     /// Minimum spacing in physical pixels for unmerged main-series samples; `None` disables
     /// conflation. The default, `Some(1.0)`, preserves the one-pixel grouping. Below the
