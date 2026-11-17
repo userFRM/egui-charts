@@ -101,7 +101,7 @@ pub(crate) use volume_profile::{ExposureProfile, StrikeExposure, grid_row};
 pub(crate) mod trades;
 
 pub use inbox::{Reply, Sink, aggregate_trades, aggregate_trades_with_tick_size};
-pub use order_flow::{BarBook, OrderFlowBars, OrderFlowInput, OrderFlowKind};
+pub use order_flow::{BarBook, OrderFlowBars, OrderFlowFootprints, OrderFlowInput, OrderFlowKind};
 pub use orders::{
     OrderEvent, OrderFilter, OrderFilterUnavailable, OrderQueue, OrderSizeTier, OrderSizeTiers,
     RestingOrder,
@@ -230,8 +230,9 @@ pub trait Datafeed: MaybeSend + 'static {
         reply.send(Err(FeedError::NotSupported));
     }
 
-    /// Prepared execution rows for the time-based volume footprint chart. OHLC still comes
-    /// from [`history`](Self::history); both replies must use the same request context.
+    /// Prepared execution rows for time-based volume footprint charts and studies declaring
+    /// an [`OrderFlowInput::footprint`] source, including studies on candle charts. OHLC still
+    /// comes from [`history`](Self::history); both replies must use the same request context.
     /// Held and live trades at or after [`FootprintPage::complete_before`] continue the page.
     /// Prepared rows survive raw-trade eviction; a changed request context or feed reset clears them.
     /// The default answers [`FeedError::NotSupported`] and keeps the trade-based loading path.
@@ -543,6 +544,36 @@ pub struct HistoryRequest {
     pub conversion: Option<String>,
 }
 
+impl HistoryRequest {
+    /// The latest `count` bars of `symbol` at `timeframe`: regular hours, unadjusted and in the
+    /// instrument's own currency, on the UTC calendar of [`BarClock::new`]. Assign
+    /// [`before`](Self::before) and [`since`](Self::since) to bound the range, and
+    /// [`clock`](Self::clock) and the other fields to match a chart.
+    ///
+    /// ```
+    /// use egui_charts::data::HistoryRequest;
+    /// use egui_charts::model::Timeframe;
+    ///
+    /// let mut request = HistoryRequest::new("AAPL", Timeframe::Min5, 500);
+    /// request.before = Some("2026-01-05T15:00:00Z".parse()?);
+    /// assert_eq!(request.since, None);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn new(symbol: impl Into<String>, timeframe: Timeframe, count: usize) -> Self {
+        Self {
+            symbol: symbol.into(),
+            timeframe,
+            clock: BarClock::new(timeframe),
+            before: None,
+            since: None,
+            count,
+            extended_hours: false,
+            adjusted: false,
+            conversion: None,
+        }
+    }
+}
+
 /// One page of history. A page without bars ends scroll-back like `end_of_history` does, unless it
 /// names where older bars continue with [`continue_before`](Self::continue_before), so a feed that
 /// pages by time window can answer an empty window such as a weekend.
@@ -616,6 +647,40 @@ pub struct FootprintRequest {
     pub adjusted: bool,
     /// Requested price currency or unit; see [`HistoryRequest::conversion`].
     pub conversion: Option<String>,
+}
+
+impl FootprintRequest {
+    /// The latest `count` bars of `symbol` at `timeframe`, in rows of one tick of `tick_size`,
+    /// with the other fields as [`HistoryRequest::new`] sets them. Assign
+    /// [`before`](Self::before) and [`since`](Self::since) to bound the range.
+    ///
+    /// ```
+    /// use egui_charts::data::FootprintRequest;
+    /// use egui_charts::model::Timeframe;
+    ///
+    /// let request = FootprintRequest::new("ES", Timeframe::Min1, 300, 0.25);
+    /// assert_eq!(request.ticks_per_row, 1);
+    /// ```
+    pub fn new(
+        symbol: impl Into<String>,
+        timeframe: Timeframe,
+        count: usize,
+        tick_size: f64,
+    ) -> Self {
+        Self {
+            symbol: symbol.into(),
+            timeframe,
+            clock: BarClock::new(timeframe),
+            tick_size,
+            ticks_per_row: 1,
+            before: None,
+            since: None,
+            count,
+            extended_hours: false,
+            adjusted: false,
+            conversion: None,
+        }
+    }
 }
 
 /// Prepared footprint history, validated as [`Footprint::from_bars`] before it is displayed.
@@ -745,6 +810,27 @@ pub struct TradeRequest {
     /// The currency or unit the host chose, in which the prices are wanted; see
     /// [`HistoryRequest::conversion`].
     pub conversion: Option<String>,
+}
+
+impl TradeRequest {
+    /// The latest `count` trades of `symbol`, priced in the instrument's own currency. Assign
+    /// [`before`](Self::before) and [`since`](Self::since) to bound the range.
+    ///
+    /// ```
+    /// use egui_charts::data::TradeRequest;
+    ///
+    /// let request = TradeRequest::new("ES", 10_000);
+    /// assert_eq!(request.before, None);
+    /// ```
+    pub fn new(symbol: impl Into<String>, count: usize) -> Self {
+        Self {
+            symbol: symbol.into(),
+            before: None,
+            since: None,
+            count,
+            conversion: None,
+        }
+    }
 }
 
 /// One page of trades. A page without trades ends scroll-back like `end_of_history` does, unless

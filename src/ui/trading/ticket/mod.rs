@@ -225,8 +225,8 @@ pub(crate) struct Market<'a> {
     /// Why the ladder has no sizes when the view needs orders the feed does not send.
     pub ladder_unavailable: Option<crate::data::OrderFilterUnavailable>,
     /// Prices whose largest known individual order reaches a tier of the view, as (is bid,
-    /// price, colour).
-    pub highlights: Vec<(bool, f64, egui::Color32)>,
+    /// price, size of that order, colour).
+    pub highlights: Vec<(bool, f64, f64, egui::Color32)>,
     /// The account's working orders and open positions, of every symbol.
     pub orders: &'a [Order],
     pub positions: &'a [Position],

@@ -24,8 +24,9 @@
 use super::AutoAnchor;
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
 use crate::data::{
-    FootprintBar, FootprintLevel, OrderFlowBars, OrderFlowInput, ProfileDisplay, ProfileLevel,
-    ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile, VolumeProfileConfig, grid_row,
+    FootprintBar, FootprintLevel, OrderFlowFootprints, OrderFlowInput, ProfileDisplay,
+    ProfileLevel, ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile,
+    VolumeProfileConfig, grid_row,
 };
 use crate::model::{
     Bar, BarClock, CustomProfileSession, Instrument, ProfileResolution, ProfileSession, Session,
@@ -710,18 +711,13 @@ impl ProfileStudy {
     /// The executions the chart holds from the bar before chart bar `start` on, while the source
     /// opens its bars by this study's calendar; executions keyed by another calendar, as the
     /// chart's are while the study runs on another interval, cannot be assigned to these bars.
-    fn held_executions(&self, start: usize) -> Option<OrderFlowBars<FootprintBar>> {
-        if self.flow.footprint_clock().as_ref() != Some(&self.clock) {
-            return None;
-        }
+    fn held_executions(&self, start: usize) -> Option<OrderFlowFootprints> {
         let from = start
             .checked_sub(1)
             .map_or(DateTime::<Utc>::MIN_UTC, |before| {
                 self.clock.bar_open(self.data[before].time)
             });
-        // shortcut: viewport queries copy up to 110,000 held rows; retain the copy by revision
-        // if panning shows the cost.
-        Some(self.flow.footprints_from(from))
+        self.flow.footprint_snapshot_for_clock(from, &self.clock)
     }
 
     /// The executions of chart bars `range` in `flow`, merged per tick, and whether `flow` holds
@@ -732,7 +728,7 @@ impl ProfileStudy {
     fn executions_of(
         &self,
         range: &Range<usize>,
-        flow: &OrderFlowBars<FootprintBar>,
+        flow: &OrderFlowFootprints,
     ) -> Option<(FootprintBar, bool)> {
         let open = |bar: &Bar| self.clock.bar_open(bar.time);
         let (start, end) = (
@@ -752,8 +748,8 @@ impl ProfileStudy {
         }
         // Rows before the first bar's slot belong to bars the chart has dropped or never held.
         let lower = before.map_or(Bound::Included(start), Bound::Excluded);
-        let held = flow.bars.range((lower, Bound::Included(end)));
-        let first = *held.clone().next()?.0;
+        let mut held = flow.bars((lower, Bound::Included(end))).peekable();
+        let first = held.peek()?.time;
         // Bars stamped before the first held bar hold none of the executions.
         let from = range.start + self.data[range.clone()].partition_point(|bar| bar.time < first);
         let mut opens = Vec::with_capacity(range.end - from);
@@ -766,22 +762,16 @@ impl ProfileStudy {
         }
         let mut opens = opens.into_iter().peekable();
         let mut merged = FootprintBar::empty(start);
-        for (&time, bar) in held {
+        for bar in held {
+            let time = bar.time;
             while opens.next_if(|&open| open < time).is_some() {}
             // Executions in a slot that no bar of the range opens belong to bars it lacks.
             if opens.peek() != Some(&time) {
                 return None;
             }
-            merged.absorb(bar);
+            merged.absorb_grouped(bar, 1);
         }
-        // During a replay the bar containing the cutoff is absent when its executions before the
-        // cutoff are not known.
-        let unknown = flow.cutoff.is_some_and(|cutoff| {
-            end <= cutoff
-                && self.clock.next_open(end).is_none_or(|next| cutoff < next)
-                && !flow.bars.contains_key(&end)
-        });
-        let complete = flow.complete_from.is_some_and(|from| from <= start) && !unknown;
+        let complete = flow.span_is_complete(start, end);
         Some((merged, complete))
     }
 
@@ -792,7 +782,7 @@ impl ProfileStudy {
         &self,
         range: &Range<usize>,
         config: &VolumeProfileConfig,
-        flow: &OrderFlowBars<FootprintBar>,
+        flow: &OrderFlowFootprints,
     ) -> Option<VolumeProfile> {
         let tick = flow.tick_size?;
         let (bar, complete) = self.executions_of(range, flow)?;
@@ -1084,7 +1074,7 @@ impl ProfileStudy {
         let mut cache = self.cache.borrow_mut();
         let mut profiles = Vec::new();
         // Copied once, from the bar before the first profile built here on.
-        let mut held: Option<Option<OrderFlowBars<FootprintBar>>> = None;
+        let mut held: Option<Option<OrderFlowFootprints>> = None;
         for range in ranges {
             if let Some(plot) = cache.iter().find(|cached| {
                 cached.plot.bars == range && cached.plot.config == config && !cached.dirty
@@ -1569,6 +1559,11 @@ macro_rules! profile_study {
             }
             fn clone_box(&self) -> Box<dyn Indicator> {
                 Box::new(self.clone())
+            }
+            fn clone_for_export(&self) -> Box<dyn Indicator> {
+                let mut frozen = self.clone();
+                frozen.profile.flow = self.profile.flow.frozen();
+                Box::new(frozen)
             }
         }
     };
@@ -3120,6 +3115,123 @@ mod rendering_tests {
     use crate::chart::rendering::{ChartMapping, IndicatorRenderer, RenderContext};
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
     use crate::{model::Bar, studies::Indicator};
+
+    #[test]
+    fn frozen_profiles_keep_deferred_rows_levels_and_autoscale() {
+        use crate::chart::rendering::fit_study_mapping;
+        use crate::studies::ConfiguredStudy;
+        let bars = super::tests::level_bars();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 400.0));
+        let price = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(90.0, 110.0),
+            0.0,
+            400.0,
+            false,
+        );
+        let coords = ChartMapping::new(rect, 100.0, 0, 1, 0.0, price);
+        let profiles = |study: &dyn Indicator| {
+            study
+                .volume_profiles(0..7)
+                .into_iter()
+                .map(|plot| {
+                    (
+                        plot.profile.source(),
+                        plot.profile.low(),
+                        plot.profile.high(),
+                        plot.profile.volume().to_vec(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let levels = |study: &dyn Indicator| {
+            study
+                .profile_levels(0..7)
+                .into_iter()
+                .map(|level| (level.kind, level.price, level.bars))
+                .collect::<Vec<_>>()
+        };
+        for prepared in [false, true] {
+            if prepared && !cfg!(feature = "widget") {
+                continue;
+            }
+            for first_read in 0..3 {
+                let mut study = ConfiguredStudy::new(Box::new(VolProfileSession::new(24)));
+                study.set_timeframe(Timeframe::Hour1);
+                study
+                    .set_input("row_size", InputValue::Number(2.0))
+                    .unwrap();
+                study
+                    .set_input("extend_poc", InputValue::Toggle(true))
+                    .unwrap();
+                let input = study.order_flow_inputs()[0].clone();
+                input.set_tick_size(Some(1.0));
+                let clock = BarClock::new(Timeframe::Hour1);
+                if prepared {
+                    #[cfg(feature = "widget")]
+                    {
+                        let mut rows = crate::data::Footprint::new(clock.clone(), 1.0, 1).unwrap();
+                        for bar in &bars {
+                            rows.push(&crate::model::Tick::new(
+                                bar.time, bar.close, bar.volume, None,
+                            ))
+                            .unwrap();
+                        }
+                        let trades = crate::data::trades::Trades::new(1);
+                        let mut history = crate::data::FootprintState::new(rows);
+                        history.prepare_history(
+                            bars.last().unwrap().time + chrono::TimeDelta::hours(1),
+                            &trades,
+                            true,
+                        );
+                        history.share_prepared();
+                        input.replace_trades(&clock, &trades, &bars, Some(&history));
+                    }
+                } else {
+                    for bar in &bars {
+                        input.push_trade(
+                            &clock,
+                            &crate::model::Tick::new(bar.time, bar.close, bar.volume, None),
+                        );
+                    }
+                }
+                study.calculate(&bars);
+                let expected_profiles = profiles(&study);
+                let expected_levels = levels(&study);
+                assert!(!expected_levels.is_empty());
+                let expected_scale = fit_study_mapping(&study, &coords, None).price.range();
+                let mut frozen = study.clone_for_export();
+                frozen.calculate(&bars);
+                input.clear();
+                study.calculate(&bars);
+                assert_ne!(profiles(&study), expected_profiles);
+                match first_read {
+                    0 => {
+                        assert_eq!(profiles(frozen.as_ref()), expected_profiles);
+                    }
+                    1 => {
+                        assert_eq!(levels(frozen.as_ref()), expected_levels);
+                    }
+                    _ => {
+                        assert_eq!(
+                            fit_study_mapping(frozen.as_ref(), &coords, None)
+                                .price
+                                .range(),
+                            expected_scale
+                        );
+                    }
+                }
+                assert_eq!(profiles(frozen.as_ref()), expected_profiles);
+                assert_eq!(levels(frozen.as_ref()), expected_levels);
+                assert_eq!(
+                    fit_study_mapping(frozen.as_ref(), &coords, None)
+                        .price
+                        .range(),
+                    expected_scale
+                );
+            }
+        }
+    }
 
     /// Hidden value area boundaries leave clicks to the plot beneath, while rows and the point
     /// of control still select the study.
