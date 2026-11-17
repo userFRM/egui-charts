@@ -273,9 +273,10 @@ impl FeedLink {
         if let Some(source) = excluded {
             for &open in source.partial_slots() {
                 flow.add_missing(
-                    open,
+                    self.clock.bar_start(open),
                     self.clock
                         .next_open(open)
+                        .map(|next| self.clock.bar_start(next))
                         .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC),
                 );
             }
@@ -290,7 +291,8 @@ impl FeedLink {
                     usize::MAX
                 })
                 .filter(|trade| {
-                    excluded.is_none_or(|source| !source.partial_at(self.clock.bar_open(trade.ts)))
+                    excluded
+                        .is_none_or(|source| !source.partial_at(self.clock.instant_open(trade.ts)))
                 })
         };
         let trades = || held().take_while(|trade| before.is_none_or(|time| trade.ts < time));

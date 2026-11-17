@@ -363,8 +363,7 @@ impl Chart {
         let link = self.feed_link.as_ref();
         let clock = link.map_or_else(|| self.bar_clock(), |link| link.clock.clone());
         let trades = link.map(|link| &link.trades);
-        // A footprint input keeps executions in calendar periods, the others in trading dates.
-        let open = clock.instant_open(since).min(clock.bar_open(since));
+        let open = clock.instant_open(since);
         let from = (self.state.data().bars).partition_point(|bar| clock.bar_open(bar.time) < open);
         // The window keeps the bars after the cutoff aside; the executions are grouped along all.
         let history = (self.replay.as_ref())

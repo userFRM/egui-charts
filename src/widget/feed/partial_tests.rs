@@ -770,3 +770,95 @@ fn chart_paints_an_entirely_partial_page_without_fallback_candles() {
         "an intra-slot timestamp must not add fallback candles over partial cells"
     );
 }
+
+#[cfg(feature = "timezones")]
+#[test]
+fn partial_trading_dates_are_sealed_and_raw_replay_excludes_their_evening_executions() {
+    use crate::model::{Session, SessionWindow, TimezoneId};
+    use chrono::{NaiveTime, Weekday::*};
+    for closed in [false, true] {
+        let chicago = TimezoneId::named("America/Chicago").unwrap();
+        let hour = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+        let futures = Instrument::new("ES")
+            .with_tick_size(1.0)
+            .with_time_zone(chicago.clone())
+            .with_session(Session::new([SessionWindow::new(
+                [Mon, Tue, Wed, Thu, Fri],
+                hour(17),
+                hour(16),
+            )]));
+        let feed = Arc::new(Script::default());
+        feed.prepared_footprints.store(true, Ordering::Relaxed);
+        let mut chart = fed(&feed, Some("ES"));
+        chart.chart_options.time_scale.timezone = crate::scales::TimezoneMode::Exchange(chicago);
+        chart.set_timeframe(Timeframe::Day1);
+        chart.set_chart_type(ChartType::VolumeFootprint);
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        for _ in 0..2 {
+            feed.resolve().send(Ok(futures.clone()));
+            feed.page().send(page(Vec::new(), true));
+            frames.run(&mut chart);
+            frames.run(&mut chart);
+        }
+        // Tuesday's midnight label is still inside its trading session, not its close.
+        let cutoff = "2024-01-09T06:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let clock = chart.feed_link.as_ref().unwrap().clock.clone();
+        let evening = Tick::new(
+            cutoff - TimeDelta::hours(if closed { 30 } else { 6 }),
+            100.0,
+            3.0,
+            None,
+        );
+        let marked = clock.instant_open(evening.ts);
+        let mut flow = Footprint::new(clock.clone(), 1.0, 1).unwrap();
+        flow.push(&evening).unwrap();
+        let answer = FootprintPage::partial(
+            FootprintBars::Shared(Arc::new(flow.bars().values().cloned().collect::<Vec<_>>())),
+            cutoff,
+            true,
+            vec![marked],
+        );
+        feed.footprints
+            .lock()
+            .unwrap()
+            .pop()
+            .unwrap()
+            .send(Ok(answer));
+        frames.run(&mut chart);
+        if !closed {
+            assert!(matches!(
+                chart.feed.last_error,
+                Some(FeedError::InvalidData(_))
+            ));
+            continue;
+        }
+        assert!(
+            chart.feed.last_error.is_none(),
+            "{:?}",
+            chart.feed.last_error
+        );
+        assert!(prepared_view(&chart).partial_at(marked));
+        let next = Tick::new(cutoff - TimeDelta::hours(6), 100.0, 9.0, None);
+        let complete = clock.instant_open(next.ts);
+        feed.trades
+            .lock()
+            .unwrap()
+            .pop()
+            .unwrap()
+            .send(Ok(TradePage::new(vec![evening, next], true)));
+        frames.run(&mut chart);
+        let link = chart.feed_link.as_ref().unwrap();
+        let replay = link
+            .footprint(Some(cutoff), chart.bars(SeriesId::MAIN))
+            .unwrap();
+        let view = FootprintView::from(&replay);
+        assert!(
+            view.bar_at(marked).is_none(),
+            "raw history must not repair the marked date"
+        );
+        assert!(!view.span_is_complete(marked, marked));
+        assert_eq!(view.complete_bar_at(complete).unwrap().unknown, 9.0);
+        assert!(view.span_is_complete(complete, complete));
+    }
+}

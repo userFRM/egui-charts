@@ -1649,6 +1649,63 @@ fn prepared_pages_reject_invalid_ranges_and_nonprogressing_continuations() {
     }
 }
 
+/// On a daily chart with an overnight session, a page cut in the evening session holds the bar
+/// of the next trading date, which opens after the cutoff, and may hold no older bar.
+#[cfg(feature = "timezones")]
+#[test]
+fn prepared_page_cut_in_the_evening_session_may_hold_only_the_next_date() {
+    use crate::model::{Session, SessionWindow, TimezoneId};
+    use chrono::{NaiveTime, Weekday::*};
+    let chicago = TimezoneId::named("America/Chicago").unwrap();
+    let hour = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+    // A date trades from 17:00 the evening before to 16:00 in Chicago.
+    let futures = Instrument::new("ES")
+        .with_tick_size(1.0)
+        .with_time_zone(chicago.clone())
+        .with_session(Session::new([SessionWindow::new(
+            [Mon, Tue, Wed, Thu, Fri],
+            hour(17),
+            hour(16),
+        )]));
+    let feed = Arc::new(Script::default());
+    feed.prepared_footprints.store(true, Ordering::Relaxed);
+    let mut chart = fed(&feed, Some("ES"));
+    chart.chart_options.time_scale.timezone = crate::scales::TimezoneMode::Exchange(chicago);
+    chart.set_timeframe(Timeframe::Day1);
+    chart.set_chart_type(ChartType::VolumeFootprint);
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    // The session the feed reports dates the bars, so the chart loads again once it resolves.
+    for _ in 0..2 {
+        feed.resolve().send(Ok(futures.clone()));
+        feed.page().send(page(Vec::new(), true));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+    }
+    // 17:30 on Monday 8 January 2024 trades Tuesday, whose bar opens at midnight.
+    let cutoff = "2024-01-08T23:30:00Z".parse::<DateTime<Utc>>().unwrap();
+    let clock = chart.feed_link.as_ref().unwrap().clock.clone();
+    let tuesday = clock.instant_open(cutoff);
+    assert!(tuesday > cutoff);
+    let mut flow = Footprint::new(clock, 1.0, 1).unwrap();
+    let evening = Tick::new(cutoff - TimeDelta::minutes(20), 100.0, 2.0, None);
+    flow.push(&evening).unwrap();
+    let answer = FootprintPage::new(flow.bars().values().cloned().collect(), cutoff, false);
+    // The newest request: the first load asked with the clock it had before the session.
+    let reply = feed.footprints.lock().unwrap().pop().unwrap();
+    reply.send(Ok(answer));
+    frames.run(&mut chart);
+    assert!(
+        chart.feed.last_error.is_none(),
+        "{:?}",
+        chart.feed.last_error
+    );
+    let held = prepared_view(&chart)
+        .bars(..)
+        .map(|bar| (bar.time, bar.volume()));
+    assert_eq!(held.collect::<Vec<_>>(), [(tuesday, 2.0)]);
+}
+
 #[test]
 fn prepared_replies_follow_context_and_do_not_load_trade_intervals() {
     let start = bars(1)[0].time;

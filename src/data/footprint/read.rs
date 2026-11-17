@@ -316,7 +316,8 @@ impl FootprintState {
         let Some(before) = self.live.prepared_before() else {
             return;
         };
-        self.share_owned_before(self.live.clock.bar_open(before));
+        let open = self.live.place(before);
+        self.share_owned_before(open);
     }
 
     #[cfg(feature = "widget")]
@@ -377,6 +378,8 @@ impl FootprintState {
             rows: 0,
             missing: self.live.missing.clone(),
             partial_slots: self.live.partial_slots.clone(),
+            missing_bars: self.live.missing_bars.clone(),
+            placement: Default::default(),
             prepared: self.live.prepared.clone(),
             ..self.live
         };
@@ -422,11 +425,11 @@ impl FootprintState {
             self.live.trade_starts.remove(&bar.time);
             #[cfg(feature = "widget")]
             if let Some(before) = self.live.prepared_before() {
-                let end = self
-                    .live
-                    .clock
-                    .next_open(bar.time)
-                    .unwrap_or(DateTime::<Utc>::MAX_UTC);
+                // The executions of the next bar can start before its open.
+                let end = (self.live.clock.next_open(bar.time))
+                    .map_or(DateTime::<Utc>::MAX_UTC, |next| {
+                        self.live.clock.bar_start(next)
+                    });
                 self.live.add_missing(before, end);
             } else {
                 self.live.incomplete_through = self.live.incomplete_through.max(Some(bar.time));
@@ -456,6 +459,8 @@ impl FootprintState {
             trade_starts: Default::default(),
             missing: self.live.missing.clone(),
             partial_slots: self.live.partial_slots.clone(),
+            missing_bars: self.live.missing_bars.clone(),
+            placement: Default::default(),
             #[cfg(feature = "widget")]
             prepared: None,
             ..self.live
@@ -604,7 +609,7 @@ impl FootprintState {
         from_start: bool,
     ) {
         self.live.covered_from = self.view().covered_from().or(Some(before));
-        let open = self.live.clock.bar_open(before);
+        let open = self.live.place(before);
         if let Some(page) = self.pages.last_mut()
             && page.source.bar(page.end - 1).time == open
         {
@@ -621,6 +626,9 @@ impl FootprintState {
         self.live.prepare_history(before, trades, from_start);
     }
     /// Record one answered span without mistaking an unavailable answer for empty executions.
+    /// `from` is a bar's open and `before` another's or the prepared cutoff: the span's executions
+    /// run from the first instant of the bar opening at `from` to the cutoff or to the first
+    /// instant of the bar opening at `before`.
     #[cfg(feature = "widget")]
     pub(crate) fn record_prepared_span(
         &mut self,
@@ -632,8 +640,25 @@ impl FootprintState {
             return;
         }
         let held = self.live.covered_from.unwrap_or(before);
+        // A bar of a trading date can start on either side of its open. When the prepared bar
+        // holding the cutoff opens exactly there, a bound at the cutoff is that bar's open.
+        let cutoff = (self.live.prepared_before())
+            .filter(|&cutoff| (self.live.prepared_boundary()).is_none_or(|bar| bar.time != cutoff));
+        let clock = &self.live.clock;
+        let first_instant = |time| {
+            if Some(time) == cutoff {
+                time
+            } else {
+                clock.bar_start(time)
+            }
+        };
+        let (start, unheld, end) = (
+            first_instant(from),
+            first_instant(held),
+            first_instant(before),
+        );
         if from < held {
-            self.live.add_missing(from, held);
+            self.live.add_missing(start, unheld);
         }
         let first = held.min(from);
         if self.live.covered_from != Some(first) {
@@ -641,9 +666,9 @@ impl FootprintState {
             self.live.revision = super::next_revision();
         }
         if available {
-            self.live.cover_missing(from, before);
+            self.live.cover_missing(start, end);
         } else {
-            self.live.add_missing(from, before);
+            self.live.add_missing(start, end);
         }
     }
 
@@ -657,14 +682,21 @@ impl FootprintState {
         if from >= before {
             return None;
         }
+        // Gaps hold execution times, and a bar of a trading date can start on either side of its
+        // open.
+        let clock = &self.live.clock;
+        let (since, until) = (clock.bar_start(from), clock.bar_start(before));
         let end = self
             .live
             .missing
-            .partition_point(|(start, _)| *start < before);
+            .partition_point(|(start, _)| *start < until);
         if let Some(&(start, stop)) = end.checked_sub(1).and_then(|at| self.live.missing.get(at))
-            && stop > from
+            && stop > since
         {
-            return Some((start.max(from), stop.min(before)));
+            return Some((
+                clock.instant_open(start.max(since)),
+                clock.instant_open(stop.min(until)),
+            ));
         }
         let end = self
             .live
@@ -689,7 +721,7 @@ impl FootprintState {
             || self
                 .live
                 .prepared_before()
-                .is_none_or(|cutoff| before > cutoff)
+                .is_none_or(|cutoff| before > self.live.clock.instant_open(cutoff))
             || self.live.clock != page.live.clock
             || self.live.tick_size != page.live.tick_size
             || self.live.ticks_per_row != page.live.ticks_per_row
