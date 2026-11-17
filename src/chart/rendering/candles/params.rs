@@ -4,6 +4,7 @@
 
 use crate::scales::PriceMap;
 use egui::Color32;
+use std::ops::Range;
 
 use crate::chart::rendering::{RenderContext, StyleColors};
 use crate::model::{Bar, PriceSource};
@@ -38,6 +39,27 @@ pub struct CandleDataContext<'a> {
     pub tick_size: Option<f64>,
     /// Host formatting of the price labels a chart type prints beside its bars.
     pub price_formatter: Option<&'a dyn crate::scales::PriceFormatter>,
+}
+
+impl<'a> CandleDataContext<'a> {
+    /// `visible_data` with the bar of `full_data` just beyond each of its edges where there is
+    /// one, the index of its first bar in `full_data`, and the range of `visible_data` within
+    /// it. A line drawn through them runs on to the plot's edges, where the clip ends it.
+    /// `visible_data` alone when `full_data` is shorter than the window, as when a chart without
+    /// bars of its own shows the whitespace slots of its added series.
+    pub(crate) fn with_neighbours(&self) -> (&'a [Bar], usize, Range<usize>) {
+        let (start, len) = (self.start_idx, self.visible_data.len());
+        if self.full_data.len() < start + len {
+            return (self.visible_data, start, 0..len);
+        }
+        let from = start.saturating_sub(1);
+        let to = (start + len + 1).min(self.full_data.len());
+        (
+            &self.full_data[from..to],
+            from,
+            start - from..start - from + len,
+        )
+    }
 }
 
 /// Bar/candle rendering dimensions
