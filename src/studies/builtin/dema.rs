@@ -77,7 +77,7 @@ impl Indicator for DEMA {
     }
 
     fn desc(&self) -> &str {
-        "Double Exponential Moving Avg - Reduces lag compared to EMA"
+        "Double Exponential Moving Average - Reduces lag compared to EMA"
     }
 
     fn calculate(&mut self, data: &[Bar]) {

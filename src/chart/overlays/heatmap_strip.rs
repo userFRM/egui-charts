@@ -60,7 +60,9 @@ pub struct HeatmapStripConfig {
     pub height: f32,
     /// Minimum painted cell width; bar positions still follow the caller's mapping.
     pub min_cell_width: f32,
-    /// Whether to show volume-based intensity
+    /// Whether a bar's share of the largest volume sets its colour strength toward the side of
+    /// its delta with `use_gradient`, or its opacity without it. A bar with zero delta stays
+    /// neutral.
     pub volume_weighted: bool,
     /// Whether to show gradient or solid colors
     pub use_gradient: bool,
@@ -208,9 +210,16 @@ impl HeatmapStrip {
             let color = if self.config.use_gradient {
                 let mut shown = cell.with_normalized_intensity(self.max_abs_delta);
                 if self.config.volume_weighted {
+                    // A cell without delta stays neutral, as in solid mode.
+                    let side = if cell.is_buying() {
+                        1.0
+                    } else if cell.is_selling() {
+                        -1.0
+                    } else {
+                        0.0
+                    };
                     shown.intensity = if max_volume > 0.0 {
-                        (0.5 + 0.5 * cell.delta.signum() * cell.volume / max_volume).clamp(0.0, 1.0)
-                            as f32
+                        (0.5 + 0.5 * side * cell.volume / max_volume).clamp(0.0, 1.0) as f32
                     } else {
                         0.5
                     };
@@ -361,12 +370,48 @@ mod tests {
             [0, 2, 5]
         );
 
-        strip.set_data([(0, 10.0, 1.0), (1, -10.0, 10.0), (2, 0.0, 5.0)]);
-        strip.config.use_gradient = false;
-        strip.config.opacity = 1.0;
+        // Dark theme: bg black, candle_up (8, 153, 129), candle_down (242, 54, 69).
+        let up = Color32::from_rgb(8, 153, 129);
+        let down = Color32::from_rgb(242, 54, 69);
+        let solid = HeatmapStripConfig {
+            use_gradient: false,
+            opacity: 1.0,
+            ..HeatmapStripConfig::default()
+        };
+        let skewed = [(0, 10.0, 1.0), (1, -10.0, 10.0), (2, 0.0, 5.0)];
+        let even = [(0, 0.0, 10.0), (1, 5.0, 10.0), (2, -5.0, 10.0)];
         let ctx = egui::Context::default();
-        for (weighted, expected) in [(false, [255, 255, 0]), (true, [26, 255, 0])] {
-            strip.config.volume_weighted = weighted;
+        for (config, data, expected) in [
+            (
+                HeatmapStripConfig {
+                    volume_weighted: false,
+                    ..solid.clone()
+                },
+                skewed,
+                [up, down, Color32::TRANSPARENT],
+            ),
+            (
+                solid,
+                skewed,
+                [
+                    Color32::from_rgba_premultiplied(1, 15, 13, 26),
+                    down,
+                    Color32::TRANSPARENT,
+                ],
+            ),
+            // The default gradient weights by volume, and a zero delta stays neutral.
+            (
+                HeatmapStripConfig::default(),
+                even,
+                [
+                    Color32::from_rgba_premultiplied(0, 0, 0, 217),
+                    Color32::from_rgba_premultiplied(7, 130, 110, 217),
+                    Color32::from_rgba_premultiplied(206, 46, 59, 217),
+                ],
+            ),
+        ] {
+            let mut strip = HeatmapStrip::with_config(config.clone());
+            strip.set_data(data);
             let mut output = ctx.run_ui(Default::default(), |ui| {
                 strip.render(
                     ui,
@@ -376,16 +421,16 @@ mod tests {
                     |i| 25.0 + i as f32 * 50.0,
                 );
             });
-            let alphas: Vec<_> = output
+            let fills: Vec<_> = output
                 .shapes
                 .iter()
                 .filter_map(|shape| match &shape.shape {
-                    egui::Shape::Rect(rect) if rect.rect.width() == 50.0 => Some(rect.fill.a()),
+                    egui::Shape::Rect(rect) if rect.rect.width() == 50.0 => Some(rect.fill),
                     _ => None,
                 })
                 .collect();
             output.textures_delta.clear();
-            assert_eq!(alphas, expected, "solid volume weighting: {weighted}");
+            assert_eq!(fills, expected, "{config:?}");
         }
     }
 

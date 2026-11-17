@@ -5266,6 +5266,9 @@ fn scroll_to_time_shows_the_nearest_bar_and_loads_older_history() {
             Call::History(request)
         };
         assert_eq!(feed.calls(), [ranged(all[2000].time)]);
+        // A range synchronised from another chart keeps the target, so a linked chart that
+        // follows the active one still pages towards its own date.
+        assert!(chart.apply_synced_time_range(chart.visible_time_range().unwrap()));
         feed.page().send(page(all[1000..2000].to_vec(), false));
         frames.run(&mut chart);
         frames.run(&mut chart);
