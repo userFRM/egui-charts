@@ -411,9 +411,9 @@ impl Chart {
     /// top-level folder keeps it on one chart or in one layout
     /// ([`FolderSync::Chart`](crate::drawings::FolderSync::Chart),
     /// [`FolderSync::Layout`](crate::drawings::FolderSync::Layout)), unless storage holds the
-    /// drawing in a folder that does neither. Until that read the chart shows the snapshot's
-    /// drawings, and edits made meanwhile are kept. When storage holds no drawings document of the
-    /// symbol, the snapshot's drawings are kept and stored.
+    /// drawing outside such a folder. Until that read the chart shows the snapshot's drawings, and
+    /// edits made meanwhile are kept. When storage holds no drawings document of the symbol, the
+    /// snapshot's drawings are kept and stored.
     ///
     /// Errors distinguish a saved [`RestoreError::Study`], invalid [`RestoreError::Settings`],
     /// [`RestoreError::Layout`] geometry and unreadable [`RestoreError::Drawings`].

@@ -29,7 +29,20 @@ use serde::{Deserialize, Serialize};
 /// set. A saved layout opened on a chart with drawing storage shows each drawing as stored, and
 /// one deleted from storage stays deleted, except that a drawing the layout holds in a folder set
 /// to [`Chart`](Self::Chart) or [`Layout`](Self::Layout) comes back as the layout holds it,
-/// unless storage holds it in a folder set to neither.
+/// unless storage holds it outside such a folder.
+///
+/// ```
+/// use egui_charts::drawings::{ChartPoint, Drawing, DrawingManager, DrawingToolType, FolderSync};
+///
+/// let mut drawings = DrawingManager::new();
+/// let mut level = Drawing::new(0, DrawingToolType::TrendLine);
+/// level.chart_points = vec![ChartPoint::new(2.0, 104.0), ChartPoint::new(4.0, 104.0)];
+/// let id = drawings.add_drawing(level).unwrap();
+/// let folder = ["Levels".to_owned()];
+/// assert!(drawings.move_to_folder(&[id], &[], &folder));
+/// assert!(drawings.set_folder_sync(&folder, Some(FolderSync::AllLayouts)));
+/// assert_eq!(drawings.drawings[0].folder_sync_mode(), Some(FolderSync::AllLayouts));
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum FolderSync {
