@@ -85,17 +85,7 @@ impl AlertFeed {
         symbol: impl Into<String>,
         timeframe: Timeframe,
     ) -> crate::data::HistoryRequest {
-        crate::data::HistoryRequest {
-            symbol: symbol.into(),
-            timeframe,
-            clock: crate::model::BarClock::new(timeframe),
-            before: None,
-            since: None,
-            count: 1000,
-            extended_hours: false,
-            adjusted: false,
-            conversion: None,
-        }
+        crate::data::HistoryRequest::new(symbol, timeframe, 1000)
     }
 
     /// Requests the symbol's metadata, then its history and updates. `metric` selects a study's
