@@ -16,11 +16,11 @@ use crate::widget::{Chart, SeriesId};
 #[non_exhaustive]
 pub enum LayoutCopy {
     /// Adds this study to each other chart, next to the studies it has, with its inputs, styles,
-    /// interval visibility and scale. A study on the source's price pane joins each chart's
-    /// price pane; any other study gets a new pane at the bottom of each chart.
+    /// interval visibility, scale and input caption. A study on the source's price pane joins
+    /// each chart's price pane; any other study gets a new pane at the bottom of each chart.
     Study(SeriesId),
-    /// Replaces the studies of each other chart with those of the source, with their links and
-    /// shared panes, as [`Chart::apply_study_template_set_with`] does.
+    /// Replaces the studies of each other chart with those of the source, with their links,
+    /// shared panes and input captions, as [`Chart::apply_study_template_set_with`] does.
     Studies,
     /// Applies these settings to every chart, the source included. Each other chart keeps its
     /// symbol, interval and chart type, the sizes and other parameters of that type, its own
@@ -111,6 +111,8 @@ struct CopiedStudies {
     set: StudyTemplateSet,
     /// Whether each study draws on the source, by its position in the set.
     draws: Vec<bool>,
+    /// The input caption each study shows on the source, by its position in the set.
+    captions: Vec<String>,
     /// Whether the other charts keep the studies they have.
     adding: bool,
 }
@@ -125,6 +127,10 @@ impl CopiedStudies {
         let current = !source.chart_type().is_time_independent() || !source.element_studies.dirty;
         let draws: Vec<_> = (0..source.indicators().count())
             .map(|at| current && rendered.get(at).is_some_and(|study| draws(study.as_ref())))
+            .collect();
+        let captions: Vec<_> = source
+            .indicators()
+            .map(|(id, _)| source.indicator_inputs(id).unwrap_or_default().to_owned())
             .collect();
         match copy {
             LayoutCopy::Study(id) => {
@@ -142,12 +148,14 @@ impl CopiedStudies {
                         ..StudyTemplateSet::default()
                     },
                     draws: vec![draws[at]],
+                    captions: vec![captions[at].clone()],
                     adding: true,
                 })
             }
             LayoutCopy::Studies => Some(Self {
                 set,
                 draws,
+                captions,
                 adding: false,
             }),
             LayoutCopy::Settings(_) => None,
@@ -407,9 +415,12 @@ impl ChartLayout {
                         );
                     }
                     (_, Some(studies)) => {
-                        chart
+                        let ids = chart
                             .place_study_template_set(&studies.set, factory, !studies.adding)
-                            .ok();
+                            .unwrap_or_default();
+                        for (id, caption) in ids.into_iter().zip(&studies.captions) {
+                            chart.set_indicator_inputs(id, caption.clone());
+                        }
                     }
                     _ => {}
                 }
@@ -490,6 +501,7 @@ mod tests {
     fn one_study_copy_keeps_its_placement_and_reverses_as_one_edit() {
         let (mut a, mut b, mut c) = (chart(50), chart(50), chart(50));
         let overlay = a.add_indicator(Box::new(SMA::new(7)));
+        a.set_indicator_inputs(overlay, "7 close");
         let paned = a.add_indicator(Box::new(RSI::new(5)));
         c.add_indicator(Box::new(SMA::new(3)));
         let source_panes = a.panes();
@@ -507,6 +519,7 @@ mod tests {
         };
         assert_eq!(charts[1].series_pane(sma), Some(PaneId::MAIN));
         assert_ne!(charts[1].series_pane(rsi), Some(PaneId::MAIN));
+        assert_eq!(charts[1].indicator_inputs(sma), Some("7 close"));
         assert_eq!(
             charts[0].panes(),
             source_panes,
@@ -545,6 +558,7 @@ mod tests {
         show(&mut layout, &mut charts);
         assert_eq!(names(charts[1]), ["SMA"]);
         assert_eq!(names(charts[2]), ["SMA", "SMA"]);
+        assert_eq!(charts[1].indicator_inputs(sma), Some("7 close"));
     }
 
     /// A replacement layout follows old copies from either the source or a target. Clones
@@ -735,6 +749,8 @@ mod tests {
         )
         .unwrap();
         a.move_indicator_to_pane(child, parent);
+        a.set_indicator_inputs(parent, "5");
+        a.set_indicator_inputs(child, "3");
         b.add_indicator(Box::new(SMA::new(20)));
         let mut layout = ChartLayout {
             mode: ChartLayoutMode::TwoHorizontal,
@@ -748,6 +764,11 @@ mod tests {
         assert_eq!(charts[2].indicators().count(), 0, "hidden slot");
         let ids: Vec<_> = charts[1].indicators().map(|(id, _)| id).collect();
         assert_eq!(charts[1].series_pane(ids[0]), charts[1].series_pane(ids[1]));
+        let captions: Vec<_> = ids
+            .iter()
+            .map(|id| charts[1].indicator_inputs(*id))
+            .collect();
+        assert_eq!(captions, [Some("5"), Some("3")]);
         assert_eq!(
             charts[1].indicators().nth(1).unwrap().1.source(),
             Some(StudySource::Study {
