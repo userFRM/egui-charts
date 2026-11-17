@@ -1201,7 +1201,7 @@ mod tests {
     /// without an axis has neither.
     #[test]
     fn price_axis_primitives_use_the_axis_of_their_series_scale() {
-        use crate::model::{AxisSide, SeriesScale};
+        use crate::model::{AxisSide, ChartType, SeriesScale};
         const AUTOMATIC: Color32 = Color32::from_rgb(83, 29, 61);
         struct Tagged(Arc<Mutex<Option<egui::Rect>>>);
         impl Primitive for Tagged {
@@ -1233,8 +1233,10 @@ mod tests {
             chart.config.show_volume = false;
             let id = match scale {
                 Some(scale) => {
+                    // Candles, as the main series, so that its own scale spans 10 to 20 too.
                     let id = chart.add_series(SeriesOptions {
                         scale,
+                        chart_type: ChartType::Candles,
                         ..Default::default()
                     });
                     chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
