@@ -778,6 +778,42 @@ mod tests {
         );
     }
 
+    /// A copy keeps the user's visibility switch apart from the interval settings: a study hidden
+    /// only on the source's interval is drawn on a chart whose interval they allow, and a study
+    /// switched off stays off there too.
+    #[test]
+    fn copies_keep_the_visibility_switch_apart_from_interval_visibility() {
+        let visible = |chart: &Chart| {
+            chart
+                .indicators()
+                .map(|(_, study)| study.is_visible())
+                .collect::<Vec<_>>()
+        };
+        for set in [false, true] {
+            let (mut a, mut b) = (chart(50), chart(50));
+            b.set_timeframe(Timeframe::Min5);
+            let by_interval = a.add_indicator(Box::new(SMA::new(7)));
+            let study = a.indicator_mut(by_interval).unwrap();
+            let mut settings = study.settings();
+            settings.hidden_intervals = vec![Timeframe::Min1];
+            study.apply_settings(&[], settings).unwrap();
+            let off = a.add_indicator(Box::new(SMA::new(3)));
+            a.set_indicator_visible(off, false);
+            assert_eq!(visible(&a), [false, false]);
+            let factory = IndicatorFactory::new();
+            let mut layout = pair();
+            let mut charts = [&mut a, &mut b];
+            if set {
+                layout.apply_copy(&mut charts, 0, &LayoutCopy::Studies, &factory);
+            } else {
+                for id in [by_interval, off] {
+                    layout.apply_copy(&mut charts, 0, &LayoutCopy::Study(id), &factory);
+                }
+            }
+            assert_eq!(visible(charts[1]), [true, false], "set {set}");
+        }
+    }
+
     /// Issues name what a chart lacks before anything changes, and a chart with a blocking issue
     /// is left alone while the others take the copy.
     #[test]

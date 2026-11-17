@@ -1807,6 +1807,9 @@ impl Indicator for ConfiguredStudy {
     fn set_visible(&mut self, visible: bool) {
         self.study.set_visible(visible);
     }
+    fn user_visible(&self) -> bool {
+        self.study.is_visible()
+    }
     fn clone_box(&self) -> Box<dyn Indicator> {
         Box::new(self.clone())
     }

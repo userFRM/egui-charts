@@ -16,7 +16,8 @@ pub struct StudyTemplate {
     pub inputs: Vec<(String, InputValue)>,
     /// Plot styles, precision and interval visibility.
     pub settings: StudySettings,
-    /// Whether the study is visible.
+    /// Whether the user has the study shown. Its interval visibility in
+    /// [`settings`](Self::settings) still hides it on the intervals it leaves out.
     pub visible: bool,
     /// The value scale, or `None` to keep the study's own, as templates saved before the scale
     /// was kept do.
@@ -126,7 +127,7 @@ impl StudyTemplate {
                 .map(|input| (input.id, input.value))
                 .collect(),
             settings: study.settings(),
-            visible: study.is_visible(),
+            visible: study.user_visible(),
             scale: Some(study.scale()),
         }
     }
