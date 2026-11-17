@@ -92,7 +92,7 @@ struct Trial {
 
 enum JobOutput {
     Report(StrategyReport, Vec<Bar>),
-    Trials(Vec<Trial>),
+    Trials(Vec<Trial>, Vec<(&'static str, usize)>),
 }
 
 type Job = Pin<Box<dyn Future<Output = Result<JobOutput, &'static str>>>>;
@@ -104,7 +104,8 @@ type Job = Pin<Box<dyn Future<Output = Result<JobOutput, &'static str>>>>;
 /// web builds. Host strategy preparation and callbacks must be bounded, as documented on
 /// [`Backtest::run_async`]. Edits cancel pending work and retain the previous report as stale.
 /// History replies are tied to a request id and discarded after an edit or scope change.
-/// Give each tester its own egui id scope.
+/// An optimisation skips combinations the strategy refuses as a whole and shows how many, with
+/// the reason. Give each tester its own egui id scope.
 pub struct StrategyTester {
     factory: Arc<StrategyFactory>,
     name: String,
@@ -128,6 +129,7 @@ pub struct StrategyTester {
     total: usize,
     ranges: Vec<Range>,
     trials: Vec<Trial>,
+    skipped: Vec<(&'static str, usize)>,
     sort: usize,
     ascending: bool,
 }
@@ -156,6 +158,7 @@ impl std::fmt::Debug for StrategyTester {
             .field("total", &self.total)
             .field("ranges", &self.ranges)
             .field("trials", &self.trials)
+            .field("skipped", &self.skipped)
             .field("sort", &self.sort)
             .field("ascending", &self.ascending)
             .finish_non_exhaustive()
@@ -199,6 +202,7 @@ impl StrategyTester {
             completed: Rc::new(Cell::new(0)),
             total: 0,
             trials: Vec::new(),
+            skipped: Vec::new(),
             sort: 1,
             ascending: false,
         }
@@ -219,7 +223,8 @@ impl StrategyTester {
         Ok(())
     }
 
-    /// Edit an input through the strategy's own validation.
+    /// Edit an input through the strategy's own validation. Inputs checked together, such as
+    /// zone levels, are checked when a run starts, so they can be edited in any order.
     pub fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
         let mut strategy = self.configured_strategy()?;
         strategy.set_input(id, value)?;
@@ -347,6 +352,7 @@ impl StrategyTester {
         self.pending = None;
         self.job = None;
         self.trials.clear();
+        self.skipped.clear();
         self.error = None;
     }
 
@@ -358,6 +364,17 @@ impl StrategyTester {
         Ok(strategy)
     }
 
+    /// A single run needs the form's inputs valid together; an optimisation checks each
+    /// combination instead and skips those refused.
+    fn check_run(&self, optimise: bool) -> Result<(), &'static str> {
+        let strategy = self.configured_strategy()?;
+        if optimise {
+            Ok(())
+        } else {
+            strategy.validate_inputs()
+        }
+    }
+
     fn start_job(
         &mut self,
         symbol: &str,
@@ -367,7 +384,7 @@ impl StrategyTester {
         optimise: bool,
     ) -> Result<(), &'static str> {
         super::properties::validate(&self.settings)?;
-        self.configured_strategy()?;
+        self.check_run(optimise)?;
         let (count, axes) = if optimise {
             optimisation::grid(&self.ranges)?
         } else {
@@ -383,8 +400,10 @@ impl StrategyTester {
         let completed = self.completed.clone();
         self.error = None;
         self.trials.clear();
+        self.skipped.clear();
         self.job = Some(Box::pin(async move {
             let mut trials = Vec::new();
+            let mut skipped = Vec::new();
             for ordinal in 0..count {
                 let mut inputs = inputs.clone();
                 let mut index = ordinal;
@@ -399,6 +418,17 @@ impl StrategyTester {
                 let mut strategy = factory.create(&name).ok_or("Unknown strategy")?;
                 for input in &inputs {
                     strategy.set_input(&input.id, input.value.clone())?;
+                }
+                if let Err(reason) = strategy.validate_inputs() {
+                    if !optimise {
+                        return Err(reason);
+                    }
+                    match skipped.iter_mut().find(|(seen, _)| *seen == reason) {
+                        Some((_, count)) => *count += 1,
+                        None => skipped.push((reason, 1)),
+                    }
+                    completed.set(ordinal + 1);
+                    continue;
                 }
                 let label = strategy
                     .inputs()
@@ -420,7 +450,7 @@ impl StrategyTester {
                     trades: performance.closed_trades,
                 });
             }
-            Ok(JobOutput::Trials(trials))
+            Ok(JobOutput::Trials(trials, skipped))
         }));
         Ok(())
     }
@@ -443,7 +473,7 @@ impl StrategyTester {
             return Err("Choose a fill interval shorter than the chart interval");
         }
         super::properties::validate(&self.settings)?;
-        self.configured_strategy()?;
+        self.check_run(optimise)?;
         if optimise {
             optimisation::grid(&self.ranges)?;
         }
@@ -647,6 +677,19 @@ impl StrategyTester {
                                     ui.label(l10n::text(ui.ctx(), error));
                                 }
                             }
+                            for (reason, count) in &self.skipped {
+                                ui.colored_label(
+                                    ui.active_theme().ui.warning,
+                                    l10n::format_text(
+                                        ui.ctx(),
+                                        "{count} skipped: {reason}",
+                                        &[
+                                            ("count", count.to_string()),
+                                            ("reason", l10n::text(ui.ctx(), reason)),
+                                        ],
+                                    ),
+                                );
+                            }
                             edited |= self.show_trials(ui);
                         }
                         Tab::Report => {}
@@ -714,8 +757,9 @@ impl StrategyTester {
                             self.stale = false;
                             self.tab = Tab::Report;
                         }
-                        Ok(JobOutput::Trials(trials)) => {
+                        Ok(JobOutput::Trials(trials, skipped)) => {
                             self.trials = trials;
+                            self.skipped = skipped;
                             self.sort_trials();
                         }
                         Err(error) => self.error = Some(error.into()),

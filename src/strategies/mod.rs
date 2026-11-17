@@ -9,9 +9,10 @@
 //! [`StrategyFactory`] supplies ten price-action strategies and, with `studies`, twelve
 //! strategies using the chart studies' public values. Hosts can register their own constructors.
 //! Use [`Strategy::study_inputs`] and [`Strategy::set_input`] to edit bounded parameters before
-//! a run. Gap and inside/outside strategies take the host instrument's `tick_size` input; their
-//! exits are distances from the actual position fill price. The engine's settings supply size
-//! and pyramiding. Built-ins ignore fill callbacks; live tick recalculation follows the run settings.
+//! a run, then [`Strategy::validate_inputs`] to check them together. Gap and inside/outside
+//! strategies take the host instrument's `tick_size` input; their exits are distances from the
+//! actual position fill price. The engine's settings supply size and pyramiding. Built-ins ignore
+//! fill callbacks; live tick recalculation follows the run settings.
 //!
 //! [`Backtest::update`] retains the execution state as the host appends bars or changes the
 //! forming bar, and returns [`StrategyFill`] events. [`Backtest::report`] exposes its report.
