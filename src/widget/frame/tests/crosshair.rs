@@ -2525,7 +2525,8 @@ fn latched_touch_readout_is_the_reported_crosshair() {
 /// Study and plot titles on the legend, the axis tags, the floating tooltip and the data window
 /// go through the translator, each plot name apart from its study's name, while the readout rows
 /// a host reads keep the English names.
-#[cfg(feature = "ui")]
+// `test` marks the `ui` import as test-only for the module cycle check.
+#[cfg(all(test, feature = "ui"))]
 #[test]
 fn study_titles_reach_the_translator_apart_from_plot_names() {
     use crate::ui::widget_bar::panels::object_tree::{DataWindowInfo, show_data_window};
