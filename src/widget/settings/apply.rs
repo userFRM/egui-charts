@@ -332,6 +332,8 @@ impl ChartSettingsState {
         settings.scales_and_lines.log_scale = scale.options().mode == PriceScaleMode::Logarithmic;
         settings.scales_and_lines.percentage_scale =
             scale.options().mode == PriceScaleMode::Percentage;
+        settings.scales_and_lines.indexed_to_100 =
+            Some(scale.options().mode == PriceScaleMode::IndexedTo100);
         settings.scales_and_lines.invert_scale = scale.options().invert_scale;
 
         settings.set_timezone_mode(&chart.chart_options().time_scale.timezone);
@@ -710,7 +712,11 @@ impl ChartSettingsState {
             PriceScaleMode::Logarithmic
         } else if self.scales_and_lines.percentage_scale {
             PriceScaleMode::Percentage
-        } else if chart.state.price_scale().options().mode == PriceScaleMode::IndexedTo100 {
+        } else if self
+            .scales_and_lines
+            .indexed_to_100
+            .unwrap_or(chart.state.price_scale().options().mode == PriceScaleMode::IndexedTo100)
+        {
             PriceScaleMode::IndexedTo100
         } else {
             PriceScaleMode::Normal
