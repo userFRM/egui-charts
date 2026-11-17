@@ -944,6 +944,8 @@ mod tests {
                         clicked = render_event_band(ui, &events, &bars, &coords, 300.0)
                             .or(clicked.take());
                     });
+                    // Asserting before the output is dropped would abort the test binary.
+                    let mut mismatches = Vec::new();
                     for (at, half, outlines) in &expected {
                         let clip = Rect::from_center_size(*at, Vec2::splat(2.0 * half));
                         let drawn: Vec<_> = output
@@ -984,9 +986,12 @@ mod tests {
                                     && d.1.len() == e.1.len()
                                     && d.1.iter().zip(&e.1).all(|(a, b)| near(*a, *b))
                             });
-                        assert!(matches, "spacing {spacing}, badge at {at:?}: {drawn:?}");
+                        if !matches {
+                            mismatches.push(format!("badge at {at:?}: {drawn:?}"));
+                        }
                     }
                     output.drop_without_applying_deltas();
+                    assert!(mismatches.is_empty(), "spacing {spacing}: {mismatches:?}");
                 }
                 assert_eq!(clicked.as_deref(), event.id.as_deref());
             }
