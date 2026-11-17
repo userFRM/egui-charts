@@ -1,8 +1,9 @@
 //! The broker's pushes and answers: applying them to the controller, and the notifications and
 //! execution sound they raise.
 
+use super::account_panel::quantity_decimals;
 use super::widgets::side_name;
-use super::{Trading, valid};
+use super::{Numbers, Trading, valid};
 use crate::chart::TradingLineAction;
 use crate::data::FeedError;
 use crate::localization as l10n;
@@ -194,6 +195,7 @@ impl Trading {
                         OrderType::StopLimit { stop, .. } => stop,
                         _ => unreachable!(),
                     };
+                    let chart = (self.chart_logo.as_ref()).map_or("", |(chart, _)| chart.as_str());
                     self.notify(
                         toasts,
                         order_toast(
@@ -201,7 +203,7 @@ impl Trading {
                             &order.request,
                             price,
                             order.request.quantity,
-                            self.decimals,
+                            &self.numbers(&order.request.symbol, chart),
                             false,
                             self.logo(&order.request.symbol),
                         ),
@@ -240,9 +242,11 @@ impl Trading {
             }
             AccountEvent::Execution(fill) if announce => {
                 let order = self.account_panel.fills.orders.get(&fill.order);
+                let chart = (self.chart_logo.as_ref()).map_or("", |(chart, _)| chart.as_str());
+                let numbers = self.numbers(order.map_or("", |order| order.symbol.as_str()), chart);
                 let side = l10n::text(ctx, side_name(fill.side));
                 let quantity = fill.quantity.to_string();
-                let price = format!("{:.*}", self.decimals, fill.price);
+                let price = numbers.price(fill.price);
                 let text = match order {
                     Some(order) => l10n::format_text(
                         ctx,
@@ -275,7 +279,7 @@ impl Trading {
                             &executed,
                             fill.price,
                             fill.quantity,
-                            self.decimals,
+                            &numbers,
                             true,
                             self.logo(&executed.symbol),
                         )
@@ -289,13 +293,16 @@ impl Trading {
                 if let Some(order) = order
                     && filled < order.quantity * (1.0 - 1e-9)
                 {
+                    // A sum of fills such as 0.1 and 0.2 carries the noise of binary fractions.
+                    let decimals = quantity_decimals(filled);
+                    let filled = format!("{filled:.decimals$}");
                     toast.kind = ToastKind::Info;
                     toast.title = Some(l10n::format_text(
                         ctx,
                         "{order} order partially executed ({filled} of {quantity}) on",
                         &[
                             ("order", l10n::text(ctx, order_name(order)).as_str()),
-                            ("filled", filled.to_string().as_str()),
+                            ("filled", filled.as_str()),
                             ("quantity", order.quantity.to_string().as_str()),
                         ],
                     ));
@@ -304,7 +311,7 @@ impl Trading {
                         "Partially filled: {fill} ({filled} of {quantity})",
                         &[
                             ("fill", text.as_str()),
-                            ("filled", filled.to_string().as_str()),
+                            ("filled", filled.as_str()),
                             ("quantity", order.quantity.to_string().as_str()),
                         ],
                     );
@@ -470,11 +477,12 @@ fn order_toast(
     request: &OrderRequest,
     price: f64,
     quantity: f64,
-    decimals: usize,
+    numbers: &Numbers<'_>,
     executed: bool,
     logo: Option<&str>,
 ) -> Toast {
     let side = l10n::text(ctx, side_name(request.side));
+    let price = numbers.price(price);
     let fill = l10n::format_text(
         ctx,
         "{side} {quantity} {symbol} at {price}",
@@ -482,7 +490,7 @@ fn order_toast(
             ("side", side.as_str()),
             ("quantity", quantity.to_string().as_str()),
             ("symbol", request.symbol.as_str()),
-            ("price", format!("{price:.decimals$}").as_str()),
+            ("price", price.as_str()),
         ],
     );
     let mut toast = Toast::new(
@@ -515,7 +523,7 @@ fn order_toast(
         logo: logo.map(str::to_owned),
         side: request.side,
         quantity,
-        price: format!("{price:.decimals$}"),
+        price,
         executed,
     });
     toast
@@ -822,6 +830,78 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Notifications write each order's prices as the account tables do: in the decimals of the
+    /// order's symbol rather than the chart's, through the host's formatter, on the card too,
+    /// and a partial fill's running total without the noise of adding fills up. A regression
+    /// announces a five-decimal symbol at the chart's two, skips the formatter, or writes fills
+    /// of 0.1 and 0.2 as 0.30000000000000004 filled.
+    #[test]
+    fn notices_write_prices_in_the_order_symbols_decimals() {
+        use crate::model::Instrument;
+        use crate::ui::trading::TradingFormatter;
+        struct ThirtySeconds;
+        impl TradingFormatter for ThirtySeconds {
+            fn price(&self, symbol: &str, price: f64) -> Option<String> {
+                (symbol == "ZN")
+                    .then(|| format!("{}'{:02}", price.trunc(), (price.fract() * 32.0).round()))
+            }
+        }
+        let order = |id, symbol, side, quantity, price| {
+            let request = OrderRequest::new(symbol, side, quantity, OrderType::Limit(price));
+            AccountEvent::Order(Order::new(OrderId::new(id), request, OrderStatus::Working))
+        };
+        let fill = |id, side, price, quantity| {
+            let time = chrono::Utc::now();
+            AccountEvent::Execution(Execution::new(
+                OrderId::new(id),
+                time,
+                side,
+                price,
+                quantity,
+            ))
+        };
+        let mut trading = Trading::default();
+        trading.set_instrument(Instrument::new("EURUSD").with_price_decimals(5));
+        trading.set_formatter(Some(Arc::new(ThirtySeconds)));
+        trading.set_service(Arc::new(Recorder::default()));
+        let ctx = egui::Context::default();
+        trading.poll(&ctx, &mut Toasts::new());
+        let mut toasts = Toasts::new();
+        for event in [
+            order("1", "EURUSD", OrderSide::Buy, 1.0, 1.08765),
+            fill("1", OrderSide::Buy, 1.08765, 0.1),
+            fill("1", OrderSide::Buy, 1.08765, 0.2),
+            fill("1", OrderSide::Buy, 1.0876, 0.7),
+            order("2", "ZN", OrderSide::Sell, 2.0, 110.5),
+            fill("2", OrderSide::Sell, 110.5, 2.0),
+        ] {
+            trading.apply(&ctx, event, &mut toasts);
+        }
+        let notices: Vec<_> = (toasts.toasts().iter())
+            .map(|toast| {
+                let card = toast.trading.as_ref().map(|card| card.price.as_str());
+                (toast.message.as_str(), card)
+            })
+            .collect();
+        assert_eq!(
+            notices,
+            [
+                ("Placed: Buy 1 EURUSD at 1.08765", Some("1.08765")),
+                (
+                    "Partially filled: Buy 0.1 EURUSD at 1.08765 (0.1 of 1)",
+                    Some("1.08765")
+                ),
+                (
+                    "Partially filled: Buy 0.2 EURUSD at 1.08765 (0.3 of 1)",
+                    Some("1.08765")
+                ),
+                ("Filled: Buy 0.7 EURUSD at 1.08760", Some("1.08760")),
+                ("Placed: Sell 2 ZN at 110'16", Some("110'16")),
+                ("Filled: Sell 2 ZN at 110'16", Some("110'16")),
+            ]
+        );
     }
 
     /// What a broker pushes as the account's state when a stream starts, on connecting, on

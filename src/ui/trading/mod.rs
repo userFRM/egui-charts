@@ -95,7 +95,8 @@ pub struct Trading {
     pending: Option<TradingLineAction>,
     /// An order the user asked the broker to preview, until it is placed or discarded.
     preview: Option<Preview>,
-    /// Decimals of the chart's prices, for notifications.
+    /// Decimals of the chart's prices at the last [`show`](Self::show), in which
+    /// [`numbers`](Self::numbers) writes the prices of the chart symbol.
     decimals: usize,
     /// The metadata of the symbols the host described with
     /// [`set_instrument`](Self::set_instrument), by symbol.
