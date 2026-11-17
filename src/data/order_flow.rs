@@ -978,14 +978,21 @@ impl OrderFlowInput {
         } else {
             let run = chart_run();
             // After a loss on a trade-based interval the run leaves the held executions before
-            // its first bar to the bars the loss cut, and all of them without a run: a rolling
+            // its first bar to the bars the loss cut, and all of them without a run. It also
+            // leaves out the streamed executions the store kept apart as repeats of a page, and
+            // the page's copies after their instant, which stand for streamed ones: a rolling
             // window gives no value while it reaches one, as while it reaches the loss.
             let left_out = lost.filter(|_| trade_based).and_then(|_| {
                 let counted: std::collections::HashSet<*const Tick> =
                     (run.iter().flat_map(|(parts, _)| parts))
                         .map(|(trade, ..)| std::ptr::from_ref(*trade))
                         .collect();
-                (trades.live())
+                let (kept_at, kept) = trades.unheld_live().unzip();
+                let paged = trades.iter().count() - trades.live().count();
+                let copies = (trades.iter().take(paged))
+                    .filter(|trade| kept_at.is_some_and(|at| trade.ts > at));
+                let streamed = trades.live().chain(kept.into_iter().flatten());
+                (streamed.chain(copies))
                     .filter(|trade| !counted.contains(&std::ptr::from_ref(*trade)))
                     .map(|trade| trade.ts)
                     .max()
@@ -2904,8 +2911,10 @@ mod tests {
     /// whole: the 60 second window at 01:05 reaches back to the loss, and the 3 second one holds
     /// only the sell of 4. On 2t the sell of 01:10 drops the buy of 00:00, whose bar the buy of 2
     /// at 01:05 completes, so the rebuild starts at the sell: its 60 second window reaches the buy
-    /// of 2, which the rebuild leaves out, and gives no value either. The footprint of 1min keeps
-    /// bar 10:01 only.
+    /// of 2, which the rebuild leaves out, and gives no value either. On 3t the streamed buys of
+    /// 2, 1 and 1 from 01:05 reach a store of four only as a page's copies, and the sell drops the
+    /// page's buy of 00:00: the rebuild starts at the sell and leaves out the copies, which the 60
+    /// second window reaches. The footprint of 1min keeps bar 10:01 only.
     #[cfg(feature = "widget")]
     #[test]
     fn rebuilt_sources_leave_out_what_the_store_dropped() {
@@ -2923,6 +2932,20 @@ mod tests {
         let bars = [(0, 3.0), (70, 4.0)].map(|(second, volume)| {
             crate::model::Bar::new(at(second), 100.0, 100.0, 100.0, 100.0, volume)
         });
+        // The 3t chart's bars: the streamed buys, then the sell.
+        let streamed = [(65, 4.0), (70, 4.0)].map(|(second, volume)| {
+            crate::model::Bar::new(at(second), 100.0, 100.0, 100.0, 100.0, volume)
+        });
+        let tick = |(second, size, side)| Tick::new(at(second), 100.0, size, Some(side));
+        let buys = [(65, 2.0, Buy), (66, 1.0, Buy), (67, 1.0, Buy)];
+        let mut copied = super::super::trades::Trades::new(4);
+        let page = [(0, 1.0, Buy)].into_iter().chain(buys).map(tick).collect();
+        copied.prepend(page, &mut |_, _| ());
+        let mut drained = super::super::trades::Trades::new(4);
+        buys.into_iter()
+            .chain([(70, 4.0, Sell)])
+            .for_each(|trade| drained.push(tick(trade)));
+        copied.append(drained, &mut |_, _| ());
         let rows = [
             (
                 "1min",
@@ -2936,6 +2959,7 @@ mod tests {
                 &bars[..],
                 70,
             ),
+            ("3t", copied, &streamed[..], 70),
         ];
         for (interval, store, history, open) in &rows {
             let clock = BarClock::new(interval.parse().unwrap());
