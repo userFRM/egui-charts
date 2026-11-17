@@ -274,6 +274,7 @@ impl SettingsDialog {
                 ) && self.settings.scales_and_lines.log_scale
                 {
                     self.settings.scales_and_lines.percentage_scale = false;
+                    self.settings.scales_and_lines.indexed_to_100 = Some(false);
                 }
                 if styled_checkbox(
                     ui,
@@ -283,6 +284,7 @@ impl SettingsDialog {
                 ) && self.settings.scales_and_lines.percentage_scale
                 {
                     self.settings.scales_and_lines.log_scale = false;
+                    self.settings.scales_and_lines.indexed_to_100 = Some(false);
                 }
                 styled_checkbox(
                     ui,

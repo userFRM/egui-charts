@@ -29,7 +29,7 @@ struct Snapshot {
 fn mirrored(sync: Option<FolderSync>, layout_wide: bool) -> bool {
     match sync {
         Some(FolderSync::Chart) => false,
-        Some(FolderSync::Layout) => true,
+        Some(FolderSync::Layout | FolderSync::AllLayouts) => true,
         None => layout_wide,
     }
 }
@@ -1960,6 +1960,92 @@ mod tests {
         }
     }
 
+    /// Guards #3286: opening a layout shows the symbol's stored drawings. One moved or deleted
+    /// elsewhere since the layout was saved stays so, one drawn elsewhere shows, and one the
+    /// layout keeps on a chart or in a layout comes back as the layout holds it. The opening
+    /// chart's own drawing is kept whether it was stored before the layout opened, unsaved then,
+    /// or drawn before the stored drawings were read again.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn opening_a_layout_keeps_the_drawings_stored_since_it_was_saved() {
+        use crate::services::document::tests::Revised;
+        use FolderSync::{AllLayouts, Chart as Local, Layout};
+        #[derive(Debug)]
+        enum Drawn {
+            Before,
+            Unsaved,
+            After,
+        }
+        // (folder of the layout's drawing, deleted elsewhere, when the opening chart draws its
+        // own, prices shown and stored)
+        type Row = (Option<FolderSync>, bool, Drawn, &'static [f64]);
+        let rows: [Row; 8] = [
+            (None, false, Drawn::Before, &[105.0, 108.0]),
+            (Some(AllLayouts), false, Drawn::Before, &[105.0, 108.0]),
+            (Some(Layout), false, Drawn::Before, &[104.0, 108.0]),
+            (Some(Local), false, Drawn::Before, &[104.0, 108.0]),
+            (None, true, Drawn::Before, &[108.0]),
+            (Some(Layout), true, Drawn::Before, &[104.0, 108.0]),
+            (None, false, Drawn::Unsaved, &[105.0, 108.0]),
+            (None, false, Drawn::After, &[105.0, 108.0]),
+        ];
+        for (folder, deleted, drawn, expected) in rows {
+            let host = Arc::new(Revised::default());
+            let chart = || {
+                let mut chart = bars(60);
+                chart.set_symbol("SAMPLE");
+                chart.set_storage(host.clone());
+                assert!(chart.flush_stored_drawings());
+                chart
+            };
+            let mut saved = chart();
+            saved.user_action(|chart| {
+                draw(chart, 104.0);
+                if let Some(folder) = folder {
+                    into_folder(chart, folder);
+                }
+            });
+            assert!(saved.flush_stored_drawings());
+            let layout = saved.snapshot().unwrap();
+            // Another layout of the symbol moves or deletes that drawing and draws one at 108.
+            let mut other = chart();
+            other.user_action(|chart| {
+                if deleted {
+                    let id = chart.drawings().drawings[0].id;
+                    chart.drawings_mut().delete_drawing(id);
+                } else {
+                    move_first(chart, 105.0);
+                }
+            });
+            assert!(other.flush_stored_drawings());
+            if !matches!(drawn, Drawn::After) {
+                other.user_action(|chart| draw(chart, 108.0));
+            }
+            if matches!(drawn, Drawn::Before) {
+                assert!(other.flush_stored_drawings());
+            }
+            other.restore(&layout).unwrap();
+            if matches!(drawn, Drawn::After) {
+                other.user_action(|chart| draw(chart, 108.0));
+            }
+            // A write the restore started is settled before the stored drawings are read again.
+            assert!((0..3).any(|_| other.flush_stored_drawings()));
+            let [shown] = prices(std::array::from_ref(&other));
+            let (document, _) = DrawingStorage::from_json(&host.get("SAMPLE").unwrap()).unwrap();
+            let mut stored: Vec<f64> = document
+                .drawings()
+                .iter()
+                .map(|d| d.points[0].price)
+                .collect();
+            stored.sort_by(f64::total_cmp);
+            assert_eq!(
+                (shown, stored),
+                (expected.to_vec(), expected.to_vec()),
+                "{folder:?}, deleted {deleted}, drawn {drawn:?}"
+            );
+        }
+    }
+
     /// The order by name ignores case and the order by edit time starts at the latest; equal
     /// keys fall back to the stored id, which is the same after a layout is restored. An edit
     /// time comes with the edit alone: live bars, saving and reading leave it, and an undo puts
@@ -2099,9 +2185,10 @@ mod tests {
         };
         let groups = std::array::from_fn(|_| None);
         let top = ["Top".to_owned()];
-        use FolderSync::{Chart as Local, Layout};
+        use FolderSync::{AllLayouts, Chart as Local, Layout};
         for (mode, layout_wide, copies) in [
             (Some(Layout), false, 1),
+            (Some(AllLayouts), false, 1),
             (Some(Local), true, 0),
             (None, true, 1),
             (None, false, 0),

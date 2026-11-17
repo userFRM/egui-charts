@@ -173,6 +173,8 @@ pub struct ChartSnapshot {
     pub right_offset: f32,
     /// The symbol's drawings as a drawings document (see [`DrawingStorage::to_json`]).
     /// Version 1 layouts may omit drawings kept in per-symbol storage.
+    /// With drawing storage, [`Chart::restore`] shows the stored drawings and brings back only
+    /// some of these (see there).
     pub drawings: Option<serde_json::Value>,
     /// The chart that took the snapshot, by an identifier no other chart has, also in another
     /// run. [`Chart::restore`] keeps the data table column choices of the saved studies only on
@@ -402,6 +404,17 @@ impl Chart {
     /// without the main series and the original pane the series stays out of the panes and is
     /// not drawn, and its bars come the same way, for the studies and the time axis.
     ///
+    /// With drawing storage ([`set_storage`](Self::set_storage)), the drawings shown are the
+    /// symbol's stored drawings, read again after the restore, rather than the snapshot's written
+    /// over them: a drawing added in another layout after the snapshot was taken shows, and one
+    /// deleted there stays deleted. The snapshot's own copy comes back for a drawing whose
+    /// top-level folder keeps it on one chart or in one layout
+    /// ([`FolderSync::Chart`](crate::drawings::FolderSync::Chart),
+    /// [`FolderSync::Layout`](crate::drawings::FolderSync::Layout)), unless storage holds the
+    /// drawing outside such a folder. Until that read the chart shows the snapshot's drawings, and
+    /// edits made meanwhile are kept. When storage holds no drawings document of the symbol, the
+    /// snapshot's drawings are kept and stored.
+    ///
     /// Errors distinguish a saved [`RestoreError::Study`], invalid [`RestoreError::Settings`],
     /// [`RestoreError::Layout`] geometry and unreadable [`RestoreError::Drawings`].
     pub fn restore(
@@ -420,6 +433,8 @@ impl Chart {
         factory: &IndicatorFactory,
     ) -> Result<Vec<SkippedDrawing>, RestoreError> {
         let (studies, drawings) = check(snapshot, factory, self.main_series_scale)?;
+        // Unsaved drawing edits are stored before the layout's drawings replace them.
+        self.save_stored_drawings();
         let next_series = self.next_series;
         self.layout_identity = crate::model::next_revision();
         let main_present = snapshot.panes.iter().any(|pane| pane.main);
@@ -696,14 +711,9 @@ impl Chart {
         }
         self.apply_synced_time_scale(snapshot.bar_spacing, snapshot.right_offset);
         let skipped = match drawings {
-            Some(json) => {
-                let skipped = self
-                    .load_drawings_remapped(&json, true)
-                    .map_err(RestoreError::Drawings)?;
-                self.history.drawing_edits += 1;
-                self.save_restored_drawings();
-                skipped
-            }
+            Some(json) => self
+                .restore_layout_drawings(&json)
+                .map_err(RestoreError::Drawings)?,
             None => Vec::new(),
         };
         // A layout without the original pane has just left it: the main bars are live again.
