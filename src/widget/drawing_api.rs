@@ -514,6 +514,24 @@ impl Chart {
         true
     }
 
+    /// Deletes the selected drawings as one undo step, as Delete and Backspace do. Locked drawings
+    /// stay selected and in place, and
+    /// [`ChartEvent::LockedDrawingsKept`](super::ChartEvent::LockedDrawingsKept) reports how many,
+    /// so the host can tell the user why.
+    pub fn delete_selected_drawings(&mut self) {
+        let kept = self
+            .drawings
+            .drawings
+            .iter()
+            .filter(|d| d.locked && self.drawings.is_selected(d.id))
+            .count();
+        self.drawings.delete_selected();
+        if kept > 0 {
+            self.host_events
+                .push(super::ChartEvent::LockedDrawingsKept(kept));
+        }
+    }
+
     /// Adds a horizontal line at `price` in the pane under `pos`, the pane holding the main series
     /// when no other pane is there, with the tool's default style, and selects it. Returns its
     /// id, or `None` for a price that is not finite or a disabled tool.
