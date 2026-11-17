@@ -227,10 +227,13 @@ pub(crate) fn render_event_breaks(
 
 /// Draws host-supplied event badges just above `baseline`, using the chart's time mapping.
 /// An event between bars uses the first bar at or after its time; whitespace extrapolates the
-/// most common positive spacing among the outermost 16 bars. Colliding badges stack upward.
+/// most common positive spacing among the outermost 16 bars. Colliding badges stack upward,
+/// 2 points apart.
 /// Returns the clicked event ID; callers handle that action before starting a chart drag.
-/// The badges use the event's colour, text and tooltip, without assigning any market meaning
-/// to them.
+/// Each badge outlines the event's shape in its colour on the chart background, 22 points tall
+/// at size 1 and scaled by its size, with its text inside; the arrow and triangle of one
+/// direction draw the same outline. Events whose size is not a positive finite number are left
+/// out. The badges use the event's tooltip without assigning any market meaning to them.
 pub fn render_event_band(
     ui: &mut egui::Ui,
     events: &[Marker],
@@ -261,10 +264,16 @@ pub(crate) fn render_event_badges<'a>(
     let theme = ui.ctx().active_theme().chart;
     for (index, event) in events {
         let at = crate::model::index_at(visible_data, event.time)?.ceil();
+        if !event.size.is_finite() || event.size <= 0.0 {
+            continue;
+        }
         let x = coords.index_to_x(coords.start_idx as f64 + at);
-        let mut rect = Rect::from_center_size(Pos2::new(x, baseline - 11.0), Vec2::splat(22.0));
-        while placed.iter().any(|other| other.intersects(rect)) {
-            rect = rect.translate(Vec2::new(0.0, -24.0));
+        let half = 11.0 * event.size;
+        let mut rect =
+            Rect::from_center_size(Pos2::new(x, baseline - half), Vec2::splat(2.0 * half));
+        // Each badge sits 2 points above every badge it would overlap, whatever their sizes.
+        while let Some(other) = placed.iter().find(|other| other.intersects(rect)) {
+            rect = rect.translate(Vec2::new(0.0, other.top() - 2.0 - rect.bottom()));
         }
         if rect.left() < coords.rect.left()
             || rect.right() > coords.rect.right()
@@ -279,14 +288,22 @@ pub(crate) fn render_event_badges<'a>(
             egui::Sense::click(),
         );
         let color = themed(event.color, theme.axis_text);
-        let painter = ui.painter().with_clip_rect(rect);
-        painter.circle(rect.center(), 10.0, theme.bg, Stroke::new(1.2, color));
+        // The outline's stroke and sharp joins reach past the box.
+        let painter = ui.painter().with_clip_rect(rect.expand(1.0));
+        let text_at = paint_badge(
+            &painter,
+            event.shape,
+            rect.center(),
+            10.0 * event.size,
+            theme.bg,
+            Stroke::new(1.2, color),
+        );
         if let Some(text) = &event.text {
             painter.text(
-                rect.center(),
+                text_at,
                 egui::Align2::CENTER_CENTER,
                 text,
-                FontId::proportional(11.0),
+                FontId::proportional(11.0 * event.size),
                 color,
             );
         }
@@ -304,6 +321,64 @@ pub(crate) fn render_event_badges<'a>(
         }
     }
     clicked
+}
+
+/// Paints a time axis badge of `shape` within `r` of `c`, filled with `fill` and outlined with
+/// `stroke`, and returns where its text centres. The arrow and triangle of one direction draw
+/// the same outline.
+fn paint_badge(
+    painter: &Painter,
+    shape: MarkerShape,
+    c: Pos2,
+    r: f32,
+    fill: Color32,
+    stroke: Stroke,
+) -> Pos2 {
+    let at = |x: f32, y: f32| c + Vec2::new(x * r, y * r);
+    let polygon = |points| painter.add(Shape::convex_polygon(points, fill, stroke));
+    match shape {
+        MarkerShape::Circle => {
+            painter.circle(c, r, fill, stroke);
+        }
+        MarkerShape::Square => {
+            painter.rect(
+                Rect::from_center_size(c, Vec2::splat(2.0 * r)),
+                0.0,
+                fill,
+                stroke,
+                StrokeKind::Middle,
+            );
+        }
+        MarkerShape::Diamond => {
+            polygon(vec![
+                at(0.0, -1.0),
+                at(1.0, 0.0),
+                at(0.0, 1.0),
+                at(-1.0, 0.0),
+            ]);
+        }
+        MarkerShape::ArrowUp | MarkerShape::TriangleUp => {
+            polygon(vec![at(0.0, -1.0), at(1.0, 1.0), at(-1.0, 1.0)]);
+            // The triangle's centroid.
+            return at(0.0, 1.0 / 3.0);
+        }
+        MarkerShape::ArrowDown | MarkerShape::TriangleDown => {
+            polygon(vec![at(0.0, 1.0), at(-1.0, -1.0), at(1.0, -1.0)]);
+            return at(0.0, -1.0 / 3.0);
+        }
+        MarkerShape::Star => paint_star(painter, c, r, fill, stroke),
+        MarkerShape::Cross => {
+            painter.line_segment([at(-1.0, -1.0), at(1.0, 1.0)], stroke);
+            painter.line_segment([at(-1.0, 1.0), at(1.0, -1.0)], stroke);
+        }
+        MarkerShape::Flag => {
+            painter.line_segment([at(-0.6, -1.0), at(-0.6, 1.0)], stroke);
+            polygon(vec![at(-0.6, -1.0), at(1.0, -0.2), at(-0.6, 0.6)]);
+            // The pennant's centroid.
+            return at(-0.2 / 3.0, -0.2);
+        }
+    }
+    c
 }
 
 /// Render a single marker shape
@@ -405,26 +480,13 @@ fn render_marker_shape(
                 Stroke::new(DESIGN_TOKENS.stroke.hairline, outline),
             ));
         }
-        MarkerShape::Star => {
-            // Draw simple 4-pointed star
-            let outer = base_size;
-            let inner = base_size * 0.4;
-            let points = vec![
-                pos + Vec2::new(0.0, -outer), // top
-                pos + Vec2::new(inner * 0.3, -inner * 0.3),
-                pos + Vec2::new(outer, 0.0), // right
-                pos + Vec2::new(inner * 0.3, inner * 0.3),
-                pos + Vec2::new(0.0, outer), // bottom
-                pos + Vec2::new(-inner * 0.3, inner * 0.3),
-                pos + Vec2::new(-outer, 0.0), // left
-                pos + Vec2::new(-inner * 0.3, -inner * 0.3),
-            ];
-            painter.add(Shape::convex_polygon(
-                points,
-                color,
-                Stroke::new(DESIGN_TOKENS.stroke.hairline, outline),
-            ));
-        }
+        MarkerShape::Star => paint_star(
+            painter,
+            pos,
+            base_size,
+            color,
+            Stroke::new(DESIGN_TOKENS.stroke.hairline, outline),
+        ),
         MarkerShape::Cross => {
             // Draw X
             let size = base_size * 1.2;
@@ -455,6 +517,34 @@ fn render_marker_shape(
             ));
         }
     }
+}
+
+/// Fills a four-pointed star around `centre` with its points `outer` away and outlines it.
+/// `Shape::convex_polygon` fans its fill from the first point, which would also fill the
+/// notches between the points.
+fn paint_star(painter: &Painter, centre: Pos2, outer: f32, fill: Color32, stroke: Stroke) {
+    let inner = outer * 0.12;
+    let points = vec![
+        centre + Vec2::new(0.0, -outer),
+        centre + Vec2::new(inner, -inner),
+        centre + Vec2::new(outer, 0.0),
+        centre + Vec2::new(inner, inner),
+        centre + Vec2::new(0.0, outer),
+        centre + Vec2::new(-inner, inner),
+        centre + Vec2::new(-outer, 0.0),
+        centre + Vec2::new(-inner, -inner),
+    ];
+    // Every point is visible from the centre, so a fan from it covers the star exactly.
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(centre, fill);
+    for &point in &points {
+        mesh.colored_vertex(point, fill);
+    }
+    for k in 0..8 {
+        mesh.add_triangle(0, 1 + k, 1 + (k + 1) % 8);
+    }
+    painter.add(mesh);
+    painter.add(Shape::closed_line(points, stroke));
 }
 
 #[cfg(test)]
@@ -635,11 +725,90 @@ mod tests {
         assert!(text_matches.into_iter().all(|matches| matches));
     }
 
+    /// A star at size 4 fills its centre but not the notch between its upper and right points,
+    /// in the price pane (outer radius 32) and on the time axis (outer radius 40). A convex
+    /// polygon fill of the outline covers that notch point.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn star_marks_fill_only_their_points() {
+        let ctx = egui::Context::default();
+        crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::light());
+        let time = Utc.with_ymd_and_hms(2024, 10, 1, 14, 30, 0).unwrap();
+        let bars: Vec<_> = (0..30)
+            .map(|i| {
+                Bar::new(
+                    time + chrono::Duration::hours(i),
+                    100.0,
+                    105.0,
+                    95.0,
+                    104.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let star = |i: usize| {
+            Marker::new(bars[i].time)
+                .with_shape(MarkerShape::Star)
+                .with_size(4.0)
+        };
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(160.0, 500.0));
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(90.0, 110.0),
+            0.0,
+            500.0,
+            false,
+        );
+        let pane_coords = ChartMapping::new(pane, 10.0, 12, 13, 2.0, map);
+        let axis_coords = ChartMapping::new(
+            Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 300.0)),
+            10.0,
+            0,
+            35,
+            0.0,
+            map,
+        );
+        let pane_star = [star(0).at_price(100.0, MarkerPos::AtPriceMiddle)];
+        let axis_star = [star(20)];
+        let rows = [
+            (Pos2::new(pane_coords.index_to_x(12.0), 250.0), 32.0, true),
+            (Pos2::new(344.0, 256.0), 40.0, false),
+        ];
+        for (centre, outer, in_pane) in rows {
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                if in_pane {
+                    let painter = Painter::new(ui.ctx().clone(), egui::LayerId::background(), pane);
+                    render_markers(
+                        &RenderContext::new(&painter, pane),
+                        pane_star.iter().enumerate(),
+                        &bars,
+                        &map,
+                        &pane_coords,
+                    );
+                } else {
+                    render_event_band(ui, &axis_star, &bars, &axis_coords, 300.0);
+                }
+            });
+            let painted = |dx: f32, dy: f32| {
+                crate::drawings::services::SelectionService::intersects_painted(
+                    &ctx,
+                    &output.shapes,
+                    Rect::from_center_size(centre + Vec2::new(dx, dy) * outer, Vec2::splat(1.0)),
+                )
+            };
+            let probes = [painted(0.0, 0.0), painted(0.25, -0.4)];
+            output.drop_without_applying_deltas();
+            assert_eq!(probes, [true, false], "star at {centre:?}");
+        }
+    }
+
     /// x = 500 - (35 + offset - index + 0.5) * spacing - 1.
     /// Events at slots 11 and 30 keep distinct click targets, including a stacked duplicate.
+    /// Slot 20 holds a square at size 1.5, a diamond, an up arrow at size 0.5 and a down arrow,
+    /// each drawn in its shape and size and stacked 2 points above the badges it would overlap.
     #[test]
     fn event_band_follows_time_mapping_and_returns_the_clicked_id() {
-        use egui::{Context, Event, Modifiers, PointerButton, RawInput};
+        use egui::{Context, Event, Modifiers, PointerButton, RawInput, epaint::ColorMode};
         let ctx = Context::default();
         let light = crate::theme::Theme::light();
         crate::theme::apply_to_egui(&ctx, &light);
@@ -659,12 +828,26 @@ mod tests {
         let event = Marker::new(bars[10].time + chrono::Duration::minutes(15))
             .with_text("E")
             .with_id("event-42");
+        let shaped = |shape, size, id| {
+            Marker::new(bars[20].time)
+                .with_shape(shape)
+                .with_size(size)
+                .with_id(id)
+        };
         let events = [
             event.clone(),
             event.with_id("event-43").with_color(Color32::RED),
             Marker::event(bars[29].time + chrono::Duration::hours(1), "N").with_id("future"),
+            shaped(MarkerShape::Square, 1.5, "square"),
+            shaped(MarkerShape::Diamond, 1.0, "diamond"),
+            shaped(MarkerShape::ArrowUp, 0.5, "up"),
+            shaped(MarkerShape::ArrowDown, 1.0, "down"),
         ];
-        for (spacing, offset, x) in [(10.0, 0.0, [254.0, 444.0]), (15.0, 2.0, [101.5, 386.5])] {
+        let (axis, info) = (light.chart.axis_text, events[2].color);
+        for (spacing, offset, x) in [
+            (10.0, 0.0, [254.0, 444.0, 344.0]),
+            (15.0, 2.0, [101.5, 386.5, 236.5]),
+        ] {
             let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 300.0));
             let map = PriceMap::new(
                 PriceTransform::default(),
@@ -674,12 +857,77 @@ mod tests {
                 false,
             );
             let coords = ChartMapping::new(rect, spacing, 0, 35, offset, map);
-            let centres = [
-                Pos2::new(x[0], 289.0),
-                Pos2::new(x[0], 265.0),
-                Pos2::new(x[1], 289.0),
+            let p = |dx: f32, y: f32, slot: usize| Pos2::new(x[slot] + dx, y);
+            // Per badge: its centre, its clip (the box grown by 1) and its outlines in paint
+            // order, by kind, points and stroke colour.
+            let expected = [
+                (
+                    p(0.0, 289.0, 0),
+                    12.0,
+                    vec![("circle", vec![p(-10.0, 279.0, 0), p(10.0, 299.0, 0)], axis)],
+                ),
+                (
+                    p(0.0, 265.0, 0),
+                    12.0,
+                    vec![(
+                        "circle",
+                        vec![p(-10.0, 255.0, 0), p(10.0, 275.0, 0)],
+                        Color32::RED,
+                    )],
+                ),
+                (
+                    p(0.0, 289.0, 1),
+                    12.0,
+                    vec![
+                        ("line", vec![p(-6.0, 279.0, 1), p(-6.0, 299.0, 1)], info),
+                        (
+                            "path",
+                            vec![p(-6.0, 279.0, 1), p(10.0, 287.0, 1), p(-6.0, 295.0, 1)],
+                            info,
+                        ),
+                    ],
+                ),
+                (
+                    p(0.0, 283.5, 2),
+                    17.5,
+                    vec![("rect", vec![p(-15.0, 268.5, 2), p(15.0, 298.5, 2)], axis)],
+                ),
+                (
+                    p(0.0, 254.0, 2),
+                    12.0,
+                    vec![(
+                        "path",
+                        vec![
+                            p(0.0, 244.0, 2),
+                            p(10.0, 254.0, 2),
+                            p(0.0, 264.0, 2),
+                            p(-10.0, 254.0, 2),
+                        ],
+                        axis,
+                    )],
+                ),
+                (
+                    p(0.0, 235.5, 2),
+                    6.5,
+                    vec![(
+                        "path",
+                        vec![p(0.0, 230.5, 2), p(5.0, 240.5, 2), p(-5.0, 240.5, 2)],
+                        axis,
+                    )],
+                ),
+                (
+                    p(0.0, 217.0, 2),
+                    12.0,
+                    vec![(
+                        "path",
+                        vec![p(0.0, 227.0, 2), p(-10.0, 207.0, 2), p(10.0, 207.0, 2)],
+                        axis,
+                    )],
+                ),
             ];
-            for (centre, event) in centres.into_iter().zip(&events) {
+            let near = |a: Pos2, b: Pos2| (a - b).length() < 1e-3;
+            for ((centre, ..), event) in expected.iter().zip(&events) {
+                let centre = *centre;
                 let mut clicked = None;
                 for pressed in [None, Some(true), Some(false)] {
                     let mut input = RawInput::default();
@@ -696,23 +944,54 @@ mod tests {
                         clicked = render_event_band(ui, &events, &bars, &coords, 300.0)
                             .or(clicked.take());
                     });
-                    let circles: Vec<_> = output
-                        .shapes
-                        .iter()
-                        .filter_map(|shape| match &shape.shape {
-                            Shape::Circle(circle) => Some((circle.center, circle.stroke.color)),
-                            _ => None,
-                        })
-                        .collect();
+                    // Asserting before the output is dropped would abort the test binary.
+                    let mut mismatches = Vec::new();
+                    for (at, half, outlines) in &expected {
+                        let clip = Rect::from_center_size(*at, Vec2::splat(2.0 * half));
+                        let drawn: Vec<_> = output
+                            .shapes
+                            .iter()
+                            .filter(|shape| {
+                                near(shape.clip_rect.min, clip.min)
+                                    && near(shape.clip_rect.max, clip.max)
+                            })
+                            .filter_map(|shape| match &shape.shape {
+                                Shape::Circle(circle) => Some((
+                                    "circle",
+                                    vec![
+                                        circle.center - Vec2::splat(circle.radius),
+                                        circle.center + Vec2::splat(circle.radius),
+                                    ],
+                                    circle.stroke.color,
+                                )),
+                                Shape::Rect(r) => {
+                                    Some(("rect", vec![r.rect.min, r.rect.max], r.stroke.color))
+                                }
+                                Shape::Path(path) => match path.stroke.color {
+                                    ColorMode::Solid(color) => {
+                                        Some(("path", path.points.clone(), color))
+                                    }
+                                    ColorMode::UV(_) => None,
+                                },
+                                Shape::LineSegment { points, stroke } => {
+                                    Some(("line", points.to_vec(), stroke.color))
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        let matches = drawn.len() == outlines.len()
+                            && drawn.iter().zip(outlines).all(|(d, e)| {
+                                d.0 == e.0
+                                    && d.2 == e.2
+                                    && d.1.len() == e.1.len()
+                                    && d.1.iter().zip(&e.1).all(|(a, b)| near(*a, *b))
+                            });
+                        if !matches {
+                            mismatches.push(format!("badge at {at:?}: {drawn:?}"));
+                        }
+                    }
                     output.drop_without_applying_deltas();
-                    assert_eq!(
-                        circles,
-                        [
-                            (centres[0], light.chart.axis_text),
-                            (centres[1], Color32::RED),
-                            (centres[2], events[2].color),
-                        ]
-                    );
+                    assert!(mismatches.is_empty(), "spacing {spacing}: {mismatches:?}");
                 }
                 assert_eq!(clicked.as_deref(), event.id.as_deref());
             }
