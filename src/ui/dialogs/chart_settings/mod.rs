@@ -73,6 +73,8 @@ pub struct SettingsDialog {
     price_targets_offered: bool,
     /// The axis font family the dialog was opened with, shown while the settings hold none.
     opened_font_family: Option<egui::FontFamily>,
+    /// The top and bottom margins in percent the margin rows were last filled with.
+    loaded_margins: (f32, f32),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -165,6 +167,7 @@ impl SettingsDialog {
             order_flow_layers: [true; 4],
             price_targets_offered: true,
             opened_font_family: None,
+            loaded_margins: (0.0, 0.0),
         }
     }
 
@@ -282,6 +285,10 @@ impl SettingsDialog {
         self.margin_top_str = format!("{}", self.settings.margins.top_percent);
         self.margin_bottom_str = format!("{}", self.settings.margins.bottom_percent);
         self.margin_right_str = format!("{}", self.settings.margins.right_bars);
+        self.loaded_margins = (
+            self.settings.margins.top_percent,
+            self.settings.margins.bottom_percent,
+        );
     }
 
     /// Close the dialog.
@@ -445,6 +452,16 @@ impl SettingsDialog {
             .validate()
             .err()
             .map(|error| error.to_string())
+            .or_else(|| {
+                // Margins leaving no room for prices are kept when unedited; the fit ignores them.
+                let (top, bottom) = (
+                    self.settings.margins.top_percent,
+                    self.settings.margins.bottom_percent,
+                );
+                (top + bottom >= 100.0 && (top, bottom) != self.loaded_margins).then(|| {
+                    crate::widget::settings::ChartSettingsError::Margins { top, bottom }.to_string()
+                })
+            })
             .or_else(|| {
                 (self.margin_top_str.parse::<f32>().is_err()
                     || self.margin_bottom_str.parse::<f32>().is_err()
@@ -2394,5 +2411,51 @@ mod tests {
         };
         settings.apply_to_chart(&mut second).unwrap();
         assert_eq!(margin(&second), (7.5, None, (12.0, 7.5)));
+    }
+
+    /// Margins that leave no room for prices, which the fit ignores, apply with Ok as a chart
+    /// holds them and as a template saved from that chart loads them on another chart. Typed in,
+    /// they keep Ok disabled.
+    #[test]
+    fn margins_without_room_apply_unless_typed() {
+        use crate::scales::PriceScaleMargins;
+        use crate::widget::test_frames::chart;
+        let without_room = PriceScaleMargins {
+            top: 0.6,
+            bottom: 0.4,
+        };
+        let mut held = chart(&[100.0], &[110.0]);
+        held.price_scale_mut().options_mut().scale_margins = without_room;
+        let mut dialog = SettingsDialog::new();
+        dialog
+            .templates
+            .save("No room", ChartSettingsState::from_chart(&held))
+            .unwrap();
+        let other = PriceScaleMargins::default();
+        for (margins, template, typed, applied) in [
+            (without_room, None, None, Some(without_room)),
+            (other, Some("No room"), None, Some(without_room)),
+            (other, None, Some(("60", "40")), None),
+        ] {
+            let mut chart = chart(&[100.0], &[110.0]);
+            chart.price_scale_mut().options_mut().scale_margins = margins;
+            dialog.open(ChartSettingsState::from_chart(&chart));
+            if let Some(name) = template {
+                load_template(&mut dialog, name);
+            }
+            if let Some((top, bottom)) = typed {
+                dialog.margin_top_str = top.into();
+                dialog.margin_bottom_str = bottom.into();
+                dialog.active_tab = SettingsTab::Canvas;
+            }
+            let shown = match click_through(&mut dialog, &["Ok"]) {
+                SettingsAction::Apply(settings) => {
+                    settings.apply_to_chart(&mut chart).unwrap();
+                    Some(chart.state().price_scale().options().scale_margins)
+                }
+                _ => None,
+            };
+            assert_eq!(shown, applied, "{template:?} {typed:?}");
+        }
     }
 }

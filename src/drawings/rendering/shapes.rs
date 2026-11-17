@@ -84,9 +84,13 @@ impl Drawing {
         painter.add(Shape::closed_line(points, self.stroke()));
     }
 
-    /// A rectangle whose first two anchors form its base and whose third sets the width.
+    /// A rectangle whose first two anchors form its base and whose third sets the width. With two
+    /// anchors, as while the second is placed, it draws the base.
     pub(crate) fn render_rotated_rect(&self, painter: &egui::Painter) {
         let Some(corners) = self.rotated_rect_corners() else {
+            if let &[a, b] = self.points.as_slice() {
+                painter.line_segment([a, b], self.stroke());
+            }
             return;
         };
         let fill = self.fill_color.map_or(Color32::TRANSPARENT, |c| {

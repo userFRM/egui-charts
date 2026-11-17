@@ -631,7 +631,10 @@ pub struct ChartSettingsState {
     /// Styles and construction inputs; absent in settings saved before these controls existed.
     #[serde(default)]
     pub chart_type_params: Option<crate::model::ChartTypeParams>,
-    /// Source for line and area representations; absent in older saved settings.
+    /// The price the Line, Step line, Line with markers, Area and Baseline charts draw while
+    /// their own source in `chart_type_params` is `None`, as
+    /// [`ChartConfig::price_source`](crate::config::ChartConfig::price_source) holds it; absent
+    /// in older saved settings, which keep the chart's.
     #[serde(default)]
     pub price_source: Option<crate::model::PriceSource>,
     /// Candle body, border and wick colors.

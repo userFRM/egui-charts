@@ -96,7 +96,10 @@ pub(crate) struct FeedLink {
     pub(super) depth_history: Option<DepthHistory>,
     depth_complete: bool,
     footprints_complete: bool,
-    footprint_cursor: Option<chrono::DateTime<chrono::Utc>>,
+    /// A terminal footprint error stops requests until refresh, independently of older EOF.
+    footprints_stopped: bool,
+    /// Unavailable spans suppressed only for the current feed context.
+    footprint_unavailable: Vec<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
     /// Where older history continues after an empty page, by source: bars, trades, depth. The
     /// bar cursor keeps the oldest bar held when the feed named it and lapses once that bar goes.
     bar_cursor: Option<(
@@ -222,7 +225,8 @@ impl FeedLink {
             depth_history: self.depth_history.clone(),
             depth_complete: self.depth_complete,
             footprints_complete: true,
-            footprint_cursor: None,
+            footprints_stopped: true,
+            footprint_unavailable: Vec::new(),
             bar_cursor: None,
             trade_cursor: None,
             depth_cursor: None,
@@ -291,10 +295,11 @@ impl FeedLink {
             let ended = self.trades.retained_until().is_none();
             // The sink opened the bars from the oldest live execution the store kept apart, where
             // the page may hold executions the stream never sent, so the page fills none of them.
-            // Without a loss the sink's allocations fill them, as `OrderFlowInput::chart_run`
-            // rebuilds them; after one `OrderFlowInput::replace_trades` waits for the sink's next
-            // allocations, and the executions already received fill none of them. A chart that
-            // starts after it holds no bar with the page's executions of that instant.
+            // The sink's allocations fill them, as `OrderFlowInput::chart_run` rebuilds them,
+            // unless the store lost an execution at or after the open of the first: then the run
+            // starts at the oldest bar after the loss whose executions are all held, and without
+            // one `OrderFlowInput::replace_trades` waits for the sink's next allocations. A chart
+            // that starts after it holds no bar with the page's executions of that instant.
             let stream_from = (self.trades.unheld_live())
                 .and_then(|(_, kept)| kept.first())
                 .map(|trade| trade.ts)
@@ -457,7 +462,8 @@ impl Chart {
             depth_history: None,
             depth_complete: false,
             footprints_complete: false,
-            footprint_cursor: None,
+            footprints_stopped: false,
+            footprint_unavailable: Vec::new(),
             bar_cursor: None,
             trade_cursor: None,
             depth_cursor: None,
@@ -752,6 +758,8 @@ impl Chart {
             && link.adjusted != adjusted
         {
             link.adjusted = adjusted;
+            // Adjusted rows belong to another context even when the symbol and clock match.
+            link.footprint = None;
             link.reload_pending = true;
             self.study_data.clear_feed();
         }
