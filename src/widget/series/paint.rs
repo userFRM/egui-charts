@@ -377,8 +377,58 @@ impl Chart {
         }
     }
 
-    /// Paints a legend row for each of `items`, the first at `top`. The values follow a pointer
-    /// over `rect`. Returns the bottom of the last row, or `top` without rows, and the
+    /// The value the status row of `item` shows: its close at `time`, or its last close without
+    /// one; `None` when it has no bar there.
+    pub(in crate::widget) fn series_status_value(
+        &self,
+        item: &PriceSeries,
+        time: Option<chrono::DateTime<chrono::Utc>>,
+        rect: Rect,
+    ) -> Option<String> {
+        let bar = match time {
+            Some(time) => item
+                .bars
+                .binary_search_by_key(&time, |bar| bar.time)
+                .ok()
+                .map(|at| &item.bars[at])
+                .filter(|bar| !bar.is_whitespace()),
+            None => crate::model::last_with_value(&item.bars),
+        }?;
+        Some(
+            match self.series_label_formatter(item.id, PriceScaleMode::Normal) {
+                Some(formatter) => formatter.format(bar.close),
+                None => {
+                    let map = self.series_map(item, rect);
+                    crate::scales::group_thousands(
+                        format!("{:.*}", map.price_precision().unwrap_or(2), bar.close),
+                        map.thousands_sep(),
+                    )
+                }
+            },
+        )
+    }
+
+    /// Each visible added series in status line order, with its name, colour and the value its
+    /// status row shows at `time`, or at its last bar without one.
+    #[cfg(feature = "ui")]
+    pub(crate) fn series_readouts(
+        &self,
+        time: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> impl Iterator<Item = (&str, egui::Color32, Option<String>)> {
+        self.price_series
+            .iter()
+            .filter(|item| item.visible)
+            .map(move |item| {
+                (
+                    item.options.name.as_str(),
+                    item.options.color,
+                    self.series_status_value(item, time, self.last_rendered_price_rect),
+                )
+            })
+    }
+
+    /// Paints a legend row for each of `items`, the first at `top`, with its value at the bar the
+    /// status line reads. Returns the bottom of the last row, or `top` without rows, and the
     /// handle of the series whose remove control was activated.
     pub(in crate::widget) fn paint_secondary_legend<'a>(
         &self,
@@ -402,44 +452,13 @@ impl Chart {
         let mut remove = None;
         for (row, item) in items.enumerate() {
             if self.config.show_indicator_labels || self.config.show_indicator_last_val {
-                let selected_time = ui
-                    .input(|input| input.pointer.hover_pos())
-                    .filter(|point| rect.contains(*point))
-                    .and_then(|point| {
-                        main.get(
-                            self.state
-                                .time_scale()
-                                .coord_to_idx_precise(point.x, rect.left(), rect.width())
-                                .round()
-                                .max(0.0) as usize,
-                        )
-                    })
+                let time = self
+                    .readout_index
+                    .and_then(|index| main.get(index))
                     .map(|bar| bar.time);
-                let bar = match selected_time {
-                    Some(time) => item
-                        .bars
-                        .binary_search_by_key(&time, |bar| bar.time)
-                        .ok()
-                        .map(|at| &item.bars[at])
-                        .filter(|bar| !bar.is_whitespace()),
-                    None => crate::model::last_with_value(&item.bars),
-                };
-                let formatter = self.series_label_formatter(item.id, PriceScaleMode::Normal);
-                let value = bar.map_or_else(
-                    || "∅".into(),
-                    |bar| {
-                        formatter.as_ref().map_or_else(
-                            || {
-                                let map = self.series_map(item, rect);
-                                crate::scales::group_thousands(
-                                    format!("{:.*}", map.price_precision().unwrap_or(2), bar.close),
-                                    map.thousands_sep(),
-                                )
-                            },
-                            |formatter| formatter.format(bar.close),
-                        )
-                    },
-                );
+                let value = self
+                    .series_status_value(item, time, rect)
+                    .unwrap_or_else(|| "∅".into());
                 let mut job = egui::text::LayoutJob::simple_singleline(
                     format!(
                         "{}  {}",
