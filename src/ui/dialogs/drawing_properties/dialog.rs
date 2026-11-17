@@ -159,7 +159,8 @@ impl DrawingPropertiesDialog {
                             .coordinates
                             .resolve(chart)
                             .unwrap_or_default()
-                            .is_empty();
+                            .is_empty()
+                        || self.props.template.is_some();
                     if !changed {
                         self.error = None;
                         return action;
@@ -350,9 +351,13 @@ impl DrawingPropertiesDialog {
         self.props.fill_enabled = d.fill_color.is_some();
         self.props.extend_left = d.extend_left;
         self.props.extend_right = d.extend_right;
-        self.props.label = d.text.clone().unwrap_or_default();
+        // A tool without text keeps its picture, sticker or icon there.
+        if d.tool_type.supports_text() {
+            self.props.label = d.text.clone().unwrap_or_default();
+        }
         self.props.font_size = d.font_size;
         self.props.timeframe_visibility = d.timeframe_visibility.clone();
+        self.props.template = Some(Box::new(template.clone()));
         self.props.tool_settings = Some(Box::new(template));
     }
 
@@ -1259,5 +1264,65 @@ mod tests {
         let saved: serde_json::Value =
             serde_json::from_str(&host.0.lock().unwrap()["Legacy"]).unwrap();
         assert_eq!(saved["template"]["settings"]["stroke_width"], 3.0);
+    }
+
+    /// A template loaded in the dialog of one drawing gives every unlocked selected drawing of its
+    /// tool all of its style, whatever each held before, and leaves the selected drawings of other
+    /// tools and the locked ones as they were. One undo restores them all.
+    #[test]
+    fn a_loaded_template_restyles_every_unlocked_selected_drawing_of_its_tool() {
+        let ctx = Context::default();
+        let mut chart = Chart::new(BarData::new());
+        let anchors = [ChartPoint::new(1.0, 100.0), ChartPoint::new(3.0, 110.0)];
+        for (id, tool, color) in [
+            (1, Tool::Rect, [242, 54, 69, 255]),
+            (2, Tool::Rect, [41, 98, 255, 255]),
+            (3, Tool::TrendLine, [41, 98, 255, 255]),
+            (4, Tool::Rect, [41, 98, 255, 255]),
+        ] {
+            let mut drawing = Drawing::new(id, tool);
+            (drawing.color, drawing.stroke_width, drawing.fill_color) = (color, 1.0, None);
+            drawing.extend_right = id == 2;
+            drawing.locked = id == 4;
+            drawing.chart_points = anchors.to_vec();
+            chart.drawings_mut().drawings.push(drawing);
+        }
+        chart.drawings_mut().select_drawings([1, 2, 3, 4]);
+        let mut zone = Drawing::new(0, Tool::Rect);
+        (zone.color, zone.stroke_width) = ([242, 54, 69, 255], 2.0);
+        zone.line_style = crate::model::LineStyle::Dashed;
+        zone.fill_color = Some([76, 175, 80, 51]);
+        let template = DrawingTemplate::from_drawing(&zone);
+        let mut dialog = DrawingPropertiesDialog::new();
+        dialog
+            .templates
+            .save_for_tool("Red zone", template.clone())
+            .unwrap();
+        let before = serde_json::to_value(&chart.drawings().drawings).unwrap();
+        dialog.open_for_chart(&chart, DrawingId(1));
+        frame(&mut dialog, &mut chart, &ctx, vec![]);
+        click(&mut dialog, &mut chart, &ctx, "Template");
+        click(&mut dialog, &mut chart, &ctx, "Red zone");
+        click(&mut dialog, &mut chart, &ctx, "Ok");
+        let style = |drawing: &Drawing| {
+            serde_json::to_value(DrawingTemplate::from_drawing(drawing)).unwrap()
+        };
+        let drawings = &chart.drawings().drawings;
+        let want = serde_json::to_value(&template).unwrap();
+        assert_eq!(style(&drawings[0]), want);
+        assert_eq!(style(&drawings[1]), want, "the blue rectangle");
+        assert_eq!(drawings[1].chart_points, anchors);
+        for index in [2, 3] {
+            assert_eq!(
+                serde_json::to_value(&drawings[index]).unwrap(),
+                before[index]
+            );
+        }
+        assert!(chart.undo());
+        assert_eq!(
+            serde_json::to_value(&chart.drawings().drawings).unwrap(),
+            before
+        );
+        assert!(!chart.can_undo());
     }
 }

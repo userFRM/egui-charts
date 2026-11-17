@@ -6729,11 +6729,14 @@ mod tests {
                 plot: 0
             })
         );
-        let mut target = Drawing::new(23, DrawingToolType::TrendLine);
-        target.chart_points = vec![ChartPoint::new(8.0, 300.0), ChartPoint::new(10.0, 400.0)];
-        target.completed = true;
-        app.chart.drawings_mut().drawings.push(target);
-        app.chart.drawings_mut().select(23);
+        for id in [23, 24] {
+            let mut target = Drawing::new(id, DrawingToolType::TrendLine);
+            target.chart_points = vec![ChartPoint::new(8.0, 300.0), ChartPoint::new(10.0, 400.0)];
+            target.completed = true;
+            target.stroke_width = 1.0;
+            app.chart.drawings_mut().drawings.push(target);
+        }
+        app.chart.drawings_mut().select_drawings([23, 24]);
         // The row the toolbar's template menu shows for the template.
         app.show_templates(&ctx);
         let template_id = app
@@ -6746,6 +6749,12 @@ mod tests {
             .id
             .clone();
         app.handle_drawing_toolbar(DrawingToolbarAction::LoadTemplate { template_id });
+        let widths = |app: &DemoApp| {
+            [23, 24].map(|id| {
+                let drawings = &app.chart.drawings().drawings;
+                drawings.iter().find(|d| d.id == id).unwrap().stroke_width
+            })
+        };
         let target = app
             .chart
             .drawings()
@@ -6753,20 +6762,10 @@ mod tests {
             .iter()
             .find(|drawing| drawing.id == 23)
             .unwrap();
-        assert_eq!(target.id, 23);
         assert_eq!(target.chart_points[0].bar_idx, 8.0);
-        assert_eq!(target.stroke_width, 4.0);
+        assert_eq!(widths(&app), [4.0, 4.0]);
         assert!(app.chart.undo());
-        assert_ne!(
-            app.chart
-                .drawings()
-                .drawings
-                .iter()
-                .find(|drawing| drawing.id == 23)
-                .unwrap()
-                .stroke_width,
-            4.0
-        );
+        assert_eq!(widths(&app), [1.0, 1.0]);
     }
 
     /// Native clipboard events paste the selected drawings without a session cache,

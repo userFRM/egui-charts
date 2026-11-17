@@ -20,6 +20,10 @@ pub struct DrawingProps {
     pub symbol: Option<String>,
     /// Tool-specific settings, edited by the Inputs page.
     pub tool_settings: Option<Box<DrawingTemplate>>,
+    /// Template loaded from the Template menu, or the tool's defaults after Reset to defaults.
+    /// Applying gives every unlocked selected drawing of the template's tool all of the template
+    /// first, then the edited values; drawings of other tools take the edited values.
+    pub template: Option<Box<DrawingTemplate>>,
     /// Instrument tick size for position level inputs; absent disables editing by ticks.
     pub tick_size: Option<f64>,
     /// Staged anchor edits, applied only to the drawing whose dialog was opened.
@@ -55,6 +59,7 @@ impl Default for DrawingProps {
             symbol: None,
             tick_size: None,
             tool_settings: None,
+            template: None,
             coordinates: CoordinatesState::default(),
             save_as_default: false,
             color: crate::theme::Theme::default().ui.accent,
@@ -144,7 +149,8 @@ impl DrawingProps {
     /// Validate and apply one undoable edit to the unlocked selection. A value that differs from
     /// drawing `id`'s, which these properties were read from, was edited, and only edited values
     /// change the drawings: text only those that show text, tool inputs only drawings of the same
-    /// tool, coordinates only `id`. Errors leave all live drawings unchanged.
+    /// tool, coordinates only `id`. A loaded `template` first gives every unlocked selected
+    /// drawing of its tool all of its values. Errors leave all live drawings unchanged.
     pub fn apply_to_chart(&self, id: DrawingId, chart: &mut Chart) -> Result<(), &'static str> {
         let edits = self.edited_drawings(id, chart)?;
         chart.user_action(|chart| {
@@ -171,8 +177,8 @@ impl DrawingProps {
     }
 
     /// Prepare validated edits without history or persistence side effects, for live preview.
-    /// Values compare with drawing `id` as `chart` holds it, so a preview restores its drawings
-    /// before calling this.
+    /// Values compare with drawing `id` as `chart` holds it, with a loaded `template` applied, so
+    /// a preview restores its drawings before calling this.
     pub(super) fn edited_drawings(
         &self,
         id: DrawingId,
@@ -212,6 +218,11 @@ impl DrawingProps {
         if !points.is_empty() && points.len() != target.chart_points.len() && !adds_position_stop {
             return Err("Drawing anchors changed; reopen its properties");
         }
+        // A loaded template gives the drawings all of its values, and edits compare with it.
+        let mut target = target.clone();
+        if let Some(template) = &self.template {
+            template.apply_to(&mut target)?;
+        }
         let selected = chart.drawings().is_selected(id.0);
         let fill = self.fill_enabled.then(|| {
             self.fill_color.unwrap_or_else(|| {
@@ -241,6 +252,10 @@ impl DrawingProps {
             })
             .cloned()
         {
+            if let Some(template) = &self.template {
+                // A drawing of another tool refuses it and takes the edited values only.
+                let _ = template.apply_to(&mut drawing);
+            }
             // The dialog opened with the target's values: one that differs from them was edited,
             // and only edited values are written, so each drawing keeps the rest of its own.
             if hue_edited {
