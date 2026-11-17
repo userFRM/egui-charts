@@ -3044,10 +3044,11 @@ mod tests {
     /// 100.00, where the busiest price of the first is 100.25. The second bar trades 2500 after
     /// 16, a change of 2484 / 16 = 15525%, all of it sold, at one price.
     ///
-    /// Open interest of 1000 from 09:58, 1004 from 10:00:20, 998 from 10:00:40 and 1010 from
-    /// 10:05: the first bar opens at 1000 and publishes 1004 and 998 before 10:01, so its high is
-    /// 1004 and its low 998. The second publishes nothing before 10:02 and holds 998 from its
-    /// open; 10:05 is after both. Without the points the open interest rows are left out.
+    /// Open interest of 1000 from 09:58, 1004 from 10:00:20, 998 from 10:00:40, 1006 from 10:01
+    /// and 1010 from 10:05: the first bar opens at 1000 and publishes 1004 and 998 before 10:01,
+    /// so its high is 1004 and its low 998. The second holds 1006, published at its open, with
+    /// nothing else before 10:02; 10:05 is after both. Without the points the open interest rows
+    /// are left out.
     #[test]
     fn statistics_keep_shared_rows_and_aligned_values_or_explain_the_overview() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
@@ -3069,6 +3070,7 @@ mod tests {
             ("2026-01-05T09:58:00Z", 1000.0),
             ("2026-01-05T10:00:20Z", 1004.0),
             ("2026-01-05T10:00:40Z", 998.0),
+            ("2026-01-05T10:01:00Z", 1006.0),
             ("2026-01-05T10:05:00Z", 1010.0),
         ]
         .into_iter()
@@ -3219,7 +3221,8 @@ mod tests {
                 } else {
                     [
                         "2500", "2500", "0", "-2500", "-2500", "0", "-2490", "-100.0%", "0.00:1",
-                        "1", "2500", "100.0%", "0.0%", "0.00", "100.00", "15525.0%", "998", "998",
+                        "1", "2500", "100.0%", "0.0%", "0.00", "100.00", "15525.0%", "1006",
+                        "1006",
                     ]
                 },
             ]

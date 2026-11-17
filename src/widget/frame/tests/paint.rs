@@ -1730,9 +1730,11 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
         table(&mut chart),
         ["Vol", "Delta", "OI high", "OI low", "5", "1", "507", "500"]
     );
-    // Without open interest the rows are left out.
+    let four_rows = chart.get_rendered_price_rect().bottom();
+    // Without open interest the rows are left out, and the table is two rows shorter.
     chart.set_study_data(open_interest, Vec::new(), None);
     assert_eq!(table(&mut chart), ["Vol", "Delta", "5", "1"]);
+    assert_eq!(chart.get_rendered_price_rect().bottom() - four_rows, 24.0);
     assert_eq!(chart.trade_profile_settings().value_area, Some(0.5));
     let saved = serde_json::to_vec(&chart.snapshot().unwrap()).unwrap();
     let snapshot: ChartSnapshot = serde_json::from_slice(&saved).unwrap();
