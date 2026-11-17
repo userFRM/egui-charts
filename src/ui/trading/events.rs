@@ -12,13 +12,18 @@ use crate::ui_kit::notifications::{Toast, ToastKind, Toasts};
 use crate::widget::settings::TradingNotifications;
 
 impl Trading {
-    /// Applies the broker's pushes and answers, reconnects a lagged stream, and reports refused
-    /// orders and fills in `toasts`. Call it every frame, even while the chart is hidden.
+    /// Applies the broker's pushes and answers, and reports refused orders and fills in `toasts`.
+    /// A lagged stream is replaced by a new one, on which the broker restates the account: the
+    /// order ticket, a previewed order and the quantity calculator stay as the user left them,
+    /// while a change to an order or a position that waits for confirmation is dropped. Call it
+    /// every frame, even while the chart is hidden.
     pub fn poll(&mut self, ctx: &egui::Context, toasts: &mut Toasts) {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
-        if self.listener.as_ref().is_some_and(|l| !l.is_active()) {
-            self.connect();
+        let lagged = self.listener.as_ref().is_some_and(|l| !l.is_active());
+        let held = lagged && !self.is_connected();
+        if lagged {
+            self.listen();
         }
         for (key, answer) in self.inbox.drain().answers {
             if key == self.generation {
@@ -130,6 +135,11 @@ impl Trading {
                     )),
                 );
             }
+        }
+        // A new stream counts as live unless the broker restated otherwise: rules held back
+        // while the old stream was not live are asked for once the restated account shows it is.
+        if held && self.is_connected() {
+            self.ask_rules_again();
         }
     }
 
@@ -317,10 +327,7 @@ impl Trading {
                     }
                     // Ask once more for what the broker may not have answered meanwhile.
                     (false, true) => {
-                        if !self.rules_ready && !self.rules_failed && !self.rules.symbol.is_empty()
-                        {
-                            self.ask_rules();
-                        }
+                        self.ask_rules_again();
                         self.account_panel.resume();
                     }
                     _ => {}
@@ -820,17 +827,21 @@ mod tests {
     /// What a broker pushes as the account's state when a stream starts, on connecting, on
     /// connecting again after a disconnect and after the stream lagged, raises no notification
     /// and asks for no sound; a fill, a working order and a rejection pushed later are each
-    /// announced once.
+    /// announced once. A stream that lags while the broker reconnects keeps the order ticket and
+    /// the quantity calculator as they were, drops a confirmation that names a position, lists
+    /// the account the broker restates and asks for the ticket's trading rules once the new
+    /// stream is live; a new broker resets the ticket.
     #[test]
     fn a_new_stream_does_not_announce_the_accounts_state() {
+        use crate::data::FeedStatus;
         use crate::data::inbox::Inbox;
         use crate::model::TimeInForce;
         use crate::services::{Broker, PaperAccount};
         let ctx = egui::Context::default();
         let paper = Arc::new(PaperAccount::new("USD", 100_000.0));
         paper.set_price("SYM", 100.0);
-        let buy = |quantity, order_type| {
-            let mut request = OrderRequest::new("SYM", OrderSide::Buy, quantity, order_type);
+        let place = |side, quantity, order_type| {
+            let mut request = OrderRequest::new("SYM", side, quantity, order_type);
             request.time_in_force = TimeInForce::GoodTillCancelled;
             paper.place(request, Arc::new(Inbox::default()).reply(0));
         };
@@ -847,9 +858,9 @@ mod tests {
         trading.display.execution_sound = "Bell".into();
         trading.set_service(paper.clone());
         assert_eq!(announced(&mut trading), (vec![], None));
-        buy(1.0, OrderType::Market);
-        buy(1.0, OrderType::Limit(90.0));
-        buy(10_000.0, OrderType::Market);
+        place(OrderSide::Buy, 1.0, OrderType::Market);
+        place(OrderSide::Buy, 1.0, OrderType::Limit(90.0));
+        place(OrderSide::Buy, 10_000.0, OrderType::Market);
         let (messages, sound) = announced(&mut trading);
         assert_eq!(
             messages[..2],
@@ -858,17 +869,53 @@ mod tests {
         assert!(messages[2].starts_with("Order rejected: Insufficient buying power"));
         assert_eq!((messages.len(), sound.as_deref()), (3, Some("Bell")));
 
+        let reset = format!("{:?}", trading.ticket);
+        trading.open_ticket(OrderRequest::new(
+            "SYM",
+            OrderSide::Buy,
+            5.0,
+            OrderType::Market,
+        ));
         trading.disconnect();
         trading.set_service(paper.clone());
         assert_eq!(announced(&mut trading), (vec![], None), "connected again");
+        assert_eq!(format!("{:?}", trading.ticket), reset, "a new broker");
+        // While the broker reconnects, the user fills in a sell in the ticket, whose rules wait
+        // for it, with the quantity calculator open, and is asked to confirm closing the position.
+        let connecting = AccountEvent::Status(FeedStatus::Connecting);
+        trading.apply(&ctx, connecting, &mut Toasts::new());
+        let mut request = OrderRequest::new("SYM", OrderSide::Sell, 2.0, OrderType::Limit(105.0));
+        request.stop_loss = Some(110.0);
+        trading.open_ticket(request);
+        trading.calculator = Some((egui::Pos2::ZERO, "3".into()));
+        trading.pending = Some(TradingLineAction::Close(trading.positions[0].clone()));
+        let ticket = format!("{:?}", trading.ticket);
         // Revaluing the open position pushes it and the account twice per price, which overflows
-        // the stream between two frames.
+        // the stream between two frames; the position closes while the stream lags.
         let generation = trading.generation;
         for price in [101.0, 100.0].repeat(2_501) {
             paper.set_price("SYM", price);
         }
+        place(OrderSide::Sell, 1.0, OrderType::Market);
         assert_eq!(announced(&mut trading), (vec![], None), "lagged");
         assert_ne!(trading.generation, generation);
+        let working: Vec<_> = (trading.orders.iter())
+            .map(|order| &order.request.order_type)
+            .collect();
+        assert_eq!(
+            (trading.positions.len(), working),
+            (0, vec![&OrderType::Limit(90.0)])
+        );
+        assert!(trading.pending.is_none());
+        assert_eq!(format!("{:?}", trading.ticket), ticket);
+        assert_eq!(trading.calculator, Some((egui::Pos2::ZERO, "3".to_owned())));
+        // The broker restated no status, so the new stream is live.
+        assert_eq!(
+            announced(&mut trading),
+            (vec![], None),
+            "the ticket's rules"
+        );
+        assert!(trading.rules_ready && trading.rules.symbol == "SYM");
 
         paper.set_price("SYM", 90.0);
         assert_eq!(
@@ -1190,7 +1237,7 @@ mod tests {
             check(&mut trading, &format!("{status:?}"), true, connected, mark);
         }
         // A new stream, as after a lag, starts without the old stream's status.
-        trading.connect();
+        trading.listen();
         check(&mut trading, "new stream", true, true, None);
         trading.disconnect();
         check(&mut trading, "disconnected", false, false, None);
