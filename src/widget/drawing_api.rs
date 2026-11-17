@@ -146,8 +146,9 @@ impl Chart {
     /// Replace a retracement's, extension's, channel's, wedge's, circle's, resistance arc's, spiral's,
     /// time projection's or speed resistance fan's Fibonacci settings (levels, typography, text
     /// placement, construction visibility, fan grid and fan labels) as one undoable edit. A fan
-    /// given settings without time levels takes its price levels as its time levels. Unknown
-    /// ids, locked drawings and invalid settings change nothing.
+    /// given changed settings without time levels takes their price levels as its time levels.
+    /// Unknown ids, locked drawings, invalid settings and the drawing's own settings change
+    /// nothing.
     pub fn set_fibonacci_config(
         &mut self,
         id: usize,
