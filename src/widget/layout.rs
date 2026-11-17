@@ -2091,12 +2091,15 @@ impl ChartLayout {
         }
         let symbol = source.symbol().to_owned();
         let timeframe = source.timeframe();
+        // A linked chart keeps its history as the source did; a host change outside a user
+        // action, which cleared the source's, clears it too.
+        let keep_history = source.can_undo() || source.can_redo();
         for (index, chart) in charts.iter_mut().take(count).enumerate() {
             if index == from {
                 continue;
             }
             if self.linked(index, from, false) && symbol_changed {
-                chart.set_symbol(&symbol);
+                chart.change_symbol(symbol.clone(), keep_history);
             }
             if self.linked(index, from, true)
                 && timeframe_changed
@@ -5167,6 +5170,51 @@ mod tests {
                 "recorded before the exchange: {recorded}"
             );
         }
+    }
+
+    /// Four charts, the second and the fourth in one symbol group. The fourth keeps its own
+    /// undo step through the symbol the active second sends it; a host change outside a user
+    /// action clears the history of both, as it clears the source's.
+    #[test]
+    fn a_linked_symbol_change_keeps_the_history_of_the_chart_it_reaches() {
+        let show = |layout: &mut ChartLayout, charts: &mut [Chart; 4]| {
+            egui::Context::default()
+                .run_ui(RawInput::default(), |ui| {
+                    layout.show(ui, &mut charts.each_mut());
+                })
+                .drop_without_applying_deltas();
+        };
+        let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::Four,
+            ..Default::default()
+        };
+        let group = ChartLinkGroups {
+            symbol: ChartLink::Group("🔶".into()),
+            ..Default::default()
+        };
+        layout.set_link_groups(1, group.clone(), true);
+        layout.set_link_groups(3, group, true);
+        layout.set_active(1);
+        show(&mut layout, &mut charts);
+        charts[3].user_action(|chart| chart.set_chart_type(crate::model::ChartType::Line));
+        charts[1].user_action(|chart| chart.set_symbol("OTHER"));
+        show(&mut layout, &mut charts);
+        assert_eq!(charts[3].symbol(), "OTHER");
+        assert!(charts[3].undo(), "the linked chart keeps its step");
+        show(&mut layout, &mut charts);
+        assert_eq!(
+            (
+                charts[1].symbol(),
+                charts[3].symbol(),
+                charts[3].chart_type()
+            ),
+            ("OTHER", "OTHER", crate::model::ChartType::Candles)
+        );
+        charts[1].set_symbol("HOST");
+        show(&mut layout, &mut charts);
+        assert_eq!(charts[3].symbol(), "HOST");
+        assert!(!charts[3].can_undo() && !charts[3].can_redo());
     }
 
     /// A host opens a saved layout by supplying its charts in the same slots or restoring
