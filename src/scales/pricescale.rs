@@ -92,7 +92,9 @@ impl PriceRange {
 /// Space auto-scaling leaves above and below the data, as fractions of the pane height.
 ///
 /// The defaults keep the data in the middle 80% of the pane. Margins that together
-/// leave no room for the data are ignored.
+/// leave no room for the data are ignored: the fit then leaves no space above or below the
+/// data. A chart holding such margins saves, restores and applies its settings with them;
+/// `Chart::restore` refuses only a margin that is not finite, is negative or is above 1.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PriceScaleMargins {
     /// Space above the highest value, as a fraction of the pane height (0.0 to 1.0)

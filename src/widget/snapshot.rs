@@ -823,17 +823,15 @@ fn check(
         .settings
         .validate()
         .map_err(RestoreError::Settings)?;
+    // Margins that together leave no room for prices are kept: the fit ignores them.
     let valid_scale = |scale: &crate::scales::PriceScale| {
         let range = scale.range();
         let margins = scale.options().scale_margins;
         range.min.is_finite()
             && range.max.is_finite()
             && range.min < range.max
-            && margins.top.is_finite()
-            && margins.bottom.is_finite()
-            && margins.top >= 0.0
-            && margins.bottom >= 0.0
-            && margins.top + margins.bottom < 1.0
+            && (0.0..=1.0).contains(&margins.top)
+            && (0.0..=1.0).contains(&margins.bottom)
             && scale.options().tick_marks.max_marks
                 <= crate::scales::PriceMarkGeneratorConfig::MAX_MARKS
     };
@@ -1467,6 +1465,7 @@ mod tests {
             ("/options/tooltip/font_size", 1e5),
             ("/config/watermark_font_size", 1e5),
             ("/config/axis_font_size", 0.0),
+            ("/price_scale/options/scale_margins/top", 1.5),
         ] {
             let mut invalid = document.clone();
             *invalid.pointer_mut(pointer).unwrap() = value.into();
@@ -1489,6 +1488,29 @@ mod tests {
         .unwrap();
         let layout = SavedLayout::from_json(&json).unwrap();
         chart(&[10.0], &[11.0]).restore(&layout.charts[0]).unwrap();
+    }
+
+    /// Margins that together leave no room for prices, which the fit ignores, save and restore
+    /// as they were.
+    #[test]
+    fn margins_without_room_do_not_block_saving() {
+        use crate::scales::PriceScaleMargins;
+        use crate::widget::test_frames::chart;
+        for (top, bottom) in [(0.6, 0.4), (0.7, 0.7)] {
+            let margins = PriceScaleMargins { top, bottom };
+            let mut original = chart(&[10.0], &[11.0]);
+            original.price_scale_mut().options_mut().scale_margins = margins;
+            let json = serde_json::to_string(&original.snapshot().unwrap()).unwrap();
+            let mut restored = chart(&[10.0], &[11.0]);
+            restored
+                .restore(&serde_json::from_str(&json).unwrap())
+                .unwrap();
+            assert_eq!(
+                restored.state().price_scale().options().scale_margins,
+                margins,
+                "{top} {bottom}"
+            );
+        }
     }
 
     /// Ignored style values save as finite equivalents, and the restored chart keeps their
