@@ -98,7 +98,8 @@ The owner must remain unchanged, and reading it must not allocate or perform I/O
 cells, statistics and annotations use the same complete bars,
 including valid history before a missing join. `Footprint::bars()` keeps its existing owned
 store API. Fixed range and anchored volume profile drawings also read these shared rows through
-[`ChartView::executions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/drawings/rendering/struct.ChartView.html#structfield.executions).
+[`ChartView::executions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/drawings/rendering/struct.ChartView.html#structfield.executions)
+and group them into their rows as the volume profile studies below group executions.
 A selected span across missing history stays labelled partial. Hosts constructing a `ChartView`
 from an owned footprint pass `executions: Some((&footprint).into())`. Replay and independent
 trade-driven studies still require individual executions.
