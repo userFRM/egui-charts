@@ -605,14 +605,14 @@ Studies,Indicators,Bollinger Bands,verified,library,src/studies/builtin/bollinge
 Studies,Indicators,Bollinger Bands %b,incomplete,library,src/studies/builtin/percent_b.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,3253
 Studies,Indicators,Bollinger Bars,incomplete,library,src/studies/builtin/bollinger_bars.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,3258
 Studies,Indicators,Bull Bear Power,verified,library,src/studies/builtin/bull_bear_power.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Candlestick pattern: Abandoned Baby - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172;3256
-Studies,Indicators,Candlestick pattern: Abandoned Baby - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172;3256
+Studies,Indicators,Candlestick pattern: Abandoned Baby - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
+Studies,Indicators,Candlestick pattern: Abandoned Baby - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
 Studies,Indicators,Candlestick pattern: Dark Cloud Cover - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Candlestick pattern: Doji,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
 Studies,Indicators,Candlestick pattern: Doji Star - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
 Studies,Indicators,Candlestick pattern: Doji Star - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
 Studies,Indicators,Candlestick pattern: Downside Tasuki Gap - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,3257;3172
-Studies,Indicators,Candlestick pattern: Dragonfly Doji - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172;3256
+Studies,Indicators,Candlestick pattern: Dragonfly Doji - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
 Studies,Indicators,Candlestick pattern: Engulfing - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
 Studies,Indicators,Candlestick pattern: Engulfing - Bullish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
 Studies,Indicators,Candlestick pattern: Evening Doji Star - Bearish,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,3257;3172
