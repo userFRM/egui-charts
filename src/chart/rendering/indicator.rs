@@ -48,6 +48,9 @@ pub(crate) fn paint_study_plot(
             );
         }
         PlotType::Area => {
+            // The fill lies under the line at a fifth of its opacity, so the guides and grid
+            // beneath stay visible.
+            let fill = plot.color.gamma_multiply(0.2);
             for pair in points.windows(2) {
                 paint_band(
                     painter,
@@ -55,10 +58,19 @@ pub(crate) fn paint_study_plot(
                     pair[1],
                     Pos2::new(pair[0].x, baseline),
                     Pos2::new(pair[1].x, baseline),
-                    plot.color,
+                    fill,
                     None,
                 );
             }
+            paint_study_plot(
+                painter,
+                points,
+                PlotStyle {
+                    plot_type: PlotType::Line,
+                    ..plot
+                },
+                baseline,
+            );
         }
         PlotType::Crosses => {
             for &point in points {
@@ -932,18 +944,20 @@ mod tests {
     fn plot_geometry_uses_the_selected_stroke_and_zero_baseline() {
         let color = Color32::from_rgb(17, 71, 191);
         let points = [Pos2::new(10.0, 15.0), Pos2::new(20.0, 5.0)];
-        for (plot_type, pattern) in [
-            (PlotType::Histogram, LineStyle::Solid),
-            (PlotType::Columns, LineStyle::Solid),
-            (PlotType::StepLine, LineStyle::Solid),
-            (PlotType::Crosses, LineStyle::Solid),
-            (PlotType::TriangleUp, LineStyle::Solid),
-            (PlotType::TriangleDown, LineStyle::Solid),
-            (PlotType::Area, LineStyle::Solid),
-            (PlotType::BackgroundColor, LineStyle::Solid),
-            (PlotType::Circles, LineStyle::Solid),
-            (PlotType::Line, LineStyle::Dashed),
-            (PlotType::Line, LineStyle::Dotted),
+        for (plot_type, pattern, width) in [
+            (PlotType::Histogram, LineStyle::Solid, 4.0),
+            (PlotType::Columns, LineStyle::Solid, 4.0),
+            (PlotType::StepLine, LineStyle::Solid, 4.0),
+            (PlotType::Crosses, LineStyle::Solid, 4.0),
+            (PlotType::TriangleUp, LineStyle::Solid, 4.0),
+            (PlotType::TriangleDown, LineStyle::Solid, 4.0),
+            (PlotType::Area, LineStyle::Solid, 1.0),
+            (PlotType::Area, LineStyle::Solid, 6.0),
+            (PlotType::Area, LineStyle::Dashed, 6.0),
+            (PlotType::BackgroundColor, LineStyle::Solid, 4.0),
+            (PlotType::Circles, LineStyle::Solid, 4.0),
+            (PlotType::Line, LineStyle::Dashed, 4.0),
+            (PlotType::Line, LineStyle::Dotted, 4.0),
         ] {
             let mut output = Context::default().run_ui(RawInput::default(), |ui| {
                 paint_study_plot(
@@ -952,7 +966,7 @@ mod tests {
                     &points,
                     PlotStyle {
                         color,
-                        width: 4.0,
+                        width,
                         pattern,
                         plot_type,
                         visible: true,
@@ -1003,9 +1017,39 @@ mod tests {
                 PlotType::TriangleUp | PlotType::TriangleDown => {
                     assert_eq!(painted.iter().filter(|shape| matches!(shape, Shape::Path(path) if path.points.len() == 3 && path.fill == color)).count(), 2);
                 }
+                // The line in the plot's width, colour and pattern over a fill of its colour at
+                // 20% of its opacity: 17, 71, 191 and 255 times 0.2, rounded.
                 PlotType::Area => {
-                    assert!(painted.iter().any(|shape| matches!(shape, Shape::Mesh(mesh)
-                        if mesh.vertices.iter().map(|vertex| vertex.pos).collect::<Vec<_>>() == [points[0], points[1], Pos2::new(20.0, 20.0), Pos2::new(10.0, 20.0)] && mesh.vertices.iter().all(|vertex| vertex.color == color))));
+                    let fill = Color32::from_rgba_premultiplied(3, 14, 38, 51);
+                    let meshes: Vec<_> = painted
+                        .iter()
+                        .filter_map(|shape| match shape {
+                            Shape::Mesh(mesh) => Some(mesh),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(meshes.len(), 1, "{width} {pattern:?}");
+                    assert_eq!(
+                        meshes[0]
+                            .vertices
+                            .iter()
+                            .map(|vertex| vertex.pos)
+                            .collect::<Vec<_>>(),
+                        [
+                            points[0],
+                            points[1],
+                            Pos2::new(20.0, 20.0),
+                            Pos2::new(10.0, 20.0)
+                        ]
+                    );
+                    assert!(meshes[0].vertices.iter().all(|vertex| vertex.color == fill));
+                    let stroke = Stroke::new(width, color);
+                    if pattern == LineStyle::Solid {
+                        assert!(painted.iter().any(|shape| matches!(shape, Shape::Path(path)
+                            if path.points == points && !path.closed && path.stroke == stroke.into())), "{width}");
+                    } else {
+                        assert!(painted.iter().any(|shape| matches!(shape, Shape::LineSegment { stroke: dash, .. } if *dash == stroke)));
+                    }
                 }
                 PlotType::BackgroundColor => {
                     assert_eq!(painted.iter().filter(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == color && rect.rect.height() == 100.0)).count(), 2);

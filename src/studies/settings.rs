@@ -22,7 +22,7 @@ pub enum PlotType {
     Columns,
     /// A plus at each defined value.
     Crosses,
-    /// Filled area between the output and zero.
+    /// A line along the values over a fill of its colour at 20% of its opacity down to zero.
     Area,
     /// An upward triangle centred on each defined value.
     TriangleUp,

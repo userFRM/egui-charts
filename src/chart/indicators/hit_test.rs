@@ -191,23 +191,28 @@ where
                 .expand(HIT_TOLERANCE)
                 .contains(click_pos)
             }
+            // On the line, which reaches half its width past the fill, or inside the fill.
             PlotType::Area => {
                 let Some(next) = indicator.plot_value(line_idx, bar + 1) else {
                     continue;
                 };
                 let next = Pos2::new(coords.idx_to_x(bar + 1), value_to_y(next));
-                if !next.is_finite() || click_pos.x < point.x || click_pos.x > next.x {
+                if !next.is_finite() {
                     continue;
                 }
-                let t = (click_pos.x - point.x) / (next.x - point.x);
-                let edge = point.y + t * (next.y - point.y);
-                let baseline = value_to_y(0.0);
-                let baseline = if baseline.is_finite() {
-                    baseline.clamp(rect.top(), rect.bottom())
-                } else {
-                    rect.bottom()
-                };
-                (edge.min(baseline)..=edge.max(baseline)).contains(&click_pos.y)
+                point_to_segment_distance(click_pos, point, next)
+                    <= HIT_TOLERANCE + plot.width * 0.5
+                    || ((point.x..=next.x).contains(&click_pos.x) && {
+                        let t = (click_pos.x - point.x) / (next.x - point.x);
+                        let edge = point.y + t * (next.y - point.y);
+                        let baseline = value_to_y(0.0);
+                        let baseline = if baseline.is_finite() {
+                            baseline.clamp(rect.top(), rect.bottom())
+                        } else {
+                            rect.bottom()
+                        };
+                        (edge.min(baseline)..=edge.max(baseline)).contains(&click_pos.y)
+                    })
             }
             PlotType::Circles
             | PlotType::Crosses
@@ -328,6 +333,8 @@ mod tests {
                 (PlotType::Columns, Pos2::new(79.0, 60.0), true),
                 (PlotType::StepLine, Pos2::new(99.0, 20.0), true),
                 (PlotType::Area, Pos2::new(99.0, 60.0), true),
+                // Above the fill, on the line's tolerance: the values sit at y 20.
+                (PlotType::Area, Pos2::new(99.0, 17.0), true),
                 (PlotType::Area, Pos2::new(99.0, 5.0), false),
                 (PlotType::Area, Pos2::new(160.0, 60.0), false),
             ] {
