@@ -264,7 +264,7 @@ fn hidden_alerts_and_settings_leave_the_drawing_menu_and_chart() {
         let mut menus = ChartMenus::default();
         for visible in [true, false, true] {
             menus.set_control_visible(control, visible);
-            chart.set_control_visible(control, visible);
+            chart.set_settings_buttons_visible(control != Control::Settings || visible);
             assert_eq!(
                 observe(&mut chart, &mut menus),
                 if visible { shown } else { hidden },

@@ -26,7 +26,8 @@ pub trait ChartAppState {
 /// A control the terminal or a host can hide. Hidden controls are not drawn and emit nothing.
 ///
 /// Each component that draws one of these has a `set_control_visible(control, visible)`
-/// method; every control starts visible. This controls presentation, not authorization:
+/// method, except the chart's own settings buttons (see [`Control::Settings`]); every control
+/// starts visible. This controls presentation, not authorization:
 /// hosts choose which services, commands and shortcut bindings they provide.
 /// Chart behavior switches live in [`ChartOptions`](crate::config::ChartOptions);
 /// component `config` fields override dimensions and [`Theme`](crate::theme::Theme) overrides
@@ -66,7 +67,8 @@ pub enum Control {
     QuickSearch,
     /// Chart and series settings buttons and menu entries, including the series settings button
     /// among a chart's legend controls and the scale settings button in its price axis corner,
-    /// which [`Chart::set_control_visible`](crate::widget::Chart::set_control_visible) hides.
+    /// which [`Chart::set_settings_buttons_visible`](crate::widget::Chart::set_settings_buttons_visible)
+    /// hides.
     Settings,
     /// The top toolbar's fullscreen button.
     Fullscreen,

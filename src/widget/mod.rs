@@ -761,17 +761,12 @@ impl Chart {
         self.chart_options.tooltip.enabled = enabled;
     }
 
-    /// Shows or hides the controls this chart draws.
-    /// [`Control::Settings`](crate::ui::Control::Settings) covers the series settings button among
-    /// the legend's title controls and the scale settings button in the price axis corner: hidden,
+    /// Shows or hides the chart's own settings buttons: the series settings button among the
+    /// legend's title controls and the scale settings button in the price axis corner. Hidden,
     /// they are not drawn and take no keyboard focus, while the legend's other controls stay.
-    /// Other controls are ignored. Every control starts visible.
-    #[cfg(feature = "ui")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
-    pub fn set_control_visible(&mut self, control: crate::ui::Control, visible: bool) {
-        if control == crate::ui::Control::Settings {
-            self.settings_hidden = !visible;
-        }
+    /// Hosts call it with the visibility they give `Control::Settings`. Both start visible.
+    pub fn set_settings_buttons_visible(&mut self, visible: bool) {
+        self.settings_hidden = !visible;
     }
 
     /// The rising and falling body, border and wick colors of a chart type that series settings
