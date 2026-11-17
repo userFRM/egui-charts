@@ -690,7 +690,8 @@ impl Chart {
         let is_drawing_interaction = box_selection || drawing_gesture;
         let show_price_button =
             self.config.show_plus_button && !eraser_mode && !is_drawing_interaction;
-        let show_axis_settings = !self.layout_inactive || ui.rect_contains_pointer(rect);
+        let show_axis_settings =
+            !self.settings_hidden && (!self.layout_inactive || ui.rect_contains_pointer(rect));
         let price_button_interaction = cfg!(feature = "icons")
             && (show_right_axis || show_left_axis)
             && show_price_button
@@ -3419,6 +3420,7 @@ impl Chart {
                     }
                 }
                 legend.series_visible = self.main_series_visible;
+                legend.show_series_settings = !self.settings_hidden;
                 legend.title_as_description = self.config.title_as_description;
                 // A whitespace bar has no values to show.
                 let values = self.main_series_visible && !bar.is_whitespace();
