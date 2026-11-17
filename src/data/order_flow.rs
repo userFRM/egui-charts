@@ -1123,10 +1123,10 @@ impl OrderFlowInput {
     /// `lost_until`, so the bars from a later open hold all of theirs. A bar the sink opened a
     /// nanosecond after the one before starts with an execution no later than that one's open,
     /// so a run of such bars counts from the open of its first. Older paged ones belong to
-    /// history bars, which the chart did not fold from them. At
-    /// the first instant, as the page stamps it, where the store left a live execution to a page,
-    /// the page may hold executions the stream never sent, so the live ones the store kept apart
-    /// count in place of the page's executions of that instant. They are live executions too:
+    /// history bars, which the chart did not fold from them. At the first instant, as the page
+    /// stamps it, where the store left a live execution to a page, the page may hold executions the
+    /// stream never sent, so the live ones the store kept apart count in place of the page's
+    /// executions of that instant. They are live executions too:
     /// when the chart holds a bar at or before the oldest of them, the run starts at that bar,
     /// unless the executions from there fail to rebuild the chart's bars or, from a bar that
     /// opens at the oldest of them, leave part of their volume to an older bar. A paged execution
