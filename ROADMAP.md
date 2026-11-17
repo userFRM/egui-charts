@@ -123,7 +123,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Shared renderers support lines, steps, histograms, columns, dots, crosses, areas, shapes, bar/background colours and filled regions.
 - [x] MACD histogram columns, displaced Ichimoku cloud fills into visible future space, and separate Parabolic SAR crosses.
 - [x] RSI reads 100 with no losses, 0 with no gains and 50 on flat prices at any price size, and its divergence and stochastic studies use the same values. Its Calculate divergence input marks the regular bullish and bearish divergences between its swings and the highs and lows of price.
-- [x] Connors RSI's price and streak components use Wilder smoothing and read 100 on gains alone. Its pane opens with dashed guides at 70, 30 and a faint 50, and a light blue fill tied to the outer guides even when the middle guide moves past them. Applied settings independently edit guide values, colours, patterns, widths and visibility, fill colour and opacity, and the latest-value line; snapshots and saved templates retain them.
+- [x] Connors RSI's price and streak components use Wilder smoothing and read 100 on gains alone, and its rank is the share of the previous returns at or below the latest one. Its pane opens with dashed guides at 70 and 30 and a light blue fill between them; one saved with a middle guide at 50 keeps it, and the fill stays tied to the outer guides when it moves past them. Applied settings independently edit guide values, colours, patterns, widths and visibility, fill colour and opacity, and the latest-value line; snapshots and saved templates retain them.
 - [x] Both Tasuki Gap detectors need the third candle to open inside the second body and close inside the gap.
 - [x] Woodies CCI reads the close, with separate neutral, transition and established histogram colours.
 - [x] PPO and PVO draw their histograms as columns and offer average-type inputs.
@@ -131,7 +131,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Bollinger Bands select their basis average, and BandWidth has expansion and contraction lookbacks.
 - [x] VWAP band multipliers and event dates are editable in applied-study settings.
 - [x] Request finer profile data, from a feed's suggestion or a chosen interval, and adapt session profile rows to the zoom.
-- [x] Spread, Ratio and Correlation Coefficient read their second symbol from the host; correlation also offers log returns. Correlation Coefficient opens as an area with dashed guides at 1, -1 and zero, each with editable visibility, value, colour, style, width and latest value line; one saved as a line with the zero guide alone restores that way, with the guides at its bounds hidden.
+- [x] Spread, Ratio and Correlation Coefficient read their second symbol from the host; correlation also offers log returns. Correlation Coefficient opens as an area with a dashed guide at zero, with editable visibility, value, colour, style, width and latest value line; one saved as a line restores that way, and one saved with guides at 1 and -1 keeps them.
 - [ ] Add a dedicated log-return correlation study.
 - [x] Trend Strength Index plots the rolling correlation of price with bar position.
 - [x] Automatic chart-pattern, wedge and key-level detection studies.
