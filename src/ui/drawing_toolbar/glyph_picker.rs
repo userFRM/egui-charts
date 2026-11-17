@@ -110,6 +110,10 @@ impl GlyphPicker {
                 }
             });
         let glyph = picked?;
+        let tool = tool_type(glyph);
+        if !registry.availability(tool).enabled {
+            return Some(DrawingToolbarAction::ToolUnavailable(tool));
+        }
         self.recent.retain(|id| *id != glyph);
         self.recent.insert(0, glyph);
         self.recent.truncate(12);
@@ -130,15 +134,19 @@ fn cells(ui: &mut Ui, glyphs: &[&Glyph], registry: &DrawingToolRegistry) -> Opti
     for row in glyphs.chunks(columns) {
         ui.horizontal(|ui| {
             for glyph in row {
+                let enabled = registry.availability(tool_type(glyph.id)).enabled;
+                // A disabled glyph is drawn as egui draws a disabled button but still answers
+                // clicks, so the host can say why.
+                let opacity = ui.opacity();
+                if !enabled {
+                    ui.multiply_opacity(ui.visuals().disabled_alpha());
+                }
                 let response = ui
-                    .add_enabled(
-                        registry.availability(tool_type(glyph.id)).enabled,
-                        egui::Button::new("").min_size(Vec2::splat(40.0)),
-                    )
+                    .add(egui::Button::new("").min_size(Vec2::splat(40.0)))
                     .on_hover_text(l10n::text(ui.ctx(), glyph.name));
                 let translated_label = l10n::text(ui.ctx(), glyph.name);
                 response.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label)
+                    egui::WidgetInfo::labeled(egui::Role::Button, enabled, &translated_label)
                 });
                 let rect = Rect::from_center_size(response.rect.center(), Vec2::splat(26.0));
                 let color = ui.visuals().text_color();
@@ -151,6 +159,7 @@ fn cells(ui: &mut Ui, glyphs: &[&Glyph], registry: &DrawingToolRegistry) -> Opti
                         color,
                     );
                 }
+                ui.set_opacity(opacity);
                 if response.clicked() {
                     picked = Some(glyph.id);
                 }

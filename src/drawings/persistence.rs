@@ -203,6 +203,12 @@ impl StoredDrawing {
         if d.note_text_style.is_some_and(|style| !style.is_valid()) {
             return Some("note_text_style.font_size".into());
         }
+        if d.anchor_price_style.is_some_and(|style| !style.is_valid()) {
+            return Some("anchor_price_style.font_size".into());
+        }
+        if !(d.middle_line.width > 0.0 && d.middle_line.width <= MAX_STROKE_WIDTH) {
+            return Some("middle_line.width".into());
+        }
         if let Some(i) = self.points.iter().position(|p| bad(p.price)) {
             return Some(format!("points[{i}].price"));
         }
@@ -1435,6 +1441,10 @@ mod tests {
             bold: true,
             italic: true,
         });
+        d.anchor_price_style = Some(crate::drawings::NoteTextStyle::new([25, 26, 27, 28], 16.0));
+        d.middle_line.color = Some([29, 30, 31, 32]);
+        d.middle_line.width = 2.5;
+        d.middle_line.line_style = crate::model::LineStyle::Dotted;
         d.marker = crate::drawings::AnnotationMarker {
             show_text: false,
             glyph: "🚀".into(),
@@ -1746,6 +1756,9 @@ mod tests {
             want.text_follows_zoom = false;
             want.text_zoom_spacing = None;
             want.note_text_style = None;
+            // Earlier files draw no channel prices and the default middle line.
+            want.anchor_price_style = None;
+            want.middle_line = crate::drawings::MiddleLineStyle::default();
             // Earlier files show a pin's text and carry no glyph on a signpost.
             want.marker = crate::drawings::AnnotationMarker {
                 show_text: true,
@@ -2643,6 +2656,30 @@ mod tests {
         assert_eq!((colors.text, colors.fill), (Color32::WHITE, blue));
     }
 
+    /// The fixture is a parallel channel and a flat top/bottom as the release before their middle
+    /// line and price settings saved them. They restore with the default middle line, a dashed
+    /// hairline in the line colour, and no price style, as they were drawn.
+    #[test]
+    fn channels_saved_before_their_middle_line_and_price_settings_keep_their_look() {
+        let saved = include_str!("fixtures/storage_v10_channels.json");
+        let (storage, skipped) = DrawingStorage::from_json(saved).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let tools = [
+            DrawingToolType::ParallelChannel,
+            DrawingToolType::FlatTopBottom,
+        ];
+        for (i, tool) in tools.into_iter().enumerate() {
+            let drawing = restore(&storage.drawings[i], i + 1);
+            assert_eq!(drawing.tool_type, tool);
+            assert_eq!(drawing.middle_line, MiddleLineStyle::default(), "{tool:?}");
+            assert_eq!(drawing.anchor_price_style, None, "{tool:?}");
+            assert_eq!(
+                drawing.channel_midline,
+                tool == DrawingToolType::ParallelChannel
+            );
+        }
+    }
+
     /// Before version 10 a position filled its zones with the target and stop colours at 20% on a
     /// dark theme, and a palette pick saved alpha 255: such a zone loads at alpha 51, and 128 at
     /// 25.6, rounded to 26, also once saved again. Version 10 alphas are the zone opacity.
@@ -2773,7 +2810,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 39] = [
+        let cases: [(Spoil, &str); 41] = [
             (
                 |s| {
                     first(s)
@@ -2872,6 +2909,17 @@ mod tests {
                     style.font_size = 0.0;
                 },
                 "invalid note_text_style.font_size",
+            ),
+            (
+                |s| {
+                    first(s).drawing.anchor_price_style =
+                        Some(crate::drawings::NoteTextStyle::new([0; 4], 0.0));
+                },
+                "invalid anchor_price_style.font_size",
+            ),
+            (
+                |s| first(s).drawing.middle_line.width = f32::NAN,
+                "invalid middle_line.width",
             ),
             (
                 |s| first(s).points[1].price = f64::NAN,

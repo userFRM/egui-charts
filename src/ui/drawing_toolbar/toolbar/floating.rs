@@ -26,6 +26,10 @@ impl DrawingToolbar {
     /// on screen, and its close button clears [`ToolbarState::floating_visible`][floating_visible], as the
     /// favourites button of the toolbar does.
     ///
+    /// A click on a tool the host disabled returns `None` here;
+    /// [`Self::show_floating_with_action`] reports it as
+    /// [`DrawingToolbarAction::ToolUnavailable`].
+    ///
     /// [favorites]: super::super::state::ToolbarState::favorites
     /// [floating_pos]: super::super::state::ToolbarState::floating_pos
     /// [floating_visible]: super::super::state::ToolbarState::floating_visible
@@ -107,6 +111,12 @@ impl DrawingToolbar {
                                     &response,
                                     ui.active_theme().radius.sm,
                                 );
+                                // A disabled tool is drawn as egui draws a disabled widget but
+                                // still answers clicks, so the host can say why.
+                                let opacity = ui.opacity();
+                                if !enabled {
+                                    ui.multiply_opacity(ui.visuals().disabled_alpha());
+                                }
 
                                 let bg = if is_sel {
                                     ui.active_theme().ui.accent
@@ -129,9 +139,14 @@ impl DrawingToolbar {
                                     response.hovered(),
                                     is_sel,
                                 );
+                                ui.set_opacity(opacity);
 
-                                if response.on_hover_text(translated_label).clicked() && enabled {
-                                    new_selection = Some(DrawingToolbarAction::SelectTool(tool));
+                                if response.on_hover_text(translated_label).clicked() {
+                                    new_selection = Some(if enabled {
+                                        DrawingToolbarAction::SelectTool(tool)
+                                    } else {
+                                        DrawingToolbarAction::ToolUnavailable(tool)
+                                    });
                                 }
                             }
 

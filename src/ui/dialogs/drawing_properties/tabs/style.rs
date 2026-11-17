@@ -322,13 +322,44 @@ impl StyleTab {
                     }
                 }
                 if settings.tool_type.supports_middle_line() {
+                    // A rectangle's middle line keeps the line colour, hairline and dashes.
+                    let styled = settings.tool_type == DrawingToolType::ParallelChannel;
                     let label = ui.label(l10n::text(ui.ctx(), "Middle line"));
-                    ui.checkbox(
-                        &mut settings.channel_midline,
-                        l10n::text(ui.ctx(), "Show middle line"),
-                    )
-                    .labelled_by(label.id);
+                    ui.horizontal(|ui| {
+                        ui.checkbox(
+                            &mut settings.channel_midline,
+                            l10n::text(ui.ctx(), "Show middle line"),
+                        )
+                        .labelled_by(label.id);
+                        if styled && settings.channel_midline {
+                            let [r, g, b, a] = settings.middle_line.color.unwrap_or(exact);
+                            let shown = Color32::from_rgba_unmultiplied(r, g, b, a);
+                            if let Some(picked) =
+                                color_swatch(ui, glyph_picker, shown, "channel_middle_line_color")
+                            {
+                                settings.middle_line.color = Some(
+                                    keep_opacity(picked, shown, glyph_picker.custom_mode)
+                                        .to_srgba_unmultiplied(),
+                                );
+                            }
+                        }
+                    });
                     ui.end_row();
+                    if styled && settings.channel_midline {
+                        ui.label(l10n::text(ui.ctx(), "Middle line width"));
+                        line_width_row(ui, &mut settings.middle_line.width);
+                        ui.end_row();
+                        let label = ui.label(l10n::text(ui.ctx(), "Middle line style"));
+                        ui.label_inputs_by(label.id, |ui| {
+                            ui.combo_select(
+                                "middle_line_style",
+                                &mut settings.middle_line.line_style,
+                                LineStyle::all().iter().copied(),
+                                |v| v.name().to_string(),
+                            );
+                        });
+                        ui.end_row();
+                    }
                 }
                 if settings.tool_type == DrawingToolType::VerticalLine {
                     let label = ui.label(l10n::text(ui.ctx(), "Extend"));

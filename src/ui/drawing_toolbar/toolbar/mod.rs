@@ -87,6 +87,8 @@ use super::{
 pub struct DrawingToolbar {
     /// Built-in availability for the bar, flyouts and shortcuts. Clone the chart manager's
     /// registry here after changing it; hosts use its custom catalogue for their own picker.
+    /// A disabled tool stays in the strip, the flyouts and the Measure button, drawn disabled,
+    /// and a click on it returns [`DrawingToolbarAction::ToolUnavailable`].
     pub registry: crate::drawings::DrawingToolRegistry,
     /// Toolbar state (selected tool, favorites, recent, etc.)
     pub state: ToolbarState,
@@ -540,12 +542,9 @@ impl DrawingToolbar {
         let measure_active = self.state.sel_tool == Some(DrawingToolType::Measure);
         let measure = self.registry.availability(DrawingToolType::Measure);
         if measure.visible
-            && let Some(a) = ui
-                .add_enabled_ui(measure.enabled, |ui| {
-                    MeasureButton::show(ui, measure_active)
-                })
-                .inner
+            && let Some(a) = MeasureButton::show_available(ui, measure_active, measure.enabled)
         {
+            // `select_tool` ignores a disabled tool, so a refused click selects nothing.
             self.select_tool(DrawingToolType::Measure);
             action = a;
         }
@@ -981,6 +980,172 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Tools the host disabled look disabled in the strip, a tool flyout, the Icons/Emojis
+    /// flyout and the Measure button, and report their clicks without selecting anything.
+    #[test]
+    fn disabled_tools_look_disabled_and_report_their_clicks() {
+        use DrawingToolType::{FontIcon, HorizontalLine, HorizontalRay, Measure, Ray};
+        use egui::accesskit::Role;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+
+        type State = (DrawingToolbar, Vec<DrawingToolbarAction>);
+        /// The picker to open first, the entry of a disabled tool, the tool, and an enabled
+        /// entry beside it.
+        type Row = (
+            Option<&'static str>,
+            (Role, &'static str),
+            DrawingToolType,
+            Option<(Role, &'static str)>,
+        );
+
+        fn harness() -> Harness<'static, State> {
+            let mut toolbar = DrawingToolbar::new();
+            toolbar.state.favorites = vec![HorizontalLine, Ray];
+            for tool in [HorizontalLine, Measure, FontIcon] {
+                toolbar.registry.set_availability(
+                    tool,
+                    crate::drawings::ToolAvailability {
+                        visible: true,
+                        enabled: false,
+                    },
+                );
+            }
+            let theme = crate::theme::Theme::light();
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(1440.0, 900.0))
+                // The Icons/Emojis flyout lists Unicode emoji that the test fonts cannot draw.
+                .allow_missing_glyphs()
+                .with_context_setup(move |ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &theme);
+                })
+                .build_ui_state(
+                    |ui, state: &mut State| {
+                        let action = state.0.show_with_action(ui);
+                        if action != DrawingToolbarAction::None {
+                            state.1.push(action);
+                        }
+                    },
+                    (toolbar, Vec::new()),
+                );
+            harness.run();
+            harness
+        }
+
+        /// The strongest alpha painted inside an entry, inset past its antialiased edge and
+        /// short of a flyout row's star, which stays operable at full strength.
+        fn alpha(harness: &Harness<'_, State>, role: Role, label: &str) -> Option<u8> {
+            let mut rect = harness.get_by_role_and_label(role, label).rect();
+            let star = format!("Favourite {label}");
+            if let Some(star) = harness.query_by_role_and_label(Role::Button, &star) {
+                rect.max.x = star.rect().min.x;
+            }
+            let rect = rect.shrink(2.0);
+            let output = harness.output();
+            harness
+                .ctx
+                .tessellate(output.shapes.clone(), output.pixels_per_point)
+                .into_iter()
+                .filter_map(|clipped| match clipped.primitive {
+                    egui::epaint::Primitive::Mesh(mesh) => Some(mesh),
+                    egui::epaint::Primitive::Callback(_) => None,
+                })
+                .flat_map(|mesh| mesh.vertices)
+                .filter(|vertex| rect.contains(vertex.pos))
+                .map(|vertex| vertex.color.a())
+                .max()
+        }
+
+        let rows: [Row; 4] = [
+            (
+                None,
+                (Role::Button, "Horizontal Line"),
+                HorizontalLine,
+                Some((Role::Button, "Ray")),
+            ),
+            (
+                Some("Trend Line"),
+                (Role::MenuItem, "Horizontal Line"),
+                HorizontalLine,
+                Some((Role::MenuItem, "Horizontal Ray")),
+            ),
+            (
+                None,
+                (Role::Button, "Measure"),
+                Measure,
+                Some((Role::Button, "Zoom in")),
+            ),
+            (
+                Some("Icons/Emojis"),
+                (Role::Button, "Arrow up"),
+                FontIcon,
+                None,
+            ),
+        ];
+        for (open, (role, label), tool, neighbour) in rows {
+            let mut harness = harness();
+            if let Some(open) = open {
+                harness.get_by_role_and_label(Role::Button, open).click();
+                harness.run();
+            }
+            // Away from every entry, so none draws hover feedback or a tooltip.
+            harness.hover_at(egui::pos2(1430.0, 890.0));
+            harness.run();
+            let node = harness.get_by_role_and_label(role, label);
+            assert!(
+                node.accesskit_node().is_disabled(),
+                "{label} is announced disabled"
+            );
+            // Opaque ink times `Visuals::disabled_alpha` (0.5), rounded as egui rounds it.
+            assert_eq!(
+                alpha(&harness, role, label),
+                Some(128),
+                "{label} is drawn disabled"
+            );
+            if let Some((role, label)) = neighbour {
+                let node = harness.get_by_role_and_label(role, label);
+                assert!(!node.accesskit_node().is_disabled(), "{label} is enabled");
+                assert_eq!(
+                    alpha(&harness, role, label),
+                    Some(255),
+                    "{label} is drawn enabled"
+                );
+            }
+            harness.get_by_role_and_label(role, label).click();
+            harness.run();
+            assert_eq!(
+                harness.state().1,
+                [DrawingToolbarAction::ToolUnavailable(tool)],
+                "{label}"
+            );
+            assert_eq!(harness.state().0.state.sel_tool, None, "{label}");
+        }
+
+        // The star of a disabled row still edits the favourites, and an enabled row still picks.
+        let mut harness = harness();
+        harness
+            .get_by_role_and_label(Role::Button, "Trend Line")
+            .click();
+        harness.run();
+        harness
+            .get_by_role_and_label(Role::Button, "Favourite Horizontal Line")
+            .click();
+        harness.run();
+        assert_eq!(harness.state().0.state.favorites, [Ray]);
+        harness
+            .get_by_role_and_label(Role::MenuItem, "Horizontal Ray")
+            .click();
+        harness.run();
+        assert_eq!(
+            harness.state().1,
+            [DrawingToolbarAction::SelectTool(HorizontalRay)]
+        );
+        assert_eq!(harness.state().0.state.sel_tool, Some(HorizontalRay));
     }
 
     /// The floating strip lists the favorite tools as they change, stays where it was first put

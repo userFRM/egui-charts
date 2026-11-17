@@ -259,6 +259,9 @@ pub(super) struct FlyoutRow<'a> {
     /// A favourite star in the right column: `Some(is_favorite)`. A favourite always shows
     /// it; any other row shows an outline star while the pointer is over the row.
     pub star: Option<bool>,
+    /// Drawn as egui draws a disabled widget and announced disabled, while the row still
+    /// answers clicks and its star keeps full strength and stays operable.
+    pub disabled: bool,
 }
 
 impl<'a> From<&'a SubmenuItem> for FlyoutRow<'a> {
@@ -316,7 +319,7 @@ pub(super) fn flyout_row(ui: &mut Ui, width: f32, row: &FlyoutRow) -> RowRespons
     row_response.widget_info(|| {
         WidgetInfo::selected(
             Role::MenuItem,
-            row_response.enabled(),
+            row_response.enabled() && !row.disabled,
             row.selected || row.check,
             &translated_label,
         )
@@ -348,6 +351,10 @@ pub(super) fn flyout_row(ui: &mut Ui, width: f32, row: &FlyoutRow) -> RowRespons
 
     if ui.is_rect_visible(rect) {
         let radius = ui.active_theme().radius.sm;
+        let opacity = ui.opacity();
+        if row.disabled {
+            ui.multiply_opacity(ui.visuals().disabled_alpha());
+        }
         let painter = ui.painter();
         let fill = match (row.selected, hovered) {
             (true, true) => Some(theme.ui.accent_hover),
@@ -392,6 +399,8 @@ pub(super) fn flyout_row(ui: &mut Ui, width: f32, row: &FlyoutRow) -> RowRespons
                 secondary,
             );
         }
+        // The star and the focus ring still answer the user, so they keep full strength.
+        ui.set_opacity(opacity);
         match row.star {
             Some(true) => star(ui, &icons::STAR_FILLED, right_slot, theme.ui.warning, row),
             Some(false) if hovered => {

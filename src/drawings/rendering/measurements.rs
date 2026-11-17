@@ -278,14 +278,8 @@ impl Drawing {
                     } else {
                         (Align2::RIGHT_BOTTOM, egui::vec2(-gap, -gap))
                     }
-                } else if point.x < other.x {
-                    (Align2::RIGHT_CENTER, egui::vec2(-gap, 0.0))
-                } else if point.x > other.x {
-                    (Align2::LEFT_CENTER, egui::vec2(gap, 0.0))
-                } else if point.y <= other.y {
-                    (Align2::CENTER_BOTTOM, egui::vec2(0.0, -gap))
                 } else {
-                    (Align2::CENTER_TOP, egui::vec2(0.0, gap))
+                    beside_anchor(point, other, gap)
                 };
             boxed_label(
                 painter,
@@ -660,6 +654,21 @@ pub(super) fn boxed_label(
     painter.rect_filled(rect, DESIGN_TOKENS.rounding.sm, bg);
     painter.galley(rect.center() - galley.size() / 2.0, galley, color);
     rect
+}
+
+/// Where a label sits beside the anchor `point` of a line that runs to `other`, `gap` away: left
+/// of a left end, right of a right end, above the upper end of a vertical line and below its lower
+/// end. Returns the label's alignment and its offset from `point`.
+pub(super) fn beside_anchor(point: Pos2, other: Pos2, gap: f32) -> (Align2, egui::Vec2) {
+    if point.x < other.x {
+        (Align2::RIGHT_CENTER, egui::vec2(-gap, 0.0))
+    } else if point.x > other.x {
+        (Align2::LEFT_CENTER, egui::vec2(gap, 0.0))
+    } else if point.y <= other.y {
+        (Align2::CENTER_BOTTOM, egui::vec2(0.0, -gap))
+    } else {
+        (Align2::CENTER_TOP, egui::vec2(0.0, gap))
+    }
 }
 
 /// Milliseconds from bar `a` to bar `b`, from the bars' times. An index past either end of the
