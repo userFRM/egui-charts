@@ -15,13 +15,19 @@ use std::collections::VecDeque;
 /// taken against true bar positions. The latest value equals
 /// [`LinearRegressionChannel::correlation`](super::LinearRegressionChannel::correlation) of
 /// the same period.
+///
+/// Values below zero are drawn in the plot's Below zero colour, the down colour by default, and
+/// other values in the plot colour, the up colour by default.
 #[derive(Clone, Debug)]
 pub struct TrendStrengthIndex {
     period: usize,
     source: PriceSource,
     values: IndicatorValues,
     stepper: Stepper<VecDeque<Bar>>,
-    color: Color32,
+    /// Colour of values at or above zero, and of the plot.
+    positive_color: Color32,
+    /// Colour of values below zero.
+    negative_color: Color32,
     visible: bool,
 }
 
@@ -33,7 +39,8 @@ impl TrendStrengthIndex {
             source: PriceSource::Close,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::PURPLE,
+            positive_color: palette::UP,
+            negative_color: palette::DOWN,
             visible: true,
         }
     }
@@ -44,9 +51,10 @@ impl TrendStrengthIndex {
         self
     }
 
-    /// Set the plot color.
+    /// Draw every value in `color`.
     pub fn with_color(mut self, color: Color32) -> Self {
-        self.color = color;
+        self.positive_color = color;
+        self.negative_color = color;
         self
     }
 }
@@ -107,13 +115,31 @@ impl Indicator for TrendStrengthIndex {
     }
 
     fn colors(&self) -> Vec<Color32> {
-        vec![self.color]
+        vec![self.positive_color, self.negative_color]
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
-        if !colors.is_empty() {
-            self.color = colors[0];
+        if let Some(&color) = colors.first() {
+            self.positive_color = color;
         }
+        if let Some(&color) = colors.get(1) {
+            self.negative_color = color;
+        }
+    }
+
+    fn plot_variants(&self, _line: usize) -> Vec<crate::studies::PlotVariant> {
+        vec![crate::studies::PlotVariant::new(
+            "Below zero",
+            self.negative_color,
+        )]
+    }
+
+    fn plot_variant(&self, _line: usize, bar: usize) -> Option<usize> {
+        (self.values.value(0, bar)? < 0.0).then_some(0)
+    }
+
+    fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
+        self.plot_variant(line, bar).map(|_| self.negative_color)
     }
 
     fn value_format(&self) -> crate::scales::StudyFormat {
@@ -205,6 +231,52 @@ mod tests {
             }
         }
         assert_eq!(rolling(&[5.0, 4.0, 3.0, 2.0], 4)[3], Some(-1.0));
+    }
+
+    /// Values below zero take the plot's Below zero colour and other values the plot colour,
+    /// through an edit, undo of a later change and a template; a template saved with one colour
+    /// draws every value in it. Period 3 over 1, 2, 3, 2, 1 gives no value, no value, 1, 0, -1.
+    #[test]
+    fn values_are_coloured_by_their_sign() {
+        use crate::studies::{ConfiguredStudy, StudyTemplate};
+        let data = bars(&[1.0, 2.0, 3.0, 2.0, 1.0]);
+        let colours = |study: &dyn Indicator| -> Vec<Color32> {
+            (0..data.len())
+                .map(|bar| {
+                    study
+                        .plot_color(0, bar)
+                        .unwrap_or(study.plot_style(0).color)
+                })
+                .collect()
+        };
+        let (up, down) = (palette::UP, palette::DOWN);
+        let (gold, blue) = (Color32::GOLD, Color32::BLUE);
+        let mut study = ConfiguredStudy::new(Box::new(TrendStrengthIndex::new(3)));
+        study.calculate(&data);
+        assert_eq!(colours(&study), [up, up, up, up, down]);
+        let mut settings = study.settings();
+        settings.plots[0].color = gold;
+        settings.plot_variants[0][0].color = blue;
+        study.apply_settings(&[], settings).unwrap();
+        study.calculate(&data);
+        let edited = [gold, gold, gold, gold, blue];
+        assert_eq!(colours(&study), edited);
+        let saved = study.snapshot_settings();
+        study.set_colors(vec![up, down]);
+        study.restore_settings(&saved).unwrap();
+        study.calculate(&data);
+        assert_eq!(colours(&study), edited);
+        let mut restored = StudyTemplate::from_study(&study).create().unwrap();
+        restored.calculate(&data);
+        assert_eq!(colours(restored.as_ref()), edited);
+        // Saved in gold before the study had a Below zero colour.
+        let saved = r#"{"name":"Trend Strength Index","inputs":[["period",{"Length":3}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TrendStrengthIndex.html","plots":[{"color":[255,215,0,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":3,"hidden_intervals":[],"interval_range":"All","levels":[{"value":null,"color":[60,62,67,128],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":false,"level_fill_color":[16,13,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let mut restored = serde_json::from_str::<StudyTemplate>(saved)
+            .unwrap()
+            .create()
+            .unwrap();
+        restored.calculate(&data);
+        assert_eq!(colours(restored.as_ref()), [gold; 5]);
     }
 
     /// A missing price blanks every window that holds it and keeps later bar positions true.
