@@ -956,6 +956,35 @@ mod tests {
         assert!(!charts[0].can_undo() && !charts[1].can_undo());
     }
 
+    /// Every chart takes the scale mode of the source, whichever of the four modes either has.
+    #[test]
+    fn settings_copy_gives_every_chart_the_source_scale_mode() {
+        use crate::scales::PriceScaleMode::*;
+        let modes = [Normal, Logarithmic, Percentage, IndexedTo100];
+        let mode = |chart: &Chart| chart.state().price_scale().options().mode;
+        for source in 0..modes.len() {
+            let mut charts = modes.map(|mode| {
+                let mut chart = chart(50);
+                let mut config = chart.config().clone();
+                config.right_axis_scale_mode = mode;
+                chart.update_config(config);
+                chart
+            });
+            let mut layout = ChartLayout {
+                mode: ChartLayoutMode::Four,
+                ..ChartLayout::default()
+            };
+            show(&mut layout, &mut charts.each_mut());
+            assert_eq!(charts.each_ref().map(mode), modes);
+            let settings = ChartSettingsState::from_chart(&charts[source]);
+            let copy = LayoutCopy::Settings(Box::new(settings));
+            let factory = IndicatorFactory::new();
+            layout.apply_copy(&mut charts.each_mut(), source, &copy, &factory);
+            show(&mut layout, &mut charts.each_mut());
+            assert_eq!(charts.each_ref().map(mode), [modes[source]; 4]);
+        }
+    }
+
     fn pair() -> ChartLayout {
         ChartLayout {
             mode: ChartLayoutMode::TwoHorizontal,
