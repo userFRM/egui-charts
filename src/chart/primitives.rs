@@ -537,7 +537,7 @@ pub trait Primitive: Send {
     }
 
     /// Draws inside `axis`, the column of the price axis that [`PriceAxisLabel`] describes,
-    /// behind its labels.
+    /// behind its labels. Not called while that axis is not shown.
     fn draw_price_axis(&self, painter: &Painter, axis: Rect, view: &PrimitiveView<'_>) {
         let _ = (painter, axis, view);
     }
