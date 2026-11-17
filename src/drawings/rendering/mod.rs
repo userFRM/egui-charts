@@ -82,7 +82,7 @@ pub struct ChartView<'a> {
     /// on a [horizontal scale](crate::scales::HorizontalScale) other than time.
     pub time_axis: bool,
     /// The executions behind `bars`, aggregated on the bars' clock. The volume profile drawings
-    /// then show the executed volume at each price, split by aggressor side, instead of
+    /// then show the executed volume in their rows, split by aggressor side, instead of
     /// spreading bar volume over bar ranges; `None` estimates from the bars.
     ///
     /// Hosts with an owned footprint construct the borrowed view without copying:
