@@ -41,6 +41,10 @@ pub enum DrawingToolbarAction {
     },
     /// A drawing tool was selected
     SelectTool(DrawingToolType),
+    /// The user clicked a drawing tool that the host disabled through
+    /// [`ToolAvailability::enabled`](crate::drawings::ToolAvailability::enabled). The toolbar
+    /// selects nothing, so the host can tell the user why the tool is unavailable.
+    ToolUnavailable(DrawingToolType),
     /// Set cursor type (Cross, Dot, Arrow, Magic)
     SetCursorType(CursorType),
     /// Magnet mode toggled, from a click on the magnet or its Off row
