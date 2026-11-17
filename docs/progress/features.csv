@@ -783,7 +783,7 @@ Studies,Indicators,Technical Ratings,incomplete,library,src/studies/builtin/tech
 Studies,Indicators,Time Price Opportunity,incomplete,library,src/studies/builtin/time_price_opportunity.rs;src/model/tpo.rs;src/model/session/exchange.rs;src/chart/rendering/candles/tpo.rs;src/tokens/mod.rs;src/tokens/semantic.rs;src/widget/frame/mod.rs,2432;3135
 Studies,Indicators,Time Weighted Average Price,verified,library,src/studies/builtin/twap.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Trading Sessions,incomplete,library,src/studies/builtin/trading_sessions.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/chart/indicators/plots.rs;src/chart/indicators/hit_test.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/studies/template.rs,
-Studies,Indicators,Trend Strength Index,incomplete,library,src/studies/builtin/linear_regression_channel.rs,1115;3182
+Studies,Indicators,Trend Strength Index,unverified,library,src/studies/builtin/trend_strength_index.rs;src/studies/builtin/linear_regression_channel.rs;src/studies/settings.rs,1115;3182
 Studies,Indicators,Triple EMA,incomplete,library,src/studies/builtin/tema.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,True Strength Index,verified,library,src/studies/builtin/true_strength.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Typical Price,incomplete,library,src/studies/builtin/typical_price.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
@@ -807,7 +807,7 @@ Studies,Indicators,Weighted Moving Average,unverified,library,src/studies/builti
 Studies,Indicators,Williams %R,verified,library,src/studies/builtin/williams_r.rs;src/studies/builtin/smoothing.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/widget/pane/indicator/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,2410
 Studies,Indicators,Williams Alligator,verified,library,src/studies/builtin/williams_alligator.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Williams Fractal,verified,library,src/studies/builtin/williams_fractals.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Woodies CCI,incomplete,library,src/studies/builtin/woodies_cci.rs,1118;3183
+Studies,Indicators,Woodies CCI,unverified,library,src/studies/builtin/woodies_cci.rs;src/studies/inputs.rs,1118;3183
 Studies,Indicators,Zig Zag,incomplete,library,src/studies/builtin/zigzag.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs,
 Studies,Strategy tester,Backtest engine,verified,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs;src/services/paper.rs;docs/strategy-report.md,2059;2285;2446
 Studies,Strategy tester,Built-in Bollinger Bands strategy,verified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/bollinger_bands.rs,1155

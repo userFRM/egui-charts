@@ -25,6 +25,8 @@
 //! | 1, or the value is zero | neutral | neutral colour |
 //!
 //! The columns colour is the first plot colour of the settings; the other three are study inputs.
+//! Setting the transition or neutral colour to a new value sets that stage on both sides of zero;
+//! applying it unchanged, as the settings dialog and templates do, keeps the colour below zero.
 //!
 //! # Example
 //! ```
@@ -56,9 +58,13 @@ pub struct WoodiesCCI {
     down_color: Color32,
     /// Column colour of a run of two to five values.
     transition_color: Color32,
+    /// Column colour of that stage below zero, set with the stage colour when that changes and
+    /// kept in `colors()` after the plot colours.
     transition_negative: Color32,
     /// Column colour of a first value on a side of zero, or of zero.
     neutral_color: Color32,
+    /// Column colour of that stage below zero, set with the stage colour when that changes and
+    /// kept in `colors()` after the plot colours.
     neutral_negative: Color32,
     visible: bool,
 }
@@ -137,9 +143,16 @@ impl Indicator for WoodiesCCI {
         down_color: color("Established down colour"),
         transition_color: color("Transition colour"),
         neutral_color: color("Neutral colour")
-    ; changed => {
-        if changed == "transition_color" { self.transition_negative = self.transition_color; }
-        if changed == "neutral_color" { self.neutral_negative = self.neutral_color; }
+    ; changed, previous => {
+        // A stage colour recolours both sides of zero only when it changes, so applying it
+        // unchanged, as Ok and templates do, keeps the colour below zero.
+        let edited = |color| previous != crate::studies::InputValue::Color(color);
+        if changed == "transition_color" && edited(self.transition_color) {
+            self.transition_negative = self.transition_color;
+        }
+        if changed == "neutral_color" && edited(self.neutral_color) {
+            self.neutral_negative = self.neutral_color;
+        }
     });
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
