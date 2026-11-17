@@ -83,9 +83,6 @@ impl DemoApp {
         {
             self.load_study_template(&studies);
         }
-        if let Some(drawing) = self.drawing_templates.show(ctx, "Drawing templates") {
-            self.load_drawing_template(drawing);
-        }
         self.top_toolbar.indicator_templates = self
             .study_templates
             .templates
@@ -100,15 +97,14 @@ impl DemoApp {
             .filter(|info| dialog.favorites.contains(&info.id))
             .map(|info| (info.id.clone(), info.name.clone()))
             .collect();
-        self.drawing_toolbar.state.templates = self
-            .drawing_templates
-            .templates
+        let templates = &self.drawing_props.templates;
+        self.drawing_toolbar.state.templates = templates
             .entries()
             .iter()
             .map(
-                |(name, template)| egui_charts::ui::drawing_toolbar::DrawingTemplate {
-                    id: name.clone(),
-                    name: name.clone(),
+                |(document, template)| egui_charts::ui::drawing_toolbar::DrawingTemplate {
+                    id: document.clone(),
+                    name: templates.template_name(document).into(),
                     drawing_type: template.settings.tool_type.as_str().into(),
                     is_default: false,
                 },
