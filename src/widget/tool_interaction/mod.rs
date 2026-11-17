@@ -984,22 +984,56 @@ mod tests {
         }
     }
 
-    /// Closing uses placed anchors, Escape keeps paths with at least two, and two clicks place
-    /// curves with editable controls between their endpoints.
+    /// Closing uses placed anchors, Escape keeps paths with at least two, a double click
+    /// finishes without reporting itself to the host while a later one does, and two clicks
+    /// place curves with editable controls between their endpoints.
     #[test]
     fn multi_point_shapes_close_finish_on_escape_and_curves_take_two_clicks() {
+        use crate::widget::{Chart, ChartEvent, PointerTarget};
         use DrawingToolType::{Curve, DoubleCurve, Path, Polyline};
+        #[derive(PartialEq)]
+        enum End {
+            Click,
+            Escape,
+            DoubleClick,
+        }
         let a = (30, 16.0);
         let b = (50, 14.0);
         let c = (40, 12.0);
-        for (tool, clicks, escape, kept) in [
-            (Polyline, vec![a, b, c, a], false, Some((3, true, 40.0))),
-            (Polyline, vec![a, b, a], true, Some((3, false, 30.0))),
-            (Polyline, vec![a], true, None),
-            (Path, vec![a, b], true, Some((2, false, 50.0))),
-            (Path, vec![a], true, None),
-            (Curve, vec![a, b], false, Some((3, false, 50.0))),
-            (DoubleCurve, vec![a, b], false, Some((4, false, 50.0))),
+        let doubles = |chart: &mut Chart| {
+            chart
+                .drain_events()
+                .filter_map(|event| match event {
+                    ChartEvent::DoubleClick { position } => Some(position.target),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        for (tool, clicks, end, kept) in [
+            (
+                Polyline,
+                vec![a, b, c, a],
+                End::Click,
+                Some((3, true, 40.0)),
+            ),
+            (Polyline, vec![a, b, a], End::Escape, Some((3, false, 30.0))),
+            (Polyline, vec![a], End::Escape, None),
+            (Path, vec![a, b], End::Escape, Some((2, false, 50.0))),
+            (Path, vec![a], End::Escape, None),
+            (
+                Path,
+                vec![a, b, c],
+                End::DoubleClick,
+                Some((3, false, 40.0)),
+            ),
+            (
+                Polyline,
+                vec![a, b, c, a],
+                End::DoubleClick,
+                Some((3, true, 40.0)),
+            ),
+            (Curve, vec![a, b], End::Click, Some((3, false, 50.0))),
+            (DoubleCurve, vec![a, b], End::Click, Some((4, false, 50.0))),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
@@ -1012,14 +1046,23 @@ mod tests {
                 pressed,
                 modifiers: Modifiers::NONE,
             };
-            for (i, (bar, price)) in clicks.into_iter().enumerate() {
-                let pos = egui::pos2(map.idx_to_x(bar), map.price_to_y(price));
+            let at =
+                |(bar, price): (usize, f64)| egui::pos2(map.idx_to_x(bar), map.price_to_y(price));
+            let mut last = (egui::Pos2::ZERO, 0.0);
+            for (i, &point) in clicks.iter().enumerate() {
+                let pos = at(point);
                 let time = 1.0 + i as f64;
                 frame(&ctx, &mut chart, time, vec![Event::PointerMoved(pos)]);
                 frame(&ctx, &mut chart, time + 0.1, vec![button(pos, true)]);
                 frame(&ctx, &mut chart, time + 0.2, vec![button(pos, false)]);
+                last = (pos, time);
             }
-            if escape {
+            if end == End::DoubleClick {
+                let (pos, time) = last;
+                frame(&ctx, &mut chart, time + 0.3, vec![button(pos, true)]);
+                frame(&ctx, &mut chart, time + 0.4, vec![button(pos, false)]);
+            }
+            if end == End::Escape {
                 frame(
                     &ctx,
                     &mut chart,
@@ -1034,6 +1077,11 @@ mod tests {
                 );
             }
             assert!(chart.drawings().curr_drawing.is_none(), "{tool:?}");
+            assert_eq!(
+                doubles(&mut chart),
+                [],
+                "{tool:?}: placement reports no double click"
+            );
             let Some((count, closed, last_bar)) = kept else {
                 assert!(chart.drawings().drawings.is_empty(), "{tool:?}");
                 continue;
@@ -1050,6 +1098,18 @@ mod tests {
                     .set_drawing_points(id, &chart.drawing_points(id).unwrap())
                     .is_ok()
             );
+            if end == End::DoubleClick {
+                let mid = at(a).lerp(at(b), 0.5);
+                for (i, pressed) in [true, false, true, false].into_iter().enumerate() {
+                    let events = vec![Event::PointerMoved(mid), button(mid, pressed)];
+                    frame(&ctx, &mut chart, 7.0 + 0.1 * i as f64, events);
+                }
+                assert_eq!(
+                    doubles(&mut chart),
+                    [Some(PointerTarget::Drawing(id))],
+                    "{tool:?}"
+                );
+            }
         }
     }
 

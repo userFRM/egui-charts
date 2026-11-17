@@ -55,6 +55,9 @@ pub fn handle_active_tool<F1, F2>(
     F2: Fn(f32) -> f64,
 {
     drawing_manager.interaction_modifiers = ui.input(|i| i.modifiers);
+    if response.clicked() {
+        drawing_manager.placement_click = Some(ui.ctx().cumulative_frame_nr());
+    }
     let interaction_mode = active_tool.interaction_mode();
     let pointer_pos = response
         .interact_pointer_pos()
