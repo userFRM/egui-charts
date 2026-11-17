@@ -577,6 +577,39 @@ mod tests {
         }
     }
 
+    /// A study the chart wraps saves the switch its own `user_visible` reports, not whether its
+    /// other rule hides it.
+    #[test]
+    fn templates_save_the_user_switch_of_a_wrapped_study() {
+        #[derive(Clone, Default)]
+        struct Muted(crate::studies::IndicatorValues);
+        impl Indicator for Muted {
+            fn name(&self) -> &str {
+                "Muted"
+            }
+            fn calculate(&mut self, _: &[Bar]) {}
+            fn values(&self) -> &crate::studies::IndicatorValues {
+                &self.0
+            }
+            fn colors(&self) -> Vec<Color32> {
+                vec![Color32::RED]
+            }
+            fn set_colors(&mut self, _: Vec<Color32>) {}
+            fn is_visible(&self) -> bool {
+                false
+            }
+            fn set_visible(&mut self, _: bool) {}
+            fn user_visible(&self) -> bool {
+                true
+            }
+            fn clone_box(&self) -> Box<dyn Indicator> {
+                Box::new(self.clone())
+            }
+        }
+        let study = ConfiguredStudy::new(Box::new(Muted::default()));
+        assert!(StudyTemplate::from_study(&study).visible);
+    }
+
     /// What a chart shows of a calculated study: its name, values, line names, crossing
     /// markers, line styles, value scale and drawings, as text.
     fn shown(study: &dyn Indicator) -> String {
