@@ -21,10 +21,28 @@ use crate::model::{AlertSource, LineStyle, PostLink};
 use crate::scales::PriceScaleMode;
 use serde::{Deserialize, Serialize};
 
-/// How a top-level object-tree folder shares its drawings with the other charts of a layout.
+/// How a top-level object-tree folder shares its drawings with the other charts of a layout and
+/// with other layouts.
 ///
-/// Leaving it unset follows [`ChartSyncOptions::sync_drawings`](crate::widget::ChartSyncOptions).
-/// Charts on one drawing storage read each other's saved drawings whichever is set.
+/// Leaving it unset follows [`ChartSyncOptions::sync_drawings`](crate::widget::ChartSyncOptions)
+/// within a layout. Charts on one drawing storage read each other's saved drawings whichever is
+/// set. A saved layout opened on a chart with drawing storage shows each drawing as stored, and
+/// one deleted from storage stays deleted, except that a drawing the layout holds in a folder set
+/// to [`Chart`](Self::Chart) or [`Layout`](Self::Layout) comes back as the layout holds it,
+/// unless storage holds it outside such a folder.
+///
+/// ```
+/// use egui_charts::drawings::{ChartPoint, Drawing, DrawingManager, DrawingToolType, FolderSync};
+///
+/// let mut drawings = DrawingManager::new();
+/// let mut level = Drawing::new(0, DrawingToolType::TrendLine);
+/// level.chart_points = vec![ChartPoint::new(2.0, 104.0), ChartPoint::new(4.0, 104.0)];
+/// let id = drawings.add_drawing(level).unwrap();
+/// let folder = ["Levels".to_owned()];
+/// assert!(drawings.move_to_folder(&[id], &[], &folder));
+/// assert!(drawings.set_folder_sync(&folder, Some(FolderSync::AllLayouts)));
+/// assert_eq!(drawings.drawings[0].folder_sync_mode(), Some(FolderSync::AllLayouts));
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum FolderSync {
@@ -32,6 +50,9 @@ pub enum FolderSync {
     Chart,
     /// Mirror the drawings across the layout, even with layout-wide drawing sync off.
     Layout,
+    /// Mirror the drawings across the layout as [`Layout`](Self::Layout) does, and show them as
+    /// stored in every layout of their symbol, also in layouts saved before they were drawn.
+    AllLayouts,
 }
 
 /// A drawing on the chart

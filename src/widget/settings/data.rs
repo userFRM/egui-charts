@@ -361,6 +361,12 @@ pub struct ScalesAndLinesSettings {
     pub log_scale: bool,
     /// Whether prices are shown as percentage changes.
     pub percentage_scale: bool,
+    /// Whether prices are indexed to 100 when neither [`log_scale`](Self::log_scale) nor
+    /// [`percentage_scale`](Self::percentage_scale) is on. `None` keeps a chart indexed to 100
+    /// as it is and gives any other chart a regular scale, as do settings saved without this
+    /// field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexed_to_100: Option<bool>,
     /// Whether increasing prices run downward.
     pub invert_scale: bool,
     /// Show the price scale on the left instead of the right.
@@ -408,6 +414,7 @@ impl Default for ScalesAndLinesSettings {
             auto_scale: true,
             log_scale: false,
             percentage_scale: false,
+            indexed_to_100: None,
             invert_scale: false,
             price_scale_left: false,
             show_last_price_label: true,
