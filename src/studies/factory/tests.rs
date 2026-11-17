@@ -179,11 +179,12 @@ fn host_defaults_are_atomic_and_follow_the_constructor_lifetime() {
     );
 }
 
-/// Confirming the settings dialog without an edit must preserve every drawn colour,
-/// including per-bar palettes that contain more colours than the study has plots.
+/// Confirming the settings dialog without an edit, or recreating the study from its template,
+/// must preserve every drawn colour, including per-bar palettes that contain more colours than
+/// the study has plots.
 #[test]
 fn unchanged_settings_keep_every_colour() {
-    use crate::studies::ConfiguredStudy;
+    use crate::studies::{ConfiguredStudy, StudyTemplate};
 
     let bars: Vec<Bar> = (0..300)
         .map(|i| {
@@ -192,7 +193,7 @@ fn unchanged_settings_keep_every_colour() {
             Bar::new(time, c - 0.5, c + 1.0, c - 1.0, c, 1000.0 + i as f64)
         })
         .collect();
-    let colours = |study: &ConfiguredStudy| -> Vec<_> {
+    let colours = |study: &dyn Indicator| -> Vec<_> {
         (0..study.line_count())
             .flat_map(|line| {
                 let style = study.plot_style(line).color;
@@ -204,9 +205,18 @@ fn unchanged_settings_keep_every_colour() {
         let mut study = ConfiguredStudy::new(IndicatorFactory::new().create(&name).unwrap());
         study.calculate(&bars);
         let before = colours(&study);
-        study.apply_settings(&[], study.settings()).unwrap();
+        // Ok without an edit applies every input as shown with the current settings.
+        let inputs: Vec<_> = study
+            .inputs()
+            .into_iter()
+            .map(|input| (input.id, input.value))
+            .collect();
+        study.apply_settings(&inputs, study.settings()).unwrap();
         study.calculate(&bars);
         assert_eq!(colours(&study), before, "{name}");
+        let mut restored = StudyTemplate::from_study(&study).create().unwrap();
+        restored.calculate(&bars);
+        assert_eq!(colours(restored.as_ref()), before, "{name} template");
     }
 }
 

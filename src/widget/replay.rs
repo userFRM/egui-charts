@@ -16,7 +16,7 @@ pub(super) struct ReplayWindow {
     pub(super) bars: HashMap<SeriesId, Vec<Bar>>,
     source: Option<(Vec<Bar>, BarClock)>,
     /// The pause last set with `set_feed_paused` before the replay, which its exit sets again.
-    feed_paused: bool,
+    pub(super) feed_paused: bool,
     /// The live ATR and percentage sizes in Renko, Kagi, Range, Point and Figure order, with
     /// whether each waited for history, which the exit gives back. `None` for a fixed size, and
     /// for one armed by its parameters or by new main history during the session, which
@@ -28,8 +28,8 @@ pub(super) struct ReplayWindow {
 
 pub(super) struct MarketReplay {
     driver: Arc<ReplayDriver>,
-    feed: Option<super::feed::FeedLink>,
-    window: ReplayWindow,
+    pub(super) feed: Option<super::feed::FeedLink>,
+    pub(super) window: ReplayWindow,
 }
 
 impl ReplayWindow {
