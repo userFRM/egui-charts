@@ -2545,7 +2545,7 @@ impl Chart {
         if show_right_axis || show_left_axis {
             let axis_painter =
                 painter.with_clip_rect(painter.clip_rect().intersect(price_axis_rect));
-            for (item, view) in self.main_primitives(&coords) {
+            for (item, view) in self.axis_primitives(&coords, self.main_series_scale) {
                 item.get()
                     .draw_price_axis(&axis_painter, price_axis_rect, &view);
             }
@@ -2832,7 +2832,7 @@ impl Chart {
         let mut fixed_price_labels = Vec::new();
         if show_price_axis {
             let (fixed, automatic): (Vec<_>, Vec<_>) = self
-                .main_primitives(&coords)
+                .axis_primitives(&coords, self.main_series_scale)
                 .flat_map(|(item, view)| {
                     let map = view.mapping.price;
                     item.get()
@@ -2852,7 +2852,7 @@ impl Chart {
             );
         }
         let mut independent_axis_width =
-            self.paint_series_axes(ui, &painter, rect, price_rect, &colors);
+            self.paint_series_axes(ui, &painter, rect, &coords, &colors);
         for (key, axis) in self.pane_scale_axes(main_pane, rect, price_rect) {
             let super::PaneScale::Study(id) = key else {
                 continue;
