@@ -29,8 +29,8 @@
 //!
 //! # Presentation
 //!
-//! The correlation opens as an area from zero with dashed guides at its bounds, 1 and -1, and at
-//! zero. The ratio and the spread open as lines without guides.
+//! The correlation opens as an area from zero with a dashed guide at zero. The ratio and the
+//! spread open as lines without guides.
 
 use crate::model::{Bar, PriceSource};
 use crate::studies::palette;
@@ -49,7 +49,7 @@ pub type Correlation = SymbolPair<false, true>;
 /// A ratio, spread or correlation of two series, each a price source of a symbol. `RATIO` selects
 /// the ratio and `CORRELATION` the correlation; neither selects the spread. With both `true`,
 /// `CORRELATION` takes precedence and the study is the correlation.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SymbolPair<const RATIO: bool, const CORRELATION: bool> {
     symbols: [String; 2],
     sources: [PriceSource; 2],
@@ -345,13 +345,9 @@ impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO,
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             range: CORRELATION.then_some((-1.1, 1.1)),
-            // The bounds of a correlation, then zero.
+            // Zero for a correlation; the ratio and the spread have no guide.
             levels: if CORRELATION {
-                vec![
-                    (1.0, palette::GRAY, "Upper guide"),
-                    (-1.0, palette::GRAY, "Lower guide"),
-                    (0.0, palette::GRAY.gamma_multiply_u8(128), "Zero"),
-                ]
+                vec![(0.0, palette::GRAY.gamma_multiply_u8(128), "Zero")]
             } else {
                 Vec::new()
             },

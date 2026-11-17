@@ -22,7 +22,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Weighted Moving Avg indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WMA {
     period: usize,
     values: IndicatorValues,
@@ -102,7 +102,7 @@ impl Indicator for WMA {
     }
 
     fn desc(&self) -> &str {
-        "Weighted Moving Avg - Gives more weight to recent prices"
+        "Weighted Moving Average - Gives more weight to recent prices"
     }
 
     fn calculate(&mut self, data: &[Bar]) {

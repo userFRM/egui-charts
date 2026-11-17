@@ -2,6 +2,7 @@
 
 use crate::data::FeedError;
 use crate::data::inbox::Inbox;
+use crate::drawings::{Drawing, DrawingTemplate};
 use crate::services::{Storage, StoreKind};
 use serde::{Serialize, de::DeserializeOwned};
 use std::collections::{BTreeMap, VecDeque};
@@ -13,6 +14,7 @@ struct Document<T> {
     template: T,
 }
 
+#[derive(Debug)]
 enum Pending {
     List,
     Load(String),
@@ -36,8 +38,32 @@ pub struct TemplateStore<T> {
     pub error: Option<String>,
 }
 
+impl<T> std::fmt::Debug for TemplateStore<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TemplateStore")
+            .field("kind", &self.kind)
+            .field("remaining", &self.remaining)
+            .field("loaded", &self.loaded)
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<T: Clone + Serialize + DeserializeOwned> TemplateStore<T> {
     /// An empty catalog in the supplied namespace, initially kept only in memory.
+    ///
+    /// ```
+    /// use egui_charts::model::Timeframe;
+    /// use egui_charts::services::StoreKind;
+    /// use egui_charts::studies::StudyTemplateSet;
+    /// use egui_charts::ui::dialogs::templates::TemplateStore;
+    ///
+    /// let mut store = TemplateStore::new(StoreKind::StudyTemplates);
+    /// let mut set = StudyTemplateSet::default();
+    /// set.interval = Some(Timeframe::Day1);
+    /// store.save("Daily", set).unwrap();
+    /// assert_eq!(store.entries()["Daily"].interval, Some(Timeframe::Day1));
+    /// ```
     pub fn new(kind: StoreKind) -> Self {
         Self {
             entries: BTreeMap::new(),
@@ -51,7 +77,9 @@ impl<T: Clone + Serialize + DeserializeOwned> TemplateStore<T> {
         }
     }
 
-    /// Read the catalog, sorted by name, for a host-provided menu or export.
+    /// Read the catalog, sorted by document name, for a host-provided menu or export. Drawing
+    /// templates saved with [`save_for_tool`](TemplateStore::save_for_tool) have names prefixed
+    /// by their tool; [`template_name`](TemplateStore::template_name) gives the name to show.
     pub fn entries(&self) -> &BTreeMap<String, T> {
         &self.entries
     }
@@ -154,6 +182,8 @@ impl<T: Clone + Serialize + DeserializeOwned> TemplateStore<T> {
     }
 
     /// Save or explicitly replace a named template. Blank names and concurrent writes are rejected.
+    /// Save drawing templates with [`save_for_tool`](TemplateStore::save_for_tool), which keeps
+    /// each tool's templates apart.
     pub fn save(&mut self, name: &str, template: T) -> Result<(), String> {
         if !self.ready() {
             return Err("Templates are not ready".into());
@@ -189,6 +219,82 @@ impl<T: Clone + Serialize + DeserializeOwned> TemplateStore<T> {
             self.entries.remove(name);
         }
         Ok(())
+    }
+}
+
+impl TemplateStore<DrawingTemplate> {
+    /// Save or replace this tool's template `name`. Templates are kept per tool, built-in or
+    /// host-registered, so several tools can each have a template of one name. The document is
+    /// named after the tool and the template, as in `TrendLine/Red`, or `Polyline:host-path/Red`
+    /// for a host tool; [`template_name`](Self::template_name) gives the name to show. A template
+    /// this tool saved under its name alone, before templates were kept per tool, is replaced in
+    /// place. Blank names, concurrent writes and a document name held by another tool's template
+    /// are rejected.
+    ///
+    /// ```
+    /// use egui_charts::drawings::{Drawing, DrawingTemplate, DrawingToolType};
+    /// use egui_charts::services::StoreKind;
+    /// use egui_charts::ui::dialogs::templates::TemplateStore;
+    ///
+    /// let mut store = TemplateStore::<DrawingTemplate>::new(StoreKind::DrawingTemplates);
+    /// for tool in [DrawingToolType::HorizontalLine, DrawingToolType::VerticalLine] {
+    ///     let red = DrawingTemplate::from_drawing(&Drawing::new(1, tool));
+    ///     store.save_for_tool("Red", red).unwrap();
+    /// }
+    /// let documents: Vec<_> = store.entries().keys().map(String::as_str).collect();
+    /// assert_eq!(documents, ["HorizontalLine/Red", "VerticalLine/Red"]);
+    /// assert_eq!(store.template_name("VerticalLine/Red"), "Red");
+    /// ```
+    pub fn save_for_tool(&mut self, name: &str, template: DrawingTemplate) -> Result<(), String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("Enter a template name".into());
+        }
+        let tool = &template.settings;
+        let document = self
+            .entries
+            .iter()
+            .find(|(document, saved)| {
+                same_tool(&saved.settings, tool) && self.template_name(document) == name
+            })
+            .map_or_else(
+                || format!("{}{name}", tool_prefix(tool)),
+                |(document, _)| document.clone(),
+            );
+        if self
+            .entries
+            .get(&document)
+            .is_some_and(|saved| !same_tool(&saved.settings, tool))
+        {
+            return Err("A template of another tool is saved under this name".into());
+        }
+        self.save(&document, template)
+    }
+
+    /// The name to show for the template saved as `document`: the document name without its
+    /// tool's prefix, or all of it for a template saved under its name alone.
+    pub fn template_name<'a>(&self, document: &'a str) -> &'a str {
+        self.entries
+            .get(document)
+            .and_then(|saved| document.strip_prefix(tool_prefix(&saved.settings).as_str()))
+            .unwrap_or(document)
+    }
+}
+
+fn same_tool(a: &Drawing, b: &Drawing) -> bool {
+    a.tool_type == b.tool_type && a.custom_tool == b.custom_tool
+}
+
+/// `TrendLine/`, or `Polyline:host-path/` for a host tool. Tool variant names hold neither `:`
+/// nor `/`, and the escaped host id holds no `/`, so no two tools share a prefix.
+fn tool_prefix(drawing: &Drawing) -> String {
+    let tool = serde_json::to_value(drawing.tool_type)
+        .ok()
+        .and_then(|tool| tool.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    match &drawing.custom_tool {
+        Some(id) => format!("{tool}:{}/", id.replace('%', "%25").replace('/', "%2F")),
+        None => format!("{tool}/"),
     }
 }
 

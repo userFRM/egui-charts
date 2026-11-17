@@ -143,6 +143,39 @@ pub struct StudyPane {
 /// state carries over it unchanged. A window study may also leave the windows that
 /// contain it without a value. The chart's datafeed drops such bars before they reach a
 /// study, so this matters to direct callers of [`calculate`](Indicator::calculate).
+///
+/// # Presentation hooks
+///
+/// The optional hooks return records a study builds from their defaults or variants:
+///
+/// ```
+/// use ecolor::Color32;
+/// use egui_charts::studies::{
+///     FillBoundary, IndicatorLineStyle, StudyCell, StudyFill, StudyPane, StudySettings,
+///     StudyTable,
+/// };
+///
+/// // `line_style`
+/// let mut style = IndicatorLineStyle::default();
+/// style.width = 2.0;
+/// // `pane`
+/// let mut pane = StudyPane::default();
+/// pane.range = Some((0.0, 100.0));
+/// // `settings`
+/// let mut settings = StudySettings::default();
+/// settings.precision = Some(1);
+/// // `table`
+/// let mut table = StudyTable::default();
+/// table.title = "Momentum".into();
+/// table.rows = vec![vec![StudyCell::Text("RSI".into()), StudyCell::Percent(Some(0.42))]];
+/// // `fills`
+/// let fill = StudyFill {
+///     first: FillBoundary::Plot(0),
+///     second: FillBoundary::Level(50.0),
+///     color: Color32::from_rgba_unmultiplied(41, 98, 255, 40),
+///     inverted_color: None,
+/// };
+/// ```
 pub trait Indicator: Send {
     /// Sparse projected price bands, with fractional endpoints in future whitespace.
     fn projections(&self) -> &[super::StudyProjection] {
@@ -382,9 +415,8 @@ pub trait Indicator: Send {
                 .fills()
                 .iter()
                 .map(|fill| super::FillStyle {
-                    color: fill.color,
                     inverted_color: fill.inverted_color,
-                    visible: true,
+                    ..super::FillStyle::new(fill.color)
                 })
                 .collect(),
         }
@@ -857,6 +889,18 @@ pub trait Indicator: Send {
     ///
     /// This enables cloning of heterogeneous indicator collections.
     fn clone_box(&self) -> Box<dyn Indicator>;
+
+    /// Clone for an export that can be drawn after the live chart changes or is dropped.
+    /// The result must have no live subscription and share nothing that later events can
+    /// mutate. Immutable history owners may remain shared.
+    ///
+    /// The default calls [`clone_box`](Self::clone_box). Override when the study holds live
+    /// state; [`OrderFlowInput::frozen`](crate::data::OrderFlowInput::frozen) detaches stream
+    /// inputs while preserving their current data. Ordinary presentation and undo clones
+    /// continue to use `clone_box`.
+    fn clone_for_export(&self) -> Box<dyn Indicator> {
+        self.clone_box()
+    }
 }
 
 /// Blanket `Clone` implementation for boxed indicators, delegating to

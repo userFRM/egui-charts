@@ -1,20 +1,25 @@
 //! The trades of one series, kept for order flow.
 //!
-//! A page adds trades up to the oldest held trade and leaves later ones to the live stream. A trade
+//! A page adds trades up to the first held trade and leaves later ones to the live stream. A trade
 //! whose id is already held is dropped, whatever its time, so history and live trades join exactly
-//! when both carry ids. Otherwise time decides: a page adds a trade at the instant of the oldest
-//! held trade only if it and every held trade at that instant carry ids, and a live trade is
-//! dropped if a page added a trade at or after it and the two do not both carry ids. Trades
-//! sharing the boundary instant may be lost but are never counted twice. The first page after a
-//! new subscription on a retained tape also fills the time between the tape and the live stream,
-//! from the instant of the newest retained trade through that of the oldest live trade, each under
-//! the same rule. A page's trades at the stream's first instant may have traded before the
-//! subscription, so the live trades left to a page there are kept apart: they, not the page's, are
-//! what the stream sent at that instant.
+//! when both carry ids. Otherwise time decides: a page adds a trade without an id only before every
+//! held trade, a trade at the instant of a held trade only if it and every held trade at that
+//! instant carry ids, and a live trade is dropped if a page added a trade at or after it and the
+//! two do not both carry ids. Trades sharing the boundary instant may be lost but are never counted
+//! twice. The first page after a new subscription on a retained tape also fills the time between
+//! the tape and the live stream, from the instant of the newest retained trade through that of the
+//! next live trade, each under the same rule, and the time after the first such tape when the
+//! subscription changed again before it. A page's trades at the stream's first instant may
+//! have traded before the subscription, so the live trades left to a page there are kept apart:
+//! they, not the page's, are what the stream sent at that instant. A loss of older trades to stay
+//! within capacity leaves the page's trades there held, so the live ones stay apart until the loss
+//! reaches that instant. The sink drops live trades from the oldest it holds, at or after that
+//! instant, so once it drops any, no more are kept apart, and the kept ones go when its drop
+//! reaches their instant.
 
 use crate::model::{OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 
 /// Size taken from one resting order, or from an unidentified one, at one price.
 #[derive(Clone, Debug, PartialEq)]
@@ -147,8 +152,23 @@ pub(crate) struct Trades {
     paged_without_id_until: Option<DateTime<Utc>>,
     /// Newest retained trade, until the next page fills the time after it.
     retained_until: Option<DateTime<Utc>>,
+    /// Newest trade retained at the first subscription change, when the subscription changed
+    /// again before a page answered: that page fills the time after it as well, before the trades
+    /// held since.
+    first_retained_until: Option<DateTime<Utc>>,
     /// Time of the newest trade dropped to stay within `capacity`: evidence before it is incomplete.
     lost_until: Option<DateTime<Utc>>,
+    /// Instants at which the held trades may lack trades, kept across subscriptions as
+    /// `lost_until` is: a page left trades of the instant out, as ids did not tell them from held
+    /// ones, or the subscription changed before a page reached the first instant of its stream,
+    /// which may lack trades that traded before the stream began. When the subscription changed
+    /// more than twice before a page answered, no page fills the time of the changes between the
+    /// first and the last, and the instants on either side of each such time are kept too. A page
+    /// whose trades at the oldest held instant ids all tell apart completes that instant.
+    left_out: BTreeSet<DateTime<Utc>>,
+    /// Whether a page reached the first held instant since the store began or the subscription
+    /// last changed.
+    front_reached: bool,
     /// Time of the oldest live trades when a page left out its trades at that time, as ids did not
     /// tell them from the live ones: the page may lack trades of that instant.
     left_out_at: Option<DateTime<Utc>>,
@@ -156,10 +176,16 @@ pub(crate) struct Trades {
     /// arrival order, each id once, with that instant: the time of the paged trade holding a
     /// trade's id, which a page may stamp apart from the stream, or else the trade's own. The
     /// instant is that of the first live trade so left, the only one at which a page's trades can
-    /// include some that the stream never sent.
+    /// include some that the stream never sent. Live trades are kept only while every trade dropped
+    /// to stay within capacity is older than that instant, as the page's trades of it are then all
+    /// held, and until the sink drops live trades, which are at or after it. The list goes when the
+    /// store evicts, or the sink drops, a trade of that instant or a later one.
     unheld_live: Option<(DateTime<Utc>, Vec<Tick>)>,
     /// Changes whenever a trade is added or evicted.
     revision: u64,
+    /// Whether the sink dropped live trades since the subscription began, after which no more are
+    /// kept apart.
+    live_lost: bool,
 }
 
 impl Trades {
@@ -173,10 +199,14 @@ impl Trades {
             paged_until: None,
             paged_without_id_until: None,
             retained_until: None,
+            first_retained_until: None,
             lost_until: None,
+            left_out: BTreeSet::new(),
+            front_reached: false,
             left_out_at: None,
             unheld_live: None,
             revision: next_revision(),
+            live_lost: false,
         }
     }
 
@@ -198,6 +228,18 @@ impl Trades {
         self.lost_until
     }
 
+    /// The instants at which the held trades may lack trades of that instant, whatever
+    /// subscriptions changed since: a page left them out, no page reached the first instant of a
+    /// stream before its subscription changed, or they bound the time of a subscription change
+    /// that no page fills, between the first and the last of more than two before a page.
+    #[cfg_attr(
+        not(feature = "widget"),
+        expect(dead_code, reason = "only the chart widget consumes a feed")
+    )]
+    pub(crate) fn left_out(&self) -> &BTreeSet<DateTime<Utc>> {
+        &self.left_out
+    }
+
     /// Time of the newest retained trade, until a page fills the time after it: trades from that
     /// instant on, before the live ones, may be missing.
     #[cfg_attr(
@@ -206,6 +248,17 @@ impl Trades {
     )]
     pub(crate) fn retained_until(&self) -> Option<DateTime<Utc>> {
         self.retained_until
+    }
+
+    /// Time of the newest trade retained at the first subscription change, when it changed again
+    /// before a page answered, until a page fills the time after it: held trades after it follow a
+    /// time that may lack all of its trades.
+    #[cfg_attr(
+        not(feature = "widget"),
+        expect(dead_code, reason = "only the chart widget consumes a feed")
+    )]
+    pub(crate) fn first_retained_until(&self) -> Option<DateTime<Utc>> {
+        self.first_retained_until
     }
 
     /// Time of the oldest live trades, while a page left out its trades at that time because ids
@@ -221,7 +274,9 @@ impl Trades {
     /// The first instant, as the page stamps it, where a live trade was left to a page's trades,
     /// and the live trades left to the page's trades of that instant, in arrival order: with the
     /// held live trades of that instant they are all the stream sent at it, while the page's
-    /// trades there may include some it never sent.
+    /// trades there may include some it never sent. They survive the loss of older trades and end
+    /// with that of a trade of that instant or a later one, and no more are kept after the sink
+    /// drops live trades.
     #[cfg_attr(
         not(feature = "widget"),
         expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -245,6 +300,27 @@ impl Trades {
         expect(dead_code, reason = "only the chart widget consumes a feed")
     )]
     pub(crate) fn reanchor(&mut self) {
+        // No page reached the first instant of the stream, which may lack trades that traded
+        // before the stream began.
+        if self.paged == 0
+            && !self.front_reached
+            && let Some(first) = self.trades.front().map(|trade| trade.ts)
+        {
+            self.leave_out(first);
+        }
+        // A page fills the time after the first tape no page has filled and after the newest
+        // held trade, not the time of a change in between: its trades are missing, and so may be
+        // some at the instants on either side of it.
+        if let Some(first) = self.first_retained_until
+            && let Some(until) = self.retained_until.filter(|until| *until > first)
+            && let Some(from) = self.live().map(|trade| trade.ts).min()
+        {
+            self.leave_out(until);
+            self.leave_out(from);
+        }
+        // A page has yet to fill the time after the tape an earlier change retained.
+        self.first_retained_until = self.first_retained_until.or(self.retained_until);
+        self.front_reached = false;
         self.paged = self.trades.len();
         self.paged_until = self.trades.iter().map(|trade| trade.ts).max();
         self.paged_without_id_until = self
@@ -257,6 +333,7 @@ impl Trades {
         // The trades it compared are no longer the live ones.
         self.left_out_at = None;
         self.unheld_live = None;
+        self.live_lost = false;
     }
 
     /// An empty store of the same capacity, for the next drain.
@@ -323,8 +400,11 @@ impl Trades {
             if self.left_out_at == Some(evicted.ts) {
                 self.left_out_at = None;
             }
-            // After a loss the paged trades stand in for no live one.
-            self.unheld_live = None;
+            // Paged trades through the loss fill no bar, so once it reaches the kept instant the
+            // kept trades guard nothing.
+            if (self.unheld_live.as_ref()).is_some_and(|(at, _)| evicted.ts >= *at) {
+                self.unheld_live = None;
+            }
             changed(&evicted, false);
         }
     }
@@ -345,6 +425,14 @@ impl Trades {
     /// `changed` with each trade added (`true`) or evicted (`false`).
     pub(crate) fn append(&mut self, newer: Trades, changed: &mut impl FnMut(&Tick, bool)) {
         self.lost_until = self.lost_until.max(newer.lost_until);
+        // The sink drops its oldest live trades, at or after the stream's first instant: kept
+        // trades the loss reaches guard nothing, and no later instant is the stream's first.
+        if let Some(lost) = newer.lost_until {
+            self.live_lost = true;
+            if (self.unheld_live.as_ref()).is_some_and(|(at, _)| lost >= *at) {
+                self.unheld_live = None;
+            }
+        }
         for trade in newer.trades {
             let paged_until = match trade.id {
                 Some(_) => self.paged_without_id_until,
@@ -356,9 +444,10 @@ impl Trades {
                 Some(at) => at >= self.paged,
                 None => paged_until.is_none_or(|until| trade.ts > until),
             };
-            if !live && self.lost_until.is_none() {
-                // A page may stamp its copy of a trade with an id apart from the stream.
-                let time = held.map_or(trade.ts, |at| self.trades[at].ts);
+            // A page may stamp its copy of a trade with an id apart from the stream.
+            let time = held.map_or(trade.ts, |at| self.trades[at].ts);
+            // A loss of older trades leaves the page's trades of this instant held.
+            if !live && !self.live_lost && self.lost_until.is_none_or(|lost| lost < time) {
                 let (kept_at, kept) = self.unheld_live.get_or_insert_with(|| (time, Vec::new()));
                 // shortcut: a scan per trade with an id at this one instant; index the ids if a
                 // feed stamps thousands of trades with one time.
@@ -390,16 +479,40 @@ impl Trades {
         }
         // Stable, so trades sharing a time keep the feed's order.
         page.sort_by_key(|trade| trade.ts);
+        // A page reaches the first held instant unless its trades start after it or one was
+        // invalid.
+        let front = self.trades.front().map(|trade| trade.ts);
+        let late = (page.first().zip(front)).is_some_and(|(trade, front)| trade.ts > front);
+        self.front_reached |= rejected == 0 && !late;
         self.fill_gap(&mut page, changed);
-        if let Some(oldest) = self.trades.iter().map(|trade| trade.ts).min() {
+        // The held trades run without a gap from the first one: a live trade stamped before it
+        // marks no boundary for a page's trades that ids join to the held ones.
+        if let Some(oldest) = self.trades.front().map(|trade| trade.ts) {
             let ids_at_oldest = (self.trades.iter())
                 .filter(|held| held.ts == oldest)
                 .all(|held| held.id.is_some());
             let kept = |trade: &Tick| trade.id.is_some() && ids_at_oldest;
-            if self.paged == 0 && page.iter().any(|trade| trade.ts == oldest && !kept(trade)) {
-                self.left_out_at = Some(oldest);
+            if page.iter().any(|trade| trade.ts == oldest && !kept(trade)) {
+                if self.paged == 0 {
+                    self.left_out_at = Some(oldest);
+                    self.leave_out(oldest);
+                }
+            } else if rejected == 0 && page.iter().any(|trade| trade.ts == oldest) {
+                // Ids join the page's trades of that instant to the held ones: none is missing.
+                self.left_out.remove(&oldest);
             }
-            page.retain(|trade| trade.ts < oldest || (trade.ts == oldest && kept(trade)));
+            // A page's trade joins by id only when it and every held trade at its instant carry
+            // one; any other may repeat a live trade, so it must be older than every held trade.
+            let held_from = (self.trades.iter())
+                .map(|trade| trade.ts)
+                .min()
+                .unwrap_or(oldest);
+            let held_without_id: BTreeSet<_> = (self.trades.iter())
+                .filter(|held| held.ts <= oldest && held.id.is_none())
+                .map(|held| held.ts)
+                .collect();
+            let joins = |trade: &Tick| trade.id.is_some() && !held_without_id.contains(&trade.ts);
+            page.retain(|trade| trade.ts < held_from || (trade.ts <= oldest && joins(trade)));
         }
         let mut room = self.capacity.saturating_sub(self.trades.len());
         let mut added = Vec::new();
@@ -433,30 +546,61 @@ impl Trades {
         rejected
     }
 
-    /// Moves the trades of `page` after the retained tape and before the live stream between
-    /// them: nothing streamed while the subscription changed. One whose id is held stays out. A
-    /// trade at the instant of the newest retained trade or of the oldest live trade follows them
-    /// when it and every held trade at that instant carry ids; one that ids do not tell from the
-    /// held ones is left out, and the instant of the oldest live trade recorded. The oldest go
-    /// beyond capacity.
+    /// Moves the trades of `page` into the time the subscription changes left without trades,
+    /// with [`fill_after`](Self::fill_after): after the retained tape and, when the subscription
+    /// changed more than once before a page answered, after the first change's tape as well,
+    /// before the trades held since.
     fn fill_gap(&mut self, page: &mut Vec<Tick>, changed: &mut impl FnMut(&Tick, bool)) {
+        let first = self.first_retained_until.take();
         let Some(until) = self.retained_until.take() else {
             return;
         };
-        let live_from = self.trades.iter().skip(self.paged).map(|t| t.ts).min();
+        // The trades held since the first tape follow its time as live ones would.
+        if let Some(first) = first.filter(|first| *first < until)
+            && let Some(from) =
+                (self.trades.iter().take(self.paged)).position(|trade| trade.ts > first)
+        {
+            let live = self.trades.len() - self.paged;
+            self.paged = from;
+            self.fill_after(first, page, changed);
+            self.paged = self.trades.len() - live;
+            // Those trades are not the live ones.
+            self.left_out_at = None;
+        }
+        self.fill_after(until, page, changed);
+    }
+
+    /// Moves the trades of `page` after `until`, the newest trade of a retained tape, and before
+    /// the live stream between them: nothing streamed while the subscription changed. One whose
+    /// id is held stays out. A trade at the instant of `until` or of the oldest live trade follows
+    /// them when it and every held trade at that instant carry ids; one that ids do not tell from
+    /// the held ones is left out, and its instant recorded. The oldest go beyond capacity.
+    fn fill_after(
+        &mut self,
+        until: DateTime<Utc>,
+        page: &mut Vec<Tick>,
+        changed: &mut impl FnMut(&Tick, bool),
+    ) {
+        // A live trade stamped inside the retained tape marks no boundary.
+        let live_from = (self.trades.iter().skip(self.paged))
+            .map(|t| t.ts)
+            .filter(|ts| *ts >= until)
+            .min();
         let ids_at = |at: Option<DateTime<Utc>>| {
             (self.trades.iter())
                 .filter(|held| Some(held.ts) == at)
                 .all(|held| held.id.is_some())
         };
         let (ids_at_tape, ids_at_live) = (ids_at(Some(until)), ids_at(live_from));
+        // The old stream may have stopped inside the tape's last instant.
+        let tape_left_out =
+            (page.iter()).any(|t| t.ts == until && !(t.id.is_some() && ids_at_tape));
         // The tape's last instant is a boundary of its own while the stream starts after it.
         let after_tape = live_from.is_none_or(|from| until < from);
         let mut left_out = false;
         let (gap, older): (Vec<_>, Vec<_>) = std::mem::take(page).into_iter().partition(|t| {
             let unheld = t.id.is_none_or(|id| !self.ids.contains_key(&id));
-            // A live trade stamped inside the retained tape marks no boundary.
-            let at_live = Some(t.ts) == live_from && t.ts >= until;
+            let at_live = Some(t.ts) == live_from;
             if !at_live && (t.ts != until || !after_tape) {
                 return unheld && t.ts > until && live_from.is_none_or(|from| t.ts < from);
             }
@@ -465,8 +609,12 @@ impl Trades {
             told_apart && unheld
         });
         *page = older;
-        if left_out {
-            self.left_out_at = live_from;
+        if tape_left_out {
+            self.leave_out(until);
+        }
+        if left_out && let Some(at) = live_from {
+            self.left_out_at = Some(at);
+            self.leave_out(at);
         }
         if gap.is_empty() {
             return;
@@ -489,6 +637,17 @@ impl Trades {
                     changed(trade, false);
                 }
             });
+        }
+    }
+
+    /// Records that the held trades may lack trades of `at`, unless the loss reaches it. The
+    /// instants the loss has reached go, as the loss marks them, so the record holds no more
+    /// instants than the store holds trades.
+    fn leave_out(&mut self, at: DateTime<Utc>) {
+        let lost = self.lost_until;
+        self.left_out.retain(|left| Some(*left) > lost);
+        if Some(at) > lost {
+            self.left_out.insert(at);
         }
     }
 }
@@ -745,6 +904,27 @@ mod tests {
                     Live(vec![id(later(trade(3, 5.0), 400), 5)]),
                     Page(vec![id(trade(1, 1.0), 1), id(trade(2, 2.0), 2), id(trade(3, 5.0), 5)])],
                 vec![1.0, 2.0, 5.0], 0, vec![5.0]),
+            // Live trades stamped before the first held one: the page may repeat 3 and 4.
+            ("from the oldest held time up to the first held trade, a page takes only trades \
+                that, like every held trade at their instant, carry ids", 10,
+                vec![Live(vec![id(trade(5, 5.0), 5), id(trade(3, 3.0), 3), trade(4, 4.0)]),
+                    Page(vec![trade(2, 2.0), trade(3, 3.0), id(trade(4, 4.0), 4)])],
+                vec![2.0, 5.0, 3.0, 4.0], 0, vec![5.0, 3.0, 4.0]),
+            // The interval changes twice before the page answers: 3 and 4 traded during the
+            // first change, 6 during the second.
+            ("after two interval changes, with ids, a page fills the time of both", 10,
+                vec![Live(vec![id(trade(1, 1.0), 1), id(trade(2, 2.0), 2)]), Reanchor,
+                    Live(vec![id(trade(5, 5.0), 5)]), Reanchor, Live(vec![id(trade(7, 7.0), 7)]),
+                    Page(vec![id(trade(1, 1.0), 1), id(trade(2, 2.0), 2), id(trade(3, 3.0), 3),
+                        id(trade(4, 4.0), 4), id(trade(5, 5.0), 5), id(trade(6, 6.0), 6),
+                        id(trade(7, 7.0), 7)])],
+                vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], 0, vec![7.0]),
+            ("after two interval changes, without ids, a page fills the time of both", 10,
+                vec![Live(vec![trade(1, 1.0), trade(2, 2.0)]), Reanchor, Live(vec![trade(5, 5.0)]),
+                    Reanchor, Live(vec![trade(7, 7.0)]),
+                    Page(vec![trade(1, 1.0), trade(2, 2.0), trade(3, 3.0), trade(4, 4.0),
+                        trade(5, 5.0), trade(6, 6.0), trade(7, 7.0)])],
+                vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], 0, vec![7.0]),
         ];
         for (name, capacity, steps, prices, rejected, live_prices) in cases {
             let mut store = Trades::new(capacity);

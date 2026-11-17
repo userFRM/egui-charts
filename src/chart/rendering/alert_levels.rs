@@ -106,12 +106,12 @@ pub fn render_alert_levels<'a>(
                     continue;
                 }
                 let marker_x = mapping.rect.right() - 12.0;
+                let unnamed = alert
+                    .name
+                    .is_empty()
+                    .then(|| crate::localization::text(ui.ctx(), "Alert"));
                 let caption = |value| {
-                    let name = if alert.name.is_empty() {
-                        "Alert"
-                    } else {
-                        &alert.name
-                    };
+                    let name = unnamed.as_deref().unwrap_or(&alert.name);
                     format!("{name}  {}", format(value))
                 };
                 let mut galley = labels.then(|| {
@@ -236,9 +236,13 @@ pub fn render_alert_levels<'a>(
                 }
                 let blinking = blinks(alert, now);
                 let marker_color = if blinking {
-                    let bright = ui.input(|input| (input.time * 2.0).floor() as i64 % 2 == 0);
+                    let half_seconds = ui.input(|input| input.time * 2.0);
+                    let bright = half_seconds.floor() as i64 % 2 == 0;
+                    // The marker changes on the next half second.
                     ui.ctx()
-                        .request_repaint_after(std::time::Duration::from_millis(100));
+                        .request_repaint_after(std::time::Duration::from_secs_f64(
+                            (half_seconds.floor() + 1.0 - half_seconds) / 2.0,
+                        ));
                     if bright {
                         color
                     } else {
@@ -326,18 +330,28 @@ mod tests {
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
     use crate::theme::Theme;
 
-    /// The shapes of one frame at `time`. A fresh context also exercises reload, without
-    /// transient animation state.
+    /// The shapes and repaint delay of one frame at `time`. A fresh context also exercises
+    /// reload, without transient animation state.
     fn frame(
         alert: &Alert,
         theme: &Theme,
         time: f64,
         active_only: bool,
-    ) -> Vec<egui::epaint::ClippedShape> {
+    ) -> (Vec<egui::epaint::ClippedShape>, std::time::Duration) {
         let ctx = egui::Context::default();
         #[cfg(feature = "icons")]
         crate::icons::install_loader(&ctx);
         crate::theme::apply_to_egui(&ctx, theme);
+        // A new context asks for an immediate repaint in its first two passes; run them empty, so
+        // the drawn pass shows only what the chart requests.
+        let input = egui::RawInput {
+            time: Some(time),
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            ctx.run_ui(input.clone(), |_| {})
+                .drop_without_applying_deltas();
+        }
         let mut output = ctx.run_ui(
             egui::RawInput {
                 time: Some(time),
@@ -371,8 +385,9 @@ mod tests {
             },
         );
         let shapes = std::mem::take(&mut output.shapes);
+        let delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
         output.drop_without_applying_deltas();
-        shapes
+        (shapes, delay)
     }
 
     fn marker(shapes: &[egui::epaint::ClippedShape]) -> Option<&egui::epaint::CircleShape> {
@@ -397,7 +412,7 @@ mod tests {
                         serde_json::from_str(&serde_json::to_string(&alert).unwrap()).unwrap();
                     let mut colors = Vec::new();
                     for time in [0.0, 0.75] {
-                        let shapes = frame(&alert, &theme, time, false);
+                        let (shapes, _) = frame(&alert, &theme, time, false);
                         let lines = shapes.iter().filter(|shape| matches!(&shape.shape,
                             egui::Shape::LineSegment { points, .. } if points[0] == pos2(20.0, 120.0) && points[1] == pos2(420.0, 120.0)
                         )).count();
@@ -437,11 +452,21 @@ mod tests {
             alert.blink_on_trigger = enabled;
             alert.last_triggered_at = fired.map(|s| Utc::now() - chrono::TimeDelta::seconds(s));
             let case = format!("{status:?} {fired:?} {enabled} {active_only}");
-            let colors: Vec<_> = [0.0, 0.75]
-                .map(|time| marker(&frame(&alert, &theme, time, active_only)).map(|m| m.fill))
-                .into();
+            let frames = [0.0, 0.75].map(|time| frame(&alert, &theme, time, active_only));
+            let colors = frames
+                .each_ref()
+                .map(|(shapes, _)| marker(shapes).map(|m| m.fill));
             assert_eq!(colors[0].is_some(), drawn, "{case}");
             assert_eq!(colors[0] != colors[1], blinks, "{case}");
+            // A blinking marker repaints when it next turns, on the half second.
+            if blinks {
+                let delays = frames.each_ref().map(|(_, delay)| *delay);
+                assert_eq!(
+                    delays,
+                    [500, 250].map(std::time::Duration::from_millis),
+                    "{case}"
+                );
+            }
         }
     }
 

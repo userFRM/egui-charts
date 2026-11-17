@@ -8,6 +8,16 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
 /// Settings for chart series appearance
+///
+/// ```
+/// use egui_charts::chart::series::SeriesSettings;
+///
+/// # fn apply(chart: &mut egui_charts::Chart) {
+/// let mut settings = SeriesSettings::new();
+/// settings.bullish_color = egui::Color32::from_rgb(38, 166, 154);
+/// chart.apply_series_settings(&settings);
+/// # }
+/// ```
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct SeriesSettings {
@@ -31,7 +41,12 @@ pub struct SeriesSettings {
     pub bullish_wick_color: Option<Color32>,
     /// Bearish wick color (None = same as fill)
     pub bearish_wick_color: Option<Color32>,
-    /// Price source for line calculations
+    /// The price its `chart_type` draws when that is a Line, Step line, Line with markers, Area
+    /// or Baseline chart.
+    /// [`Chart::apply_series_settings`](crate::widget::Chart::apply_series_settings) makes it
+    /// that type's own source when the type draws another price, so it wins over the same source
+    /// in `chart_type_params`; other chart types ignore it, and Columns keep theirs in
+    /// `chart_type_params`.
     pub price_source: PriceSource,
 
     // === Symbol Tab: Visibility ===

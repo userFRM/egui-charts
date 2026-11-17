@@ -2,8 +2,6 @@ use super::*;
 #[cfg(feature = "drawings")]
 use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
 use crate::studies::{Indicator, IndicatorValue, SMA};
-#[cfg(all(test, feature = "ui"))]
-use crate::ui::top_toolbar::SettingsMenu;
 use crate::widget::test_frames::frame;
 use chrono::{DateTime, TimeDelta, Utc};
 use std::time::Duration;
@@ -147,16 +145,7 @@ fn autoscale_includes_only_visible_overlay_values() {
             );
             chart.set_main_series_visible(case != "main_hidden");
             if case.starts_with("price_only") {
-                #[cfg(feature = "ui")]
-                {
-                    let mut menu = SettingsMenu::new();
-                    menu.settings.scale_price_chart_only = true;
-                    chart.update_config(menu.apply_to_config(chart.config().clone()));
-                }
-                #[cfg(not(feature = "ui"))]
-                {
-                    chart.config_mut().scale_price_chart_only = true;
-                }
+                chart.config_mut().scale_price_chart_only = true;
                 if matches!(case, "price_only_restored" | "price_only_excluded") {
                     frame(&ctx, &mut chart, 0.03, Vec::new());
                     chart.config_mut().scale_price_chart_only = false;
@@ -513,6 +502,155 @@ fn removed_whitespace_tail_keeps_the_view() {
             ("pop_bars", 19.0, Some(40)),
             ("set_data", 19.0, Some(40)),
             ("replay", 19.0, Some(40)),
+        ]
+    );
+}
+
+/// A view scrolled back from the live edge keeps the bars it shows in place when bars after its
+/// right edge go or are inserted, as it does when bars are appended. 100 one-minute bars from
+/// 10:00 at a right offset of -30 put 11:09 (index 69) at the right edge. Removing the newest
+/// five bars by either data API, by a replay cutoff at 11:35 or from the added series of a chart
+/// without main bars leaves 95 slots, where 11:09 is at the edge at an offset of 69 - 94 = -25.
+/// Popping the last bar and adding it again, moving a replay cutoff from 11:40 back to 11:39 and
+/// forward again, and pausing and resuming a feed, which pops the last bar and adds it again from
+/// the latest page, end with the same 100 bars at -30. A bar inserted at 11:20:30 adds a slot
+/// after the edge: 11:09 stays at index 69 of 101, an offset of -31. Popping 31 bars removes
+/// 11:09 as well, and 11:08, the last bar left at index 68, takes its place at an offset of 0.
+/// At -1.5 the view is near the live edge and keeps its offset when the last bar goes. Emptying
+/// the series and filling it again keeps the offset of -30. At 20 px a bar with a fixed left
+/// edge, a view scrolled back as far as the edge allows has the first bar at its left edge, and
+/// popping five bars raises its offset by five, so the first bar stays there.
+#[test]
+fn scrolled_back_view_keeps_its_bars_when_later_bars_change() {
+    struct WindowFeed;
+    impl crate::data::Datafeed for WindowFeed {
+        fn history(
+            &self,
+            _: crate::data::HistoryRequest,
+            reply: crate::data::Reply<crate::data::HistoryPage>,
+        ) {
+            reply.send(Ok(crate::data::HistoryPage::new(window(0, 100), true)));
+        }
+    }
+
+    let ctx = egui::Context::default();
+    let mut got = Vec::new();
+    for (operation, offset) in [
+        ("pop_bars", -30.0),
+        ("set_data", -30.0),
+        ("replay", -30.0),
+        ("pop and update", -30.0),
+        ("replay back and forth", -30.0),
+        ("insert", -30.0),
+        ("pop through the right edge", -30.0),
+        ("near the live edge", -1.5),
+        ("emptied and filled again", -30.0),
+    ] {
+        let mut chart = Chart::new(BarData::from_bars(window(0, 100)));
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        chart.scroll_to_position(offset, false);
+        match operation {
+            "pop_bars" => {
+                chart.pop_bars(SeriesId::MAIN, 5);
+            }
+            "set_data" => {
+                chart.set_data(SeriesId::MAIN, window(0, 95));
+            }
+            "replay" => chart.set_replay_time(Some(bar(95 * 60, 10.0).time)),
+            "pop and update" => {
+                let popped = chart.pop_bars(SeriesId::MAIN, 1);
+                chart.update(SeriesId::MAIN, popped[0].clone());
+            }
+            "replay back and forth" => {
+                for minute in [100, 99, 100] {
+                    chart.set_replay_time(Some(bar(minute * 60, 10.0).time));
+                }
+            }
+            "insert" => {
+                chart.update(SeriesId::MAIN, bar(80 * 60 + 30, 10.0));
+            }
+            "pop through the right edge" => {
+                chart.pop_bars(SeriesId::MAIN, 31);
+            }
+            "near the live edge" => {
+                chart.pop_bars(SeriesId::MAIN, 1);
+            }
+            "emptied and filled again" => {
+                chart.set_data(SeriesId::MAIN, Vec::new());
+                chart.set_data(SeriesId::MAIN, window(0, 100));
+            }
+            _ => unreachable!(),
+        }
+        frame(&ctx, &mut chart, 1.0, Vec::new());
+        got.push((operation, chart.state.time_scale().right_offset()));
+    }
+
+    let mut chart = Chart::new(BarData::from_bars(Vec::new()));
+    let id = chart.add_series(crate::widget::SeriesOptions::default());
+    chart.set_data(id, window(0, 100));
+    frame(&ctx, &mut chart, 0.0, Vec::new());
+    chart.scroll_to_position(-30.0, false);
+    chart.pop_bars(id, 5);
+    frame(&ctx, &mut chart, 1.0, Vec::new());
+    got.push((
+        "added series pop_bars",
+        chart.state.time_scale().right_offset(),
+    ));
+
+    let mut chart = crate::widget::ChartBuilder::new()
+        .with_feed(std::sync::Arc::new(WindowFeed))
+        .with_symbol("A")
+        .build();
+    for time in [0.0, 0.1, 0.2] {
+        frame(&ctx, &mut chart, time, Vec::new());
+    }
+    assert_eq!(chart.bars(SeriesId::MAIN), window(0, 100), "loaded");
+    chart.scroll_to_position(-30.0, false);
+    chart.set_feed_paused(true);
+    chart.set_feed_paused(false);
+    for time in [1.0, 1.1, 1.2] {
+        frame(&ctx, &mut chart, time, Vec::new());
+    }
+    assert_eq!(chart.bars(SeriesId::MAIN), window(0, 100), "resumed");
+    got.push((
+        "feed pause and resume",
+        chart.state.time_scale().right_offset(),
+    ));
+
+    let options = crate::config::ChartOptions {
+        time_scale: crate::config::TimeScaleOptions {
+            bar_spacing: 20.0,
+            fix_left_edge: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut chart = Chart::new(BarData::from_bars(window(0, 100))).with_chart_options(options);
+    frame(&ctx, &mut chart, 0.0, Vec::new());
+    chart.scroll_to_position(-100.0, false);
+    let stopped = chart.state.time_scale().right_offset_precise();
+    chart.pop_bars(SeriesId::MAIN, 5);
+    frame(&ctx, &mut chart, 1.0, Vec::new());
+    got.push((
+        "pop_bars at a fixed left edge",
+        (chart.state.time_scale().right_offset_precise() - stopped) as f32,
+    ));
+
+    assert_eq!(
+        got,
+        [
+            ("pop_bars", -25.0),
+            ("set_data", -25.0),
+            ("replay", -25.0),
+            ("pop and update", -30.0),
+            ("replay back and forth", -30.0),
+            ("insert", -31.0),
+            ("pop through the right edge", 0.0),
+            ("near the live edge", -1.5),
+            ("emptied and filled again", -30.0),
+            ("added series pop_bars", -25.0),
+            ("feed pause and resume", -30.0),
+            ("pop_bars at a fixed left edge", 5.0),
         ]
     );
 }
@@ -1155,6 +1293,7 @@ fn marker_autoscale_keeps_shapes_and_text_inside_each_pane() {
                                 || p.stroke.color == egui::epaint::ColorMode::Solid(Color32::RED)
                         }
                         Shape::LineSegment { stroke, .. } => stroke.color == Color32::RED,
+                        Shape::Mesh(mesh) => mesh.vertices.iter().any(|v| v.color == Color32::RED),
                         Shape::Text(t) if t.galley.text().starts_with("edge ") => {
                             labels += 1;
                             true

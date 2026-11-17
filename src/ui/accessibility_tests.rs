@@ -154,10 +154,6 @@ fn custom_controls_report_names_roles_and_states() {
             selector.sync.sync_crosshair = selected;
             selector.show_menu(ui);
         }),
-        (Role::Button, "Chart settings", |ui, _| {
-            super::top_toolbar::components::settings_menu::SettingsMenu::new()
-                .show_btn(ui, ui.max_rect());
-        }),
         (Role::Tab, "Profiles", |ui, selected| {
             use super::top_toolbar::components::indicator_dialog::IndicatorTab;
             let mut active = if selected {

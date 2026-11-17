@@ -20,6 +20,7 @@ mod vwap;
 pub use crate::config::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};
 pub use bars_pattern::{BarsPatternConfig, BarsPatternMode};
 pub use coordinates::ChartPoint;
+pub(crate) use drawing::ColorSlot;
 pub use drawing::{Drawing, FolderSync};
 pub use elliott::ElliottDegree;
 pub(crate) use gann::{GANN_MAX_ARC, GANN_SQUARE_UNITS};
@@ -29,9 +30,9 @@ pub use image::ImageConfig;
 pub use options::{
     AnnotationMarker, ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight,
     HandlePos, LineMeasurementPosition, LineMeasurements, LineTextHorizontalAlign,
-    LineTextOrientation, LineTextVerticalAlign, NoteTextStyle, PositionReadout, PositionSize,
-    PositionSizing, PositionStyle, RegressionTrendConfig, TimeframeVisibility,
+    LineTextOrientation, LineTextVerticalAlign, MiddleLineStyle, NoteTextStyle, PositionReadout,
+    PositionSize, PositionSizing, PositionStyle, RegressionTrendConfig, TimeframeVisibility,
 };
 pub use pitchfork::{PitchforkConfig, PitchforkLevel};
 pub use template::DrawingTemplate;
-pub use vwap::{VwapBand, VwapBandMode, VwapConfig, VwapFill, VwapPlotType};
+pub use vwap::{VwapBand, VwapBandLine, VwapBandMode, VwapConfig, VwapFill, VwapPlotType};

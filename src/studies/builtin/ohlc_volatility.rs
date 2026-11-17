@@ -7,7 +7,7 @@ use egui::Color32;
 /// OHLC Volatility (Garman-Klass)
 /// Uses OHLC data for more efficient volatility estimation
 /// GK = 0.5 * ln(H/L)^2 - (2*ln(2)-1) * ln(C/O)^2
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OhlcVolatility {
     period: usize,
     /// Trading days per year the result is annualized over, one bar per day (252 for stocks, 365

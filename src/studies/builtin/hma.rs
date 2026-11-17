@@ -23,7 +23,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Hull Moving Avg indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct HMA {
     period: usize,
     values: IndicatorValues,
@@ -120,7 +120,7 @@ impl Indicator for HMA {
     }
 
     fn desc(&self) -> &str {
-        "Hull Moving Avg - Fast and smooth moving avg"
+        "Hull Moving Average - Fast and smooth moving avg"
     }
 
     fn calculate(&mut self, data: &[Bar]) {

@@ -34,7 +34,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Trend strength from a short and a long Bollinger Band.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BBTrend {
     short_length: usize,
     long_length: usize,

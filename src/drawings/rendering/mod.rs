@@ -26,6 +26,7 @@ pub(crate) mod utils {
 }
 
 pub(crate) use outline::Outline;
+pub(crate) use trading::anchored_vwap_through;
 pub use traits::DrawingRenderer;
 
 use crate::drawings::domain::{Drawing, DrawingToolType};
@@ -67,6 +68,12 @@ pub struct ChartView<'a> {
     pub revision: u64,
     /// Screen x of a (fractional) bar index.
     pub bar_to_x: &'a dyn Fn(f32) -> f32,
+    /// Points per bar of `bar_to_x`; on a numeric horizontal scale, points per spacing unit,
+    /// the mean key gap when the scale was set, as
+    /// [`TimeScale::bar_spacing`](crate::model::TimeScale::bar_spacing) returns. Text that
+    /// follows the zoom is drawn at its ratio to [`Drawing::text_zoom_spacing`]; a value that
+    /// is not a positive number draws such text at its set size.
+    pub bar_spacing: f32,
     /// Screen y of a price.
     pub price_to_y: &'a dyn Fn(f64) -> f32,
     /// Price at a screen y, using the same scale and orientation as `price_to_y`.
@@ -77,7 +84,29 @@ pub struct ChartView<'a> {
     /// The executions behind `bars`, aggregated on the bars' clock. The volume profile drawings
     /// then show the executed volume at each price, split by aggressor side, instead of
     /// spreading bar volume over bar ranges; `None` estimates from the bars.
-    pub executions: Option<&'a crate::data::Footprint>,
+    ///
+    /// Hosts with an owned footprint construct the borrowed view without copying:
+    /// ```
+    /// use egui_charts::{
+    ///     data::Footprint, drawings::rendering::ChartView,
+    ///     model::{Bar, BarClock, Tick, Timeframe},
+    /// };
+    /// let time = "2026-01-05T10:00:00Z".parse()?;
+    /// let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1)?;
+    /// flow.push(&Tick::new(time, 100.0, 2.0, None))?;
+    /// let bars = [Bar::new(time, 100.0, 100.0, 100.0, 100.0, 2.0)];
+    /// let view = ChartView {
+    ///     price_formatter: None, time_formatter: None, instrument: None, bar_seconds: 60,
+    ///     bars: &bars, revision: 0, bar_to_x: &|x| x, bar_spacing: 1.0,
+    ///     price_to_y: &|price| price as f32, y_to_price: &f64::from, time_axis: true,
+    ///     executions: Some((&flow).into()), timeframe: Some(Timeframe::Min1), finer: &[],
+    /// };
+    /// let executions = view.executions.unwrap();
+    /// assert!(executions.span_is_complete(time, time));
+    /// assert_eq!(executions.profile(time, time).volume(), 2.0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub executions: Option<crate::data::FootprintView<'a>>,
     /// Interval of `bars`, or `None` for price-based chart types, trade-based intervals and
     /// horizontal scales other than time. Volume profiles read finer bars only with an interval.
     pub timeframe: Option<crate::model::Timeframe>,
@@ -148,6 +177,8 @@ impl Drawing {
     /// This method handles rendering for every drawing tool type,
     /// delegating to the appropriate category-specific implementation. `selected`
     /// lets a tool mark its selection, as a position's statistics block does.
+    /// Default colours are drawn in the shade the theme needs, as [`Drawing::theme_shaded`]
+    /// gives.
     pub(crate) fn render_with_selection(
         &self,
         painter: &egui::Painter,
@@ -158,7 +189,20 @@ impl Drawing {
         if self.points.is_empty() {
             return;
         }
+        match self.theme_shaded(painter.ctx()) {
+            Some(shaded) => shaded.paint_with_selection(painter, rect, view, selected),
+            None => self.paint_with_selection(painter, rect, view, selected),
+        }
+    }
 
+    /// [`Self::render_with_selection`] in the colours stored in the drawing.
+    fn paint_with_selection(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        view: &ChartView,
+        selected: bool,
+    ) {
         let painter = &painter.with_clip_rect(rect);
         let start = painter.ctx().graphics(|g| {
             g.get(painter.layer_id())
@@ -317,8 +361,15 @@ impl Drawing {
         if self.tool_type.supports_line_measurements() {
             self.render_line_measurements(painter, view, selected);
         }
-        if self.tool_type == DrawingToolType::Rect {
-            self.render_rect_middle_line(painter, rect);
+        match self.tool_type {
+            DrawingToolType::Rect => self.render_rect_middle_line(painter, rect),
+            DrawingToolType::ParallelChannel => self.render_channel_middle_line(painter, rect),
+            DrawingToolType::FlatTopBottom | DrawingToolType::DisjointChannel
+                if self.line_measurements.price_labels =>
+            {
+                self.render_channel_prices(painter, view);
+            }
+            _ => {}
         }
     }
 
@@ -679,6 +730,46 @@ mod tests {
         }
     }
 
+    /// While its second anchor is placed, a rotated rectangle draws its base between its two
+    /// anchors in its colour and width; the third anchor makes it the rectangle.
+    #[test]
+    fn a_rotated_rectangle_draws_its_base_until_its_third_anchor() {
+        use egui::{Stroke, pos2};
+        let stroke = Stroke::new(3.0, Color32::from_rgb(200, 40, 40));
+        let base = [pos2(100., 100.), pos2(300., 200.)];
+        let corners = [
+            pos2(100., 100.),
+            pos2(300., 100.),
+            pos2(300., 200.),
+            pos2(100., 200.),
+        ];
+        for anchors in [
+            base.to_vec(),
+            vec![corners[0], corners[1], pos2(200., 200.)],
+        ] {
+            let mut drawing = Drawing::new(1, DrawingToolType::RotatedRect);
+            drawing.points = anchors.clone();
+            drawing.color = [200, 40, 40, 255];
+            drawing.stroke_width = 3.0;
+            drawing.line_style = crate::model::LineStyle::Solid;
+            let shapes = paint(&drawing);
+            let segments: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::LineSegment { points, stroke } => Some((*points, *stroke)),
+                    _ => None,
+                })
+                .collect();
+            if anchors.len() == 2 {
+                assert_eq!(segments, [(base, stroke)]);
+            } else {
+                assert!(segments.is_empty(), "{segments:?}");
+                assert!(shapes.iter().any(|shape| matches!(shape,
+                    Shape::Path(path) if path.closed && path.points == corners)));
+            }
+        }
+    }
+
     /// The settings the properties dialog offers for a tool are the ones its renderer uses: a
     /// fill colour reaches a filled area, extension moves geometry (each flag flipped from the
     /// tool's default, since an extended line starts extended), the text is painted, each line
@@ -852,6 +943,7 @@ mod tests {
                         bars: &bars,
                         revision: 0,
                         bar_to_x: &|b| b * 40.0,
+                        bar_spacing: 40.0,
                         price_to_y: &|p| 500.0 - p as f32,
                         y_to_price: &|y| 500.0 - f64::from(y),
                         time_axis: true,
@@ -1518,21 +1610,27 @@ mod tests {
     }
 
     fn paint_with(drawing: &Drawing, selected: bool) -> Vec<Shape> {
+        let bars = if drawing.tool_type == DrawingToolType::RegressionTrend {
+            sample_bars()
+        } else {
+            Vec::new()
+        };
+        paint_on(drawing, selected, &bars)
+    }
+
+    /// Paints `drawing` over `bars`, bar `i` at x = 10 i and price `p` at y = 500 - p.
+    fn paint_on(drawing: &Drawing, selected: bool, bars: &[Bar]) -> Vec<Shape> {
         let ctx = Context::default();
-        let bars = sample_bars();
         let output = ctx.run_ui(RawInput::default(), |ui| {
             let view = ChartView {
                 price_formatter: None,
                 time_formatter: None,
                 bar_seconds: 0,
                 instrument: None,
-                bars: if drawing.tool_type == DrawingToolType::RegressionTrend {
-                    &bars
-                } else {
-                    &[]
-                },
+                bars,
                 revision: 0,
                 bar_to_x: &|b| b * 10.0,
+                bar_spacing: 10.0,
                 price_to_y: &|p| 500.0 - p as f32,
                 y_to_price: &|y| 500.0 - f64::from(y),
                 time_axis: true,
@@ -1874,6 +1972,7 @@ mod tests {
                 bars: &[],
                 revision: 0,
                 bar_to_x: &|x| x,
+                bar_spacing: 1.0,
                 price_to_y: &|p| p as f32,
                 y_to_price: &f64::from,
                 time_axis: true,
@@ -1898,27 +1997,28 @@ mod tests {
         );
     }
 
-    /// An annotation that offers line controls draws differently at 2 and 7 px; annotations
-    /// with fixed borders or guides must hide those controls.
+    /// Every line control a tool offers changes its drawing: 2 and 7 px, and solid, dashed and
+    /// dotted, each paint differently. The bars span the anchors, at prices inside the pane, so
+    /// the tools that measure bars draw.
     #[test]
     fn offered_line_width_changes_the_drawing() {
+        use crate::model::LineStyle;
+        let bars: Vec<_> = (0..60)
+            .map(|i| {
+                let time = chrono::DateTime::from_timestamp(i * 60, 0).unwrap();
+                let open = 150.0 + (i % 7) as f64 * 20.0;
+                Bar::new(
+                    time,
+                    open,
+                    open + 30.0,
+                    open - 30.0,
+                    open + 10.0,
+                    100.0 + i as f64,
+                )
+            })
+            .collect();
         let mut inert = Vec::new();
-        for tool in [
-            DrawingToolType::TextLabel,
-            DrawingToolType::AnchoredText,
-            DrawingToolType::Note,
-            DrawingToolType::PriceNote,
-            DrawingToolType::AnchoredNote,
-            DrawingToolType::Table,
-            DrawingToolType::Callout,
-            DrawingToolType::Comment,
-            DrawingToolType::PriceLabel,
-            DrawingToolType::Signpost,
-            DrawingToolType::FlagNote,
-        ] {
-            if !tool.draws_line() {
-                continue;
-            }
+        for &tool in DrawingToolType::all() {
             let mut drawing = Drawing::new(7, tool);
             drawing.points = [
                 (100., 100.),
@@ -1939,14 +2039,36 @@ mod tests {
             if drawing.text.is_none() {
                 drawing.text = Some("Label".into());
             }
-            let mut thin = drawing.clone();
-            thin.stroke_width = 2.0;
-            let mut wide = drawing;
-            wide.stroke_width = 7.0;
-            if format!("{:?}", paint(&thin)) == format!("{:?}", paint(&wide)) {
-                inert.push(tool);
+            let painted = |edit: &dyn Fn(&mut Drawing)| {
+                let mut edited = drawing.clone();
+                edit(&mut edited);
+                format!("{:?}", paint_on(&edited, false, &bars))
+            };
+            if tool.supports_line_width()
+                && painted(&|d| d.stroke_width = 2.0) == painted(&|d| d.stroke_width = 7.0)
+            {
+                inert.push((tool, "width"));
+            }
+            if tool.supports_line_style() {
+                let [solid, dashed, dotted] =
+                    [LineStyle::Solid, LineStyle::Dashed, LineStyle::Dotted]
+                        .map(|style| painted(&|d| d.line_style = style));
+                if solid == dashed || solid == dotted || dashed == dotted {
+                    inert.push((tool, "style"));
+                }
             }
         }
-        assert_eq!(inert, Vec::<DrawingToolType>::new());
+        assert_eq!(inert, []);
+    }
+
+    /// A sticker's art keeps its solid outlines whatever line style the drawing stored.
+    #[test]
+    fn sticker_ignores_a_stored_line_style() {
+        let mut sticker = Drawing::new(7, DrawingToolType::Sticker);
+        sticker.text = Some("sticker:bull".into());
+        sticker.points = vec![Pos2::new(100.0, 100.0)];
+        let solid = format!("{:?}", paint(&sticker));
+        sticker.line_style = crate::model::LineStyle::Dashed;
+        assert_eq!(format!("{:?}", paint(&sticker)), solid);
     }
 }

@@ -31,6 +31,10 @@ impl Chart {
             history_complete: self.feed.history_complete,
             #[cfg(feature = "ui")]
             drawings: &self.drawings().drawings,
+            signals: self.signals().collect(),
+            exchange: self
+                .instrument()
+                .and_then(|instrument| instrument.exchange.as_deref()),
         })
     }
 
@@ -282,18 +286,21 @@ mod tests {
             ]
         );
     }
-    /// Fork medians and tines use anchor construction, and regression fits the supplied closes.
+    /// Fork medians and tines use anchor construction, and regression fits the source prices of
+    /// the supplied bars.
     #[test]
     fn fork_and_regression_sources_follow_edits_and_saved_geometry() {
+        // Opens 100, 102, 104 and 106; each bar's high and low are its open and close.
         let bars = [100.0, 104.0, 102.0, 108.0]
             .into_iter()
             .enumerate()
             .map(|(i, close)| {
+                let open = 100.0 + 2.0 * i as f64;
                 Bar::new(
                     DateTime::from_timestamp(i as i64 * 60, 0).unwrap(),
-                    close,
-                    close,
-                    close,
+                    open,
+                    open.max(close),
+                    open.min(close),
                     close,
                     1.0,
                 )
@@ -421,6 +428,27 @@ mod tests {
                 "regression {level}: {got} != {expected}"
             );
         }
+        // Without their deviations the bands pass through the high and the low furthest from the
+        // line: 1.6 above and 2.6 below the closes' line, 2 either side of the opens' y=100+2x.
+        let mut config = crate::drawings::RegressionTrendConfig::default();
+        config.use_upper = false;
+        config.use_lower = false;
+        for (source, levels) in [
+            (crate::model::PriceSource::Close, [106.8, 108.4, 104.2]),
+            (crate::model::PriceSource::Open, [106.0, 108.0, 104.0]),
+        ] {
+            config.source = source;
+            chart.drawings_mut().drawings[0].regression_trend = Some(config);
+            for (level, expected) in levels.into_iter().enumerate() {
+                let alert = chart.drawings().drawings[0].alert_source(level);
+                let got = chart.alert_value(&alert, 3).unwrap();
+                assert!(
+                    (got - expected).abs() < 1e-9,
+                    "{source:?} {level}: {got} != {expected}"
+                );
+            }
+        }
+        chart.drawings_mut().drawings[0].regression_trend = None;
         #[cfg(feature = "ui")]
         {
             let mut menu = crate::ui::context_menu::drawing::DrawingContextMenu::new();
@@ -458,6 +486,82 @@ mod tests {
             chart.alert_value(&AlertSource::Drawing("8".into()), 1),
             None
         );
+    }
+
+    /// An anchored VWAP offers its line and the lines of its enabled bands as the values painted
+    /// at a bar, from the bar its saved anchor time names.
+    #[test]
+    fn anchored_vwap_sources_follow_the_painted_lines_from_the_saved_anchor() {
+        let time = |minute: i64| DateTime::from_timestamp(minute * 60, 0).unwrap();
+        let flat =
+            |minute, close, volume| Bar::new(time(minute), close, close, close, close, volume);
+        let bars: Vec<_> = [(100.0, 1.0), (104.0, 2.0), (102.0, 3.0), (108.0, 4.0)]
+            .into_iter()
+            .zip(0..)
+            .map(|((close, volume), minute)| flat(minute, close, volume))
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        chart.set_symbol("SAMPLE");
+        let mut vwap = Drawing::new(8, DrawingToolType::AnchoredVWAP);
+        vwap.chart_points = vec![ChartPoint::new(1.0, 0.0)];
+        vwap.completed = true;
+        chart.drawings_mut().drawings.push(vwap);
+        let source = |level| {
+            AlertSource::Drawing(if level == 0 {
+                "8".into()
+            } else {
+                format!("8#{level}")
+            })
+        };
+        // The typical price of a flat bar is its close. From the anchor, bar 3 weighs closes
+        // 104, 102 and 108 by volumes 2, 3 and 4: 946 / 9, with a weighted variance of
+        // 99500 / 9 - (946 / 9)^2 = 584 / 81. The default first band lies one deviation away.
+        let (mean, sigma) = (946.0 / 9.0, 584.0_f64.sqrt() / 9.0);
+        for (level, bar, expected) in [
+            (0, 3, Some(mean)),
+            (1, 3, Some(mean + sigma)),
+            (2, 3, Some(mean - sigma)),
+            (0, 2, Some(514.0 / 5.0)),
+            (0, 0, None),
+            (3, 3, None),
+        ] {
+            let got = chart.alert_value(&source(level), bar);
+            assert!(
+                got.zip(expected)
+                    .map_or(got == expected, |(got, want)| (got - want).abs() < 1e-9),
+                "level {level} at bar {bar}: {got:?} != {expected:?}"
+            );
+        }
+        let offered: Vec<_> = chart.alert_sources().into_iter().map(|(s, _)| s).collect();
+        assert_eq!(offered, [source(0), source(1), source(2)]);
+        #[cfg(feature = "ui")]
+        {
+            let mut menu = crate::ui::context_menu::drawing::DrawingContextMenu::new();
+            menu.open_on(&egui::Context::default(), &chart, egui::Pos2::ZERO, 8);
+            assert_eq!(
+                menu.alert.unwrap().condition,
+                crate::model::AlertCondition::Compare {
+                    other: source(0),
+                    comparison: crate::model::AlertComparison::Crossing
+                }
+            );
+        }
+        // Saved by time and restored on a series that gained an older bar, it still starts at
+        // the bar of 104.
+        let stored =
+            crate::drawings::persistence::drawing_to_stored(&chart.drawings().drawings[0], |i| {
+                (i * 60_000.0) as i64
+            });
+        let restored = crate::drawings::persistence::stored_to_drawing(
+            &stored,
+            |t| t as f32 / 60_000.0 + 1.0,
+            9,
+        );
+        let mut longer = vec![flat(-1, 50.0, 10.0)];
+        longer.extend(bars);
+        let levels =
+            restored.alert_levels_with_bars(4.0, crate::scales::PriceScaleMode::Normal, &longer);
+        assert!((levels[0].2 - mean).abs() < 1e-9, "{levels:?}");
     }
 
     /// A chart in market replay lends no recorded bars to alerts, as in candle replay, and lends

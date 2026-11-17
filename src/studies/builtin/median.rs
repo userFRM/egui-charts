@@ -36,7 +36,7 @@ use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Median: rolling median of a price source, its EMA and ATR bands around it.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Median {
     length: usize,
     atr_length: usize,

@@ -38,6 +38,7 @@ const TALLEST_TAB_HEIGHT: f32 = 840.0;
 ///
 /// Edits chart display settings, event category visibility and the host trading and
 /// alert-overlay preferences.
+#[derive(Debug)]
 pub struct SettingsDialog {
     /// Whether the dialog is currently open
     pub is_open: bool,
@@ -72,9 +73,11 @@ pub struct SettingsDialog {
     price_targets_offered: bool,
     /// The axis font family the dialog was opened with, shown while the settings hold none.
     opened_font_family: Option<egui::FontFamily>,
+    /// The top and bottom margins in percent the margin rows were last filled with.
+    loaded_margins: (f32, f32),
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct ColorPickerStates {
     body_up: ColorPickerState,
     body_down: ColorPickerState,
@@ -164,6 +167,7 @@ impl SettingsDialog {
             order_flow_layers: [true; 4],
             price_targets_offered: true,
             opened_font_family: None,
+            loaded_margins: (0.0, 0.0),
         }
     }
 
@@ -281,6 +285,10 @@ impl SettingsDialog {
         self.margin_top_str = format!("{}", self.settings.margins.top_percent);
         self.margin_bottom_str = format!("{}", self.settings.margins.bottom_percent);
         self.margin_right_str = format!("{}", self.settings.margins.right_bars);
+        self.loaded_margins = (
+            self.settings.margins.top_percent,
+            self.settings.margins.bottom_percent,
+        );
     }
 
     /// Close the dialog.
@@ -444,6 +452,16 @@ impl SettingsDialog {
             .validate()
             .err()
             .map(|error| error.to_string())
+            .or_else(|| {
+                // Margins leaving no room for prices are kept when unedited; the fit ignores them.
+                let (top, bottom) = (
+                    self.settings.margins.top_percent,
+                    self.settings.margins.bottom_percent,
+                );
+                (top + bottom >= 100.0 && (top, bottom) != self.loaded_margins).then(|| {
+                    crate::widget::settings::ChartSettingsError::Margins { top, bottom }.to_string()
+                })
+            })
             .or_else(|| {
                 (self.margin_top_str.parse::<f32>().is_err()
                     || self.margin_bottom_str.parse::<f32>().is_err()
@@ -747,12 +765,15 @@ impl SettingsDialog {
                 let session_breaks = template
                     .show_session_breaks
                     .or(self.settings.show_session_breaks);
-                // The whole bars of the margin shown are an unedited margin, which stays as shown.
-                let shown = self.settings.margins.right_bars;
-                let right_bars = if template.scales_appearance.font_family.is_none()
-                    && template.margins.right_bars == shown.trunc()
+                // The whole bars of the margin shown, or its pixels, are an unedited margin, which
+                // stays as shown.
+                let shown = &self.settings.margins;
+                let right_bars = if (template.scales_appearance.font_family.is_none()
+                    && template.margins.right_bars == shown.right_bars.trunc())
+                    || (template.margins.right_pixels.is_some()
+                        && template.margins.right_pixels == shown.right_pixels)
                 {
-                    shown
+                    shown.right_bars
                 } else {
                     template.margins.right_bars
                 };
@@ -1082,12 +1103,12 @@ mod tests {
         }
     }
 
-    /// A palette swatch recolours a Canvas colour at the opacity its well shows, which no other
-    /// control of the tab sets; an invisible colour takes the swatch's opacity. Expected: the
-    /// swatch rgb(49, 27, 146) at the seeded alpha of 128, and opaque where the well showed an
-    /// invisible colour or the theme's opaque crosshair.
+    /// A palette swatch recolours a colour of the Canvas, Symbol, Scales and lines or Alerts tab at
+    /// the opacity its well shows, which no other control of the tab sets; an invisible colour
+    /// takes the swatch's opacity. Expected: the swatch rgb(49, 27, 146) at the seeded alpha of
+    /// 128, and opaque where the well showed an invisible colour or the theme's opaque crosshair.
     #[test]
-    fn palette_colour_keeps_the_watermark_opacity() {
+    fn palette_colour_keeps_the_opacity_the_well_shows_on_every_tab() {
         use crate::widget::settings::{BackgroundType, GridLinesMode};
         use egui::accesskit::Role;
         use egui_kittest::{Harness, kittest::Queryable};
@@ -1095,7 +1116,7 @@ mod tests {
         type Row = fn(&mut ChartSettingsState) -> &mut Color32;
         let translucent = Color32::from_rgba_unmultiplied(255, 0, 255, 128);
         let theme = Theme::light();
-        let rows: [(&str, Row, Color32, u8); 11] = [
+        let rows: [(&str, Row, Color32, u8); 18] = [
             ("watermark", |s| &mut s.watermark.color, translucent, 128),
             (
                 "background",
@@ -1153,6 +1174,51 @@ mod tests {
                 Color32::PLACEHOLDER,
                 255,
             ),
+            (
+                "rising body",
+                |s| &mut s.candle_colors.body_up,
+                translucent,
+                128,
+            ),
+            (
+                "falling border",
+                |s| &mut s.candle_colors.border_down,
+                translucent,
+                128,
+            ),
+            (
+                "rising wick",
+                |s| &mut s.candle_colors.wick_up,
+                translucent,
+                128,
+            ),
+            (
+                "symbol price",
+                |s| {
+                    s.scales_and_lines
+                        .symbol_price_color
+                        .get_or_insert(Color32::TRANSPARENT)
+                },
+                translucent,
+                128,
+            ),
+            (
+                "study values",
+                |s| {
+                    s.scales_and_lines
+                        .study_value_color
+                        .get_or_insert(Color32::TRANSPARENT)
+                },
+                translucent,
+                128,
+            ),
+            (
+                "extended-session price",
+                |s| &mut s.scales_and_lines.extended_session_price_color,
+                translucent,
+                128,
+            ),
+            ("alert", |s| &mut s.alerts.alert_color, translucent, 128),
         ];
         for (name, row, seeded, alpha) in rows {
             let shown = if seeded == Color32::PLACEHOLDER {
@@ -1165,11 +1231,19 @@ mod tests {
             if name.starts_with("gradient") {
                 settings.chart_basic_styles.background_type = BackgroundType::VerticalGradient;
             }
+            settings.candle_colors.show_border = true;
             *row(&mut settings) = seeded;
             let mut dialog = SettingsDialog::new();
             dialog.set_control_visible(Control::Templates, false);
             dialog.open(settings);
-            dialog.active_tab = SettingsTab::Canvas;
+            dialog.active_tab = match name {
+                "rising body" | "falling border" | "rising wick" => SettingsTab::Symbol,
+                "symbol price" | "study values" | "extended-session price" => {
+                    SettingsTab::ScalesAndLines
+                }
+                "alert" => SettingsTab::Alerts,
+                _ => SettingsTab::Canvas,
+            };
             let (shown_theme, setup_theme) = (theme.clone(), theme.clone());
             let mut harness = Harness::builder()
                 .with_context_setup(move |ctx| {
@@ -1189,6 +1263,11 @@ mod tests {
             harness.run();
             let [r, g, b, _] = shown.to_srgba_unmultiplied();
             let well = format!("#{r:02X}{g:02X}{b:02X}");
+            // Some wells of the Scales and lines tab sit below the fold of a 900 px window.
+            harness
+                .get_by_role_and_label(Role::ColorWell, &well)
+                .scroll_to_me();
+            harness.run();
             harness
                 .get_by_role_and_label(Role::ColorWell, &well)
                 .click();
@@ -1983,44 +2062,7 @@ mod tests {
                 .save("Old", serde_json::from_value(saved).unwrap())
                 .unwrap();
             dialog.open(ChartSettingsState::from_chart(&chart));
-            let ctx = Context::default();
-            let mut item = None;
-            for step in 0..4 {
-                let events = match (step, item) {
-                    (2, Some(pos)) | (3, Some(pos)) => vec![
-                        egui::Event::PointerMoved(pos),
-                        egui::Event::PointerButton {
-                            pos,
-                            pressed: step == 2,
-                            button: egui::PointerButton::Primary,
-                            modifiers: Default::default(),
-                        },
-                    ],
-                    _ => vec![],
-                };
-                let output = ctx.run_ui(
-                    egui::RawInput {
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        dialog.draw_template_item(
-                            ui,
-                            &Theme::light(),
-                            "Old".into(),
-                            SettingsAction::None,
-                        );
-                    },
-                );
-                item = item.or(output.shapes.iter().find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == "Old" => {
-                        Some(text.pos + text.galley.size() / 2.0)
-                    }
-                    _ => None,
-                }));
-                output.drop_without_applying_deltas();
-            }
-            assert_eq!(dialog.template_name, "Old", "{entry}");
+            load_template(&mut dialog, "Old");
             assert_eq!(
                 dialog.settings().candle_colors,
                 CandleColorConfig {
@@ -2115,6 +2157,48 @@ mod tests {
             }
         }
         action
+    }
+
+    /// Clicks the entry of the template `name` in the template menu, which loads it.
+    fn load_template(dialog: &mut SettingsDialog, name: &str) {
+        let ctx = Context::default();
+        let mut item = None;
+        for step in 0..4 {
+            let events = match (step, item) {
+                (2, Some(pos)) | (3, Some(pos)) => vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        pressed: step == 2,
+                        button: egui::PointerButton::Primary,
+                        modifiers: Default::default(),
+                    },
+                ],
+                _ => vec![],
+            };
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    dialog.draw_template_item(
+                        ui,
+                        &Theme::light(),
+                        name.into(),
+                        SettingsAction::None,
+                    );
+                },
+            );
+            item = item.or(output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == name => {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            }));
+            output.drop_without_applying_deltas();
+        }
+        assert_eq!(dialog.template_name, name);
     }
 
     /// Choosing a family next to the font size draws the labels of the price, study and time
@@ -2260,44 +2344,7 @@ mod tests {
                 .save("Old", serde_json::from_value(saved).unwrap())
                 .unwrap();
             dialog.open(ChartSettingsState::from_chart(&chart));
-            let ctx = Context::default();
-            let mut item = None;
-            for step in 0..4 {
-                let events = match (step, item) {
-                    (2, Some(pos)) | (3, Some(pos)) => vec![
-                        egui::Event::PointerMoved(pos),
-                        egui::Event::PointerButton {
-                            pos,
-                            pressed: step == 2,
-                            button: egui::PointerButton::Primary,
-                            modifiers: Default::default(),
-                        },
-                    ],
-                    _ => vec![],
-                };
-                let output = ctx.run_ui(
-                    egui::RawInput {
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        dialog.draw_template_item(
-                            ui,
-                            &Theme::light(),
-                            "Old".into(),
-                            SettingsAction::None,
-                        );
-                    },
-                );
-                item = item.or(output.shapes.iter().find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == "Old" => {
-                        Some(text.pos + text.galley.size() / 2.0)
-                    }
-                    _ => None,
-                }));
-                output.drop_without_applying_deltas();
-            }
-            assert_eq!(dialog.template_name, "Old", "{pixels:?}");
+            load_template(&mut dialog, "Old");
             let shown = dialog.settings();
             assert_eq!(shown.margins.right_bars, row, "{pixels:?}");
             assert_eq!(dialog.margin_right_str, row.to_string(), "{pixels:?}");
@@ -2322,6 +2369,93 @@ mod tests {
             assert!(config.show_session_breaks);
             let style = chart.series_style(SeriesId::MAIN).unwrap();
             assert_eq!(style.price_line_source, PriceLineSource::LastVisible);
+        }
+    }
+
+    /// A template saved from a chart that keeps its right margin in pixels, loaded on a chart that
+    /// keeps the same pixels at another bar spacing, shows that chart's margin in bars, and Ok keeps
+    /// its margin and its view. An edit of the margin row then sets the margin in bars.
+    #[test]
+    fn templates_keep_a_pixel_right_margin_and_edits_set_bars() {
+        use crate::widget::test_frames::chart;
+        let mut options = crate::config::ChartOptions::default();
+        options.time_scale.right_offset_pixels = Some(60.0);
+        let first = chart(&[100.0], &[110.0]).with_chart_options(options.clone());
+        let mut second = chart(&[100.0], &[110.0]).with_chart_options(options);
+        second.apply_synced_time_scale(12.0, -20.0);
+        let saved = serde_json::to_value(ChartSettingsState::from_chart(&first)).unwrap();
+        let mut dialog = SettingsDialog::new();
+        dialog
+            .templates
+            .save("Pixels", serde_json::from_value(saved).unwrap())
+            .unwrap();
+        dialog.open(ChartSettingsState::from_chart(&second));
+        load_template(&mut dialog, "Pixels");
+        // 60 pixels are 10 bars at the 6 points per bar of the first chart and 5 at 12.
+        assert_eq!(dialog.settings().margins.right_bars, 5.0);
+        dialog.settings().apply_to_chart(&mut second).unwrap();
+        let margin = |chart: &crate::Chart| {
+            let time_scale = &chart.chart_options().time_scale;
+            (
+                time_scale.right_offset,
+                time_scale.right_offset_pixels,
+                chart.get_time_scale_state(),
+            )
+        };
+        assert_eq!(margin(&second), (2.5, Some(60.0), (12.0, -20.0)));
+
+        dialog.margin_right_str = "7.5".into();
+        dialog.active_tab = SettingsTab::Canvas;
+        let SettingsAction::Apply(settings) = click_through(&mut dialog, &["Ok"]) else {
+            panic!("Ok must apply the settings");
+        };
+        settings.apply_to_chart(&mut second).unwrap();
+        assert_eq!(margin(&second), (7.5, None, (12.0, 7.5)));
+    }
+
+    /// Margins that leave no room for prices, which the fit ignores, apply with Ok as a chart
+    /// holds them and as a template saved from that chart loads them on another chart. Typed in,
+    /// they keep Ok disabled.
+    #[test]
+    fn margins_without_room_apply_unless_typed() {
+        use crate::scales::PriceScaleMargins;
+        use crate::widget::test_frames::chart;
+        let without_room = PriceScaleMargins {
+            top: 0.6,
+            bottom: 0.4,
+        };
+        let mut held = chart(&[100.0], &[110.0]);
+        held.price_scale_mut().options_mut().scale_margins = without_room;
+        let mut dialog = SettingsDialog::new();
+        dialog
+            .templates
+            .save("No room", ChartSettingsState::from_chart(&held))
+            .unwrap();
+        let other = PriceScaleMargins::default();
+        for (margins, template, typed, applied) in [
+            (without_room, None, None, Some(without_room)),
+            (other, Some("No room"), None, Some(without_room)),
+            (other, None, Some(("60", "40")), None),
+        ] {
+            let mut chart = chart(&[100.0], &[110.0]);
+            chart.price_scale_mut().options_mut().scale_margins = margins;
+            dialog.open(ChartSettingsState::from_chart(&chart));
+            if let Some(name) = template {
+                load_template(&mut dialog, name);
+            }
+            if let Some((top, bottom)) = typed {
+                dialog.margin_top_str = top.into();
+                dialog.margin_bottom_str = bottom.into();
+                dialog.active_tab = SettingsTab::Canvas;
+            }
+            let shown = match click_through(&mut dialog, &["Ok"]) {
+                SettingsAction::Apply(settings) => {
+                    settings.apply_to_chart(&mut chart).unwrap();
+                    Some(chart.state().price_scale().options().scale_margins)
+                }
+                _ => None,
+            };
+            assert_eq!(shown, applied, "{template:?} {typed:?}");
         }
     }
 }

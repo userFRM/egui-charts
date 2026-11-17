@@ -6,7 +6,7 @@
 //! The colour shows the aggressor side or the delta, as [`BubbleColor`] says.
 //! Turn them on with [`Chart::set_volume_bubbles`](crate::widget::Chart::set_volume_bubbles).
 
-use crate::model::{Bar, BarClock, OrderSide, Tick};
+use crate::model::{Bar, BarClock, OrderSide, Placement, Tick, Timeframe};
 use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, TimeDelta, Utc};
 use egui::{Color32, Mesh, Painter, Pos2, Shape, Vec2};
@@ -90,6 +90,7 @@ impl Default for VolumeBubblesConfig {
 /// Which trades share a bubble. Each group is one bubble, whatever the chart's bar interval,
 /// except for [`Automatic`](Self::Automatic).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum BubbleGrouping {
     /// One bubble per bar and price level, the level being the instrument's tick size, or every
     /// traded price when the feed reports none. Crowded views merge nearby bars and levels into
@@ -131,6 +132,7 @@ pub enum BubbleScalingMode {
 
 /// What the colour of a bubble shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum BubbleColor {
     /// The aggressor side with more volume, or the neutral colour on a tie and when no trade
     /// has a side.
@@ -236,6 +238,9 @@ fn count(count: &mut usize, sum: &mut f64, size: f64, added: bool) {
 pub(crate) struct VolumeBubbles {
     pub(crate) config: VolumeBubblesConfig,
     clock: BarClock,
+    /// The bar of the latest per-bar trade, so a stream of trades finds its session once per
+    /// trading date.
+    placement: Placement,
     step: Option<f64>,
     /// Milliseconds of a time window, for [`BubbleGrouping::TimeWindow`].
     window: i64,
@@ -279,6 +284,7 @@ impl VolumeBubbles {
         let mut bubbles = Self {
             config,
             clock,
+            placement: Placement::default(),
             step,
             window,
             group,
@@ -322,7 +328,7 @@ impl VolumeBubbles {
                 (start, start + TimeDelta::milliseconds(self.window / 2))
             }
             _ => {
-                let bar = self.clock.bar_open(trade.ts);
+                let bar = self.placement.open(&self.clock, trade.ts);
                 (bar, bar)
             }
         };
@@ -408,7 +414,9 @@ impl VolumeBubbles {
     }
 
     /// Draws the bubbles of `bars`, the visible bars, the `i`th bar's at `x(i)` and `spacing`
-    /// apart. Bubbles that do not sit on a bar's centre are placed in its slot by their time.
+    /// apart. Bubbles that do not sit on a bar's centre are placed in its slot by their time, on a
+    /// daily or longer clock with a session in the bar of their trading date, by the time since
+    /// its first instant.
     pub(crate) fn render(
         &self,
         painter: &Painter,
@@ -433,11 +441,44 @@ impl VolumeBubbles {
             None => slot,
         };
         let end = opens[opens.len() - 1] + TimeDelta::milliseconds(slot_of(bars.len() - 1));
+        // On a daily or longer clock with a session a bar holds its trading dates, whose
+        // executions can start before its open and end after the next bar's.
+        let instants = self.clock.has_session()
+            && slot >= Timeframe::Day1.duration_ms()
+            && !matches!(
+                self.config.grouping,
+                BubbleGrouping::Automatic | BubbleGrouping::PriceStep(_)
+            );
+        let reach = TimeDelta::days(if instants { 2 } else { 0 });
+        let first = opens[0]
+            .checked_sub_signed(reach)
+            .unwrap_or(DateTime::<Utc>::MIN_UTC);
+        let last = end
+            .checked_add_signed(reach)
+            .unwrap_or(DateTime::<Utc>::MAX_UTC);
+        let (mut placement, mut start) = (Placement::default(), None);
         let mut shown: Vec<(f32, f32, Bubble)> = Vec::new();
-        for bubble in self.between(opens[0], end) {
-            let i = opens.partition_point(|open| *open <= bubble.at);
-            let Some(i) = i.checked_sub(1) else { continue };
-            let elapsed = (bubble.at - open_of(i)).num_milliseconds();
+        for bubble in self.between(first, last) {
+            let i = match instants {
+                true => opens
+                    .binary_search(&placement.open(&self.clock, bubble.at))
+                    .ok(),
+                false => opens
+                    .partition_point(|open| *open <= bubble.at)
+                    .checked_sub(1),
+            };
+            let Some(i) = i else { continue };
+            // The first instant of the bar, found once per bar: bubbles come in time order.
+            let from = match start {
+                Some((bar, from)) if bar == i => from,
+                _ if instants => {
+                    let from = self.clock.instant_start(bubble.at);
+                    start = Some((i, from));
+                    from
+                }
+                _ => open_of(i),
+            };
+            let elapsed = (bubble.at - from).num_milliseconds();
             let (x, merges) = match self.config.grouping {
                 BubbleGrouping::Automatic | BubbleGrouping::PriceStep(_) => {
                     if open_of(i) != bubble.at {
@@ -760,7 +801,6 @@ impl Scale {
 mod tests {
     use super::*;
     use crate::data::trades::Trades;
-    use crate::model::Timeframe;
     use BubbleGrouping::{Automatic, Executions, PriceStep, TimeWindow, Ungrouped};
 
     /// A trade `second` seconds after 10:00.
@@ -1296,10 +1336,15 @@ mod tests {
     #[test]
     fn bubbles_follow_their_bar_slots_and_execution_times() {
         let ten = "2024-03-15T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
-        let mesh = |grouping, fills: &[(i64, f64)], stamp, timeframe: Timeframe| {
+        // A clock and the open of the first of two bars.
+        let at_ten = |timeframe| {
             let clock = BarClock::new(timeframe);
             let open = clock.bar_open(ten);
-            let bars = [0, timeframe.duration_ms()].map(|ms| {
+            (clock, open)
+        };
+        let mesh = |grouping, fills: &[(i64, f64)], stamp, (clock, open): (BarClock, _)| {
+            let slot = clock.timeframe().map_or(0, |t| t.duration_ms());
+            let bars = [0, slot].map(|ms| {
                 Bar::new(
                     open + TimeDelta::milliseconds(ms) + TimeDelta::seconds(stamp),
                     100.0,
@@ -1341,8 +1386,8 @@ mod tests {
                 })
                 .unwrap_or_default()
         };
-        let centres = |fills: &[(i64, f64)]| {
-            let mesh = mesh(Ungrouped, fills, 0, Timeframe::Min1);
+        let centres = |grouping, fills: &[(i64, f64)], at| {
+            let mesh = mesh(grouping, fills, 0, at);
             let sides = mesh.vertices.len() / fills.len();
             Vec::from_iter(
                 mesh.vertices
@@ -1352,7 +1397,11 @@ mod tests {
         };
         // A quarter into the first bar, half way, and three quarters into the second.
         assert_eq!(
-            centres(&[(15, 100.0), (30, 99.0), (75, 99.0), (30, 99.0)]),
+            centres(
+                Ungrouped,
+                &[(15, 100.0), (30, 99.0), (75, 99.0), (30, 99.0)],
+                at_ten(Timeframe::Min1)
+            ),
             [
                 (87.5, 100.0),
                 (100.0, 101.0),
@@ -1366,11 +1415,11 @@ mod tests {
                 PriceStep(0.25),
                 &[(15, 99.0), (20, 99.25)],
                 0,
-                Timeframe::Min1
+                at_ten(Timeframe::Min1)
             )
             .vertices
             .len(),
-            mesh(Ungrouped, &[(15, 99.0)], 0, Timeframe::Min1)
+            mesh(Ungrouped, &[(15, 99.0)], 0, at_ten(Timeframe::Min1))
                 .vertices
                 .len()
         );
@@ -1380,8 +1429,8 @@ mod tests {
         ] {
             for grouping in [Automatic, PriceStep(1.0)] {
                 let fills = [(40, 100.0), (second + 40, 101.0)];
-                let opens = mesh(grouping, &fills, 0, timeframe);
-                let inside = mesh(grouping, &fills, stamp, timeframe);
+                let opens = mesh(grouping, &fills, 0, at_ten(timeframe));
+                let inside = mesh(grouping, &fills, stamp, at_ten(timeframe));
                 assert!(!opens.vertices.is_empty());
                 assert_eq!(
                     inside.vertices, opens.vertices,
@@ -1398,12 +1447,49 @@ mod tests {
             (TimeWindow(TimeDelta::seconds(10)), 137.5),
         ] {
             let fills = [(15, 100.0), (70, 101.0)];
-            let inside = mesh(grouping, &fills, 30, Timeframe::Min1);
-            let opens = mesh(grouping, &fills, 0, Timeframe::Min1);
+            let inside = mesh(grouping, &fills, 30, at_ten(Timeframe::Min1));
+            let opens = mesh(grouping, &fills, 0, at_ten(Timeframe::Min1));
             assert_eq!(inside.vertices, opens.vertices, "{grouping:?}");
             let second = inside.vertices.len() / 2;
             assert!((inside.vertices[0].pos.x - 87.5).abs() < 0.01);
             assert!((inside.vertices[second].pos.x - second_x).abs() < 0.01);
+        }
+        // Chicago futures trade 17:00 to 16:00 local, CST being UTC-6: Monday's date runs from
+        // Sunday 23:00 UTC, its bar opening at 06:00 UTC, and 05:00 UTC on Tuesday is Tuesday's.
+        #[cfg(feature = "timezones")]
+        {
+            use crate::model::{Session, SessionWindow, TimezoneId};
+            use chrono::{NaiveTime, Weekday::*};
+            let chicago = TimezoneId::named("America/Chicago").unwrap();
+            let hm = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+            let day = BarClock::new(Timeframe::Day1)
+                .with_timezone(chicago.clone())
+                .with_session(
+                    chicago,
+                    Session::new([SessionWindow::new(
+                        [Mon, Tue, Wed, Thu, Fri],
+                        hm(17),
+                        hm(16),
+                    )]),
+                    false,
+                );
+            let monday = "2024-01-08T06:00:00Z".parse::<DateTime<Utc>>().unwrap();
+            let fills = [(11 * 3600, 100.0), (23 * 3600, 101.0)];
+            // 18 of 24 hours after Sunday 23:00: 100 + (0.75 - 0.5) * 50; 6 hours into
+            // Tuesday's date: 150 + (0.25 - 0.5) * 50. Per-bar discs sit on their bars.
+            for (grouping, expected) in [
+                (Ungrouped, [(112.5, 100.0), (137.5, 99.0)]),
+                (Automatic, [(100.0, 100.0), (150.0, 99.0)]),
+            ] {
+                let centres = centres(grouping, &fills, (day.clone(), monday));
+                assert_eq!(centres.len(), 2, "{grouping:?}");
+                for ((x, y), (ex, ey)) in centres.into_iter().zip(expected) {
+                    assert!(
+                        (x - ex).abs() < 0.01 && (y - ey).abs() < 0.01,
+                        "{grouping:?} {x} {y}"
+                    );
+                }
+            }
         }
     }
 }

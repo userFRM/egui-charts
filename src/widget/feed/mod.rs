@@ -14,11 +14,12 @@ use crate::data::inbox::Inbox;
 use crate::data::trades::Trades;
 use crate::data::{
     Datafeed, DepthHistory, DepthRequest, FeedCapabilities, FeedError, Footprint, FootprintRequest,
-    HistoryRequest, Reply, SubscriptionId, TradeRequest,
+    FootprintState, HistoryRequest, Reply, SubscriptionId, TradeRequest,
 };
 use crate::model::{Bar, BarClock, Instrument, OrderBook, Tick, Timeframe};
 use crate::theme::ThemeExt;
 use egui::ViewportId;
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -83,7 +84,7 @@ pub(crate) struct FeedLink {
     /// The trades as a footprint on the instrument's tick, while the chart type or a volume
     /// profile drawing reads them. Raw-only history uses [`FOOTPRINT_BARS`] and
     /// [`FOOTPRINT_ROWS`]; prepared pages outlive those budgets and the raw tape.
-    pub(super) footprint: Option<Footprint>,
+    pub(super) footprint: Option<FootprintState>,
     /// Live trade-bar allocations shared with the sink, independent of paged executions.
     footprint_input: Option<(crate::data::OrderFlowInput, u64)>,
     /// The footprint of the trades before the cutoff, while a candle replay runs under a visible
@@ -95,7 +96,10 @@ pub(crate) struct FeedLink {
     pub(super) depth_history: Option<DepthHistory>,
     depth_complete: bool,
     footprints_complete: bool,
-    footprint_cursor: Option<chrono::DateTime<chrono::Utc>>,
+    /// A terminal footprint error stops requests until refresh, independently of older EOF.
+    footprints_stopped: bool,
+    /// Unavailable spans suppressed only for the current feed context.
+    footprint_unavailable: Vec<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
     /// Where older history continues after an empty page, by source: bars, trades, depth. The
     /// bar cursor keeps the oldest bar held when the feed named it and lapses once that bar goes.
     bar_cursor: Option<(
@@ -155,11 +159,32 @@ impl FeedLink {
         if let Some(flow) = self
             .footprint
             .as_mut()
-            .filter(|flow| flow.prepared_before().is_some())
+            .filter(|flow| flow.live.prepared_before().is_some())
         {
-            flow.rebuild_prepared(&self.trades);
+            flow.live.rebuild_prepared(&self.trades);
         } else if self.footprint.is_some() {
-            self.footprint = self.footprint(None, history);
+            self.footprint = self.footprint(None, history).map(FootprintState::new);
+        }
+    }
+
+    /// Rebuilds a study's order-flow `input` from prepared history and held trades along the
+    /// chart's bars, at the instrument's tick size and latest time, as connecting
+    /// it does. Like `OrderFlowInput::replace_trades`, it keeps quote and book sources, and on a
+    /// trade-based interval a source the sink has allocated to, as they are.
+    pub(super) fn rebuild_study_input(
+        &mut self,
+        input: &crate::data::OrderFlowInput,
+        history: &[Bar],
+    ) {
+        if input.is_footprint()
+            && let Some(flow) = &mut self.footprint
+        {
+            flow.share_prepared();
+        }
+        input.set_tick_size(self.instrument.as_ref().and_then(|i| i.tick_size));
+        input.replace_trades(&self.clock, &self.trades, history, self.footprint.as_ref());
+        if let Some(now) = self.time {
+            input.advance_time(&self.clock, now);
         }
     }
 
@@ -200,7 +225,8 @@ impl FeedLink {
             depth_history: self.depth_history.clone(),
             depth_complete: self.depth_complete,
             footprints_complete: true,
-            footprint_cursor: None,
+            footprints_stopped: true,
+            footprint_unavailable: Vec::new(),
             bar_cursor: None,
             trade_cursor: None,
             depth_cursor: None,
@@ -217,15 +243,19 @@ impl FeedLink {
         }
     }
 
-    /// The held trades as a footprint, or `None` without the instrument's tick size. A trade
-    /// older than the one before it is left out, as it is when it arrives live. The bar of the
-    /// oldest held trade is incomplete until a trade page reports the start of trade history.
+    /// The held trades as a footprint, or `None` without the instrument's tick size. The held
+    /// trades are taken in time order, as a stream can stamp its first trades before held ones.
+    /// The bar of the oldest held trade is incomplete until a trade page reports the start of
+    /// trade history.
     /// On a trade-based interval, paged trades fill only the bars of `history`, the chart's, that
     /// open before the live executions, held ones or those the store kept apart at the first
     /// instant a page covers while the chart holds a bar at or before the oldest of them, or
     /// without them before the oldest pushed bar the history lacks or holds with other values,
-    /// and that they rebuild ([`Footprint::push_history`]). With `before`, includes only
-    /// executions strictly before that replay cutoff.
+    /// and that they rebuild ([`Footprint::push_history`]). No grouping takes in an instant at
+    /// which the held executions may lack some, as a page left them out or no page reached the
+    /// first instant of a stream, whatever subscriptions changed since: the newest executions
+    /// between such instants that prove a bar are kept. With `before`, includes only executions
+    /// strictly before that replay cutoff.
     pub(super) fn footprint(
         &self,
         before: Option<chrono::DateTime<chrono::Utc>>,
@@ -264,16 +294,61 @@ impl FeedLink {
             // after them may be missing: their end is not the page's and proves nothing.
             let ended = self.trades.retained_until().is_none();
             // The sink opened the bars from the oldest live execution the store kept apart, where
-            // the page may hold executions the stream never sent: its allocations fill those
-            // bars, as `OrderFlowInput::chart_run` rebuilds them. A chart that starts after it
-            // holds no bar with the page's executions of that instant.
+            // the page may hold executions the stream never sent, so the page fills none of them.
+            // The sink's allocations fill them, as `OrderFlowInput::chart_run` rebuilds them,
+            // unless the store lost an execution at or after the open of the first: then the run
+            // starts at the oldest bar after the loss whose executions are all held, and without
+            // one `OrderFlowInput::replace_trades` waits for the sink's next allocations. A chart
+            // that starts after it holds no bar with the page's executions of that instant.
             let stream_from = (self.trades.unheld_live())
                 .and_then(|(_, kept)| kept.first())
                 .map(|trade| trade.ts)
                 .filter(|at| history.first().is_some_and(|bar| bar.time <= *at));
-            flow.push_history(&paged, &history[..paged_bars], before, ended, stream_from);
+            // The held executions may lack some of an instant a page left out, or of the first
+            // instant of a stream no page reached, whatever subscriptions changed since: no
+            // grouping takes in such an instant between the oldest paged execution and the first
+            // live one. The executions after the newest are tried first, then those between each
+            // pair of older ones, and the first to prove a bar are kept. Before such an instant
+            // the bar that opens last may hold executions of it and proves nothing, nor does the
+            // end of those executions.
+            let oldest = paged.iter().map(|trade| trade.ts).min();
+            // Until a page fills the time after the executions the first of several subscription
+            // changes retained, the first held instant after them, that of a later stream,
+            // follows a time that may lack all of its executions.
+            let pending = (self.trades.first_retained_until()).and_then(|until| {
+                (paged.iter().map(|trade| trade.ts))
+                    .filter(|at| *at > until)
+                    .min()
+            });
+            let splits: BTreeSet<_> = (self.trades.left_out().iter().copied())
+                .chain(pending)
+                .filter(|at| oldest < Some(*at) && live.is_none_or(|live| *at < live))
+                .collect();
+            let mut end = None;
+            for start in (splits.into_iter().rev().map(Some)).chain([None]) {
+                let part: Vec<_> = (paged.iter().copied())
+                    .filter(|trade| start.is_none_or(|at| trade.ts > at))
+                    .filter(|trade| end.is_none_or(|at| trade.ts < at))
+                    .collect();
+                let bars = end.map_or(paged_bars, |at| {
+                    (history.partition_point(|bar| bar.time < at))
+                        .saturating_sub(1)
+                        .min(paged_bars)
+                });
+                let ended = ended && end.is_none();
+                flow.push_history(&part, &history[..bars], before, ended, stream_from);
+                if !flow.bars().is_empty() {
+                    break;
+                }
+                end = start;
+            }
         } else if !trade_based || lost.is_none() || self.trades.live().next().is_none() {
-            for trade in trades() {
+            // A stream can stamp its first trades before held ones: take them in time order.
+            let mut ordered: Vec<_> = held()
+                .filter(|trade| before.is_none_or(|time| trade.ts < time))
+                .collect();
+            ordered.sort_by_key(|trade| trade.ts);
+            for trade in ordered {
                 let _ = flow.push(trade);
             }
         }
@@ -301,7 +376,7 @@ impl FeedLink {
                 for trade in self.trades.live().take_while(|trade| trade.ts < cutoff) {
                     let _ = live.push(trade);
                 }
-                flow.copy_trade_bars(&live, None);
+                flow.copy_trade_bars((&live).into(), None);
             }
         } else if let Some((input, _)) = &self.footprint_input {
             input.copy_footprint(&mut flow, u64::MAX);
@@ -347,11 +422,130 @@ impl Drop for FeedLink {
 }
 
 impl Chart {
+    /// Installs or replaces this chart's feed, loading from the next [`show`](Self::show).
+    ///
+    /// The same `Arc` allocation is a no-op, also during market replay, where it is compared
+    /// with the saved live feed rather than the replay driver. To reload changed settings in
+    /// the same adapter, leave replay and call [`reload_feed`](Self::reload_feed).
+    ///
+    /// A different feed immediately retires this chart's subscriptions and clears feed-owned
+    /// bars, study histories, order flow, quotes and metadata, even while paused. No new feed
+    /// requests run here. Other charts and a shared replay driver are not changed.
+    ///
+    /// Keeps chart configuration, drawings, host-supplied auxiliary series and
+    /// [`set_study_data`](Self::set_study_data) overrides. The configured initial page size
+    /// stays; first attachment uses the builder default of 1,000 bars. Ends replay locally and
+    /// restores the pre-replay host pause choice. Clears undo/redo, whose retained series could
+    /// otherwise restore old-source bars; the source change is not an undoable action.
+    pub fn set_feed(&mut self, feed: Arc<dyn Datafeed>) {
+        let configured = self
+            .market_replay
+            .as_ref()
+            .map_or(self.feed_link.as_ref(), |replay| replay.feed.as_ref());
+        if configured.is_some_and(|link| Arc::ptr_eq(&link.feed, &feed)) {
+            return;
+        }
+
+        let (mut previous, window) = if let Some(replay) = self.market_replay.take() {
+            // Drop only this chart's driver subscription, without seeking or stopping it.
+            drop(self.feed_link.take());
+            (replay.feed, Some(replay.window))
+        } else {
+            (self.feed_link.take(), self.replay.take())
+        };
+        let host_paused = window.as_ref().map_or_else(
+            || previous.as_ref().is_some_and(|link| link.host_paused),
+            |window| window.feed_paused,
+        );
+        if let Some(window) = window {
+            // Restore only host-owned auxiliary history, never the old main/feed histories.
+            for (id, bars) in window.bars {
+                if id != SeriesId::MAIN
+                    && let Some(item) = self.price_series.iter_mut().find(|item| item.id == id)
+                    && !item.fed
+                {
+                    item.bars = bars;
+                    item.revision = crate::model::next_revision();
+                }
+            }
+            for (size, live) in self
+                .chart_type_params
+                .sizes_mut()
+                .into_iter()
+                .zip(window.live_sizes)
+            {
+                if let Some((live, _)) = live {
+                    *size = live;
+                }
+            }
+        }
+
+        self.legend_instrument = None;
+        self.currency_choice = None;
+        self.bar_close_time = None;
+        self.server_time_offset = None;
+        self.set_quote(None);
+        self.quote_action = None;
+        self.session_quote = None;
+        self.state.price_scale_mut().set_price_precision(None);
+        self.state.price_scale_mut().set_tick_size(None);
+        let initial_bars = previous.as_ref().map_or(1000, |link| link.initial_bars);
+        self.attach_feed(feed, initial_bars);
+        if let (Some(old), Some(new)) = (&mut previous, &mut self.feed_link) {
+            new.adjusted = old.adjusted;
+            new.bubbles_config = std::mem::take(&mut old.bubbles_config);
+            new.bubbles = old
+                .bubbles
+                .take()
+                .map(|bubbles| new.bubbles(bubbles.config));
+            new.depth_history = old.depth_history.take();
+            new.depth_history.iter_mut().for_each(DepthHistory::clear);
+            new.heatmap = old.heatmap.take().map(|_| Default::default());
+            new.heatmap_config = old.heatmap_config;
+            new.book_view = std::mem::take(&mut old.book_view);
+            new.book_visible = old.book_visible;
+        }
+        drop(previous);
+
+        // All old sinks are inactive before shared inputs lose their source context.
+        let clock = self.bar_clock();
+        for study in self.studies.indicators_mut() {
+            for input in study.order_flow_inputs() {
+                input.clear();
+                input.set_tick_size(None);
+                input.set_replay(&clock, None, None, &[]);
+            }
+            study.update(&[], 0);
+        }
+        self.pending_from.fill(Some(0));
+        self.next_refresh.fill(f64::NEG_INFINITY);
+        self.stale.fill(false);
+        self.element_studies = Default::default();
+        self.execution_ranges = Default::default();
+        self.replace_main_data(Vec::new());
+        self.feed = Default::default();
+        for series in self.price_series.iter_mut().filter(|series| series.fed) {
+            series.feed = Default::default();
+        }
+        self.invalidate_study_data();
+        self.state.set_elements(None, false);
+        self.refresh_time_scale_content();
+        #[cfg(feature = "drawings")]
+        self.project_drawing_points();
+        self.set_feed_paused(host_paused);
+        self.history.clear();
+        #[cfg(feature = "drawings")]
+        self.drawings
+            .swap_history(&mut crate::drawings::services::HistoryService::new());
+    }
+
     /// Drives the chart from `feed` from the next [`show`](Self::show) on.
     pub(crate) fn attach_feed(&mut self, feed: Arc<dyn Datafeed>, initial_bars: usize) {
         self.set_timeframe(self.timeframe.unwrap_or_default());
-        // The previous feed's histories, and the bars filled from them, are another request's.
+        // The previous feed's histories, and the bars filled from them, are another request's,
+        // as are the analyst targets it answered.
         self.study_data.clear_feed();
+        self.reload_price_targets();
         let timeframe = self.timeframe.unwrap_or_default();
         self.readout_revision = crate::model::next_revision();
         self.feed_link = Some(FeedLink {
@@ -385,7 +579,8 @@ impl Chart {
             depth_history: None,
             depth_complete: false,
             footprints_complete: false,
-            footprint_cursor: None,
+            footprints_stopped: false,
+            footprint_unavailable: Vec::new(),
             bar_cursor: None,
             trade_cursor: None,
             depth_cursor: None,
@@ -580,7 +775,9 @@ impl Chart {
             {
                 return false;
             }
-            self.symbol_drawings.remove(symbol);
+            if self.symbol_drawings.remove(symbol).is_some() {
+                self.drawing_resets += 1;
+            }
             self.symbol_drawings.shrink_to_fit();
         }
         #[cfg(not(feature = "drawings"))]
@@ -643,15 +840,18 @@ impl Chart {
     /// Asks the feed for data in a currency or unit the host chose, such as `"EUR"` or `"oz"`,
     /// or in the instrument's own with `None`. The library converts nothing: the feed does, and
     /// labels the resolved instrument's currency and unit, which the legend and scale headers
-    /// show. A changed choice drops the bars, trades and depth held, ignores the replies to the
-    /// previous choice and reloads, resolving through [`Datafeed::resolve_converted`] and
-    /// carrying the choice in every history, trade and depth request and subscription,
-    /// including those of studies on other symbols. A feed that cannot convert answers
-    /// [`FeedError::NotSupported`] and the chart shows no data. A feed attached later uses it.
+    /// show. A changed choice drops the bars, trades, depth and analyst targets held, ignores the
+    /// replies to the previous choice and reloads, resolving through
+    /// [`Datafeed::resolve_converted`], asking for targets through
+    /// [`Datafeed::price_targets_converted`] and carrying the choice in every history, trade,
+    /// footprint and depth request and subscription, including those of studies on other
+    /// symbols. A feed that cannot convert answers [`FeedError::NotSupported`] and the chart shows
+    /// no data. A feed attached later uses it.
     pub fn set_conversion(&mut self, conversion: Option<String>) {
         if self.conversion != conversion {
             self.conversion = conversion;
             self.study_data.clear_feed();
+            self.reload_price_targets();
             if let Some(link) = &mut self.feed_link {
                 link.reload_pending = true;
                 // The headers must not keep the previous choice's currency while loading.
@@ -675,6 +875,8 @@ impl Chart {
             && link.adjusted != adjusted
         {
             link.adjusted = adjusted;
+            // Adjusted rows belong to another context even when the symbol and clock match.
+            link.footprint = None;
             link.reload_pending = true;
             self.study_data.clear_feed();
         }

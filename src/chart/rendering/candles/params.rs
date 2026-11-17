@@ -4,6 +4,7 @@
 
 use crate::scales::PriceMap;
 use egui::Color32;
+use std::ops::Range;
 
 use crate::chart::rendering::{RenderContext, StyleColors};
 use crate::model::{Bar, PriceSource};
@@ -40,6 +41,27 @@ pub struct CandleDataContext<'a> {
     pub price_formatter: Option<&'a dyn crate::scales::PriceFormatter>,
 }
 
+impl<'a> CandleDataContext<'a> {
+    /// `visible_data` with the bar of `full_data` just beyond each of its edges where there is
+    /// one, the index of its first bar in `full_data`, and the range of `visible_data` within
+    /// it. A line drawn through them runs on to the plot's edges, where the clip ends it.
+    /// `visible_data` alone when `full_data` is shorter than the window, as when a chart without
+    /// bars of its own shows the whitespace slots of its added series.
+    pub(crate) fn with_neighbours(&self) -> (&'a [Bar], usize, Range<usize>) {
+        let (start, len) = (self.start_idx, self.visible_data.len());
+        if self.full_data.len() < start + len {
+            return (self.visible_data, start, 0..len);
+        }
+        let from = start.saturating_sub(1);
+        let to = (start + len + 1).min(self.full_data.len());
+        (
+            &self.full_data[from..to],
+            from,
+            start - from..start - from + len,
+        )
+    }
+}
+
 /// Bar/candle rendering dimensions
 #[derive(Clone, Copy)]
 pub struct BarDimensions {
@@ -61,13 +83,16 @@ impl BarDimensions {
 pub struct VolumeSettings {
     pub show_volume: bool,
     pub max_volume: f64,
+    /// Width of each volume bar, as `ChartMapping::volume_bar_width` gives it.
+    pub width: f32,
 }
 
 impl VolumeSettings {
-    pub fn new(show_volume: bool, max_volume: f64) -> Self {
+    pub fn new(show_volume: bool, max_volume: f64, width: f32) -> Self {
         Self {
             show_volume,
             max_volume,
+            width,
         }
     }
 }
@@ -139,6 +164,9 @@ impl<'a> ChartTypeParams<'a> {
     }
     pub fn max_volume(&self) -> f64 {
         self.volume.max_volume
+    }
+    pub fn volume_width(&self) -> f32 {
+        self.volume.width
     }
     pub fn bullish_color(&self) -> Color32 {
         self.colors.bullish

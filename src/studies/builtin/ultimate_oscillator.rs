@@ -30,7 +30,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Ultimate Oscillator indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct UltimateOscillator {
     period1: usize, // Short (typically 7)
     period2: usize, // Medium (typically 14)

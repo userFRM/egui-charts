@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 
 /// One instrument of the market heatmap. The library computes no market data.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct MarketHeatmapEntry {
     /// Symbol returned when the tile is selected.
     pub symbol: String,
@@ -18,6 +19,18 @@ pub struct MarketHeatmapEntry {
     /// The value of each metric by [`MarketHeatmapMetric::id`]. A missing or non-finite value is
     /// unavailable for this tile.
     pub values: BTreeMap<String, f64>,
+}
+
+impl MarketHeatmapEntry {
+    /// A tile of `symbol` in `group` without metric values: insert them into
+    /// [`values`](Self::values).
+    pub fn new(symbol: impl Into<String>, group: impl Into<String>) -> Self {
+        Self {
+            symbol: symbol.into(),
+            group: group.into(),
+            values: BTreeMap::new(),
+        }
+    }
 }
 
 /// A market the heatmap can show, with its instruments.
@@ -86,7 +99,8 @@ impl MarketHeatmapMetric {
 /// by the second. Store [`selection`](Self::selection) with the settings and assign it back to
 /// restore the choices; one the host does not offer at the moment stays chosen and shows as
 /// unavailable.
-#[derive(Default)]
+#[derive(Debug, Default)]
+#[non_exhaustive]
 pub struct MarketHeatmapPanel {
     /// The markets to choose from.
     pub universes: Vec<MarketHeatmapUniverse>,

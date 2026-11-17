@@ -278,14 +278,8 @@ impl Drawing {
                     } else {
                         (Align2::RIGHT_BOTTOM, egui::vec2(-gap, -gap))
                     }
-                } else if point.x < other.x {
-                    (Align2::RIGHT_CENTER, egui::vec2(-gap, 0.0))
-                } else if point.x > other.x {
-                    (Align2::LEFT_CENTER, egui::vec2(gap, 0.0))
-                } else if point.y <= other.y {
-                    (Align2::CENTER_BOTTOM, egui::vec2(0.0, -gap))
                 } else {
-                    (Align2::CENTER_TOP, egui::vec2(0.0, gap))
+                    beside_anchor(point, other, gap)
                 };
             boxed_label(
                 painter,
@@ -662,6 +656,21 @@ pub(super) fn boxed_label(
     rect
 }
 
+/// Where a label sits beside the anchor `point` of a line that runs to `other`, `gap` away: left
+/// of a left end, right of a right end, above the upper end of a vertical line and below its lower
+/// end. Returns the label's alignment and its offset from `point`.
+pub(super) fn beside_anchor(point: Pos2, other: Pos2, gap: f32) -> (Align2, egui::Vec2) {
+    if point.x < other.x {
+        (Align2::RIGHT_CENTER, egui::vec2(-gap, 0.0))
+    } else if point.x > other.x {
+        (Align2::LEFT_CENTER, egui::vec2(gap, 0.0))
+    } else if point.y <= other.y {
+        (Align2::CENTER_BOTTOM, egui::vec2(0.0, -gap))
+    } else {
+        (Align2::CENTER_TOP, egui::vec2(0.0, gap))
+    }
+}
+
 /// Milliseconds from bar `a` to bar `b`, from the bars' times. An index past either end of the
 /// series is placed at the most common spacing of the bars at that end; `None` with fewer than
 /// two bars.
@@ -952,6 +961,7 @@ mod tests {
                 bars: &bars,
                 revision: 0,
                 bar_to_x: &x,
+                bar_spacing: 10.0,
                 price_to_y: &y,
                 y_to_price: &inverse,
                 time_axis,
@@ -1151,6 +1161,7 @@ mod tests {
             bars: &[],
             revision: 0,
             bar_to_x: &x,
+            bar_spacing: 1.0,
             price_to_y: &y,
             y_to_price: &inverse,
             time_axis: false,
@@ -1286,6 +1297,7 @@ mod tests {
                     finer: &[],
                     revision: 0,
                     bar_to_x: &|b| b,
+                    bar_spacing: 1.0,
                     price_to_y: &|p| p as f32,
                     y_to_price: &f64::from,
                     time_axis: true,
@@ -1375,6 +1387,7 @@ mod tests {
                     bars: &bars,
                     revision: 0,
                     bar_to_x: &|bar| 10.0 * bar,
+                    bar_spacing: 10.0,
                     price_to_y: &|price| 300.0 - price as f32,
                     y_to_price: &|y| f64::from(300.0 - y),
                     time_axis: false,
@@ -1530,6 +1543,7 @@ mod tests {
             bars: &[],
             revision: 0,
             bar_to_x: &x,
+            bar_spacing: 1.0,
             price_to_y: &y,
             y_to_price: &inverse,
             time_axis: false,
@@ -1581,6 +1595,7 @@ mod tests {
             bars: &bars,
             revision: 0,
             bar_to_x: &|bar| 10.0 * bar,
+            bar_spacing: 10.0,
             price_to_y: &|price| 300.0 - price as f32,
             y_to_price: &|y| f64::from(300.0 - y),
             time_axis: false,
@@ -1663,6 +1678,7 @@ mod tests {
                         bars: &bars,
                         revision: 0,
                         bar_to_x: &|bar| 10.0 * bar,
+                        bar_spacing: 10.0,
                         price_to_y: &|price| 300.0 - price as f32,
                         y_to_price: &|y| f64::from(300.0 - y),
                         time_axis: false,

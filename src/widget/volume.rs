@@ -101,7 +101,7 @@ pub(super) fn paint(
         }
         let histogram = matches!(plot.plot_type, PlotType::Histogram | PlotType::Columns);
         if histogram {
-            plot.width = coords.bar_spacing_for_width() * factor as f32 * 0.8;
+            plot.width = coords.volume_bar_width() * factor as f32;
         }
         let mut points = Vec::new();
         for group in visible.start / factor..visible.end.div_ceil(factor) {
@@ -179,7 +179,8 @@ pub(super) fn tags(
             && study.plot_tagged(line)
             && map.range().contains(value)
         {
-            let label = crate::chart::rendering::axes::named_label(
+            let label = crate::chart::rendering::axes::study_named_label(
+                painter.ctx(),
                 axis.show_study_names,
                 study.name(),
                 study.format_value(value),
@@ -318,6 +319,47 @@ mod tests {
             }
             if rows != shown {
                 failures.push(format!("{kind:?}: volume rows in the tooltip: {rows}"));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// A volume study pinned to a scale draws no columns on a chart type that hides volume, as
+    /// an unpinned one does; a candle chart still draws them.
+    #[test]
+    fn pinned_volume_draws_no_columns_on_charts_that_hide_volume() {
+        use crate::model::ChartType;
+        let mut failures = Vec::new();
+        for (kind, shown) in [(ChartType::Candles, true), (ChartType::Range, false)] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[100.0, 103.0, 106.0, 109.0]);
+            chart.set_chart_type(kind);
+            shapes(&ctx, &mut chart, 0.0, vec![]);
+            let id = chart
+                .indicators()
+                .find(|(_, study)| study.name() == "Volume")
+                .unwrap()
+                .0;
+            assert!(chart.set_indicator_scale(
+                id,
+                crate::studies::StudyScale::Shared(crate::model::SeriesScale::Right)
+            ));
+            let rects = |chart: &mut crate::widget::Chart, time| {
+                shapes(&ctx, chart, time, vec![]);
+                let painted = shapes(&ctx, chart, time + 0.1, vec![]);
+                let area = chart.last_rendered_price_rect;
+                painted
+                    .iter()
+                    .filter(|shape| {
+                        matches!(shape, egui::Shape::Rect(rect) if area.contains_rect(rect.rect))
+                    })
+                    .count()
+            };
+            let with = rects(&mut chart, 0.2);
+            assert!(chart.set_indicator_visible(id, false));
+            let without = rects(&mut chart, 0.6);
+            if (with != without) != shown {
+                failures.push(format!("{kind:?}: {with} rects pinned, {without} hidden"));
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");

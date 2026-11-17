@@ -16,7 +16,7 @@ const MENU_WIDTH: f32 = 428.0;
 const TILE: Vec2 = Vec2::new(29.0, 27.0);
 
 /// A layout trigger with an anchored, scrollable preset menu.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct ChartGridSelector {
     current: ChartLayoutMode,
     /// Synchronization options chosen by the user. Apply these to the layout each frame.
@@ -142,7 +142,7 @@ impl ChartGridSelector {
                     (
                         &mut self.sync.sync_date_range,
                         "Date range",
-                        "A date range chosen on one chart applies to every chart of the group.",
+                        "A date range chosen on one chart applies to every chart of the group; later scrolling stays on each chart. With Scroll and zoom on, chosen ranges reach the group already.",
                     ),
                     (
                         &mut self.sync.sync_drawings,

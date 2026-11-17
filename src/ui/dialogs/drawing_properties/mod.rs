@@ -141,7 +141,7 @@ mod tests {
             (Tool::FixedRangeVolumeProfile, "Rows"),
             (Tool::AnchoredVolumeProfile, "Rows"),
             (Tool::AnchoredVWAP, "Band 1"),
-            (Tool::RegressionTrend, "Deviations"),
+            (Tool::RegressionTrend, "Upper deviation"),
             (Tool::ElliottImpulse, "Degree"),
             (Tool::ElliottCorrection, "Degree"),
             (Tool::ElliottTriangle, "Degree"),

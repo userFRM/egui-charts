@@ -8,7 +8,7 @@ use egui::Color32;
 /// Stochastic Momentum Index (SMI)
 /// Enhanced stochastic that measures close relative to HL range midpoint
 /// More responsive than standard stochastic
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StochasticMomentumIndex {
     /// Lookback period (typically 10)
     period: usize,
@@ -305,7 +305,8 @@ mod tests {
         for (line, expected) in [1525.0 / 27.0, 1700.0 / 27.0].into_iter().enumerate() {
             assert!((smi.values().value(line, 6).unwrap() - expected).abs() < 1e-12);
         }
-        // Older saved lengths keep their exact values, even when unequal.
+        // Older saved lengths keep their exact values, even when unequal, and an SMI saved
+        // before it declared its shading restores it hidden.
         let study = crate::studies::ConfiguredStudy::new(Box::new(smi.clone()));
         let mut saved = crate::studies::StudyTemplate::from_study(&study);
         saved.inputs.retain(|(id, _)| id != "smoothing");
@@ -322,11 +323,10 @@ mod tests {
             .unwrap()
             .create()
             .unwrap();
+        let shading = restored.settings().gradients;
         assert_eq!(
-            serde_json::to_value(restored.settings()).unwrap()["gradients"]
-                .as_array()
-                .map(Vec::len),
-            Some(2)
+            shading.iter().map(|fill| fill.visible).collect::<Vec<_>>(),
+            [false; 2]
         );
         for (id, value) in [("smooth1", 2), ("smooth2", 4)] {
             assert_eq!(

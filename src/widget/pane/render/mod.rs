@@ -104,7 +104,7 @@ impl Chart {
         &mut self,
         ui: &mut Ui,
         footprint: Option<(
-            &crate::data::Footprint,
+            crate::data::FootprintView<'_>,
             &crate::chart::overlays::FootprintConfig,
         )>,
     ) -> Response {
@@ -240,10 +240,15 @@ impl Chart {
             } else {
                 *height
             };
-            let rect = Rect::from_min_size(
-                Pos2::new(available.left(), top),
-                egui::vec2(available.width(), height),
-            );
+            let rect = if *id == main_pane && maximized.is_some_and(|pane| pane != main_pane) {
+                // Hidden by the maximized pane: away from the time axis, which its clip shows.
+                Rect::from_min_size(available.min, egui::vec2(available.width(), 0.0))
+            } else {
+                Rect::from_min_size(
+                    Pos2::new(available.left(), top),
+                    egui::vec2(available.width(), height),
+                )
+            };
             top += height;
             self.pane_layout.panes[*idx].rect = rect;
             rects.push(rect);
@@ -448,7 +453,7 @@ impl Chart {
                 .iter()
                 .map(|at| {
                     let item = &self.price_series[*at];
-                    let close = match hovered {
+                    let close = match self.readout_index {
                         Some(bar) => self.series_close_at(item, bar),
                         None => crate::model::last_with_value(&item.bars).map(|bar| bar.close),
                     };
@@ -625,7 +630,9 @@ impl Chart {
                 panel.legend_offset = legend_offset;
                 panel.pane_controls = true;
                 // A series legend reports its value at any bar, the last close without a crosshair.
-                panel.bar_index = hovered.or(id.filter(|_| study.is_none()).map(|_| 0));
+                panel.bar_index = self
+                    .readout_index
+                    .or(id.filter(|_| study.is_none()).map(|_| 0));
                 let legend_row_height = panel
                     .legend_galley(
                         ui.painter(),

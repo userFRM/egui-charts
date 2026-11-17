@@ -28,7 +28,11 @@ pub(crate) enum ProfileStyle {
         width: f32,
     },
     #[cfg(feature = "drawings")]
-    Drawing { anchored: bool },
+    Drawing {
+        anchored: bool,
+        /// Width of the point of control line, the drawing's line width.
+        poc_width: f32,
+    },
 }
 
 /// `color`, or the active theme's foreground for `Color32::PLACEHOLDER`, which follows the
@@ -91,15 +95,27 @@ pub(crate) fn paint_profile(
     };
     let y_at_row = |row: usize| (price_to_y)(profile.low + row as f64 * profile.row_height);
     let color = shown_color(painter, color);
-    let (drawing, right_aligned, share) = match style {
+    let options = profile.source() == ProfileSource::Options;
+    let (drawing, right_aligned, share, poc_width) = match style {
         ProfileStyle::Study {
             right_aligned,
             width,
-        } => (false, right_aligned, width),
+        } => (
+            false,
+            right_aligned,
+            width,
+            if options {
+                stroke::HAIRLINE
+            } else {
+                stroke::THICK
+            },
+        ),
         #[cfg(feature = "drawings")]
-        ProfileStyle::Drawing { anchored } => (true, anchored, 0.3),
+        ProfileStyle::Drawing {
+            anchored,
+            poc_width,
+        } => (true, anchored, 0.3, poc_width),
     };
-    let options = profile.source() == ProfileSource::Options;
     let spans_view = !drawing && measures_view(profile, right_aligned);
     let rect = Rect::from_two_pos(
         Pos2::new(left, y_at_row(profile.volume.len())),
@@ -136,11 +152,7 @@ pub(crate) fn paint_profile(
             } else {
                 line_rect.x_range()
             },
-            if options {
-                stroke::HAIRLINE
-            } else {
-                stroke::THICK
-            },
+            poc_width,
             [y_at_row(va_high + 1), y_at_row(va_low)],
             config.show_value_area_lines,
             drawing,
@@ -500,7 +512,7 @@ fn draw_volume_profile_lines(
         painter.text(
             Pos2::new(rect.max.x - 25.0, y),
             egui::Align2::CENTER_CENTER,
-            label,
+            crate::localization::text(painter.ctx(), label),
             font.clone(),
             va_color,
         );
@@ -568,7 +580,10 @@ mod tests {
                     color,
                     0.0..300.0,
                     if drawing {
-                        ProfileStyle::Drawing { anchored: false }
+                        ProfileStyle::Drawing {
+                            anchored: false,
+                            poc_width: crate::styles::stroke::THICK,
+                        }
                     } else {
                         ProfileStyle::Study {
                             right_aligned: false,

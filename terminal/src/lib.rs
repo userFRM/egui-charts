@@ -71,10 +71,13 @@ type Intercept = Box<dyn FnMut(&Action) -> bool>;
 /// charts on the host's feed and services. It performs every action its controls emit unless the
 /// host intercepts it.
 ///
-/// Every chart slot loads from the same [`Datafeed`]. Each service is handed to the components
-/// that consume it; a control whose service or output is absent is hidden. The controls of
-/// features the terminal does not perform yet stay hidden and the services passed for them are
-/// kept unused.
+/// Every new chart slot starts on the terminal's [`Datafeed`]. A host can use
+/// [`Chart::set_feed`] through [`Self::chart_mut`] or [`Self::show_with`] to bind individual slots
+/// independently, without changing the terminal's services or default feed. Reapply bindings
+/// after a layout is restored; feeds are not serialized. Each service is handed to the
+/// components that consume it; a control whose service or output is absent is hidden. The
+/// controls of features the terminal does not perform yet stay hidden and the services passed
+/// for them are kept unused.
 pub struct Terminal {
     charts: Vec<Chart>,
     layout: ChartLayout,

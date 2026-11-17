@@ -37,17 +37,32 @@ fn interval(value: u32, unit: TimeframeUnit) -> Timeframe {
         TimeframeUnit::Volume => Timeframe::Volume(count),
         TimeframeUnit::Range => Timeframe::Range(count),
         TimeframeUnit::Delta => Timeframe::Delta(count),
-        _ => format!(
-            "{value}{}",
-            match unit {
-                TimeframeUnit::Minute => "min",
-                TimeframeUnit::Month => "month",
-                _ => unit.short_name(),
-            }
-        )
-        .parse()
-        .expect("valid interval unit"),
+        _ => as_preset(
+            format!(
+                "{value}{}",
+                match unit {
+                    TimeframeUnit::Minute => "min",
+                    TimeframeUnit::Month => "month",
+                    _ => unit.short_name(),
+                }
+            )
+            .parse()
+            .expect("valid interval unit"),
+        ),
     }
+}
+
+/// The preset the menu names like `tf` (60 seconds is 1 minute), else `tf`.
+///
+/// Labels are compared rather than durations, so 7 days stays apart from the
+/// calendar week and 30 days from the calendar month.
+fn as_preset(tf: Timeframe) -> Timeframe {
+    let custom = |tf: &Timeframe| matches!(tf, Timeframe::Custom(_));
+    PRESETS
+        .iter()
+        .copied()
+        .find(|preset| custom(&tf) && !custom(preset) && parts(*preset) == parts(tf))
+        .unwrap_or(tf)
 }
 
 fn parts(tf: Timeframe) -> (u64, TimeframeUnit) {
@@ -193,6 +208,7 @@ pub enum TimeframeAction {
 /// Host-owned interval settings. Save with the user's settings and restore with
 /// [`TimeframeSelector::set_preferences`]. The selector owns no storage.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct TimeframePreferences {
     /// Pinned intervals, including those temporarily unavailable from a source.
     #[serde(default)]
@@ -206,6 +222,7 @@ pub struct TimeframePreferences {
 }
 
 /// Timeframe selector
+#[derive(Debug)]
 pub struct TimeframeSelector {
     /// Currently selected timeframe
     pub current: Timeframe,
@@ -293,16 +310,18 @@ impl TimeframeSelector {
         }
     }
 
-    /// Restore saved lists, discarding duplicate custom entries.
+    /// Restore saved lists, discarding duplicate custom entries and those that
+    /// equal a preset.
     pub fn set_preferences(&mut self, preferences: TimeframePreferences) {
         self.hidden_timeframes = preferences.hidden_timeframes.into_iter().collect();
         self.favorites = preferences
             .favorites
             .into_iter()
+            .map(as_preset)
             .filter(|tf| !self.hidden_timeframes.contains(tf))
             .collect();
         self.custom_timeframes.clear();
-        for tf in preferences.custom_timeframes {
+        for tf in preferences.custom_timeframes.into_iter().map(as_preset) {
             if !self.custom_timeframes.contains(&tf) && !PRESETS.contains(&tf) {
                 self.custom_timeframes.push(tf);
             }
@@ -1196,6 +1215,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The form and older saves resolve an interval the menu names like a preset to that preset.
+    #[test]
+    fn a_custom_interval_equal_to_a_preset_is_the_preset() {
+        let seconds = |n| Model::Custom(NonZeroU64::new(n).unwrap());
+        for (value, unit, expected) in [
+            (60, TimeframeUnit::Second, Model::Min1),
+            (300, TimeframeUnit::Second, Model::Min5),
+            (60, TimeframeUnit::Minute, Model::Hour1),
+            (240, TimeframeUnit::Minute, Model::Hour4),
+            (24, TimeframeUnit::Hour, Model::Day1),
+            (1440, TimeframeUnit::Minute, Model::Day1),
+            // A preset that is itself custom, and intervals no preset names.
+            (15, TimeframeUnit::Second, seconds(15)),
+            (90, TimeframeUnit::Second, seconds(90)),
+            (7, TimeframeUnit::Day, seconds(604_800)),
+            (30, TimeframeUnit::Day, seconds(2_592_000)),
+        ] {
+            assert_eq!(interval(value, unit), expected, "{value} {unit:?}");
+        }
+        // Older saves hold the duplicates as custom entries, one of them starred.
+        let saved = r#"{"favorites":[{"Custom":60}],"custom_timeframes":[{"Custom":60},{"Custom":300},{"Custom":3600},{"Custom":14400},{"Custom":86400},{"Custom":90},{"Custom":604800}],"hidden_timeframes":[]}"#;
+        let mut selector = TimeframeSelector::default();
+        selector.set_preferences(serde_json::from_str(saved).unwrap());
+        assert_eq!(
+            selector.custom_timeframes,
+            vec![seconds(90), seconds(604_800)]
+        );
+        assert_eq!(selector.favorites, HashSet::from([Model::Min1]));
     }
 
     /// The feed's intervals and the symbol's both apply, and an empty list differs from none.

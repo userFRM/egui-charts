@@ -40,7 +40,7 @@ pub enum AtrSmoothing {
 }
 
 /// Avg True Range indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ATR {
     period: usize,
     smoothing: AtrSmoothing,
@@ -50,7 +50,7 @@ pub struct ATR {
     visible: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct State {
     previous: Option<f64>,
     usable: usize,

@@ -246,6 +246,7 @@ impl Quote {
 
 /// The session of an extended-hours trade.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExtendedSession {
     /// Before the regular session opens.
     PreMarket,
@@ -255,6 +256,7 @@ pub enum ExtendedSession {
 
 /// The latest trade of a symbol outside its regular session.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ExtendedHoursQuote {
     /// Whether the trade was before or after the regular session.
     pub session: ExtendedSession,
@@ -263,6 +265,17 @@ pub struct ExtendedHoursQuote {
     pub last: f64,
     /// When `last` traded.
     pub time: DateTime<Utc>,
+}
+
+impl ExtendedHoursQuote {
+    /// A trade at `last` at `time`, in `session`.
+    pub fn new(session: ExtendedSession, last: f64, time: DateTime<Utc>) -> Self {
+        Self {
+            session,
+            last,
+            time,
+        }
+    }
 }
 
 /// Level 1 quote -- best bid and ask (top-of-book).

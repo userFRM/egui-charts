@@ -40,9 +40,9 @@ pub use domain::{
     FibonacciConfig, FibonacciLevel, FolderSync, FontWeight, GannConfig, GannFanDirection,
     GannLevel, GhostCandle, GhostFeedConfig, HandlePos, ImageConfig, LineMeasurementPosition,
     LineMeasurements, LineTextHorizontalAlign, LineTextOrientation, LineTextVerticalAlign,
-    NoteTextStyle, ParseToolTypeError, PitchforkConfig, PitchforkLevel, PositionReadout,
-    PositionSize, PositionSizing, PositionStyle, RegressionTrendConfig, TimeframeVisibility,
-    VwapBand, VwapBandMode, VwapConfig, VwapFill, VwapPlotType,
+    MiddleLineStyle, NoteTextStyle, ParseToolTypeError, PitchforkConfig, PitchforkLevel,
+    PositionReadout, PositionSize, PositionSizing, PositionStyle, RegressionTrendConfig,
+    TimeframeVisibility, VwapBand, VwapBandLine, VwapBandMode, VwapConfig, VwapFill, VwapPlotType,
 };
 
 // Re-export manager types

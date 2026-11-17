@@ -212,7 +212,8 @@ mod tests {
 
     /// Entering own data shows one chart on the visitor's data and leaves the synthetic session
     /// untouched: stored as it was left, paused, and back exactly as it was when the visitor
-    /// leaves. In between, what belongs to the synthetic session refuses.
+    /// leaves. In between, what belongs to the synthetic session refuses, and on either side a
+    /// study template that keeps a symbol or interval the data on show lacks changes nothing.
     #[test]
     fn own_data_sets_the_synthetic_workspace_aside_and_brings_it_back() {
         const J3: &str = r#"{"t":1794407580,"o":100.75,"h":103.0,"l":100.5,"c":102.5,"v":1500}"#;
@@ -226,7 +227,10 @@ mod tests {
         settle(&mut app, &ctx);
         // A synthetic workspace that is not the default one: two charts, a comparison, a study.
         app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
-        app.handle_comparison(CompareAction::AddSymbol("AAPL".into(), Default::default()));
+        app.handle_comparison(CompareAction::AddSymbol(
+            "STOCKA".into(),
+            Default::default(),
+        ));
         app.chart
             .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
         settle(&mut app, &ctx);
@@ -304,9 +308,22 @@ mod tests {
         assert_eq!(app.layout_tabs.len(), tabs);
         assert!(notified(&app, "Layouts: available on synthetic data only."));
         // A symbol outside the profile is refused. One of the profile is asked of its service.
-        app.switch_symbol("AAPL");
+        app.switch_symbol("STOCKA");
         assert_eq!(app.chart.symbol(), "ABC");
-        assert!(notified(&app, "AAPL is not a symbol of this data source"));
+        assert!(notified(&app, "STOCKA is not a symbol of this data source"));
+        // So is a study template that keeps one, or an interval the service does not have.
+        let mut kept = app.chart.study_template_set();
+        kept.symbol = Some("STOCKB".to_owned());
+        app.load_study_template(&kept);
+        assert!(notified(&app, "STOCKB is not a symbol of this data source"));
+        kept.symbol = None;
+        kept.interval = Some(Timeframe::Hour4);
+        app.load_study_template(&kept);
+        assert!(notified(&app, "The data source has no interval"));
+        assert_eq!(
+            (app.chart.symbol(), app.chart.timeframe()),
+            ("ABC", Some(Timeframe::Min1))
+        );
         app.switch_symbol("XYZ");
         until(&ctx, &mut app.chart, "the other symbol", complete);
         assert_eq!(
@@ -338,5 +355,39 @@ mod tests {
         assert_eq!(layout(&mut app), before);
         assert_eq!((app.extra_charts.len(), app.comparisons.len()), (1, 1));
         assert_eq!(app.state.symbol, symbol);
+        // A study template that keeps a symbol of the visitor's data does not bring it here.
+        kept.symbol = Some("XYZ".to_owned());
+        kept.interval = None;
+        app.load_study_template(&kept);
+        assert_eq!(app.chart.symbol(), symbol);
+        assert!(notified(&app, "XYZ is not a symbol of this data source"));
+    }
+
+    /// On own data, time and sales writes a price at the decimals of the profile's price step,
+    /// as the chart's price scale does, and so does the notice of a size filter that matches.
+    #[test]
+    fn time_and_sales_writes_own_data_prices_at_the_price_step() {
+        use egui_charts::ui::widget_bar::TradeSizeFilter;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let server = Server::start(pages(vec!["[]".to_owned()]));
+        let mut own = profile(&server.origin);
+        own.tick_size = Some(0.001);
+        app.connect_own_data(own, Secrets::new());
+        let step = |chart: &Chart| chart.instrument().and_then(|i| i.tick_size);
+        until(&ctx, &mut app.chart, "the price step", |chart| {
+            step(chart) == Some(0.001)
+        });
+        let mut filter = TradeSizeFilter::new(1.0);
+        filter.sound = true;
+        app.time_and_sales.filters.push(filter);
+        let trade = egui_charts::model::Tick::new(chrono::Utc::now(), 12.347, 5.0, None);
+        app.feed_time_and_sales(vec![trade]);
+        // The step 0.001 has three decimals: the list and the notice write 12.347, not 12.35.
+        assert_eq!(app.time_and_sales.config.price_decimals, Some(3));
+        assert_eq!(
+            app.toasts.toasts().last().unwrap().message,
+            "Size filter matched on fill: 5 at 12.347"
+        );
     }
 }

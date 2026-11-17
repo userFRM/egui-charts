@@ -9,13 +9,14 @@ use egui::Color32;
 /// Composite momentum indicator combining:
 /// 1. Standard RSI
 /// 2. Up/Down Streak Length RSI
-/// 3. Percent Rank of Rate of Change
+/// 3. Percent rank of the one-bar return: the share of the previous rank-period returns at or
+///    below the latest one
 ///
-/// The pane starts with guides at 70, 50 and 30 and a light blue fill between the outer guides.
-/// Applied study settings edit each guide and the fill independently.
+/// The pane starts with an upper guide at 70, a lower guide at 30 and a light blue fill between
+/// them. Applied study settings edit each guide and the fill independently.
 ///
 /// Developed by Larry Connors
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ConnorsRSI {
     /// RSI period (typically 3)
     rsi_period: usize,
@@ -29,12 +30,13 @@ pub struct ConnorsRSI {
     visible: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     previous: Option<f64>,
     streak: f64,
     price_rsi: (usize, f64, f64),
     streak_rsi: (usize, f64, f64),
+    /// The last rank-period one-bar returns.
     roc: std::collections::VecDeque<f64>,
 }
 
@@ -125,7 +127,7 @@ impl Indicator for ConnorsRSI {
                     return IndicatorValue::None;
                 }
                 let previous = state.previous.replace(bar.close);
-                let (mut price_rsi, mut streak_rsi, mut roc) = (f64::NAN, f64::NAN, f64::NAN);
+                let (mut price_rsi, mut streak_rsi, mut roc) = (f64::NAN, f64::NAN, None);
                 if let Some(previous) = previous {
                     price_rsi =
                         Self::next_rsi(&mut state.price_rsi, bar.close - previous, self.rsi_period);
@@ -151,23 +153,20 @@ impl Indicator for ConnorsRSI {
                     );
                     state.streak = streak;
                     if previous != 0.0 {
-                        roc = (bar.close - previous) / previous * 100.0;
+                        roc = Some((bar.close - previous) / previous * 100.0);
                     }
                 }
-                let rank = if state.roc.len() == self.rank_period && !roc.is_nan() {
-                    state
-                        .roc
-                        .iter()
-                        .filter(|&&v| !v.is_nan() && v < roc)
-                        .count() as f64
-                        / self.rank_period as f64
-                        * 100.0
-                } else {
-                    f64::NAN
-                };
-                state.roc.push_back(roc);
-                if state.roc.len() > self.rank_period {
-                    state.roc.pop_front();
+                // The share of the previous `rank_period` returns at or below this one. A bar
+                // without a return has no rank and leaves the window as it was.
+                let mut rank = f64::NAN;
+                if let Some(roc) = roc {
+                    if state.roc.len() == self.rank_period {
+                        rank = state.roc.iter().filter(|&&v| v <= roc).count() as f64
+                            / self.rank_period as f64
+                            * 100.0;
+                        state.roc.pop_front();
+                    }
+                    state.roc.push_back(roc);
                 }
                 if price_rsi.is_nan() || streak_rsi.is_nan() || rank.is_nan() {
                     IndicatorValue::None
@@ -195,10 +194,6 @@ impl Indicator for ConnorsRSI {
         }
     }
 
-    fn level_fill_indices(&self) -> Option<[usize; 2]> {
-        Some([0, 2])
-    }
-
     fn level_fill_color(&self) -> Color32 {
         palette::LIGHT_BLUE.gamma_multiply_u8(26)
     }
@@ -209,7 +204,6 @@ impl Indicator for ConnorsRSI {
             range: Some((0.0, 100.0)),
             levels: vec![
                 (70.0, palette::MUTED, "Upper guide"),
-                (50.0, palette::MUTED.gamma_multiply_u8(128), "Middle guide"),
                 (30.0, palette::MUTED, "Lower guide"),
             ],
             fill_between_levels: true,
@@ -258,37 +252,43 @@ mod tests {
         }
     }
 
+    /// Wilder RSI(2) of the closes reads 100, 50, 25, 25, 25 and of the streaks 100, 25, 50/3,
+    /// 450/7, 450/7 from bar 2. The rank waits for two previous returns, so the first value is at
+    /// bar 3. The returns 1, 100/101, -100/102, -100/101, 0 and 0 percent rank 0, 0, 100 and, the
+    /// last tied with the zero before it, 100 percent.
     #[test]
     fn test_streak_calculation() {
-        let data = [
-            make_bar(100.0),
-            make_bar(101.0), // +1
-            make_bar(102.0), // +2
-            make_bar(101.0), // -1
-            make_bar(100.0), // -2
-            make_bar(100.0), // 0
+        let data = [100.0, 101.0, 102.0, 101.0, 100.0, 100.0, 100.0].map(make_bar);
+        let expected = [
+            None,
+            None,
+            None,
+            Some(25.0),
+            Some(125.0 / 9.0),
+            Some(1325.0 / 21.0),
+            Some(1325.0 / 21.0),
         ];
-
-        // Wilder RSI(2): price = 100, 50, 25, 25; streak = 100, 25, 50/3, 450/7.
-        // The last two returns rank the current return at 0, 0, 0, then 100 percent.
-        let expected = [200.0 / 3.0, 25.0, 125.0 / 9.0, 1325.0 / 21.0];
         let mut study = ConnorsRSI::new().with_periods(2, 2, 2);
         study.calculate(&data);
-        for (bar, want) in (2..data.len()).zip(expected) {
-            let got = study.values().value(0, bar).expect("defined Connors RSI");
-            assert!((got - want).abs() < 1e-9, "bar {bar}: {got} != {want}");
+        for (bar, want) in expected.into_iter().enumerate() {
+            let got = study.values().value(0, bar);
+            let same = match (got, want) {
+                (Some(got), Some(want)) => (got - want).abs() < 1e-9,
+                (got, want) => got.is_none() && want.is_none(),
+            };
+            assert!(same, "bar {bar}: {got:?} != {want:?}");
         }
     }
 
-    /// A flat series has no gains or losses: both RSI components are the neutral 50 and no
-    /// return ranks above an equal one, so the composite is (50 + 50 + 0) / 3.
+    /// A flat series has no gains or losses, so both RSI components are the neutral 50, and each
+    /// return ties with the previous ones and ranks at 100: (50 + 50 + 100) / 3.
     #[test]
     fn flat_series_uses_neutral_rsi() {
         let mut crsi = ConnorsRSI::new().with_periods(3, 2, 5);
         let data: Vec<Bar> = (0..20).map(|_| make_bar(100.0)).collect();
         crsi.calculate(&data);
         match crsi.values.to_rows()[19] {
-            IndicatorValue::Single(v) => assert!((v - 100.0 / 3.0).abs() < 1e-9),
+            IndicatorValue::Single(v) => assert!((v - 200.0 / 3.0).abs() < 1e-9),
             _ => panic!("expected a value after warmup"),
         }
     }

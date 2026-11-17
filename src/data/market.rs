@@ -22,6 +22,29 @@ pub struct NewsQuery {
     pub limit: usize,
 }
 
+impl NewsQuery {
+    /// Up to `limit` headlines about the whole market, of every topic and provider. Assign
+    /// [`symbols`](Self::symbols), [`topics`](Self::topics) and [`providers`](Self::providers) to
+    /// narrow it, and [`highlights`](Self::highlights) for summaries instead of headlines.
+    ///
+    /// ```
+    /// use egui_charts::data::NewsQuery;
+    ///
+    /// let mut query = NewsQuery::new(50);
+    /// query.symbols.push("AAPL".into());
+    /// assert!(query.topics.is_empty());
+    /// ```
+    pub fn new(limit: usize) -> Self {
+        Self {
+            symbols: Vec::new(),
+            topics: Vec::new(),
+            providers: Vec::new(),
+            highlights: false,
+            limit,
+        }
+    }
+}
+
 /// One story, already formatted for display.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -74,6 +97,7 @@ pub enum CalendarKind {
 
 /// How much an economic event is expected to move the market.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum Importance {
     /// Low importance.
     Low,
@@ -98,6 +122,34 @@ pub struct CalendarQuery {
     pub countries: Vec<String>,
     /// Only events at least this important, when set. Set for economic events only.
     pub importance: Option<Importance>,
+}
+
+impl CalendarQuery {
+    /// The events of the `kind` calendar from `from` until before `to`, of every country and
+    /// importance. Assign [`countries`](Self::countries) and, for economic events,
+    /// [`importance`](Self::importance) to narrow it.
+    ///
+    /// ```
+    /// use egui_charts::data::{CalendarKind, CalendarQuery, Importance};
+    ///
+    /// let mut query = CalendarQuery::new(
+    ///     CalendarKind::Economic,
+    ///     "2026-01-05T00:00:00Z".parse()?,
+    ///     "2026-01-12T00:00:00Z".parse()?,
+    /// );
+    /// query.importance = Some(Importance::High);
+    /// assert!(query.countries.is_empty());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn new(kind: CalendarKind, from: DateTime<Utc>, to: DateTime<Utc>) -> Self {
+        Self {
+            kind,
+            from,
+            to,
+            countries: Vec::new(),
+            importance: None,
+        }
+    }
 }
 
 /// One calendar event, its figures already formatted for display.
@@ -217,6 +269,7 @@ impl ScreenerUniverse {
 
 /// How a screener filter compares a column's value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ScreenerOp {
     /// Greater than the filter's value.
     Above,
@@ -226,6 +279,7 @@ pub enum ScreenerOp {
 
 /// One condition every row must meet.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScreenerFilter {
     /// The [`ScreenerColumn::id`] compared.
     pub column: String,
@@ -233,6 +287,24 @@ pub struct ScreenerFilter {
     pub op: ScreenerOp,
     /// Comparison threshold.
     pub value: f64,
+}
+
+impl ScreenerFilter {
+    /// Rows whose `column` compares to `value` as `op` says.
+    ///
+    /// ```
+    /// use egui_charts::data::{ScreenerFilter, ScreenerOp};
+    ///
+    /// let filter = ScreenerFilter::new("price", ScreenerOp::Above, 10.0);
+    /// assert_eq!(filter.column, "price");
+    /// ```
+    pub fn new(column: impl Into<String>, op: ScreenerOp, value: f64) -> Self {
+        Self {
+            column: column.into(),
+            op,
+            value,
+        }
+    }
 }
 
 /// The rows a screener asks [`Datafeed::screen`](super::Datafeed::screen) for. The feed
@@ -258,6 +330,33 @@ pub struct ScreenerQuery {
     pub offset: usize,
     /// Rows wanted at most.
     pub limit: usize,
+}
+
+impl ScreenerQuery {
+    /// Up to `limit` rows from the first, in the feed's own order, without a universe,
+    /// description, column or filter. Assign [`columns`](Self::columns) for the values each row
+    /// answers, and the other fields to describe, filter, sort and page the screen.
+    ///
+    /// ```
+    /// use egui_charts::data::{ScreenerFilter, ScreenerOp, ScreenerQuery};
+    ///
+    /// let mut query = ScreenerQuery::new(200);
+    /// query.columns = vec!["price".into(), "change_percent".into()];
+    /// query.filters.push(ScreenerFilter::new("price", ScreenerOp::Above, 10.0));
+    /// assert_eq!(query.offset, 0);
+    /// ```
+    pub fn new(limit: usize) -> Self {
+        Self {
+            universe: None,
+            text: String::new(),
+            columns: Vec::new(),
+            filters: Vec::new(),
+            sort_by: None,
+            descending: false,
+            offset: 0,
+            limit,
+        }
+    }
 }
 
 /// What a feed answers for a screen that has a text description.
@@ -310,6 +409,23 @@ pub struct HotlistQuery {
     pub list: String,
     /// Symbols wanted at most.
     pub limit: usize,
+}
+
+impl HotlistQuery {
+    /// Up to `limit` symbols of the hotlist `list`.
+    ///
+    /// ```
+    /// use egui_charts::data::HotlistQuery;
+    ///
+    /// let query = HotlistQuery::new("Top gainers", 50);
+    /// assert_eq!(query.list, "Top gainers");
+    /// ```
+    pub fn new(list: impl Into<String>, limit: usize) -> Self {
+        Self {
+            list: list.into(),
+            limit,
+        }
+    }
 }
 
 /// One symbol of a hotlist, with its last price and its change since the previous close.

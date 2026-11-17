@@ -129,6 +129,9 @@ pub fn render_chart_type(
     }
 
     let x_of = |i| idx_to_coord(ctx.start_idx + i, params.chart_rect_min_x());
+    // Line-based chart types draw through the bar beyond each edge of the view, so their lines
+    // and fills run on to the plot's edges; markers and volume stay on the bars in view.
+    let (joined, joined_start, in_view) = ctx.with_neighbours();
 
     match chart_type {
         // === Standard OHLC Types ===
@@ -146,6 +149,7 @@ pub fn render_chart_type(
                 params.wick_width(),
                 params.show_volume(),
                 params.max_volume(),
+                params.volume_width(),
                 params.chart_rect_min_x(),
                 &idx_to_coord,
                 &params.type_params.styles.candles,
@@ -167,6 +171,7 @@ pub fn render_chart_type(
                 params.wick_width(),
                 params.show_volume(),
                 params.max_volume(),
+                params.volume_width(),
                 params.chart_rect_min_x(),
                 &idx_to_coord,
                 &params.type_params.styles.bars,
@@ -185,6 +190,7 @@ pub fn render_chart_type(
                 params.wick_width(),
                 params.show_volume(),
                 params.max_volume(),
+                params.volume_width(),
                 params.chart_rect_min_x(),
                 &idx_to_coord,
                 &params.type_params.styles.hollow,
@@ -213,10 +219,12 @@ pub fn render_chart_type(
             line::render_line(
                 painter,
                 ctx.volume_ctx,
-                ctx.visible_data,
-                ctx.start_idx,
+                joined,
+                joined_start,
+                in_view,
                 params.show_volume(),
                 params.max_volume(),
+                params.volume_width(),
                 ctx.colors,
                 ctx.price_scale,
                 params.chart_rect_min_x(),
@@ -229,10 +237,12 @@ pub fn render_chart_type(
             line::render_line_with_markers(
                 painter,
                 ctx.volume_ctx,
-                ctx.visible_data,
-                ctx.start_idx,
+                joined,
+                joined_start,
+                in_view,
                 params.show_volume(),
                 params.max_volume(),
+                params.volume_width(),
                 ctx.colors,
                 ctx.price_scale,
                 params.chart_rect_min_x(),
@@ -246,10 +256,12 @@ pub fn render_chart_type(
             line::render_step_line(
                 painter,
                 ctx.volume_ctx,
-                ctx.visible_data,
-                ctx.start_idx,
+                joined,
+                joined_start,
+                in_view,
                 params.show_volume(),
                 params.max_volume(),
+                params.volume_width(),
                 ctx.colors,
                 ctx.price_scale,
                 params.chart_rect_min_x(),
@@ -265,10 +277,12 @@ pub fn render_chart_type(
                 painter,
                 price_rect,
                 ctx.volume_ctx,
-                ctx.visible_data,
-                ctx.start_idx,
+                joined,
+                joined_start,
+                in_view,
                 params.show_volume(),
                 params.max_volume(),
+                params.volume_width(),
                 ctx.colors,
                 ctx.price_scale,
                 params.chart_rect_min_x(),
@@ -281,10 +295,12 @@ pub fn render_chart_type(
             area::render_hlc_area(
                 painter,
                 ctx.volume_ctx,
-                ctx.visible_data,
-                ctx.start_idx,
+                joined,
+                joined_start,
+                in_view,
                 params.show_volume(),
                 params.max_volume(),
+                params.volume_width(),
                 ctx.colors,
                 ctx.price_scale,
                 params.chart_rect_min_x(),
@@ -304,6 +320,7 @@ pub fn render_chart_type(
                 params.bar_width(),
                 params.show_volume(),
                 params.max_volume(),
+                params.volume_width(),
                 params.chart_rect_min_x(),
                 &idx_to_coord,
                 params.bullish_color(),
@@ -317,10 +334,12 @@ pub fn render_chart_type(
                 painter,
                 price_rect,
                 ctx.volume_ctx,
-                ctx.visible_data,
-                ctx.start_idx,
+                joined,
+                joined_start,
+                in_view,
                 params.show_volume(),
                 params.max_volume(),
+                params.volume_width(),
                 ctx.colors,
                 ctx.price_scale,
                 params.chart_rect_min_x(),
@@ -341,6 +360,7 @@ pub fn render_chart_type(
                 params.bar_width(),
                 params.show_volume(),
                 params.max_volume(),
+                params.volume_width(),
                 ctx.colors,
                 ctx.price_scale,
                 ctx.price_formatter,
@@ -444,8 +464,10 @@ pub fn render_chart_type(
                 ctx.volume_ctx,
                 ctx.visible_data,
                 ctx.start_idx,
+                0..ctx.visible_data.len(),
                 false,
                 params.max_volume(),
+                params.volume_width(),
                 ctx.colors,
                 ctx.price_scale,
                 params.chart_rect_min_x(),
@@ -500,6 +522,7 @@ mod tests {
         styles.marker_radius = 8.0;
         styles.area.marker_radius = 8.0;
         styles.baseline.marker_radius = 8.0;
+        styles.step_line_price_source = Some(crate::model::PriceSource::Open);
         styles.area.top_fill = Color32::from_rgba_unmultiplied(255, 0, 0, 200);
         styles.area.bottom_fill = Color32::from_rgba_unmultiplied(0, 0, 255, 40);
         styles.baseline.above_fill = Color32::from_rgba_unmultiplied(255, 255, 0, 100);

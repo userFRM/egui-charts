@@ -7,12 +7,19 @@ use crate::localization as l10n;
 use egui::{Rect, Ui, Vec2};
 
 /// Session state for the drawing glyph picker.
+///
+/// ```
+/// let mut picker = egui_charts::ui::drawing_toolbar::GlyphPicker::default();
+/// picker.sticker_size = 96.0;
+/// ```
 #[derive(Clone, Debug)]
 pub struct GlyphPicker {
     /// Search by glyph name across icons, emoji and stickers.
     pub query: String,
-    /// Size in logical pixels, independent of line width.
+    /// Size in logical pixels of a placed icon or emoji, independent of line width.
     pub size: f32,
+    /// Size in logical pixels of a placed sticker, independent of [`Self::size`].
+    pub sticker_size: f32,
     group: &'static str,
     recent: Vec<&'static str>,
 }
@@ -22,6 +29,7 @@ impl Default for GlyphPicker {
         Self {
             query: String::new(),
             size: 40.0,
+            sticker_size: 110.0,
             group: "All",
             recent: Vec::new(),
         }
@@ -46,13 +54,18 @@ impl GlyphPicker {
                 ui.selectable_value(&mut self.group, group, l10n::text(ui.ctx(), group));
             }
         });
-        ui.horizontal(|ui| {
-            ui.label(l10n::text(ui.ctx(), "Size"));
-            ui.add(
-                egui::DragValue::new(&mut self.size)
-                    .range(8.0..=128.0)
-                    .suffix(l10n::text(ui.ctx(), " px")),
-            );
+        ui.horizontal_wrapped(|ui| {
+            for (label, size) in [
+                ("Size", &mut self.size),
+                ("Sticker size", &mut self.sticker_size),
+            ] {
+                ui.label(l10n::text(ui.ctx(), label));
+                ui.add(
+                    egui::DragValue::new(size)
+                        .range(8.0..=128.0)
+                        .suffix(l10n::text(ui.ctx(), " px")),
+                );
+            }
         });
         ui.separator();
         let query = self.query.trim().to_lowercase();
@@ -97,12 +110,20 @@ impl GlyphPicker {
                 }
             });
         let glyph = picked?;
+        let tool = tool_type(glyph);
+        if !registry.availability(tool).enabled {
+            return Some(DrawingToolbarAction::ToolUnavailable(tool));
+        }
         self.recent.retain(|id| *id != glyph);
         self.recent.insert(0, glyph);
         self.recent.truncate(12);
         Some(DrawingToolbarAction::InsertGlyph {
             icon_name: glyph,
-            size: self.size,
+            size: if glyph.starts_with("sticker:") {
+                self.sticker_size
+            } else {
+                self.size
+            },
         })
     }
 }
@@ -113,15 +134,19 @@ fn cells(ui: &mut Ui, glyphs: &[&Glyph], registry: &DrawingToolRegistry) -> Opti
     for row in glyphs.chunks(columns) {
         ui.horizontal(|ui| {
             for glyph in row {
+                let enabled = registry.availability(tool_type(glyph.id)).enabled;
+                // A disabled glyph is drawn as egui draws a disabled button but still answers
+                // clicks, so the host can say why.
+                let opacity = ui.opacity();
+                if !enabled {
+                    ui.multiply_opacity(ui.visuals().disabled_alpha());
+                }
                 let response = ui
-                    .add_enabled(
-                        registry.availability(tool_type(glyph.id)).enabled,
-                        egui::Button::new("").min_size(Vec2::splat(40.0)),
-                    )
+                    .add(egui::Button::new("").min_size(Vec2::splat(40.0)))
                     .on_hover_text(l10n::text(ui.ctx(), glyph.name));
                 let translated_label = l10n::text(ui.ctx(), glyph.name);
                 response.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label)
+                    egui::WidgetInfo::labeled(egui::Role::Button, enabled, &translated_label)
                 });
                 let rect = Rect::from_center_size(response.rect.center(), Vec2::splat(26.0));
                 let color = ui.visuals().text_color();
@@ -134,6 +159,7 @@ fn cells(ui: &mut Ui, glyphs: &[&Glyph], registry: &DrawingToolRegistry) -> Opti
                         color,
                     );
                 }
+                ui.set_opacity(opacity);
                 if response.clicked() {
                     picked = Some(glyph.id);
                 }

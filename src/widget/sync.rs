@@ -10,6 +10,7 @@ pub(super) type CrosshairPeriod = (DateTime<Utc>, DateTime<Utc>);
 
 /// UTC timestamps at the left and right edges of a chart's plot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct VisibleTimeRange {
     /// Time at the leftmost plot pixel.
     pub from: DateTime<Utc>,
@@ -17,15 +18,34 @@ pub struct VisibleTimeRange {
     pub to: DateTime<Utc>,
 }
 
+impl VisibleTimeRange {
+    /// The range from `from` at the leftmost plot pixel to `to` at the rightmost.
+    pub fn new(from: DateTime<Utc>, to: DateTime<Utc>) -> Self {
+        Self { from, to }
+    }
+}
+
 impl Chart {
-    /// The time of the nearest eligible hovered point, or `None` outside the data.
+    /// The time of the nearest eligible hovered point, the start of the hovered whitespace slot
+    /// after the last bar, or `None` elsewhere outside the data.
     pub fn hover_time(&self) -> Option<DateTime<Utc>> {
         self.hover_period().map(|(open, _)| open)
     }
 
-    /// The hovered bar's period, or an independently keyed point's exact timestamp as both bounds.
+    /// The start of the whitespace slot at `index` after the last bar, extrapolated as in
+    /// [`Self::index_to_time`]; `None` at or before the last bar.
+    pub(super) fn whitespace_time(&self, index: f64) -> Option<DateTime<Utc>> {
+        (index >= self.state.shown().len() as f64)
+            .then(|| self.index_to_time(index))
+            .flatten()
+    }
+
+    /// The hovered bar's period, an independently keyed point's exact timestamp as both bounds,
+    /// or the start of the hovered whitespace slot after the last bar as both bounds.
     pub(crate) fn hover_period(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
-        let index = self.last_hover_bar_idx?;
+        let Some(index) = self.last_hover_bar_idx else {
+            return self.last_hover_whitespace.map(|time| (time, time));
+        };
         if index.fract() != 0.0 || index < 0.0 || index >= self.state.shown().len() as f64 {
             let time = self.last_crosshair?.0;
             return Some((time, time));
@@ -57,10 +77,13 @@ impl Chart {
     }
 
     /// Shows a crosshair at the local bar whose period holds `time`, from its open until the
-    /// next bar of its interval opens. Between bars it marks the nearest one; ties choose the
-    /// earlier bar. Times before the first bar or after the last bar's period, and `None`, clear
-    /// it. Repeated element times choose the first element. Each receiver resolves the timestamp
-    /// against its own series, including after bars are evicted or older history is loaded.
+    /// next bar of its interval opens, with the vertical guide and time label alone. Between
+    /// bars it marks the nearest one; ties choose the earlier bar. A time after the last bar's
+    /// period marks the whitespace slot that holds it, stepped by the chart's own interval or
+    /// bar spacing, and is drawn while that slot is in view. Times before the first bar and
+    /// `None` clear it. Repeated element times choose the first element. Each receiver resolves
+    /// the timestamp against its own series, including after bars are evicted or older history
+    /// is loaded.
     /// An exact added or custom point between main bars keeps its fractional position.
     /// Inside a [`super::ChartLayout`] the position stays until it is cleared or replaced, and
     /// returns after a linked pointer leaves.
@@ -73,7 +96,7 @@ impl Chart {
 
     /// Shows a crosshair at the local bar for `time`, as [`Self::set_synced_crosshair_time`]
     /// does, with its horizontal line and price label at `price` on the main price scale.
-    /// `None`, a time outside the data or a non-finite price clears it. The pointer's own
+    /// `None`, a time before the first bar or a non-finite price clears it. The pointer's own
     /// crosshair takes its place while the pointer is over the plots.
     /// Use [`Self::set_series_crosshair_position`] to target another bar series or pane.
     pub fn set_crosshair_position(&mut self, position: Option<(DateTime<Utc>, f64)>) {
@@ -95,7 +118,7 @@ impl Chart {
     /// apply without price snapping. Moving the series or changing its scale updates the
     /// position on the next frame. Hidden axes have no price label.
     ///
-    /// `None`, a non-finite price, a time outside the chart's data or an unknown or removed
+    /// `None`, a non-finite price, a time before the chart's first bar or an unknown or removed
     /// target clears the position. A hidden series or collapsed pane retains the position;
     /// its horizontal line and price label wait until it is shown. Offscreen prices have
     /// only the time line and label. The pointer takes precedence over all host positions
@@ -170,8 +193,13 @@ impl Chart {
             after - 1
         } else if after < bars.len() && bars[after].time < to {
             after
-        } else if after == 0 || after == bars.len() {
+        } else if after == 0 {
             return None;
+        } else if after == bars.len() {
+            // The slot holding the time; the tolerance absorbs rounding at a slot's start.
+            return self
+                .time_to_index(from)
+                .map(|index| (index + 1e-9).floor().max(bars.len() as f64));
         } else if from - bars[after - 1].time <= bars[after].time - from {
             after - 1
         } else {
@@ -183,6 +211,7 @@ impl Chart {
     /// The visible UTC range, including whitespace mapped by [`Self::index_to_time`].
     /// Empty charts return `None`.
     /// Between bars, time is interpolated, so session gaps retain fractional edge positions.
+    /// [`Self::set_visible_time_range`] shows a range.
     pub fn visible_time_range(&self) -> Option<VisibleTimeRange> {
         let scale = self.state.time_scale();
         // Keep fractional indices in f64: a rounded edge can move minutes across a session gap.
@@ -196,13 +225,34 @@ impl Chart {
         })
     }
 
-    /// Fits the receiver's bars to a UTC range using its own plot width.
+    /// Shows `range` across the plot width of the last frame, `from` at the leftmost plot pixel
+    /// and `to` at the rightmost, as [`Self::visible_time_range`] reports them. Like
+    /// [`Self::set_visible_logical_range`], it ends tracking mode and pending scrolls.
+    ///
+    /// Returns `false` without changing the view for empty data, reversed or zero ranges, a
+    /// range that ends before the first bar's slot or starts after the last bar's period, or
+    /// endpoints mapping to the same element. The spacing and edge limits of the time scale
+    /// options still apply: a span above the maximum spacing is centred, and the fit keeps a
+    /// bar in view, so a view that would start after the last bar's open moves left to show
+    /// that bar, or the newest bars across the plot when the range is longer than the plot at
+    /// the minimum spacing. Unlike [`Self::apply_synced_time_range`], which fits a range from
+    /// another chart, it has no 50-pixel cap.
+    pub fn set_visible_time_range(&mut self, range: VisibleTimeRange) -> bool {
+        let fitted = self.fit_time_range(range, f64::INFINITY);
+        if fitted {
+            self.cancel_view_motion();
+        }
+        fitted
+    }
+
+    /// Fits the receiver's bars to a UTC range from another chart, using its own plot width.
     /// Returns `false` without changing the view for empty data, reversed or zero ranges,
     /// a range that ends before the first bar's slot or starts after the last bar's period,
     /// or endpoints mapping to the same element.
     /// Spacing stops at the configured maximum, or 50 pixels when unlimited, centring short
     /// spans. The minimum spacing and local edge constraints still apply, and the fit keeps a
     /// bar in view: a range longer than the plot at the minimum spacing shows the newest bars.
+    /// Use [`Self::set_visible_time_range`] to show dates on this chart without the cap.
     pub fn apply_synced_time_range(&mut self, range: VisibleTimeRange) -> bool {
         self.apply_synced_time_range_from(range, None)
     }
@@ -380,8 +430,8 @@ mod tests {
     }
 
     /// On a custom axis a key's period ends at the next key whatever the displayed interval:
-    /// key 4 lies past the period of key 3, the last of keys 0 to 3, and the period of key 4,
-    /// the last of keys 0 to 4, ends at key 5.
+    /// key 4 lies past the period of key 3, the last of keys 0 to 3, so it marks the whitespace
+    /// slot 4, and the period of key 4, the last of keys 0 to 4, ends at key 5.
     #[test]
     fn custom_key_crosshair_period_ignores_the_timeframe() {
         let scale =
@@ -400,7 +450,7 @@ mod tests {
         };
         let mut receiver = keyed(&[0, 1, 2, 3]);
         receiver.set_synced_crosshair_time(scale.time(&4));
-        assert_eq!(receiver.synced_crosshair_bar_idx, None);
+        assert_eq!(receiver.synced_crosshair_bar_idx, Some(4.0));
         let mut source = keyed(&[0, 1, 2, 3, 4]);
         source.last_hover_bar_idx = Some(4.0);
         assert_eq!(source.hover_period(), scale.time(&4).zip(scale.time(&5)));
@@ -506,7 +556,12 @@ mod tests {
             // A time inside a coarser bar's period marks that bar, the latest one included.
             (&one(10 * D + 14 * H + 1800), Some(0.0), &days, Some(10.0)),
             (&one(29 * D + 14 * H + 1800), Some(0.0), &days, Some(29.0)),
-            (&one(30 * D + 1800), Some(0.0), &days, None),
+            // After the last bar's period a time marks the whitespace slot holding it.
+            (&one(30 * D + 1800), Some(0.0), &days, Some(30.0)),
+            (&one(31 * D), Some(0.0), &days, Some(31.0)),
+            // 25:30 lies in the four-hour slot from 24:00, slot 6; 28:00 opens slot 7.
+            (&one(25 * H + 1800), Some(0.0), &four_hours, Some(6.0)),
+            (&one(28 * H), Some(0.0), &four_hours, Some(7.0)),
             (&one(3 * H), Some(0.0), &four_hours, Some(0.0)),
             // The daily bar of day 1 marks its first minute, not the last minute of day 0.
             (&days, Some(1.0), &sessions, Some(390.0)),
@@ -626,5 +681,58 @@ mod tests {
         let t = time(1_700_000_000) + Duration::nanoseconds(150);
         assert_eq!(time_at(fine.state.shown(), 1.5), Some(t));
         assert_eq!(index_at(fine.state.shown(), t), Some(1.5));
+    }
+
+    /// The dates of ten daily bars need more than the 50 px per bar that a synchronised receiver
+    /// stops at, yet show exactly on a chart with default options; setting the dates of a view
+    /// zoomed further keeps its spacing and edges, and a scroll requested before the dates does
+    /// not move them on the next frame.
+    #[test]
+    fn set_visible_time_range_shows_the_requested_dates() {
+        use crate::model::LogicalRange;
+        use crate::widget::test_frames::frame;
+        let day = |day: f64| time((day * 86_400.0) as i64);
+        let mut chart = Chart::new(BarData::from_bars(
+            (0..200)
+                .map(|i| Bar::new(day(f64::from(i)), 10.0, 11.0, 9.0, 10.0, 1.0))
+                .collect(),
+        ));
+        let ctx = egui::Context::default();
+        for t in [0.0, 0.1] {
+            frame(&ctx, &mut chart, t, Vec::new());
+        }
+        let plot = f64::from(chart.state.time_scale().width()) - 1.0;
+        assert!(plot / 10.0 > 50.0, "{plot}");
+        let assert_view = |chart: &Chart, range: VisibleTimeRange, spacing: f64| {
+            let shown = chart.visible_time_range().unwrap();
+            for (actual, expected) in [(shown.from, range.from), (shown.to, range.to)] {
+                assert!(
+                    (actual - expected).num_milliseconds().abs() < 1,
+                    "{shown:?} != {range:?}"
+                );
+            }
+            let actual = f64::from(chart.get_time_scale_state().0);
+            assert!((actual - spacing).abs() < 1e-3, "{actual} != {spacing}");
+        };
+        // From the open of bar 100 to the close of bar 109.
+        let requested = VisibleTimeRange::new(day(100.0), day(110.0));
+        chart.scroll_to_time(day(20.0));
+        assert!(chart.set_visible_time_range(requested));
+        frame(&ctx, &mut chart, 0.2, Vec::new());
+        assert_view(&chart, requested, plot / 10.0);
+        // Five slots from index 99.5 to 104.5: noon of day 99 to noon of day 104, within the
+        // rounding of the spacing to f32.
+        assert!(chart.set_visible_logical_range(LogicalRange::new(100.0, 104.0)));
+        let zoomed = chart.visible_time_range().unwrap();
+        for (actual, expected) in [(zoomed.from, day(99.5)), (zoomed.to, day(104.5))] {
+            assert!(
+                (actual - expected).num_milliseconds().abs() < 100,
+                "{zoomed:?}"
+            );
+        }
+        let (spacing, offset) = chart.get_time_scale_state();
+        assert!(chart.set_visible_time_range(zoomed));
+        assert_view(&chart, zoomed, f64::from(spacing));
+        assert!((chart.get_time_scale_state().1 - offset).abs() < 1e-4);
     }
 }

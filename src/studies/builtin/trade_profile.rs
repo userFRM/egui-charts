@@ -1,6 +1,6 @@
 //! Exact bid, ask and delta profiles over host-selected session or composite ranges.
 
-use crate::data::{FeedError, Footprint, FootprintBar, NodeSensitivity};
+use crate::data::{FeedError, Footprint, FootprintBar, FootprintView, NodeSensitivity};
 use crate::model::ProfileRows;
 use chrono::{DateTime, Utc};
 use std::ops::Range;
@@ -88,6 +88,14 @@ impl TradeProfile {
         flow: &Footprint,
         share: f64,
     ) -> Vec<(DateTime<Utc>, (i64, i64))> {
+        self.developing_value_area_read(flow.into(), share)
+    }
+
+    pub(crate) fn developing_value_area_read(
+        &self,
+        flow: FootprintView<'_>,
+        share: f64,
+    ) -> Vec<(DateTime<Utc>, (i64, i64))> {
         let mut volume = FootprintBar::empty(self.range.start);
         flow.complete_bars(self.range.clone())
             .filter_map(|bar| {
@@ -173,6 +181,14 @@ pub fn trade_profiles(flow: &Footprint, ranges: &TradeProfileRanges) -> Vec<Trad
 /// [`TradeProfile::group`].
 pub fn trade_profiles_with_rows(
     flow: &Footprint,
+    ranges: &TradeProfileRanges,
+    rows: ProfileRows,
+) -> Vec<TradeProfile> {
+    trade_profiles_with_rows_read(flow.into(), ranges, rows)
+}
+
+pub(crate) fn trade_profiles_with_rows_read(
+    flow: FootprintView<'_>,
     ranges: &TradeProfileRanges,
     rows: ProfileRows,
 ) -> Vec<TradeProfile> {

@@ -30,7 +30,7 @@ use egui::Color32;
 ///
 /// Fits a least-squares regression line to the most recent `period` prices
 /// and reports the end-point value. Overlay indicator.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LSMA {
     period: usize,
     offset: i32, // Future projection offset (can be negative for past)
@@ -149,7 +149,7 @@ impl Indicator for LSMA {
     }
 
     fn desc(&self) -> &str {
-        "Least Squares Moving Avg - Linear regression line"
+        "Least Squares Moving Average - Linear regression line"
     }
 
     fn calculate(&mut self, data: &[Bar]) {

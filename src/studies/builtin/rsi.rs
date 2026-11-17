@@ -76,7 +76,7 @@ use egui::Color32;
 ///
 /// A bounded momentum oscillator (0-100) that compares the magnitude of
 /// recent gains to recent losses. Drawn in a separate sub-pane.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RSI {
     period: usize,
     smoothing: SmoothingType,
@@ -96,7 +96,7 @@ pub struct RSI {
 }
 
 /// The RSI, the average of its values and the pivots its divergences compare.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct Averaged {
     rsi: State,
     smoothed: Smoothed,
@@ -104,7 +104,7 @@ struct Averaged {
     pivots: Pivots,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct State {
     previous: Option<f64>,
     usable: usize,

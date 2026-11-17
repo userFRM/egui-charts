@@ -174,9 +174,11 @@ impl Terminal {
     pub(super) fn studies_settings(&mut self, settings: &mut UserSettings, direction: Direction) {
         let indicators = &mut self.studies.indicators;
         match direction {
-            Direction::Load => indicators.set_preferences(IndicatorPreferences {
-                favorites: settings.indicator_favorites.iter().cloned().collect(),
-            }),
+            Direction::Load => {
+                let mut preferences = IndicatorPreferences::default();
+                preferences.favorites = settings.indicator_favorites.iter().cloned().collect();
+                indicators.set_preferences(preferences);
+            }
             Direction::Save => {
                 settings.indicator_favorites =
                     indicators.preferences().favorites.into_iter().collect();
@@ -538,7 +540,7 @@ mod tests {
                     terminal = terminal.with_indicator_factory(factory);
                     ("Host average", "Host average", 42)
                 } else {
-                    ("SMA", "Simple Moving Avg", 9)
+                    ("SMA", "Simple Moving Average", 9)
                 };
                 for _ in 0..4 {
                     frame(&mut terminal, SIZE, vec![]);
@@ -553,7 +555,7 @@ mod tests {
                         .expect("the browser offers the study's category");
                     click(&mut terminal, SIZE, tab);
                     let row = frame(&mut terminal, SIZE, vec![])
-                        .text_at("Simple Moving Avg")
+                        .text_at("Simple Moving Average")
                         .expect("the browser lists the study in its category");
                     click(&mut terminal, SIZE, row);
                 } else {
@@ -605,7 +607,7 @@ mod tests {
             vec![Event::Text("Simple Moving".into())],
         );
         let row = frame(&mut terminal, SIZE, vec![])
-            .text_at("Simple Moving Avg")
+            .text_at("Simple Moving Average")
             .expect("the dialog lists the study");
         click(&mut terminal, SIZE, row);
         let child = terminal
@@ -673,7 +675,7 @@ mod tests {
         for (timezone, top, bottom, width) in [
             ("Unknown", 10.0, 10.0, 1.0),
             ("UTC", f32::NAN, 10.0, 1.0),
-            ("UTC", 60.0, 40.0, 1.0),
+            ("UTC", 101.0, 0.0, 1.0),
             ("UTC", -1.0, 10.0, 1.0),
             ("UTC", 10.0, 10.0, 0.0),
         ] {

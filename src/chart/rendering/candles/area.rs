@@ -5,6 +5,7 @@
 use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Painter, Pos2, Rect, Shape, Stroke};
+use std::ops::Range;
 
 use super::helpers::valued_runs;
 use super::line::{draw_bar_line, draw_point_marker, line_color, with_line_type};
@@ -15,14 +16,17 @@ use crate::model::{
     PriceSource,
 };
 
+/// Area chart: the line with a fill under it, its bars as [`super::line::render_line`] takes them
 pub(super) fn render_area(
     painter: &Painter,
     price_rect: Rect,
     volume_ctx: &RenderContext,
-    visible_data: &[Bar],
+    bars: &[Bar],
     start_idx: usize,
+    in_view: Range<usize>,
     show_volume: bool,
     max_volume: f64,
+    volume_width: f32,
     colors: &StyleColors,
     price_scale: &PriceMap,
     chart_rect_min_x: f32,
@@ -32,7 +36,7 @@ pub(super) fn render_area(
 ) {
     let coords = *price_scale;
     let line_points = collect_price_points(
-        visible_data,
+        bars,
         start_idx,
         &coords,
         chart_rect_min_x,
@@ -41,7 +45,7 @@ pub(super) fn render_area(
     );
 
     let mut fill_points = Vec::new();
-    for run in valued_runs(visible_data).filter(|run| run.len() > 1) {
+    for run in valued_runs(bars).filter(|run| run.len() > 1) {
         if !fill_points.is_empty() {
             fill_points.push(Pos2::new(f32::NAN, f32::NAN));
         }
@@ -51,8 +55,11 @@ pub(super) fn render_area(
         ));
     }
     draw_area_fill(painter, &fill_points, price_rect, style);
-    draw_bar_line(painter, visible_data, &line_points, &style.line, false);
-    for (point, bar) in line_points.iter().zip(visible_data) {
+    draw_bar_line(painter, bars, &line_points, &style.line, false);
+    for (point, bar) in line_points[in_view.clone()]
+        .iter()
+        .zip(&bars[in_view.clone()])
+    {
         if !bar.is_whitespace() {
             draw_point_marker(
                 painter,
@@ -66,9 +73,10 @@ pub(super) fn render_area(
     if show_volume {
         render_volume_bars(
             volume_ctx,
-            visible_data,
-            start_idx,
+            &bars[in_view.clone()],
+            start_idx + in_view.start,
             max_volume,
+            volume_width,
             colors,
             chart_rect_min_x,
             &idx_to_coord,
@@ -77,34 +85,31 @@ pub(super) fn render_area(
 }
 
 /// HLC Area: fills high to close and close to low, with the high, low and close lines on top.
-/// The close line is at the bar closes whatever price source the single-value types plot.
+/// The close line is at the bar closes whatever price source the single-value types plot. Its bars
+/// are as [`super::line::render_line`] takes them.
 pub(super) fn render_hlc_area(
     painter: &Painter,
     volume_ctx: &RenderContext,
-    visible_data: &[Bar],
+    bars: &[Bar],
     start_idx: usize,
+    in_view: Range<usize>,
     show_volume: bool,
     max_volume: f64,
+    volume_width: f32,
     colors: &StyleColors,
     price_scale: &PriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     style: &HlcAreaStyle,
 ) {
-    if visible_data.is_empty() {
+    if bars.is_empty() {
         return;
     }
 
     let coords = *price_scale;
-    let points = collect_hlc_points(
-        visible_data,
-        start_idx,
-        &coords,
-        chart_rect_min_x,
-        &idx_to_coord,
-    );
+    let points = collect_hlc_points(bars, start_idx, &coords, chart_rect_min_x, &idx_to_coord);
 
-    draw_hlc_fill(painter, visible_data, &points, style);
+    draw_hlc_fill(painter, bars, &points, style);
     for (visible, line, y) in [
         (
             style.high_line_visible,
@@ -120,16 +125,17 @@ pub(super) fn render_hlc_area(
                 line_type: LineType::Simple,
                 ..line.clone()
             };
-            draw_bar_line(painter, visible_data, &line_points, &line, false);
+            draw_bar_line(painter, bars, &line_points, &line, false);
         }
     }
 
     if show_volume {
         render_volume_bars(
             volume_ctx,
-            visible_data,
-            start_idx,
+            &bars[in_view.clone()],
+            start_idx + in_view.start,
             max_volume,
+            volume_width,
             colors,
             chart_rect_min_x,
             &idx_to_coord,
@@ -137,15 +143,18 @@ pub(super) fn render_hlc_area(
     }
 }
 
-/// Baseline chart: coloured by the side of the base line, split where a segment crosses it
+/// Baseline chart: coloured by the side of the base line, split where a segment crosses it, its
+/// bars as [`super::line::render_line`] takes them
 pub(super) fn render_baseline(
     painter: &Painter,
     price_rect: Rect,
     volume_ctx: &RenderContext,
-    visible_data: &[Bar],
+    bars: &[Bar],
     start_idx: usize,
+    in_view: Range<usize>,
     show_volume: bool,
     max_volume: f64,
+    volume_width: f32,
     colors: &StyleColors,
     price_scale: &PriceMap,
     chart_rect_min_x: f32,
@@ -154,7 +163,8 @@ pub(super) fn render_baseline(
     price_source: PriceSource,
     level: BaselineLevel,
 ) {
-    if visible_data.is_empty() {
+    // No bar in view and no segment across the plot.
+    if in_view.is_empty() && bars.len() < 2 {
         return;
     }
 
@@ -169,8 +179,9 @@ pub(super) fn render_baseline(
     draw_baseline_line(painter, price_rect, baseline_y);
     draw_baseline_segments(
         painter,
-        visible_data,
+        bars,
         start_idx,
+        in_view.clone(),
         &coords,
         baseline_y,
         chart_rect_min_x,
@@ -182,9 +193,10 @@ pub(super) fn render_baseline(
     if show_volume {
         render_volume_bars(
             volume_ctx,
-            visible_data,
-            start_idx,
+            &bars[in_view.clone()],
+            start_idx + in_view.start,
             max_volume,
+            volume_width,
             colors,
             chart_rect_min_x,
             &idx_to_coord,
@@ -238,17 +250,43 @@ fn collect_hlc_points(
         .collect()
 }
 
+/// The lowest and highest y, in that order, of the polyline `points`, broken at non-finite
+/// points, between the left and right of `rect`, taking a segment that crosses either edge at
+/// that edge: the extremes of the line in view. `None` when no segment reaches into that range.
+fn y_extent_in(points: &[Pos2], rect: Rect) -> Option<(f32, f32)> {
+    points
+        .windows(2)
+        .filter(|pair| pair[0].is_finite() && pair[1].is_finite())
+        .filter_map(|pair| {
+            let (a, b) = if pair[0].x <= pair[1].x {
+                (pair[0], pair[1])
+            } else {
+                (pair[1], pair[0])
+            };
+            let (from, to) = (a.x.max(rect.min.x), b.x.min(rect.max.x));
+            if from > to {
+                return None;
+            }
+            // A vertical segment spans both of its ends.
+            if b.x == a.x {
+                return Some([a.y, b.y]);
+            }
+            let y_at = |x: f32| a.y + (b.y - a.y) * (x - a.x) / (b.x - a.x);
+            Some([y_at(from), y_at(to)])
+        })
+        .flatten()
+        .fold(None, |extent, y| {
+            Some(extent.map_or((y, y), |(high, low): (f32, f32)| (high.min(y), low.max(y))))
+        })
+}
+
 /// Fills between the line and the bottom of `rect`, or its top when inverted. The gradient runs
 /// from `top_fill` to `bottom_fill` over the whole pane, or with a relative gradient from the
-/// fill's far edge on the line to the pane edge it reaches.
+/// fill's far edge on the line inside `rect`'s left and right to the pane edge it reaches.
 fn draw_area_fill(painter: &Painter, points: &[Pos2], rect: Rect, style: &AreaStyle) {
-    let finite = points.iter().map(|p| p.y).filter(|y| y.is_finite());
-    let (high, low) = finite.fold((f32::INFINITY, f32::NEG_INFINITY), |(high, low), y| {
-        (high.min(y), low.max(y))
-    });
-    if !high.is_finite() {
+    let Some((high, low)) = y_extent_in(points, rect) else {
         return;
-    }
+    };
     let base_y = if style.invert_filled_area {
         rect.min.y
     } else {
@@ -332,10 +370,13 @@ fn draw_baseline_line(painter: &Painter, rect: Rect, baseline_y: f32) {
     ));
 }
 
+/// The parts, fills and markers of a Baseline chart, its bars as [`super::line::render_line`]
+/// takes them.
 fn draw_baseline_segments(
     painter: &Painter,
     data: &[Bar],
     start_idx: usize,
+    in_view: Range<usize>,
     coords: &PriceMap,
     baseline_y: f32,
     chart_rect_min_x: f32,
@@ -460,7 +501,7 @@ fn draw_baseline_segments(
         };
         draw_baseline_line_part(painter, a, b, &line, distance);
     }
-    for (point, bar) in points.iter().zip(data) {
+    for (point, bar) in points[in_view.clone()].iter().zip(&data[in_view]) {
         if bar.is_whitespace() {
             continue;
         }
@@ -567,6 +608,7 @@ mod tests {
                         ui.painter(),
                         &bars,
                         0,
+                        0..bars.len(),
                         &map,
                         50.0,
                         0.0,
@@ -680,6 +722,7 @@ mod tests {
                         &painter,
                         &bars,
                         0,
+                        0..bars.len(),
                         &map,
                         map.price_to_y(100.0),
                         0.0,
@@ -739,6 +782,7 @@ mod tests {
                         ui.painter(),
                         &bars,
                         0,
+                        0..bars.len(),
                         &map,
                         50.0,
                         0.0,
@@ -755,8 +799,10 @@ mod tests {
                         &RenderContext::new(ui.painter(), rect),
                         &bars,
                         0,
+                        0..bars.len(),
                         false,
                         1.0,
+                        0.0,
                         &StyleColors {
                             bullish: Color32::GREEN,
                             bearish: Color32::RED,
@@ -810,20 +856,31 @@ mod tests {
         // From y=20 to y=100, y=60 is halfway, so 45% becomes 22.5%. Moving the visible high
         // to y=40 keeps the same endpoint opacities. An inverted fill reaches y=0 and spans the
         // lowest point, y=60 or 70; an absolute gradient spans the 100-point pane either way.
-        for (top, relative, inverted) in [
-            (20.0, true, false),
-            (40.0, true, false),
-            (20.0, false, false),
-            (20.0, true, true),
-            (40.0, true, true),
-            (40.0, false, true),
+        // A point beyond the pane's left or right counts only where its segment is inside:
+        // (-40, 10) to (10, 20) is at y=18 on the left edge, (30, 20) to (130, 10) at y=13 on
+        // the right one.
+        for (top, relative, inverted, beyond, high) in [
+            (20.0, true, false, None, 20.0),
+            (40.0, true, false, None, 40.0),
+            (20.0, false, false, None, 20.0),
+            (20.0, true, true, None, 20.0),
+            (40.0, true, true, None, 40.0),
+            (40.0, false, true, None, 40.0),
+            (20.0, true, false, Some(pos2(-40.0, 10.0)), 18.0),
+            (20.0, true, false, Some(pos2(130.0, 10.0)), 13.0),
         ] {
             let low = (top + 100.0) / 2.0;
             let (span_top, span_bottom) = match (relative, inverted) {
                 (false, _) => (0.0, 100.0),
-                (true, false) => (top, 100.0),
+                (true, false) => (high, 100.0),
                 (true, true) => (0.0, low),
             };
+            let mut points = vec![pos2(10.0, top), pos2(20.0, low), pos2(30.0, top)];
+            match beyond {
+                Some(point) if point.x < 0.0 => points.insert(0, point),
+                Some(point) => points.push(point),
+                None => {}
+            }
             let style = AreaStyle {
                 top_fill: Color32::from_rgba_unmultiplied(0, 0, 255, 115),
                 bottom_fill: Color32::TRANSPARENT,
@@ -835,12 +892,7 @@ mod tests {
             let output = ctx.run_ui(RawInput::default(), |_| {
                 let rect = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
                 let painter = Painter::new(ctx.clone(), LayerId::background(), rect);
-                draw_area_fill(
-                    &painter,
-                    &[pos2(10.0, top), pos2(20.0, low), pos2(30.0, top)],
-                    rect,
-                    &style,
-                );
+                draw_area_fill(&painter, &points, rect, &style);
             });
             let vertices: Vec<_> = output
                 .shapes
@@ -860,12 +912,19 @@ mod tests {
                 "area fill must carry per-vertex gradient colours"
             );
             let base = if inverted { 0.0 } else { 100.0 };
-            assert_eq!(vertices.iter().filter(|v| v.pos.y == base).count(), 3);
+            assert_eq!(
+                vertices.iter().filter(|v| v.pos.y == base).count(),
+                3 + usize::from(beyond.is_some())
+            );
             for vertex in vertices {
                 let fraction: f32 =
                     ((vertex.pos.y - span_top) / (span_bottom - span_top)).clamp(0.0, 1.0);
                 let expected = (115.0 * (1.0 - fraction)).round() as u8;
-                assert_eq!(vertex.color.a(), expected, "{top} {relative} {inverted}");
+                assert_eq!(
+                    vertex.color.a(),
+                    expected,
+                    "{top} {relative} {inverted} {beyond:?}"
+                );
             }
         }
     }
@@ -1015,7 +1074,7 @@ mod tests {
                     },
                     &ChartTypeParams::new(
                         BarDimensions::new(1.0, 1.0),
-                        VolumeSettings::new(false, 0.0),
+                        VolumeSettings::new(false, 0.0, 0.0),
                         &type_params,
                         TradingColors::new(colors.bullish, colors.bearish),
                         CoordMapping::new(0.0),

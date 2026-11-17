@@ -49,7 +49,7 @@ use std::collections::VecDeque;
 const MAX_LEVELS: usize = 500;
 
 /// Missed Pivot Levels: swing highs and lows that price has not returned to.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MissedPivots {
     left: usize,
     right: usize,
@@ -63,7 +63,7 @@ pub struct MissedPivots {
     visible: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Level {
     bar: usize,
     price: f64,
@@ -71,7 +71,7 @@ struct Level {
     revisited: Option<usize>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     source: usize,
     swings: Swings,

@@ -173,12 +173,11 @@ pub(super) fn begin_shape_edit(ui: &Ui, manager: &mut DrawingManager, response: 
     else {
         return;
     };
-    // The same handle test as the drag in `handle_selection`, which starts it for one selection.
+    // The same handle test as the drag in `handle_selection`.
     let origin = ui
         .data(|data| data.get_temp::<egui::Pos2>(press_key))
         .unwrap_or(pos);
-    let one = manager.selected_ids().count() == 1;
-    if one && manager.hit_test_handle_by_id(origin, id).is_some() {
+    if manager.hit_test_handle_by_id(origin, id).is_some() {
         return;
     }
     ui.data_mut(|data| data.insert_temp(key, (id, pos, now + delay)));
@@ -639,7 +638,8 @@ mod tests {
     /// text field on a still click there, once the double-click delay has passed. A double click,
     /// whether or not it begins by selecting the shape, reports the double click and leaves the
     /// field closed, and a locked shape has no field. A circle's centre handle, where its text is
-    /// painted, opens no field and still starts a move after a click on it. A draft that starts
+    /// painted, opens no field, also with other drawings selected, and still starts a move after a
+    /// click on it. A draft that starts
     /// blank keeps its field, cancels without history, and confirms as one undoable edit that a
     /// saved file restores.
     #[test]
@@ -806,6 +806,17 @@ mod tests {
                         step(&mut chart, vec![]);
                     }
                     assert!(chart.drawings().is_selected(id), "{initial:?}");
+                    if initial.is_some() {
+                        // The same holds with another drawing selected too.
+                        let mut other = Drawing::new(id + 100, DrawingToolType::TrendLine);
+                        other.completed = true;
+                        other.chart_points =
+                            vec![ChartPoint::new(1.0, 11.0), ChartPoint::new(3.0, 11.0)];
+                        chart.drawings_mut().drawings.push(other);
+                        chart.drawings_mut().select_drawings([id, id + 100]);
+                        step(&mut chart, vec![]);
+                        assert_eq!(chart.drawings().selected_ids().count(), 2, "{initial:?}");
+                    }
                     for pressed in [true, false] {
                         step(&mut chart, vec![button(handle, pressed)]);
                     }
@@ -1467,11 +1478,11 @@ mod tests {
                     |price, from, to| price + f64::from(to - from),
                 );
                 manager.end_drag_handle();
-                manager.update_all_screen_coords(|x| x, |y| y as f32);
+                manager.update_all_screen_coords(|x| x, |y| y as f32, 1.0);
                 manager.update_pane_anchors(pane);
                 assert_eq!(manager.drawings[0].points[0], pos2(170.0, 400.0));
                 assert!(manager.undo());
-                manager.update_all_screen_coords(|x| x, |y| y as f32);
+                manager.update_all_screen_coords(|x| x, |y| y as f32, 1.0);
                 manager.update_pane_anchors(pane);
                 assert_eq!(manager.drawings[0].points[0], pos2(130.0, 360.0));
                 let saved = chart.save_drawings().unwrap().to_json().unwrap();
@@ -1501,5 +1512,70 @@ mod tests {
         let pin = &chart.drawings().drawings[0];
         assert_ne!(pin.points[0].x, x);
         assert_eq!(pin.chart_points[0], anchor);
+    }
+
+    /// On a numeric scale with uneven key gaps, text that follows the zoom keeps its size when
+    /// it moves or the chart scrolls under it, and doubles when the bar spacing doubles.
+    #[test]
+    fn zoom_following_text_keeps_its_size_on_a_numeric_scale() {
+        use crate::drawings::{ChartPoint, Drawing};
+        use crate::model::{Bar, BarData};
+        use crate::scales::{PriceHorizontalScale, key_time};
+        use std::sync::Arc;
+
+        // Strikes 0 to 200 one apart, then 225 to 1200 25 apart: one unit is 1200 / 240 = 5.
+        let keys = (0..=200).chain((225..=1200).step_by(25));
+        let bars = keys
+            .map(|k| Bar::from_value(key_time(f64::from(k)).unwrap(), 1.0))
+            .collect();
+        let ctx = Context::default();
+        let mut chart = crate::Chart::new(BarData::from_bars(bars));
+        chart.set_horizontal_scale(Some(Arc::new(PriceHorizontalScale::default())));
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.state.time_scale_mut().set_bar_spacing(4.0);
+        chart.scroll_to_position(-60.0, false);
+        let mut label = Drawing::with_text(1, "Label".into());
+        label.chart_points.push(ChartPoint::new(100.0, 1.0));
+        let mut note = Drawing::new(2, DrawingToolType::AnchoredText);
+        note.text = Some("Note".into());
+        note.chart_points.push(ChartPoint::new(50.0, 1.0));
+        for mut text in [label, note] {
+            text.text_follows_zoom = true;
+            chart.drawings_mut().drawings.push(text);
+        }
+        let sizes = |chart: &crate::Chart| {
+            [(1, "Label"), (2, "Note")].map(|(id, text)| {
+                let (_, galley) = chart.drawings().painted_text(id, text).unwrap();
+                galley.job.sections[0].format.font_id.size
+            })
+        };
+        // The bar under the note, which stays where it is in the pane.
+        let bar_under_note = |chart: &crate::Chart| {
+            let clip = chart.drawings().pane_clips[&None];
+            let x = chart.drawings().drawings[1].points[0].x;
+            chart
+                .state
+                .time_scale()
+                .coord_to_idx_precise(x, clip.min.x, clip.width())
+        };
+
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        assert_eq!(chart.state.time_scale().bar_spacing(), 4.0);
+        assert!(bar_under_note(&chart) <= 200.0);
+        let at_first = sizes(&chart);
+
+        // The label moves over 25-apart strikes and they scroll under the note.
+        chart.drawings_mut().drawings[0].chart_points[0].bar_idx = 205.0;
+        chart.scroll_to_position(0.0, false);
+        frame(&ctx, &mut chart, 0.2, vec![]);
+        assert!(bar_under_note(&chart) >= 201.0);
+        let moved = sizes(&chart);
+
+        chart.state.time_scale_mut().set_bar_spacing(8.0);
+        frame(&ctx, &mut chart, 0.3, vec![]);
+        let zoomed = sizes(&chart);
+
+        // 4 / 4 at the first zoom, wherever the text sits, and 8 / 4 after zooming.
+        assert_eq!([at_first, moved, zoomed], [[14.0; 2], [14.0; 2], [28.0; 2]]);
     }
 }

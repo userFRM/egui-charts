@@ -14,8 +14,11 @@ An area plot fills between a value line and a pane edge. The
 accepts a scalar via
 [`Bar::from_value`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.from_value)
 or OHLC bars. The main series reads
-[`ChartConfig::price_source`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html#structfield.price_source),
-close by default; added areas read close. Whitespace breaks the line and fill.
+[`ChartTypeStyles::area_price_source`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeStyles.html#structfield.area_price_source),
+or
+[`ChartConfig::price_source`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html#structfield.price_source)
+while that is `None`, close by default; added areas read close. Whitespace breaks
+the line and fill.
 
 [`ChartType::HlcArea`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.ChartType.html#variant.HlcArea)
 needs high, low and close in a valid OHLC bar. It fills the high-to-close and

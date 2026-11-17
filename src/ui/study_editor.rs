@@ -28,6 +28,7 @@ pub enum Severity {
 
 /// A host message about a span of the document.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Diagnostic {
     /// How serious it is.
     pub severity: Severity,
@@ -36,6 +37,17 @@ pub struct Diagnostic {
     /// The byte range of the text it concerns. A range past the text or inside a character is
     /// clamped to the text and to character boundaries.
     pub span: Range<usize>,
+}
+
+impl Diagnostic {
+    /// A `severity` message about the bytes `span` of the document.
+    pub fn new(severity: Severity, message: impl Into<String>, span: Range<usize>) -> Self {
+        Self {
+            severity,
+            message: message.into(),
+            span,
+        }
+    }
 }
 
 /// What the user asked of the host.
@@ -73,7 +85,7 @@ enum Status {
 }
 
 /// The study editor panel.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct StudyEditor {
     title: String,
     text: String,

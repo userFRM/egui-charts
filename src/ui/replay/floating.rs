@@ -138,6 +138,7 @@ pub enum ReplayControlAction {
 }
 
 /// Floating replay control widget
+#[derive(Debug)]
 pub struct FloatingReplayControl {
     /// Widget ID for state persistence
     id: Id,

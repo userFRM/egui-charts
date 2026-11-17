@@ -74,7 +74,7 @@ pub enum AutoAnchor {
 /// its interval for [`AutoAnchor::Auto`] and the instrument's time zone and session; direct
 /// callers set them with [`Indicator::set_timeframe`] (one minute until then) and
 /// [`Indicator::set_instrument`] (UTC until then). Overlay indicator.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VwapAutoAnchored {
     anchor: AutoAnchor,
     length: usize,
@@ -92,7 +92,7 @@ pub struct VwapAutoAnchored {
     visible: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Point {
     source: usize,
     high: f64,
@@ -101,7 +101,7 @@ struct Point {
     price: f64,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     source: usize,
     previous_date: Option<chrono::NaiveDate>,
@@ -113,7 +113,7 @@ struct State {
 }
 
 /// The volume-weighted sums of the bars from the anchor bar.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 struct Sums {
     volume: f64,
     weighted: f64,

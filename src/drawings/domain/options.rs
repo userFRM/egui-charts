@@ -286,6 +286,13 @@ impl TimeframeVisibility {
 }
 
 /// Drawing interaction options
+///
+/// ```
+/// use egui_charts::drawings::DrawingOptions;
+///
+/// let mut options = DrawingOptions::default();
+/// options.handle_size = 10.0;
+/// ```
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct DrawingOptions {
@@ -463,7 +470,8 @@ pub struct FibonacciConfig {
     pub logarithmic: bool,
     /// Time levels of a speed resistance fan, read along the time axis as `levels` are along the
     /// price axis. Absent on fans saved before the two families were separate, which share
-    /// `levels`; see [`FibonacciConfig::fan_time_levels`].
+    /// `levels` and draw as they did then, whatever the grid, label side and Reverse settings;
+    /// see [`FibonacciConfig::fan_time_levels`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_levels: Option<Vec<FibonacciLevel>>,
     /// Whether a speed resistance fan draws its grid: a line through each visible level inside
@@ -866,43 +874,139 @@ impl FibonacciConfig {
 }
 
 /// Settings of the regression trend drawing.
+///
+/// ```
+/// use egui_charts::drawings::RegressionTrendConfig;
+/// use egui_charts::model::{LineStyle, PriceSource};
+///
+/// let mut config = RegressionTrendConfig::default()
+///     .with_deviations(1.5, 2.5)
+///     .unwrap();
+/// config.use_upper = false;
+/// config.source = PriceSource::HL2;
+/// config.line_style = LineStyle::Solid;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "RegressionTrendFields")]
 pub struct RegressionTrendConfig {
-    deviations: f64,
+    upper: f64,
+    lower: f64,
+    /// Whether the upper bound is the upper deviation away from the fitted line; otherwise it
+    /// passes through the high furthest above the line.
+    pub use_upper: bool,
+    /// Whether the lower bound is the lower deviation away from the fitted line; otherwise it
+    /// passes through the low furthest below the line.
+    pub use_lower: bool,
+    /// Bar price the line is fitted to.
+    pub source: crate::model::PriceSource,
+    /// Pattern of the fitted line.
+    pub line_style: crate::model::LineStyle,
+    precision: Option<u8>,
 }
 
-/// Stored settings of a regression trend, checked by [`RegressionTrendConfig::new`] on load.
+/// Stored settings of a regression trend, checked by [`RegressionTrendConfig::with_deviations`]
+/// and [`RegressionTrendConfig::with_precision`] on load. Settings saved before the bounds were
+/// set apart hold one `deviations` for both.
 #[derive(Deserialize)]
 struct RegressionTrendFields {
-    deviations: f64,
+    deviations: Option<f64>,
+    upper: Option<f64>,
+    lower: Option<f64>,
+    use_upper: Option<bool>,
+    use_lower: Option<bool>,
+    source: Option<crate::model::PriceSource>,
+    line_style: Option<crate::model::LineStyle>,
+    precision: Option<u8>,
 }
 
 impl TryFrom<RegressionTrendFields> for RegressionTrendConfig {
     type Error = &'static str;
 
     fn try_from(fields: RegressionTrendFields) -> Result<Self, Self::Error> {
-        Self::new(fields.deviations).ok_or("regression trend settings out of bounds")
+        let default = Self::default();
+        let both = fields.deviations.unwrap_or(default.upper);
+        let config = Self {
+            use_upper: fields.use_upper.unwrap_or(default.use_upper),
+            use_lower: fields.use_lower.unwrap_or(default.use_lower),
+            source: fields.source.unwrap_or(default.source),
+            line_style: fields.line_style.unwrap_or(default.line_style),
+            ..default
+        };
+        config
+            .with_deviations(fields.upper.unwrap_or(both), fields.lower.unwrap_or(both))
+            .and_then(|config| config.with_precision(fields.precision))
+            .ok_or("regression trend settings out of bounds")
     }
 }
 
 impl RegressionTrendConfig {
     /// Bands `deviations` standard deviations either side of the fitted line
-    /// (above 0, at most 10); `None` when out of bounds.
+    /// (above 0, at most 10), with the other settings at their defaults; `None` when out of
+    /// bounds.
     pub fn new(deviations: f64) -> Option<Self> {
-        (deviations > 0.0 && deviations <= 10.0).then_some(Self { deviations })
+        Self::default().with_deviations(deviations, deviations)
     }
 
-    /// Distance of the bands from the fitted line, in standard deviations.
-    pub fn deviations(&self) -> f64 {
-        self.deviations
+    /// These settings with the upper bound `upper` and the lower bound `lower` standard
+    /// deviations from the fitted line, each above 0 and at most 10; `None` when out of bounds.
+    pub fn with_deviations(self, upper: f64, lower: f64) -> Option<Self> {
+        let valid = |d: f64| d > 0.0 && d <= 10.0;
+        (valid(upper) && valid(lower)).then_some(Self {
+            upper,
+            lower,
+            ..self
+        })
+    }
+
+    /// Distance of the upper bound above the fitted line, in standard deviations, while
+    /// [`Self::use_upper`] is set.
+    pub fn upper_deviation(&self) -> f64 {
+        self.upper
+    }
+
+    /// Distance of the lower bound below the fitted line, in standard deviations, while
+    /// [`Self::use_lower`] is set.
+    pub fn lower_deviation(&self) -> f64 {
+        self.lower
+    }
+
+    /// These settings with `places` decimals, at most 8, on the correlation label; `None`
+    /// shows two. Returns `None` above 8.
+    pub fn with_precision(self, places: Option<u8>) -> Option<Self> {
+        places.is_none_or(|p| p <= 8).then_some(Self {
+            precision: places,
+            ..self
+        })
+    }
+
+    /// Decimals of the correlation label; `None` shows two.
+    pub fn precision(&self) -> Option<u8> {
+        self.precision
+    }
+
+    /// The distances of the upper and lower bounds in standard deviations, `None` for a side
+    /// bounded by its extreme price.
+    pub(crate) fn band_deviations(&self) -> [Option<f64>; 2] {
+        [
+            self.use_upper.then_some(self.upper),
+            self.use_lower.then_some(self.lower),
+        ]
     }
 }
 
 impl Default for RegressionTrendConfig {
-    /// Bands two standard deviations away.
+    /// A dashed line fitted to the closes, with bands two standard deviations away and a
+    /// correlation label of two decimals.
     fn default() -> Self {
-        Self { deviations: 2.0 }
+        Self {
+            upper: 2.0,
+            lower: 2.0,
+            use_upper: true,
+            use_lower: true,
+            source: crate::model::PriceSource::Close,
+            line_style: crate::model::LineStyle::Dashed,
+            precision: None,
+        }
     }
 }
 
@@ -965,8 +1069,16 @@ impl PositionSizing {
 /// Statistics and account conversion for long and short position drawings.
 /// New drawings show full statistics only while selected. Currency conversion is supplied
 /// by the host: the library never downloads exchange rates.
+///
+/// ```
+/// use egui_charts::drawings::PositionReadout;
+///
+/// let mut readout = PositionReadout::default();
+/// readout.account_currency = Some("USD".into());
+/// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct PositionReadout {
     /// Keep statistics visible when the drawing is not selected.
     pub persistent: bool,
@@ -1074,8 +1186,17 @@ impl PositionReadout {
 /// stop colours, whose opacity is that of their zones, are
 /// [`Drawing::position_target_color`](crate::drawings::Drawing::position_target_color) and
 /// [`Drawing::position_stop_color`](crate::drawings::Drawing::position_stop_color).
+///
+/// ```
+/// use egui_charts::drawings::PositionStyle;
+///
+/// let mut style = PositionStyle::default();
+/// style.line_width = 2.0;
+/// assert!(style.is_valid());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct PositionStyle {
     /// Colour of the entry line, its price tag and the trade's path; `None` draws the lines in a
     /// translucent shade of the theme's secondary text colour and the tag in that colour.
@@ -1122,8 +1243,10 @@ impl PositionStyle {
     }
 }
 
-/// Colour, size and emphasis of the text typed on a price note, apart from the price beside it.
+/// Colour, size and emphasis of text a drawing styles apart from its own: the text typed on a
+/// price note, apart from the price beside it, and the prices beside a channel's lines.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NoteTextStyle {
     /// Text colour as RGBA.
     pub color: [u8; 4],
@@ -1136,9 +1259,63 @@ pub struct NoteTextStyle {
 }
 
 impl NoteTextStyle {
+    /// Text of `color` at `font_size` points, neither bold nor italic.
+    ///
+    /// ```
+    /// use egui_charts::drawings::NoteTextStyle;
+    ///
+    /// let mut style = NoteTextStyle::new([255, 255, 255, 255], 14.0);
+    /// style.bold = true;
+    /// assert!(style.is_valid());
+    /// ```
+    pub fn new(color: [u8; 4], font_size: f32) -> Self {
+        Self {
+            color,
+            font_size,
+            bold: false,
+            italic: false,
+        }
+    }
+
     /// Whether the font size lies in 1 to 256 points.
     pub fn is_valid(&self) -> bool {
         (1.0..=256.0).contains(&self.font_size)
+    }
+}
+
+/// Colour, width and pattern of a parallel channel's middle line. The default draws it as
+/// channels saved before these settings do: dashed, 1 point wide, in the line colour.
+///
+/// ```
+/// use egui_charts::drawings::{Drawing, DrawingToolType, MiddleLineStyle};
+/// use egui_charts::model::LineStyle;
+///
+/// let mut channel = Drawing::new(1, DrawingToolType::ParallelChannel);
+/// let mut middle = MiddleLineStyle::default();
+/// middle.color = Some([255, 152, 0, 255]);
+/// middle.width = 2.0;
+/// middle.line_style = LineStyle::Dotted;
+/// channel.middle_line = middle;
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct MiddleLineStyle {
+    /// Line colour as RGBA; `None` takes the drawing's line colour.
+    pub color: Option<[u8; 4]>,
+    /// Stroke width in points, above 0 and at most 100.
+    pub width: f32,
+    /// Stroke pattern.
+    pub line_style: crate::model::LineStyle,
+}
+
+impl Default for MiddleLineStyle {
+    fn default() -> Self {
+        Self {
+            color: None,
+            width: crate::styles::stroke::HAIRLINE,
+            line_style: crate::model::LineStyle::Dashed,
+        }
     }
 }
 
@@ -1179,6 +1356,7 @@ impl AnnotationMarker {
 
 /// Placement of a line tool's measurement text relative to its anchors.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LineMeasurementPosition {
     /// Before the left anchor.
     Left,
@@ -1195,6 +1373,7 @@ pub enum LineMeasurementPosition {
 /// Which part of a line's text sits at which point of the line, reading left to right. A vertical
 /// line reads from bottom to top, so its left end is at the bottom, whichever way its text is turned.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LineTextHorizontalAlign {
     /// The text starts at the line's left end.
     Left,
@@ -1208,6 +1387,7 @@ pub enum LineTextHorizontalAlign {
 /// Which edge of a line's text rests on the line. A vertical line takes its text's top to face
 /// left, so [`Self::Top`] reads right of the line and [`Self::Bottom`] left of it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LineTextVerticalAlign {
     /// The text's top edge, so that it reads below the line.
     Top,
@@ -1220,6 +1400,7 @@ pub enum LineTextVerticalAlign {
 
 /// How a vertical line's text is turned.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LineTextOrientation {
     /// Along the line, reading from bottom to top.
     #[default]
@@ -1233,8 +1414,16 @@ pub enum LineTextOrientation {
 /// which have no readouts. Readouts start hidden except on an info line, see [`Self::for_tool`];
 /// saves from before these settings read the same way.
 /// Price changes follow anchor order; lengths and elapsed time are unsigned.
+///
+/// ```
+/// use egui_charts::drawings::LineMeasurements;
+///
+/// let mut measurements = LineMeasurements::default();
+/// measurements.bar_count = true;
+/// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct LineMeasurements {
     /// Keep enabled readouts visible without selecting the line.
     pub persistent: bool,
@@ -1254,7 +1443,9 @@ pub struct LineMeasurements {
     pub inclination: bool,
     /// Show a movable marker halfway along the displayed line segment.
     pub midpoint: bool,
-    /// Show the price of each anchor beside it, whether or not the line is selected.
+    /// Show the price of each anchor beside it, whether or not the line is selected. On a flat
+    /// top/bottom or disjoint channel, the price at each end of both lines, styled by
+    /// [`Drawing::anchor_price_style`](crate::drawings::Drawing::anchor_price_style).
     pub price_labels: bool,
     /// Where to place the readouts; right of the anchors by default.
     pub position: LineMeasurementPosition,
@@ -1674,8 +1865,16 @@ mod tests {
             );
         }
         assert!(RegressionTrendConfig::new(10.0).is_some());
+        let regression = RegressionTrendConfig::default();
         for deviations in [0.0, -1.0, 10.5, f64::INFINITY, f64::NAN] {
             assert!(RegressionTrendConfig::new(deviations).is_none());
+            assert!(regression.with_deviations(1.0, deviations).is_none());
+            assert!(regression.with_deviations(deviations, 1.0).is_none());
+        }
+        assert!(regression.with_precision(Some(8)).is_some());
+        assert!(regression.with_precision(Some(9)).is_none());
+        for saved in [r#"{"upper":2.0,"lower":0.0}"#, r#"{"precision":9}"#] {
+            assert!(serde_json::from_str::<RegressionTrendConfig>(saved).is_err());
         }
     }
 

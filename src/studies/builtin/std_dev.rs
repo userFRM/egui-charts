@@ -27,7 +27,7 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Standard Deviation indicator
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StandardDeviation {
     period: usize,
     values: IndicatorValues,

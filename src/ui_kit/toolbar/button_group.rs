@@ -20,6 +20,7 @@ use crate::theme::ThemeExt;
 ///     });
 /// # });
 /// ```
+#[derive(Debug)]
 pub struct ButtonGroup {
     separator_after: bool,
     separator_before: bool,
@@ -104,6 +105,7 @@ impl ButtonGroup {
 }
 
 /// Helper for common toolbar layout patterns
+#[derive(Debug)]
 pub struct ToolbarLayout;
 
 impl ToolbarLayout {
