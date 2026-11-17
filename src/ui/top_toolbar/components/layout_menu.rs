@@ -863,6 +863,7 @@ mod tests {
             mode: crate::widget::ChartLayoutMode::TwoHorizontal,
             charts: Vec::new(),
             sizing: None,
+            link_groups: None,
         };
         let host = Arc::new(Host::default());
         host.0
