@@ -8,7 +8,11 @@ use crate::widget::Chart;
 
 impl Chart {
     pub(super) fn scroll_footprints(&mut self, link: &mut FeedLink) {
-        if self.chart_type != ChartType::VolumeFootprint
+        if (self.chart_type != ChartType::VolumeFootprint
+            && !link
+                .study_inputs
+                .iter()
+                .any(|(input, _)| input.is_footprint()))
             || link.clock.timeframe().is_none_or(|tf| tf.is_trade_based())
             || link.footprints_complete
             || link.subscription.is_none()
@@ -124,7 +128,11 @@ impl Chart {
         let retain = link
             .footprint
             .as_ref()
-            .is_some_and(|flow| flow.owned().is_none());
+            .is_some_and(|flow| flow.owned().is_none())
+            || link
+                .study_inputs
+                .iter()
+                .any(|(input, _)| input.is_footprint());
         let mut flow = FootprintState::from_page(request, page.bars, retain)?;
         if !empty {
             if let Some(held) = link
@@ -137,6 +145,16 @@ impl Chart {
                 flow.prepare_history(page.complete_before, &link.trades, link.trades_from_start);
                 flow.live.rebuild_prepared(&link.trades);
                 link.footprint = Some(flow);
+            }
+            for (input, _) in &link.study_inputs {
+                if input.is_footprint() {
+                    input.replace_trades(
+                        &link.clock,
+                        &link.trades,
+                        &self.state.data().bars,
+                        link.footprint.as_ref(),
+                    );
+                }
             }
         }
         link.footprint_cursor = continuation;
