@@ -56,6 +56,16 @@ dominates under the imbalance settings gets a strip along its outer edge, and tw
 
 ### Prepared history
 
+The next bounded-history extension is being developed in
+[#2967](https://github.com/userFRM/egui-charts/issues/2967), after the shared study inputs.
+Its agreed contract keeps `Reply<FootprintPage>` and the existing constructors: each reply
+answers one contiguous suffix `[from, before)` as either complete (possibly empty) or
+unavailable. Unavailable means the recording cannot supply that span, not that nothing traded.
+Pending requests, transport failures and invalid data remain in the existing request/error
+lifecycle. Internal fills will use clock-aligned boundaries, preserve accepted row owners and
+the initial exclusive live cutoff, and invalidate coverage-dependent results when a gap closes.
+This paragraph records the agreed extension, not support in the current implementation.
+
 The built-in time-based footprint chart can request already aggregated history through
 [`Datafeed::footprints`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#method.footprints).
 Use [`FootprintPage::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FootprintPage.html#method.new)
