@@ -12,8 +12,8 @@ use egui::Color32;
 /// 3. Percent rank of the one-bar return: the share of the previous rank-period returns at or
 ///    below the latest one
 ///
-/// The pane starts with guides at 70, 50 and 30 and a light blue fill between the outer guides.
-/// Applied study settings edit each guide and the fill independently.
+/// The pane starts with an upper guide at 70, a lower guide at 30 and a light blue fill between
+/// them. Applied study settings edit each guide and the fill independently.
 ///
 /// Developed by Larry Connors
 #[derive(Clone, Debug)]
@@ -194,10 +194,6 @@ impl Indicator for ConnorsRSI {
         }
     }
 
-    fn level_fill_indices(&self) -> Option<[usize; 2]> {
-        Some([0, 2])
-    }
-
     fn level_fill_color(&self) -> Color32 {
         palette::LIGHT_BLUE.gamma_multiply_u8(26)
     }
@@ -208,7 +204,6 @@ impl Indicator for ConnorsRSI {
             range: Some((0.0, 100.0)),
             levels: vec![
                 (70.0, palette::MUTED, "Upper guide"),
-                (50.0, palette::MUTED.gamma_multiply_u8(128), "Middle guide"),
                 (30.0, palette::MUTED, "Lower guide"),
             ],
             fill_between_levels: true,

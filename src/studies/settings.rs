@@ -220,7 +220,9 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
         let mut zero = levels[0];
         zero.visible = false;
         settings.levels.push(zero);
-    } else if settings.levels.len() != levels.len() {
+    } else if settings.levels.len() != levels.len()
+        && former_guides(study, settings.levels.len()).is_none()
+    {
         settings.levels = levels;
         settings.fill_between_levels = fill;
         settings.level_fill_color = color;
@@ -259,6 +261,38 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
             inverted_color: fill.inverted_color,
             visible: true,
         }));
+}
+
+/// The guides a built-in study declared before it opened with fewer, and the levels its band
+/// filled between, for settings saved with that many levels. A host study under the same name,
+/// which declares other guides, keeps its own.
+fn former_guides(
+    study: &dyn Indicator,
+    saved: usize,
+) -> Option<(Vec<(f64, Color32, &'static str)>, Option<[usize; 2]>)> {
+    use super::palette::{GRAY, MUTED};
+    let (current, former, fill) = match (study.name(), saved) {
+        ("Connors RSI", 3) => (
+            super::ConnorsRSI::default().pane().levels,
+            vec![
+                (70.0, MUTED, "Upper guide"),
+                (50.0, MUTED.gamma_multiply_u8(128), "Middle guide"),
+                (30.0, MUTED, "Lower guide"),
+            ],
+            Some([0, 2]),
+        ),
+        ("Correlation Coefficient", 3) => (
+            super::Correlation::default().pane().levels,
+            vec![
+                (1.0, GRAY, "Upper guide"),
+                (-1.0, GRAY, "Lower guide"),
+                (0.0, GRAY.gamma_multiply_u8(128), "Zero"),
+            ],
+            None,
+        ),
+        _ => return None,
+    };
+    (study.pane().levels == current).then_some((former, fill))
 }
 
 /// Interval visibility evaluated for every interval, including custom and trade-based ones.
@@ -332,7 +366,9 @@ pub struct StudySettings {
     /// [`StudyPane::levels`](super::StudyPane::levels). Settings saved before levels were
     /// editable, and settings with another number of levels, take the study's own levels and fill.
     /// Only the guide declared since is added, hidden, to a Stochastic saved with two levels or a
-    /// Know Sure Thing, Chaikin Money Flow or Force Index saved with none.
+    /// Know Sure Thing, Chaikin Money Flow or Force Index saved with none. A Connors RSI or a
+    /// Correlation Coefficient with three levels keeps the guides it opened with before: 70, 50
+    /// and 30 with the band between 70 and 30, or 1, -1 and 0.
     #[serde(default)]
     pub levels: Vec<LevelStyle>,
     /// Whether the band between the boundary levels is filled.
@@ -559,6 +595,16 @@ impl std::fmt::Debug for ConfiguredStudy {
 }
 
 impl ConfiguredStudy {
+    /// The study's pane, with the guides it declared before it opened with fewer when the
+    /// settings hold that many levels.
+    fn declared_pane(&self) -> super::StudyPane {
+        let mut pane = self.study.pane();
+        if let Some((levels, _)) = former_guides(self.study.as_ref(), self.settings.levels.len()) {
+            pane.levels = levels;
+        }
+        pane
+    }
+
     /// Retain the study's current colours, widths and calculation parameters.
     pub fn new(study: Box<dyn Indicator>) -> Self {
         let mut settings = study.settings();
@@ -1602,8 +1648,7 @@ impl Indicator for ConfiguredStudy {
     }
     fn level_style(&self, value: f64) -> LineStyle {
         // Levels moved onto one value draw with the pattern of the first visible one.
-        self.study
-            .pane()
+        self.declared_pane()
             .levels
             .iter()
             .zip(&self.settings.levels)
@@ -1613,7 +1658,8 @@ impl Indicator for ConfiguredStudy {
             .map_or_else(|| self.study.level_style(value), |(_, style)| style.pattern)
     }
     fn level_fill_indices(&self) -> Option<[usize; 2]> {
-        self.study.level_fill_indices()
+        former_guides(self.study.as_ref(), self.settings.levels.len())
+            .map_or_else(|| self.study.level_fill_indices(), |(_, fill)| fill)
     }
     fn level_price_line(&self, index: usize) -> Option<Color32> {
         self.settings
@@ -1629,7 +1675,7 @@ impl Indicator for ConfiguredStudy {
             .filter(|style| {
                 style
                     .value
-                    .or_else(|| self.study.pane().levels.get(index).map(|level| level.0))
+                    .or_else(|| self.declared_pane().levels.get(index).map(|level| level.0))
                     == Some(value)
             })
             .map_or_else(
@@ -1641,8 +1687,7 @@ impl Indicator for ConfiguredStudy {
         self.settings.level_fill_color
     }
     fn level_width(&self, value: f64) -> f32 {
-        self.study
-            .pane()
+        self.declared_pane()
             .levels
             .iter()
             .zip(&self.settings.levels)
@@ -1652,7 +1697,7 @@ impl Indicator for ConfiguredStudy {
             .map_or_else(|| self.study.level_width(value), |(_, style)| style.width)
     }
     fn pane(&self) -> super::StudyPane {
-        let mut pane = self.study.pane();
+        let mut pane = self.declared_pane();
         for ((value, color, _), style) in pane.levels.iter_mut().zip(&self.settings.levels) {
             *value = style.value.unwrap_or(*value);
             // A hidden level still bounds the fill; its transparent line is not drawn.
