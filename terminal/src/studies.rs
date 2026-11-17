@@ -675,7 +675,7 @@ mod tests {
         for (timezone, top, bottom, width) in [
             ("Unknown", 10.0, 10.0, 1.0),
             ("UTC", f32::NAN, 10.0, 1.0),
-            ("UTC", 60.0, 40.0, 1.0),
+            ("UTC", 101.0, 0.0, 1.0),
             ("UTC", -1.0, 10.0, 1.0),
             ("UTC", 10.0, 10.0, 0.0),
         ] {
