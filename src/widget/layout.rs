@@ -3926,6 +3926,76 @@ mod tests {
         }
     }
 
+    /// A chart reads its status line at a crosshair it receives, from a linked chart or the host,
+    /// and at its latest bar once that crosshair is gone.
+    #[test]
+    fn status_line_reads_a_received_crosshair() {
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        for linked in [true, false] {
+            let ctx = egui::Context::default();
+            let mut layout = ChartLayout {
+                mode: ChartLayoutMode::TwoHorizontal,
+                ..Default::default()
+            };
+            // Bar `i` of the second chart opens at 700 + i.
+            let second = Chart::new(BarData::from_bars(
+                (0..100)
+                    .map(|i| {
+                        let open = 700.0 + i as f64;
+                        Bar::new(
+                            start + Duration::minutes(i),
+                            open,
+                            open + 3.0,
+                            open - 2.0,
+                            open - 1.0,
+                            1.0,
+                        )
+                    })
+                    .collect(),
+            ));
+            let mut charts = [chart(60), second];
+            let mut time = 0.0;
+            let mut opens = |layout: &mut ChartLayout, charts: &mut [Chart], mut events| {
+                let mut texts = Vec::new();
+                for _ in 0..2 {
+                    time += 0.1;
+                    texts = frame_texts(&ctx, layout, charts, vec2(1440.0, 900.0), time, events);
+                    events = vec![];
+                }
+                texts
+                    .into_iter()
+                    .map(|(text, ..)| text)
+                    .filter(|text| text.starts_with("O 7"))
+                    .collect::<Vec<_>>()
+            };
+            opens(&mut layout, &mut charts, vec![]);
+            let events = if linked {
+                vec![Event::PointerMoved(pos2(
+                    charts[0].index_to_x(50.0).unwrap(),
+                    charts[0].last_rendered_price_rect.center().y,
+                ))]
+            } else {
+                charts[1].set_synced_crosshair_time(Some(start + Duration::minutes(50)));
+                vec![]
+            };
+            assert_eq!(opens(&mut layout, &mut charts, events), ["O 750.00"]);
+            #[cfg(feature = "ui")]
+            assert_eq!(
+                crate::ui::widget_bar::panels::object_tree::DataWindowInfo::from_chart(&charts[1])
+                    .close,
+                749.0
+            );
+            if !linked {
+                charts[1].set_synced_crosshair_time(None);
+            }
+            assert_eq!(
+                opens(&mut layout, &mut charts, vec![Event::PointerGone]),
+                ["O 799.00"],
+                "linked {linked}"
+            );
+        }
+    }
+
     /// Linked charts mark a time the pointer reaches after the last bar at the slot holding it:
     /// eight one-minute slots after bar 99, opened 22:13:20 on Tuesday 14 November 2023, open
     /// at 00:00:20 the next day. One-minute bars from 22:13:00 hold it in their slot 107, opened
