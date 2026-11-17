@@ -361,8 +361,15 @@ impl Drawing {
         if self.tool_type.supports_line_measurements() {
             self.render_line_measurements(painter, view, selected);
         }
-        if self.tool_type == DrawingToolType::Rect {
-            self.render_rect_middle_line(painter, rect);
+        match self.tool_type {
+            DrawingToolType::Rect => self.render_rect_middle_line(painter, rect),
+            DrawingToolType::ParallelChannel => self.render_channel_middle_line(painter, rect),
+            DrawingToolType::FlatTopBottom | DrawingToolType::DisjointChannel
+                if self.line_measurements.price_labels =>
+            {
+                self.render_channel_prices(painter, view);
+            }
+            _ => {}
         }
     }
 

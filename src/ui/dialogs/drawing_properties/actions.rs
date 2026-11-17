@@ -343,6 +343,8 @@ impl DrawingProps {
                     regression_trend,
                     vwap,
                     channel_midline,
+                    anchor_price_style,
+                    middle_line,
                     theme_shade,
                     line_measurements.price_change,
                     line_measurements.percent_change,
@@ -505,6 +507,16 @@ impl DrawingProps {
             {
                 return Err("Price note text size must be 1 to 256");
             }
+            if settings
+                .anchor_price_style
+                .is_some_and(|style| !style.is_valid())
+            {
+                return Err("Price text size must be 1 to 256");
+            }
+            if !(settings.middle_line.width > 0.0 && settings.middle_line.width <= MAX_STROKE_WIDTH)
+            {
+                return Err("Middle line width must be above 0 and at most 100");
+            }
             if !settings.position_style.is_valid() {
                 return Err("Position line width must be 1 to 100 and font size 1 to 256");
             }
@@ -623,6 +635,7 @@ mod tests {
             DrawingToolType::FixedRangeVolumeProfile,
             DrawingToolType::RegressionTrend,
             DrawingToolType::ParallelChannel,
+            DrawingToolType::DisjointChannel,
             DrawingToolType::Rect,
             DrawingToolType::TrendLine,
             DrawingToolType::Ray,
@@ -638,7 +651,10 @@ mod tests {
             DrawingToolType::CrossLine,
         ] {
             chart.drawings_mut().drawings.clear();
-            chart.drawings_mut().drawings.push(Drawing::new(7, tool));
+            let mut drawing = Drawing::new(7, tool);
+            // A shown middle line, so that its style rows would show on a rectangle if offered.
+            drawing.channel_midline = true;
+            chart.drawings_mut().drawings.push(drawing);
             let mut peer = Drawing::new(8, DrawingToolType::TextLabel);
             // A boxed label, so that the settings below would show on it if they leaked.
             (peer.background, peer.border, peer.border_color) = (true, true, None);
@@ -670,6 +686,12 @@ mod tests {
             assert_eq!(labels.contains(&"Line end"), line, "{tool:?}");
             let middle = tool.supports_middle_line();
             assert_eq!(labels.contains(&"Middle line"), middle, "{tool:?}");
+            // A new parallel channel shows its middle line and styles it; a rectangle's is fixed.
+            assert_eq!(
+                labels.contains(&"Middle line width"),
+                tool == DrawingToolType::ParallelChannel,
+                "{tool:?}"
+            );
             use DrawingToolType as T;
             let (price, time) = (
                 matches!(

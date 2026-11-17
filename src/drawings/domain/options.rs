@@ -1243,7 +1243,8 @@ impl PositionStyle {
     }
 }
 
-/// Colour, size and emphasis of the text typed on a price note, apart from the price beside it.
+/// Colour, size and emphasis of text a drawing styles apart from its own: the text typed on a
+/// price note, apart from the price beside it, and the prices beside a channel's lines.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct NoteTextStyle {
@@ -1279,6 +1280,42 @@ impl NoteTextStyle {
     /// Whether the font size lies in 1 to 256 points.
     pub fn is_valid(&self) -> bool {
         (1.0..=256.0).contains(&self.font_size)
+    }
+}
+
+/// Colour, width and pattern of a parallel channel's middle line. The default draws it as
+/// channels saved before these settings do: dashed, 1 point wide, in the line colour.
+///
+/// ```
+/// use egui_charts::drawings::{Drawing, DrawingToolType, MiddleLineStyle};
+/// use egui_charts::model::LineStyle;
+///
+/// let mut channel = Drawing::new(1, DrawingToolType::ParallelChannel);
+/// let mut middle = MiddleLineStyle::default();
+/// middle.color = Some([255, 152, 0, 255]);
+/// middle.width = 2.0;
+/// middle.line_style = LineStyle::Dotted;
+/// channel.middle_line = middle;
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct MiddleLineStyle {
+    /// Line colour as RGBA; `None` takes the drawing's line colour.
+    pub color: Option<[u8; 4]>,
+    /// Stroke width in points, above 0 and at most 100.
+    pub width: f32,
+    /// Stroke pattern.
+    pub line_style: crate::model::LineStyle,
+}
+
+impl Default for MiddleLineStyle {
+    fn default() -> Self {
+        Self {
+            color: None,
+            width: crate::styles::stroke::HAIRLINE,
+            line_style: crate::model::LineStyle::Dashed,
+        }
     }
 }
 
@@ -1406,7 +1443,9 @@ pub struct LineMeasurements {
     pub inclination: bool,
     /// Show a movable marker halfway along the displayed line segment.
     pub midpoint: bool,
-    /// Show the price of each anchor beside it, whether or not the line is selected.
+    /// Show the price of each anchor beside it, whether or not the line is selected. On a flat
+    /// top/bottom or disjoint channel, the price at each end of both lines, styled by
+    /// [`Drawing::anchor_price_style`](crate::drawings::Drawing::anchor_price_style).
     pub price_labels: bool,
     /// Where to place the readouts; right of the anchors by default.
     pub position: LineMeasurementPosition,
