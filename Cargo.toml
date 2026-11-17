@@ -128,6 +128,11 @@ harness = false
 required-features = ["widget", "studies"]
 
 [[bench]]
+name = "footprint_input"
+path = "benches/footprint_input.rs"
+harness = false
+
+[[bench]]
 name = "stream"
 path = "benches/stream.rs"
 harness = false

@@ -528,7 +528,6 @@ impl StudySettingsSnapshot {
 /// bars that share time with their bars, its markers sit on the last such chart bar once the
 /// values on the chart reach their bar, and its labels are hidden. Its visible range is the range
 /// of its own bars that share time with the chart bars in view.
-#[derive(Clone)]
 pub struct ConfiguredStudy {
     study: Box<dyn Indicator>,
     settings: StudySettings,
@@ -559,6 +558,12 @@ pub struct ConfiguredStudy {
     kept: Option<Kept>,
 }
 
+impl Clone for ConfiguredStudy {
+    fn clone(&self) -> Self {
+        self.clone_with(self.study.clone_box())
+    }
+}
+
 /// The values a study keeps on the bars that remain after the chart evicted the oldest `shift`
 /// bars since its last calculation.
 #[derive(Clone)]
@@ -577,6 +582,33 @@ impl std::fmt::Debug for ConfiguredStudy {
 }
 
 impl ConfiguredStudy {
+    // Select the inner clone once, without first cloning and discarding its calculated data.
+    fn clone_with(&self, study: Box<dyn Indicator>) -> Self {
+        Self {
+            study,
+            settings: self.settings.clone(),
+            timeframe: self.timeframe,
+            instrument_precision: self.instrument_precision,
+            formatter: self.formatter.clone(),
+            overlay: self.overlay,
+            scale: self.scale,
+            scale_mapping: self.scale_mapping,
+            source: self.source,
+            calculation_symbol: self.calculation_symbol.clone(),
+            calculation_timeframe: self.calculation_timeframe,
+            wait_for_close: self.wait_for_close,
+            offset: self.offset,
+            clock: self.clock.clone(),
+            aligned: self.aligned.clone(),
+            aligned_bars: self.aligned_bars.clone(),
+            spans: self.spans.clone(),
+            visible: self.visible.clone(),
+            aligned_markers: self.aligned_markers.clone(),
+            aligned_zones: self.aligned_zones.clone(),
+            kept: self.kept.clone(),
+        }
+    }
+
     /// Retain the study's current colours, widths and calculation parameters.
     pub fn new(study: Box<dyn Indicator>) -> Self {
         let mut settings = study.settings();
@@ -1726,6 +1758,9 @@ impl Indicator for ConfiguredStudy {
     }
     fn clone_box(&self) -> Box<dyn Indicator> {
         Box::new(self.clone())
+    }
+    fn clone_for_export(&self) -> Box<dyn Indicator> {
+        Box::new(self.clone_with(self.study.clone_for_export()))
     }
 }
 
