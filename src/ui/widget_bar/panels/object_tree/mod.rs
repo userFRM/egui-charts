@@ -26,4 +26,4 @@ pub use config::ObjectTreeConfig;
 pub use data_window::show_data_window;
 pub use panel::ObjectTreePanel;
 pub use state::ObjectTreeState;
-pub use types::{DataWindowInfo, DrawingProperties, SourceItem, SourceType};
+pub use types::{DataWindowInfo, DataWindowSeries, DrawingProperties, SourceItem, SourceType};

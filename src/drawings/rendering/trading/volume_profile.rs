@@ -354,6 +354,7 @@ impl Drawing {
             left..right,
             ProfileStyle::Drawing {
                 anchored: self.tool_type == DrawingToolType::AnchoredVolumeProfile,
+                poc_width: self.stroke_width,
             },
             view.price_to_y,
         );

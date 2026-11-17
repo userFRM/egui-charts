@@ -8,7 +8,8 @@
 //! two do not both carry ids. Trades sharing the boundary instant may be lost but are never counted
 //! twice. The first page after a new subscription on a retained tape also fills the time between
 //! the tape and the live stream, from the instant of the newest retained trade through that of the
-//! next live trade, each under the same rule. A page's trades at the stream's first instant may
+//! next live trade, each under the same rule, and the time after the first such tape when the
+//! subscription changed again before it. A page's trades at the stream's first instant may
 //! have traded before the subscription, so the live trades left to a page there are kept apart:
 //! they, not the page's, are what the stream sent at that instant. A loss of older trades to stay
 //! within capacity leaves the page's trades there held, so the live ones stay apart until the loss
@@ -151,13 +152,19 @@ pub(crate) struct Trades {
     paged_without_id_until: Option<DateTime<Utc>>,
     /// Newest retained trade, until the next page fills the time after it.
     retained_until: Option<DateTime<Utc>>,
+    /// Newest trade retained at the first subscription change, when the subscription changed
+    /// again before a page answered: that page fills the time after it as well, before the trades
+    /// held since.
+    first_retained_until: Option<DateTime<Utc>>,
     /// Time of the newest trade dropped to stay within `capacity`: evidence before it is incomplete.
     lost_until: Option<DateTime<Utc>>,
     /// Instants at which the held trades may lack trades, kept across subscriptions as
     /// `lost_until` is: a page left trades of the instant out, as ids did not tell them from held
     /// ones, or the subscription changed before a page reached the first instant of its stream,
-    /// which may lack trades that traded before the stream began. A page whose trades at the
-    /// oldest held instant ids all tell apart completes that instant.
+    /// which may lack trades that traded before the stream began. When the subscription changed
+    /// more than twice before a page answered, no page fills the time of the changes between the
+    /// first and the last, and the instants on either side of each such time are kept too. A page
+    /// whose trades at the oldest held instant ids all tell apart completes that instant.
     left_out: BTreeSet<DateTime<Utc>>,
     /// Whether a page reached the first held instant since the store began or the subscription
     /// last changed.
@@ -192,6 +199,7 @@ impl Trades {
             paged_until: None,
             paged_without_id_until: None,
             retained_until: None,
+            first_retained_until: None,
             lost_until: None,
             left_out: BTreeSet::new(),
             front_reached: false,
@@ -221,8 +229,9 @@ impl Trades {
     }
 
     /// The instants at which the held trades may lack trades of that instant, whatever
-    /// subscriptions changed since: a page left them out, or no page reached the first instant of
-    /// a stream before its subscription changed.
+    /// subscriptions changed since: a page left them out, no page reached the first instant of a
+    /// stream before its subscription changed, or they bound the time of a subscription change
+    /// that no page fills, between the first and the last of more than two before a page.
     #[cfg_attr(
         not(feature = "widget"),
         expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -239,6 +248,17 @@ impl Trades {
     )]
     pub(crate) fn retained_until(&self) -> Option<DateTime<Utc>> {
         self.retained_until
+    }
+
+    /// Time of the newest trade retained at the first subscription change, when it changed again
+    /// before a page answered, until a page fills the time after it: held trades after it follow a
+    /// time that may lack all of its trades.
+    #[cfg_attr(
+        not(feature = "widget"),
+        expect(dead_code, reason = "only the chart widget consumes a feed")
+    )]
+    pub(crate) fn first_retained_until(&self) -> Option<DateTime<Utc>> {
+        self.first_retained_until
     }
 
     /// Time of the oldest live trades, while a page left out its trades at that time because ids
@@ -288,6 +308,18 @@ impl Trades {
         {
             self.leave_out(first);
         }
+        // A page fills the time after the first tape no page has filled and after the newest
+        // held trade, not the time of a change in between: its trades are missing, and so may be
+        // some at the instants on either side of it.
+        if let Some(first) = self.first_retained_until
+            && let Some(until) = self.retained_until.filter(|until| *until > first)
+            && let Some(from) = self.live().map(|trade| trade.ts).min()
+        {
+            self.leave_out(until);
+            self.leave_out(from);
+        }
+        // A page has yet to fill the time after the tape an earlier change retained.
+        self.first_retained_until = self.first_retained_until.or(self.retained_until);
         self.front_reached = false;
         self.paged = self.trades.len();
         self.paged_until = self.trades.iter().map(|trade| trade.ts).max();
@@ -514,15 +546,41 @@ impl Trades {
         rejected
     }
 
-    /// Moves the trades of `page` after the retained tape and before the live stream between
-    /// them: nothing streamed while the subscription changed. One whose id is held stays out. A
-    /// trade at the instant of the newest retained trade or of the oldest live trade follows them
-    /// when it and every held trade at that instant carry ids; one that ids do not tell from the
-    /// held ones is left out, and its instant recorded. The oldest go beyond capacity.
+    /// Moves the trades of `page` into the time the subscription changes left without trades,
+    /// with [`fill_after`](Self::fill_after): after the retained tape and, when the subscription
+    /// changed more than once before a page answered, after the first change's tape as well,
+    /// before the trades held since.
     fn fill_gap(&mut self, page: &mut Vec<Tick>, changed: &mut impl FnMut(&Tick, bool)) {
+        let first = self.first_retained_until.take();
         let Some(until) = self.retained_until.take() else {
             return;
         };
+        // The trades held since the first tape follow its time as live ones would.
+        if let Some(first) = first.filter(|first| *first < until)
+            && let Some(from) =
+                (self.trades.iter().take(self.paged)).position(|trade| trade.ts > first)
+        {
+            let live = self.trades.len() - self.paged;
+            self.paged = from;
+            self.fill_after(first, page, changed);
+            self.paged = self.trades.len() - live;
+            // Those trades are not the live ones.
+            self.left_out_at = None;
+        }
+        self.fill_after(until, page, changed);
+    }
+
+    /// Moves the trades of `page` after `until`, the newest trade of a retained tape, and before
+    /// the live stream between them: nothing streamed while the subscription changed. One whose
+    /// id is held stays out. A trade at the instant of `until` or of the oldest live trade follows
+    /// them when it and every held trade at that instant carry ids; one that ids do not tell from
+    /// the held ones is left out, and its instant recorded. The oldest go beyond capacity.
+    fn fill_after(
+        &mut self,
+        until: DateTime<Utc>,
+        page: &mut Vec<Tick>,
+        changed: &mut impl FnMut(&Tick, bool),
+    ) {
         // A live trade stamped inside the retained tape marks no boundary.
         let live_from = (self.trades.iter().skip(self.paged))
             .map(|t| t.ts)
@@ -852,6 +910,21 @@ mod tests {
                 vec![Live(vec![id(trade(5, 5.0), 5), id(trade(3, 3.0), 3), trade(4, 4.0)]),
                     Page(vec![trade(2, 2.0), trade(3, 3.0), id(trade(4, 4.0), 4)])],
                 vec![2.0, 5.0, 3.0, 4.0], 0, vec![5.0, 3.0, 4.0]),
+            // The interval changes twice before the page answers: 3 and 4 traded during the
+            // first change, 6 during the second.
+            ("after two interval changes, with ids, a page fills the time of both", 10,
+                vec![Live(vec![id(trade(1, 1.0), 1), id(trade(2, 2.0), 2)]), Reanchor,
+                    Live(vec![id(trade(5, 5.0), 5)]), Reanchor, Live(vec![id(trade(7, 7.0), 7)]),
+                    Page(vec![id(trade(1, 1.0), 1), id(trade(2, 2.0), 2), id(trade(3, 3.0), 3),
+                        id(trade(4, 4.0), 4), id(trade(5, 5.0), 5), id(trade(6, 6.0), 6),
+                        id(trade(7, 7.0), 7)])],
+                vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], 0, vec![7.0]),
+            ("after two interval changes, without ids, a page fills the time of both", 10,
+                vec![Live(vec![trade(1, 1.0), trade(2, 2.0)]), Reanchor, Live(vec![trade(5, 5.0)]),
+                    Reanchor, Live(vec![trade(7, 7.0)]),
+                    Page(vec![trade(1, 1.0), trade(2, 2.0), trade(3, 3.0), trade(4, 4.0),
+                        trade(5, 5.0), trade(6, 6.0), trade(7, 7.0)])],
+                vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], 0, vec![7.0]),
         ];
         for (name, capacity, steps, prices, rejected, live_prices) in cases {
             let mut store = Trades::new(capacity);

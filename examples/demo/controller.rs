@@ -2951,31 +2951,13 @@ impl DemoApp {
         items
     }
 
-    /// Reads the hovered values from the crosshair payload alone; off the bars, the chart's
-    /// own readout shows the latest bar.
+    /// Reads the hovered values from the crosshair payload; off the bars, the chart's own
+    /// readout shows the latest bar.
     fn build_data_window(&self) -> DataWindowInfo {
-        let Some((pointer, bar)) = self
-            .crosshair
-            .as_ref()
-            .and_then(|pointer| Some((pointer, pointer.bar.as_ref()?)))
-        else {
-            return DataWindowInfo::from_chart(&self.chart);
-        };
-        let mut info = DataWindowInfo::new(self.chart.symbol()).with_timeframe(
-            self.chart
-                .timeframe()
-                .map(|tf| tf.as_str())
-                .unwrap_or_default(),
-        );
-        if let Some(instrument) = self.chart.instrument() {
-            info = info.with_instrument(instrument);
-        }
-        info = info
-            .with_ohlcv(bar.open, bar.high, bar.low, bar.close, bar.volume)
-            .with_timestamp(self.chart.format_time(bar.time))
-            .with_prev_close(pointer.previous_close.unwrap_or(bar.open));
-        info.studies = pointer.studies.iter().map(|(_, row)| row.clone()).collect();
-        info.with_chart_formatters(&self.chart)
+        self.crosshair.as_ref().map_or_else(
+            || DataWindowInfo::from_chart(&self.chart),
+            |pointer| DataWindowInfo::from_pointer(&self.chart, pointer),
+        )
     }
 
     fn handle_object_tree(&mut self, action: ObjectTreeAction, sources: &[SourceItem]) {
@@ -9546,6 +9528,34 @@ mod tests {
             for _ in 0..6 {
                 frame(&mut app, vec![]);
             }
+            // The volume histogram with its moving average shown.
+            let volume = app
+                .chart
+                .indicators()
+                .find(|(_, study)| study.is_volume())
+                .unwrap()
+                .0;
+            app.chart
+                .indicator_mut(volume)
+                .unwrap()
+                .set_input(
+                    "show_average",
+                    egui_charts::studies::InputValue::Toggle(true),
+                )
+                .unwrap();
+            if kind == ChartType::Candles {
+                // A comparison whose bar at each main bar's time closes at 500 plus its index.
+                let comparison = app.chart.add_comparison("CMP", egui::Color32::GOLD);
+                let bars = app
+                    .chart
+                    .bars(egui_charts::widget::SeriesId::MAIN)
+                    .iter()
+                    .enumerate()
+                    .map(|(index, bar)| Bar::from_value(bar.time, 500.0 + index as f64))
+                    .collect();
+                app.chart.set_data(comparison, bars);
+                frame(&mut app, vec![]);
+            }
             let (start, end) = app.chart.state().visible_range();
             let index = (start + end) / 2;
             let map = app.chart.get_chart_mapping();
@@ -9586,6 +9596,25 @@ mod tests {
                 )),
                 "{text:?}"
             );
+            if kind == ChartType::Candles {
+                // One volume row, then the average's row and no row for the volume columns.
+                assert!(text.iter().any(|text| text == "Vol"), "{text:?}");
+                let volume: Vec<_> = text
+                    .iter()
+                    .filter(|text| text.starts_with("Volume: "))
+                    .collect();
+                assert!(
+                    volume.len() == 1 && !volume[0].contains(" volume"),
+                    "{text:?}"
+                );
+                let row = text.iter().position(|text| text == "CMP");
+                let value = row.and_then(|row| text.get(row + 1));
+                assert_eq!(
+                    value.and_then(|value| value.replace(',', "").parse::<f64>().ok()),
+                    Some(500.0 + index as f64),
+                    "{text:?}"
+                );
+            }
             assert!(text.iter().any(|text| text == "Gap: Missing"), "{text:?}");
             assert!(text.iter().any(|text| text == "∅"), "{text:?}");
             assert!(
@@ -9596,8 +9625,17 @@ mod tests {
             );
             let pointer = app.crosshair.clone().unwrap();
             let latest = bars.last().unwrap().close;
+            let last = bars.len() - 1;
             frame(&mut app, vec![egui::Event::PointerGone]);
-            assert_eq!(app.build_data_window().close, latest);
+            let off_bars = app.build_data_window();
+            assert_eq!(off_bars.close, latest);
+            if kind == ChartType::Candles {
+                let value = off_bars.series[0].value.as_deref().unwrap();
+                assert_eq!(
+                    value.replace(',', "").parse::<f64>(),
+                    Ok(500.0 + last as f64)
+                );
+            }
             assert_eq!(app.pointer_readout, Some(pointer.clone()));
             app.open_chart_settings_dialog();
             let mut settings = app.settings_state.clone();
