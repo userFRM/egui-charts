@@ -851,6 +851,7 @@ pub enum ChartLink {
     /// Exclude this field from synchronization, including the layout-wide switch.
     Unlinked,
     /// Link this field to charts carrying the same identifier, independently of the switch.
+    /// A chart that joins the group takes its symbol or interval, as [`ChartLayout`] describes.
     Group(String),
 }
 
@@ -979,7 +980,13 @@ impl Default for ChartSyncOptions {
 /// Each chart keeps its own feed, settings, scales, studies and drawings. Legacy view groups
 /// isolate scrolling, crosshairs and drawings; unnamed view groups synchronize together.
 /// Symbol and interval memberships are independent through [`ChartLinkGroups`]. Save these and the
-/// charts through host storage as needed. Synchronization includes supplied slots hidden by a
+/// charts through host storage as needed. A symbol or interval changed in any chart reaches the
+/// charts linked to it, whichever chart is active; when several of them changed it in one frame,
+/// the active chart's change wins, then the lowest slot's. A chart that joins a group through
+/// its link controls or [`Self::set_link_groups`] with history takes the group's symbol or
+/// interval: the active chart's when it is a member, otherwise the lowest other slot's. Charts
+/// supplied or restored into linked slots, and memberships set without history, keep their own
+/// until the next change. Synchronization includes supplied slots hidden by a
 /// grid preset. The container does not acquire data or persist it. Charts that keep their
 /// drawings in the same storage (`Chart::set_storage`) read the drawings of their symbol again
 /// after another of them wrote them, in any group.
@@ -1344,7 +1351,9 @@ impl ChartLayout {
 
     /// Sets independent field memberships. Empty identifiers are treated as unlinked.
     /// Unless `skip_history` is true, records one undo step on the active chart at the next
-    /// [`Self::show`]. Undo restores only the fields changed by this call.
+    /// [`Self::show`], where the chart also takes the symbol and interval of the groups it
+    /// joined. Undo restores only the fields changed by this call. Restore saved memberships with
+    /// `skip_history` true, which keeps each chart's own symbol and interval.
     pub fn set_link_groups(
         &mut self,
         index: usize,
@@ -1689,6 +1698,7 @@ impl ChartLayout {
         }
         // After a released drag queues its step, so an undo in this frame reaches it.
         self.record_sizes(charts[self.active]);
+        self.join_groups(charts);
         self.record_links(charts[self.active]);
         // Divider hit regions stay above the charts, but their input is known before painting.
         let starting_resize = self.sizing.drag.is_none()
@@ -1958,6 +1968,7 @@ impl ChartLayout {
             ui.ctx().request_repaint();
         }
         self.record_sizes(charts[self.active]);
+        self.join_groups(charts);
         self.record_links(charts[self.active]);
         self.focus_active = false;
         // Alt+Enter toggles the focused tile in a grid; a lone chart leaves it to the host.
@@ -2025,11 +2036,9 @@ impl ChartLayout {
             ui.ctx().request_repaint();
         }
         for (index, chart) in charts.iter().enumerate() {
-            // A change the active chart made while rendering, such as keyboard undo, stays
-            // unrecorded, so the next frame sends it like one made between frames.
-            if index != self.active {
-                self.record_state(index, chart);
-            } else if !self.state_recorded(index, chart) {
+            // A change a chart made while rendering, such as keyboard undo, stays unrecorded, so
+            // the next frame sends it like one made between frames.
+            if !self.state_recorded(index, chart) {
                 ui.ctx().request_repaint();
             }
             self.previous_bars[index] = bars_key(chart);
@@ -2073,8 +2082,42 @@ impl ChartLayout {
         }
     }
 
+    /// Sends the changes made in any chart since the last frame. The active chart's goes first,
+    /// then the lowest slot's, so it wins over a change another member made in the same frame.
     fn sync_state(&mut self, charts: &mut [&mut Chart], count: usize) {
-        self.send_state(charts, count, self.active);
+        let active = self.active;
+        for from in std::iter::once(active).chain((0..count).filter(|&index| index != active)) {
+            self.send_state(charts, count, from);
+        }
+    }
+
+    /// Gives each chart that joined a symbol or interval group through a recorded membership
+    /// change the symbol or interval of the group: the active chart's when it is a member,
+    /// otherwise that of the lowest other slot in it.
+    fn join_groups(&self, charts: &mut [&mut Chart]) {
+        let count = charts.len();
+        for change in &self.links.pending {
+            let index = change.index;
+            for (interval, joined) in [(false, &change.symbol), (true, &change.interval)] {
+                if joined.is_none() || index >= count {
+                    continue;
+                }
+                let Some(from) = std::iter::once(self.active)
+                    .chain(0..count)
+                    .find(|&from| from != index && self.linked(index, from, interval))
+                else {
+                    continue;
+                };
+                if interval {
+                    if let Some(timeframe) = charts[from].timeframe() {
+                        charts[index].set_timeframe(timeframe);
+                    }
+                } else {
+                    let symbol = charts[from].symbol().to_owned();
+                    charts[index].change_symbol(symbol, true);
+                }
+            }
+        }
     }
 
     /// Sends the symbol and interval of chart `from`, where they differ from its recorded state,
@@ -5215,6 +5258,52 @@ mod tests {
         show(&mut layout, &mut charts);
         assert_eq!(charts[3].symbol(), "HOST");
         assert!(!charts[3].can_undo() && !charts[3].can_redo());
+    }
+
+    /// The third and fourth of four charts share a symbol and an interval group while the first
+    /// is active. A symbol the host sets on the third and an interval it sets on the fourth reach
+    /// the other; the second, joining both groups, then takes them.
+    #[test]
+    fn joining_a_group_adopts_its_symbol_and_interval() {
+        let show = |layout: &mut ChartLayout, charts: &mut [Chart; 4]| {
+            egui::Context::default()
+                .run_ui(RawInput::default(), |ui| {
+                    layout.show(ui, &mut charts.each_mut());
+                })
+                .drop_without_applying_deltas();
+        };
+        let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+        for (slot, chart) in charts.iter_mut().enumerate() {
+            chart.set_symbol(format!("SLOT_{slot}"));
+        }
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::Four,
+            ..Default::default()
+        };
+        let link = ChartLinkGroups {
+            symbol: ChartLink::Group("🔶".into()),
+            interval: ChartLink::Group("💧".into()),
+        };
+        layout.set_link_groups(2, link.clone(), true);
+        layout.set_link_groups(3, link.clone(), true);
+        show(&mut layout, &mut charts);
+        charts[2].set_symbol("HOST");
+        charts[3].set_timeframe(Timeframe::Hour1);
+        show(&mut layout, &mut charts);
+        let state = |chart: &Chart| (chart.symbol().to_owned(), chart.timeframe());
+        let group = ("HOST".to_owned(), Some(Timeframe::Hour1));
+        assert_eq!(
+            [state(&charts[2]), state(&charts[3])],
+            [group.clone(), group.clone()],
+            "a change in a member that is not active"
+        );
+        layout.set_link_groups(1, link, false);
+        show(&mut layout, &mut charts);
+        assert_eq!(state(&charts[1]), group, "the joining chart");
+        assert_eq!(
+            state(&charts[0]),
+            ("SLOT_0".to_owned(), Some(Timeframe::Min1))
+        );
     }
 
     /// A host opens a saved layout by supplying its charts in the same slots or restoring
