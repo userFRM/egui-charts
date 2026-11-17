@@ -8,7 +8,7 @@ use crate::chart::primitives::{
     PrimitiveId, PrimitivePass, PrimitiveView,
 };
 use crate::data::FeedState;
-use crate::model::{AutoscaleInfo, AutoscaleMargins, Bar, LogicalRange};
+use crate::model::{AutoscaleInfo, AutoscaleMargins, Bar, LogicalRange, SeriesScale};
 use crate::studies::{CustomIndicator, Indicator, IndicatorValue};
 use chrono::{DateTime, Utc};
 use egui::{Painter, Pos2};
@@ -864,6 +864,21 @@ impl Chart {
             .filter_map(move |item| Some((item, self.main_attachment_view(item, coords)?)))
     }
 
+    /// The main pane's primitives whose price tags and axis drawing go on the axis of `scale`:
+    /// those of the bar series on it, and on the main series' scale also those of the main
+    /// series, the pane and the studies.
+    pub(super) fn axis_primitives<'a>(
+        &'a self,
+        coords: &'a ChartMapping,
+        scale: SeriesScale,
+    ) -> impl Iterator<Item = (&'a Attached, PrimitiveView<'a>)> {
+        self.main_primitives(coords).filter(move |(item, _)| {
+            self.series_scale(item.series)
+                .unwrap_or(self.main_series_scale)
+                == scale
+        })
+    }
+
     /// The primitives of every visible series, for the time axis the panes share. Those in a
     /// study pane get the main pane's mapping.
     pub(super) fn time_axis_primitives<'a>(
@@ -1181,32 +1196,97 @@ mod tests {
         }
     }
 
-    /// `axis` is the main price axis of the pane: its column beside the plot and its plot's
-    /// rows, without the corner beside the time axis.
+    /// A primitive draws in and tags the price axis of its series' scale: the column of that
+    /// axis over the plot's rows, without the corner beside the time axis. A series on a scale
+    /// without an axis has neither.
     #[test]
-    fn main_axis_primitives_draw_in_their_column_and_rows() {
-        struct AxisRect(Arc<Mutex<Option<egui::Rect>>>);
-        impl Primitive for AxisRect {
+    fn price_axis_primitives_use_the_axis_of_their_series_scale() {
+        use crate::model::{AxisSide, ChartType, SeriesScale};
+        const AUTOMATIC: Color32 = Color32::from_rgb(83, 29, 61);
+        struct Tagged(Arc<Mutex<Option<egui::Rect>>>);
+        impl Primitive for Tagged {
+            fn price_axis_labels(&self, _: &PrimitiveView<'_>) -> Vec<PriceAxisLabel> {
+                let mut pinned = PriceAxisLabel::new(15.0, "Pin", PINNED);
+                pinned.fixed_coordinate = Some(10.0);
+                vec![PriceAxisLabel::new(15.0, "Tag", AUTOMATIC), pinned]
+            }
             fn draw_price_axis(&self, _: &egui::Painter, axis: egui::Rect, _: &PrimitiveView<'_>) {
                 *self.0.lock().unwrap() = Some(axis);
             }
         }
-        for side in [crate::model::AxisSide::Right, crate::model::AxisSide::Left] {
+        // The scale of the added series that carries the primitive (`None`: the main series),
+        // the side all axes are placed at (`None`: their own), and where its axis lies: beside
+        // the plot on the right or left, right of the main axis ("far right"), or nowhere.
+        let rows = [
+            (None, None, "right"),
+            (None, Some(AxisSide::Left), "left"),
+            (Some(SeriesScale::Right), None, "right"),
+            (Some(SeriesScale::Left), None, "left"),
+            (Some(SeriesScale::Separate(1)), None, "left"),
+            (Some(SeriesScale::Left), Some(AxisSide::Right), "far right"),
+            (Some(SeriesScale::Overlay(1)), None, "no axis"),
+        ];
+        let mut observed = Vec::new();
+        for (scale, side, _) in rows {
             let ctx = egui::Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
-            chart.place_pane_scales(crate::widget::PaneId::MAIN, side);
-            let seen = Arc::default();
-            chart.attach_primitive(SeriesId::MAIN, AxisRect(Arc::clone(&seen)));
-            frame(&ctx, &mut chart, 0.0, vec![]);
-            let axis = seen.lock().unwrap().unwrap();
-            let plot = chart.get_rendered_price_rect();
-            assert_eq!(axis.y_range(), plot.y_range(), "{side:?}");
-            let touching = match side {
-                crate::model::AxisSide::Right => axis.left() == plot.right(),
-                crate::model::AxisSide::Left => axis.right() == plot.left(),
+            chart.config.show_volume = false;
+            let id = match scale {
+                Some(scale) => {
+                    // Candles, as the main series, so that its own scale spans 10 to 20 too.
+                    let id = chart.add_series(SeriesOptions {
+                        scale,
+                        chart_type: ChartType::Candles,
+                        ..Default::default()
+                    });
+                    chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                    id
+                }
+                None => SeriesId::MAIN,
             };
-            assert!(touching, "{side:?}: {axis:?} beside {plot:?}");
+            if let Some(side) = side {
+                chart.place_pane_scales(PaneId::MAIN, side);
+            }
+            let seen = Arc::default();
+            chart
+                .attach_primitive(id, Tagged(Arc::clone(&seen)))
+                .unwrap();
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            *seen.lock().unwrap() = None;
+            let painted = shapes(&ctx, &mut chart, 1.0, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let tags: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Rect(rect) if [AUTOMATIC, PINNED].contains(&rect.fill) => {
+                        Some(rect.rect.center())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let axis = *seen.lock().unwrap();
+            let column = axis.map_or("no axis", |axis| {
+                if axis.y_range() != plot.y_range() {
+                    "other rows"
+                } else if (axis.left() - plot.right()).abs() < 0.5 {
+                    "right"
+                } else if (axis.right() - plot.left()).abs() < 0.5 {
+                    "left"
+                } else if axis.left() > plot.right() {
+                    "far right"
+                } else {
+                    "elsewhere"
+                }
+            });
+            // Both tags are centred in that axis, and there is no tag without one.
+            let tagged = match axis {
+                Some(axis) => tags.len() == 2 && tags.iter().all(|tag| axis.contains(*tag)),
+                None => tags.is_empty(),
+            };
+            observed.push((column, tagged));
         }
+        let expected: Vec<_> = rows.iter().map(|&(_, _, column)| (column, true)).collect();
+        assert_eq!(observed, expected);
     }
 
     #[test]
