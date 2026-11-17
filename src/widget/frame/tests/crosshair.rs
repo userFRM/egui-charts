@@ -2521,3 +2521,73 @@ fn latched_touch_readout_is_the_reported_crosshair() {
         );
     }
 }
+
+/// Study and plot titles on the legend, the axis tags, the floating tooltip and the data window
+/// go through the translator, each plot name apart from its study's name, while the readout rows
+/// a host reads keep the English names.
+// `test` marks the `ui` import as test-only for the module cycle check.
+#[cfg(all(test, feature = "ui"))]
+#[test]
+fn study_titles_reach_the_translator_apart_from_plot_names() {
+    use crate::ui::widget_bar::panels::object_tree::{DataWindowInfo, show_data_window};
+    let ctx = egui::Context::default();
+    crate::localization::mark_keys(&ctx);
+    let mut chart = chart(&[100.0], &[110.0, 120.0]);
+    chart.config.price_axis.show_study_names = true;
+    chart.add_indicator(Box::new(crate::studies::WilliamsAlligator::default()));
+    // A study in its own pane paints its title in that pane's legend.
+    chart.add_indicator(Box::new(crate::studies::OnBalanceVolume::default()));
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    let map = chart.get_chart_mapping();
+    let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+    let mut texts: Vec<String> = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)])
+        .iter()
+        .filter_map(|shape| match shape {
+            Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    let data = DataWindowInfo::from_chart(&chart);
+    let output = ctx.run_ui(Default::default(), |ui| {
+        show_data_window(ui, &data, true);
+    });
+    let window: Vec<String> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    output.drop_without_applying_deltas();
+    // Each caption is looked up as study and plot apart: the tooltip lists the three Alligator
+    // plots and the volume study's two columns, the data window the Alligator plots alone, as its
+    // volume row shows the columns' value.
+    let captions = |texts: &[String]| texts.iter().filter(|text| *text == "~: ~").count();
+    assert_eq!(
+        (captions(&texts), captions(&window)),
+        (5, 3),
+        "{texts:?} {window:?}"
+    );
+    texts.extend(window);
+    // Legend titles and axis tags included: no study or plot name is painted in English.
+    for english in ["Alligator", "Jaw", "Teeth", "Lips", "olume", "OBV"] {
+        assert!(
+            !texts.iter().any(|text| text.contains(english)),
+            "{english}: {texts:?}"
+        );
+    }
+    let rows: Vec<_> = chart
+        .study_values_at(50)
+        .into_iter()
+        .map(|row| (row.study, row.plot))
+        .collect();
+    assert_eq!(
+        &rows[..3],
+        [
+            ("Williams Alligator".to_owned(), "Jaw".to_owned()),
+            ("Williams Alligator".to_owned(), "Teeth".to_owned()),
+            ("Williams Alligator".to_owned(), "Lips".to_owned()),
+        ]
+    );
+}

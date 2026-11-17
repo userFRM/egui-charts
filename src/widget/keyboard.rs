@@ -678,7 +678,7 @@ impl super::Chart {
                 {
                     self.remove_series(id);
                 }
-                _ => self.drawings.delete_selected(),
+                _ => self.delete_selected_drawings(),
             },
             #[cfg(feature = "drawings")]
             A::Cancel => {
@@ -928,6 +928,58 @@ mod tests {
         let delete = press(Key::Delete, Modifiers::NONE);
         frame(&ctx, &mut chart, 5.0, vec![delete]);
         assert_eq!(chart.drawings().drawings.len(), 1);
+    }
+
+    /// Delete removes the unlocked selected drawings, keeps the locked ones and reports how many
+    /// selected drawings it kept; locked drawings outside the selection are not counted.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn delete_key_keeps_and_reports_locked_drawings() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use crate::widget::ChartEvent;
+        use crate::widget::test_frames::frame;
+        for (selected, left, reported) in [
+            (&[7][..], &[7, 8, 9][..], &[1][..]),
+            (&[7, 8, 9], &[7, 8], &[2]),
+            (&[9], &[7, 8], &[]),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            for id in [7, 8, 9] {
+                let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+                drawing.chart_points =
+                    vec![ChartPoint::new(30.0, 14.0), ChartPoint::new(70.0, 17.0)];
+                drawing.completed = true;
+                drawing.locked = id != 9;
+                chart.drawings_mut().drawings.push(drawing);
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart
+                .drawings_mut()
+                .select_drawings(selected.iter().copied());
+            frame(
+                &ctx,
+                &mut chart,
+                1.0,
+                vec![press(Key::Delete, Modifiers::NONE)],
+            );
+            let ids: Vec<_> = chart.drawings().drawings.iter().map(|d| d.id).collect();
+            let kept: Vec<_> = chart
+                .drain_events()
+                .filter_map(|event| match event {
+                    ChartEvent::LockedDrawingsKept(kept) => Some(kept),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                (&ids[..], &kept[..]),
+                (left, reported),
+                "selected {selected:?}"
+            );
+            if left.len() == 3 {
+                assert!(!chart.can_undo(), "nothing removed, so no undo step");
+            }
+        }
     }
 
     #[test]

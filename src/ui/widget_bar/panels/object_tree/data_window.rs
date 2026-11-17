@@ -207,7 +207,11 @@ pub fn show_data_window(ui: &mut Ui, data: &DataWindowInfo, expanded: bool) -> b
                     .num_columns(2)
                     .show(ui, |ui| {
                         for study in &data.studies {
-                            ui.hint_label(study.label());
+                            ui.label(
+                                RichText::new(study.translated_label(ui.ctx()))
+                                    .small()
+                                    .weak(),
+                            );
                             ui.label(
                                 RichText::new(l10n::text(ui.ctx(), study.formatted_value()))
                                     .color(study.color),
