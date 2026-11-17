@@ -137,12 +137,12 @@ use Side::{Bearish, Bullish, Neutral};
 /// Every pattern, in the order of the toggles.
 pub(super) const PATTERNS: [Pattern; 44] = [
     pattern("Abandoned Baby - Bearish", "AB", Bearish, 3, |c| {
-        matches!(c, [p2, p1, b] if p2.up && p2.white() && p1.doji_body() && p2.high < p1.low
-            && b.black() && p1.low > b.high)
+        matches!(c, [p2, p1, b] if p2.up && p2.white() && p2.long() && p1.doji_body()
+            && p2.high < p1.low && b.black() && p1.low > b.high)
     }),
     pattern("Abandoned Baby - Bullish", "AB", Bullish, 3, |c| {
-        matches!(c, [p2, p1, b] if p2.down && p2.black() && p1.doji_body() && p2.low > p1.high
-            && b.white() && p1.high < b.low)
+        matches!(c, [p2, p1, b] if p2.down && p2.black() && p2.long() && p1.doji_body()
+            && p2.low > p1.high && b.white() && p1.high < b.low)
     }),
     pattern("Dark Cloud Cover - Bearish", "DCC", Bearish, 2, |c| {
         matches!(c, [p, b] if p.up && p.white() && p.long() && b.black() && b.open >= p.high
@@ -179,7 +179,7 @@ pub(super) const PATTERNS: [Pattern; 44] = [
         "DD",
         Bullish,
         1,
-        |c| matches!(c, [b] if b.doji_body() && b.upper() <= b.body()),
+        |c| matches!(c, [b] if b.down && b.doji_body() && b.upper() <= b.body()),
     ),
     pattern("Engulfing - Bearish", "BE", Bearish, 2, |c| {
         matches!(c, [p, b] if b.up && b.black() && b.long() && p.white() && p.small()

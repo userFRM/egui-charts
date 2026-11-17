@@ -95,7 +95,7 @@ impl Indicator for SMA {
     }
 
     fn desc(&self) -> &str {
-        "Simple Moving Avg - Avg price over N periods"
+        "Simple Moving Average - Avg price over N periods"
     }
 
     fn calculate(&mut self, data: &[Bar]) {

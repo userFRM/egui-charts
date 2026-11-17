@@ -120,7 +120,7 @@ impl Indicator for HMA {
     }
 
     fn desc(&self) -> &str {
-        "Hull Moving Avg - Fast and smooth moving avg"
+        "Hull Moving Average - Fast and smooth moving avg"
     }
 
     fn calculate(&mut self, data: &[Bar]) {
