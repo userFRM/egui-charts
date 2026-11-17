@@ -89,9 +89,9 @@ impl Chart {
     /// Attach the same driver to every participating chart, then advance it once per frame before
     /// drawing. Its time is inclusive; [`Self::replay_time`] reports the exclusive cutoff one
     /// nanosecond later. An interval change resubscribes at the same shared position. On exit,
-    /// the order-flow inputs of the studies are rebuilt from the executions the live feed kept,
-    /// also while it stays paused; without a feed they are emptied, and a host that fills them
-    /// itself pushes its events again.
+    /// the order-flow inputs of the studies are rebuilt from prepared history and executions
+    /// the live feed kept, also while it stays paused; without a feed they are emptied, and a
+    /// host that fills them itself pushes its events again.
     ///
     /// Other series that the host supplies are windowed as in [`Self::set_replay_time`]: they
     /// show only the bars completed by [`Self::replay_time`] and follow seeks, playback,
@@ -113,7 +113,7 @@ impl Chart {
             for study in self.studies.indicators() {
                 for input in study.order_flow_inputs() {
                     input.clear();
-                    if let Some(link) = &self.feed_link {
+                    if let Some(link) = &mut self.feed_link {
                         link.rebuild_study_input(input, &self.state.data().bars);
                     }
                 }
