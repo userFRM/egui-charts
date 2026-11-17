@@ -223,6 +223,18 @@ impl<'a> FootprintView<'a> {
         self.bar_at(time)
             .filter(|bar| self.flow.complete_at(bar.time))
     }
+    /// Only deliberately admitted partial rows may be displayed despite incomplete coverage.
+    #[cfg(feature = "widget")]
+    pub(crate) fn partial_at(self, open: DateTime<Utc>) -> bool {
+        self.flow.partial_at(open)
+    }
+    #[cfg(feature = "widget")]
+    pub(crate) fn partial_slots(self) -> &'a [DateTime<Utc>] {
+        self.flow
+            .partial_slots
+            .as_ref()
+            .map_or(&[], |slots| slots.as_slice())
+    }
     pub(crate) fn complete_from(self) -> Option<DateTime<Utc>> {
         self.bars((self.flow.complete_start(), Bound::Unbounded))
             .next()
@@ -364,6 +376,7 @@ impl FootprintState {
             trade_starts: Default::default(),
             rows: 0,
             missing: self.live.missing.clone(),
+            partial_slots: self.live.partial_slots.clone(),
             prepared: self.live.prepared.clone(),
             ..self.live
         };
@@ -442,6 +455,7 @@ impl FootprintState {
             trade_bars: Default::default(),
             trade_starts: Default::default(),
             missing: self.live.missing.clone(),
+            partial_slots: self.live.partial_slots.clone(),
             #[cfg(feature = "widget")]
             prepared: None,
             ..self.live
@@ -558,6 +572,28 @@ impl FootprintState {
             closed: Vec::new(),
             closed_rows: 0,
         })
+    }
+
+    /// Validate provenance against the admitted payload, including publicly mutated pages.
+    #[cfg(feature = "widget")]
+    pub(crate) fn mark_partial(
+        &mut self,
+        slots: Vec<DateTime<Utc>>,
+    ) -> Result<(), crate::data::FeedError> {
+        if slots.is_empty()
+            || slots.windows(2).any(|pair| pair[0] >= pair[1])
+            || slots.iter().any(|open| {
+                self.live.clock.bar_open(*open) != *open || self.view().bar_at(*open).is_none()
+            })
+        {
+            return Err(crate::data::FeedError::InvalidData(
+                "partial footprint slots must be nonempty, ordered, unique, aligned supplied bars"
+                    .into(),
+            ));
+        }
+        self.live.partial_slots = Some(Arc::new(slots));
+        self.live.revision = super::next_revision();
+        Ok(())
     }
 
     #[cfg(feature = "widget")]
@@ -700,6 +736,20 @@ impl FootprintState {
             }
         }
         let at = self.pages.partition_point(|held| held.first < from);
+        if let Some(slots) = &page.live.partial_slots {
+            let first = slots.partition_point(|open| *open < from);
+            let end = slots.partition_point(|open| *open < before);
+            if first < end {
+                if self.live.partial_slots.is_none() && first == 0 && end == slots.len() {
+                    self.live.partial_slots = Some(slots.clone());
+                } else {
+                    let held = self.live.partial_slots.get_or_insert_with(Default::default);
+                    let held = Arc::make_mut(held);
+                    let at = held.partition_point(|open| *open < from);
+                    held.splice(at..at, slots[first..end].iter().copied());
+                }
+            }
+        }
         self.pages.splice(at..at, page.pages);
         for (time, bar) in page.live.bars {
             self.live.rows += bar.levels.len();

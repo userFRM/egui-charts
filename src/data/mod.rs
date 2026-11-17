@@ -691,6 +691,8 @@ impl FootprintRequest {
 /// executions. Use [`unavailable`](Self::unavailable) for a gap in the host's recording;
 /// do not describe missing data as empty history. A bounded answer ends at the requested
 /// `before` and may leave an earlier suffix request to finish the range.
+/// [`partial`](Self::partial) explicitly marks supplied bars with missing executions; only
+/// the painter displays those rows. Unmarked slots retain the complete/known-empty contract.
 ///
 /// Supply matching OHLC through [`Datafeed::history`]. Individual trades remain available
 /// through [`Datafeed::trades`] for consumers such as the tape and volume bubbles.
@@ -708,6 +710,8 @@ pub struct FootprintPage {
     /// If a snapshot ends partway through one timestamp, exclude that entire instant.
     /// A bounded answer must end at [`FootprintRequest::before`]. Internal fills must be
     /// clock-aligned and do not move the initial prepared/live boundary.
+    /// Partial pages require alignment even for the initial reply, closing every supplied
+    /// slot. This boundary does not certify the executions in their marked slots.
     pub complete_before: DateTime<Utc>,
     /// Nothing exists before the oldest returned bar, or the requested boundary for an empty
     /// terminal page. This does not certify or suppress internal recording gaps.
@@ -717,6 +721,7 @@ pub struct FootprintPage {
     /// Ignored when the page has bars.
     pub continue_before: Option<DateTime<Utc>>,
     available: bool,
+    pub(crate) partial_slots: Option<Vec<DateTime<Utc>>>,
 }
 
 impl FootprintPage {
@@ -746,6 +751,7 @@ impl FootprintPage {
             end_of_history,
             continue_before: None,
             available: true,
+            partial_slots: None,
         }
     }
 
@@ -793,7 +799,58 @@ impl FootprintPage {
             end_of_history,
             continue_before: None,
             available: true,
+            partial_slots: None,
         }
+    }
+
+    /// Recorded rows with explicitly incomplete bar slots, never repaired automatically.
+    ///
+    /// Admission requires nonempty bars and a nonempty, strictly increasing list of unique,
+    /// clock-aligned opens, each identifying a supplied bar. The exclusive `complete_before`
+    /// must also be aligned, including on the initial reply. Owned bars may be unordered;
+    /// shared bars remain chronological. Invalid declarations are preserved here and rejected
+    /// against the request before changing admitted history.
+    ///
+    /// Unmarked slots are complete (or confirmed quiet). Marked rows draw with a translated
+    /// "Partial data" warning, but profiles, studies and replay exclude them, even if raw trades
+    /// arrive later. Reload or rebind the feed to correct them. `end_of_history` concerns older
+    /// recordings, not completeness. Unknown-side volume alone does not make a slot partial.
+    ///
+    /// ```
+    /// use egui_charts::data::{FootprintBar, FootprintBars, FootprintLevel, FootprintPage};
+    /// let time = "2026-01-05T00:00:00Z".parse()?;
+    /// let cutoff = "2026-01-05T00:01:00Z".parse()?;
+    /// let mut bar = FootprintBar::empty(time);
+    /// bar.levels.insert(100, FootprintLevel {
+    ///     level: 100, unknown: 3.0, unknown_trades: 1, ..Default::default()
+    /// });
+    /// bar.unknown = 3.0;
+    /// let page = FootprintPage::partial(FootprintBars::Owned(vec![bar]), cutoff, true, vec![time]);
+    /// assert!(!page.is_available());
+    /// assert_eq!(page.partial_slots(), Some([time].as_slice()));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn partial(
+        bars: FootprintBars,
+        complete_before: DateTime<Utc>,
+        end_of_history: bool,
+        partial_slots: Vec<DateTime<Utc>>,
+    ) -> Self {
+        Self {
+            bars,
+            complete_before,
+            end_of_history,
+            continue_before: None,
+            available: false,
+            partial_slots: Some(partial_slots),
+        }
+    }
+
+    /// Borrow the explicitly incomplete slot opens, without allocating.
+    /// `None` distinguishes complete and unavailable pages from an explicit partial declaration.
+    /// `Some([])` remains a partial declaration and is rejected during admission.
+    pub fn partial_slots(&self) -> Option<&[DateTime<Utc>]> {
+        self.partial_slots.as_deref()
     }
 
     /// A contiguous span the host cannot supply, without claiming that no executions occurred.
@@ -819,11 +876,13 @@ impl FootprintPage {
             end_of_history: false,
             continue_before: Some(from),
             available: false,
+            partial_slots: None,
         }
     }
 
     /// Whether the page certifies complete executions, including a confirmed-empty span.
-    /// `false` describes unavailable history, not pending work or a transport error.
+    /// `false` describes unavailable history or explicit [`partial`](Self::partial) slots,
+    /// distinguished by [`partial_slots`](Self::partial_slots), not pending work or an error.
     pub fn is_available(&self) -> bool {
         self.available
     }

@@ -341,9 +341,15 @@ pub(crate) fn render_footprint_read(
     let spine_drawn = !has_ladder(config);
     // Use the existing half-gap so price markers do not shrink execution columns.
     let gutter = (mapping.bar_spacing * 0.04).min(2.5);
-    // Bars cut by dropped executions are drawn as candles, not as complete footprint bars.
+    let mut partial_visible = false;
+    let mut partial_hovered = false;
+    // Ordinary loss fragments stay hidden; only explicit prepared partial rows opt in.
     for (index, bar) in bars.iter().enumerate().take(end).skip(first) {
-        let Some(source) = flow.complete_bar_at(bar.time) else {
+        let partial = flow.partial_at(bar.time);
+        let Some(source) = flow
+            .bar_at(bar.time)
+            .filter(|_| partial || flow.complete_at(bar.time))
+        else {
             continue;
         };
         let x = mapping.idx_to_x(index);
@@ -377,6 +383,36 @@ pub(crate) fn render_footprint_read(
         let group = row_group(mapping, bar, flow, config);
         let grouped = group_bar(source, group);
         let shown = grouped.view();
+        if partial
+            && let Some((&first, _)) = shown.levels.first_key_value()
+            && let Some((&last, _)) = shown.levels.last_key_value()
+        {
+            let step = flow.price_step() * group as f64;
+            let bottom = mapping.price_to_y(first as f64 * step - flow.tick_size() * 0.5);
+            let top = mapping.price_to_y((last as f64 + 1.0) * step - flow.tick_size() * 0.5);
+            let bounds = Rect::from_min_max(
+                pos2(left, top.min(bottom)),
+                pos2(left + columns as f32 * width - 0.5, top.max(bottom)),
+            )
+            .intersect(mapping.rect);
+            if bounds.is_positive() {
+                partial_visible = true;
+                partial_hovered |= painter
+                    .ctx()
+                    .pointer_hover_pos()
+                    .is_some_and(|p| bounds.contains(p));
+                for y in [bounds.top(), bounds.bottom()] {
+                    draw_dashed_line(
+                        &painter,
+                        pos2(bounds.left(), y),
+                        pos2(bounds.right(), y),
+                        Stroke::new(1.0, config.text_color),
+                        2.0,
+                        2.0,
+                    );
+                }
+            }
+        }
         let max_volume = shown
             .levels
             .values()
@@ -397,10 +433,12 @@ pub(crate) fn render_footprint_read(
                 })
         };
         let side_ranges = [side_range(|row| row.bid), side_range(|row| row.ask)];
-        let area = config.value_area.and_then(|share| shown.value_area(share));
-        let poc = config.show_poc.then(|| shown.poc()).flatten();
-        let pullback = config
-            .pullback
+        let area = config
+            .value_area
+            .filter(|_| !partial)
+            .and_then(|share| shown.value_area(share));
+        let poc = (config.show_poc && !partial).then(|| shown.poc()).flatten();
+        let pullback = (config.pullback && !partial)
             .then(|| pullback_range_read(bar, flow))
             .flatten()
             .map(|(low, high)| (low.div_euclid(group), high.div_euclid(group)));
@@ -472,7 +510,7 @@ pub(crate) fn render_footprint_read(
                 }
                 let ladder = *mode == FootprintMode::Ladder;
                 let poc_row = poc == Some(row.level);
-                let imbalances = if steps && config.show_imbalance {
+                let imbalances = if steps && config.show_imbalance && !partial {
                     shown.imbalance(
                         row.level,
                         config.imbalance_ratio,
@@ -542,7 +580,11 @@ pub(crate) fn render_footprint_read(
                     [rect, rect]
                 };
                 for (side, rect) in sides.into_iter().enumerate().take(1 + usize::from(ladder)) {
-                    let color = cell_color(&shown, row, max_volume, max_delta, config);
+                    let color = if partial && config.color_by == FootprintColor::Imbalance {
+                        config.neutral_color
+                    } else {
+                        cell_color(&shown, row, max_volume, max_delta, config)
+                    };
                     let (value, largest) = if ladder {
                         (
                             if side == 0 { row.bid } else { row.ask },
@@ -583,6 +625,7 @@ pub(crate) fn render_footprint_read(
                         fills[1] = Some((bid, shades[0]));
                         fills[2] = Some((ask, shades[1]));
                     } else if config.color_by == FootprintColor::Imbalance
+                        && !partial
                         && shown.imbalance(
                             row.level,
                             config.imbalance_ratio,
@@ -737,7 +780,7 @@ pub(crate) fn render_footprint_read(
                     color,
                 );
             }
-            if config.info_box && text[column][0].is_some() {
+            if config.info_box && !partial && text[column][0].is_some() {
                 render_info_box(&painter, mapping, flow, &shown, group, block, config);
             }
         }
@@ -783,7 +826,7 @@ pub(crate) fn render_footprint_read(
                 }
             }
         }
-        if config.extreme_ratio {
+        if config.extreme_ratio && !partial {
             let offset = ratio_offset(config);
             // An inverted scale puts the highest row at the bottom.
             let inverted = mapping.price.is_inverted();
@@ -831,6 +874,30 @@ pub(crate) fn render_footprint_read(
         }
     }
     painter.set(background, Shape::mesh(mesh));
+    if partial_visible {
+        let galley = painter.layout_no_wrap(
+            l10n::text(painter.ctx(), "Partial data"),
+            FontId::proportional(12.0),
+            config.text_color,
+        );
+        let bounds = Align2::RIGHT_TOP
+            .anchor_size(mapping.rect.right_top() + vec2(-6.0, 6.0), galley.size());
+        painter.rect_filled(bounds.expand(3.0), 2.0, text_background);
+        painter.galley(bounds.min, galley, config.text_color);
+        if let Some(pointer) = painter.ctx().pointer_hover_pos().filter(|p| {
+            painter.clip_rect().contains(*p) && (partial_hovered || bounds.contains(*p))
+        }) {
+            egui::Tooltip::always_open(
+                painter.ctx().clone(),
+                painter.layer_id(),
+                egui::Id::unique(("partial_footprint", mapping.rect.min.x.to_bits(), mapping.rect.min.y.to_bits())),
+                pointer,
+            ).show(|ui| {
+                ui.label(l10n::text(ui.ctx(), "Partial data"));
+                ui.label(l10n::text(ui.ctx(), "Marked bars contain recorded executions only. Missing executions are not reconstructed; profiles, statistics, studies and replay exclude these bars."));
+            });
+        }
+    }
 }
 
 /// The font sizes of the smallest and the largest row: the configured pair within the readable

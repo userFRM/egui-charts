@@ -80,7 +80,7 @@ Earlier unanswered history remains requestable; `count` still limits the number 
 Use [`FootprintPage::unavailable(from, before)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FootprintPage.html#method.unavailable)
 when the recording cannot supply that span. This is not empty history or a transport error.
 The chart skips automatic retries of that span until refresh/reconnect and continues loading
-other required history. `is_available()` distinguishes the two answers.
+other required history. `is_available()` is true only for complete/confirmed-empty replies.
 
 The chart requests missing spans needed by its viewport or footprint studies, including
 internal gaps. Internal fills use clock-aligned boundaries and leave the initial exclusive
@@ -91,12 +91,35 @@ prepared owners; an explicit `Chart::reload_feed()` instead discards the old bar
 prepared history and requests the latest pages again. Invalid replies preserve accepted
 data and stop footprint requests until refresh; they never certify empty or unavailable history.
 
+Use [`FootprintPage::partial`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FootprintPage.html#method.partial)
+for recorded rows whose executions are explicitly incomplete. It accepts `FootprintBars`
+and a nonempty, strictly increasing list of unique, clock-aligned slot opens, each naming a
+supplied bar. Even the initial `complete_before` must be aligned and close every supplied
+slot. Admission revalidates public payload fields; malformed declarations leave held rows
+and coverage unchanged. `partial_slots()` borrows this metadata without allocating:
+`Some(slots)` distinguishes a partial declaration from an unavailable page, although both
+return false from `is_available()`. `Some([])` is invalid, not a complete page.
+
+Unmarked slots retain complete/known-empty coverage. Unknown-side volume alone does not
+imply partial history. Marked rows draw with dashed edges and a translated **Partial data**
+label; hovering the rows or label explains their limits. Complete-only statistics, POC/value
+area and other annotations, profiles and study readers exclude these slots and report a
+crossing span incomplete. Replay refuses them even if raw history later arrives. No partial
+prefix or missing executions are inferred.
+
+These slots are terminal for automatic loading, including after pause/resume; other gaps and
+older history can still load. Later pages or trades cannot replace or certify marked rows.
+Use an explicit reload or feed replacement for corrections. A new interval needs its own
+correctly marked reply. Frozen snapshots retain both the original coverage metadata and
+shared row owners; exported images preserve the recorded values and partial marker.
+
 A shared owner can serve several charts. Admission validates its clock, grid, rows, totals and
 exclusive execution cutoff when each page is accepted. Of the shared page's bars, only an
 unfinished boundary is copied into mutable rows; subsequent live trades use the existing accumulator.
-The owner must remain unchanged, and reading it must not allocate or perform I/O. Footprint
-cells, statistics and annotations use the same complete bars,
-including valid history before a missing join. `Footprint::bars()` keeps its existing owned
+The owner must remain unchanged, and reading it must not allocate or perform I/O.
+Complete-only statistics and annotations use the same complete bars, including valid history
+before a missing join. Only the cell painter additionally displays explicitly partial rows.
+`Footprint::bars()` keeps its existing owned
 store API. Fixed range and anchored volume profile drawings also read these shared rows through
 [`ChartView::executions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/drawings/rendering/struct.ChartView.html#structfield.executions)
 and group them into their rows as the volume profile studies below group executions.
