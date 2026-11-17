@@ -134,6 +134,7 @@ impl DrawingPropertiesDialog {
                 Ok(edits) => {
                     if self.props.save_as_default
                         && let Some(mut template) = self.current_template()
+                        && template.settings.custom_tool.is_none()
                     {
                         template.settings.visible = true;
                         chart
@@ -158,7 +159,8 @@ impl DrawingPropertiesDialog {
                             .coordinates
                             .resolve(chart)
                             .unwrap_or_default()
-                            .is_empty();
+                            .is_empty()
+                        || self.props.template.is_some();
                     if !changed {
                         self.error = None;
                         return action;
@@ -349,9 +351,13 @@ impl DrawingPropertiesDialog {
         self.props.fill_enabled = d.fill_color.is_some();
         self.props.extend_left = d.extend_left;
         self.props.extend_right = d.extend_right;
-        self.props.label = d.text.clone().unwrap_or_default();
+        // A tool without text keeps its picture, sticker or icon there.
+        if d.tool_type.supports_text() {
+            self.props.label = d.text.clone().unwrap_or_default();
+        }
         self.props.font_size = d.font_size;
         self.props.timeframe_visibility = d.timeframe_visibility.clone();
+        self.props.template = Some(Box::new(template.clone()));
         self.props.tool_settings = Some(Box::new(template));
     }
 
@@ -366,16 +372,26 @@ impl DrawingPropertiesDialog {
                 self.saving_template = true;
                 ui.close();
             }
-            if ui
-                .button(l10n::text(ui.ctx(), "Save as default for this tool"))
-                .clicked()
+            let tool = self.props.tool_settings.as_ref().map(|t| &t.settings);
+            // A host-registered tool has no default of its own.
+            let built_in = tool.is_some_and(|tool| tool.custom_tool.is_none());
+            // The check `load_template` makes: another tool's default would not load.
+            let defaults = self.default_template.as_ref().map(|t| &t.settings);
+            let resets = tool.zip(defaults).is_some_and(|(tool, defaults)| {
+                tool.tool_type == defaults.tool_type && tool.custom_tool == defaults.custom_tool
+            });
+            if built_in
+                && ui
+                    .button(l10n::text(ui.ctx(), "Save as default for this tool"))
+                    .clicked()
             {
                 self.props.save_as_default = true;
                 ui.close();
             }
-            if ui
-                .button(l10n::text(ui.ctx(), "Reset to defaults"))
-                .clicked()
+            if resets
+                && ui
+                    .button(l10n::text(ui.ctx(), "Reset to defaults"))
+                    .clicked()
             {
                 load = self.default_template.clone();
                 ui.close();
@@ -383,12 +399,21 @@ impl DrawingPropertiesDialog {
             ui.separator();
             let mut delete = None;
             if let Some(current) = &self.props.tool_settings {
-                for (name, template) in self.templates.entries() {
-                    if template.settings.tool_type != current.settings.tool_type
-                        || template.settings.custom_tool != current.settings.custom_tool
-                    {
-                        continue;
-                    }
+                let mut rows: Vec<_> = self
+                    .templates
+                    .entries()
+                    .iter()
+                    .filter(|(_, template)| {
+                        template.settings.tool_type == current.settings.tool_type
+                            && template.settings.custom_tool == current.settings.custom_tool
+                    })
+                    .map(|(document, template)| {
+                        (self.templates.template_name(document), document, template)
+                    })
+                    .collect();
+                // By the name shown: one saved under its name alone sorts apart from prefixed ones.
+                rows.sort_by_key(|(name, ..)| *name);
+                for (name, document, template) in rows {
                     if ui.button(name).clicked() {
                         load = Some(template.clone());
                         ui.close();
@@ -397,11 +422,11 @@ impl DrawingPropertiesDialog {
                         .button(l10n::format_text(
                             ui.ctx(),
                             "Delete {name}",
-                            &[("name", name.clone())],
+                            &[("name", name)],
                         ))
                         .clicked()
                     {
-                        delete = Some(name.clone());
+                        delete = Some(document.clone());
                     }
                 }
             }
@@ -425,7 +450,7 @@ impl DrawingPropertiesDialog {
                             .props
                             .validate()
                             .map_err(str::to_owned)
-                            .and_then(|()| self.templates.save(&name, template));
+                            .and_then(|()| self.templates.save_for_tool(&name, template));
                         match saved {
                             Ok(()) => {
                                 self.saving_template = false;
@@ -952,8 +977,6 @@ mod tests {
         }
     }
 
-    /// Templates act on this tool's style, remain usable after cancelling a preview and can be
-    /// deleted from the menu.
     /// A previewed image opacity is restored by Cancel and committed by Ok as one undo step,
     /// without touching a frame resized while the dialog is open.
     #[test]
@@ -1114,18 +1137,202 @@ mod tests {
         );
         assert!(chart.undo());
         assert_eq!(chart.drawings().drawings[0].stroke_width, 2.0);
-        chart.drawings_mut().drawings[0].tool_type = Tool::Rect;
-        dialog.open_for_chart(&chart, DrawingId(7));
-        frame(&mut dialog, &mut chart, &ctx, vec![]);
-        click(&mut dialog, &mut chart, &ctx, "Template");
-        let labels = frame(&mut dialog, &mut chart, &ctx, vec![]);
-        assert!(!labels.iter().any(|(text, _)| text == "Thick line"));
+        // A host tool has no default of its own: saving one keeps the built-in polyline's.
+        let polyline =
+            DrawingTemplate::from_drawing(&chart.drawings().new_drawing(0, Tool::Polyline));
+        chart
+            .drawings_mut()
+            .tool_defaults
+            .insert(Tool::Polyline, polyline.clone());
+        let mut custom = Drawing::custom("host-path");
+        custom.id = 8;
+        chart.drawings_mut().drawings.push(custom);
+        dialog.open_for_chart(&chart, DrawingId(8));
+        dialog.props.line_width = 5.0;
+        // The menu hides the row for a host tool, but a host may still set the flag.
+        dialog.props.save_as_default = true;
+        click(&mut dialog, &mut chart, &ctx, "Ok");
+        assert_eq!(
+            serde_json::to_value(&chart.drawings().tool_defaults[&Tool::Polyline]).unwrap(),
+            serde_json::to_value(&polyline).unwrap()
+        );
+        assert_eq!(chart.drawings().drawings[1].stroke_width, 5.0);
+    }
+
+    /// Several tools keep a template of one name apart in the host's storage, and each lists and
+    /// deletes only its own. A template saved under its name alone, before templates were kept
+    /// per tool, loads under its tool and is replaced in place.
+    #[test]
+    fn drawing_templates_of_different_tools_keep_one_name_apart() {
+        use crate::data::Reply;
+        use crate::services::Storage;
+        use std::collections::BTreeMap;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Default)]
+        struct Host(Mutex<BTreeMap<String, String>>);
+        impl Storage for Host {
+            fn list(&self, _: StoreKind, reply: Reply<Vec<String>>) {
+                reply.send(Ok(self.0.lock().unwrap().keys().cloned().collect()));
+            }
+            fn load(&self, _: StoreKind, name: &str, reply: Reply<Option<String>>) {
+                reply.send(Ok(self.0.lock().unwrap().get(name).cloned()));
+            }
+            fn save(&self, _: StoreKind, name: &str, document: String, reply: Reply<()>) {
+                self.0.lock().unwrap().insert(name.into(), document);
+                reply.send(Ok(()));
+            }
+            fn delete(&self, _: StoreKind, name: &str, reply: Reply<()>) {
+                self.0.lock().unwrap().remove(name);
+                reply.send(Ok(()));
+            }
+        }
+        let host = Arc::new(Host::default());
+        let legacy = DrawingTemplate::from_drawing(&Drawing::new(0, Tool::HorizontalLine));
+        host.0.lock().unwrap().insert(
+            "Legacy".into(),
+            serde_json::json!({ "version": 1, "template": legacy }).to_string(),
+        );
+        let documents = || host.0.lock().unwrap().keys().cloned().collect::<Vec<_>>();
+        let ctx = Context::default();
+        let mut chart = Chart::new(BarData::new());
+        let mut custom = Drawing::custom("host-path");
+        custom.id = 9;
+        chart.drawings_mut().drawings = vec![
+            Drawing::new(7, Tool::HorizontalLine),
+            Drawing::new(8, Tool::VerticalLine),
+            custom,
+            Drawing::new(10, Tool::Polyline),
+        ];
+        let save_as = |dialog: &mut DrawingPropertiesDialog, chart: &mut Chart, name: &str| {
+            click(dialog, chart, &ctx, "Template");
+            click(dialog, chart, &ctx, "Save as template…");
+            frame(dialog, chart, &ctx, vec![Event::Text(name.into())]);
+            click(dialog, chart, &ctx, "Save");
+        };
+        let menu = |dialog: &mut DrawingPropertiesDialog, chart: &mut Chart, id| {
+            dialog.close();
+            frame(dialog, chart, &ctx, vec![]);
+            dialog.open_for_chart(chart, DrawingId(id));
+            frame(dialog, chart, &ctx, vec![]);
+            click(dialog, chart, &ctx, "Template");
+            let labels = frame(dialog, chart, &ctx, vec![]);
+            labels.into_iter().map(|(text, _)| text).collect::<Vec<_>>()
+        };
+        let mut dialog = DrawingPropertiesDialog::new();
+        dialog.templates.set_storage(host.clone());
+        for id in [7, 8, 9, 10] {
+            dialog.open_for_chart(&chart, DrawingId(id));
+            frame(&mut dialog, &mut chart, &ctx, vec![]);
+            save_as(&mut dialog, &mut chart, "Red");
+        }
+        assert_eq!(
+            documents(),
+            [
+                "HorizontalLine/Red",
+                "Legacy",
+                "Polyline/Red",
+                "Polyline:host-path/Red",
+                "VerticalLine/Red"
+            ]
+        );
+        // After a restart: one list and five loads.
+        let mut dialog = DrawingPropertiesDialog::new();
+        dialog.templates.set_storage(host.clone());
+        for _ in 0..6 {
+            frame(&mut dialog, &mut chart, &ctx, vec![]);
+        }
+        let labels = menu(&mut dialog, &mut chart, 7);
+        assert!(
+            ["Red", "Legacy"]
+                .iter()
+                .all(|name| labels.contains(&name.to_string())),
+            "{labels:?}"
+        );
+        let labels = menu(&mut dialog, &mut chart, 8);
+        assert!(
+            labels.contains(&"Red".into()) && !labels.contains(&"Legacy".into()),
+            "{labels:?}"
+        );
+        click(&mut dialog, &mut chart, &ctx, "Delete Red");
+        assert_eq!(
+            documents(),
+            [
+                "HorizontalLine/Red",
+                "Legacy",
+                "Polyline/Red",
+                "Polyline:host-path/Red"
+            ]
+        );
         dialog.close();
         frame(&mut dialog, &mut chart, &ctx, vec![]);
-        chart.drawings_mut().drawings[0].tool_type = Tool::TrendLine;
         dialog.open_for_chart(&chart, DrawingId(7));
+        frame(&mut dialog, &mut chart, &ctx, vec![]);
+        dialog.props.line_width = 3.0;
+        save_as(&mut dialog, &mut chart, "Legacy");
+        assert_eq!(documents().len(), 4, "replaced in place: {:?}", documents());
+        let saved: serde_json::Value =
+            serde_json::from_str(&host.0.lock().unwrap()["Legacy"]).unwrap();
+        assert_eq!(saved["template"]["settings"]["stroke_width"], 3.0);
+    }
+
+    /// A template loaded in the dialog of one drawing gives every unlocked selected drawing of its
+    /// tool all of its style, whatever each held before, and leaves the selected drawings of other
+    /// tools and the locked ones as they were. One undo restores them all.
+    #[test]
+    fn a_loaded_template_restyles_every_unlocked_selected_drawing_of_its_tool() {
+        let ctx = Context::default();
+        let mut chart = Chart::new(BarData::new());
+        let anchors = [ChartPoint::new(1.0, 100.0), ChartPoint::new(3.0, 110.0)];
+        for (id, tool, color) in [
+            (1, Tool::Rect, [242, 54, 69, 255]),
+            (2, Tool::Rect, [41, 98, 255, 255]),
+            (3, Tool::TrendLine, [41, 98, 255, 255]),
+            (4, Tool::Rect, [41, 98, 255, 255]),
+        ] {
+            let mut drawing = Drawing::new(id, tool);
+            (drawing.color, drawing.stroke_width, drawing.fill_color) = (color, 1.0, None);
+            drawing.extend_right = id == 2;
+            drawing.locked = id == 4;
+            drawing.chart_points = anchors.to_vec();
+            chart.drawings_mut().drawings.push(drawing);
+        }
+        chart.drawings_mut().select_drawings([1, 2, 3, 4]);
+        let mut zone = Drawing::new(0, Tool::Rect);
+        (zone.color, zone.stroke_width) = ([242, 54, 69, 255], 2.0);
+        zone.line_style = crate::model::LineStyle::Dashed;
+        zone.fill_color = Some([76, 175, 80, 51]);
+        let template = DrawingTemplate::from_drawing(&zone);
+        let mut dialog = DrawingPropertiesDialog::new();
+        dialog
+            .templates
+            .save_for_tool("Red zone", template.clone())
+            .unwrap();
+        let before = serde_json::to_value(&chart.drawings().drawings).unwrap();
+        dialog.open_for_chart(&chart, DrawingId(1));
+        frame(&mut dialog, &mut chart, &ctx, vec![]);
         click(&mut dialog, &mut chart, &ctx, "Template");
-        click(&mut dialog, &mut chart, &ctx, "Delete Thick line");
-        assert!(dialog.templates.entries().is_empty());
+        click(&mut dialog, &mut chart, &ctx, "Red zone");
+        click(&mut dialog, &mut chart, &ctx, "Ok");
+        let style = |drawing: &Drawing| {
+            serde_json::to_value(DrawingTemplate::from_drawing(drawing)).unwrap()
+        };
+        let drawings = &chart.drawings().drawings;
+        let want = serde_json::to_value(&template).unwrap();
+        assert_eq!(style(&drawings[0]), want);
+        assert_eq!(style(&drawings[1]), want, "the blue rectangle");
+        assert_eq!(drawings[1].chart_points, anchors);
+        for index in [2, 3] {
+            assert_eq!(
+                serde_json::to_value(&drawings[index]).unwrap(),
+                before[index]
+            );
+        }
+        assert!(chart.undo());
+        assert_eq!(
+            serde_json::to_value(&chart.drawings().drawings).unwrap(),
+            before
+        );
+        assert!(!chart.can_undo());
     }
 }

@@ -81,7 +81,7 @@ impl Indicator for TEMA {
     }
 
     fn desc(&self) -> &str {
-        "Triple Exponential Moving Avg - Minimal lag moving avg"
+        "Triple Exponential Moving Average - Minimal lag moving avg"
     }
 
     fn calculate(&mut self, data: &[Bar]) {

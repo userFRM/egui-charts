@@ -811,7 +811,8 @@ mod tests {
                 Color32::from_rgba_unmultiplied(1, 2, 3, 40),
                 false,
             ),
-            // The middle guide never changes the band, even hidden above or below its edges.
+            // A Connors RSI saved with its former middle guide: that guide never changes the band,
+            // even hidden above or below its edges.
             (
                 IndicatorPaneConfig::from_study(&crsi),
                 &crsi,
