@@ -135,6 +135,24 @@ impl Chart {
         self.place_study_template_set(set, factory, Keep::None)
     }
 
+    /// Applies `set` as a user's choice, built from the built-in studies, as one
+    /// [user action](Self::user_action) that a single undo reverses. The studies whose
+    /// [user edits](Self::set_indicator_user_edit_enabled) are off stay, since no user command
+    /// removes them, and count against the [study cap](Self::set_study_limit); the set's studies
+    /// replace the others and are placed beside them as
+    /// [`apply_study_template_set_with`](Self::apply_study_template_set_with) places them, each
+    /// additional scale of theirs numbered apart from those the kept studies use. Returns the ids
+    /// of the set's studies in its order, and fails as
+    /// [`apply_study_template_set`](Self::apply_study_template_set) does.
+    pub fn apply_chosen_study_template_set(
+        &mut self,
+        set: &StudyTemplateSet,
+    ) -> Result<Vec<SeriesId>, String> {
+        self.user_action(|chart| {
+            chart.place_study_template_set(set, &IndicatorFactory::new(), Keep::ReadOnly)
+        })
+    }
+
     /// Adds the studies of `set` in place of the chart's own, but for those `keep` keeps, which
     /// count against the study cap with them, and fails as
     /// [`apply_study_template_set_with`](Self::apply_study_template_set_with) does.
