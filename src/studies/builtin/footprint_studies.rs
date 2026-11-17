@@ -18,7 +18,8 @@ pub enum FootprintStudyKind {
     UnfinishedLow,
     /// Highest-volume level, extended until a later bar trades through it.
     NakedPoc,
-    /// Price with the largest absolute delta, ties resolved toward the lower price.
+    /// Price with the largest absolute delta, ties resolved toward the lower price. A bar without
+    /// a nonzero row delta has none.
     DeltaPoc,
     /// Row volume exceeds the configured share of this bar's volume.
     VolumeCluster,
@@ -111,7 +112,8 @@ pub struct FootprintStudyConfig {
     /// at equality too. A side with volume against none meets any multiple, two empty sides
     /// none, and unknown side counts in neither. Below 1 or not a number, or `None`, none.
     pub ratio: Option<f64>,
-    /// The delta POC needs at least this absolute net delta; below it the bar has none.
+    /// The delta POC needs at least this absolute net delta, and more than zero; below it the bar
+    /// has none.
     pub min_delta: f64,
 }
 
@@ -218,7 +220,7 @@ pub(crate) fn footprint_studies_on_rows(
                         .total_cmp(&b.delta().abs())
                         .then_with(|| b.level.cmp(&a.level))
                 })
-                .filter(|row| row.delta().abs() >= config.min_delta)
+                .filter(|row| row.delta() != 0.0 && row.delta().abs() >= config.min_delta)
         {
             add(row.level, row.level, FootprintStudyKind::DeltaPoc, false);
         }
@@ -906,6 +908,41 @@ mod tests {
             if expected {
                 assert_eq!(zones, [(101, 103, None, Unvisited)]);
             }
+        }
+    }
+
+    /// A bar whose rows carry no net delta, because their side is unknown, their sides balance or
+    /// they differ only by the rounding of their sums, has no delta POC with the default minimum.
+    #[test]
+    fn delta_poc_needs_a_row_with_net_delta() {
+        let (buy, sell) = (Some(OrderSide::Buy), Some(OrderSide::Sell));
+        let unknown = [(0, 100.0, 2.0, None), (1, 101.0, 3.0, None)];
+        let balanced = [
+            (0, 100.0, 2.0, buy),
+            (1, 100.0, 2.0, sell),
+            (2, 101.0, 1.0, buy),
+            (3, 101.0, 1.0, sell),
+        ];
+        // Sells of 0.1 and 0.2 sum to 0.30000000000000004 against a buy of 0.3.
+        let rounded = [
+            (0, 100.0, 0.1, sell),
+            (1, 100.0, 0.2, sell),
+            (2, 100.0, 0.3, buy),
+        ];
+        for (case, trades) in [
+            ("unknown side", &unknown[..]),
+            ("balanced", &balanced[..]),
+            ("rounding", &rounded[..]),
+        ] {
+            assert!(
+                found(
+                    &flow(trades),
+                    &FootprintStudyConfig::default(),
+                    FootprintStudyKind::DeltaPoc
+                )
+                .is_empty(),
+                "{case}"
+            );
         }
     }
 }

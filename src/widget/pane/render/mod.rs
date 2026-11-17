@@ -448,7 +448,7 @@ impl Chart {
                 .iter()
                 .map(|at| {
                     let item = &self.price_series[*at];
-                    let close = match hovered {
+                    let close = match self.readout_index {
                         Some(bar) => self.series_close_at(item, bar),
                         None => crate::model::last_with_value(&item.bars).map(|bar| bar.close),
                     };
@@ -625,7 +625,9 @@ impl Chart {
                 panel.legend_offset = legend_offset;
                 panel.pane_controls = true;
                 // A series legend reports its value at any bar, the last close without a crosshair.
-                panel.bar_index = hovered.or(id.filter(|_| study.is_none()).map(|_| 0));
+                panel.bar_index = self
+                    .readout_index
+                    .or(id.filter(|_| study.is_none()).map(|_| 0));
                 let legend_row_height = panel
                     .legend_galley(
                         ui.painter(),

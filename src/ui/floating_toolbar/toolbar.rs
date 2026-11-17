@@ -2,7 +2,7 @@
 //!
 //! Floating toolbar for object customization.
 
-use crate::drawings::{ChartPoint, LineMeasurements};
+use crate::drawings::{ChartPoint, DrawingToolType, LineMeasurements};
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::model::LineStyle;
@@ -64,8 +64,10 @@ pub struct FloatingSelectionToolbar {
     color_slots: Vec<ColorSlot>,
     /// Palette state per colour slot
     pickers: Vec<ColorPickerState>,
-    /// Line width and style of the selected drawing
-    stroke: Option<(f32, LineStyle)>,
+    /// Line width of the selected drawing, when its tool draws it
+    width: Option<f32>,
+    /// Line style of the selected drawing, when its tool draws it
+    line_style: Option<LineStyle>,
     /// Symbol and id of the drawing the toolbar follows
     selected: Option<(String, usize)>,
     /// What the toolbar last stayed clear of the readout card for: the drawing's readouts and
@@ -102,7 +104,8 @@ impl FloatingSelectionToolbar {
             ),
             color_slots: Vec::new(),
             pickers: Vec::new(),
-            stroke: None,
+            width: None,
+            line_style: None,
             selected: None,
             placed_for: None,
             colour_drag: false,
@@ -235,24 +238,38 @@ impl FloatingSelectionToolbar {
         }
         self.set_locked(drawing.locked);
         self.set_object_visible(drawing.visible);
-        self.set_colors(vec![ColorSlot {
-            label: if drawing.tool_type.is_text_annotation() {
-                "Text color"
+        // A sticker's art and the ghost feed's candles keep their own colours.
+        self.set_colors(
+            if matches!(
+                drawing.tool_type,
+                DrawingToolType::Sticker | DrawingToolType::GhostFeed
+            ) {
+                Vec::new()
             } else {
-                "Line color"
+                vec![ColorSlot {
+                    label: if drawing.tool_type.is_text_annotation() {
+                        "Text color"
+                    } else {
+                        "Line color"
+                    },
+                    color: drawing.color32(),
+                }]
             },
-            color: drawing.color32(),
-        }]);
+        );
         if drawing.tool_type.supports_fill() {
             self.color_slots.push(ColorSlot {
                 label: "Fill color",
                 color: drawing.fill_color32().unwrap_or(Color32::TRANSPARENT),
             });
         }
-        self.stroke = drawing
+        self.width = drawing
             .tool_type
-            .draws_line()
-            .then_some((drawing.stroke_width, drawing.line_style));
+            .supports_line_width()
+            .then_some(drawing.stroke_width);
+        self.line_style = drawing
+            .tool_type
+            .supports_line_style()
+            .then_some(drawing.line_style);
         // Refresh context without reopening the menu or resetting its dismiss state.
         if !self.menu.is_open() {
             self.menu.open_on(ui.ctx(), chart, self.position, id);
@@ -400,28 +417,28 @@ impl FloatingSelectionToolbar {
                                             }
                                         }
                                     }
-                                    if let Some((width, style)) = &mut self.stroke {
-                                        if ui.combo_select_width(
+                                    if let Some(width) = &mut self.width
+                                        && ui.combo_select_width(
                                             "selection_width",
                                             width,
                                             [1.0, 2.0, 3.0, 4.0],
                                             |v| format!("{v} px"),
                                             48.0,
-                                        ) {
-                                            action =
-                                                Some(FloatingToolbarAction::ChangeWidth(*width));
-                                        }
-                                        let ctx = ui.ctx().clone();
-                                        if ui.combo_select_width(
+                                        )
+                                    {
+                                        action = Some(FloatingToolbarAction::ChangeWidth(*width));
+                                    }
+                                    let ctx = ui.ctx().clone();
+                                    if let Some(style) = &mut self.line_style
+                                        && ui.combo_select_width(
                                             "selection_style",
                                             style,
                                             LineStyle::all().iter().copied(),
                                             |v| l10n::text(&ctx, v.name()),
                                             72.0,
-                                        ) {
-                                            action =
-                                                Some(FloatingToolbarAction::ChangeStyle(*style));
-                                        }
+                                        )
+                                    {
+                                        action = Some(FloatingToolbarAction::ChangeStyle(*style));
                                     }
                                 });
                             });
@@ -745,15 +762,20 @@ mod tests {
     }
 
     /// The colour of a text annotation is its text's; a label on a line does not make the line's
-    /// colour a text colour, although the colour paints both.
+    /// colour a text colour, although the colour paints both. A sticker and a ghost feed keep
+    /// their own colours. Width and style are offered apart, each where the tool draws it.
     #[test]
     fn colour_slot_names_what_the_colour_paints() {
         use crate::drawings::{Drawing, DrawingToolType as Tool};
-        for (tool, label) in [
-            (Tool::TrendLine, "Line color"),
-            (Tool::TextLabel, "Text color"),
-            (Tool::ArrowMarkUp, "Line color"),
-            (Tool::ArrowMarker, "Line color"),
+        for (tool, label, offers) in [
+            (Tool::TrendLine, Some("Line color"), (true, true)),
+            (Tool::TextLabel, Some("Text color"), (false, false)),
+            (Tool::ArrowMarkUp, Some("Line color"), (false, false)),
+            (Tool::ArrowMarker, Some("Line color"), (false, false)),
+            (Tool::Pitchfork, Some("Line color"), (true, false)),
+            (Tool::Tweet, Some("Text color"), (false, true)),
+            (Tool::Sticker, None, (false, false)),
+            (Tool::GhostFeed, None, (false, false)),
         ] {
             let mut chart = Chart::new(crate::model::BarData::new());
             let mut drawing = Drawing::new(7, tool);
@@ -767,8 +789,16 @@ mod tests {
                     toolbar.show_and_apply(ui, &mut chart);
                 })
                 .drop_without_applying_deltas();
-            assert_eq!(toolbar.color_slots[0].label, label, "{tool:?}");
-            assert_eq!(toolbar.stroke.is_some(), tool.draws_line(), "{tool:?}");
+            assert_eq!(
+                toolbar.color_slots.first().map(|slot| slot.label),
+                label,
+                "{tool:?}"
+            );
+            assert_eq!(
+                (toolbar.width.is_some(), toolbar.line_style.is_some()),
+                offers,
+                "{tool:?}"
+            );
         }
     }
 
@@ -911,7 +941,8 @@ mod tests {
                 false,
                 true,
             );
-            toolbar.stroke = Some((2.0, LineStyle::Solid));
+            toolbar.width = Some(2.0);
+            toolbar.line_style = Some(LineStyle::Solid);
             toolbar.set_colors(vec![ColorSlot {
                 label: "Line color",
                 color: Color32::BLUE,
