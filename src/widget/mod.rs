@@ -803,12 +803,22 @@ impl Chart {
         }
     }
 
+    /// The price the main series draws on its chart type: the own source of a Line, Step line,
+    /// Line with markers, Area or Baseline chart, or the chart's shared one.
+    fn main_price_source(&self) -> crate::model::PriceSource {
+        self.chart_type_params
+            .styles
+            .line_source(self.chart_type, self.config.price_source)
+    }
+
     /// Apply series settings to chart colors, price source and price scale.
     ///
-    /// Copies candlestick colors (bullish/bearish fill, border, wick) and the
-    /// price source field from the given [`SeriesSettings`] into the chart's
-    /// [`ChartConfig`], and its scale mode and inversion into the main price
-    /// scale. Settings of a Heikin-Ashi, hollow candles or volume candles chart keep their
+    /// Copies candlestick colors (bullish/bearish fill, border, wick) from the given
+    /// [`SeriesSettings`] into the chart's [`ChartConfig`], and its scale mode and inversion into
+    /// the main price scale. Its price source becomes the own source of its chart type when that
+    /// is a Line, Step line, Line with markers, Area or Baseline chart drawing another price;
+    /// other chart types ignore it, and [`ChartConfig::price_source`] is left as it is.
+    /// Settings of a Heikin-Ashi, hollow candles or volume candles chart keep their
     /// candle colors in that chart type's style instead, a `None` border or wick meaning the
     /// body color, and these colors win over the same colors in `chart_type_params`. A new
     /// scale mode returns the scale to auto-scaling and clears the zoom history, whose ranges
@@ -842,7 +852,11 @@ impl Chart {
             self.config.bullish_wick_color = settings.bullish_wick_color;
             self.config.bearish_wick_color = settings.bearish_wick_color;
         }
-        self.config.price_source = settings.price_source;
+        params.styles.set_line_source(
+            settings.chart_type,
+            settings.price_source,
+            self.config.price_source,
+        );
         self.config.show_price_line = settings.show_price_line;
         self.config.show_prev_close_line = settings.show_prev_close_line;
         self.main_series_style.alerts = settings.alerts;
@@ -860,6 +874,7 @@ impl Chart {
     /// Pass the result to `SeriesSettingsDialog::open`, then apply its accepted settings with
     /// [`Self::apply_series_settings`]. The active chart type selects the dialog's controls and
     /// where the candle colors are read from and written to; applying keeps the chart's type.
+    /// Its price source is the one the active chart type draws.
     pub fn series_settings(&self) -> SeriesSettings {
         let mut settings = SeriesSettings {
             chart_type: self.chart_type,
@@ -870,7 +885,7 @@ impl Chart {
             bearish_border_color: self.config.bearish_border_color,
             bullish_wick_color: self.config.bullish_wick_color,
             bearish_wick_color: self.config.bearish_wick_color,
-            price_source: self.config.price_source,
+            price_source: self.main_price_source(),
             show_price_line: self.config.show_price_line,
             show_prev_close_line: self.config.show_prev_close_line,
             alerts: self.main_series_style.alerts,

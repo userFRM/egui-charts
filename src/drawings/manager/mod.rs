@@ -265,6 +265,9 @@ pub struct DrawingManager {
     pub(crate) finished_text_placement: Option<usize>,
     /// A newly placed image waiting for a host file request at the end of this frame.
     pub(crate) image_request: Option<usize>,
+    /// The frame of the last primary click the active tool took. The chart reports no double
+    /// click either of whose clicks a tool took, such as the one that finishes a path.
+    pub(crate) placement_click: Option<u64>,
 
     // Services
     selection: SelectionService,
@@ -364,6 +367,7 @@ impl DrawingManager {
             text_editor: None,
             finished_text_placement: None,
             image_request: None,
+            placement_click: None,
             selection: SelectionService::new(),
             history: HistoryService::new(),
             snap_service: SnapService::new(),

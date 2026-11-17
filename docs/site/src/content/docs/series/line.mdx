@@ -11,9 +11,13 @@ Line plots connect one value per timestamp. Start with the
 ## Data
 
 Use [`Bar::from_value(time, value)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.from_value)
-for a scalar. OHLC bars also work: the main series uses
-[`ChartConfig::price_source`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html#structfield.price_source),
-which defaults to close; added line series always use close. A
+for a scalar. OHLC bars also work: the main series draws the price source of
+its chart type,
+[`ChartTypeStyles::line_price_source`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeStyles.html#structfield.line_price_source)
+for a Line chart and `step_line_price_source` or `line_with_markers_price_source`
+for the others, or
+[`ChartConfig::price_source`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html#structfield.price_source)
+while that is `None`, close by default; added line series always use close. A
 [`Bar::whitespace`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.whitespace)
 point leaves a gap. Do not encode a missing value as zero.
 

@@ -237,7 +237,9 @@ pub enum ChartEvent {
         /// The button released to complete the click.
         button: PointerButton,
     },
-    /// A primary double click in a plot, after the [`Self::Click`] of each of its clicks.
+    /// A primary double click in a plot, after the [`Self::Click`] of each of its clicks. A double
+    /// click is not reported when the active drawing tool took either of its clicks, as when it
+    /// finishes a path.
     DoubleClick {
         /// Location of the second click.
         position: ChartPointer,
@@ -1020,6 +1022,9 @@ impl Chart {
     pub(super) fn record_host_click(&mut self, ui: &Ui, response: &egui::Response) {
         self.prepare_pointer_input(ui);
         let frame = ui.ctx().cumulative_frame_nr();
+        // The first click of a double click is the primary click recorded before it.
+        #[cfg(feature = "drawings")]
+        let first_click = self.host_events.click_frames[0];
         for (index, button) in [PointerButton::Primary, PointerButton::Secondary]
             .into_iter()
             .enumerate()
@@ -1056,7 +1061,17 @@ impl Chart {
                     if !response.double_clicked() && !response.triple_clicked() {
                         self.click_link(ui.ctx(), position.pos);
                     }
-                    if response.double_clicked() && self.host_events.click_frames[2] != Some(frame)
+                    // A drawing tool that took either click was placing a drawing.
+                    #[cfg(feature = "drawings")]
+                    let placement = self
+                        .drawings
+                        .placement_click
+                        .is_some_and(|click| click == frame || Some(click) == first_click);
+                    #[cfg(not(feature = "drawings"))]
+                    let placement = false;
+                    if response.double_clicked()
+                        && !placement
+                        && self.host_events.click_frames[2] != Some(frame)
                     {
                         self.host_events.click_frames[2] = Some(frame);
                         self.host_events.push(ChartEvent::DoubleClick { position });
