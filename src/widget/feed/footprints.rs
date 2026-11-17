@@ -185,7 +185,8 @@ impl Chart {
             return Ok(());
         };
         let before = page.complete_before;
-        if from >= before
+        // Bars were checked against the cutoff above: a trading date's bar can open after it.
+        if (empty && from >= before)
             || request.since.is_some_and(|since| from < since)
             || request.before.is_some_and(|end| before != end)
             || link.clock.bar_open(from) != from
