@@ -145,12 +145,14 @@ impl Chart {
 
     /// Replace a retracement's, extension's, channel's, wedge's, circle's, resistance arc's, spiral's,
     /// time projection's or speed resistance fan's Fibonacci settings (levels, typography, text
-    /// placement, construction visibility, fan grid and fan labels) as one undoable edit. Unknown
-    /// ids, locked drawings and invalid settings change nothing.
+    /// placement, construction visibility, fan grid and fan labels) as one undoable edit. A fan
+    /// given changed settings without time levels takes their price levels as its time levels.
+    /// Unknown ids, locked drawings, invalid settings and the drawing's own settings change
+    /// nothing.
     pub fn set_fibonacci_config(
         &mut self,
         id: usize,
-        config: crate::drawings::FibonacciConfig,
+        mut config: crate::drawings::FibonacciConfig,
     ) -> Result<(), DrawingError> {
         let drawing = self
             .drawings()
@@ -180,6 +182,13 @@ impl Chart {
         }
         if !config.is_valid() {
             return Err(DrawingError::Invalid("Invalid Fibonacci settings"));
+        }
+        // A fan given changed settings saved before it had time levels takes the current look.
+        if drawing.tool_type == crate::drawings::DrawingToolType::FibonacciSpeedFan
+            && config.time_levels.is_none()
+            && drawing.fib_config.as_ref() != Some(&config)
+        {
+            config.time_levels = Some(config.levels.clone());
         }
         if drawing.fib_config.as_ref() != Some(&config) {
             self.user_action(|chart| {
@@ -1002,6 +1011,18 @@ mod tests {
             assert!(chart.undo());
             assert!(!chart.can_undo());
             assert_eq!(chart.drawings().drawings[0].fib_config, original);
+            if tool == DrawingToolType::FibonacciSpeedFan {
+                // Settings saved before fans had time levels take the price levels as theirs.
+                let mut shared = edited.clone();
+                shared.time_levels = None;
+                chart.set_fibonacci_config(7, shared.clone()).unwrap();
+                let config = chart.drawings().drawings[0].fib_config.as_ref().unwrap();
+                assert_eq!(config.time_levels.as_ref(), Some(&edited.levels));
+                // Setting them again changes nothing, so one undo restores the fan.
+                chart.set_fibonacci_config(7, shared).unwrap();
+                assert!(chart.undo());
+                assert!(!chart.can_undo());
+            }
             chart.drawings_mut().drawings[0].tool_type = DrawingToolType::TrendLine;
             assert!(chart.set_fibonacci_config(7, edited).is_err());
         }
