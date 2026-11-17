@@ -1819,6 +1819,29 @@ mod tests {
             .map(|signal| signal.id.0)
             .collect();
         assert_eq!(sweeps, ["stop-sweep-1705449600000"]);
+        // A big buy at 103 on Monday evening trades Tuesday's date, which opens at 100 and
+        // closes at 101: with wick zones off, its zone goes once Wednesday's date opens.
+        let host = Host::tracking(&futures, Timeframe::Day1, Some(10.0));
+        let mut settings = host.detectors.settings();
+        settings.big_trades.rule.wick_zones = false;
+        host.detectors.set_settings(settings);
+        let mut removed = Vec::new();
+        for (time, price, size) in [
+            ("2024-01-08T14:00:00Z", 100.0, 1.0),
+            ("2024-01-08T23:10:00Z", 100.0, 1.0),
+            ("2024-01-08T23:30:00Z", 103.0, 10.0),
+            ("2024-01-09T14:00:00Z", 101.0, 1.0),
+            ("2024-01-09T23:10:00Z", 101.0, 1.0),
+        ] {
+            let events = host.push(trade(time, price, size, Some(OrderSide::Buy)));
+            removed.extend(
+                (events.into_iter()).filter(|event| matches!(event, SignalEvent::Remove(_))),
+            );
+        }
+        assert_eq!(
+            removed,
+            [SignalEvent::Remove(SignalId("big-trade-zone-1".into()))]
+        );
     }
     fn depth_book(bids: &[(f64, f64)], asks: &[(f64, f64)]) -> OrderBook {
         let levels = |rows: &[(f64, f64)]| {
