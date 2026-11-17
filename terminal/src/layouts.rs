@@ -627,6 +627,86 @@ mod tests {
     }
 
     #[test]
+    fn set_feed_rebinds_existing_new_and_restored_slots_through_show_with() {
+        use egui_charts::data::{Datafeed, HistoryPage, HistoryRequest, Reply};
+        use egui_charts::model::{Bar, Instrument};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct ScopedFeed {
+            requests: AtomicUsize,
+        }
+        impl Datafeed for ScopedFeed {
+            fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+                reply.send(Ok(Instrument::new(symbol)));
+            }
+            fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+                self.requests.fetch_add(1, Ordering::Relaxed);
+                let time = "2026-01-02T00:00:00Z".parse().unwrap();
+                reply.send(Ok(HistoryPage::new(
+                    vec![Bar::new(time, 7.0, 7.0, 7.0, 7.0, 1.0)],
+                    true,
+                )));
+            }
+        }
+        let storage = Arc::new(MemoryStorage::default());
+        let mut terminal = new_terminal(&storage);
+        settle(&mut terminal);
+        let default_feed = terminal.feed.clone();
+        terminal.chart_mut().config_mut().show_grid = false;
+        let feed = Arc::new(ScopedFeed {
+            requests: AtomicUsize::new(0),
+        });
+        let bind = |terminal: &mut Terminal| {
+            let ctx = terminal.ctx();
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+                    time: Some(ctx.input(|input| input.time) + 0.1),
+                    ..Default::default()
+                },
+                |ui| {
+                    terminal.show_with(ui, |ui, slot, chart| {
+                        if slot == 0 {
+                            chart.set_feed(feed.clone());
+                        }
+                        chart.show(ui)
+                    });
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        for _ in 0..4 {
+            bind(&mut terminal);
+        }
+        assert_eq!(terminal.chart().bars(SeriesId::MAIN)[0].close, 7.0);
+        assert!(!terminal.chart().config().show_grid);
+        assert_eq!(feed.requests.load(Ordering::Relaxed), 1);
+        assert!(Arc::ptr_eq(&terminal.feed, &default_feed));
+
+        // New slots still start on the Terminal default. Rebinding slot zero leaves them alone.
+        layout(
+            &mut terminal,
+            LayoutAction::SelectGrid(ChartLayoutMode::TwoHorizontal),
+        );
+        let other = terminal.charts[1].bars(SeriesId::MAIN).to_vec();
+        for _ in 0..3 {
+            bind(&mut terminal);
+        }
+        assert_eq!(terminal.charts[1].bars(SeriesId::MAIN), other);
+        assert_ne!(other[0].close, 7.0);
+        let saved = terminal.capture_layout().unwrap();
+        terminal.restore_layout("rebound".into(), saved);
+        for _ in 0..4 {
+            bind(&mut terminal);
+        }
+        assert_eq!(terminal.charts[0].bars(SeriesId::MAIN)[0].close, 7.0);
+        assert!(!terminal.charts[0].config().show_grid);
+        assert_eq!(terminal.charts[1].bars(SeriesId::MAIN), other);
+        assert_eq!(feed.requests.load(Ordering::Relaxed), 2);
+        assert!(Arc::ptr_eq(&terminal.feed, &default_feed));
+    }
+
+    #[test]
     fn grid_selector_grows_slots_and_tab_cycles_the_visible_ones() {
         let storage = Arc::new(MemoryStorage::default());
         let mut terminal = new_terminal(&storage);

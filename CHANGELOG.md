@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `Chart::set_feed` installs or replaces one chart's datafeed at runtime, including Terminal slots. The same configured `Arc` is a no-op, also during replay. A different feed immediately retires old subscriptions and data even while paused, preserves chart settings, drawings and host-owned auxiliary data, exits replay locally and clears undo/redo so retained actions cannot restore old-source bars. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
+
 - Bounded prepared-footprint history can fill internal gaps without replacing retained rows or the initial live cutoff. `FootprintPage::unavailable` distinguishes unavailable recordings from confirmed-empty spans; resume retries unavailable spans while retaining prepared owners, explicit feed reload still replaces all history, and chart/profile coverage updates when a gap closes. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
 
 - `Indicator::clone_for_export` lets studies freeze live state for deferred export rendering; its default preserves existing implementations. `OrderFlowInput::frozen` shares immutable footprint history and copies mutable state, and volume profile studies use it without changing ordinary clones. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
