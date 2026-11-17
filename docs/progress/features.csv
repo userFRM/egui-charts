@@ -1,5 +1,5 @@
 area,group,feature,status,provided_by,source,issues
-Builder API,Broker API,Account information and account manager,incomplete,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs,3281
+Builder API,Broker API,Account information and account manager,incomplete,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs,3280;3281
 Builder API,Broker API,Brackets,incomplete,host,src/model/trading.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/chart/rendering/trading_lines/mod.rs;src/ui/trading/mod.rs,3282;3283
 Builder API,Broker API,Broker capability flags,incomplete,host,src/model/trading.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/view.rs;src/ui/trading/ticket/form.rs;src/services/broker.rs;src/ui/trading/dom.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs,3283;3284
 Builder API,Broker API,Broker connection contract,unverified,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/events.rs;src/ui/trading/account_panel/view.rs;src/ui/trading/view.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/view.rs;src/ui/trading/dom.rs;src/ui/trading/account_panel/history.rs,3278;3279
