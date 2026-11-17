@@ -1457,8 +1457,8 @@ fn volume_uses_themes_alpha_and_pitch_above_a_configured_baseline() {
 /// Length 2 averages the last two, the older by its own range of 5: (5 + 25) / 2 = 15, a fifth
 /// is 3, so rows of 3.
 ///
-/// Open interest rows stay out of the table until open interest arrives: 500 from 09:59 is in
-/// effect at the 10:00 open and 507 is published at 10:00:30, so the bar reads 507 and 500.
+/// Open interest of 500 from 09:59 is in effect at the 10:00 open and 507 is published at
+/// 10:00:30, so the bar reads 507 and 500; without open interest its rows stay out of the table.
 #[cfg(feature = "ui")]
 #[test]
 fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
@@ -1694,7 +1694,6 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
         },
         ..Default::default()
     };
-    chart.user_action(|chart| chart.set_chart_type_params(params.clone()));
     let table = |chart: &mut Chart| {
         let shapes = draw(chart);
         let bottom = chart.get_rendered_price_rect().bottom();
@@ -1708,15 +1707,14 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
             })
             .collect::<Vec<_>>()
     };
-    // The feed has no open interest.
-    table(&mut chart);
-    assert_eq!(table(&mut chart), ["Vol", "Delta", "5", "1"]);
+    let open_interest = crate::data::StudyDataRequest {
+        symbol: String::new(),
+        timeframe: None,
+        metric: Some("open_interest".to_owned()),
+    };
+    // Open interest supplied before a row reads it is kept by the frame that selects the rows.
     chart.set_study_data(
-        crate::data::StudyDataRequest {
-            symbol: String::new(),
-            timeframe: None,
-            metric: Some("open_interest".to_owned()),
-        },
+        open_interest.clone(),
         [
             ("2026-01-05T09:59:00Z", 500.0),
             ("2026-01-05T10:00:30Z", 507.0),
@@ -1726,10 +1724,15 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
         .collect(),
         None,
     );
+    chart.user_action(|chart| chart.set_chart_type_params(params.clone()));
+    table(&mut chart);
     assert_eq!(
         table(&mut chart),
         ["Vol", "Delta", "OI high", "OI low", "5", "1", "507", "500"]
     );
+    // Without open interest the rows are left out.
+    chart.set_study_data(open_interest, Vec::new(), None);
+    assert_eq!(table(&mut chart), ["Vol", "Delta", "5", "1"]);
     assert_eq!(chart.trade_profile_settings().value_area, Some(0.5));
     let saved = serde_json::to_vec(&chart.snapshot().unwrap()).unwrap();
     let snapshot: ChartSnapshot = serde_json::from_slice(&saved).unwrap();

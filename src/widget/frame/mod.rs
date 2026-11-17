@@ -203,6 +203,20 @@ impl Chart {
         }
     }
 
+    /// The statistics rows below a footprint: the host's, or the chart settings' on a volume
+    /// footprint chart.
+    fn footprint_statistics_rows(
+        &self,
+        host: Option<&FootprintConfig>,
+    ) -> Option<Vec<crate::model::FootprintStatistic>> {
+        match host {
+            Some(config) => config.statistics.then(|| config.statistics_rows.clone()),
+            None => (self.chart_type == ChartType::VolumeFootprint
+                && self.chart_type_params.footprint_statistics)
+                .then(|| self.chart_type_params.footprint_statistics_rows.clone()),
+        }
+    }
+
     fn show_themed_content(
         &mut self,
         ui: &mut Ui,
@@ -220,6 +234,13 @@ impl Chart {
         #[cfg(feature = "drawings")]
         self.sync_stored_drawings(ui.ctx());
         self.frame_clock = Some(super::change_marks::FrameClock::shown_in(ui.ctx()));
+        // The pump keeps only requested series, so the open interest rows ask for theirs first.
+        self.footprint_open_interest = self
+            .footprint_statistics_rows(footprint.as_ref().map(|(_, config)| *config))
+            .is_some_and(|rows| {
+                rows.iter()
+                    .any(|row| crate::chart::overlays::OPEN_INTEREST_ROWS.contains(row))
+            });
         self.pump(ui.ctx());
         if let Some(wait) = self.refresh_studies(ui.input(|i| i.time)) {
             ui.ctx()
@@ -504,17 +525,9 @@ impl Chart {
             layout.legend_rect = Rect::NOTHING;
         }
         let time_axis_top = shared_time_axis.map_or(layout.price_rect.bottom(), |axis| axis.top());
-        let statistics_rows = if let Some((_, config)) = footprint {
-            config.statistics.then(|| config.statistics_rows.clone())
-        } else {
-            (self.chart_type == ChartType::VolumeFootprint
-                && self.chart_type_params.footprint_statistics)
-                .then(|| self.chart_type_params.footprint_statistics_rows.clone())
-        };
+        let statistics_rows =
+            self.footprint_statistics_rows(footprint.as_ref().map(|(_, config)| *config));
         let open_interest_rows = crate::chart::overlays::OPEN_INTEREST_ROWS;
-        self.footprint_open_interest = statistics_rows
-            .as_ref()
-            .is_some_and(|rows| rows.iter().any(|row| open_interest_rows.contains(row)));
         // Rows without open interest are left out, as the table leaves them out.
         let statistics_rows = statistics_rows
             .map(|mut rows| {
