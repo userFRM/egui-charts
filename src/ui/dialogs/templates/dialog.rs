@@ -1,4 +1,4 @@
-//! A named save form and catalog for study and drawing templates.
+//! A named save form and catalog for study templates.
 
 use super::TemplateStore;
 use crate::localization as l10n;
@@ -8,8 +8,12 @@ use crate::ui_kit::modal::Modal;
 use crate::widget::Chart;
 use serde::{Serialize, de::DeserializeOwned};
 
-/// Template management opened by a host's study or drawing toolbar intents. The host supplies
-/// the current value, handles the returned loaded value and supplies durable storage if desired.
+/// Template management opened by a host's study toolbar intents. The host supplies the current
+/// value, handles the returned loaded value and supplies durable storage if desired.
+///
+/// Drawing templates are kept per tool: save them with [`TemplateStore::save_for_tool`] or let
+/// the drawing properties dialog's Template menu do it, since a save under a bare name here
+/// would replace another tool's template of the same name.
 #[derive(Debug)]
 pub struct TemplateDialog<T> {
     /// Host-readable catalog and storage connection.
