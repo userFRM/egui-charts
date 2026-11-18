@@ -198,6 +198,7 @@ impl Chart {
             percentage_formatter: None,
             volume_formatter: None,
             series_formatters: Default::default(),
+            study_formatters: Default::default(),
             extended_hours: false,
             conversion: None,
             measured_axis_width: 0.0,

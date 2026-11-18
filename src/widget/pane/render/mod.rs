@@ -640,6 +640,8 @@ impl Chart {
                         | crate::scales::PriceScaleMode::IndexedTo100
                 ) {
                     panel.price_formatter = self.percentage_formatter.clone();
+                } else if let Some(id) = id {
+                    panel.price_formatter = self.study_formatter(id, indicator.value_format());
                 }
                 panel.axis_rect = axes
                     .iter()
@@ -647,6 +649,7 @@ impl Chart {
                     .map(|(_, rect)| *rect);
                 panel.legend_offset = legend_offset;
                 panel.pane_controls = true;
+                panel.show_settings = !self.settings_hidden;
                 // A series legend reports its value at any bar, the last close without a crosshair.
                 panel.bar_index = self
                     .readout_index
@@ -1019,7 +1022,13 @@ impl Chart {
                                 pos: menu.unwrap(),
                             });
                         }
-                        (None, Some(id)) if control_clicked => {
+                        // A series row's More button and right click open its settings, which a
+                        // hidden `Control::Settings` withholds.
+                        (None, Some(id))
+                            if close_clicked
+                                || visibility_clicked
+                                || (control_clicked && !self.settings_hidden) =>
+                        {
                             pending_series_action = Some((id, close_clicked, visibility_clicked));
                         }
                         _ => {}

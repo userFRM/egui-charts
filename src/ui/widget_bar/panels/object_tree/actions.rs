@@ -41,9 +41,11 @@ pub enum ObjectTreeAction {
     UnlockAll,
 
     // === Object Manipulation ===
-    /// Delete an object
+    /// Delete an object; a locked drawing is kept and reported with
+    /// [`ChartEvent::LockedDrawingsKept`](crate::widget::ChartEvent::LockedDrawingsKept).
     Delete(usize),
-    /// Delete all selected objects
+    /// Delete all selected objects; locked drawings stay selected and are reported with
+    /// [`ChartEvent::LockedDrawingsKept`](crate::widget::ChartEvent::LockedDrawingsKept).
     DeleteSelected,
     /// Duplicate an object
     Duplicate(usize),
@@ -82,7 +84,9 @@ pub enum ObjectTreeAction {
     MoveToFolder(Vec<usize>, Vec<String>),
     /// Move a folder with its contents under a new parent, or an empty path for the root.
     MoveFolder(Vec<String>, Vec<String>),
-    /// Delete a folder and its descendants as one undo step, keeping any locked drawings.
+    /// Delete a folder and its descendants as one undo step, keeping any locked drawings and
+    /// reporting them with
+    /// [`ChartEvent::LockedDrawingsKept`](crate::widget::ChartEvent::LockedDrawingsKept).
     DeleteFolder(Vec<String>),
     /// Set the synchronization of a top-level folder, which its descendants follow.
     SetFolderSync(Vec<String>, Option<crate::drawings::FolderSync>),
