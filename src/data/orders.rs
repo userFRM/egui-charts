@@ -269,15 +269,9 @@ impl OrderQueue {
         self.sum(symbol.into(), &filter)
     }
 
-    /// The levels of the orders `filter` accepts, as the book stood at its last update: what a
-    /// ladder, heatmap and book size study built on the same filter show. Fails when the held
-    /// orders carry none of the metadata a filter field needs, rather than showing the unfiltered
-    /// book as if it were filtered. An empty book is never unavailable.
-    pub fn filtered(
-        &self,
-        symbol: impl Into<String>,
-        filter: &OrderFilter,
-    ) -> Result<OrderBook, OrderFilterUnavailable> {
+    /// Whether `filter` can be applied to the held orders: fails when they carry none of the
+    /// metadata a filter field needs. An empty book is never unavailable.
+    pub(crate) fn check_filter(&self, filter: &OrderFilter) -> Result<(), OrderFilterUnavailable> {
         if !self.orders.is_empty() {
             if !filter.exclude_participants.is_empty()
                 && self.orders.iter().all(|o| o.participant.is_none())
@@ -290,6 +284,19 @@ impl OrderQueue {
                 return Err(OrderFilterUnavailable::PlacementTimes);
             }
         }
+        Ok(())
+    }
+
+    /// The levels of the orders `filter` accepts, as the book stood at its last update: what a
+    /// ladder, heatmap and book size study built on the same filter show. Fails when the held
+    /// orders carry none of the metadata a filter field needs, rather than showing the unfiltered
+    /// book as if it were filtered. An empty book is never unavailable.
+    pub fn filtered(
+        &self,
+        symbol: impl Into<String>,
+        filter: &OrderFilter,
+    ) -> Result<OrderBook, OrderFilterUnavailable> {
+        self.check_filter(filter)?;
         Ok(self.sum(symbol.into(), filter))
     }
 

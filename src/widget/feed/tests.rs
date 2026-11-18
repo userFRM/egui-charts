@@ -5879,6 +5879,94 @@ fn heatmap_appearance_survives_visibility_and_frozen_images() {
     }
 }
 
+/// A history filter that needs metadata absent from every held order samples no column, and the
+/// pane says why whatever the book profile shows. Two different failures each get one notice.
+#[test]
+fn heatmap_order_filters_without_their_order_data_say_so() {
+    use crate::chart::overlays::OrderBookView;
+    use crate::data::{DepthHistoryConfig, OrderFilter, RestingOrder};
+    use crate::model::OrderSide::Buy;
+    let time = bars(1)[0].time;
+    let fresh = OrderFilter {
+        max_age: Some(TimeDelta::seconds(10)),
+        ..Default::default()
+    };
+    let others = OrderFilter {
+        exclude_participants: vec![7],
+        ..Default::default()
+    };
+    let all = OrderFilter::default();
+    let bare = RestingOrder::new(1, Buy, 99.0, 5.0);
+    let (placed, named) = (
+        bare.clone().with_placed(time),
+        bare.clone().with_participant(3),
+    );
+    let times = "Order-level depth unavailable: no order has a placement time";
+    let participants = "Order-level depth unavailable: no order names its participant";
+    // History filter, held order, profile filter when shown, notices and sampled columns.
+    for (filter, order, profile, notices, columns) in [
+        (&fresh, &bare, None, vec![times], 0),
+        (&fresh, &bare, Some(&all), vec![times], 0),
+        (&fresh, &placed, None, vec![], 1),
+        (&fresh, &placed, Some(&all), vec![], 1),
+        (&others, &bare, None, vec![participants], 0),
+        (&others, &bare, Some(&all), vec![participants], 0),
+        (&others, &named, None, vec![], 1),
+        (&others, &named, Some(&all), vec![], 1),
+        (&fresh, &bare, Some(&fresh), vec![times], 0),
+        (&fresh, &bare, Some(&others), vec![times, participants], 0),
+    ] {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        let config = DepthHistoryConfig {
+            orders: Some(filter.clone()),
+            ..Default::default()
+        };
+        chart.set_depth_history(Some(DepthHistory::new(config).unwrap()));
+        chart.set_liquidity_heatmap(true);
+        chart.set_order_book_visible(profile.is_some());
+        chart.set_order_book_view(OrderBookView {
+            filter: profile.cloned().unwrap_or_default(),
+            ..Default::default()
+        });
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(0.25)));
+        feed.page().send(page(bars(1), true));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        let sink = feed.sink();
+        sink.set_server_time(time);
+        sink.push_order_snapshot(1, time, vec![order.clone()]);
+        // The next period samples the book as it stood.
+        sink.advance_time(time + TimeDelta::seconds(1));
+        frames.run(&mut chart);
+        let mut output = frames.ctx.run_ui(Default::default(), |ui| {
+            chart.paint_liquidity(ui.painter(), &chart.get_chart_mapping());
+        });
+        output.textures_delta.clear();
+        let texts: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, notices, "{filter:?} {order:?} {profile:?}");
+        assert_eq!(
+            chart
+                .depth_history(SeriesId::MAIN)
+                .unwrap()
+                .columns()
+                .count(),
+            columns,
+            "{filter:?} {order:?}"
+        );
+    }
+}
+
 #[test]
 fn depth_paging_ends_independently_and_drops_old_settings_replies() {
     let feed = Arc::new(Script::default());
@@ -6134,6 +6222,103 @@ fn calendar_reload_uses_the_resolved_exchange_zone() {
     feed.calls();
     frames.run(&mut chart);
     assert!(feed.calls().is_empty());
+}
+
+/// A resolve answer belongs to the requested symbol even under another name. Its trading hours
+/// reload once with delayed replies, and a pause keeps the bars and prepared study inputs.
+#[test]
+fn a_resolved_instrument_with_another_symbol_reloads_once_and_resumes() {
+    use crate::model::{Session, SessionWindow};
+    use chrono::{NaiveTime, Weekday};
+    let at = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+    // The Friday bars at 00:00 through 00:04 UTC fall inside these weekday hours.
+    let weekdays = [
+        Weekday::Mon,
+        Weekday::Tue,
+        Weekday::Wed,
+        Weekday::Thu,
+        Weekday::Fri,
+    ];
+    let hours = Session::new([SessionWindow::new(weekdays, at(0), at(12))]);
+    let instrument = Instrument::new("X:A")
+        .with_session(hours)
+        .with_tick_size(1.0);
+    let feed = Arc::new(Script::default());
+    feed.prepared_footprints.store(true, Ordering::Relaxed);
+    let mut chart = fed(&feed, Some("A"));
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    for frame in 0..10 {
+        // A network feed answers in a later frame.
+        for reply in std::mem::take(&mut *feed.resolves.lock().unwrap()) {
+            reply.send(Ok(instrument.clone()));
+        }
+        frames.run(&mut chart);
+        let symbol = chart.instrument().map(|i| i.symbol.as_str());
+        assert_eq!(symbol, Some("X:A"), "frame {frame}");
+    }
+    let calls = feed.calls();
+    let resolves = calls.iter().filter(|call| matches!(call, Call::Resolve(_)));
+    let latest = calls
+        .iter()
+        .filter(|call| matches!(call, Call::History(request) if request.before.is_none()));
+    assert!(resolves.count() <= 2 && latest.count() <= 2, "{calls:?}");
+
+    let reply = feed.pages.lock().unwrap().pop().unwrap();
+    reply.send(page(bars(5), true));
+    frames.run(&mut chart);
+    assert_eq!(chart.bars(SeriesId::MAIN), bars(5));
+    #[cfg(feature = "studies")]
+    let input = {
+        let id = chart.add_indicator(
+            crate::studies::IndicatorFactory::new()
+                .create("Vol Profile FR")
+                .unwrap(),
+        );
+        frames.run(&mut chart);
+        let start = bars(1)[0].time;
+        feed.footprints
+            .lock()
+            .unwrap()
+            .pop()
+            .unwrap()
+            .send(Ok(prepared_page(
+                &[Tick::new(start, 100.0, 5.0, None)],
+                start + TimeDelta::minutes(1),
+                true,
+            )));
+        frames.run(&mut chart);
+        chart
+            .indicators()
+            .find(|(seen, _)| *seen == id)
+            .unwrap()
+            .1
+            .order_flow_inputs()[0]
+            .clone()
+    };
+    #[cfg(feature = "studies")]
+    let reset = input.reset_revision();
+    chart.set_feed_paused(true);
+    chart.set_feed_paused(false);
+    frames.run(&mut chart);
+    // A resume keeps the bars but the last, which the next page rebuilds.
+    assert_eq!(chart.bars(SeriesId::MAIN), &bars(5)[..4]);
+    #[cfg(feature = "studies")]
+    assert_eq!(
+        input.reset_revision(),
+        reset,
+        "a resume keeps the study input"
+    );
+    #[cfg(feature = "studies")]
+    assert_eq!(
+        input
+            .footprint_snapshot(bars(1)[0].time)
+            .bars(..)
+            .map(|bar| bar.volume())
+            .collect::<Vec<_>>(),
+        [5.0],
+        "a resume keeps the prepared study input"
+    );
 }
 
 #[test]

@@ -55,6 +55,14 @@ where
         });
     }
 
+    #[cfg(feature = "drawings")]
+    if let Some(bar_idx) = hit_drawings(click_pos, indicator, coords, &price_to_y) {
+        return Some(IndicatorHitResult {
+            indicator_idx,
+            bar_idx,
+        });
+    }
+
     let line_count = indicator.line_count();
 
     // Test each line of the indicator
@@ -81,6 +89,23 @@ where
     None
 }
 
+/// The bar under a click on one of the study's drawings.
+#[cfg(feature = "drawings")]
+fn hit_drawings(
+    click_pos: Pos2,
+    indicator: &dyn Indicator,
+    coords: &ChartMapping,
+    value_to_y: impl Fn(f64) -> f32,
+) -> Option<usize> {
+    if indicator.drawings().is_empty() {
+        return None;
+    }
+    let drawings = crate::chart::indicators::plots::mapped_drawings(indicator, coords, value_to_y);
+    crate::drawings::services::DrawingInteraction::new()
+        .hit_test(click_pos, &drawings, "")
+        .map(|_| coords.x_to_idx(click_pos.x))
+}
+
 /// Test the geometry painted for one output line.
 fn hit_test_indicator_line<F>(
     click_pos: Pos2,
@@ -94,13 +119,10 @@ fn hit_test_indicator_line<F>(
 where
     F: Fn(f64) -> f32,
 {
+    // Plot 0 is hit through the drawings it styles, which the callers test first.
     #[cfg(feature = "drawings")]
-    if !indicator.drawings().is_empty() {
-        let drawings =
-            crate::chart::indicators::plots::mapped_drawings(indicator, coords, value_to_y);
-        return crate::drawings::services::DrawingInteraction::new()
-            .hit_test(click_pos, &drawings, "")
-            .map(|_| coords.x_to_idx(click_pos.x));
+    if line_idx == 0 && !indicator.drawings().is_empty() && indicator.drawings_use_plot_style() {
+        return None;
     }
     let mut plot = indicator.plot_style(line_idx);
     let bar_spacing = coords.bar_spacing_for_width();
@@ -307,6 +329,16 @@ pub fn hit_test_pane_indicator(
         coords,
         &|price| coords.price_to_y(price),
     ) {
+        return Some(IndicatorHitResult {
+            indicator_idx,
+            bar_idx,
+        });
+    }
+
+    #[cfg(feature = "drawings")]
+    if let Some(bar_idx) = hit_drawings(click_pos, indicator, coords, |price| {
+        coords.price_to_y(price)
+    }) {
         return Some(IndicatorHitResult {
             indicator_idx,
             bar_idx,

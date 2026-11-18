@@ -441,7 +441,8 @@ fn time_to_idx(
     i0 as f64 + frac * (i1 as f64 - i0 as f64)
 }
 
-/// Paints time grid lines from the axis marks and an optional price grid, batching matching styles.
+/// Paints time grid lines from the axis marks and an optional price grid, batching matching
+/// styles, and returns the x positions of the time grid lines.
 pub(crate) fn render_time_grid(
     context: &RenderContext,
     marks: &[TickMark],
@@ -450,14 +451,19 @@ pub(crate) fn render_time_grid(
     color: Color32,
     style: crate::model::LineStyle,
     horizontal: Option<(Color32, crate::model::LineStyle)>,
-) {
-    let lines = marks.iter().filter_map(|mark| {
-        let index = time_to_idx(mark.time, points, coords);
-        let x = coords.index_to_x(index);
-        (x >= context.rect.left() && x <= context.rect.right()).then_some([
+) -> Vec<f32> {
+    let xs: Vec<f32> = marks
+        .iter()
+        .filter_map(|mark| {
+            let x = coords.index_to_x(time_to_idx(mark.time, points, coords));
+            (x >= context.rect.left() && x <= context.rect.right()).then_some(x)
+        })
+        .collect();
+    let lines = xs.iter().map(|&x| {
+        [
             Pos2::new(x, context.rect.top()),
             Pos2::new(x, context.rect.bottom()),
-        ])
+        ]
     });
     let price_marks = horizontal
         .map(|_| coords.price.shared_marks())
@@ -477,7 +483,7 @@ pub(crate) fn render_time_grid(
                 color,
                 style,
             );
-            return;
+            return xs;
         }
         crate::chart::rendering::grid::render_grid_lines(
             context.painter,
@@ -487,6 +493,7 @@ pub(crate) fn render_time_grid(
         );
     }
     crate::chart::rendering::grid::render_grid_lines(context.painter, lines, color, style);
+    xs
 }
 
 /// Paints the time labels of `marks`, placed by the keys of `points` with the mapping
