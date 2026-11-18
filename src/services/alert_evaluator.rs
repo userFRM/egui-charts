@@ -195,6 +195,7 @@ impl Evaluation {
 
     fn calculate(
         &mut self,
+        symbol: &str,
         bars: &[Bar],
         clock: &BarClock,
         instrument: Option<&Instrument>,
@@ -237,6 +238,7 @@ impl Evaluation {
             study.set_timeframe(self.timeframe);
             study.set_bar_clock(clock);
             study.set_instrument(instrument);
+            study.set_chart_symbol(symbol);
             study.set_visible_range(self.inputs.visible.map_or(0..bars.len(), |(start, end)| {
                 bars.partition_point(|bar| bar.time < start)
                     ..bars.partition_point(|bar| bar.time <= end)
@@ -411,7 +413,7 @@ impl AlertEvaluator {
             run.start.get_or_insert(first.time);
             if !run.initialized {
                 // Establish the main span for data_start; these outputs are never evaluated.
-                run.calculate(bars, reader.clock(), reader.instrument(), &[]);
+                run.calculate(symbol, bars, reader.clock(), reader.instrument(), &[]);
                 run.initialized = true;
             }
             let requests = run.requests(first.time);
@@ -448,7 +450,7 @@ impl AlertEvaluator {
                     }
                 })
                 .collect();
-            run.calculate(bars, reader.clock(), reader.instrument(), &data);
+            run.calculate(symbol, bars, reader.clock(), reader.instrument(), &data);
             // data_start may change after calculation, for example when a profile's span moves.
             let reaches = run.requests(bars[0].time);
             for (request, start) in &reaches {
@@ -987,6 +989,69 @@ mod tests {
             fired_messages(Arc::new(Feed::default()), &factory, alert),
             ["300 mean 250 NaN NaN NaN"]
         );
+    }
+
+    /// A study made for one symbol, as an options profile is for its underlying, reads nothing
+    /// on another: its alert fires on that symbol only.
+    #[test]
+    fn studies_follow_the_symbol_the_alert_evaluates() {
+        #[derive(Clone)]
+        struct Underlying(crate::studies::SMA, bool);
+        impl Indicator for Underlying {
+            fn name(&self) -> &str {
+                "Underlying"
+            }
+            fn calculate(&mut self, bars: &[Bar]) {
+                self.0.calculate(bars);
+            }
+            fn values(&self) -> &crate::studies::IndicatorValues {
+                self.0.values()
+            }
+            fn colors(&self) -> Vec<egui::Color32> {
+                self.0.colors()
+            }
+            fn set_colors(&mut self, colors: Vec<egui::Color32>) {
+                self.0.set_colors(colors);
+            }
+            fn set_visible(&mut self, visible: bool) {
+                self.0.set_visible(visible);
+            }
+            fn clone_box(&self) -> Box<dyn Indicator> {
+                Box::new(self.clone())
+            }
+            fn set_chart_symbol(&mut self, symbol: &str) -> bool {
+                self.1 = symbol == "SYM";
+                false
+            }
+            fn plot_value(&self, line: usize, bar: usize) -> Option<f64> {
+                self.0.plot_value(line, bar).filter(|_| self.1)
+            }
+        }
+        let mut factory = IndicatorFactory::new();
+        factory.register("Underlying", || {
+            Box::new(Underlying(crate::studies::SMA::new(1), true))
+        });
+        for (symbol, fired) in [("SYM", 1), ("OTHER", 0)] {
+            let mut alert = Alert::new(symbol, crate::model::AlertCondition::Above(0.0));
+            alert.source = AlertSource::Study {
+                id: "1".into(),
+                output: 0,
+            };
+            alert.timeframe = Some(Timeframe::Min1);
+            alert.inputs = Some(Box::new(AlertInputs {
+                studies: vec![crate::model::AlertStudy {
+                    id: 1,
+                    name: "Underlying".into(),
+                    inputs: Vec::new(),
+                }],
+                ..Default::default()
+            }));
+            assert_eq!(
+                fired_messages(Arc::new(Feed::default()), &factory, alert).len(),
+                fired,
+                "{symbol}"
+            );
+        }
     }
 
     /// A watchlist alert on a study whose extra history the feed answers with `NotSupported` for

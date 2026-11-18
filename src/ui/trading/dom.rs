@@ -156,13 +156,13 @@ pub struct DepthPanel {
 impl DepthPanel {
     /// Whether the feed explicitly declares price-level depth for the current instrument.
     /// Hosts should offer their Depth entry only while this returns true.
+    /// The chart's instrument describes its symbol even when its own `symbol` differs.
     pub fn is_available(chart: &crate::widget::Chart) -> bool {
         chart.instrument().is_some_and(|instrument| {
-            instrument.symbol == chart.symbol()
-                && chart
-                    .feed_capabilities()
-                    .unwrap_or(&crate::data::FeedCapabilities::default())
-                    .declares(crate::model::FeedService::Depth, instrument)
+            chart
+                .feed_capabilities()
+                .unwrap_or(&crate::data::FeedCapabilities::default())
+                .declares(crate::model::FeedService::Depth, instrument)
         })
     }
 
@@ -1898,7 +1898,8 @@ mod tests {
         struct Feed(OrderBook);
         impl crate::data::Datafeed for Feed {
             fn resolve(&self, symbol: &str, reply: crate::data::Reply<crate::model::Instrument>) {
-                reply.send(Ok(crate::model::Instrument::new(symbol)
+                // A feed may describe the symbol under another name.
+                reply.send(Ok(crate::model::Instrument::new(format!("X:{symbol}"))
                     .with_tick_size(0.25)
                     .with_services([crate::model::FeedService::Depth])));
             }
@@ -1935,6 +1936,7 @@ mod tests {
                 .collect();
             output.drop_without_applying_deltas();
         }
+        assert!(DepthPanel::is_available(&chart));
         assert!(
             labels.iter().any(|text| text == "Last: 100.00"),
             "{labels:?}"
