@@ -398,7 +398,7 @@ pub trait Indicator: Send {
                 .collect(),
             precision: self.precision(),
             hidden_intervals: Vec::new(),
-            interval_range: Default::default(),
+            timeframe_visibility: crate::model::TimeframeVisibility::all(),
             levels,
             fill_between_levels,
             level_fill_color,
