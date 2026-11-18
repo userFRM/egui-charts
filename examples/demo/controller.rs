@@ -1435,9 +1435,7 @@ impl DemoApp {
         }
 
         // Keyboard shortcuts help.
-        let _ = self
-            .keyboard_shortcuts
-            .show_with_shortcuts(ctx, self.chart.shortcuts());
+        let _ = self.keyboard_shortcuts.show_for_chart(ctx, &self.chart);
         self.show_interval_entry(ctx);
         self.show_open_layout(ctx);
 
