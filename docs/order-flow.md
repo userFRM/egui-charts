@@ -447,10 +447,10 @@ stop sweeps. Another feed event at or after the next boundary closes a bar; no w
 A bar opened before the bar of the first live event since tracking or reset is still marked
 without an alert, even when that live event closes it; a bar receiving live executions can alert.
 
-Footprint conditions read the same bars. `FootprintRule` marks a closed bar with a buy or sell
+Footprint conditions read the same bars. [`FootprintRule`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.FootprintRule.html) marks a closed bar with a buy or sell
 imbalance, or a stack of the rule's number of adjacent ones, using the rule's ratio, comparison
 and minimum volume on rows of one tick whatever grouping the chart displays;
-`FootprintRule::follow_chart` copies these from the chart's settings, as the demo does for its
+[`FootprintRule::follow_chart`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.FootprintRule.html#method.follow_chart) copies these from the chart's settings, as the demo does for its
 active chart. A buy volume, sell volume or delta level fires on the execution that takes the
 forming bar's value past it, from zero at the bar's open: a sell volume level of 100 fires on the
 101st unit sold. Each condition alerts at most once per bar and rebuilds with the stop sweeps on

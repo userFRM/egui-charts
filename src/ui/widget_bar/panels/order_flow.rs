@@ -421,15 +421,17 @@ mod tests {
             assert!(service.settings().big_trades.sound);
             let footprint = service.settings().footprint;
             assert!(footprint.enabled && !footprint.alert);
-            let mut rule = crate::services::FootprintRule::default();
-            rule.buy_imbalance = true;
-            rule.sell_imbalance = true;
-            rule.stacked_buy_imbalance = true;
-            rule.stacked_sell_imbalance = true;
-            rule.buy_volume_above = Some(0.0);
-            rule.sell_volume_above = Some(0.0);
-            rule.delta_above = Some(0.0);
-            rule.delta_below = Some(0.0);
+            let rule = crate::services::FootprintRule {
+                buy_imbalance: true,
+                sell_imbalance: true,
+                stacked_buy_imbalance: true,
+                stacked_sell_imbalance: true,
+                buy_volume_above: Some(0.0),
+                sell_volume_above: Some(0.0),
+                delta_above: Some(0.0),
+                delta_below: Some(0.0),
+                ..Default::default()
+            };
             assert_eq!(footprint.rule, rule);
             for second in 1..=6 {
                 let time = now + chrono::TimeDelta::seconds(second);
