@@ -523,35 +523,41 @@ mod tests {
                 Color32::from_rgba_premultiplied(48, 11, 14, 51),
             ]
         );
-        let saved = serde_json::to_value(chart.snapshot().unwrap()).unwrap();
-        let mut old = saved.clone();
-        for group in ["config", "settings"] {
-            for key in ["price_target_positive_color", "price_target_negative_color"] {
-                old[group].as_object_mut().unwrap().remove(key).expect(key);
+        #[cfg(feature = "ui")]
+        {
+            let saved = serde_json::to_value(chart.snapshot().unwrap()).unwrap();
+            let mut old = saved.clone();
+            for group in ["config", "settings"] {
+                for key in ["price_target_positive_color", "price_target_negative_color"] {
+                    old[group].as_object_mut().unwrap().remove(key).expect(key);
+                }
             }
-        }
-        for (time, document, color, fill) in [
-            (
-                0.5,
-                old,
-                theme.chart.candle_up,
-                Color32::from_rgba_premultiplied(2, 31, 26, 51),
-            ),
-            (
-                0.7,
-                saved,
-                Color32::BLUE,
-                Color32::from_rgba_premultiplied(0, 0, 51, 51),
-            ),
-        ] {
-            chart
-                .restore(&serde_json::from_value(document).unwrap())
-                .unwrap();
-            test_frames::frame(&ctx, &mut chart, time, vec![]);
-            chart.set_visible_logical_range(crate::model::LogicalRange::new(0.0, horizon + 200.0));
-            let shapes = test_frames::shapes(&ctx, &mut chart, time + 0.1, vec![]);
-            assert_eq!(label(&shapes, "High 150"), color);
-            assert_eq!(fills(&shapes, chart.index_to_x(79.0).unwrap())[0], fill);
+            for (time, document, color, fill) in [
+                (
+                    0.5,
+                    old,
+                    theme.chart.candle_up,
+                    Color32::from_rgba_premultiplied(2, 31, 26, 51),
+                ),
+                (
+                    0.7,
+                    saved,
+                    Color32::BLUE,
+                    Color32::from_rgba_premultiplied(0, 0, 51, 51),
+                ),
+            ] {
+                chart
+                    .restore(&serde_json::from_value(document).unwrap())
+                    .unwrap();
+                test_frames::frame(&ctx, &mut chart, time, vec![]);
+                chart.set_visible_logical_range(crate::model::LogicalRange::new(
+                    0.0,
+                    horizon + 200.0,
+                ));
+                let shapes = test_frames::shapes(&ctx, &mut chart, time + 0.1, vec![]);
+                assert_eq!(label(&shapes, "High 150"), color);
+                assert_eq!(fills(&shapes, chart.index_to_x(79.0).unwrap())[0], fill);
+            }
         }
         // A fully transparent choice holds no RGB: only its fill disappears. The other side's
         // chosen hue and opacity remain independent, including through theme changes.
