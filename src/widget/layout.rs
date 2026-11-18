@@ -5108,8 +5108,9 @@ mod tests {
         );
     }
 
-    /// Keys reach the active chart however it became active: a wheel turn over the second chart
-    /// after a click focused the first, then Escape, which leaves no chart focused.
+    /// Keys reach the active chart however it became active: a letter typed after a wheel turn
+    /// over the second chart while a click left the first focused, and the keys after Escape,
+    /// which leaves no chart focused.
     #[test]
     fn chart_keys_reach_the_active_chart() {
         let ctx = egui::Context::default();
@@ -5158,6 +5159,7 @@ mod tests {
             ],
         );
         assert_eq!(layout.active(), 1);
+        frame(&mut layout, &mut charts, vec![Event::Text("B".into())]);
         frame(&mut layout, &mut charts, vec![key(egui::Key::Escape)]);
         frame(
             &mut layout,
@@ -5192,7 +5194,10 @@ mod tests {
                 (
                     crate::model::ChartType::Candles,
                     PriceScaleMode::Logarithmic,
-                    vec![ShortcutRequest::SymbolSearch("A".into())]
+                    vec![
+                        ShortcutRequest::SymbolSearch("B".into()),
+                        ShortcutRequest::SymbolSearch("A".into())
+                    ]
                 ),
             ]
         );
