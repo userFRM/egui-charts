@@ -95,10 +95,12 @@ Use [`FootprintPage::partial`](https://userfrm.github.io/egui-charts/docs/api/eg
 for recorded rows whose executions are explicitly incomplete. It accepts `FootprintBars`
 and a nonempty, strictly increasing list of unique, clock-aligned slot opens, each naming a
 supplied bar. Even the initial `complete_before` must be aligned and close every marked
-slot. On daily or longer session charts, an aligned midnight cutoff may lie inside a
-trading session. Its trading-date bar cannot be marked partial, but must be supplied
-unmarked if it has executions before the cutoff: those rows seed the live bar, as on a
-complete page. Leaving it out certifies no executions before the cutoff. Admission
+slot. On daily or longer session charts, the trading-date bar holding the cutoff cannot
+be marked partial, whether the cutoff is inside its session or after its close. For an
+08:30–15:00 session, Wednesday 00:00 still belongs to Tuesday's bar; marking Tuesday
+is invalid even though its session has closed. If the bar holding the cutoff has
+pre-cutoff executions, supply it unmarked to seed the live bar, as on a complete page.
+Leaving that bar out certifies it had no executions before the cutoff. Admission
 revalidates public payload fields; malformed declarations leave held rows and coverage
 unchanged. `partial_slots()` borrows this metadata without allocating:
 `Some(slots)` distinguishes a partial declaration from an unavailable page, although both

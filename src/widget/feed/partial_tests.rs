@@ -182,7 +182,8 @@ fn invalid_partial_declarations_leave_admitted_rows_and_coverage_unchanged() {
 #[test]
 fn initial_partial_cutoff_must_be_aligned() {
     let (feed, mut chart, mut frames) = prepared_chart();
-    let mut page = partial_page(true, 0..3, &[2]);
+    // Slot 1 is sealed and slot 2 is unmarked: only cutoff alignment can reject the page.
+    let mut page = partial_page(true, 0..3, &[1]);
     page.complete_before = at(2) + TimeDelta::seconds(30);
     deliver(&feed, &mut chart, &mut frames, page);
     assert!(matches!(
