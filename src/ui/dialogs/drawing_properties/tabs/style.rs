@@ -46,6 +46,20 @@ impl StyleTab {
         ui.space_md();
 
         FormGrid::new("style_grid").show(ui, |ui| {
+            // The regression trend styles its fitted line, which takes the drawing's colour and
+            // width, beside its bands.
+            let regression = tool == Some(DrawingToolType::RegressionTrend);
+            if regression {
+                regression_rows(
+                    ui,
+                    props,
+                    [
+                        &mut *color_picker,
+                        &mut *glyph_picker,
+                        &mut badge_pickers[1],
+                    ],
+                );
+            }
             // A sticker's art and the ghost feed's candles keep their own colours.
             if tool != Some(DrawingToolType::FibonacciChannel)
                 && tool != Some(DrawingToolType::PriceLabel)
@@ -54,6 +68,7 @@ impl StyleTab {
                     Some(DrawingToolType::Sticker | DrawingToolType::GhostFeed)
                 )
                 && !position
+                && !regression
             {
                 ui.label(l10n::text(ui.ctx(), "Color"));
                 color_picker.sel_color = props.color;
@@ -81,7 +96,7 @@ impl StyleTab {
                 ui.end_row();
             }
 
-            if tool.is_none_or(|tool| tool.supports_line_width()) {
+            if tool.is_none_or(|tool| tool.supports_line_width()) && !regression {
                 ui.label(l10n::text(ui.ctx(), "Line width"));
                 line_width_row(ui, &mut props.line_width);
                 ui.end_row();
@@ -619,6 +634,115 @@ pub(super) fn color_swatch(
     ColorPicker::new(state, id).show(ui).inner
 }
 
+/// The regression trend's base, upper and lower line rows and its correlation switch. The base
+/// line takes the drawing's colour and width; a band shows the drawing's width until one is set.
+fn regression_rows(ui: &mut Ui, props: &mut DrawingProps, pickers: [&mut ColorPickerState; 3]) {
+    let Some(template) = &props.tool_settings else {
+        return;
+    };
+    let original = template.settings.regression_trend.unwrap_or_default();
+    let mut config = original;
+    let opened = props.color_rgba();
+    let mut base = opened;
+    let mut base_width = props.line_width;
+    let [base_picker, upper_picker, lower_picker] = pickers;
+    regression_line_row(
+        ui,
+        "Base line",
+        base_picker,
+        &mut config.show_base_line,
+        &mut base,
+        &mut config.line_style,
+        &mut base_width,
+    );
+    for (name, line, picker) in [
+        ("Upper line", &mut config.upper_line, upper_picker),
+        ("Lower line", &mut config.lower_line, lower_picker),
+    ] {
+        let shown = line.width().unwrap_or(base_width);
+        let mut width = shown;
+        regression_line_row(
+            ui,
+            name,
+            picker,
+            &mut line.visible,
+            &mut line.color,
+            &mut line.line_style,
+            &mut width,
+        );
+        if width != shown
+            && let Some(set) = line.with_width(Some(width))
+        {
+            *line = set;
+        }
+    }
+    let label = ui.label(l10n::text(ui.ctx(), "Correlation"));
+    ui.checkbox(
+        &mut config.show_correlation,
+        l10n::text(ui.ctx(), "Show correlation"),
+    )
+    .labelled_by(label.id);
+    ui.end_row();
+    props.line_width = base_width;
+    if base != opened {
+        let [r, g, b, a] = base;
+        props.color = Color32::from_rgba_unmultiplied(r, g, b, a);
+    }
+    if let Some(template) = &mut props.tool_settings {
+        if base != opened {
+            template.settings.color = base;
+        }
+        if config != original {
+            template.settings.regression_trend = Some(config);
+        }
+    }
+}
+
+/// One regression trend line's row: its switch named `name` in the label column, then its colour
+/// (a palette swatch keeps the opacity, the custom editor sets it), pattern and width.
+fn regression_line_row(
+    ui: &mut Ui,
+    name: &str,
+    picker: &mut ColorPickerState,
+    visible: &mut bool,
+    color: &mut [u8; 4],
+    line_style: &mut LineStyle,
+    width: &mut f32,
+) {
+    let ctx = ui.ctx().clone();
+    let label = ui.checkbox(visible, l10n::text(&ctx, name));
+    ui.label_inputs_by(label.id, |ui| {
+        ui.horizontal(|ui| {
+            let [r, g, b, a] = *color;
+            picker.sel_color = Color32::from_rgba_unmultiplied(r, g, b, a);
+            if let Some([r, g, b, a]) = ColorPicker::new(picker, (name, "regression_line_color"))
+                .show_unmultiplied(ui, *color)
+                .inner
+            {
+                let a = if picker.custom_mode { a } else { color[3] };
+                *color = [r, g, b, a];
+            }
+            ui.combo_select(
+                (name, "regression_line_style"),
+                line_style,
+                LineStyle::all().iter().copied(),
+                |v| l10n::text(&ctx, v.name()),
+            );
+            ui.add(
+                egui::DragValue::new(width)
+                    .range(1.0..=crate::drawings::validation::MAX_STROKE_WIDTH)
+                    .clamp_existing_to_range(false)
+                    .speed(0.5)
+                    .max_decimals(1)
+                    .custom_formatter(|v, _| v.to_string())
+                    .suffix(l10n::text(ui.ctx(), " px")),
+            )
+            .accessible_name(l10n::text(ui.ctx(), "Line width"));
+        });
+    });
+    ui.end_row();
+}
+
 /// Swatches that draw each preset width, then a stepper for any width from 1 to 100 px; opening
 /// it keeps a width outside that range until it is edited.
 fn line_width_row(ui: &mut Ui, width: &mut f32) {
@@ -1119,6 +1243,64 @@ mod tests {
             let settings = &props.tool_settings.as_ref().unwrap().settings;
             assert_eq!(settings.border_color, Some([76, 175, 80, 128]), "{tool:?}");
             assert_eq!((settings.text_color, props.fill_color), (None, None));
+        }
+    }
+
+    /// Each switch of the regression trend's Style tab turns off its own line or the correlation
+    /// and leaves the others shown.
+    #[test]
+    fn regression_trend_rows_switch_their_own_line() {
+        let chart = Chart::new(BarData::new());
+        for (row, shown) in [
+            ("Base line", [false, true, true, true]),
+            ("Upper line", [true, false, true, true]),
+            ("Lower line", [true, true, false, true]),
+            ("Show correlation", [true, true, true, false]),
+        ] {
+            let ctx = Context::default();
+            let drawing = Drawing::new(1, DrawingToolType::RegressionTrend);
+            let mut props = DrawingProps::from_drawing(&drawing, &chart);
+            let mut frame = |events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        StyleTab::show(
+                            ui,
+                            &mut props,
+                            &mut Default::default(),
+                            &mut Default::default(),
+                        )
+                    },
+                );
+                let shapes: Vec<_> = output.shapes.iter().map(|s| s.shape.clone()).collect();
+                output.drop_without_applying_deltas();
+                shapes
+            };
+            frame(vec![]);
+            let shapes = frame(vec![]);
+            frame(click(text_pos(&shapes, row)));
+            let config = props
+                .tool_settings
+                .as_ref()
+                .and_then(|template| template.settings.regression_trend)
+                .unwrap_or_default();
+            assert_eq!(
+                [
+                    config.show_base_line,
+                    config.upper_line.visible,
+                    config.lower_line.visible,
+                    config.show_correlation,
+                ],
+                shown,
+                "{row}"
+            );
         }
     }
 }
