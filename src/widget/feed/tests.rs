@@ -5681,12 +5681,11 @@ fn replay_reset_removes_future_data_from_the_chart() {
     let feed = Arc::new(Script::default());
     let mut chart = fed(&feed, Some("A"));
     #[cfg(feature = "studies")]
-    let studies: Vec<_> = {
-        let factory = crate::studies::IndicatorFactory::new();
-        ["Quoted Spread", "Trade Rate", "Book Size"]
-            .map(|name| chart.add_indicator(factory.create(name).unwrap()))
-            .into()
-    };
+    let factory = crate::studies::IndicatorFactory::new();
+    #[cfg(feature = "studies")]
+    let mut studies: Vec<_> = ["Quoted Spread", "Trade Rate", "Book Size"]
+        .map(|name| chart.add_indicator(factory.create(name).unwrap()))
+        .into();
     let mut frames = Frames::new();
     frames.run(&mut chart);
     let mut instrument = Instrument::new("A");
@@ -5721,10 +5720,18 @@ fn replay_reset_removes_future_data_from_the_chart() {
     frames.run(&mut chart);
     assert_eq!(chart.trades(SeriesId::MAIN).count(), 1);
     assert!(chart.order_book(SeriesId::MAIN).is_some());
+    // The host answers the trade request it held, then seeks: the chart drains both together.
+    (feed.trades.lock().unwrap().remove(0)).send(Ok(TradePage::new(
+        vec![Tick::new(time, 100.0, 2.0, None)],
+        false,
+    )));
     sink.reset_replay(time);
     sink.push_tick(Tick::new(time, 100.0, 2.0, None).with_id(7));
     sink.push_quote(quote(time, 99.0, 100.0));
     sink.advance_time(time + TimeDelta::seconds(1));
+    // A study added before that frame connects while the reset waits for the chart.
+    #[cfg(feature = "studies")]
+    studies.push(chart.add_indicator(factory.create("Trade Rate").unwrap()));
     frames.run(&mut chart);
     assert_eq!(chart.bars(SeriesId::MAIN).len(), 1);
     assert_eq!(
@@ -5747,13 +5754,14 @@ fn replay_reset_removes_future_data_from_the_chart() {
         for _ in 0..8 {
             frames.run(&mut chart);
         }
-        for (id, expected) in studies.into_iter().zip([Some(4.0), Some(1.0), None]) {
+        let expected = [Some(4.0), Some(1.0), None, Some(1.0)];
+        for (n, (id, expected)) in studies.into_iter().zip(expected).enumerate() {
             let (_, study) = chart.indicators().find(|(seen, _)| *seen == id).unwrap();
             let values = study.order_flow_inputs()[0].values();
-            assert!(values.keys().all(|at| *at == time), "{}", study.name());
-            assert_eq!(study.values().value(0, 0), expected, "{}", study.name());
+            assert!(values.keys().all(|at| *at == time), "{} {n}", study.name());
+            assert_eq!(study.values().value(0, 0), expected, "{} {n}", study.name());
             if study.name() == "Trade Rate" {
-                assert_eq!(study.values().value(2, 0), Some(1.0 / 3.0));
+                assert_eq!(study.values().value(2, 0), Some(1.0 / 3.0), "{n}");
             }
         }
     }
