@@ -5,6 +5,7 @@ use egui::{Color32, FontId, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 use std::sync::Arc;
 
 /// The Sell and Buy buttons with the spread between them and, under it, `quantity` in a box.
+/// Prices and the spread use `formatter`, else `precision` decimals grouped by `thousands_sep`.
 /// Returns the button clicked and the quantity box, when clicked.
 pub(super) fn paint_quotes(
     ui: &mut Ui,
@@ -13,11 +14,18 @@ pub(super) fn paint_quotes(
     ask: f64,
     precision: usize,
     thousands_sep: Option<char>,
+    formatter: Option<&dyn crate::scales::PriceFormatter>,
     quantity: Option<f64>,
     id: egui::Id,
 ) -> (Option<QuoteSide>, Option<Rect>) {
-    let spread =
-        crate::scales::group_thousands(format!("{:.precision$}", ask - bid), thousands_sep);
+    let text = |price: f64| {
+        formatter.map_or_else(
+            || crate::scales::group_thousands(format!("{price:.precision$}"), thousands_sep),
+            |formatter| formatter.format(price),
+        )
+    };
+    let spread = text(ask - bid);
+
     let theme = ui.active_theme();
     let spread_galley = layout.painter.layout_no_wrap(
         spread,
@@ -29,7 +37,7 @@ pub(super) fn paint_quotes(
         let price = layout
             .painter
             .layout_job(egui::text::LayoutJob::single_section(
-                crate::scales::group_thousands(format!("{price:.precision$}"), thousands_sep),
+                text(price),
                 semibold(FontId::proportional(theme.text.ohlc), color),
             ));
         let label = layout.painter.layout_no_wrap(
