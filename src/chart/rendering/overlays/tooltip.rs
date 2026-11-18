@@ -66,10 +66,10 @@ impl ValueFormatters<'_> {
         )
     }
 
-    /// The study's value, its thousands grouped in price units as the legend groups them.
+    /// Groups built-in study prices as the legend does, retaining preformatted text as supplied.
     fn study(&self, study: &StudyValue) -> String {
         let text = study.formatted_value();
-        if study.format == crate::scales::StudyFormat::Price {
+        if study.formatted.is_none() && study.format == crate::scales::StudyFormat::Price {
             group_thousands(text, self.thousands_sep)
         } else {
             text
@@ -87,7 +87,8 @@ impl std::fmt::Debug for ValueFormatters<'_> {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct StudyValue {
-    /// Host-formatted text, when supplied by the chart. `None` uses the units and precision.
+    /// Text already formatted by the chart, retained as supplied. `None` uses the units and
+    /// precision.
     pub formatted: Option<String>,
     /// Study title.
     pub study: String,
@@ -1114,9 +1115,15 @@ mod tests {
         let bar = Bar::new(time, 1000.0, 2300.0, 900.0, 2234.5, 1.0);
         let instrument = Instrument::new("SAMPLE").with_tick_size(0.01);
         let scale = crate::scales::TimeFormatterBuilder::new().build();
-        for (separator, expected) in [
-            (Some(','), "+1,234.50 (+123.45%)"),
-            (None, "+1234.50 (+123.45%)"),
+        for (separator, formatted, expected, study) in [
+            (Some(','), None, "+1,234.50 (+123.45%)", "42,569.16"),
+            (None, None, "+1234.50 (+123.45%)", "42569.16"),
+            (
+                Some(','),
+                Some("host 42569.16"),
+                "+1,234.50 (+123.45%)",
+                "host 42569.16",
+            ),
         ] {
             let ctx = egui::Context::default();
             let output = ctx.run_ui(Default::default(), |ui| {
@@ -1131,7 +1138,15 @@ mod tests {
                     egui::Color32::GREEN,
                     &scale,
                     3600,
-                    &[],
+                    &[StudyValue {
+                        formatted: formatted.map(str::to_owned),
+                        study: "MA".into(),
+                        plot: String::new(),
+                        value: Some(42_569.16),
+                        precision: 2,
+                        format: crate::scales::StudyFormat::Price,
+                        color: egui::Color32::RED,
+                    }],
                     Some(&instrument),
                     ValueFormatters {
                         thousands_sep: separator,
@@ -1149,6 +1164,7 @@ mod tests {
                 .collect();
             output.drop_without_applying_deltas();
             assert!(texts.iter().any(|text| text == expected), "{texts:?}");
+            assert!(texts.iter().any(|text| text == study), "{texts:?}");
         }
     }
 

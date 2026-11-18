@@ -388,7 +388,7 @@ impl DrawingManager {
         {
             self.render_drawing(drawing, painter, price_rect, view);
             if drawing.tool_type == DrawingToolType::Rect {
-                drawing.render_rect_guides(painter, view.price_formatter);
+                drawing.render_rect_guides(painter, view.price_formatter, view.thousands_sep);
                 self.render_handles(painter, drawing);
             }
         }
@@ -404,7 +404,7 @@ impl DrawingManager {
             d.selectable && self.selection.is_selected(d.id) && self.owns_pane(d) && self.shows(d)
         }) {
             if drawing.tool_type == DrawingToolType::Rect {
-                drawing.render_rect_guides(painter, view.price_formatter);
+                drawing.render_rect_guides(painter, view.price_formatter, view.thousands_sep);
             }
             self.render_handles(painter, drawing);
         }
@@ -569,6 +569,7 @@ mod tests {
                             pane,
                             &ChartView {
                                 price_formatter: None,
+                                thousands_sep: None,
                                 time_formatter: None,
                                 bar_seconds: 0,
                                 instrument: None,
@@ -733,6 +734,7 @@ mod tests {
                 ctx.run_ui(RawInput::default(), |ui| {
                     let view = ChartView {
                         price_formatter: None,
+                        thousands_sep: None,
                         time_formatter: None,
                         bar_seconds: 0,
                         instrument: None,
@@ -822,6 +824,7 @@ mod tests {
                 ctx.set_transform_layer(ui.layer_id(), layer);
                 let view = ChartView {
                     price_formatter: None,
+                    thousands_sep: None,
                     time_formatter: None,
                     bar_seconds: 0,
                     instrument: None,

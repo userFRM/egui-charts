@@ -50,6 +50,7 @@ impl Chart {
                 price_formatter: price_member
                     .and_then(|id| self.series_price_formatter(id))
                     .as_deref(),
+                thousands_sep: self.drawing_thousands_sep(price_member),
                 time_formatter: None,
                 bar_seconds: 0,
                 instrument: price_member.and(self.instrument()),
@@ -81,6 +82,14 @@ impl Chart {
                 .iter()
                 .any(|item| item.id == *id && item.visible)
         })
+    }
+
+    /// Groups built-in drawing prices beside a price series, as its axis does. Study-only
+    /// panes keep their own units; a decimal point or digit cannot separate built-in prices.
+    fn drawing_thousands_sep(&self, price_member: Option<super::SeriesId>) -> Option<char> {
+        price_member
+            .and(self.config.thousands_sep)
+            .filter(|separator| *separator != '.' && !separator.is_ascii_digit())
     }
 
     /// The interval drawings measure on time-based charts with a time axis.
@@ -487,6 +496,7 @@ impl Chart {
         // Render existing drawings against the chart's bars
         let view = ChartView {
             price_formatter: price_formatter.as_deref(),
+            thousands_sep: self.drawing_thousands_sep(price_member),
             time_formatter: self.horizontal_scale.is_none().then_some(time_format.0),
             bar_seconds: time_format.1,
             instrument: price_member.and(self.instrument()),
@@ -600,7 +610,9 @@ mod tests {
         }
     }
 
-    /// Drawings use raw prices from their pane's series, including changes and level labels.
+    /// Drawings use raw prices from their pane's series, including changes and level labels;
+    /// without a formatter they group thousands as the axis does, and a formatter's text is never
+    /// grouped.
     #[test]
     fn drawings_write_prices_with_the_formatter_of_their_series() {
         use crate::drawings::FibonacciConfig;
@@ -614,19 +626,23 @@ mod tests {
             })) as Arc<dyn crate::scales::PriceFormatter>)
         };
         let ctx = Context::default();
-        let mut chart = chart(&[90.0], &[110.0]);
+        let mut chart = chart(&[90_000.0], &[110_000.0]);
         use DrawingToolType::*;
         for (id, (tool, anchors)) in [
-            (Measure, vec![(30.0, 100.0), (40.0, 95.0)]),
-            (Forecast, vec![(30.0, 100.0), (40.0, 105.0)]),
+            (Measure, vec![(30.0, 100_000.0), (40.0, 95_000.0)]),
+            (Forecast, vec![(30.0, 100_000.0), (40.0, 105_000.0)]),
             (
                 ProjectionTool,
-                vec![(30.0, 100.0), (40.0, 104.0), (50.0, 101.0)],
+                vec![(30.0, 100_000.0), (40.0, 104_000.0), (50.0, 101_000.0)],
             ),
-            (LongPos, vec![(30.0, 100.0), (40.0, 106.0)]),
-            (FibonacciRetracement, vec![(30.0, 90.0), (40.0, 110.0)]),
-            (Rect, vec![(30.0, 92.0), (40.0, 108.0)]),
-            (PriceLabel, vec![(30.0, 102.0)]),
+            (LongPos, vec![(30.0, 100_000.0), (40.0, 106_000.0)]),
+            (
+                FibonacciRetracement,
+                vec![(30.0, 90_000.0), (40.0, 110_000.0)],
+            ),
+            (Rect, vec![(30.0, 92_000.0), (40.0, 108_000.0)]),
+            (PriceLabel, vec![(30.0, 102_000.0)]),
+            (GannSquare, vec![(30.0, 90_000.0), (40.0, 110_000.0)]),
         ]
         .into_iter()
         .enumerate()
@@ -657,23 +673,38 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let mut failures = Vec::new();
-        if !texts(&mut chart, 0.0).iter().any(|text| text == "102.00") {
-            failures.push("built-in price label".to_owned());
+        let built_in = texts(&mut chart, 0.0);
+        // Hand values in thousands: 95-100=-5, 105-100=5, |104-100|=4, 101+4=105,
+        // target 106 and mirrored stop 94, midpoint 100, height 16 at 16/92*100 percent.
+        for expected in [
+            "-5,000.00 (-5.00%)",
+            "+5,000.00 (+5.00%)",
+            "4,000.00 (4.0%)",
+            "Target: 105,000.00",
+            "Target: 6,000.00 (6.000%)",
+            "Stop: 6,000.00 (6.000%)",
+            "(100,000.00)",
+            "16,000.00 (17.39%)",
+            "102,000.00",
+            "20,000.00\n10 bars\n2000.0000/bar",
+        ] {
+            if !built_in.iter().any(|text| text.contains(expected)) {
+                failures.push(format!("missing built-in {expected}"));
+            }
         }
         chart.set_price_formatter(marked(" pts"));
         let formatted = texts(&mut chart, 0.1);
-        // Hand values: 95-100=-5, 105-100=5, |104-100|=4, 101+4=105,
-        // target 106 and mirrored stop 94, midpoint 100, height 16 at 16/92*100 percent.
         for expected in [
-            "-5.0 pts (-5.00%)",
-            "+5.0 pts (+5.00%)",
-            "4.0 pts (4.0%)",
-            "Target: 105.0 pts",
-            "Target: 6.0 pts (6.000%)",
-            "Stop: 6.0 pts (6.000%)",
-            "(100.0 pts)",
-            "16.0 pts (17.39%)",
-            "102.0 pts",
+            "-5000.0 pts (-5.00%)",
+            "+5000.0 pts (+5.00%)",
+            "4000.0 pts (4.0%)",
+            "Target: 105000.0 pts",
+            "Target: 6000.0 pts (6.000%)",
+            "Stop: 6000.0 pts (6.000%)",
+            "(100000.0 pts)",
+            "16000.0 pts (17.39%)",
+            "102000.0 pts",
+            "20000.0 pts\n10 bars\n2000.0000/bar",
         ] {
             if !formatted.iter().any(|text| text.contains(expected)) {
                 failures.push(format!("missing {expected}"));
@@ -681,8 +712,8 @@ mod tests {
         }
         assert!(chart.set_series_formatter(SeriesId::MAIN, marked(" main")));
         let formatted = texts(&mut chart, 0.2);
-        if !formatted.iter().any(|text| text == "102.0 main")
-            || formatted.iter().any(|text| text == "102.0 pts")
+        if !formatted.iter().any(|text| text == "102000.0 main")
+            || formatted.iter().any(|text| text == "102000.0 pts")
         {
             failures.push("main series formatter overrides chart formatter".to_owned());
         }
@@ -691,13 +722,13 @@ mod tests {
         let pane = chart.add_pane();
         assert!(chart.move_series_to_pane(series, pane));
         assert!(chart.set_series_formatter(series, marked(" alt")));
-        let mut drawing = Drawing::new(7, PriceLabel);
-        drawing.chart_points = vec![ChartPoint::new(30.0, 102.0)];
+        let mut drawing = Drawing::new(8, PriceLabel);
+        drawing.chart_points = vec![ChartPoint::new(30.0, 102_000.0)];
         drawing.completed = true;
         drawing.pane = Some(series.0);
         chart.drawings_mut().drawings.push(drawing);
         let formatted = texts(&mut chart, 0.3);
-        for expected in ["102.0 main", "102.0 alt"] {
+        for expected in ["102000.0 main", "102000.0 alt"] {
             if !formatted.iter().any(|text| text == expected) {
                 failures.push(format!("missing {expected}"));
             }
@@ -705,10 +736,10 @@ mod tests {
         // A host may supply its own sign or put a currency before a negative number.
         chart.set_series_formatter(SeriesId::MAIN, None);
         for (prefix, change, expected) in [
-            (false, 5.0, "+5.0 pts (+5.00%)"),
-            (false, -5.0, "-5.0 pts (-5.00%)"),
-            (true, 5.0, "+USD 5.0 (+5.00%)"),
-            (true, -5.0, "USD -5.0 (-5.00%)"),
+            (false, 5_000.0, "+5000.0 pts (+5.00%)"),
+            (false, -5_000.0, "-5000.0 pts (-5.00%)"),
+            (true, 5_000.0, "+USD 5000.0 (+5.00%)"),
+            (true, -5_000.0, "USD -5000.0 (-5.00%)"),
         ] {
             chart.set_price_formatter(Some(Arc::new(CustomPriceFormatter::new(move |price| {
                 if prefix {
@@ -718,7 +749,7 @@ mod tests {
                 }
             }))));
             for drawing in &mut chart.drawings_mut().drawings[..2] {
-                drawing.chart_points[1].price = 100.0 + change;
+                drawing.chart_points[1].price = 100_000.0 + change;
             }
             let formatted = texts(&mut chart, 0.4);
             assert_eq!(

@@ -314,14 +314,13 @@ pub struct ChartConfig {
     #[serde(default)]
     pub axis_font_family: egui::FontFamily,
     /// Character that groups the thousands of the built-in price labels: the ticks and tags of
-    /// price scales, the crosshair label, the legend's and the data window's prices, and the
-    /// hover tooltip's prices, change and rows of studies in price units write `42,541.77` with
-    /// the default `','`. `None` writes plain digits (`42541.77`), and so do `'.'` and the ASCII
-    /// digits, since built-in labels always write `'.'` as the decimal point. Labels written by a
+    /// price scales, the crosshair label, the legend's and the data window's prices, the hover
+    /// tooltip's prices, change and study rows in price units, and drawing prices and price
+    /// changes in panes with a price series write `42,541.77` with the default `','`. `None`
+    /// writes plain digits (`42541.77`), and so do `'.'` and the ASCII digits, since built-in
+    /// labels always write `'.'` as the decimal point. Labels written by a
     /// host formatter ([`Chart::set_price_formatter`](crate::Chart::set_price_formatter)) are
-    /// never grouped; study panes and volumes keep their own formats, and drawings group the
-    /// prices they print only under a series
-    /// [display format](crate::model::SeriesStyle::display_format). Layouts saved without this
+    /// never grouped; study panes and volumes keep their own formats. Layouts saved without this
     /// field restore with the default.
     /// Default: `Some(',')`
     #[serde(default = "group_thousands_with_comma")]

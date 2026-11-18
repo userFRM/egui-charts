@@ -158,9 +158,21 @@ impl Chart {
                 policy == CursorDataPolicy::IncludeHidden || study.plot_style(*line).visible
             }) {
                 let row = StudyValue {
-                    formatted: study
-                        .plot_value(line, index)
-                        .map(|value| study.format_plot_value(line, value)),
+                    formatted: study.plot_value(line, index).map(|value| {
+                        let text = study.format_plot_value(line, value);
+                        if study.value_format() == crate::scales::StudyFormat::Price
+                            && self.study_formatter(id, study.value_format()).is_none()
+                        {
+                            crate::scales::group_thousands(
+                                text,
+                                self.config.thousands_sep.filter(|separator| {
+                                    *separator != '.' && !separator.is_ascii_digit()
+                                }),
+                            )
+                        } else {
+                            text
+                        }
+                    }),
                     study: study.name().to_owned(),
                     format: study.value_format(),
                     plot: names.get(line).cloned().unwrap_or_default(),

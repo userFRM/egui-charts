@@ -47,8 +47,16 @@ pub struct ChartView<'a> {
     /// The host's raw-price formatter for the series the drawings belong to, from
     /// [`Chart::set_series_formatter`](crate::Chart::set_series_formatter) or else
     /// [`Chart::set_price_formatter`](crate::Chart::set_price_formatter). Drawing prices and
-    /// price changes use its `format`; `None` keeps their built-in decimals.
+    /// price changes use its `format`; `None` keeps their built-in decimals, grouped by
+    /// [`thousands_sep`](Self::thousands_sep).
     pub price_formatter: Option<&'a dyn crate::scales::PriceFormatter>,
+    /// Character that groups the thousands of prices and price changes drawn without
+    /// `price_formatter`, as [`ChartConfig::thousands_sep`](crate::config::ChartConfig::thousands_sep)
+    /// groups the chart's price labels: `Some(',')` writes `42,500.50`, `None` plain digits.
+    /// Formatter text is never grouped. The chart sets this in panes with a price series,
+    /// leaving it `None` in study-only panes and for `'.'` or an ASCII digit, since built-in
+    /// prices use `'.'` as the decimal point.
+    pub thousands_sep: Option<char>,
     /// The chart's time formatter, which writes times in its display time zone with its
     /// locale, date format, clock visibility and the host's
     /// [`TimeFormatter`](crate::scales::TimeFormatter). Drawings write the dates they print with
@@ -96,7 +104,7 @@ pub struct ChartView<'a> {
     /// flow.push(&Tick::new(time, 100.0, 2.0, None))?;
     /// let bars = [Bar::new(time, 100.0, 100.0, 100.0, 100.0, 2.0)];
     /// let view = ChartView {
-    ///     price_formatter: None, time_formatter: None, instrument: None, bar_seconds: 60,
+    ///     price_formatter: None, thousands_sep: None, time_formatter: None, instrument: None, bar_seconds: 60,
     ///     bars: &bars, revision: 0, bar_to_x: &|x| x, bar_spacing: 1.0,
     ///     price_to_y: &|price| price as f32, y_to_price: &f64::from, time_axis: true,
     ///     executions: Some((&flow).into()), timeframe: Some(Timeframe::Min1), finer: &[],
@@ -937,6 +945,7 @@ mod tests {
                 let output = ctx.run_ui(RawInput::default(), |ui| {
                     let view = ChartView {
                         price_formatter: None,
+                        thousands_sep: None,
                         time_formatter: None,
                         bar_seconds: 0,
                         instrument: None,
@@ -1624,6 +1633,7 @@ mod tests {
         let output = ctx.run_ui(RawInput::default(), |ui| {
             let view = ChartView {
                 price_formatter: None,
+                thousands_sep: None,
                 time_formatter: None,
                 bar_seconds: 0,
                 instrument: None,
@@ -1966,6 +1976,7 @@ mod tests {
         let output = ctx.run_ui(RawInput::default(), |ui| {
             let view = ChartView {
                 price_formatter: None,
+                thousands_sep: None,
                 time_formatter: None,
                 bar_seconds: 0,
                 instrument: None,

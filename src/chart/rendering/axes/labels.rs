@@ -610,10 +610,11 @@ mod tests {
             (crate::theme::Theme::dark(), 320.0),
         ] {
             // Without a display format (`None`), the chart writes the same text.
-            for (kind, separator, host, close, change) in [
+            for (kind, separator, host, _study_host, close, change) in [
                 (
                     Some(SeriesFormat::Price),
                     Some(','),
+                    false,
                     false,
                     "1,234,568.14",
                     "+0.25",
@@ -622,12 +623,14 @@ mod tests {
                     Some(SeriesFormat::Price),
                     Some(' '),
                     false,
+                    false,
                     "1 234 568.14",
                     "+0.25",
                 ),
                 (
                     Some(SeriesFormat::Price),
                     None,
+                    false,
                     false,
                     "1234568.14",
                     "+0.25",
@@ -636,6 +639,7 @@ mod tests {
                     Some(SeriesFormat::Percentage),
                     Some(','),
                     false,
+                    false,
                     "1,234,568.14%",
                     "+0.25%",
                 ),
@@ -643,11 +647,16 @@ mod tests {
                     Some(SeriesFormat::Price),
                     Some(','),
                     true,
+                    false,
                     "host 1234568.14",
                     "host 0.25",
                 ),
-                (None, Some(','), false, "1,234,568.14", "+0.25"),
-                (None, None, false, "1234568.14", "+0.25"),
+                (None, Some(','), false, true, "1,234,568.14", "+0.25"),
+                (None, Some(','), false, false, "1,234,568.14", "+0.25"),
+                (None, Some(' '), false, false, "1 234 568.14", "+0.25"),
+                (None, Some('.'), false, false, "1234568.14", "+0.25"),
+                (None, Some('0'), false, false, "1234568.14", "+0.25"),
+                (None, None, false, false, "1234568.14", "+0.25"),
             ] {
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[1_234_500.0], &[1_234_567.89, 1_234_568.14]);
@@ -675,6 +684,26 @@ mod tests {
                 chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
                 chart.series_style_mut(id).unwrap().display_format =
                     chart.series_style(SeriesId::MAIN).unwrap().display_format;
+                #[cfg(feature = "studies")]
+                {
+                    let study = chart.add_indicator(Box::new(crate::studies::SMA::new(3)));
+                    if _study_host {
+                        assert!(chart.set_indicator_formatter(
+                            study,
+                            Some(Arc::new(CustomPriceFormatter::new(|value| {
+                                format!("study {value:.2}")
+                            }))),
+                        ));
+                    }
+                }
+                #[cfg(feature = "drawings")]
+                {
+                    use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+                    let mut drawing = Drawing::new(1, DrawingToolType::PriceLabel);
+                    drawing.chart_points = vec![ChartPoint::new(95.0, 1_234_500.0)];
+                    drawing.completed = true;
+                    chart.drawings_mut().drawings.push(drawing);
+                }
                 frame(&ctx, &mut chart, 0.0, vec![]);
                 let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
                 let texts: Vec<_> = painted
@@ -709,6 +738,15 @@ mod tests {
                 }
                 chart.chart_options.tooltip.on_long_press = false;
                 let plot = chart.get_rendered_price_rect();
+                // A price label at the low, 1,234,500.00, reads as the close does.
+                #[cfg(feature = "drawings")]
+                assert!(
+                    painted.iter().any(|shape| matches!(shape,
+                        egui::Shape::Text(text) if text.galley.text() == close.replace("568.14", "500.00")
+                            && text.pos.x < plot.right()
+                    )),
+                    "price label drawing {kind:?} {separator:?}"
+                );
                 let pointer =
                     egui::Pos2::new(chart.get_chart_mapping().idx_to_x(99), plot.center().y);
                 let hovered = shapes(
@@ -724,6 +762,21 @@ mod tests {
                             && text.pos.y > plot.top() + 50.0
                     )),
                     "tooltip close {kind:?} {separator:?}"
+                );
+                // The last three closes average to 1,234,568.0566..., written with two decimals.
+                #[cfg(feature = "studies")]
+                assert!(
+                    hovered.iter().any(|shape| matches!(shape,
+                        egui::Shape::Text(text) if text.galley.text() == if _study_host {
+                            "study 1234568.06".to_owned()
+                        } else {
+                            close.trim_end_matches('%').replace("568.14", "568.06")
+                        }
+                            && text.pos.x < plot.right()
+                            && text.pos.y > plot.top() + 50.0
+                    )),
+                    "tooltip study {kind:?} {separator:?} host {host}, study host {_study_host}: {:?}",
+                    chart.study_values_at(99)
                 );
                 assert!(
                 hovered.iter().any(|shape| matches!(shape,

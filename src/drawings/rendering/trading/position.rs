@@ -5,6 +5,7 @@ use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::drawings::rendering::{ChartView, bars_between};
 use crate::localization as l10n;
 use crate::model::{Bar, percent_change};
+use crate::scales::group_thousands;
 use crate::styles::{stroke, typography};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -192,7 +193,7 @@ impl Drawing {
             Some((exit_price, closed, _)) => {
                 let change = side * (exit_price - entry_price);
                 let change_text = view.price_formatter.map_or_else(
-                    || format!("{change:.2}"),
+                    || group_thousands(format!("{change:.2}"), view.thousands_sep),
                     |formatter| formatter.format(change),
                 );
                 let risk_reward = (target_price - entry_price) / (entry_price - stop_price);
@@ -241,7 +242,7 @@ impl Drawing {
         let level_text = |price: f64, target: bool| {
             let change = (price - entry_price).abs();
             let points = view.price_formatter.map_or_else(
-                || format!("{change:.2}"),
+                || group_thousands(format!("{change:.2}"), view.thousands_sep),
                 |formatter| formatter.format(change),
             );
             let figures = format!("{points} ({:.3}%)", pct(price).abs());
