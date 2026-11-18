@@ -247,12 +247,16 @@ impl SettingsDialog {
                         "precision_mode",
                         DESIGN_TOKENS.sizing.settings_dialog.dropdown_width,
                         theme.ui.text,
-                        dialog.settings.precision.name(),
+                        &dialog.settings.precision.name(),
                         |ui| {
-                            for pm in PrecisionMode::all() {
+                            // A precision the list lacks keeps its own row while the chart holds
+                            // it, so that it can be chosen again.
+                            let held = Some(dialog.opened_precision)
+                                .filter(|mode| matches!(mode, PrecisionMode::Other(_)));
+                            for pm in PrecisionMode::all().iter().copied().chain(held) {
                                 ui.selectable_value(
                                     &mut dialog.settings.precision,
-                                    *pm,
+                                    pm,
                                     l10n::text(ui.ctx(), pm.name()),
                                 );
                             }

@@ -287,6 +287,15 @@ pub trait Indicator: Send {
         self.plot_style(line).visible
     }
 
+    /// Whether output `line` is a readout that the legend lists and the chart never draws, such
+    /// as a ratio far from the prices it would share a scale with. Its visibility in the style
+    /// tab, which starts from [`plot_style`](Self::plot_style), then shows or hides the readout
+    /// together with [`legend_visible`](Self::legend_visible). False by default.
+    fn readout_only(&self, line: usize) -> bool {
+        let _ = line;
+        false
+    }
+
     /// The output lines the legend lists, in the order it lists them: all of them in plot order
     /// by default. A study whose leading reading is not its first output lists that one first.
     fn legend_lines(&self) -> Vec<usize> {

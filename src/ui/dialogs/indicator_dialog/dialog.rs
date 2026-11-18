@@ -2290,7 +2290,9 @@ mod options_profile_tests {
         assert_eq!(study.volume_profiles(0..3)[0].profile.up(), [20.0]);
         assert_eq!(study.plot_value(0, 0), Some(0.5));
         study.set_input("measure", InputValue::Choice(1)).unwrap();
-        study.set_input("sides", InputValue::Choice(1)).unwrap();
+        study
+            .set_input("interest_sides", InputValue::Choice(1))
+            .unwrap();
         assert_eq!(study.plot_value(0, 0), Some(0.6));
         for (expiry, calls, puts) in [(0, 10.0, 6.0), (2, 30.0, 20.0), (4, 130.0, 106.0)] {
             study
