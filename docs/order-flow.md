@@ -157,10 +157,9 @@ the chart's bullish and bearish colours through the middle of each side's best r
 per row each line is on the best price itself. Each tile of a column draws as one quad; on a
 logarithmic scale a tile is halved into a few quads where the scale bends by more than half a point
 across it, which keeps every row within a point of its price at about the cost of a linear scale.
-Expired history
-releases texture slots. No tile side exceeds the backend limit. The current book appears as a size
-profile at the right of the pane; a key and the row's exact price, side and size appear while the
-pointer is over it.
+Expired history releases texture slots. No tile side exceeds the backend limit. The current book
+appears as a size profile at the right of the pane; a key and the row's exact price, side and size
+appear while the pointer is over it.
 
 [`set_volume_bubbles(Some(Default::default()))`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_volume_bubbles) overlays executed volume using the same feed's
 trades. Disabling the heatmap releases its textures and retains configured depth history.
@@ -232,11 +231,10 @@ chart.set_liquidity_heatmap(true);
 
 The heatmap shows a new column for every 50 ms period in which the host sent an update, so the
 visible cadence is that of the feed, up to 20 columns a second. `cargo bench --bench heatmap`
-measures it: 360 depth deltas a second (six per frame at 60 frames a second), each changing 8
-levels near the touch, into a book of
-1,000 levels a side, in a 1440 by 900 window showing the last three one-minute bars, on an Intel
-Core i7-10700KF (16 threads, release build, one run per case of 60 s of market time on
-18 November 2026):
+measures it: 360 depth deltas a second (six per frame at 60 frames a second), each changing 8 levels
+near the touch, into a book of 1,000 levels a side, in a 1440 by 900 window showing the last three
+one-minute bars, on an Intel Core i7-10700KF (16 threads, release build, one run per case of 60 s of
+market time on 18 November 2026):
 
 | Scenario | Sink per delta | Frame p50 / p95 / max | Texture upload | Textures | Heap retained |
 |---|---:|---:|---:|---:|---:|
@@ -257,11 +255,11 @@ The sink time is the aggregation of a delta into the live book and, once per per
 into a depth column. A frame includes layout, painting, applying the update and tessellation;
 the chart draws about 1,000 columns of 2,000 rows in those frames. On the logarithmic scale it draws
 the same quads, one per tile of 256 rows, since the scale bends by far less than half a point across
-a tile at these prices. The upload of one frame is at
-most 74 KB once the history is full, and the first frame that draws a loaded history uploads all
-of it (2.4 MB here). A filled history holds 1,687 columns covering 50 minutes, bounded by
-`columns * 8 * rows * 2 * 16` bytes, 61 MB for this configuration. A history of individual orders
-also records each row's largest order: 24 bytes a row instead of 16.
+a tile at these prices. The upload of one frame is at most 74 KB once the history is full, and the
+first frame that draws a loaded history uploads all of it (2.4 MB here). A filled history holds
+1,687 columns covering 50 minutes, bounded by `columns * 8 * rows * 2 * 16` bytes, 61 MB for this
+configuration. A history of individual orders also records each row's largest order: 24 bytes a row
+instead of 16.
 
 The supported budget is this configuration on a machine of that class: a frame under 5 ms and
 under 60 MB of heap for 1,000 levels at 50 ms. The library degrades by dropping resolution, never
