@@ -532,8 +532,9 @@ impl Chart {
             replaced.extend(self.series().map(|(id, _)| id));
         }
         let show_volume = self.config.show_volume;
+        // The snapshot replaces drawings below, or leaves the chart's drawings to storage.
         for id in replaced {
-            self.remove_series(id);
+            self.remove_series_keeping_drawings(id);
         }
         self.config.show_volume = show_volume;
         self.restored_studies.clear();
@@ -1102,6 +1103,31 @@ mod tests {
     use crate::model::{Bar, BarData, Marker, PriceLine};
     use crate::studies::{MACD, RSI, SMA};
     use chrono::{TimeZone, Utc};
+
+    /// Restoring a layout that leaves its drawings to storage keeps the chart's drawings, also
+    /// the one in the pane of a study it replaces, and asks storage to delete none.
+    #[test]
+    fn restore_without_drawings_deletes_no_drawing() {
+        use crate::drawings::manager::DrawingSyncAction;
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        let rsi = chart.add_indicator(Box::new(RSI::new(14)));
+        let mut line = Drawing::new(0, DrawingToolType::HorizontalLine);
+        line.chart_points = vec![ChartPoint::new(50.0, 70.0)];
+        line.pane = Some(rsi.0);
+        chart.drawings_mut().add_drawing(line).unwrap();
+        let mut snapshot = chart.snapshot().unwrap();
+        snapshot.drawings = None;
+        chart.drawings().pending_sync.lock().unwrap().clear();
+        chart.restore(&snapshot).unwrap();
+        assert_eq!(chart.drawings().drawings.len(), 1);
+        let queued = chart.drawings().pending_sync.lock().unwrap().clone();
+        assert!(
+            !queued
+                .iter()
+                .any(|action| matches!(action, DrawingSyncAction::Delete(_))),
+            "{queued:?}"
+        );
+    }
 
     /// A custom study, the study reading its output and an added series with its markers and
     /// price lines come back through the public API; a document that cannot be rebuilt leaves
