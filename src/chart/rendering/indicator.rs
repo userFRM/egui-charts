@@ -1832,23 +1832,13 @@ mod tests {
             }
         }
     }
-    /// A study that draws still paints its plots above its drawings: a chart pattern study marks
-    /// the bar confirming a double top with a triangle and its abbreviation in the Bearish colour
-    /// of its Style tab, draws the neckline in that colour beneath them, and both can be
-    /// selected.
     #[cfg(feature = "drawings")]
-    #[test]
-    fn chart_pattern_confirmations_are_painted_above_their_boundaries() {
-        use crate::chart::indicators::hit_test_indicator;
-        use crate::studies::{ChartPatterns, ConfiguredStudy, PatternFamily};
-        // Legs of five flat bars through 100, 120, 105, 119, 60: tops at bars 5 and 15 over
-        // the valley at 105 on bar 10; bar 18 closes at 83.6 once the second top is known.
-        let anchors = [100.0, 120.0, 105.0, 119.0, 60.0];
+    fn pattern_bars(anchors: &[f64]) -> Vec<Bar> {
         let mut closes = vec![anchors[0]];
         for pair in anchors.windows(2) {
             closes.extend((1..=5).map(|i| pair[0] + (pair[1] - pair[0]) * f64::from(i) / 5.0));
         }
-        let bars: Vec<Bar> = closes
+        closes
             .iter()
             .enumerate()
             .map(|(i, &c)| {
@@ -1861,7 +1851,21 @@ mod tests {
                     1.0,
                 )
             })
-            .collect();
+            .collect()
+    }
+
+    /// A study that draws still paints its plots above its drawings: a chart pattern study marks
+    /// the bar confirming a double top with a triangle and its abbreviation in the Bearish colour
+    /// of its Style tab, draws the neckline in that colour beneath them, and both can be
+    /// selected.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn chart_pattern_confirmations_are_painted_above_their_boundaries() {
+        use crate::chart::indicators::hit_test_indicator;
+        use crate::studies::{ChartPatterns, ConfiguredStudy, PatternFamily};
+        // Legs of five flat bars through 100, 120, 105, 119, 60: tops at bars 5 and 15 over
+        // the valley at 105 on bar 10; bar 18 closes at 83.6 once the second top is known.
+        let bars = pattern_bars(&[100.0, 120.0, 105.0, 119.0, 60.0]);
         let bearish = Color32::from_rgb(200, 0, 120);
         let mut study = ConfiguredStudy::new(Box::new(ChartPatterns::new(PatternFamily::Reversal)));
         let mut settings = study.settings();
@@ -1914,19 +1918,147 @@ mod tests {
         );
         let on_neckline = Pos2::new(coords.idx_to_x(8), price.price_to_y(105.0));
         assert!(hit_test_indicator(on_neckline, &study, 0, 0..21, &coords, to_y).is_some());
+    }
 
-        // Independent boundaries remain visible, selectable and scaled with both plots hidden.
-        let mut settings = study.settings();
-        for plot in &mut settings.plots {
-            plot.visible = false;
-        }
-        study.apply_settings(&[], settings).unwrap();
-        assert!(hit_test_indicator(on_neckline, &study, 0, 0..21, &coords, to_y).is_some());
-        assert!(hit_test_indicator(at, &study, 0, 0..21, &coords, to_y).is_none());
-        assert_eq!(
-            crate::studies::plots::drawing_prices(&study, 0..21).collect::<Vec<_>>(),
-            [105.0, 105.0]
+    /// Boundaries follow their direction or developing plot in paint, selection and autoscale.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn chart_pattern_boundaries_take_the_styles_of_their_plots() {
+        use crate::chart::indicators::hit_test_indicator;
+        use crate::studies::{ChartPatterns, ConfiguredStudy, PatternFamily};
+        let bullish = Color32::from_rgb(0, 160, 80);
+        let bearish = Color32::from_rgb(200, 0, 120);
+        let developing = Color32::from_rgb(230, 150, 0);
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 300.0));
+        let price = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(50.0, 130.0),
+            0.0,
+            300.0,
+            false,
         );
+        let coords = ChartMapping::new(rect, 15.0, 0, 20, 0.0, price);
+        let y = price.price_to_y(105.0);
+        // Tops at bars 5 and 15, valley at 105 on bar 10. The second top is known on
+        // bar 18, closing at 119 + (60 - 119) * 3 / 5 = 83.6, below the neckline.
+        // Ending at 112 instead keeps every close after the second top above 105.
+        for (anchors, plot, end, width, color, dashed) in [
+            (
+                [100.0, 120.0, 105.0, 119.0, 60.0],
+                1,
+                18,
+                1.0,
+                bearish,
+                false,
+            ),
+            (
+                [100.0, 120.0, 105.0, 119.0, 112.0],
+                2,
+                20,
+                2.0,
+                developing,
+                true,
+            ),
+        ] {
+            let bars = pattern_bars(&anchors);
+            let mut study =
+                ConfiguredStudy::new(Box::new(ChartPatterns::new(PatternFamily::Reversal)));
+            let mut settings = study.settings();
+            for (plot, color) in settings
+                .plots
+                .iter_mut()
+                .zip([bullish, bearish, developing])
+            {
+                plot.color = color;
+            }
+            settings.plots[2].width = 2.0;
+            study.apply_settings(&[], settings.clone()).unwrap();
+            study.calculate(&bars);
+            let paint = |study: &dyn Indicator| {
+                let output = Context::default().run_ui(RawInput::default(), |ui| {
+                    IndicatorRenderer::render_study(
+                        &RenderContext::new(ui.painter(), rect),
+                        study,
+                        &bars,
+                        0,
+                        &price,
+                        &coords,
+                    );
+                });
+                fn collect(shape: &Shape, y: f32, segments: &mut Vec<([Pos2; 2], Stroke)>) {
+                    match shape {
+                        Shape::Vec(shapes) => {
+                            for shape in shapes {
+                                collect(shape, y, segments);
+                            }
+                        }
+                        Shape::LineSegment { points, stroke }
+                            if points.iter().all(|p| (p.y - y).abs() < 0.01) =>
+                        {
+                            segments.push((*points, *stroke));
+                        }
+                        _ => {}
+                    }
+                }
+                let mut segments = Vec::new();
+                for shape in &output.shapes {
+                    collect(&shape.shape, y, &mut segments);
+                }
+                output.drop_without_applying_deltas();
+                segments
+            };
+            let segments = paint(&study);
+            assert!(!segments.is_empty(), "plot {plot}");
+            assert!(
+                segments
+                    .iter()
+                    .all(|(_, stroke)| *stroke == Stroke::new(width, color))
+            );
+            assert!((segments[0].0[0].x - coords.index_to_x(5.0)).abs() < 0.01);
+            if dashed {
+                assert!(segments.len() > 1);
+                assert!(
+                    segments
+                        .iter()
+                        .all(|(points, _)| points[0].distance(points[1]) <= 8.01)
+                );
+            } else {
+                assert_eq!(segments.len(), 1);
+                assert!((segments[0].0[1].x - coords.index_to_x(f64::from(end))).abs() < 0.01);
+            }
+            for (hidden, drawn) in [(0, true), (plot, false)] {
+                let mut hidden_settings = settings.clone();
+                hidden_settings.plots[hidden].visible = false;
+                study.apply_settings(&[], hidden_settings).unwrap();
+                assert_eq!(
+                    !paint(&study).is_empty(),
+                    drawn,
+                    "plot {plot}, hidden {hidden}"
+                );
+                assert_eq!(
+                    crate::studies::plots::drawing_prices(&study, 0..21).collect::<Vec<_>>(),
+                    if drawn {
+                        vec![105.0, 105.0]
+                    } else {
+                        Vec::new()
+                    },
+                    "plot {plot}, hidden {hidden}",
+                );
+                assert_eq!(
+                    hit_test_indicator(
+                        Pos2::new(coords.idx_to_x(8), y),
+                        &study,
+                        0,
+                        0..21,
+                        &coords,
+                        |p| price.price_to_y(p)
+                    )
+                    .is_some(),
+                    drawn,
+                    "plot {plot}, hidden {hidden}",
+                );
+            }
+        }
     }
 
     /// A fit of prices 2, 4, 6 continues by two per bar on every price scale.
