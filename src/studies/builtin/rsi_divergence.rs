@@ -445,15 +445,16 @@ impl Indicator for RsiDivergence {
     }
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
-        use crate::studies::PlotType::{Line, TriangleDown, TriangleUp};
+        use crate::studies::PlotType::{Line, LineWithBreaks, TriangleDown, TriangleUp};
         // A table like the colours: a `match` on the line crashed the optimiser of the compiler
-        // the performance job pins once inlined into `settings`.
+        // the performance job pins once inlined into `settings`. Each divergence is a segment
+        // between two pivots, missing elsewhere.
         let plot_types = [
             Line,
-            Line,
-            Line,
-            Line,
-            Line,
+            LineWithBreaks,
+            LineWithBreaks,
+            LineWithBreaks,
+            LineWithBreaks,
             TriangleUp,
             TriangleUp,
             TriangleDown,

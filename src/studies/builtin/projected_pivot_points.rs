@@ -212,6 +212,18 @@ impl Indicator for ProjectedPivotPoints {
         self.pivots.colors()
     }
 
+    fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
+        crate::studies::PlotStyle {
+            color: self.colors().get(line).copied().unwrap_or(Color32::WHITE),
+            width: self.line_style(line).width,
+            pattern: crate::model::LineStyle::Solid,
+            // A level's change at a new period is not drawn, so the line breaks at a gap rather
+            // than join two levels.
+            plot_type: crate::studies::PlotType::LineWithBreaks,
+            visible: true,
+        }
+    }
+
     fn set_colors(&mut self, colors: Vec<Color32>) {
         self.pivots.set_colors(colors);
     }

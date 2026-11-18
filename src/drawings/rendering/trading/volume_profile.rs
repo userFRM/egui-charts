@@ -488,9 +488,9 @@ fn anchored_vwap<'a>(
     })
 }
 
-/// Draws a line of an anchored VWAP at `points` as `plot` in `stroke`, the line and step line
-/// in `style`, the plots that start from price zero from `zero`, at bars `pitch` apart. The area
-/// fills in the stroke's colour, as a study's area does.
+/// Draws a line of an anchored VWAP at `points` as `plot` in `stroke`, the line, step line and
+/// area line in `style`, the plots that start from price zero from `zero`, at bars `pitch` apart.
+/// An area is its line over a fill of its colour at 20% of its opacity, as a study's area is.
 fn paint_vwap_line(
     painter: &egui::Painter,
     points: Vec<Pos2>,
@@ -547,7 +547,9 @@ fn paint_vwap_line(
         }
         VwapPlotType::Area => {
             let base: Vec<_> = points.iter().map(|p| Pos2::new(p.x, zero)).collect();
-            super::super::fibonacci::paint_band(painter, &points, &base, color);
+            let fill = color.gamma_multiply(0.2);
+            super::super::fibonacci::paint_band(painter, &points, &base, fill);
+            path(points);
         }
         VwapPlotType::Circles => {
             for point in points {
@@ -904,6 +906,25 @@ mod tests {
             })
             .collect();
         assert_eq!(columns, [(110.0, 100.0), (120.0, 90.0), (130.0, 90.0)]);
+        // Area: the VWAP's line over a fill of its colour at 20% of its opacity down to zero.
+        let shapes = edited(|c| c.plot_type = crate::drawings::VwapPlotType::Area);
+        assert_eq!(strokes(&shapes), [green, green, blue]);
+        let Shape::Mesh(area) = &shapes[3] else {
+            panic!("area fill")
+        };
+        assert!(
+            area.vertices
+                .iter()
+                .all(|v| v.color == Color32::from_rgba_premultiplied(8, 20, 51, 51))
+        );
+        assert_eq!(
+            area.vertices
+                .iter()
+                .step_by(2)
+                .map(|v| v.pos)
+                .collect::<Vec<_>>(),
+            [(110.0, 100.0), (120.0, 90.0), (130.0, 90.0)].map(|(x, y)| Pos2::new(x, y))
+        );
         // Fill off: no mesh under the band.
         let shapes = edited(|c| c.band_fill.visible = false);
         assert_eq!(strokes(&shapes), [green, green, blue]);
