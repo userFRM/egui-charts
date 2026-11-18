@@ -546,6 +546,24 @@ impl Chart {
         }
     }
 
+    /// Deletes the drawings in `ids` as one undo step, keeping the locked ones, and reports how
+    /// many it kept with [`ChartEvent::LockedDrawingsKept`](super::ChartEvent::LockedDrawingsKept),
+    /// as [`Self::delete_selected_drawings`] does for the selection.
+    #[cfg(feature = "ui")]
+    pub(crate) fn delete_drawings_keeping_locked(&mut self, ids: &[usize]) {
+        let kept = self
+            .drawings
+            .drawings
+            .iter()
+            .filter(|d| d.locked && ids.contains(&d.id))
+            .count();
+        self.drawings.delete_drawings(ids);
+        if kept > 0 {
+            self.host_events
+                .push(super::ChartEvent::LockedDrawingsKept(kept));
+        }
+    }
+
     /// Adds a horizontal line at `price` in the pane under `pos`, the pane holding the main series
     /// when no other pane is there, with the tool's default style, and selects it. Returns its
     /// id, or `None` for a price that is not finite or a disabled tool.
