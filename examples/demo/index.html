@@ -82,6 +82,8 @@
             if (failed) message.textContent = root.dataset.demoError || 'The chart could not start. Please retry.';
         };
         const failStartup = text => {
+            // Keep the cause when the loader reports a consequential error.
+            if (root.dataset.demoState === 'error') return;
             root.dataset.demoError = text;
             root.dataset.demoState = 'error';
             updateStartup();
@@ -89,7 +91,8 @@
         new MutationObserver(updateStartup).observe(root, { attributes: true, attributeFilter: ['data-demo-state'] });
         window.addEventListener('error', event => {
             const asset = event.target;
-            if (asset !== window && ['SCRIPT', 'LINK'].includes(asset.tagName)) {
+            // main() marks the point at which the downloaded module starts running.
+            if (!root.dataset.demoState || (asset !== window && ['SCRIPT', 'LINK'].includes(asset.tagName))) {
                 failStartup('A chart asset could not load. Check your connection and retry.');
             } else if (event.error) {
                 failStartup('The chart stopped: ' + event.message);

@@ -28,7 +28,8 @@ impl DemoApp {
             return;
         }
         let applied = self.user_action(|app| {
-            app.chart.apply_chosen_study_template_set(template)?;
+            app.chart
+                .apply_chosen_study_template_set_with(template, app.indicator_dialog.factory())?;
             let captions: Vec<_> = app
                 .chart
                 .indicators()

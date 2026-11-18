@@ -49,6 +49,7 @@ mod strategy;
 mod study;
 mod time_scale_event;
 mod timeframe;
+mod timeframe_visibility;
 mod timescale;
 mod timezone;
 pub mod tpo;
@@ -130,6 +131,7 @@ pub use strategy::{
 pub use study::{InputValue, StudySource};
 pub use time_scale_event::{EventKind, EventVisibility, TimeScaleEvent};
 pub use timeframe::{Timeframe, TimeframeUnit};
+pub use timeframe_visibility::TimeframeVisibility;
 pub use timescale::{LogicalRange, NumericPositions, TimeScale};
 pub use timezone::{TimezoneId, TimezoneOffset};
 pub(crate) use timezone::{local_instant, local_time};
