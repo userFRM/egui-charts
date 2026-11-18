@@ -686,7 +686,8 @@ fn crosshair_skips_ineligible_indices_without_removing_data() {
 }
 
 /// An update starts one last price pulse, loading does not, and a continuous pulse always
-/// runs; the crosshair marker sits on the line at the hovered bar's close.
+/// runs; the crosshair marker sits on the line at the hovered bar's close. Both take the line's
+/// colour at their bar, also on a gradient line.
 #[test]
 fn line_pulse_and_crosshair_marker_follow_their_bars() {
     use crate::model::{ChartType, LastPriceAnimation};
@@ -733,6 +734,38 @@ fn line_pulse_and_crosshair_marker_follow_their_bars() {
         ),
         vec![Pos2::new(map.idx_to_x(70), map.price_to_y(110.0))]
     );
+    // On a gradient line the marker takes the colour of the segment starting at the hovered
+    // bar, between the start and end colours, and the pulse at the newest bar the end colour.
+    let (start, end) = (Color32::from_rgb(0, 0, 200), Color32::from_rgb(250, 0, 0));
+    let mut gradient = chart.chart_type_params().clone();
+    gradient.styles.line_gradient = true;
+    gradient.styles.line_gradient_start = start;
+    gradient.styles.line_gradient_end = end;
+    chart.set_chart_type_params(gradient);
+    let painted = shapes(&ctx, &mut chart, 5.15, vec![Event::PointerMoved(hover)]);
+    let at_70 = Pos2::new(map.idx_to_x(70), map.price_to_y(110.0));
+    let segment = painted
+        .iter()
+        .find_map(|shape| match shape {
+            Shape::Path(path) if path.points[0].distance(at_70) < 0.5 => match path.stroke.color {
+                egui::epaint::ColorMode::Solid(color) => Some(color),
+                egui::epaint::ColorMode::UV(_) => None,
+            },
+            _ => None,
+        })
+        .unwrap();
+    assert!(segment != start && segment != end, "{segment:?}");
+    let fills = |radius: f32| {
+        painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Circle(dot) if dot.radius == radius => Some(dot.fill),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(fills(5.0).contains(&segment), "{:?}", fills(5.0));
+    assert!(fills(3.0).contains(&end), "{:?}", fills(3.0));
     // Trailing whitespace leaves the pulse on the last valued bar; both dots use that
     // bar's own colour, and a hovered empty slot has no dot. Vary the hover height to
     // stay outside the price-action button beside the last bars.
