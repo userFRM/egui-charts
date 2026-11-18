@@ -1319,6 +1319,7 @@ mod tests {
             mode,
             charts: Vec::new(),
             sizing: None,
+            link_groups: None,
         };
         let document = |mode| layout(mode).to_json().unwrap();
         let stored = |host: &Revised, name: &str| {
