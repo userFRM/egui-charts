@@ -2676,11 +2676,11 @@ mod tests {
     /// 10:00:01 one at a time into a store of 100, 2 or 1: it kept them all, lost the 09:59:57
     /// bar, or lost the 10:00:00 buy too, which leaves no bar to rebuild along. The buys of :02
     /// to :06 wait in a queue of 100, of 3, which drops those of :02 and :03, or of zero, which
-    /// drops them all; in the last row the host pushes a bar at :03 before the :03 buy, which
-    /// restarts the stream's grouping. A volume and delta source and a footprint source connected
-    /// then, and given the buys of :07 to :09, hold three buys in each chart bar from the oldest
-    /// whose executions they all hold, and one at :09; after a lost or regrouped queue only the
-    /// :09 bar.
+    /// drops them all; in the last row the host pushes a bar at :02 after the :02 buy, which
+    /// restarts the stream's grouping without making a queued buy late. A volume and delta
+    /// source and a footprint source connected then, and given the buys of :07 to :09, hold
+    /// three buys in each chart bar from the oldest whose executions they all hold, and one at
+    /// :09; after a lost or regrouped queue only the :09 bar.
     #[cfg(feature = "widget")]
     #[test]
     fn sources_connected_while_executions_wait_hold_the_charts_bars() {
@@ -2694,7 +2694,7 @@ mod tests {
             (100, 100, false, &[-3, 0, 3, 6]),
             (2, 100, false, &[0, 3, 6]),
             (1, 100, false, &[3, 6]),
-            (1, 3, false, &[]),
+            (100, 3, false, &[]),
             (1, 0, false, &[]),
             (1, 100, true, &[]),
         ];
@@ -2720,7 +2720,7 @@ mod tests {
             }
             for second in 2..=6 {
                 if pushed && second == 3 {
-                    let bar = crate::model::Bar::new(at(3), 100.0, 100.0, 100.0, 100.0, 3.0);
+                    let bar = crate::model::Bar::new(at(2), 100.0, 100.0, 100.0, 100.0, 3.0);
                     sink.push_bar(bar);
                 }
                 sink.push_tick(buy(second));
