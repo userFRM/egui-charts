@@ -42,3 +42,30 @@ test('resolve guide and API members as browser links and reject missing pages or
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('report a code span naming an API member only when its page has no link to that member', () => {
+  const root = mkdtempSync(join(tmpdir(), 'guide-members-'));
+  try {
+    const chart = 'api/egui_charts/widget/struct.Chart.html';
+    mkdirSync(dirname(join(root, chart)), { recursive: true });
+    writeFileSync(join(root, chart), '<h2 id="method.bars">Bars</h2><span id="structfield.name"></span>');
+    const link = `<a href="/egui-charts/docs/${chart}#method.bars">bars</a>`;
+    for (const [page, html, errors] of [
+      ['guide/index.html', '<code>Chart::bars</code>', 1],
+      ['guide/index.html', `<code>Chart::bars</code> ${link}`, 0],
+      ['guide/index.html', `<a href="/egui-charts/docs/${chart}">Chart</a> <code>Chart::bars</code>`, 1],
+      ['guide/index.html', '<code>widget::Chart::bars(&amp;self)</code> <code>Chart::name</code>', 2],
+      ['guide/index.html', '<pre><code>Chart::bars</code></pre>', 0],
+      ['guide/index.html', '<code>Chart::missing</code> <code>Color32::PLACEHOLDER</code> <code>Chart</code>', 0],
+      ['release-notes/index.html', '<code>Chart::bars</code>', 0],
+    ]) {
+      mkdirSync(dirname(join(root, page)), { recursive: true });
+      writeFileSync(join(root, page), html);
+      const result = checkLinks(root);
+      assert.equal(result.errors.length, errors, `${page}: ${html}: ${result.errors.join('\n')}`);
+      rmSync(join(root, page));
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

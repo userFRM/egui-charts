@@ -1602,7 +1602,9 @@ mod tests {
         };
 
         let before = chrono::Utc::now().timestamp_millis();
-        manager.edit_drawing(id, |d| d.color = [1, 2, 3, 255]);
+        manager
+            .edit_drawing(id, |d| d.color = [1, 2, 3, 255])
+            .unwrap();
         let edited = drawing(&manager).modified_at;
         assert!(
             edited.is_some_and(|time| time >= before),
@@ -1616,7 +1618,7 @@ mod tests {
         let saved = drawing_to_stored(&drawing(&manager), bar_to_time);
         assert_eq!(Some(saved.modified_at), edited);
 
-        manager.edit_drawing(id, |d| d.stroke_width = 3.0);
+        manager.edit_drawing(id, |d| d.stroke_width = 3.0).unwrap();
         assert!(manager.undo());
         let undone = drawing(&manager);
         assert_eq!(
