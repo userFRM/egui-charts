@@ -263,7 +263,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] The floating selection toolbar follows the selected drawing, keeping clear of its label, popup or readout card, and performs its settings, duplicate, lock, visibility, delete and colour actions in the terminal and demo.
 - [ ] Handle the series context menu's Copy price action in the demo; `Terminal` already copies the clicked price.
 - [x] Alt+Shift+R selects the rectangle tool and Alt+Enter maximises or restores the selected chart of a grid. Interval entry and go-to-date shortcuts run in `Terminal`.
-- [x] Main-symbol legend controls hide or show the series, open its settings and remove it. A host that hides the settings control leaves the settings button out of the legend and the price axis corner, and out of keyboard focus.
+- [x] Main-symbol legend controls hide or show the series, open its settings and remove it. Hovered titles show only whole buttons that fit before the end of the legend’s first row, clear of link group markers; rows too narrow for the flag show no controls. A host that hides the settings control leaves the settings button out of the legend and the price axis corner, and out of keyboard focus.
 - [ ] Offer and restore order-flow entries in `Terminal` only for symbols whose feed declares their data, across the chart type menu, indicator browser, order flow settings, time and sales panel and saved layouts.
 - [ ] Offer the analysis depth panel in `Terminal`.
 - [x] Watchlists duplicate lists, filter flags, add symbols from the chart menu and open an advanced view in the terminal. The host supplies its earnings, dividends and headlines.
