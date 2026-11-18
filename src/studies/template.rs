@@ -204,6 +204,15 @@ impl StudyTemplate {
             .into_iter()
             .chain(template.inputs.iter().cloned())
             .collect();
+        // Keep a host's presentation wrapper when it can retain the factory key too.
+        let mut study = if study.has_settings()
+            && (study.registered_name() == registered || study.set_registered_name(registered))
+        {
+            study
+        } else {
+            Box::new(ConfiguredStudy::new(study))
+        };
+        study.set_registered_name(registered);
         // A study's own Source input once kept another study's output that never reached its
         // calculation, which read the input's default instead. An output the study now refuses
         // there, or in `source` while it runs on other bars, keeps that default.
@@ -214,7 +223,7 @@ impl StudyTemplate {
             )
         };
         if inputs.iter().any(|(_, value)| output(value)) {
-            let mut probe = ConfiguredStudy::new(study.clone_box());
+            let mut probe = study.clone_box();
             for (id, value) in &inputs {
                 if matches!(id.as_str(), "calculation_symbol" | "calculation_timeframe") {
                     let _ = probe.set_input(id, value.clone());
@@ -240,15 +249,6 @@ impl StudyTemplate {
         } else {
             &template.settings
         };
-        // Keep a host's presentation wrapper when it can retain the factory key too.
-        let mut study = if study.has_settings()
-            && (study.registered_name() == registered || study.set_registered_name(registered))
-        {
-            study
-        } else {
-            Box::new(ConfiguredStudy::new(study))
-        };
-        study.set_registered_name(registered);
         study.apply_settings(&inputs, settings.clone())?;
         study.set_visible(template.visible);
         if let Some(scale) = template.scale {
