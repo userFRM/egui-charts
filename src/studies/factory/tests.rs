@@ -420,3 +420,175 @@ fn channel_studies_open_with_their_usual_inputs_and_fill_their_bands() {
         assert_eq!(fills, bands, "{name}");
     }
 }
+
+/// Studies that colour each bar by its state offer every state's colour in the Style tab,
+/// draw each bar in its state's colour through an edit and a template, and restore settings
+/// saved before those states had colours of their own with the colours they drew.
+#[test]
+fn per_bar_states_offer_the_colours_they_draw() {
+    use crate::studies::{ConfiguredStudy, StudyTemplate, palette};
+    use egui::Color32;
+
+    // A parabola sweeps the EMA angle through every Chop Zone band, slowly enough that each
+    // band holds bars; the swings after it give every impulse, trend and acceleration state.
+    let bars: Vec<Bar> = (0..900)
+        .map(|i| {
+            let x = i as f64;
+            let c = if i < 600 {
+                100.0 + 5e-5 * (x - 300.0).powi(2)
+            } else {
+                104.5 + 10.0 * ((x - 600.0) / 9.0).sin()
+            };
+            let time = Utc.timestamp_opt(i * 3600, 0).unwrap();
+            Bar::new(time, c - 0.5, c + 1.0, c - 1.0, c, 1000.0)
+        })
+        .collect();
+    let drawn = |study: &dyn Indicator| -> Vec<Color32> {
+        (0..bars.len())
+            .filter(|&bar| study.plot_value(0, bar).is_some())
+            .map(|bar| {
+                study
+                    .plot_color(0, bar)
+                    .unwrap_or(study.plot_style(0).color)
+            })
+            .collect()
+    };
+    // Name, plot colour, the other states in the Style tab, the plot colour saved before they
+    // existed, and whether such a save drew every bar in it.
+    type Row = (
+        &'static str,
+        Color32,
+        Vec<(&'static str, Color32)>,
+        Color32,
+        bool,
+    );
+    let rows: [Row; 4] = [
+        (
+            "Accelerator Oscillator",
+            palette::GREEN,
+            vec![("Decreasing bars", palette::RED)],
+            Color32::from_rgb(0, 0, 128),
+            false,
+        ),
+        (
+            "Chop Zone",
+            palette::CYAN,
+            vec![
+                ("Rising 3.57° to 5°", palette::DARK_GREEN),
+                ("Rising 2.14° to 3.57°", palette::LIGHT_GREEN),
+                ("Rising 0.71° to 2.14°", palette::DEEP_TEAL),
+                ("Flat, under 0.71°", palette::YELLOW),
+                ("Falling 0.71° to 2.14°", palette::LIGHT_ORANGE),
+                ("Falling 2.14° to 3.57°", palette::ORANGE),
+                ("Falling 3.57° to 5°", palette::PINK),
+                ("Falling 5° or more", palette::DEEP_RED),
+            ],
+            palette::CYAN,
+            false,
+        ),
+        (
+            "Impulse",
+            palette::GREEN,
+            vec![("Bearish", palette::RED), ("Neutral", palette::BLUE)],
+            palette::GREEN,
+            true,
+        ),
+        (
+            "Volatility Stop",
+            palette::DEEP_TEAL,
+            vec![("Downtrend", palette::BRIGHT_RED)],
+            palette::DEEP_TEAL,
+            false,
+        ),
+    ];
+    let factory = IndicatorFactory::new();
+    for (name, plot, states, saved, one_colour) in rows {
+        let mut study = ConfiguredStudy::new(factory.create(name).unwrap());
+        study.calculate(&bars);
+        let settings = study.settings();
+        assert_eq!(settings.plots[0].color, plot, "{name}");
+        let offered: Vec<_> = settings.plot_variants[0]
+            .iter()
+            .map(|variant| (variant.name.as_str(), variant.color))
+            .collect();
+        assert_eq!(offered, states, "{name}");
+        // Every state is drawn, and nothing else.
+        let colours: Vec<Color32> = std::iter::once(plot)
+            .chain(states.iter().map(|&(_, colour)| colour))
+            .collect();
+        let before = drawn(&study);
+        let seen: std::collections::HashSet<_> = before.iter().copied().collect();
+        let expected: std::collections::HashSet<_> = colours.iter().copied().collect();
+        assert_eq!(seen, expected, "{name}");
+
+        // Each control recolours exactly the bars of its own state.
+        let opening = study.snapshot_settings();
+        // Choosing navy now is an explicit edit, so a new save must keep it.
+        let new = |state: usize| {
+            if state == 0 {
+                Color32::from_rgb(0, 0, 128)
+            } else {
+                Color32::from_rgb(1, 2, 3 + state as u8)
+            }
+        };
+        let mut edited = study.settings();
+        edited.plots[0].color = new(0);
+        for (index, variant) in edited.plot_variants[0].iter_mut().enumerate() {
+            variant.color = new(index + 1);
+        }
+        study.apply_settings(&[], edited).unwrap();
+        study.calculate(&bars);
+        let recoloured: Vec<_> = before
+            .iter()
+            .map(|colour| new(colours.iter().position(|c| c == colour).unwrap()))
+            .collect();
+        assert_eq!(drawn(&study), recoloured, "{name}");
+        let mut restored = StudyTemplate::from_study(&study).create().unwrap();
+        restored.calculate(&bars);
+        assert_eq!(drawn(restored.as_ref()), recoloured, "{name} template");
+        let changed = study.snapshot_settings();
+        study.restore_settings(&opening).unwrap();
+        study.calculate(&bars);
+        assert_eq!(drawn(&study), before, "{name} cancel or undo");
+        study.restore_settings(&changed).unwrap();
+        study.calculate(&bars);
+        assert_eq!(drawn(&study), recoloured, "{name} redo");
+
+        // Older saves either omitted the variants or wrote an empty list, with default or
+        // edited plot styles. Both keep the colours and widths they drew.
+        for (variants, saved) in [Vec::new(), vec![Vec::new()]]
+            .into_iter()
+            .flat_map(|variants| [saved, Color32::BLACK].map(|saved| (variants.clone(), saved)))
+        {
+            let mut old =
+                StudyTemplate::from_study(&ConfiguredStudy::new(factory.create(name).unwrap()));
+            old.settings.plots[0].color = saved;
+            old.settings.plots[0].width = 3.5;
+            old.settings.plot_variants = variants;
+            let mut restored = old.create().unwrap();
+            restored.calculate(&bars);
+            let expected = if one_colour {
+                vec![saved; before.len()]
+            } else {
+                before
+                    .iter()
+                    .map(|&colour| {
+                        if colour == plot && saved != Color32::from_rgb(0, 0, 128) {
+                            saved
+                        } else {
+                            colour
+                        }
+                    })
+                    .collect()
+            };
+            assert_eq!(drawn(restored.as_ref()), expected, "{name} saved before");
+            assert_eq!(restored.plot_style(0).width, 3.5, "{name} saved width");
+            assert!(
+                restored
+                    .plot_variants(0)
+                    .iter()
+                    .all(|variant| variant.width == 3.5)
+            );
+        }
+    }
+}
