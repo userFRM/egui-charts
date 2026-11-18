@@ -433,6 +433,11 @@ jobs:
     name: Test (headless Chrome, ${{ matrix.features }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # Debug info makes the all-features test module about 840 MB, and preparing it for the browser then takes about
+      # 16 GB, all of the machine's memory: the machine stalls past every timeout and the job loses its log. The tests
+      # never read debug info, and panics still report their source line without it.
+      CARGO_PROFILE_DEV_DEBUG: 0
     strategy:
       fail-fast: false
       matrix:
@@ -475,30 +480,24 @@ jobs:
         shell: bash
         run: |
           mkdir -p target/browser-tests
-          : > target/browser-tests/chromedriver.log
           # Match the driver's script deadline to the runner instead of its 30-second default.
           printf '%s\n' '{"timeouts":{"script":120000}}' > target/browser-tests/webdriver.json
-          set +e
+          status=0
           timeout --verbose --kill-after=10s 240s \
             wasm-pack test --headless --chrome --lib \
             ${{ matrix.features == 'all' && '--all-features' || '--no-default-features --features widget' }} \
-            -- --nocapture > target/browser-tests/output.log 2>&1
-          status=$?
-          set -e
-          {
-            echo "Browser test exit status: $status"
-            ps -eo pid,ppid,stat,etime,comm --forest
-          } > target/browser-tests/processes.log
-          cat target/browser-tests/output.log target/browser-tests/processes.log
+            -- --nocapture > target/browser-tests/output.log 2>&1 || status=$?
+          cat target/browser-tests/output.log
+          # Show whether the driver or the browser outlived a failed or stopped run.
+          if [ "$status" -ne 0 ]; then ps -eo pid,ppid,stat,etime,comm --forest; fi
           exit "$status"
       - name: Keep browser test diagnostics
-        if: always() && needs.changes.outputs.rust == 'true'
+        if: failure() && needs.changes.outputs.rust == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: browser-tests-${{ matrix.features }}
           path: target/browser-tests/
           if-no-files-found: ignore
-          retention-days: 7
       - name: Build the network feed example for the browser
         if: needs.changes.outputs.rust == 'true' && matrix.features == 'widget'
         run: cargo clippy --target wasm32-unknown-unknown --no-default-features --features widget,http --example network_feed -- -D warnings
