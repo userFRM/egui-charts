@@ -17,10 +17,10 @@ use crate::widget::{Chart, SeriesId};
 use std::sync::Arc;
 
 impl Chart {
-    /// Whether a visible profile drawing reads the trades on this time-based chart.
+    /// Whether a visible profile drawing reads trades on this chart type and interval.
     #[cfg(feature = "drawings")]
-    fn profile_drawings(&self) -> bool {
-        self.drawing_timeframe().is_some()
+    fn profile_drawings(&self, chart_executions: bool) -> bool {
+        (chart_executions || self.drawing_timeframe().is_some())
             && self
                 .drawings
                 .drawings
@@ -29,7 +29,7 @@ impl Chart {
     }
 
     #[cfg(not(feature = "drawings"))]
-    fn profile_drawings(&self) -> bool {
+    fn profile_drawings(&self, _chart_executions: bool) -> bool {
         false
     }
 
@@ -42,10 +42,12 @@ impl Chart {
             .instrument()
             .and_then(|instrument| instrument.tick_size);
         self.state.price_scale_mut().set_tick_size(tick_size);
-        // Profile drawings read held trades on every chart type.
-        let executions = self.chart_type == ChartType::VolumeFootprint
-            || (self.chart_type == ChartType::SessionVolumeProfile && cfg!(feature = "studies"))
-            || (self.feed_link.is_some() && self.profile_drawings());
+        // Footprint chart types and their profile drawings read trades on every interval;
+        // time-based profile drawings read them on every chart type.
+        let chart_executions = self.chart_type == ChartType::VolumeFootprint
+            || (self.chart_type == ChartType::SessionVolumeProfile && cfg!(feature = "studies"));
+        let profile_drawings = self.feed_link.is_some() && self.profile_drawings(chart_executions);
+        let executions = chart_executions || profile_drawings;
         // Replay keeps the bars after its cutoff aside; paged trades are matched to all of them.
         let history = (self.replay.as_ref())
             .and_then(|replay| replay.bars.get(&SeriesId::MAIN))
@@ -65,11 +67,11 @@ impl Chart {
             };
         }
         // Candle replay can stop inside a bar while the feed holds later trades, so profile
-        // drawings sum only executions before its cutoff. A market replay's feed delivers none
-        // past its cursor, so they read the footprint it extends.
+        // drawings sum only executions before its cutoff wherever they read trades. A market
+        // replay's feed delivers none past its cursor, so they read the footprint it extends.
         let cutoff = (self.replay.as_ref())
             .map(|replay| replay.time)
-            .filter(|_| self.profile_drawings());
+            .filter(|_| profile_drawings);
         if let Some(link) = self
             .feed_link
             .as_mut()
@@ -165,6 +167,7 @@ impl Chart {
             link.retries
                 .retain(|(_, request, _)| !matches!(request, Request::Footprints(_)));
         }
+        let mut paged_tick_rates = false;
         for (key, answer) in drained.answers {
             let Some(at) = link
                 .pending
@@ -198,7 +201,10 @@ impl Chart {
                     request: asked,
                     scroll_back,
                 } => match result::<HistoryPage>(answer) {
-                    Ok(page) => self.apply_page(&mut link, &asked, page, scroll_back),
+                    Ok(page) => {
+                        paged_tick_rates |= !page.bars.is_empty();
+                        self.apply_page(&mut link, &asked, page, scroll_back);
+                    }
                     Err(error) => self.request_failed(&mut link, request, failures, error, now),
                 },
                 Request::Depth(request) => match result::<DepthPage>(answer) {
@@ -245,7 +251,10 @@ impl Chart {
                     Err(error) => self.request_failed(&mut link, request, failures, error, now),
                 },
                 Request::Trades(asked) => match result::<TradePage>(answer) {
-                    Ok(page) => self.apply_trades(&mut link, &asked, page, reset),
+                    Ok(page) => {
+                        paged_tick_rates = true;
+                        self.apply_trades(&mut link, &asked, page, reset);
+                    }
                     Err(error) if error.is_recoverable() => {
                         self.request_failed(&mut link, request, failures, error, now);
                     }
@@ -254,6 +263,11 @@ impl Chart {
                         link.trades_complete = true;
                     }
                 },
+            }
+        }
+        if paged_tick_rates && !reset {
+            for (input, _) in &link.study_inputs {
+                link.rebuild_paged_tick_rate(input, &self.state.data().bars);
             }
         }
 
