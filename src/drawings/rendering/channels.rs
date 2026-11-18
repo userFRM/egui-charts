@@ -316,7 +316,7 @@ impl Drawing {
                 config.line_style,
             );
         }
-        self.render_line_text(painter, fitted[0], fitted[1], true);
+        self.render_placed_line_text(painter, fitted[0], fitted[1]);
         config.show_correlation.then(|| {
             let places = usize::from(config.precision().unwrap_or(2));
             let text = fit.correlation.map_or_else(
