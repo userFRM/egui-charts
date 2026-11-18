@@ -62,6 +62,7 @@ struct Action {
     drawings_hidden: Option<bool>,
     event_visibility: Option<crate::model::EventVisibility>,
     options: Option<ChartOptions>,
+    date_format: Option<Option<String>>,
     order_flow: Option<FeedDisplay>,
     view: Option<(f32, f32)>,
     scale: Option<PriceScale>,
@@ -107,6 +108,7 @@ impl Action {
             && self.price_targets_visible.is_none()
             && self.event_visibility.is_none()
             && self.options.is_none()
+            && self.date_format.is_none()
             && self.order_flow.is_none()
             && self.scale.is_none()
             && self.series_scales.is_empty()
@@ -480,6 +482,7 @@ impl Chart {
                 drawings_hidden: Some(self.drawings.is_hidden()),
                 event_visibility: Some(self.event_visibility.clone()),
                 options: Some(self.chart_options.clone()),
+                date_format: Some(self.date_format.clone()),
                 order_flow: FeedDisplay::capture(self),
                 view: Some(self.get_time_scale_state()),
                 scale: Some(self.state.price_scale().clone()),
@@ -581,6 +584,9 @@ impl Chart {
         }
         if action.options.as_ref() == Some(&self.chart_options) {
             action.options = None;
+        }
+        if action.date_format.as_ref() == Some(&self.date_format) {
+            action.date_format = None;
         }
         if action.order_flow == FeedDisplay::capture(self) {
             action.order_flow = None;
@@ -1129,6 +1135,9 @@ impl Chart {
                 offset,
                 None,
             );
+        }
+        if let Some(date_format) = &mut action.date_format {
+            std::mem::swap(&mut self.date_format, date_format);
         }
         if let Some(view) = &mut action.view {
             self.apply_synced_time_scale(view.0, view.1);

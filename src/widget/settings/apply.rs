@@ -1,7 +1,7 @@
 //! Apply and read the chart settings exposed by the shared dialog.
 
 use super::{
-    BackgroundType, ButtonVisibility, ChartSettingsState, GridLinesMode, PrecisionMode,
+    BackgroundType, ButtonVisibility, ChartSettingsState, DateFormat, GridLinesMode, PrecisionMode,
     ThousandsSeparator, WatermarkMode,
 };
 use crate::{
@@ -337,6 +337,13 @@ impl ChartSettingsState {
         settings.scales_and_lines.invert_scale = scale.options().invert_scale;
 
         settings.set_timezone_mode(&chart.chart_options().time_scale.timezone);
+        let time_scale = &chart.chart_options().time_scale;
+        settings.scales_and_lines.use_24_hour = Some(time_scale.use_24_hour);
+        settings.scales_and_lines.weekday_names = Some(time_scale.weekday_names);
+        settings.scales_and_lines.date_format = Some(match &chart.date_format {
+            Some(pattern) => DateFormat::Pattern(pattern.clone()),
+            None => DateFormat::Default,
+        });
         settings.grid_lines.mode = match (
             config.show_grid && config.show_horizontal_grid,
             config.show_grid && config.show_vertical_grid,
@@ -502,6 +509,19 @@ impl ChartSettingsState {
         chart.set_event_visibility(self.events.clone());
         chart.set_price_targets_visible(self.show_price_targets);
         chart.chart_options.time_scale.timezone = timezone;
+        let scales = &self.scales_and_lines;
+        if let Some(use_24_hour) = scales.use_24_hour {
+            chart.chart_options.time_scale.use_24_hour = use_24_hour;
+        }
+        if let Some(weekday_names) = scales.weekday_names {
+            chart.chart_options.time_scale.weekday_names = weekday_names;
+        }
+        if let Some(date_format) = &scales.date_format {
+            chart.set_date_format(match date_format {
+                DateFormat::Default => None,
+                DateFormat::Pattern(pattern) => Some(pattern.clone()),
+            });
+        }
         if self.scales_appearance.lines_color != axis_line_color(chart.config()) {
             // A transparent line is no line; any other colour draws on the price axes and the time axis.
             let line = (self.scales_appearance.lines_color != Color32::TRANSPARENT)
@@ -2829,37 +2849,109 @@ mod tests {
         assert!(range.max - range.min < 0.0875, "{range:?}");
     }
 
-    /// The session breaks switch and the bar the last price line follows reach the chart, read
-    /// back and are undone. Settings saved before these, the axis font family and the thousands
-    /// separator could be chosen hold none of them and keep the chart's.
+    /// Optional label and display choices reach the chart, read back and are undone. Settings
+    /// saved before they could be chosen keep the chart's choices.
     #[test]
-    fn session_breaks_and_last_price_bar_apply_and_read_back() {
+    fn optional_choices_apply_read_back_and_survive_older_saves() {
         use crate::model::PriceLineSource::{LastBar, LastVisible};
+        use crate::scales::{
+            TickMarkType,
+            WeekdayNames::{Always, Never},
+        };
         use crate::widget::{SeriesId, test_frames::chart};
+        use chrono::TimeZone;
+        let time = chrono::Utc
+            .with_ymd_and_hms(2024, 3, 13, 14, 30, 0)
+            .unwrap();
         let read = |chart: &Chart| {
             let style = chart.series_style(SeriesId::MAIN).unwrap();
-            (chart.config().show_session_breaks, style.price_line_source)
+            let labels = chart.build_time_formatter();
+            (
+                chart.config().show_session_breaks,
+                style.price_line_source,
+                [
+                    labels.format_crosshair(time, 60),
+                    labels.format_crosshair(time, 86_400),
+                    labels.format(time, TickMarkType::Time),
+                ],
+            )
         };
         let mut chart = chart(&[100.0], &[110.0]);
         let new_chart = ChartSettingsState::from_chart(&chart);
-        for (breaks, source) in [(true, LastVisible), (false, LastBar)] {
+        let rows = [
+            (
+                true,
+                LastVisible,
+                DateFormat::Default,
+                false,
+                Never,
+                ["13 Mar '24 02:30 PM", "Mar 13, 2024", "02:30 PM"],
+            ),
+            (
+                false,
+                LastBar,
+                DateFormat::Default,
+                true,
+                Always,
+                ["Wed 13 Mar '24 14:30", "Wed Mar 13, 2024", "14:30"],
+            ),
+            (
+                false,
+                LastBar,
+                DateFormat::Pattern("%d.%m.%Y".into()),
+                true,
+                Always,
+                ["Wed 13.03.2024 14:30", "Wed 13.03.2024", "14:30"],
+            ),
+        ];
+        for (breaks, source, date_format, use_24_hour, weekday_names, labels) in &rows {
             let mut settings = ChartSettingsState::from_chart(&chart);
-            settings.show_session_breaks = Some(breaks);
-            settings.scales_and_lines.price_line_source = Some(source);
+            settings.show_session_breaks = Some(*breaks);
+            let scales = &mut settings.scales_and_lines;
+            scales.price_line_source = Some(*source);
+            scales.date_format = Some(date_format.clone());
+            scales.use_24_hour = Some(*use_24_hour);
+            scales.weekday_names = Some(*weekday_names);
             chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
-            assert_eq!(read(&chart), (breaks, source));
+            assert_eq!(read(&chart), (*breaks, *source, labels.map(String::from)));
             let settings = ChartSettingsState::from_chart(&chart);
+            let scales = &settings.scales_and_lines;
             assert_eq!(
                 (
                     settings.show_session_breaks,
-                    settings.scales_and_lines.price_line_source
+                    scales.price_line_source,
+                    scales.date_format.clone(),
+                    scales.use_24_hour,
+                    scales.weekday_names
                 ),
-                (Some(breaks), Some(source))
+                (
+                    Some(*breaks),
+                    Some(*source),
+                    Some(date_format.clone()),
+                    Some(*use_24_hour),
+                    Some(*weekday_names)
+                )
             );
         }
+        for row in [&rows[1], &rows[0]] {
+            assert!(chart.undo());
+            assert_eq!(read(&chart), (row.0, row.1, row.5.map(String::from)));
+        }
+        // A date-only action also redoes, then returns to the older-save setup.
+        assert!(chart.redo());
+        assert!(chart.redo());
+        assert_eq!(
+            read(&chart),
+            (rows[2].0, rows[2].1, rows[2].5.map(String::from))
+        );
         assert!(chart.undo());
-        assert_eq!(read(&chart), (true, LastVisible));
+        assert!(chart.undo());
 
+        chart.set_date_format(Some("%d.%m.%Y".into()));
+        let mut options = chart.chart_options().clone();
+        options.time_scale.use_24_hour = false;
+        options.time_scale.weekday_names = Always;
+        chart.set_chart_options(options);
         chart.config_mut().axis_font_family = egui::FontFamily::Monospace;
         chart.config_mut().thousands_sep = Some('_');
         let mut saved = serde_json::to_value(new_chart).unwrap();
@@ -2867,6 +2959,9 @@ mod tests {
             ("", "show_session_breaks"),
             ("/scales_and_lines", "price_line_source"),
             ("/scales_and_lines", "thousands_sep"),
+            ("/scales_and_lines", "date_format"),
+            ("/scales_and_lines", "use_24_hour"),
+            ("/scales_and_lines", "weekday_names"),
             ("/scales_appearance", "font_family"),
         ] {
             let group = saved.pointer_mut(group).unwrap().as_object_mut().unwrap();
@@ -2874,7 +2969,14 @@ mod tests {
         }
         let saved: ChartSettingsState = serde_json::from_value(saved).unwrap();
         saved.apply_to_chart(&mut chart).unwrap();
-        assert_eq!(read(&chart), (true, LastVisible));
+        assert_eq!(
+            read(&chart),
+            (
+                true,
+                LastVisible,
+                ["Wed 13.03.2024 02:30 PM", "Wed 13.03.2024", "02:30 PM"].map(String::from)
+            )
+        );
         assert_eq!(chart.config().axis_font_family, egui::FontFamily::Monospace);
         assert_eq!(chart.config().thousands_sep, Some('_'));
     }
