@@ -8,7 +8,7 @@ use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::localization as l10n;
 use crate::model::{Bar, percent_change};
 use crate::scales::price_decimals;
-use crate::scales::{DefaultPriceFormatter, PriceFormatter, VolumeFormatter};
+use crate::scales::{DefaultPriceFormatter, PriceFormatter, VolumeFormatter, group_thousands};
 use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -303,8 +303,15 @@ impl Drawing {
         };
         let settings = self.line_measurements;
         let change = b.price - a.price;
-        let price = (settings.price_change && change.is_finite())
-            .then(|| change_text(a.price, change, view.instrument, view.price_formatter));
+        let price = (settings.price_change && change.is_finite()).then(|| {
+            change_text(
+                a.price,
+                change,
+                view.instrument,
+                view.price_formatter,
+                view.thousands_sep,
+            )
+        });
         let percent = percent_change(a.price, b.price);
         let percent = (settings.percent_change && a.price != 0.0 && percent.is_finite())
             .then(|| format!("{percent:+.2}%"));
@@ -365,9 +372,10 @@ impl Drawing {
     // Note: render_bars_pattern is now in trading.rs with full projection features
 
     /// Label of the measuring tools: the price change from the first anchor to the second in
-    /// `price_formatter`'s text, else the instrument's price decimals (by magnitude without them),
-    /// its percentage and its whole number of pips, or else ticks, the bars between them and,
-    /// on a `time_axis`, the time they span, and the volume traded over them.
+    /// `price_formatter`'s text, else the instrument's price decimals (by magnitude without them)
+    /// with thousands grouped by `thousands_sep`, its percentage and its whole number of pips, or
+    /// else ticks, the bars between them and, on a `time_axis`, the time they span, and the volume
+    /// traded over them.
     /// Volume drops trailing zeros. Each anchor counts at its nearest bar: anchors N bars apart
     /// span N bars of time and the volume of the N + 1 bars from one to the other, both included.
     pub(crate) fn measurement_label(
@@ -377,6 +385,7 @@ impl Drawing {
         instrument: Option<&crate::model::Instrument>,
         time_axis: bool,
         price_formatter: Option<&dyn PriceFormatter>,
+        thousands_sep: Option<char>,
     ) -> Option<String> {
         let [a, b, ..] = &self.chart_points[..] else {
             return None;
@@ -385,7 +394,7 @@ impl Drawing {
         let pct = percent_change(a.price, b.price);
         let mut change = format!(
             "{} ({pct:+.2}%)",
-            change_text(a.price, change, instrument, price_formatter)
+            change_text(a.price, change, instrument, price_formatter, thousands_sep)
         );
         if let Some(text) = unit_change_text(ctx, b.price - a.price, instrument, true) {
             change.push_str(&format!("  {text}"));
@@ -434,6 +443,7 @@ impl Drawing {
         &self,
         ctx: &egui::Context,
         price_formatter: Option<&dyn PriceFormatter>,
+        thousands_sep: Option<char>,
     ) -> Vec<String> {
         let gap = |a: f64, b: f64| {
             let (low, gap) = (a.min(b), (a - b).abs());
@@ -442,7 +452,10 @@ impl Drawing {
                 Some(formatter) => format!("{} ({pct:.2}%)", formatter.format(gap)),
                 None => {
                     let decimals = price_decimals(low);
-                    format!("{gap:.decimals$} ({pct:.2}%)")
+                    format!(
+                        "{} ({pct:.2}%)",
+                        group_thousands(format!("{gap:.decimals$}"), thousands_sep)
+                    )
                 }
             }
         };
@@ -466,10 +479,14 @@ fn change_text(
     change: f64,
     instrument: Option<&crate::model::Instrument>,
     formatter: Option<&dyn PriceFormatter>,
+    thousands_sep: Option<char>,
 ) -> String {
     let built_in =
         DefaultPriceFormatter::with_precision(change_decimals(instrument, price, change));
-    let text = formatter.unwrap_or(&built_in).format(change);
+    let text = formatter.map_or_else(
+        || group_thousands(built_in.format(change), thousands_sep),
+        |formatter| formatter.format(change),
+    );
     let sign = if text.starts_with(['-', '+']) || (formatter.is_some() && change < 0.0) {
         ""
     } else {
@@ -555,6 +572,7 @@ impl Drawing {
                 view.instrument,
                 view.time_axis,
                 view.price_formatter,
+                view.thousands_sep,
             ),
             self.points.as_slice(),
         ) else {
@@ -777,7 +795,8 @@ mod tests {
             let mut drawing = Drawing::new(1, tool);
             drawing.chart_points = vec![ChartPoint::new(b1, p1), ChartPoint::new(b2, p2)];
             drawing.update_screen_coords(|bar| bar * 10.0, |price| 500.0 - price as f32);
-            let got = drawing.measurement_label(&egui::Context::default(), &bars, None, true, None);
+            let got =
+                drawing.measurement_label(&egui::Context::default(), &bars, None, true, None, None);
             if got.as_deref() != Some(want) {
                 wrong.push(format!("{tool:?}: got {got:?}, want {want:?}"));
             }
@@ -789,7 +808,7 @@ mod tests {
         drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(4.0, 95.0)];
         assert_eq!(
             drawing
-                .measurement_label(&marked, &bars, None, true, None)
+                .measurement_label(&marked, &bars, None, true, None, None)
                 .as_deref(),
             Some("-5.00 (-5.00%)\n~3~, 3h\n~900~")
         );
@@ -798,7 +817,7 @@ mod tests {
         // On a horizontal scale other than time the bar times are keys, not times.
         assert_eq!(
             drawing
-                .measurement_label(&egui::Context::default(), &bars, None, false, None)
+                .measurement_label(&egui::Context::default(), &bars, None, false, None, None)
                 .as_deref(),
             Some("-0.0005 (-0.05%)\n3 bars\nVol 900")
         );
@@ -845,6 +864,7 @@ mod tests {
                     Some(&instrument),
                     true,
                     None,
+                    None,
                 )
                 .unwrap();
             assert_eq!(
@@ -861,6 +881,7 @@ mod tests {
                 &bars,
                 Some(&instrument),
                 true,
+                None,
                 None,
             )
             .unwrap();
@@ -956,6 +977,7 @@ mod tests {
             let view = ChartView {
                 instrument: Some(&instrument),
                 price_formatter: None,
+                thousands_sep: None,
                 time_formatter: None,
                 bar_seconds: 3600,
                 bars: &bars,
@@ -1156,6 +1178,7 @@ mod tests {
         let view = ChartView {
             instrument: None,
             price_formatter: None,
+            thousands_sep: None,
             time_formatter: None,
             bar_seconds: 0,
             bars: &[],
@@ -1263,7 +1286,7 @@ mod tests {
         let mut drawing = Drawing::new(1, DrawingToolType::Rect);
         drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(20.0, 110.0)];
         assert_eq!(
-            drawing.size_labels(&egui::Context::default(), None),
+            drawing.size_labels(&egui::Context::default(), None, None),
             ["20 bars", "10.00 (10.00%)"]
         );
     }
@@ -1288,6 +1311,7 @@ mod tests {
             let output = egui::Context::default().run_ui(Default::default(), |ui| {
                 let view = ChartView {
                     price_formatter: None,
+                    thousands_sep: None,
                     time_formatter: None,
                     bar_seconds: 0,
                     instrument: None,
@@ -1382,6 +1406,7 @@ mod tests {
                 let view = ChartView {
                     instrument: Some(&instrument),
                     price_formatter: None,
+                    thousands_sep: None,
                     time_formatter: None,
                     bar_seconds: 0,
                     bars: &bars,
@@ -1538,6 +1563,7 @@ mod tests {
         let view = ChartView {
             instrument: None,
             price_formatter: None,
+            thousands_sep: None,
             time_formatter: None,
             bar_seconds: 0,
             bars: &[],
@@ -1590,6 +1616,7 @@ mod tests {
         let view = ChartView {
             instrument: None,
             price_formatter: None,
+            thousands_sep: None,
             time_formatter: None,
             bar_seconds: 0,
             bars: &bars,
@@ -1673,6 +1700,7 @@ mod tests {
                     let view = ChartView {
                         instrument: None,
                         price_formatter: None,
+                        thousands_sep: None,
                         time_formatter: None,
                         bar_seconds: 0,
                         bars: &bars,

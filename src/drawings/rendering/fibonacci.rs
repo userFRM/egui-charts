@@ -6,6 +6,7 @@
 use super::ChartView;
 use super::style::{Acceleration, ellipse_arc, ellipse_point, sample_curve, smooth_path};
 use crate::drawings::domain::{Drawing, DrawingToolType as Tool, FibonacciConfig, FibonacciLevel};
+use crate::scales::group_thousands;
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rangef, Rect, Stroke};
@@ -19,6 +20,7 @@ struct LevelLabelKey<'a> {
     price: Option<f64>,
     formatted_price: Option<&'a str>,
     precision: u8,
+    thousands_sep: Option<char>,
 }
 
 impl Hash for LevelLabelKey<'_> {
@@ -33,6 +35,7 @@ impl Hash for LevelLabelKey<'_> {
             self.price.map(f64::to_bits),
             self.formatted_price,
             self.precision,
+            self.thousands_sep,
         )
             .hash(state);
     }
@@ -48,8 +51,13 @@ impl egui::cache::ComputerMut<LevelLabelKey<'_>, String> for LevelLabelFormatter
             .price
             .filter(|_| key.formatted_price.is_none())
             .map(|price| {
-                crate::scales::DefaultPriceFormatter::with_precision(usize::from(key.precision))
-                    .format(price)
+                group_thousands(
+                    crate::scales::DefaultPriceFormatter::with_precision(usize::from(
+                        key.precision,
+                    ))
+                    .format(price),
+                    key.thousands_sep,
+                )
             });
         key.config
             .label_text(key.level, key.formatted_price.or(price.as_deref()))
@@ -72,6 +80,7 @@ fn level_galley(
         level,
         price,
         formatted_price: formatted_price.as_deref(),
+        thousands_sep: view.and_then(|view| view.thousands_sep),
         precision: view
             .and_then(|v| v.instrument)
             .and_then(crate::scales::instrument_price_precision)
@@ -1621,6 +1630,7 @@ mod tests {
                     drawing.update_screen_coords(|x| x + shift, |price| 600.0 - price as f32);
                     let view = ChartView {
                         price_formatter: None,
+                        thousands_sep: None,
                         time_formatter: None,
                         bar_seconds: 0,
                         instrument: None,
@@ -2544,6 +2554,7 @@ mod tests {
                         d.update_screen_coords(|x| x, y);
                         let view = ChartView {
                             price_formatter: None,
+                            thousands_sep: None,
                             time_formatter: None,
                             bar_seconds: 0,
                             instrument: None,
@@ -2748,6 +2759,7 @@ mod tests {
                 let view = ChartView {
                     price_formatter: custom
                         .then_some(&formatter as &dyn crate::scales::PriceFormatter),
+                    thousands_sep: None,
                     time_formatter: None,
                     bar_seconds: 0,
                     instrument: Some(&instrument),
@@ -2920,6 +2932,7 @@ mod tests {
             drawing.update_screen_coords(|b| b, y);
             let view = ChartView {
                 price_formatter: None,
+                thousands_sep: None,
                 time_formatter: None,
                 bar_seconds: 0,
                 instrument: None,
@@ -2981,6 +2994,7 @@ mod tests {
                 drawing.update_screen_coords(|x| x, |p| 600.0 - p as f32);
                 let view = ChartView {
                     price_formatter: None,
+                    thousands_sep: None,
                     time_formatter: None,
                     bar_seconds: 0,
                     instrument: None,
@@ -3374,6 +3388,7 @@ mod tests {
                     rect,
                     &ChartView {
                         price_formatter: None,
+                        thousands_sep: None,
                         time_formatter: None,
                         bar_seconds: 0,
                         instrument: None,

@@ -496,6 +496,7 @@ impl Drawing {
         &self,
         painter: &egui::Painter,
         price_formatter: Option<&dyn crate::scales::PriceFormatter>,
+        thousands_sep: Option<char>,
     ) {
         if self.points.len() < 2 {
             return;
@@ -528,9 +529,12 @@ impl Drawing {
         // Width in bars below, height in price on the right
         let height = rect.height();
         let width = rect.width();
-        let [width_label, height_label] =
-            <[String; 2]>::try_from(self.size_labels(painter.ctx(), price_formatter))
-                .unwrap_or_default();
+        let [width_label, height_label] = <[String; 2]>::try_from(self.size_labels(
+            painter.ctx(),
+            price_formatter,
+            thousands_sep,
+        ))
+        .unwrap_or_default();
         let chart = painter.ctx().active_theme().chart;
         let label_bg = chart.bg_axis;
 
@@ -923,6 +927,7 @@ mod tests {
             let output = Context::default().run_ui(RawInput::default(), |ui| {
                 let view = ChartView {
                     price_formatter: None,
+                    thousands_sep: None,
                     time_formatter: None,
                     bar_seconds: 0,
                     instrument: None,
@@ -1306,6 +1311,7 @@ mod tests {
                 let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
                     let view = ChartView {
                         price_formatter: None,
+                        thousands_sep: None,
                         time_formatter: None,
                         bar_seconds: 0,
                         instrument: None,
@@ -1411,7 +1417,7 @@ mod tests {
         for (_, theme) in presets() {
             apply_to_egui(&ctx, &theme);
             let output = ctx.run_ui(Default::default(), |ui| {
-                drawing.render_rect_guides(ui.painter(), None);
+                drawing.render_rect_guides(ui.painter(), None, None);
             });
             let labels: Vec<_> = output
                 .shapes
@@ -1658,6 +1664,7 @@ mod tests {
                     let output = egui::Context::default().run_ui(Default::default(), |ui| {
                         let view = ChartView {
                             price_formatter: None,
+                            thousands_sep: None,
                             time_formatter: None,
                             bar_seconds: 0,
                             instrument: None,
@@ -1726,6 +1733,7 @@ mod tests {
                 let output = egui::Context::default().run_ui(Default::default(), |ui| {
                     let view = ChartView {
                         price_formatter: None,
+                        thousands_sep: None,
                         time_formatter: None,
                         bar_seconds: 0,
                         instrument: None,
@@ -1785,6 +1793,7 @@ mod tests {
             let output = ctx.run_ui(Default::default(), |ui| {
                 let view = ChartView {
                     price_formatter: None,
+                    thousands_sep: None,
                     time_formatter: None,
                     bar_seconds: 0,
                     instrument: None,
@@ -1828,6 +1837,7 @@ mod tests {
             let view = ChartView {
                 instrument: None,
                 price_formatter: None,
+                thousands_sep: None,
                 time_formatter: None,
                 bar_seconds: 0,
                 bars: &[],

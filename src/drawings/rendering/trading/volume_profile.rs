@@ -1047,6 +1047,7 @@ mod tests {
         let view = ChartView {
             instrument: None,
             price_formatter: None,
+            thousands_sep: None,
             time_formatter: None,
             bar_seconds: 0,
             bars,
@@ -1208,6 +1209,7 @@ mod tests {
                     drawing.volume_profile = Some(config);
                     let view = ChartView {
                         price_formatter: None,
+                        thousands_sep: None,
                         time_formatter: None,
                         bar_seconds: 0,
                         instrument: None,
@@ -1380,6 +1382,7 @@ mod tests {
         let bar_to_x = |b: f32| 100.0 + 10.0 * b;
         let view = ChartView {
             price_formatter: None,
+            thousands_sep: None,
             time_formatter: None,
             bar_seconds: 0,
             instrument: None,
@@ -1531,6 +1534,7 @@ mod tests {
         let bar_to_x = |b: f32| 100.0 + 10.0 * b;
         let view = ChartView {
             price_formatter: None,
+            thousands_sep: None,
             time_formatter: None,
             bar_seconds: 0,
             instrument: None,
@@ -1684,6 +1688,7 @@ mod tests {
         let check = |bars: &[Bar], case: &str| {
             let view = ChartView {
                 price_formatter: None,
+                thousands_sep: None,
                 time_formatter: None,
                 bar_seconds: 0,
                 instrument: None,
@@ -1747,6 +1752,7 @@ mod tests {
         }
         let view = |executions| ChartView {
             price_formatter: None,
+            thousands_sep: None,
             time_formatter: None,
             bar_seconds: 0,
             instrument: None,
@@ -1910,6 +1916,7 @@ mod tests {
             }
             let view = ChartView {
                 price_formatter: None,
+                thousands_sep: None,
                 time_formatter: None,
                 bar_seconds: 0,
                 instrument: None,
@@ -2069,6 +2076,7 @@ mod tests {
             let view = ChartView {
                 instrument: Some(&instrument),
                 price_formatter: None,
+                thousands_sep: None,
                 time_formatter: None,
                 bar_seconds: 0,
                 bars: &daily,
