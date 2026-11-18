@@ -232,6 +232,13 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(AutoDrawing::new(AutoDrawingKind::Pitchfork, x(5.0), l(0))),
         Box::new(PivotPointsHighLow::new(l(0), l(1), l(2), l(3))),
         Box::new(MissedPivots::new(l(0), l(1), x(0.1), l(2))),
+        Box::new(MissedPivots::new(l(0), l(1), x(0.1), l(2)).with_period(MissedPivotPeriod::Daily)),
+        Box::new(
+            MissedPivots::new(l(0), l(1), x(0.1), l(2)).with_period(MissedPivotPeriod::Weekly),
+        ),
+        Box::new(
+            MissedPivots::new(l(0), l(1), x(0.1), l(2)).with_period(MissedPivotPeriod::Monthly),
+        ),
         Box::new(KeyLevels::new(l(0), l(1), l(2), x(0.25))),
         Box::new(AutoKeyLevels::new()),
         {

@@ -140,7 +140,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Automatic chart-pattern, wedge and key-level detection studies. Studies paint their drawings beneath their plots, text and markers; chart patterns show a triangle and abbreviation at each confirmation, with boundaries styled and hidden by their Bullish, Bearish or Developing plot. Developing boundaries start grey and dashed, and older two-plot saves restore that style. Automatic drawing studies keep plot 0 as their construction style and visibility control.
 - [x] Composite technical ratings, rated on both groups or one, with higher-interval rows and a placed, sized and coloured table, and lunar phases.
 - [x] Volatility Index draws Wilder's stop and reverse a multiple of the average true range from the significant close, with editable periods, multiplier and Wilder or exponential smoothing.
-- [x] ADX-breakout, divergence, key-reversal, intraday and missed-pivot studies.
+- [x] ADX-breakout, divergence, key-reversal, intraday and missed-pivot studies. Missed Pivot Levels follows daily, weekly or monthly exchange periods and keeps missed levels until price reaches them; older saves and the explicit constructor preserve swing pivots.
 - [ ] Add the remaining specialised reversal and ghost-pivot studies.
 - [ ] Complete the remaining style and calculation controls of the built-in studies, including shared style defaults and editor presentation for SMI, Stochastic and Stochastic RSI.
 - [x] Give session and periodic volume profile studies level extension, session hours, period lengths and rows in ticks.
