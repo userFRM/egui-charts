@@ -425,7 +425,14 @@ impl Terminal {
                 chart.drawings_mut().clear_all();
             }
             DrawingToolbarAction::HideAllDrawings => {
-                chart.drawings_mut().set_visibility_all(!hide_all);
+                let manager = chart.drawings_mut();
+                let ids: Vec<_> = manager
+                    .drawings
+                    .iter()
+                    .filter(|drawing| drawing.visible == hide_all)
+                    .map(|drawing| drawing.id)
+                    .collect();
+                let _ = manager.edit_drawings(&ids, |drawing| drawing.visible = !hide_all);
             }
             DrawingToolbarAction::LockAllDrawings => {
                 let manager = chart.drawings_mut();
@@ -450,7 +457,14 @@ impl Terminal {
                     .start_icon_insertion(icon_name.to_string());
             }
             DrawingToolbarAction::HideAll => {
-                chart.drawings_mut().set_visibility_all(false);
+                let manager = chart.drawings_mut();
+                let ids: Vec<_> = manager
+                    .drawings
+                    .iter()
+                    .filter(|drawing| drawing.visible)
+                    .map(|drawing| drawing.id)
+                    .collect();
+                let _ = manager.edit_drawings(&ids, |drawing| drawing.visible = false);
                 let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
                 for id in ids {
                     chart.set_indicator_visible(id, false);

@@ -98,7 +98,7 @@ impl Chart {
                     ) && index
                         .and_then(|index| study.plot_value(line, index))
                         .is_some_and(f64::is_finite);
-                    (study.is_visible() && plot.visible, valued)
+                    (self.shows_study(study.as_ref()) && plot.visible, valued)
                 })
             });
         let mut valued = false;
@@ -150,7 +150,7 @@ impl Chart {
             .filter(|(id, study)| {
                 !close_only
                     && time_based
-                    && study.is_visible()
+                    && self.shows_study(study.as_ref())
                     && !study.is_volume()
                     && self.series_pane(**id) == Some(self.main_series_pane())
             })

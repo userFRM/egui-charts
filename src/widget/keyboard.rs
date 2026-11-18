@@ -662,7 +662,7 @@ impl super::Chart {
                     );
             }
             #[cfg(feature = "drawings")]
-            A::ToggleDrawings => self.drawings.toggle_visibility_all(),
+            A::ToggleDrawings => self.drawings.set_hidden(!self.drawings.is_hidden()),
             #[cfg(feature = "drawings")]
             A::CompleteDrawing => {
                 if self.drawings.active_tool.is_some_and(|tool| {
@@ -861,16 +861,16 @@ mod tests {
         }
     }
 
-    /// Ctrl+Alt+H hides every drawing unless all are hidden, and then shows them all.
+    /// Ctrl+Alt+H toggles the group while preserving each drawing's own visibility.
     #[cfg(feature = "drawings")]
     #[test]
-    fn hide_drawings_key_hides_all_unless_all_are_hidden() {
+    fn hide_drawings_key_toggles_the_group_and_keeps_each_visibility() {
         use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
         use crate::widget::test_frames::frame;
-        for (hidden, shown) in [
-            ([false, false, false], false),
-            ([false, true, false], false),
-            ([true, true, true], true),
+        for hidden in [
+            [false, false, false],
+            [false, true, false],
+            [true, true, true],
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
@@ -882,15 +882,18 @@ mod tests {
                 chart.drawings_mut().drawings.push(drawing);
             }
             frame(&ctx, &mut chart, 0.0, vec![]);
-            let hide = press(Key::H, Modifiers::COMMAND.plus(Modifiers::ALT));
-            frame(&ctx, &mut chart, 1.0, vec![hide]);
-            let visible: Vec<_> = chart
-                .drawings()
-                .drawings
-                .iter()
-                .map(|d| d.visible)
-                .collect();
-            assert_eq!(visible, [shown; 3], "{hidden:?}");
+            for (time, group_hidden) in [(1.0, true), (2.0, false)] {
+                let hide = press(Key::H, Modifiers::COMMAND.plus(Modifiers::ALT));
+                frame(&ctx, &mut chart, time, vec![hide]);
+                assert_eq!(chart.drawings().is_hidden(), group_hidden);
+                let visible: Vec<_> = chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .map(|d| d.visible)
+                    .collect();
+                assert_eq!(visible, hidden.map(|hidden| !hidden), "{hidden:?}");
+            }
         }
     }
 
