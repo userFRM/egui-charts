@@ -318,6 +318,12 @@ accepted heartbeat when replaying retained executions. Quotes seed the movement 
 lost book breaks it so the next quote does not count an unobserved jump. A loss leaves book size missing until
 a new synchronized snapshot arrives, including recovery within the same bar.
 
+On a history-only tick chart, Trade Rate uses the recorded executions when the tape reaches
+its start without a gap and reproduces every displayed candle's key and OHLCV. The last
+candle may hold fewer than the interval's tick count. Each rate stops at that candle's last
+execution, even when the next candle starts at the same provider timestamp. A partial tape
+or a mismatched candle leaves a gap; candle volume alone never supplies an execution count.
+
 [`Indicator::order_flow_inputs`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.order_flow_inputs) returns the study's [`OrderFlowInput`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowInput.html) sources. Charts connect quote and
 book inputs before feed updates are coalesced and feed rates from the deduplicated trade store.
 A historical page rebuilds rate inputs from retained trades in timestamp order; a bar that lost
