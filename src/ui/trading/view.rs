@@ -20,10 +20,7 @@ impl Trading {
     /// `colors` unless the chart's book view sets its own.
     fn market<'a>(&'a self, chart: &'a Chart, colors: &crate::theme::ChartColors) -> Market<'a> {
         let symbol = chart.symbol();
-        let instrument = chart
-            .instrument()
-            .filter(|instrument| instrument.symbol == symbol)
-            .or_else(|| self.instruments.get(symbol));
+        let instrument = chart.instrument().or_else(|| self.instruments.get(symbol));
         let decimals = instrument
             .and_then(crate::scales::instrument_price_precision)
             .map_or(2, usize::from);
@@ -865,6 +862,18 @@ mod tests {
             Some("bytes://usdjpy.svg")
         );
         assert_eq!(trading.market(&chart, &colors).pip_value, Some(10.0));
+        // The chart's instrument describes its symbol even under another name.
+        chart.set_instrument(Some(
+            Instrument::new("X:USDJPY")
+                .with_pip_size(0.25)
+                .with_logo("bytes://x.svg"),
+        ));
+        let market = trading.market(&chart, &colors);
+        assert_eq!(
+            (market.logo, market.pip_value),
+            (Some("bytes://x.svg"), Some(250.0))
+        );
+        chart.set_instrument(None);
         trading.rules.pip_value = Some(0.5);
         assert_eq!(trading.market(&chart, &colors).pip_value, Some(0.5));
         chart.set_symbol("UNKNOWN");
