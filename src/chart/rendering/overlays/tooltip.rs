@@ -253,7 +253,10 @@ pub fn render_floating_tooltip(
         let change = candle.close - reference;
         let change_pct = percent_change(reference, candle.close);
         let absolute = formatters.price.map_or_else(
-            || format!("{change:+.*}", formatters.decimals(instrument).unwrap_or(2)),
+            || {
+                let decimals = formatters.decimals(instrument).unwrap_or(2);
+                group_thousands(format!("{change:+.decimals$}"), formatters.thousands_sep)
+            },
             |formatter| formatter.format_change(change),
         );
         let percent = formatters.percentage.map_or_else(
@@ -1099,6 +1102,53 @@ mod tests {
                 Some(symbol) => assert!(first.starts_with(symbol), "{first:?}"),
                 None => assert!(!first.contains("SAMPLE"), "{first:?}"),
             }
+        }
+    }
+
+    /// Without a host formatter the floating readout groups the thousands of its change, as the
+    /// legend and the data window do.
+    #[test]
+    fn floating_readout_groups_the_thousands_of_its_change() {
+        let plot = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(800.0, 300.0));
+        let time = chrono::DateTime::UNIX_EPOCH;
+        let bar = Bar::new(time, 1000.0, 2300.0, 900.0, 2234.5, 1.0);
+        let instrument = Instrument::new("SAMPLE").with_tick_size(0.01);
+        let scale = crate::scales::TimeFormatterBuilder::new().build();
+        for (separator, expected) in [
+            (Some(','), "+1,234.50 (+123.45%)"),
+            (None, "+1234.50 (+123.45%)"),
+        ] {
+            let ctx = egui::Context::default();
+            let output = ctx.run_ui(Default::default(), |ui| {
+                render_floating_tooltip(
+                    ui.painter(),
+                    Pos2::new(plot.left() + 100.0, plot.center().y),
+                    plot,
+                    10.0,
+                    &bar,
+                    Some(1000.0),
+                    &TooltipOptions::default(),
+                    egui::Color32::GREEN,
+                    &scale,
+                    3600,
+                    &[],
+                    Some(&instrument),
+                    ValueFormatters {
+                        thousands_sep: separator,
+                        ..Default::default()
+                    },
+                );
+            });
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            assert!(texts.iter().any(|text| text == expected), "{texts:?}");
         }
     }
 
