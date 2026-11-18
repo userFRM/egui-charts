@@ -478,8 +478,14 @@ mod tests {
             (ProfileSession::PostMarket, &[segments[1], segments[4]][..]),
             // Regular hours alone bucket the hours from their 09:30 open, so Friday's 20:00 bar
             // opens at 19:30; extended hours close at 20:00 New York time.
-            (ProfileSession::Regular, &["08 19:30-08 21:00", "11 13:30-11 20:00"][..]),
-            (ProfileSession::Extended, &["08 20:00-09 01:00", "11 08:00-12 00:00"][..]),
+            (
+                ProfileSession::Regular,
+                &["08 19:30-08 21:00", "11 13:30-11 20:00"][..],
+            ),
+            (
+                ProfileSession::Extended,
+                &["08 20:00-09 01:00", "11 08:00-12 00:00"][..],
+            ),
         ] {
             let chart = hourly(exchange.clone(), session.clone());
             assert_eq!(ranges(&chart), expected, "{session:?}");
