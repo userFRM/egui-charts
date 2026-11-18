@@ -1143,7 +1143,8 @@ impl Chart {
                     crate::studies::StudyScale::Shared(key) => key,
                     _ => SeriesScale::Right,
                 };
-                if !members.contains(&id) || !study.is_visible() || assignment != key {
+                if !members.contains(&id) || !self.shows_study(study.as_ref()) || assignment != key
+                {
                     continue;
                 }
                 // The initial pane's independent overlays retain their own mapping.
@@ -1312,7 +1313,7 @@ impl Chart {
                 continue;
             };
             // A chart type that hides volume draws no volume columns in the price pane.
-            if !study.is_visible()
+            if !self.shows_study(study.as_ref())
                 || self.series_pane(id) != Some(pane)
                 || (study.is_volume() && !self.chart_type.supports_volume())
                 || (key == self.main_series_scale

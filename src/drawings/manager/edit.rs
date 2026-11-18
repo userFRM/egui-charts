@@ -540,6 +540,11 @@ impl DrawingManager {
         self.pane_rect = rect;
     }
 
+    /// Whether the drawing is visible on this interval and its group is shown.
+    pub(crate) fn shows(&self, drawing: &Drawing) -> bool {
+        !self.hidden && drawing.is_visible_on_timeframe(&self.curr_timeframe)
+    }
+
     pub(crate) fn owns_pane(&self, drawing: &Drawing) -> bool {
         self.pane_members.contains(&drawing.pane)
     }
@@ -618,43 +623,24 @@ impl DrawingManager {
 
     // === Visibility ===
 
-    /// Hides every drawing unless all of them are already hidden, in which case shows them all,
-    /// as the Hide drawings toolbar entry does. Does nothing without drawings.
-    pub fn toggle_visibility_all(&mut self) {
-        let visible = self.drawings.iter().all(|drawing| !drawing.visible);
-        self.set_visibility_all(visible);
+    /// Hides or shows the drawings as a group without changing [`Drawing::visible`].
+    /// Hidden drawings cannot be painted, hit, dragged, snapped to or selected, including
+    /// drawings added or loaded while hidden. Placement previews and text being typed inline
+    /// remain visible until completed. Hiding clears the drawing selection.
+    ///
+    /// This is not a drawing edit: it queues no save or sync and changes no edit timestamp.
+    /// [`Chart`](crate::widget::Chart) records the flag in undo history and keeps it across
+    /// drawing loads and symbol changes, but does not save it with a layout.
+    pub fn set_hidden(&mut self, hidden: bool) {
+        self.hidden = hidden;
+        if hidden {
+            self.selection.deselect_all();
+        }
     }
 
-    /// Set every drawing's visibility as one undoable edit. Hiding deselects the drawings it hides;
-    /// undo restores their visibility, not the selection.
-    pub fn set_visibility_all(&mut self, visible: bool) {
-        let mut before = Vec::new();
-        for (index, drawing) in self
-            .drawings
-            .iter_mut()
-            .enumerate()
-            .filter(|(_, drawing)| drawing.visible != visible)
-        {
-            before.push((index, drawing.clone()));
-            drawing.visible = visible;
-            if self.sync_enabled
-                && drawing.saveable
-                && let Ok(mut sync) = self.pending_sync.lock()
-            {
-                queue_sync(
-                    &mut sync,
-                    DrawingSyncAction::UpdateDrawing(drawing.id),
-                    Some(&sync_id(drawing)),
-                );
-            }
-        }
-        for (_, drawing) in &before {
-            self.stamp(drawing.id);
-            if !visible {
-                self.selection.deselect(drawing.id);
-            }
-        }
-        self.history.push_snapshot(before);
+    /// Whether [`Self::set_hidden`] hides every drawing.
+    pub fn is_hidden(&self) -> bool {
+        self.hidden
     }
 
     /// Toggles the lock state of all drawings. If all are locked, unlocks them
@@ -950,6 +936,78 @@ mod tests {
 
     fn folders(manager: &DrawingManager) -> Vec<Vec<String>> {
         manager.drawings.iter().map(|d| d.folder.clone()).collect()
+    }
+
+    /// Group hiding keeps own visibility, also for newly added drawings (#3152).
+    #[test]
+    fn hiding_all_drawings_keeps_each_drawings_own_visibility() {
+        use crate::drawings::rendering::ChartView;
+        use egui::{Context, Pos2, RawInput};
+        let ctx = Context::default();
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
+        let line = |price: f64| {
+            let mut drawing = Drawing::new(0, DrawingToolType::HorizontalLine);
+            drawing.chart_points = vec![ChartPoint::new(20.0, price)];
+            drawing
+        };
+        let painted = |manager: &mut DrawingManager| {
+            // Bar b maps to x = 10b, price p to y = 500 - p.
+            manager.update_pane_screen_coords(|bar| bar * 10.0, |price| 500.0 - price as f32, 10.0);
+            ctx.run_ui(RawInput::default(), |ui| {
+                let view = ChartView {
+                    price_formatter: None,
+                    time_formatter: None,
+                    bar_seconds: 0,
+                    instrument: None,
+                    bars: &[],
+                    revision: 0,
+                    bar_to_x: &|b| b * 10.0,
+                    bar_spacing: 10.0,
+                    price_to_y: &|p| 500.0 - p as f32,
+                    y_to_price: &|y| 500.0 - f64::from(y),
+                    time_axis: true,
+                    executions: None,
+                    timeframe: None,
+                    finer: &[],
+                };
+                manager.render_all(ui.painter(), pane, &view);
+            })
+            .drop_without_applying_deltas();
+            let mut ids: Vec<_> = manager
+                .painted
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|p| p.id)
+                .collect();
+            ids.sort_unstable();
+            ids
+        };
+        let own = |manager: &DrawingManager| -> Vec<bool> {
+            manager.drawings.iter().map(|d| d.visible).collect()
+        };
+        let mut manager = DrawingManager::new();
+        let first = manager.add_drawing(line(400.0)).unwrap();
+        let second = manager.add_drawing(line(300.0)).unwrap();
+        manager.edit_drawing(first, |d| d.visible = false).unwrap();
+        assert_eq!(painted(&mut manager), [second]);
+        let saved = manager.drawings.clone();
+        manager.set_hidden(!manager.is_hidden());
+        assert_eq!(own(&manager), [false, true]);
+        assert!(painted(&mut manager).is_empty());
+        assert_eq!(manager.hit_test(Pos2::new(200.0, 200.0)), None);
+        for (before, after) in saved.iter().zip(&manager.drawings) {
+            assert_eq!(before.modified_at, after.modified_at);
+        }
+        let third = manager.add_drawing(line(200.0)).unwrap();
+        manager.select(third);
+        manager.toggle_selection(second);
+        assert!(painted(&mut manager).is_empty());
+        assert_eq!(manager.selected_ids().count(), 0);
+        manager.set_hidden(!manager.is_hidden());
+        assert_eq!(own(&manager), [false, true, true]);
+        assert_eq!(painted(&mut manager), [second, third]);
+        assert_eq!(manager.hit_test(Pos2::new(200.0, 200.0)), Some(second));
     }
 
     /// A folder cannot enter itself or a descendant or overwrite a sibling, and a refused move

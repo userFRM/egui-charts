@@ -624,7 +624,7 @@ impl Chart {
                 .iter()
                 .zip(&self.study_ids)
                 .filter(|(study, id)| {
-                    study.is_visible()
+                    self.shows_study(study.as_ref())
                         && self.series_pane(**id) == Some(self.main_series_pane())
                         && study.scale() == crate::studies::StudyScale::Shared(key)
                 })

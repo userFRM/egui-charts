@@ -499,6 +499,9 @@ impl Chart {
                         } else {
                             let idx = self.study_ids.iter().position(|study| study == id)?;
                             let study = studies.indicators()[idx].as_ref();
+                            if !self.shows_study(study) {
+                                return None;
+                            }
                             let hit = crate::widget::primitives::primitive_at(
                                 self.primitives_of(*id).map(|item| {
                                     (
@@ -532,8 +535,8 @@ impl Chart {
                 .iter()
                 .filter_map(
                     |id| match self.study_ids.iter().position(|study| study == id) {
-                        Some(idx) => studies.indicators()[idx]
-                            .is_visible()
+                        Some(idx) => self
+                            .shows_study(studies.indicators()[idx].as_ref())
                             .then_some((*id, Some(idx))),
                         None => legends
                             .iter()
@@ -787,7 +790,7 @@ impl Chart {
                                     return Vec::new();
                                 };
                                 let study = studies.indicators()[idx].as_ref();
-                                if !study.is_visible() {
+                                if !self.shows_study(study) {
                                     return Vec::new();
                                 }
                                 let map = if matches!(
@@ -1089,6 +1092,9 @@ impl Chart {
                                         .map(|_| ChartElementId::Series(*id));
                                 }
                                 let idx = self.study_ids.iter().position(|study| study == id)?;
+                                if !self.shows_study(studies.indicators()[idx].as_ref()) {
+                                    return None;
+                                }
                                 hit_test_pane_indicator(
                                     pos,
                                     studies.indicators()[idx].as_ref(),
@@ -1362,7 +1368,7 @@ impl Chart {
                         .drawings
                         .iter()
                         .filter(|drawing| {
-                            drawing.is_visible_on_timeframe(&self.drawings.curr_timeframe)
+                            self.drawings.shows(drawing)
                                 && (drawing.pane == Some(pane_id.0)
                                     || members.iter().any(|id| drawing.pane == Some(id.0)))
                         })
@@ -1588,7 +1594,7 @@ impl Chart {
                 for id in &members {
                     if let Some(idx) = self.study_ids.iter().position(|study| study == id) {
                         let study = &studies.indicators()[idx];
-                        if study.is_visible()
+                        if self.shows_study(study.as_ref())
                             && let Some(table) = study.table()
                         {
                             table_rect.max.y = crate::studies::table::paint(

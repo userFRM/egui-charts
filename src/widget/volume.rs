@@ -220,7 +220,7 @@ impl super::Chart {
                 self.series_pane(*id) == Some(self.main_series_pane())
                     && study.is_volume()
                     && study.is_overlay()
-                    && study.is_visible()
+                    && self.shows_study(study.as_ref())
                     && (0..study.line_count()).any(|line| study.plot_style(line).visible)
             })
             || (!cfg!(feature = "studies") && self.config.show_volume);

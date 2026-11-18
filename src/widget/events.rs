@@ -768,7 +768,7 @@ impl Chart {
                         &self.rendered_studies().indicators()[index],
                     )
                 })
-                .filter(|(_, study)| study.is_visible())
+                .filter(|(_, study)| self.shows_study(study.as_ref()))
                 .flat_map(|(id, study)| {
                     let own = self.series_price_map(id).unwrap_or(map);
                     (0..study.line_count())

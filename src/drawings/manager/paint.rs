@@ -135,7 +135,7 @@ impl DrawingManager {
     /// source of truth for per-segment / per-level geometry hit testing, so that
     /// channels, Fibonacci levels, fans, and pitchforks are selectable along
     /// their drawn geometry rather than only near a control point. Honors the
-    /// active timeframe so drawings hidden on the current timeframe are not hit.
+    /// active timeframe and group visibility, so hidden drawings are not hit.
     /// After [`Self::render_all`], uses the actual clipped paint geometry, including text and
     /// data-driven bodies. Before the first paint, falls back to the tool's geometric outline.
     pub fn hit_test(&self, point: Pos2) -> Option<usize> {
@@ -143,7 +143,7 @@ impl DrawingManager {
         in_z_order(&self.drawings)
             .into_iter()
             .rev()
-            .filter(|d| d.selectable && d.is_visible_on_timeframe(&self.curr_timeframe))
+            .filter(|d| d.selectable && self.shows(d))
             .filter(|d| {
                 self.pane_clips.is_empty()
                     || self
@@ -315,6 +315,7 @@ impl DrawingManager {
                     .is_some_and(|bounds| !bounds.intersects(price_rect));
             if self.owns_pane(drawing)
                 && drawing.is_visible_on_timeframe(&self.curr_timeframe)
+                && (!self.hidden || preview.is_some())
                 && !off_pane
             {
                 let start = painter.ctx().graphics(|g| {
@@ -373,7 +374,7 @@ impl DrawingManager {
                 });
             } else if !self.owns_pane(drawing)
                 && drawing.reaches_other_panes()
-                && drawing.is_visible_on_timeframe(&self.curr_timeframe)
+                && self.shows(drawing)
             {
                 drawing.render_line_from_other_pane(painter, price_rect);
             }
@@ -400,10 +401,7 @@ impl DrawingManager {
 
         // Render handles for every visible selected drawing.
         for drawing in self.drawings.iter().filter(|d| {
-            d.selectable
-                && self.selection.is_selected(d.id)
-                && self.owns_pane(d)
-                && d.is_visible_on_timeframe(&self.curr_timeframe)
+            d.selectable && self.selection.is_selected(d.id) && self.owns_pane(d) && self.shows(d)
         }) {
             if drawing.tool_type == DrawingToolType::Rect {
                 drawing.render_rect_guides(painter, view.price_formatter);
@@ -447,8 +445,7 @@ impl DrawingManager {
         self.drawings
             .iter()
             .filter(|drawing| {
-                (self.owns_pane(drawing) || drawing.reaches_other_panes())
-                    && drawing.is_visible_on_timeframe(&self.curr_timeframe)
+                (self.owns_pane(drawing) || drawing.reaches_other_panes()) && self.shows(drawing)
             })
             .flat_map(move |drawing| {
                 let (price, time) = Drawing::axis_labels_of(drawing.tool_type);
