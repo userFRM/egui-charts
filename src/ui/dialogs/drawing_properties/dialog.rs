@@ -264,6 +264,7 @@ impl DrawingPropertiesDialog {
                 drawing.price_axis_label = old.price_axis_label;
                 drawing.time_axis_label = old.time_axis_label;
                 drawing.elliott_degree = old.elliott_degree;
+                drawing.elliott_show_wave = old.elliott_show_wave;
                 drawing.font_weight = old.font_weight;
                 drawing.italic = old.italic;
                 drawing.text_wrap = old.text_wrap;
@@ -887,6 +888,7 @@ mod tests {
                 settings.theme_shade = true;
                 settings.anchor_price_style = Some(note_text);
                 settings.middle_line.width = 3.0;
+                settings.elliott_show_wave = false;
                 dialog.coordinates.points[1].price = "125".into();
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
                 assert_eq!(
@@ -910,6 +912,7 @@ mod tests {
                 assert!(preview.theme_shade);
                 assert_eq!(preview.anchor_price_style, Some(note_text));
                 assert_eq!(preview.middle_line.width, 3.0);
+                assert!(!preview.elliott_show_wave);
                 assert_eq!(chart.drawings().drawings[2].stroke_width, 6.0);
                 assert!(!chart.can_undo());
                 assert!(chart.can_redo(), "preview must retain existing redo");
@@ -974,6 +977,7 @@ mod tests {
                 crate::drawings::MiddleLineStyle::default(),
                 "{finish}"
             );
+            assert!(restored.elliott_show_wave, "{finish}");
             assert_eq!(chart.drawings().drawings[0].stroke_width, 20.0, "{finish}");
             assert_eq!(chart.drawings().drawings[1].stroke_width, 4.0, "{finish}");
             assert_eq!(
