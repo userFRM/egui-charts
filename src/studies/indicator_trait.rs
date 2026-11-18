@@ -618,6 +618,26 @@ pub trait Indicator: Send {
     /// Return the short display name of this indicator (e.g. `"SMA"`, `"RSI"`, `"MACD"`).
     fn name(&self) -> &str;
 
+    /// The factory key used to recreate this study in saved charts, templates, clipboard copies
+    /// and alerts. `IndicatorFactory::create` retains the key even when it differs from the
+    /// display [`name`](Self::name). A study whose display name changes with its inputs should
+    /// return its stable factory key here.
+    fn registered_name(&self) -> &str {
+        self.name()
+    }
+
+    /// Set the factory key. Returns whether the study supports the change; the chart's
+    /// presentation wrapper does.
+    fn set_registered_name(&mut self, _name: &str) -> bool {
+        false
+    }
+
+    /// The descriptor needed to restore a host metric without its catalogue registration.
+    /// Ordinary studies return `None`; a scalar metric returns its own descriptor.
+    fn metric(&self) -> Option<&crate::data::MetricSeries> {
+        None
+    }
+
     /// Return a human-readable description of what this indicator measures.
     ///
     /// Defaults to an empty string. Override to provide a tooltip-friendly

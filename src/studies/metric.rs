@@ -38,6 +38,9 @@ impl Indicator for MetricStudy {
     fn name(&self) -> &str {
         &self.metric.name
     }
+    fn metric(&self) -> Option<&MetricSeries> {
+        Some(&self.metric)
+    }
     fn desc(&self) -> &str {
         &self.metric.unit
     }

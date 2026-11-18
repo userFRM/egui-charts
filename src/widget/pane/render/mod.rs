@@ -1439,6 +1439,7 @@ impl Chart {
                 }
             }
             if !collapsed && let Some((pane_response, chart_rect, _)) = drawing_response {
+                self.paint_metric_notice(ui, pane_id, chart_rect);
                 if pane_response.clicked() || pane_response.secondary_clicked() {
                     host_clicks.push(pane_response.clone());
                 }
