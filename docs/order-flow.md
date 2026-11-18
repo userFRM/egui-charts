@@ -109,9 +109,10 @@ trade-driven studies still require individual executions.
 Call [`Chart::set_liquidity_heatmap(true)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_liquidity_heatmap) on a chart with a feed and an instrument tick size.
 It starts the default [`DepthHistory`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.DepthHistory.html) if the host has not configured one. Call
 [`Chart::set_depth_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_depth_history) first to choose cadence, grouping and retention. The book is sampled
-where depth arrives, independently of UI frames. No column covers a period when the book was
-lost. A merged historical column averages size over its span and uses its best retained row for
-the inside-market path; it cannot restore individual quotes from before merging.
+where depth arrives, independently of UI frames. No column covers a period that ends while the
+aggregate or order-level book waits for a snapshot, so merging never averages an outage into the
+sizes beside it. A merged historical column averages size over its span and uses its best
+retained row for the inside-market path; it cannot restore individual quotes from before merging.
 
 The renderer stores one texel per time column and grouped price level in texture atlases. New
 or corrected columns upload only their column. One colour scale encodes size, the same for bids
