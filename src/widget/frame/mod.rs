@@ -770,19 +770,15 @@ impl Chart {
                 || self.state.data().is_empty(),
         );
         let touch_readout = super::interaction::touch_crosshair(ui, shown.id);
-        if touch_readout.touch_input
-            && self.chart_options.tooltip.enabled
-            && self.chart_options.tooltip.on_long_press
-        {
+        // A touch that draws or erases follows the finger, as a pointer does.
+        let touch_tracking = touch_readout.tracking(&self.chart_options.tooltip)
+            && !is_drawing_interaction
+            && !eraser_mode;
+        if touch_tracking {
             self.host_events.touch_position = Some(None);
         }
         let mut readout_flags = egui::response::Flags::empty();
-        if self.chart_options.tooltip.on_long_press
-            && self.chart_options.tooltip.enabled
-            && touch_readout.touch_input
-            && !is_drawing_interaction
-            && !eraser_mode
-        {
+        if touch_tracking {
             // A contact that activated the readout owns its release as well as its moves.
             readout_flags |= egui::response::Flags::LONG_TOUCHED;
             if touch_readout.owns_gesture {
@@ -3358,10 +3354,7 @@ impl Chart {
                         - 8.0;
             }
         }
-        let hover_pos = if touch_readout.touch_input
-            && self.chart_options.tooltip.enabled
-            && self.chart_options.tooltip.on_long_press
-        {
+        let hover_pos = if touch_tracking {
             touch_readout
                 .position
                 .filter(|pos| hover_rect.contains(*pos))
@@ -3383,10 +3376,7 @@ impl Chart {
                     })
                 })
         };
-        if touch_readout.touch_input
-            && self.chart_options.tooltip.enabled
-            && self.chart_options.tooltip.on_long_press
-        {
+        if touch_tracking {
             self.host_events.touch_position = Some(hover_pos);
         }
         let hover_pos = hover_pos.and_then(|pos| self.crosshair_position(pos, &coords));
@@ -3661,9 +3651,10 @@ impl Chart {
                 let mut tooltip_options = self.chart_options.tooltip.clone();
                 tooltip_options.enabled &= self.main_series_visible;
                 tooltip_options.show_volume &= self.chart_type.supports_volume();
+                // A touch readout is a held readout, whatever the mouse uses.
+                tooltip_options.on_long_press |= touch_tracking;
                 let held = touch_readout.position.is_some()
-                    || (!touch_readout.touch_input
-                        && ui.input(|input| input.pointer.primary_down()));
+                    || (!touch_tracking && ui.input(|input| input.pointer.primary_down()));
                 let held_values = tooltip_options.enabled
                     && tooltip_options.on_long_press
                     && held

@@ -1329,6 +1329,11 @@ mod tests {
             app.chart.chart_options().tooltip.mode
         );
         assert!(app.chart.chart_options().tooltip.on_long_press);
+        click(&mut app, &ctx, "Clear touch values on release");
+        assert_eq!(
+            app.chart.chart_options().tooltip.touch_exit_mode,
+            egui_charts::config::TouchTrackingExitMode::OnTouchEnd
+        );
         egui::Popup::close_all(&ctx);
         click(&mut app, &ctx, "Menu");
         click(&mut app, &ctx, "Appearance");
