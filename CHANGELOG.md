@@ -511,6 +511,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Trade Rate now fills history-only tick charts when the complete trade tape reproduces the candles. Partial or mismatched inputs stay blank. ([#3394](https://github.com/userFRM/egui-charts/issues/3394))
+
 - A detached chart export keeps Trade Rate and other `OrderFlowStudy` values at the captured position when new live events arrive. Ordinary study clones still follow the stream. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
 
 - The Terminal's Time and Sales panel removes trades at or after the replay cutoff on rewind and shows the live tape again on exit. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
