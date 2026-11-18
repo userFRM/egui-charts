@@ -341,29 +341,44 @@ impl OrderQueue {
     }
 
     fn sum(&self, symbol: String, filter: &OrderFilter) -> OrderBook {
-        let mut bids: BTreeMap<u64, OrderBookLevel> = BTreeMap::new();
-        let mut asks: BTreeMap<u64, OrderBookLevel> = BTreeMap::new();
+        // Each level carries the rounding error of its running sum (Neumaier summation), so a
+        // level of many orders totals within an ulp of its exact sum, where plain addition
+        // drifts: a hundred orders of 0.1 would add to 9.99999999999998.
+        let mut bids: BTreeMap<u64, (OrderBookLevel, f64)> = BTreeMap::new();
+        let mut asks: BTreeMap<u64, (OrderBookLevel, f64)> = BTreeMap::new();
         for order in self.orders.iter().filter(|o| filter.accepts(o, self.time)) {
             let side = if order.side == OrderSide::Buy {
                 &mut bids
             } else {
                 &mut asks
             };
-            let level = side
-                .entry(key(self.tick, order.price))
-                .or_insert(OrderBookLevel {
+            let (level, error) = side.entry(key(self.tick, order.price)).or_insert((
+                OrderBookLevel {
                     price: order.price,
                     size: 0.0,
                     order_cnt: Some(0),
-                });
-            level.size = (level.size + order.size).min(f64::MAX);
+                },
+                0.0,
+            ));
+            let total = level.size + order.size;
+            *error += if level.size >= order.size {
+                level.size - total + order.size
+            } else {
+                order.size - total + level.size
+            };
+            level.size = total;
             level.order_cnt = level.order_cnt.map(|n| n + 1);
         }
+        // An overflow leaves an infinite or NaN total, which `min` turns into the largest size.
+        let close = |(mut level, error): (OrderBookLevel, f64)| {
+            level.size = (level.size + error).min(f64::MAX);
+            level
+        };
         OrderBook {
             ts: self.time,
             symbol,
-            bids: bids.into_values().rev().collect(),
-            asks: asks.into_values().collect(),
+            bids: bids.into_values().rev().map(close).collect(),
+            asks: asks.into_values().map(close).collect(),
         }
     }
 
@@ -760,6 +775,19 @@ mod tests {
         book.snapshot(7, DateTime::default(), orders.clone())
             .unwrap();
         assert_eq!(book.aggregate("A", 4.0).bids[0].size, 5.0);
+        // A level beyond the largest finite total saturates at it.
+        let mut saturated = OrderQueue::new(None);
+        saturated
+            .snapshot(
+                1,
+                DateTime::default(),
+                vec![
+                    RestingOrder::new(1, Buy, 100.0, f64::MAX),
+                    RestingOrder::new(2, Buy, 100.0, f64::MAX),
+                ],
+            )
+            .unwrap();
+        assert_eq!(saturated.aggregate("A", 0.0).bids[0].size, f64::MAX);
         assert_eq!(book.largest_order(Buy, 100.0).unwrap().id, 2);
         assert!(
             book.apply(9, DateTime::default(), OrderEvent::Cancel { id: 1 })
