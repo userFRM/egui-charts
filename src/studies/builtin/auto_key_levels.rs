@@ -3,7 +3,7 @@
 //! Horizontal lines at the key levels of the current and of the previous trading day, week and
 //! month, and of one custom period, each shown by its own input. For each period the levels are
 //! the point of control (POC) and the low and high of the value area (VAL, VAH) of its volume
-//! profile with 24 rows and a value area of 70% of the volume, and its open, high, low and close.
+//! profile with 24 rows and a 70% value-area target, and its open, high, low and close.
 //! The study requests finer candles from the host through [`Indicator::data_requests`];
 //! chart bars without finer candles use their high to low volume estimate, as
 //! [`VolProfilePeriodic`](super::VolProfilePeriodic) does.
@@ -289,7 +289,36 @@ fn levels_of(bars: &[Bar], profile_bars: Option<&[Bar]>, tick_size: Option<f64>)
         config.with_row_size(row_size)?,
     )
     .and_then(|profile| {
-        let (poc, (va_low, va_high)) = profile.poc_and_value_area(config.value_area())?;
+        let (poc, _) = profile.poc_and_value_area(config.value_area())?;
+        let volume = profile.volume();
+        let budget = volume.iter().sum::<f64>() * config.value_area();
+        let (mut va_low, mut va_high, mut included) = (poc, poc, volume[poc]);
+        // Keep the POC even when it alone exceeds the target. Grow by one adjacent row,
+        // taking the greater volume, then the nearer row, then the upper row on a tie.
+        while included < budget {
+            let below = va_low.checked_sub(1);
+            let above = (va_high + 1 < volume.len()).then_some(va_high + 1);
+            let next = match (below, above) {
+                (None, None) => break,
+                (Some(row), None) | (None, Some(row)) => row,
+                (Some(low), Some(high)) => {
+                    if volume[high] > volume[low]
+                        || (volume[high] == volume[low] && high - poc <= poc - low)
+                    {
+                        high
+                    } else {
+                        low
+                    }
+                }
+            };
+            // Stop before the selected row would exceed the remaining volume budget.
+            if volume[next] > budget - included {
+                break;
+            }
+            included += volume[next];
+            va_low = va_low.min(next);
+            va_high = va_high.max(next);
+        }
         let (bottom, height) = (profile.low(), profile.row_height());
         Some([
             bottom + (poc as f64 + 0.5) * height,
@@ -729,7 +758,8 @@ mod tests {
     /// Hand-calculated price and 24-row profile levels across a day, week and month boundary.
     /// Jan 30 puts 3/4 of its volume at 10: POC 10.5, value area [10, 11]. Feb 2 puts 3/4
     /// at 54: POC 53.5, area [53, 54]. Feb 2 and 3 together tie the endpoint rows at 4:
-    /// POC 30.5 (the lower tie), value area [30, 54]. Tokyo splits the Jan 30 UTC bars.
+    /// POC 30.5 (the lower tie), value area [30, 53]: the last row would exceed the budget.
+    /// Tokyo splits the Jan 30 UTC bars.
     #[test]
     fn levels_follow_each_period_and_input() {
         use InputValue::{Choice, Length, Toggle};
@@ -797,7 +827,7 @@ mod tests {
                     2..6,
                     1,
                     &ALL[1..],
-                    &[30.0, 54.0, 54.0, 54.0, 30.0, 54.0],
+                    &[30.0, 53.0, 54.0, 54.0, 30.0, 54.0],
                 ),
             ),
             (
@@ -850,7 +880,7 @@ mod tests {
                 ],
                 [
                     group("d", 4..6, 0, &ALL[..3], &[30.5, 30.0, 31.0]),
-                    group("w", 2..6, 1, &ALL[..3], &[30.5, 30.0, 54.0]),
+                    group("w", 2..6, 1, &ALL[..3], &[30.5, 30.0, 53.0]),
                     group("m", 2..6, 2, &ALL[..1], &[30.5]),
                 ]
                 .concat(),
@@ -873,7 +903,7 @@ mod tests {
                     ("custom_levels [2]", Toggle(true)),
                     ("length", Length(2)),
                 ],
-                group("Custom ", 2..6, 6, &ALL[..3], &[30.5, 30.0, 54.0]),
+                group("Custom ", 2..6, 6, &ALL[..3], &[30.5, 30.0, 53.0]),
             ),
             (
                 "custom week",
@@ -1063,7 +1093,24 @@ mod tests {
     fn host_profiles_use_finer_candles_and_whole_tick_rows() {
         let time = Utc.with_ymd_and_hms(2026, 2, 2, 0, 0, 0).unwrap();
         let data = [Bar::new(time, 10.0, 34.0, 10.0, 34.0, 4.0)];
-        for (tick, want) in [(None, [33.5, 33.0, 34.0]), (Some(1.0), [34.5, 34.0, 35.0])] {
+        let endpoints = [(10.0, 1.0), (34.0, 3.0), (34.0, 0.0)];
+        // At row 12 the empty neighbours tie: alternate by distance, upper first. Bounds reach
+        // 3..=22: row 23 is then selected and exceeds the budget, though row 2 would fit.
+        // At row 1 a lower row of volume 1 reaches the budget exactly and is included.
+        for (tick, points, want) in [
+            (None, endpoints, [33.5, 33.0, 34.0]),
+            (Some(1.0), endpoints, [34.5, 34.0, 35.0]),
+            (
+                None,
+                [(10.0, 2.0), (22.0, 6.0), (34.0, 2.0)],
+                [22.5, 13.0, 33.0],
+            ),
+            (
+                None,
+                [(10.0, 1.0), (11.0, 6.0), (34.0, 3.0)],
+                [11.5, 10.0, 12.0],
+            ),
+        ] {
             let mut study = AutoKeyLevels::new();
             study
                 .set_input("current [1]", InputValue::Toggle(false))
@@ -1073,22 +1120,26 @@ mod tests {
             study.set_instrument(instrument.as_ref());
             let request = study.data_requests().pop().unwrap();
             assert_eq!(request.timeframe, Some(Timeframe::Min1));
-            let mut intrabars = [
-                Bar::new(time, 10.0, 10.0, 10.0, 10.0, 1.0),
-                Bar::new(
-                    time + chrono::TimeDelta::minutes(1),
-                    34.0,
-                    34.0,
-                    34.0,
-                    34.0,
-                    3.0,
-                ),
-            ];
+            let mut intrabars: Vec<_> = points
+                .into_iter()
+                .enumerate()
+                .map(|(i, (price, volume))| {
+                    Bar::new(
+                        time + chrono::TimeDelta::minutes(i as i64),
+                        price,
+                        price,
+                        price,
+                        price,
+                        volume,
+                    )
+                })
+                .collect();
             for (revision, want) in [want, [10.5, 10.0, 11.0]].into_iter().enumerate() {
                 if revision == 1 {
                     intrabars[1] = Bar::new(intrabars[1].time, 10.0, 10.0, 10.0, 10.0, 3.0);
                     // Retain the range with a zero-volume candle at 34.
                     intrabars[0] = Bar::new(time, 34.0, 34.0, 34.0, 34.0, 0.0);
+                    intrabars[2].volume = 0.0;
                 }
                 study.update_data(
                     &data,
