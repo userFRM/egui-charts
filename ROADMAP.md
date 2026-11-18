@@ -82,7 +82,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] The triangle pattern runs its two boundaries on to their apex and fills only the polygon they enclose.
 - [x] Three-drives ratios are measured in price.
 - [x] Elliott triangles collect an origin and waves A to E.
-- [x] Ghost Feed projects translucent candles along its clicked path, with configurable average range and noise in instrument ticks.
+- [x] Ghost Feed projects translucent candles along its clicked path, with configurable average range and noise in instrument ticks, body, border and wick colours, switches for the borders and the wicks, and transparency.
 - [x] Gann squares configure their fan direction, fan lines and arcs, and show or hide the fan and the arcs.
 - [x] Each drawing tool starts from a default style chosen for its role, and its default line, level and text colours are drawn in a shade that keeps 4:1 on the light, dark and high-contrast charts.
 - [ ] Complete the remaining on-chart text editing of horizontal rays and vertical lines.

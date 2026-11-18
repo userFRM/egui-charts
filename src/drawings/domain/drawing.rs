@@ -83,8 +83,9 @@ pub enum FolderSync {
 ///
 /// let mut arrow = Drawing::new(1, DrawingToolType::TrendLine);
 /// arrow.arrow_end_style = ArrowStyle::Arrow;
-/// let mut feed = GhostFeedConfig::default();
+/// let mut feed = GhostFeedConfig::drawing_default();
 /// feed.noise_ticks = 2.0;
+/// feed.show_wick = false;
 /// let mut ghost = Drawing::new(2, DrawingToolType::GhostFeed);
 /// ghost.ghost_feed = Some(feed);
 /// let mut fib = Drawing::new(3, DrawingToolType::FibonacciRetracement);
@@ -311,7 +312,9 @@ pub struct Drawing {
     /// [`GannConfig::for_tool`].
     #[serde(default)]
     pub gann: Option<GannConfig>,
-    /// Average range and noise, in ticks, of the candles a Ghost Feed projects.
+    /// Average range and noise, in ticks, and colours of the candles a Ghost Feed projects. New
+    /// feeds start from [`GhostFeedConfig::drawing_default`]; `None` uses the defaults, the
+    /// colours of feeds saved before these settings.
     #[serde(default)]
     pub ghost_feed: Option<GhostFeedConfig>,
     /// Whether a rectangle or parallel channel draws its halfway line; a channel's takes
@@ -691,7 +694,8 @@ impl Drawing {
             image: None,
             closed: false,
             gann: None,
-            ghost_feed: None,
+            ghost_feed: (tool_type == DrawingToolType::GhostFeed)
+                .then(GhostFeedConfig::drawing_default),
             bars_pattern: (tool_type == DrawingToolType::BarsPattern).then(|| BarsPatternConfig {
                 mode: BarsPatternMode::HighLowBars,
                 ..Default::default()

@@ -614,10 +614,12 @@ const FOOTER_HEIGHT: f32 = 60.0;
 /// Keyboard and colour picker state kept in egui memory between frames.
 #[derive(Clone, Default)]
 struct UiState {
-    /// Colour, fill colour and signpost disc colour pickers of the Style tab.
+    /// Colour, fill colour and signpost disc colour pickers of the Style tab; they also serve the
+    /// ghost feed's rising body, falling body and wick.
     pickers: [ColorPickerState; 3],
     /// Text colour, background and border pickers of the Text tab, and of the Style tab's rows
-    /// for a price label's badge and a price note's label.
+    /// for a price label's badge and a price note's label; the text and background pickers also
+    /// serve the ghost feed's rising and falling borders.
     text_pickers: [ColorPickerState; 3],
     /// One list of colour pickers per level grid of the current tool.
     level_pickers: Vec<Vec<ColorPickerState>>,
@@ -741,6 +743,7 @@ mod tests {
                     ),
                     ("Line width", width),
                     ("Line style", style),
+                    ("Wick", tool == Tool::GhostFeed),
                     ("Coordinates", !freehand),
                     ("Template", true),
                     ("Ok", true),
