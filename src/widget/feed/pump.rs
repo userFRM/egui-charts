@@ -153,12 +153,13 @@ impl Chart {
         let now = ctx.input(|input| input.time);
         self.scroll_footprints(&mut link);
         let drained = link.inbox.drain();
-        // A reset in this drain invalidates earlier footprint answers before admission.
-        if drained
+        // Answers apply before updates: a page drained with a seek joins the trades it discards.
+        let reset = drained
             .updates
             .iter()
-            .any(|(id, updates)| link.subscription == Some(*id) && updates.reset)
-        {
+            .any(|(id, updates)| link.subscription == Some(*id) && updates.reset);
+        // A reset in this drain invalidates earlier footprint answers before admission.
+        if reset {
             link.pending
                 .retain(|(_, request, _)| !matches!(request, Request::Footprints(_)));
             link.retries
@@ -244,7 +245,7 @@ impl Chart {
                     Err(error) => self.request_failed(&mut link, request, failures, error, now),
                 },
                 Request::Trades(asked) => match result::<TradePage>(answer) {
-                    Ok(page) => self.apply_trades(&mut link, &asked, page),
+                    Ok(page) => self.apply_trades(&mut link, &asked, page, reset),
                     Err(error) if error.is_recoverable() => {
                         self.request_failed(&mut link, request, failures, error, now);
                     }
@@ -903,8 +904,15 @@ impl Chart {
     /// Puts a page of older trades in front of the held ones. A page that ends history, names a
     /// continuation, or adds nothing before a boundary it was asked for cannot move it, so the
     /// same request is never repeated. A page that ends history also confirms that the held trades
-    /// start where trade history starts.
-    fn apply_trades(&mut self, link: &mut FeedLink, asked: &TradeRequest, page: TradePage) {
+    /// start where trade history starts. A `reset` in the same drain discards the held trades, so
+    /// the page then leaves the order-flow inputs as the reset cleared them.
+    fn apply_trades(
+        &mut self,
+        link: &mut FeedLink,
+        asked: &TradeRequest,
+        page: TradePage,
+        reset: bool,
+    ) {
         let empty = page.trades.is_empty();
         let continuation = page.continue_before.filter(|_| empty);
         if let Some(error) = non_progressing(asked.before, continuation) {
@@ -999,36 +1007,38 @@ impl Chart {
                 .footprint(None, &self.state.data().bars)
                 .map(crate::data::FootprintState::new);
         }
-        for (input, _) in &link.study_inputs {
-            // A prepared footprint input keeps the executions it received: only a page that
-            // changes executions from the cutoff on rebuilds it, as it does the chart's footprint.
-            let prepared = prepared_before.is_some() && input.is_footprint();
-            let rebuild = if prepared { tail_changed } else { changed };
-            if rebuild {
-                input.replace_trades(
-                    &link.clock,
-                    &link.trades,
-                    &self.state.data().bars,
-                    link.footprint.as_ref(),
-                );
-            } else if prepared {
-                if rejected == 0
-                    && let Some((from, end, oldest, live)) = coverage
-                {
-                    // The store's losses can include executions the input never received, so the
-                    // page proves its coverage only after the newest of them.
-                    let from = link.trades.lost_until().map_or(from, |lost| {
-                        from.max(
-                            lost.checked_add_signed(chrono::TimeDelta::nanoseconds(1))
-                                .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC),
-                        )
-                    });
-                    input.cover_footprint(from, end.min(oldest.unwrap_or(end)));
-                    if let Some(retained) = unproven.1 {
-                        input.cover_footprint(from.max(retained), end.min(live.unwrap_or(end)));
+        if !reset {
+            for (input, _) in &link.study_inputs {
+                // A prepared footprint input keeps the executions it received: only a page that
+                // changes executions from the cutoff on rebuilds it, as it does the chart's footprint.
+                let prepared = prepared_before.is_some() && input.is_footprint();
+                let rebuild = if prepared { tail_changed } else { changed };
+                if rebuild {
+                    input.replace_trades(
+                        &link.clock,
+                        &link.trades,
+                        &self.state.data().bars,
+                        link.footprint.as_ref(),
+                    );
+                } else if prepared {
+                    if rejected == 0
+                        && let Some((from, end, oldest, live)) = coverage
+                    {
+                        // The store's losses can include executions the input never received, so the
+                        // page proves its coverage only after the newest of them.
+                        let from = link.trades.lost_until().map_or(from, |lost| {
+                            from.max(
+                                lost.checked_add_signed(chrono::TimeDelta::nanoseconds(1))
+                                    .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC),
+                            )
+                        });
+                        input.cover_footprint(from, end.min(oldest.unwrap_or(end)));
+                        if let Some(retained) = unproven.1 {
+                            input.cover_footprint(from.max(retained), end.min(live.unwrap_or(end)));
+                        }
                     }
+                    input.refresh_footprint_coverage(&link.trades, None, None);
                 }
-                input.refresh_footprint_coverage(&link.trades, None, None);
             }
         }
         link.trade_cursor = continuation;
