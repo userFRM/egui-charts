@@ -388,6 +388,8 @@ impl Distinct {
 struct State {
     source: Source,
     trade_bars: super::inbox::TradeBars,
+    /// These rows have no live allocation anchor. The first sink allocation replaces them.
+    paged_rate: bool,
     /// Open of the newest bar a rebuild left out because the store had lost executions of it:
     /// later executions of that bar or an older one add to no bar.
     cut: Option<DateTime<Utc>>,
@@ -793,6 +795,7 @@ impl OrderFlowInput {
             return state.push_footprint(clock, trade, None);
         }
         if let Some(timeframe) = clock.timeframe().filter(|tf| tf.is_trade_based()) {
+            state.discard_paged_rate();
             let tick_size = state.tick_size;
             let Ok(parts) = state.trade_bars.push(timeframe, trade, tick_size) else {
                 return;
@@ -816,6 +819,7 @@ impl OrderFlowInput {
         first: bool,
     ) {
         let mut state = self.state();
+        state.discard_paged_rate();
         if matches!(state.source, Source::Footprint) {
             state.push_footprint(clock, trade, Some((open, size)));
         } else {
@@ -825,7 +829,9 @@ impl OrderFlowInput {
     }
 
     pub(crate) fn set_trade_bar(&self, open: DateTime<Utc>) {
-        self.state().trade_bars.forming = Some(open);
+        let mut state = self.state();
+        state.discard_paged_rate();
+        state.trade_bars.forming = Some(open);
     }
 
     /// Leaves out queued executions that cannot be allocated again, as after a store loss.
@@ -834,6 +840,7 @@ impl OrderFlowInput {
     #[cfg(any(feature = "widget", feature = "alert-engine"))]
     pub(crate) fn leave_out_queued(&self, open: DateTime<Utc>, until: DateTime<Utc>) {
         let mut state = self.state();
+        state.discard_paged_rate();
         match state.source {
             Source::Footprint => {
                 if let Some(flow) = &mut state.footprint {
@@ -921,6 +928,52 @@ impl OrderFlowInput {
         };
         state.bars.insert(open, (row, 0));
         state.finish(now, open);
+    }
+
+    /// Require the complete tape to reproduce each candle with the sink's allocator. A short
+    /// final bar is valid. The historical grouping is not a live allocation anchor.
+    #[cfg(feature = "widget")]
+    pub(crate) fn rebuild_paged_tick_rate(
+        &self,
+        count: std::num::NonZeroU64,
+        trades: &super::trades::Trades,
+        history: &[crate::model::Bar],
+    ) {
+        let mut state = self.state();
+        if !matches!(state.source, Source::Fixed(OrderFlowKind::TradeRate { .. }))
+            || state.trade_bars.forming.is_some()
+        {
+            return;
+        }
+        state.discard_paged_rate();
+        if history.is_empty() {
+            return;
+        }
+        let mut grouped = super::inbox::TradeBars::default();
+        let mut tape = trades.iter();
+        let timeframe = crate::model::Timeframe::Ticks(count);
+        let matched = history.iter().all(|expected| {
+            let mut last = None;
+            for _ in 0..count.get() {
+                let Some(trade) = tape.next() else { break };
+                let Ok(parts) = grouped.push(timeframe, trade, None) else {
+                    return false;
+                };
+                // Tick intervals allocate the whole execution to exactly one bar.
+                let Some((bar, size)) = parts.into_iter().next() else {
+                    return false;
+                };
+                state.add_trade(trade, bar.time, size, true);
+                last = Some(bar);
+            }
+            last.is_some_and(|bar| super::merge::same_values(&bar, expected))
+        }) && tape.next().is_none();
+        if matched {
+            state.paged_rate = true;
+        } else {
+            // No reader can see a partially matched run: the lock covers the entire rebuild.
+            state.clear();
+        }
     }
 
     /// Rebuilds the source from the executions the chart holds, in place of what it holds. A
@@ -1677,6 +1730,7 @@ impl State {
         Self {
             source,
             trade_bars: super::inbox::TradeBars::default(),
+            paged_rate: false,
             cut: None,
             bars: BTreeMap::new(),
             last: None,
@@ -1696,6 +1750,12 @@ impl State {
             tick_size: None,
             replay: None,
             placement: Placement::default(),
+        }
+    }
+
+    fn discard_paged_rate(&mut self) {
+        if self.paged_rate {
+            self.clear();
         }
     }
 

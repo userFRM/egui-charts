@@ -218,6 +218,7 @@ impl Drawing {
         });
         let color = self.color32();
         let stroke = self.stroke();
+        let mut correlation = None;
 
         match self.tool_type {
             // Simple Lines (9 tools)
@@ -275,7 +276,9 @@ impl Drawing {
             DrawingToolType::ParallelChannel
             | DrawingToolType::FlatTopBottom
             | DrawingToolType::DisjointChannel => self.render_channel(painter, rect),
-            DrawingToolType::RegressionTrend => self.render_regression_trend(painter, view),
+            DrawingToolType::RegressionTrend => {
+                correlation = self.render_regression_trend(painter, view);
+            }
 
             // Patterns (6 tools)
             DrawingToolType::XABCDPattern => self.render_xabcd_pattern(painter),
@@ -366,6 +369,10 @@ impl Drawing {
             self.render_text_hint(painter);
         }
         self.finish_style(painter, start, rect);
+        // After the drawing's style, so that bold text leaves the regression trend's correlation alone.
+        if let Some(label) = correlation {
+            painter.add(label);
+        }
         if self.tool_type.supports_line_measurements() {
             self.render_line_measurements(painter, view, selected);
         }
