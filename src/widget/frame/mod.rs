@@ -2463,14 +2463,22 @@ impl Chart {
         for study in studies
             .indicators()
             .iter()
-            .filter(|study| self.shows_study(study.as_ref()) && study.labels_on_price())
+            .filter(|study| self.shows_study(study.as_ref()))
         {
-            crate::chart::indicators::plots::paint_labels(
+            crate::chart::indicators::plots::paint_price_segments(
                 &clipped_painter,
                 study.as_ref(),
                 &price_map,
                 &coords,
             );
+            if study.labels_on_price() {
+                crate::chart::indicators::plots::paint_labels(
+                    &clipped_painter,
+                    study.as_ref(),
+                    &price_map,
+                    &coords,
+                );
+            }
         }
         self.paint_signals(ui, &coords);
         let target_lines = self
