@@ -165,6 +165,8 @@ pub trait Datafeed: MaybeSend + 'static {
     }
 
     /// Describes `symbol`. The default reports [`Instrument::new`] of the symbol.
+    /// The answer's [`symbol`](Instrument::symbol) may differ from `symbol`, such as `X:ABC` for
+    /// `ABC`: a chart keeps the answer as the instrument of `symbol` and goes on asking for it.
     /// Fill [`Instrument::profile_resolutions`] to suggest the bars volume profile studies and
     /// drawings read.
     fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {

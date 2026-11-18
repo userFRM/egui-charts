@@ -237,6 +237,7 @@ impl Chart {
             ),
             last_rendered_price_rect: egui::Rect::NOTHING,
             last_rendered_volume_rect: egui::Rect::NOTHING,
+            last_vertical_grid_x: Vec::new(),
             last_rendered_indicator_panes: Vec::new(),
             // Multi-chart sync
             layout_inactive: false,
