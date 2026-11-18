@@ -462,9 +462,10 @@ impl CustomProfileSession {
 /// Which hours divide a session volume profile chart into sessions.
 ///
 /// Only intraday charts are divided this way: daily and longer bars profile by trading date.
-/// Bars outside regular, extended or custom hours still join the session before them, so a host
-/// that wants them left out should not supply them. The pre-market, post-market and segment
-/// choices profile only the bars of their hours, each bar in the hours it opens in.
+/// Every choice but [`Self::Chart`] profiles only the bars of its hours, each bar in the hours it
+/// opens in: a profile takes a day's bars from its first in those hours to its last, so the bars
+/// of a midday break inside them stay in it, and the bars before and after, such as the
+/// post-market of a regular-hours profile, join no profile.
 ///
 /// ```
 /// use egui_charts::model::{ProfileSession, TradeProfileSettings};

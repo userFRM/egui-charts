@@ -98,9 +98,9 @@ impl Chart {
         self.profile_division().0
     }
 
-    /// The calendar that divides the chart into profile sessions and the choice that divides
-    /// those further: the pre-market, post-market or segment choice, otherwise
-    /// [`ProfileSession::Chart`].
+    /// The calendar that divides the chart into profile sessions and the choice that keeps the
+    /// bars of their hours ([`ProfileSession::profiled`]): the settings' choice on intraday
+    /// bars, otherwise [`ProfileSession::Chart`].
     fn profile_division(&self) -> (BarClock, &ProfileSession) {
         let mut clock = self.bar_clock();
         let instrument = self.instrument();
@@ -117,21 +117,18 @@ impl Chart {
             .and_then(|i| i.time_zone.clone())
             .unwrap_or_else(TimezoneId::utc);
         let hours = instrument.and_then(|i| i.session.as_ref());
-        let segments = matches!(
-            selection,
-            ProfileSession::PreMarket | ProfileSession::PostMarket | ProfileSession::Segments
-        );
-        let by_time_of_day = segments || matches!(selection, ProfileSession::Custom(_));
+        let by_time_of_day =
+            !matches!(selection, ProfileSession::Regular | ProfileSession::Extended);
         if (intraday || !by_time_of_day)
             && let Some(divided) = selection.session_clock(&clock, &zone, hours)
         {
-            // Regular, extended and custom hours divide their sessions no further.
-            let further = if segments {
+            // Daily and longer bars keep every bar of their trading dates.
+            let kept = if intraday {
                 selection
             } else {
                 &ProfileSession::Chart
             };
-            return (divided, further);
+            return (divided, kept);
         }
         // Without instrument hours there is nothing to select among, so the chart's calendar stays.
         if let Some(zone) = instrument
@@ -267,8 +264,7 @@ fn profiled(
     clock: &BarClock,
     selection: &ProfileSession,
 ) -> Option<TradeProfileRanges> {
-    use ProfileSession::{PostMarket, PreMarket, Segments};
-    if !matches!(selection, PreMarket | PostMarket | Segments) {
+    if *selection == ProfileSession::Chart {
         return Some(ranges);
     }
     let sessions = clock.sessions();
@@ -276,7 +272,7 @@ fn profiled(
     for range in ranges.ranges() {
         let first = bars.partition_point(|bar| bar.time < range.start);
         let end = bars.partition_point(|bar| bar.time < range.end);
-        for part in selection.profiled(bars, first..end, &sessions, false) {
+        for part in selection.profiled(bars, first..end, &sessions, true) {
             let close = match bars.get(part.end).filter(|_| part.end < end) {
                 Some(after) => clock.bar_open(after.time),
                 None => range.end,
@@ -314,6 +310,23 @@ mod tests {
             ..Default::default()
         });
         chart
+    }
+
+    /// New York hours on weekdays: regular from 09:30 to 16:00, extended from 04:00 to 09:30 and
+    /// from 16:00 to 20:00.
+    fn us_equity_hours() -> Instrument {
+        use Weekday::*;
+        let at = |hour, minute| NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+        let week = [Mon, Tue, Wed, Thu, Fri];
+        Instrument::new("X")
+            .with_time_zone(TimezoneId::named("America/New_York").unwrap())
+            .with_session(
+                Session::new([SessionWindow::new(week, at(9, 30), at(16, 0))])
+                    .with_extended_windows([
+                        SessionWindow::new(week, at(4, 0), at(9, 30)),
+                        SessionWindow::new(week, at(16, 0), at(20, 0)),
+                    ]),
+            )
     }
 
     fn starts(chart: &Chart) -> Vec<String> {
@@ -368,9 +381,9 @@ mod tests {
         assert_eq!(other_type.profile_clock(), plain);
     }
 
-    /// Daily and longer bars profile by trading date whatever the custom hours' zone: a Paris
-    /// instrument's bars stamped at Paris midnight keep their Monday-to-Friday weeks, and its
-    /// monthly bars their calendar years.
+    /// Daily and longer bars profile by trading date whatever the custom hours' zone, and keep
+    /// every bar under regular hours: a Paris instrument's bars stamped at Paris midnight keep
+    /// their Monday-to-Friday weeks, and its monthly bars their calendar years.
     #[test]
     fn custom_zone_keeps_daily_profiles_on_their_trading_weeks() {
         use Weekday::*;
@@ -440,6 +453,10 @@ mod tests {
             ),
             ("day UTC", held(&days, Timeframe::Day1, custom("UTC"))),
             (
+                "day regular",
+                held(&days, Timeframe::Day1, ProfileSession::Regular),
+            ),
+            (
                 "day New York",
                 held(&days, Timeframe::Day1, custom("America/New_York")),
             ),
@@ -452,6 +469,7 @@ mod tests {
         let expected = [
             ("day chart", vec![5, 5]),
             ("day UTC", vec![5, 5]),
+            ("day regular", vec![5, 5]),
             ("day New York", vec![5, 5]),
             ("month chart", vec![2, 2]),
             ("month UTC", vec![2, 2]),
@@ -459,25 +477,15 @@ mod tests {
         assert!(observed == expected, "bars per profile: {observed:?}");
     }
 
-    /// The pre-market, post-market and segment choices profile only the bars of their hours,
-    /// each part ending at the open of the bar after it, and a merge of two segments leaves the
-    /// next one apart and stays with its choice. Without extended hours they keep the chart's
-    /// calendar.
+    /// Every choice but the trading day profiles only the bars of its hours, each part ending at
+    /// the open of the bar after it: regular hours end Friday's profile at the 21:00 UTC close
+    /// and start Monday's at the 13:30 open, and extended hours end Friday's at the 01:00
+    /// post-market close. A merge of two segments leaves the next one apart and stays with its
+    /// choice. Without extended hours the segment choices keep the chart's calendar.
     #[test]
     fn segment_sessions_profile_each_part_of_the_day_apart() {
-        use Weekday::*;
-        let new_york = TimezoneId::named("America/New_York").unwrap();
+        let exchange = us_equity_hours();
         let at = |hour, minute| NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
-        let week = [Mon, Tue, Wed, Thu, Fri];
-        let exchange = Instrument::new("X")
-            .with_time_zone(new_york.clone())
-            .with_session(
-                Session::new([SessionWindow::new(week, at(9, 30), at(16, 0))])
-                    .with_extended_windows([
-                        SessionWindow::new(week, at(4, 0), at(9, 30)),
-                        SessionWindow::new(week, at(16, 0), at(20, 0)),
-                    ]),
-            );
         let ranges = |chart: &Chart| -> Vec<String> {
             let ranges = chart.trade_profile_ranges().unwrap();
             let format = |time: DateTime<Utc>| time.format("%d %H:%M").to_string();
@@ -499,6 +507,10 @@ mod tests {
             (ProfileSession::Segments, &segments[..]),
             (ProfileSession::PreMarket, &segments[2..3]),
             (ProfileSession::PostMarket, &[segments[1], segments[4]][..]),
+            // Regular hours alone bucket the hours from their 09:30 open, so Friday's 20:00 bar
+            // opens at 19:30; extended hours close at 20:00 New York time.
+            (ProfileSession::Regular, &["08 19:30-08 21:00", "11 13:30-11 20:00"][..]),
+            (ProfileSession::Extended, &["08 20:00-09 01:00", "11 08:00-12 00:00"][..]),
         ] {
             let chart = hourly(exchange.clone(), session.clone());
             assert_eq!(ranges(&chart), expected, "{session:?}");
@@ -516,9 +528,9 @@ mod tests {
         });
         assert_eq!(ranges(&merged), [segments[1], segments[4]]);
         let regular = Instrument::new("X")
-            .with_time_zone(new_york)
+            .with_time_zone(TimezoneId::named("America/New_York").unwrap())
             .with_session(Session::new([SessionWindow::new(
-                [Mon],
+                [Weekday::Mon],
                 at(9, 0),
                 at(15, 0),
             )]));
