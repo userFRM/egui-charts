@@ -493,6 +493,16 @@ impl StudyTemplate {
                     fill.visible = false;
                 }
             }
+            // Chart patterns saved before developing boundaries had their own plot drew them
+            // in its default style.
+            "Continuation Chart Patterns" | "Reversal Chart Patterns"
+                if self.settings.plots.len() == 2 =>
+            {
+                template.settings.plots.push(
+                    crate::studies::ChartPatterns::new(crate::studies::PatternFamily::Reversal)
+                        .plot_style(2),
+                );
+            }
             // The unused navy plot colour in older saves still drew rising columns green.
             "Accelerator Oscillator"
                 if self.settings.plot_variants.iter().all(Vec::is_empty)
@@ -896,6 +906,51 @@ mod tests {
                     assert_eq!(&restored.value, value, "{id}");
                 }
             }
+        }
+        // Literal two-plot saves from before developing boundaries had their own style keep
+        // their input ids and styles, with the third plot in the style they already drew.
+        for saved in [
+            r#"{"name":"Continuation Chart Patterns","inputs":[["strength",{"Length":3}],["min_length",{"Length":8}],["max_length",{"Length":120}],["tolerance",{"Number":1.0}],["touches",{"Length":2}],["pole",{"Number":5.0}],["patterns[0]",{"Toggle":true}],["patterns[1]",{"Toggle":true}],["patterns[2]",{"Toggle":true}],["patterns[3]",{"Toggle":true}],["patterns[4]",{"Toggle":true}],["patterns[5]",{"Toggle":true}],["patterns[6]",{"Toggle":true}],["patterns[7]",{"Toggle":true}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ChartPatterns.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleUp","visible":false},{"color":[200,0,120,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+            r#"{"name":"Reversal Chart Patterns","inputs":[["strength",{"Length":3}],["min_length",{"Length":10}],["max_length",{"Length":200}],["tolerance",{"Number":3.0}],["depth",{"Number":3.0}],["handle",{"Number":50.0}],["patterns[0]",{"Toggle":true}],["patterns[1]",{"Toggle":true}],["patterns[2]",{"Toggle":true}],["patterns[3]",{"Toggle":true}],["patterns[4]",{"Toggle":true}],["patterns[5]",{"Toggle":true}],["patterns[6]",{"Toggle":true}],["patterns[7]",{"Toggle":true}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ChartPatterns.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleUp","visible":false},{"color":[200,0,120,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+        ] {
+            let saved: StudyTemplate = serde_json::from_str(saved).unwrap();
+            let mut restored = saved.create().unwrap();
+            let mut expected = saved.settings.clone();
+            expected.plots.push(crate::studies::PlotStyle {
+                color: Color32::from_rgb(120, 123, 134),
+                width: 1.0,
+                pattern: crate::model::LineStyle::Dashed,
+                plot_type: crate::studies::PlotType::Line,
+                visible: true,
+            });
+            expected.plot_variants.push(Vec::new());
+            assert_eq!(restored.settings(), expected, "{}", saved.name);
+            let inputs = restored.inputs();
+            for (id, value) in &saved.inputs {
+                assert_eq!(
+                    inputs
+                        .iter()
+                        .find(|input| input.id == *id)
+                        .map(|input| &input.value),
+                    Some(value),
+                    "{} {id}",
+                    saved.name
+                );
+            }
+            assert_eq!(restored.line_names(), ["Bullish", "Bearish", "Developing"]);
+            // A new save retains edits to the developing style independently of both directions.
+            expected.plots[2].color = Color32::from_rgb(230, 150, 0);
+            expected.plots[2].width = 2.0;
+            expected.plots[2].pattern = crate::model::LineStyle::Dotted;
+            expected.plots[2].visible = false;
+            restored.apply_settings(&[], expected.clone()).unwrap();
+            let json =
+                serde_json::to_string(&StudyTemplate::from_study(restored.as_ref())).unwrap();
+            let again = serde_json::from_str::<StudyTemplate>(&json)
+                .unwrap()
+                .create()
+                .unwrap();
+            assert_eq!(again.settings(), expected, "{} saved again", saved.name);
         }
     }
 

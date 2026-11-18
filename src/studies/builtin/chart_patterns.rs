@@ -821,11 +821,11 @@ impl State {
 /// # Outputs
 ///
 /// Line 0 marks a bullish confirmation at the low of its bar, line 1 a bearish one at the
-/// high, each labelled with the abbreviations of the formations it confirms. Boundaries are
-/// also generated as drawings, 1 px wide, in the Bullish or Bearish colour once confirmed and
-/// dashed in the third of [`colors`](Indicator::colors), grey by default, while developing; a
-/// reversal formation draws only its neckline or breakout level. They keep these styles and
-/// show while the study does, whatever the plot styles.
+/// high, each labelled with the abbreviations of the formations it confirms. Line 2,
+/// Developing, holds no values. Boundaries are also generated as drawings, each in the colour,
+/// width and pattern of its plot and hidden with it: Bullish or Bearish once its formation is
+/// confirmed, Developing, grey and dashed by default, until then. A reversal formation draws
+/// only its neckline or breakout level.
 #[derive(Clone, Debug)]
 pub struct ChartPatterns {
     family: PatternFamily,
@@ -837,6 +837,9 @@ pub struct ChartPatterns {
     stepper: Stepper<State>,
     #[cfg(feature = "drawings")]
     drawings: Vec<crate::drawings::Drawing>,
+    /// The plot that styles each of `drawings`: 0 Bullish, 1 Bearish, 2 Developing.
+    #[cfg(feature = "drawings")]
+    drawing_plots: Vec<usize>,
     colors: [Color32; 3],
     visible: bool,
 }
@@ -874,6 +877,8 @@ impl ChartPatterns {
             stepper: Stepper::default(),
             #[cfg(feature = "drawings")]
             drawings: Vec::new(),
+            #[cfg(feature = "drawings")]
+            drawing_plots: Vec::new(),
             colors: [palette::BLUE, palette::RED, palette::GRAY],
             visible: true,
         }
@@ -1032,13 +1037,17 @@ impl Indicator for ChartPatterns {
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
         crate::studies::PlotStyle {
-            color: self.colors[line.min(1)],
+            color: self.colors[line.min(2)],
             width: 1.0,
-            pattern: crate::model::LineStyle::Solid,
-            plot_type: if line == 0 {
-                crate::studies::PlotType::TriangleUp
+            pattern: if line >= 2 {
+                crate::model::LineStyle::Dashed
             } else {
-                crate::studies::PlotType::TriangleDown
+                crate::model::LineStyle::Solid
+            },
+            plot_type: match line {
+                0 => crate::studies::PlotType::TriangleUp,
+                1 => crate::studies::PlotType::TriangleDown,
+                _ => crate::studies::PlotType::Line,
             },
             visible: true,
         }
@@ -1088,20 +1097,22 @@ impl Indicator for ChartPatterns {
                 IndicatorValue::Multiple(vec![
                     if marks[0] != 0 { bar.low } else { f64::NAN },
                     if marks[1] != 0 { bar.high } else { f64::NAN },
+                    f64::NAN,
                 ])
             });
         #[cfg(feature = "drawings")]
         {
-            self.drawings = self
+            (self.drawings, self.drawing_plots) = self
                 .formations()
                 .iter()
                 .flat_map(|formation| {
                     let confirmed = formation.status == FormationStatus::Confirmed;
-                    let color = match formation.direction {
-                        Some(PatternDirection::Bullish) if confirmed => self.colors[0],
-                        Some(PatternDirection::Bearish) if confirmed => self.colors[1],
-                        _ => self.colors[2],
+                    let plot = match formation.direction {
+                        Some(PatternDirection::Bullish) if confirmed => 0,
+                        Some(PatternDirection::Bearish) if confirmed => 1,
+                        _ => 2,
                     };
+                    let color = self.colors[plot];
                     formation.boundaries.iter().map(move |segment| {
                         let mut drawing = crate::drawings::Drawing::new(
                             0,
@@ -1119,10 +1130,10 @@ impl Indicator for ChartPatterns {
                                 crate::drawings::ChartPoint::new(bar as f32, price)
                             })
                             .collect();
-                        drawing
+                        (drawing, plot)
                     })
                 })
-                .collect();
+                .unzip();
         }
     }
 
@@ -1144,6 +1155,11 @@ impl Indicator for ChartPatterns {
         false
     }
 
+    #[cfg(feature = "drawings")]
+    fn drawing_plot(&self, index: usize) -> Option<usize> {
+        self.drawing_plots.get(index).copied()
+    }
+
     fn colors(&self) -> Vec<Color32> {
         self.colors.to_vec()
     }
@@ -1159,7 +1175,7 @@ impl Indicator for ChartPatterns {
     }
 
     fn line_names(&self) -> Vec<String> {
-        vec!["Bullish".into(), "Bearish".into()]
+        vec!["Bullish".into(), "Bearish".into(), "Developing".into()]
     }
 
     fn is_visible(&self) -> bool {

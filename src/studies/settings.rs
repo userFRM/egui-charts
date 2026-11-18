@@ -1225,6 +1225,10 @@ impl Indicator for ConfiguredStudy {
     fn drawings_use_plot_style(&self) -> bool {
         self.study.drawings_use_plot_style()
     }
+    #[cfg(feature = "drawings")]
+    fn drawing_plot(&self, index: usize) -> Option<usize> {
+        self.study.drawing_plot(index)
+    }
     fn candles(&self) -> &[super::StudyCandle] {
         self.study.candles()
     }
