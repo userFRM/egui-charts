@@ -4,6 +4,7 @@ mod absorption;
 mod alerts;
 mod big_trades;
 mod depth;
+mod footprint;
 mod icebergs;
 mod liquidity;
 mod stops;
@@ -24,6 +25,7 @@ use alerts::{Counting, Delivery};
 pub use big_trades::BigTradeRule;
 use big_trades::BigTrades;
 use depth::Depth;
+pub use footprint::FootprintRule;
 pub use icebergs::IcebergRule;
 use icebergs::Icebergs;
 use liquidity::Liquidity;
@@ -108,6 +110,8 @@ pub enum DetectionKind {
     StopRun,
     /// A closed bar meeting the stop sweep rule.
     StopSweep,
+    /// A bar meeting a footprint condition: see [`FootprintRule`].
+    FootprintCondition,
     /// Repeated visible refills at one price, exact or estimated.
     Iceberg,
     /// Aggressive volume absorbed at an inside price.
@@ -128,11 +132,12 @@ pub enum DetectionKind {
 
 impl DetectionKind {
     /// Every detection category, in panel order.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::BigTrade,
         Self::BigTradeZone,
         Self::StopRun,
         Self::StopSweep,
+        Self::FootprintCondition,
         Self::Iceberg,
         Self::Absorption,
         Self::LargeLiquidity,
@@ -150,6 +155,7 @@ impl DetectionKind {
             Self::BigTradeZone => "Big trade zones",
             Self::StopRun => "Stop runs",
             Self::StopSweep => "Stop sweeps",
+            Self::FootprintCondition => "Footprint conditions",
             Self::Iceberg => "Icebergs",
             Self::Absorption => "Absorption",
             Self::LargeLiquidity => "Large liquidity",
@@ -173,6 +179,10 @@ pub struct DetectorSettings {
     pub stop_runs: Detector<StopRunRule>,
     /// Directional footprint bars with exceptional volume.
     pub stop_sweeps: Detector<StopSweepRule>,
+    /// Footprint imbalances, stacked imbalances, and bar volume and delta levels. Settings
+    /// saved without it restore it disabled.
+    #[serde(default)]
+    pub footprint: Detector<FootprintRule>,
     /// Exact order refills and estimates from aggregate depth.
     pub icebergs: Detector<IcebergRule>,
     /// Aggressive volume absorbed at a resting inside price.
@@ -214,6 +224,24 @@ impl DetectorSettings {
             if alert.minimum == 0 {
                 return Err(FeedError::InvalidData(
                     "count alert minimum must be positive".into(),
+                ));
+            }
+        }
+        let rule = &self.footprint.rule;
+        for level in [rule.buy_volume_above, rule.sell_volume_above]
+            .into_iter()
+            .flatten()
+        {
+            if !level.is_finite() || level < 0.0 {
+                return Err(FeedError::InvalidData(
+                    "footprint volume level must be finite and not negative".into(),
+                ));
+            }
+        }
+        for level in [rule.delta_above, rule.delta_below].into_iter().flatten() {
+            if !level.is_finite() {
+                return Err(FeedError::InvalidData(
+                    "footprint delta level must be finite".into(),
                 ));
             }
         }
@@ -357,7 +385,8 @@ impl OrderFlowDetectors {
 
     /// Replaces the settings of every detector from the next event on. Completed detections
     /// stay; a disabled liquidity tracker drops its unfinished zones. Panics if a fixed
-    /// threshold is not positive and finite, or a refill or count-alert minimum is zero.
+    /// threshold is not positive and finite, a refill or count-alert minimum is zero, or a
+    /// footprint level is not finite or a volume level is negative.
     pub fn set_settings(&self, settings: DetectorSettings) {
         settings.validate().expect("invalid detector settings");
         self.lock().settings = settings;
@@ -376,6 +405,7 @@ impl OrderFlowDetectors {
         let Some(tracked) = symbols.get_mut(symbol) else {
             return;
         };
+        tracked.stop_sweeps.go_live(time);
         let mut out = Vec::new();
         // A loss clears the book, which waits for the next snapshot, and is not a detection.
         match event {
@@ -485,9 +515,7 @@ impl OrderFlowDetectors {
             &settings.absorption,
             &mut out,
         );
-        tracked
-            .stop_sweeps
-            .advance(time, settings.stop_sweeps.enabled, &mut out);
+        tracked.stop_sweeps.advance(time, settings, &mut out);
         tracked
             .counting
             .advance(time, settings, true, symbol, delivery);
@@ -551,12 +579,15 @@ impl Signals for OrderFlowDetectors {
                 let mut changes: Vec<_> = tracked
                     .detections
                     .iter()
-                    .filter(|signal| signal.category == DetectionKind::StopSweep.category())
+                    .filter(|signal| {
+                        signal.category == DetectionKind::StopSweep.category()
+                            || signal.category == DetectionKind::FootprintCondition.category()
+                    })
                     .map(|signal| SignalEvent::Remove(signal.id.clone()))
                     .collect();
                 tracked.stop_sweeps.set_clock(
                     clock(&tracked.instrument, timeframe),
-                    &settings.stop_sweeps,
+                    settings,
                     &mut changes,
                 );
                 deliver(Some(tracked), Some(subscription), changes);
@@ -600,7 +631,7 @@ impl State {
         (tracked.big_trades).set_clock(timeframe.and_then(|tf| clock(instrument, tf)));
         tracked.stop_sweeps.set_clock(
             timeframe.and_then(|tf| clock(instrument, tf)),
-            &self.settings.stop_sweeps,
+            &self.settings,
             &mut Vec::new(),
         );
         if self
@@ -689,7 +720,7 @@ impl Tracked {
         }
         self.stop_runs
             .trade(trade, self.tick, settings.stop_runs.enabled, out);
-        self.stop_sweeps.trade(trade, &settings.stop_sweeps, out);
+        self.stop_sweeps.trade(trade, settings, out);
         let big = &settings.big_trades;
         (self.big_trades).trade(trade, &big.rule, big.enabled, out);
     }
@@ -1362,7 +1393,7 @@ mod tests {
     }
 
     #[test]
-    fn fixed_thresholds_must_be_positive_and_finite() {
+    fn invalid_settings_are_refused_and_saved_settings_restore() {
         let detectors = OrderFlowDetectors::new();
         for size in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
             let mut settings = detectors.settings();
@@ -1379,6 +1410,40 @@ mod tests {
             detectors.set_settings(settings.clone());
             assert_eq!(detectors.settings(), settings);
         }
+        for (volume, delta) in [
+            (f64::NAN, 0.0),
+            (f64::INFINITY, 0.0),
+            (-1.0, 0.0),
+            (0.0, f64::NAN),
+            (0.0, f64::NEG_INFINITY),
+        ] {
+            let mut settings = detectors.settings();
+            settings.footprint.rule.sell_volume_above = Some(volume);
+            settings.footprint.rule.delta_below = Some(delta);
+            assert!(
+                std::panic::catch_unwind(|| detectors.set_settings(settings)).is_err(),
+                "accepted {volume}, {delta}"
+            );
+        }
+        let mut settings = detectors.settings();
+        settings.footprint.rule.buy_volume_above = Some(0.0);
+        settings.footprint.rule.delta_above = Some(-5.0);
+        detectors.set_settings(settings.clone());
+        assert_eq!(detectors.settings(), settings);
+        // Literal settings in the format saved before footprint conditions existed.
+        let saved = r#"{
+            "big_trades":{"enabled":false,"alert":false,"sound":false,"rule":{"threshold":"Auto","body_zones":true,"wick_zones":true}},
+            "stop_runs":{"enabled":false,"alert":false,"sound":false,"rule":null},
+            "stop_sweeps":{"enabled":false,"alert":false,"sound":false,"rule":null},
+            "icebergs":{"enabled":false,"alert":false,"sound":false,"rule":{"refills":2}},
+            "absorption":{"enabled":false,"alert":false,"sound":false,"rule":{"threshold":"Auto"}},
+            "liquidity":{"enabled":false,"alert":false,"sound":false,"rule":{"threshold":"Auto","fresh_threshold":"Auto"}},
+            "iceberg_count_alert":null,"stop_run_count_alert":null
+        }"#;
+        assert_eq!(
+            serde_json::from_str::<DetectorSettings>(saved).unwrap(),
+            DetectorSettings::default()
+        );
     }
 
     #[test]
@@ -1763,6 +1828,163 @@ mod tests {
                 "{name}: rebuilt back at one minute after the last sided execution"
             );
         }
+    }
+
+    #[test]
+    fn footprint_conditions_alert_once_per_live_bar() {
+        use OrderSide::{Buy, Sell};
+        /// Feed second, price, size and side of an execution, and the alerts it raises as
+        /// "title: body".
+        type Step = (i64, f64, f64, OrderSide, &'static [&'static str]);
+        // Bids of 1 at 100, 100.25 and 100.5 under asks of 12, 9 and 15 one row higher.
+        let stacked = |closing: &'static [&'static str]| -> [Step; 8] {
+            [
+                (0, 100.0, 1.0, Buy, &[]),
+                (60, 100.0, 1.0, Sell, &[]),
+                (61, 100.25, 1.0, Sell, &[]),
+                (62, 100.5, 1.0, Sell, &[]),
+                (63, 100.25, 12.0, Buy, &[]),
+                (64, 100.5, 9.0, Buy, &[]),
+                (65, 100.75, 15.0, Buy, &[]),
+                (120, 100.0, 1.0, Buy, closing),
+            ]
+        };
+        let crossed: &'static [&'static str] = &[
+            "Sell volume above: Sell volume 101 above 100",
+            "Delta below: Delta -101 below -100",
+        ];
+        let selling: [Step; 6] = [
+            (0, 100.0, 1.0, Sell, &[]),
+            (60, 100.0, 60.0, Sell, &[]),
+            (61, 100.0, 41.0, Sell, crossed),
+            (62, 100.0, 5.0, Sell, &[]),
+            (120, 100.0, 100.0, Sell, &[]),
+            (121, 100.0, 1.0, Sell, crossed),
+        ];
+        let gapped: [Step; 5] = [
+            (0, 100.0, 1.0, Buy, &[]),
+            (60, 100.0, 12.0, Buy, &[]),
+            (61, 100.25, 9.0, Buy, &[]),
+            (62, 100.75, 15.0, Buy, &[]),
+            (
+                120,
+                100.0,
+                1.0,
+                Buy,
+                &["Buy imbalance: Buy imbalance on 3 rows"],
+            ),
+        ];
+        let settings = |minimum: f64| {
+            let mut settings = DetectorSettings::default();
+            settings.footprint.enabled = true;
+            settings.footprint.alert = true;
+            let rule = &mut settings.footprint.rule;
+            rule.buy_imbalance = true;
+            rule.sell_imbalance = true;
+            rule.stacked_buy_imbalance = true;
+            rule.stacked_sell_imbalance = true;
+            rule.imbalance_min_volume = minimum;
+            rule.buy_volume_above = Some(100.0);
+            rule.sell_volume_above = Some(100.0);
+            rule.delta_above = Some(100.0);
+            rule.delta_below = Some(-100.0);
+            settings
+        };
+        let alerts = |host: &Host| -> Vec<String> {
+            (host.detectors.take_alerts().into_iter())
+                .map(|alert| {
+                    assert_eq!(alert.kind, DetectionKind::FootprintCondition);
+                    format!("{}: {}", alert.notification.title, alert.notification.body)
+                })
+                .collect()
+        };
+        for (name, minimum, steps) in [
+            (
+                "stack",
+                0.0,
+                stacked(&[
+                    "Buy imbalance: Buy imbalance on 3 rows",
+                    "Stacked buy imbalance: Stacked buy imbalance of 3 rows",
+                ])
+                .to_vec(),
+            ),
+            (
+                "minimum breaks the stack",
+                10.0,
+                stacked(&["Buy imbalance: Buy imbalance on 2 rows"]).to_vec(),
+            ),
+            ("levels", 0.0, selling.to_vec()),
+            ("horizontal gap breaks the stack", 0.0, gapped.to_vec()),
+        ] {
+            let mut host = Host::new(Some(1_000.0));
+            let mut configured = settings(minimum);
+            if name == "horizontal gap breaks the stack" {
+                configured.footprint.rule.diagonal = false;
+            }
+            host.detectors.set_settings(configured);
+            for (second, price, size, side, expected) in steps {
+                let trade = MarketEvent::Trade(fill(second, price, size, side, None));
+                host.detectors.push("ES", time(second), &trade);
+                assert_eq!(alerts(&host), expected, "{name}, second {second}");
+            }
+            if name == "stack" {
+                host.events();
+                let (listener, events) = Listener::new(&host.inbox, 1);
+                host.listeners.push(listener);
+                host.detectors.subscribe("ES", Timeframe::Min5, events);
+                let id = SignalId("footprint-stacked-buy-60000".into());
+                assert!(host.events().contains(&SignalEvent::Remove(id)), "{name}");
+                assert!(alerts(&host).is_empty(), "{name}: rebuilt five-minute bars");
+            }
+        }
+        // Loaded history, with 101 sold on its own row: marked, never alerted, also when the first
+        // live event closes the last history bar.
+        let host = Host::new(Some(1_000.0));
+        host.detectors.set_settings(settings(0.0));
+        let mut history: Vec<_> = stacked(&[])[..7]
+            .iter()
+            .map(|&(second, price, size, side, _)| fill(second, price, size, side, None))
+            .collect();
+        history.push(fill(66, 99.0, 101.0, Sell, None));
+        host.detectors.push_history("ES", &history);
+        assert!(alerts(&host).is_empty());
+        let trade = MarketEvent::Trade(fill(120, 100.0, 1.0, Buy, None));
+        host.detectors.push("ES", time(120), &trade);
+        assert!(alerts(&host).is_empty());
+        let marked: Vec<_> = of_kind(host.events(), "Footprint conditions")
+            .into_iter()
+            .map(|signal| signal.id.0)
+            .collect();
+        assert_eq!(
+            marked,
+            [
+                "footprint-sell-volume-60000",
+                "footprint-buy-imbalance-60000",
+                "footprint-stacked-buy-60000"
+            ]
+        );
+        // An active bar can outlive chart marker retention. Recrossing still alerts only once.
+        let host = Host::new(Some(1.0));
+        let mut active = settings(0.0);
+        active.big_trades.enabled = true;
+        active.big_trades.rule.threshold = Threshold::Fixed(1.0);
+        host.detectors.set_settings(active);
+        for (second, size, side) in [(0, 1.0, Sell), (60, 101.0, Sell)] {
+            host.push(MarketEvent::Trade(fill(second, 100.0, size, side, None)));
+        }
+        assert_eq!(alerts(&host).len(), 2);
+        for _ in 0..=RETAINED {
+            host.push(MarketEvent::Trade(fill(61, 100.0, 1.0, Buy, None)));
+        }
+        assert_eq!(alerts(&host).len(), 2);
+        host.push(MarketEvent::Trade(fill(62, 100.0, 6_000.0, Sell, None)));
+        assert!(alerts(&host).is_empty(), "a recross after marker eviction");
+        assert_eq!(
+            host.detectors
+                .counts("ES", DetectionKind::FootprintCondition, time(62))
+                .total,
+            4
+        );
     }
 
     /// On a daily chart with a session the detectors close the bars of trading dates, as the

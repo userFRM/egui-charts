@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use chrono::{DateTime, TimeDelta, Utc};
 
 use super::{DetectionKind, DetectorSettings, OrderFlowDetectors, RETAINED, Tracked};
-use crate::model::SignalId;
+use crate::model::{SignalId, SignalShape};
 use crate::services::{Events, Notification, Notifications, SignalEvent};
 
 /// Running detections, including loaded history and excluding updates of an existing signal.
@@ -154,6 +154,8 @@ struct Counter {
     total: u64,
     times: BTreeMap<DateTime<Utc>, u64>,
     last_episode: u64,
+    /// Latest bar per footprint condition, independent of chart marker retention.
+    bars: HashMap<String, DateTime<Utc>>,
     rule: Option<(CountWindow, u64)>,
     above: bool,
 }
@@ -291,6 +293,15 @@ impl Tracked {
                 }
                 counter.last_episode = number;
             }
+            if kind == DetectionKind::FootprintCondition
+                && let SignalShape::Marker { time, .. } = &signal.shape
+                && let Some(label) = &signal.label
+            {
+                if counter.bars.get(label).is_some_and(|last| *time <= *last) {
+                    continue;
+                }
+                counter.bars.insert(label.clone(), *time);
+            }
             counter.total = counter.total.saturating_add(1);
             let number = counter.times.entry(time).or_default();
             *number = number.saturating_add(1);
@@ -304,10 +315,21 @@ impl Tracked {
                 }
                 DetectionKind::Iceberg => (settings.icebergs.alert, settings.icebergs.sound),
                 DetectionKind::Absorption => (settings.absorption.alert, settings.absorption.sound),
+                DetectionKind::FootprintCondition => {
+                    (settings.footprint.alert, settings.footprint.sound)
+                }
                 _ => (settings.liquidity.alert, settings.liquidity.sound),
             };
-            if live && alert {
-                let mut notification = Notification::new(time, kind.category());
+            // A condition met by a bar that opened before the first live event's bar is history.
+            let current = kind != DetectionKind::FootprintCondition
+                || matches!(&signal.shape, SignalShape::Marker { time, .. }
+                    if self.stop_sweeps.live_open.is_some_and(|live| *time >= live));
+            if live && alert && current {
+                let title = match (&signal.label, kind) {
+                    (Some(label), DetectionKind::FootprintCondition) => label.as_str(),
+                    _ => kind.category(),
+                };
+                let mut notification = Notification::new(time, title);
                 notification.body = signal
                     .tooltip
                     .as_ref()
