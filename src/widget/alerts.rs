@@ -3,6 +3,7 @@
 use crate::Chart;
 use crate::chart::series::SeriesId;
 use crate::model::{AlertSource, AlertSourceName};
+use crate::scales::PriceScaleMode;
 
 impl Chart {
     /// Lend loaded live bars to the alert evaluator. A paused chart, or one in candle or market
@@ -39,7 +40,9 @@ impl Chart {
     }
 
     /// Capture calculation inputs for alert creation, independently of later chart changes.
-    /// Copies and edits retain the inputs already carried by the alert.
+    /// Copies and edits retain the inputs already carried by the alert. A new alert's drawing
+    /// levels interpolate on the scale of the pane that paints the drawing its first condition
+    /// names.
     pub fn prepare_alert(&self, alert: &mut crate::model::Alert) {
         alert.timeframe = alert.timeframe.or(self.timeframe());
         if let Some(inputs) = &mut alert.inputs {
@@ -55,6 +58,22 @@ impl Chart {
                 inputs.count = inputs.count.max(1000);
             }
             alert.inputs = Some(Box::new(inputs));
+        }
+        // The evaluator resolves every drawing level of an alert on this one scale.
+        // shortcut: one scale per alert, so a later condition's drawing in a pane on another
+        // scale resolves on the first one's; upgrade when inputs carry a scale per drawing.
+        if alert.id.is_none()
+            && let Some(inputs) = &mut alert.inputs
+            && let Some(drawing) = std::iter::once(&alert.source)
+                .chain(alert.condition.partners().into_iter().flatten())
+                .find_map(|source| {
+                    self.drawings()
+                        .drawings
+                        .iter()
+                        .find(|d| d.alert_level(source).is_some())
+                })
+        {
+            inputs.logarithmic = self.drawing_subject(drawing.id).0 == PriceScaleMode::Logarithmic;
         }
     }
 
@@ -84,8 +103,7 @@ impl Chart {
                 .get(left)
                 .zip(bars.get(right.min(bars.len()).saturating_sub(1)))
                 .map(|(first, last)| (first.time, last.time)),
-            logarithmic: self.config().right_axis_scale_mode
-                == crate::scales::PriceScaleMode::Logarithmic,
+            logarithmic: self.config().right_axis_scale_mode == PriceScaleMode::Logarithmic,
             studies: self
                 .indicators()
                 .map(|(id, study)| crate::model::AlertStudy {
@@ -105,8 +123,9 @@ impl Chart {
     /// its `value` function and any other evaluator can use: the close for
     /// [`Price`](AlertSource::Price), the volume for [`Volume`](AlertSource::Volume), the value of
     /// the study output at that bar for a [`Study`](AlertSource::Study) named by its [`SeriesId`]
-    /// in decimal, and the price of the drawing's level at that bar for a
-    /// [`Drawing`](AlertSource::Drawing) named as [`Drawing::alert_source`] does.
+    /// in decimal, and the value of the drawing's level at that bar, on the scale of the pane that
+    /// paints the drawing, for a [`Drawing`](AlertSource::Drawing) named as
+    /// [`Drawing::alert_source`] does.
     ///
     /// `None` for an unknown study, output or drawing, a bar the series does not have, and a value
     /// that is not finite.
@@ -122,27 +141,26 @@ impl Chart {
                 .find(|(study, _)| study.0.to_string() == *id)?
                 .1
                 .plot_value(*output, bar)?,
-            AlertSource::Drawing(_) => {
-                let scale = self.config().right_axis_scale_mode;
-                self.drawings().drawings.iter().find_map(|d| {
-                    let level = d.alert_level(source)?;
-                    d.alert_levels_with_bars(bar as f64, scale, self.bars(SeriesId::MAIN))
-                        .into_iter()
-                        .find(|(index, ..)| *index == level)
-                        .map(|(.., price)| price)
-                })?
-            }
+            AlertSource::Drawing(_) => self.drawings().drawings.iter().find_map(|d| {
+                let level = d.alert_level(source)?;
+                let (scale, ..) = self.drawing_subject(d.id);
+                d.alert_levels_with_bars(bar as f64, scale, self.bars(SeriesId::MAIN))
+                    .into_iter()
+                    .find(|(index, ..)| *index == level)
+                    .map(|(.., price)| price)
+            })?,
         };
         value.is_finite().then_some(value)
     }
 
-    /// Every output of every study and every level of every completed drawing, with the name the
-    /// alert dialog shows, for `AlertDialog::sources`. Drawing levels are those at the newest bar.
-    /// A name keeps the study's name, the drawing's number and a fork level's value as given and
-    /// translates the study output, the drawing tool and the level when shown.
+    /// Every output of every study and every level of every completed drawing whose pane marks
+    /// the price or a study, as [`Self::alert_value`] resolves it, with the name the alert dialog
+    /// shows, for `AlertDialog::sources`. Drawing levels are those at the newest bar. A name keeps
+    /// the study's name, the drawing's number and a fork level's value as given and translates the
+    /// study output, the drawing tool and the level when shown. A level in a study pane is named
+    /// after the study first in its pane, as in `RSI: Horizontal Line 7`.
     pub fn alert_sources(&self) -> Vec<(AlertSource, AlertSourceName)> {
         let bar = self.bars(SeriesId::MAIN).len().saturating_sub(1) as f64;
-        let scale = self.config().right_axis_scale_mode;
         let studies = self.indicators().flat_map(|(id, study)| {
             study
                 .line_names()
@@ -168,21 +186,37 @@ impl Chart {
             .iter()
             .filter(|d| d.completed)
             .flat_map(|d| {
-                let levels = d.alert_levels_with_bars(bar, scale, self.bars(SeriesId::MAIN));
+                let (scale, subject, study) = self.drawing_subject(d.id);
+                let levels = if subject.is_some() {
+                    d.alert_levels_with_bars(bar, scale, self.bars(SeriesId::MAIN))
+                } else {
+                    Vec::new()
+                };
                 let single = levels.len() == 1;
                 levels.into_iter().map(move |(level, name, _)| {
                     let id = d.id.to_string();
                     let tool = ("tool", d.tool_type.as_str());
+                    let named =
+                        |template: &str, values: &[(&str, &str)], labels: &[(&str, &str)]| {
+                            match study {
+                                Some(study) => AlertSourceName::new(
+                                    &format!("{{pane}}: {template}"),
+                                    &[values, &[("pane", study)]].concat(),
+                                    labels,
+                                ),
+                                None => AlertSourceName::new(template, values, labels),
+                            }
+                        };
                     let name = if single {
-                        AlertSourceName::new("{tool} {id}", &[("id", id.as_str())], &[tool])
+                        named("{tool} {id}", &[("id", id.as_str())], &[tool])
                     } else if let Some((line, value)) = d.fork_line(level) {
-                        AlertSourceName::new(
+                        named(
                             line,
                             &[("id", id.as_str()), ("value", value.as_str())],
                             &[tool],
                         )
                     } else {
-                        AlertSourceName::new(
+                        named(
                             "{tool} {id}: {level}",
                             &[("id", id.as_str())],
                             &[tool, ("level", name.as_str())],
@@ -192,6 +226,53 @@ impl Chart {
                 })
             });
         studies.chain(drawings).collect()
+    }
+
+    /// The scale mode the levels of drawing `id` resolve with, what they mark and the study that
+    /// names them, as the pane painting the drawing shows them. In the pane holding the main
+    /// series they mark the price on that series' scale. In another pane they mark the first
+    /// output of the pane's first member, or the volume for a volume study, on the scale that
+    /// pane paints the drawing with, and are named after that study. They mark nothing an alert
+    /// can name when that member is a bar series, the pane is empty or the study has no output.
+    pub(crate) fn drawing_subject(
+        &self,
+        id: usize,
+    ) -> (PriceScaleMode, Option<AlertSource>, Option<&str>) {
+        let main = self.main_series_pane();
+        let pane = self.drawing_pane(id).unwrap_or(main);
+        if pane == main {
+            return (
+                self.config().right_axis_scale_mode,
+                Some(AlertSource::Price),
+                None,
+            );
+        }
+        let first = self.pane_series_iter(pane).next();
+        let study = first.and_then(|first| self.indicators().find(|(id, _)| *id == first));
+        // The scale the pane paints its drawings on, as `show_with_panes` picks it.
+        let key = first
+            .and_then(|first| self.series_scale(first))
+            .or_else(|| match study?.1.scale() {
+                crate::studies::StudyScale::Shared(key) => Some(key),
+                _ => None,
+            })
+            .unwrap_or(crate::model::SeriesScale::Right);
+        let study = study.filter(|(_, study)| study.line_count() > 0);
+        let source = study.map(|(id, study)| {
+            if study.is_volume() {
+                AlertSource::Volume
+            } else {
+                AlertSource::Study {
+                    id: id.0.to_string(),
+                    output: 0,
+                }
+            }
+        });
+        (
+            self.pane_price_scale(pane, key).options().mode,
+            source,
+            study.map(|(_, study)| study.name()),
+        )
     }
 }
 
@@ -285,6 +366,97 @@ mod tests {
                 (fork("#7"), "Pitchfork 9: 1.5: second line".into()),
             ]
         );
+    }
+
+    /// A drawing in a study pane marks the study first in that pane, on that pane's scale, and a
+    /// drawing in the price pane marks the price.
+    #[test]
+    fn study_pane_drawings_alert_on_their_study() {
+        let bars = [10.0, 20.0, 30.0, 40.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, close)| {
+                let time = DateTime::from_timestamp(60 * i as i64, 0).unwrap();
+                Bar::new(time, close, close, close, close, 1.0)
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.set_symbol("SAMPLE");
+        chart.config_mut().right_axis_scale_mode = PriceScaleMode::Logarithmic;
+        let rsi = chart.add_indicator(Box::new(
+            crate::studies::CustomIndicator::new("RSI", |bars: &[Bar]| {
+                vec![crate::studies::IndicatorValue::Single(50.0); bars.len()]
+            })
+            .with_overlay(false),
+        ));
+        let drawing = |id, tool, points: &[(f32, f64)], pane| {
+            let mut drawing = Drawing::new(id, tool);
+            drawing.chart_points = points
+                .iter()
+                .map(|&(bar, price)| ChartPoint::new(bar, price))
+                .collect();
+            drawing.completed = true;
+            drawing.pane = pane;
+            drawing
+        };
+        chart.drawings_mut().drawings = vec![
+            drawing(
+                7,
+                DrawingToolType::HorizontalLine,
+                &[(0.0, 70.0)],
+                Some(rsi.0),
+            ),
+            drawing(
+                8,
+                DrawingToolType::TrendLine,
+                &[(0.0, 40.0), (2.0, 60.0)],
+                Some(rsi.0),
+            ),
+            drawing(9, DrawingToolType::HorizontalLine, &[(0.0, 25.0)], None),
+        ];
+        // The study pane's own scale is linear: the line through (0, 40) and (2, 60) is 50 at
+        // bar 1, where the main pane's logarithmic scale would give sqrt(40 * 60).
+        for (id, bar, expected) in [("7", 3, 70.0), ("8", 1, 50.0), ("9", 3, 25.0)] {
+            let source = AlertSource::Drawing(id.into());
+            assert_eq!(chart.alert_value(&source, bar), Some(expected), "{id}");
+        }
+        let names = chart.alert_sources();
+        for (id, name) in [("7", "RSI: Horizontal Line 7"), ("9", "Horizontal Line 9")] {
+            assert!(
+                names.contains(&(AlertSource::Drawing(id.into()), name.into())),
+                "{names:?}"
+            );
+        }
+        #[cfg(feature = "ui")]
+        {
+            let study = AlertSource::Study {
+                id: rsi.0.to_string(),
+                output: 0,
+            };
+            // Rows are (drawing, the source its alert tests, that source at bar 3, whether the
+            // saved alert interpolates drawing levels logarithmically).
+            for (id, source, value, logarithmic) in
+                [(7, study, 50.0, false), (9, AlertSource::Price, 40.0, true)]
+            {
+                let mut menu = crate::ui::context_menu::drawing::DrawingContextMenu::new();
+                menu.open_on(&egui::Context::default(), &chart, egui::Pos2::ZERO, id);
+                let mut alert = menu.alert.unwrap();
+                assert_eq!(
+                    (&alert.source, &alert.condition),
+                    (
+                        &source,
+                        &crate::model::AlertCondition::Compare {
+                            other: AlertSource::Drawing(id.to_string()),
+                            comparison: crate::model::AlertComparison::Crossing,
+                        }
+                    ),
+                    "{id}"
+                );
+                assert_eq!(chart.alert_value(&alert.source, 3), Some(value), "{id}");
+                chart.prepare_alert(&mut alert);
+                assert_eq!(alert.inputs.unwrap().logarithmic, logarithmic, "{id}");
+            }
+        }
     }
     /// Fork medians and tines use anchor construction, and regression fits the source prices of
     /// the supplied bars.
