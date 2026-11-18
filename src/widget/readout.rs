@@ -146,7 +146,9 @@ impl Chart {
             .study_ids
             .iter()
             .zip(self.rendered_studies().indicators())
-            .filter(|(_, study)| policy == CursorDataPolicy::IncludeHidden || study.is_visible())
+            .filter(|(_, study)| {
+                policy == CursorDataPolicy::IncludeHidden || self.shows_study(study.as_ref())
+            })
             // A chart type that hides volume lists no volume rows.
             .filter(|(_, study)| self.chart_type.supports_volume() || !study.is_volume())
         {

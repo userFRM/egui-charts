@@ -301,6 +301,8 @@ pub struct DrawingManager {
     /// Whether a click deletes the drawing under the pointer instead of selecting it. Set it
     /// with [`Self::set_eraser_mode`].
     pub(crate) eraser_mode: bool,
+    /// Whether every drawing is hidden as a group; see [`Self::set_hidden`].
+    hidden: bool,
 
     /// Changes to the stored drawings, oldest first, for the host to drain, for example
     /// with `std::mem::take(&mut *manager.pending_sync.lock().unwrap())`. See
@@ -384,6 +386,7 @@ impl DrawingManager {
             stay_in_drawing_mode: false,
             curr_timeframe: String::from("1D"),
             eraser_mode: false,
+            hidden: false,
             pending_sync: Arc::new(Mutex::new(Vec::new())),
             sync_enabled: true,
             identity: crate::model::next_revision(),
@@ -435,8 +438,12 @@ impl DrawingManager {
     }
 
     /// Replace the selected drawings with the supplied live ids.
+    /// Selects nothing while the drawings are hidden ([`Self::set_hidden`]).
     pub fn select_drawings(&mut self, ids: impl IntoIterator<Item = usize>) {
         self.selection.deselect_all();
+        if self.hidden {
+            return;
+        }
         self.selection.select_all(
             ids.into_iter()
                 .filter(|id| self.drawings.iter().any(|d| d.id == *id && d.selectable)),
@@ -458,7 +465,7 @@ impl DrawingManager {
 
     /// Toggle a live drawing in the selection, retaining the other selected drawings.
     pub fn toggle_selection(&mut self, id: usize) {
-        if self.drawings.iter().any(|d| d.id == id && d.selectable) {
+        if !self.hidden && self.drawings.iter().any(|d| d.id == id && d.selectable) {
             self.selection.toggle(id);
         }
     }
@@ -686,7 +693,7 @@ impl DrawingManager {
                 drawings
                     .iter()
                     .filter(|d| {
-                        d.is_visible_on_timeframe(&self.curr_timeframe)
+                        self.shows(d)
                             && self.pane_members.contains(&d.pane)
                             && self.dragging_handle.is_none_or(|(id, _)| id != d.id)
                             && self.drag_group.iter().all(|old| old.id != d.id)
@@ -1127,7 +1134,7 @@ mod tests {
                 &["Save(1)", "Update(0)"],
             ),
             (|m| m.clear_all(), &["Delete(a1b2)"]),
-            (|m| m.toggle_visibility_all(), &["Update(0)"]),
+            (|m| m.set_hidden(true), &[]),
             (|m| m.toggle_lock_all(), &["Update(0)"]),
             (|m| m.bring_to_front(0), &["Update(0)"]),
             (|m| m.send_to_back(0), &["Update(0)"]),
@@ -1186,7 +1193,6 @@ mod tests {
                         m.edit_drawing(0, |d| d.stroke_width = 2.0 + (i % 2) as f32)
                             .unwrap();
                     }
-                    m.toggle_visibility_all();
                     m.toggle_lock_all();
                 },
                 &["Update(0)"],
@@ -1230,7 +1236,11 @@ mod tests {
                 })
                 .collect();
             assert_eq!(queued, expected);
-            if matches!(case, 0 | 2..=6 | 10 | 11) {
+            if case == 3 {
+                assert_eq!(before, after, "group hiding is not a drawing edit");
+                assert!(!manager.can_undo());
+            }
+            if matches!(case, 0 | 2 | 4..=6 | 10 | 11) {
                 assert!(manager.undo(), "case {case} must be undoable");
                 assert_eq!(
                     manager

@@ -8,7 +8,8 @@ use std::time::Duration;
 
 /// Bars span 100..110 and the overlay reaches 120: 10% of the pane above and below adds an
 /// eighth of the span on each side, 97.5..122.5. Every line of a study counts and non-finite
-/// values do not; without eligible values, or with a volume profile, the bars alone give
+/// values do not; without eligible values, with the study group hidden, or with a volume
+/// profile, the bars alone give
 /// 98.75..111.25. Relative modes use close 110.
 #[test]
 fn autoscale_includes_only_visible_overlay_values() {
@@ -34,6 +35,7 @@ fn autoscale_includes_only_visible_overlay_values() {
             "multiple",
             "excluded",
             "hidden",
+            "group_hidden",
             "plot_hidden",
             "interval_hidden",
             "pane",
@@ -137,6 +139,7 @@ fn autoscale_includes_only_visible_overlay_values() {
                 study.apply_settings(&[], settings).unwrap();
             }
             chart.set_indicator_visible(id, case != "hidden");
+            chart.set_indicators_hidden(case == "group_hidden");
             assert!(
                 chart.set_indicator_autoscale(
                     id,

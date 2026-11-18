@@ -329,7 +329,7 @@ impl Chart {
         for (index, study) in studies
             .iter_mut()
             .enumerate()
-            .filter(|(_, study)| study.is_visible())
+            .filter(|(_, study)| self.shows_study(study.as_ref()))
         {
             let names = study.line_names();
             for line in (0..study.line_count()).filter(|line| study.plot_style(*line).visible) {
@@ -685,6 +685,7 @@ impl Chart {
         }
         chart.pending_box_sizes = self.pending_box_sizes;
         chart.main_series_visible = self.main_series_visible;
+        chart.indicators_hidden = self.indicators_hidden;
         chart.main_series_present = self.main_series_present;
         chart.main_series_scale = self.main_series_scale;
         chart.main_series_style = self.main_series_style.clone();
@@ -736,6 +737,7 @@ impl Chart {
             chart.drawings.registry = self.drawings.registry.clone();
             chart.drawings.drawings = self.drawings.drawings.clone();
             chart.drawings.curr_timeframe = self.drawings.curr_timeframe.clone();
+            chart.drawings.set_hidden(self.drawings.is_hidden());
         }
         chart.marks = self.marks.clone();
         chart.marker_options = self.marker_options;

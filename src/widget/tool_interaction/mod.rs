@@ -290,7 +290,7 @@ impl Chart {
                     .iter()
                     .zip(self.rendered_studies().indicators())
                     .filter(|(id, study)| {
-                        study.is_visible()
+                        self.shows_study(study.as_ref())
                             && members.contains(&Some(id.0))
                             // The price pane paints a volume overlay only with the main series.
                             && (pane.is_some()

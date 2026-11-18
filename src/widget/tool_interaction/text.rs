@@ -79,7 +79,7 @@ pub(super) fn begin_fibonacci_edit(
             && drawing.selectable
             && !drawing.locked
             && manager.owns_pane(drawing)
-            && drawing.is_visible_on_timeframe(&manager.curr_timeframe)
+            && manager.shows(drawing)
     }) {
         let config = drawing.fibonacci_config();
         for (index, level) in config.levels.iter().enumerate() {
