@@ -327,11 +327,13 @@ struct DashesKey {
     tessellation: Option<egui::epaint::TessellationOptions>,
 }
 
+/// A kept mesh: the pass that last painted it, what it was laid out from, and the extent of its
+/// dots that [`draw_grid_dashes`] clips them to.
+type KeptDashes = (u64, DashesKey, Arc<Mesh>, Rect);
+
 thread_local! {
     /// Keep only this pass and the previous one, so moving guides do not accumulate meshes.
-    /// Each mesh keeps the extent of its dots that [`draw_grid_dashes`] clips them to.
-    static DASHES: RefCell<Vec<(u64, DashesKey, Arc<Mesh>, Rect)>> =
-        const { RefCell::new(Vec::new()) };
+    static DASHES: RefCell<Vec<KeptDashes>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The mesh built from `key` in this pass or the last, and its dots' extent, kept for the next
