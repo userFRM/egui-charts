@@ -5,6 +5,7 @@ use crate::model::{BarClock, OrderSide, Placement, Tick, next_revision};
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 use std::ops::{Bound, RangeBounds};
+use std::sync::Arc;
 
 mod read;
 pub(crate) use read::FootprintState;
@@ -296,6 +297,9 @@ pub struct Footprint {
     incomplete_through: Option<DateTime<Utc>>,
     /// Execution coverage missing between prepared history and the retained stream.
     missing: Vec<(DateTime<Utc>, DateTime<Utc>)>,
+    /// Explicitly incomplete prepared slots, independent of recoverable execution gaps.
+    /// Snapshots share the immutable metadata, as they share the recorded rows.
+    partial_slots: Option<Arc<Vec<DateTime<Utc>>>>,
     /// The bars holding the first and the last instant of each `missing` range, `MAX_UTC` for
     /// an open end, so that completeness compares bar opens with bar opens.
     missing_bars: Vec<(DateTime<Utc>, DateTime<Utc>)>,
@@ -397,6 +401,7 @@ impl Footprint {
             max_rows: usize::MAX,
             incomplete_through: None,
             missing: Vec::new(),
+            partial_slots: None,
             missing_bars: Vec::new(),
             placement: Placement::default(),
             covered_from: None,
@@ -432,7 +437,15 @@ impl Footprint {
     }
 
     fn complete_start(&self) -> Bound<DateTime<Utc>> {
-        match (self.incomplete_through).max(self.missing_bars.last().map(|&(_, last)| last)) {
+        let partial = self
+            .partial_slots
+            .as_ref()
+            .and_then(|slots| slots.last().copied());
+        match self
+            .incomplete_through
+            .max(partial)
+            .max(self.missing_bars.last().map(|&(_, last)| last))
+        {
             Some(cut) => Bound::Excluded(cut),
             None => Bound::Unbounded,
         }
@@ -453,9 +466,16 @@ impl Footprint {
     /// Whether the bar slot opening at `open` holds all its executions, if it has any.
     pub(crate) fn complete_at(&self, open: DateTime<Utc>) -> bool {
         self.incomplete_through.is_none_or(|cut| open > cut)
+            && !self.partial_at(open)
             && (self.missing_bars)
                 .get(self.missing_bars.partition_point(|&(_, last)| last < open))
                 .is_none_or(|&(first, _)| open < first)
+    }
+
+    fn partial_at(&self, open: DateTime<Utc>) -> bool {
+        self.partial_slots
+            .as_ref()
+            .is_some_and(|slots| slots.binary_search(&open).is_ok())
     }
 
     /// Whether missing executions could change a result over the bars opening at `from`
@@ -464,6 +484,11 @@ impl Footprint {
         (self.missing_bars)
             .get(self.missing_bars.partition_point(|&(_, last)| last < from))
             .is_some_and(|&(first, _)| through.is_none_or(|through| first <= through))
+            || self.partial_slots.as_ref().is_some_and(|slots| {
+                slots
+                    .get(slots.partition_point(|open| *open < from))
+                    .is_some_and(|open| through.is_none_or(|end| *open <= end))
+            })
     }
 
     /// Open of the bar an execution at `t` joins: on a daily or longer clock with a session
@@ -767,6 +792,7 @@ impl Footprint {
                 rows: 0,
                 last: None,
                 missing: Vec::new(),
+                partial_slots: None,
                 missing_bars: Vec::new(),
                 placement: Placement::default(),
                 #[cfg(feature = "widget")]
