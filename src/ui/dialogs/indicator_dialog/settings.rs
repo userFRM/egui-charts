@@ -124,7 +124,8 @@ impl IndicatorSettingsDialog {
         self.sources.clear();
     }
 
-    /// Open on a chart study and offer its other studies as source inputs, excluding cycles.
+    /// Open on a chart study and offer other studies' outputs, excluding cycles, to the input
+    /// `source` of a study that names a source.
     pub fn open_for_chart(&mut self, chart: &crate::widget::Chart, id: SeriesId) -> bool {
         let Some((_, study)) = chart.indicators().find(|(candidate, _)| *candidate == id) else {
             return false;
@@ -132,6 +133,9 @@ impl IndicatorSettingsDialog {
         self.open(id, study, chart.timeframe());
         if !self.is_open() {
             return false;
+        }
+        if study.source().is_none() {
+            return true;
         }
         let studies: Vec<_> = chart.indicators().collect();
         for (candidate, study) in &studies {
@@ -318,7 +322,11 @@ impl IndicatorSettingsDialog {
                                     if crate::ui::strategy_report::inputs::show_input(
                                         ui,
                                         input,
-                                        &self.sources,
+                                        if input.id == "source" {
+                                            self.sources.as_slice()
+                                        } else {
+                                            &[]
+                                        },
                                     ) && let (
                                         InputKind::Choice(choices),
                                         InputValue::Choice(choice),
@@ -2528,6 +2536,73 @@ mod tests {
                 let study = chart.indicators().find(|(i, _)| *i == id).unwrap().1;
                 assert_eq!(study.is_visible(), visible, "{range:?} on {at}");
             }
+        }
+    }
+    /// Other studies' outputs are offered only to the source the chart supplies: not to a custom
+    /// study's other Source inputs, nor to the source of a study that declares histories.
+    #[test]
+    fn study_outputs_are_offered_only_to_a_supplied_source() {
+        use crate::model::PriceSource;
+        use crate::studies::{
+            CustomIndicator, IndicatorValue, InputKind, RSI, StudyDataRequest, StudyInput,
+            StudySource,
+        };
+        use egui_kittest::{Harness, kittest::Queryable};
+        let price = |source| InputValue::Source(StudySource::Price(source));
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        chart.add_indicator(Box::new(RSI::new(14)));
+        for (histories, combo, offered) in [
+            (false, "Source", true),
+            (false, "Basis", false),
+            (true, "Source", false),
+        ] {
+            let study = CustomIndicator::new("Custom", |_| Vec::new())
+                .with_inputs(
+                    vec![
+                        StudyInput::new(
+                            "source",
+                            "Source",
+                            price(PriceSource::HL2),
+                            InputKind::Source,
+                        ),
+                        StudyInput::new(
+                            "basis",
+                            "Basis",
+                            price(PriceSource::OHLC4),
+                            InputKind::Source,
+                        ),
+                    ],
+                    |bars, _, _, _| vec![IndicatorValue::None; bars.len()],
+                )
+                .unwrap();
+            let study = if histories {
+                study.with_data_requests(|_| {
+                    vec![StudyDataRequest {
+                        symbol: "OTHER".into(),
+                        timeframe: None,
+                        metric: None,
+                    }]
+                })
+            } else {
+                study
+            };
+            let id = chart.add_indicator(Box::new(study));
+            let mut dialog = IndicatorSettingsDialog::default();
+            assert!(dialog.open_for_chart(&chart, id));
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::vec2(1440.0, 900.0))
+                .build_ui(|ui| {
+                    let _ = dialog.show(ui.ctx(), &Theme::dark());
+                });
+            harness.run();
+            harness.get_by_label(combo).click();
+            harness.run();
+            assert_eq!(
+                harness.query_by_label("RSI: RSI(14)").is_some(),
+                offered,
+                "{combo}, histories {histories}"
+            );
         }
     }
 }

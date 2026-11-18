@@ -8,6 +8,7 @@ use crate::drawings::domain::{
     GannLevel,
 };
 use crate::localization as l10n;
+use crate::scales::group_thousands;
 use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -436,7 +437,7 @@ impl Drawing {
         if range.is_finite() && bars.is_finite() {
             let decimals = super::measurements::change_decimals(view.instrument, a.price, range);
             let range_text = view.price_formatter.map_or_else(
-                || format!("{range:.decimals$}"),
+                || group_thousands(format!("{range:.decimals$}"), view.thousands_sep),
                 |formatter| formatter.format(range),
             );
             let mut label = range_text;
@@ -988,6 +989,7 @@ mod tests {
                     pane,
                     &ChartView {
                         price_formatter: None,
+                        thousands_sep: None,
                         time_formatter: None,
                         bar_seconds: 0,
                         instrument,
@@ -1025,6 +1027,7 @@ mod tests {
                     Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)),
                     &ChartView {
                         price_formatter: None,
+                        thousands_sep: None,
                         time_formatter: None,
                         bar_seconds: 0,
                         instrument: None,

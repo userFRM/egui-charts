@@ -5,6 +5,7 @@ use crate::drawings::rendering::ChartView;
 use crate::drawings::rendering::measurements::boxed_label;
 use crate::drawings::rendering::utils::draw_dashed_line;
 use crate::localization as l10n;
+use crate::scales::group_thousands;
 use crate::styles::stroke;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
@@ -87,6 +88,7 @@ impl Drawing {
             dy,
             dashed_color,
             view.price_formatter,
+            view.thousands_sep,
         );
     }
 
@@ -149,6 +151,7 @@ impl Drawing {
         dy: f32,
         dashed_color: Color32,
         price_formatter: Option<&dyn crate::scales::PriceFormatter>,
+        thousands_sep: Option<char>,
     ) {
         // Price/percentage labels
         let price_change = if !self.chart_points.is_empty() && self.chart_points.len() >= 2 {
@@ -172,7 +175,10 @@ impl Drawing {
         let mid_ab = Pos2::new((start.x + end.x) / 2.0, (start.y + end.y) / 2.0);
         let label_text = match price_formatter {
             Some(formatter) => format!("{} ({pct_change:.1}%)", formatter.format(price_change)),
-            None => format!("{price_change:.2} ({pct_change:.1}%)"),
+            None => format!(
+                "{} ({pct_change:.1}%)",
+                group_thousands(format!("{price_change:.2}"), thousands_sep)
+            ),
         };
         let chart = painter.ctx().active_theme().chart;
         boxed_label(
@@ -192,7 +198,7 @@ impl Drawing {
                 let target = c.price + self.chart_points[1].price - self.chart_points[0].price;
                 let price = match price_formatter {
                     Some(formatter) => formatter.format(target),
-                    None => format!("{target:.2}"),
+                    None => group_thousands(format!("{target:.2}"), thousands_sep),
                 };
                 l10n::format_text(painter.ctx(), "Target: {price}", &[("price", price)])
             },
@@ -231,6 +237,7 @@ mod tests {
                     Pos2::new(500.0, 100.0),
                     -100.0,
                     Color32::BLUE,
+                    None,
                     None,
                 );
             });

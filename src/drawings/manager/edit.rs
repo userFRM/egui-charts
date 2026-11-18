@@ -972,6 +972,7 @@ mod tests {
             ctx.run_ui(RawInput::default(), |ui| {
                 let view = ChartView {
                     price_formatter: None,
+                    thousands_sep: None,
                     time_formatter: None,
                     bar_seconds: 0,
                     instrument: None,

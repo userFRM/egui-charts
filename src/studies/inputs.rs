@@ -16,7 +16,9 @@ pub enum InputKind {
     Choice(Vec<String>),
     /// An enabled or disabled input.
     Toggle,
-    /// A price field or another study's output. The chart checks dependency availability.
+    /// A price field or another study's output. The chart supplies an output only to the input
+    /// `source` of a study whose [`Indicator::source`](super::Indicator::source) names it, and
+    /// checks dependency availability and cycles.
     Source,
     /// An RGBA colour.
     Color,

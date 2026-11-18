@@ -5,7 +5,10 @@ use crate::drawings::rendering::measurements::{boxed_label, elapsed_ms, format_d
 use crate::drawings::rendering::{ChartView, bars_between};
 use crate::localization as l10n;
 use crate::model::{Bar, percent_change};
-use crate::scales::{DefaultPriceFormatter, instrument_price_precision, price_decimals};
+use crate::scales::{
+    DefaultPriceFormatter, PriceFormatter, group_thousands, instrument_price_precision,
+    price_decimals,
+};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Align2, Pos2};
@@ -28,9 +31,14 @@ impl Drawing {
             .and_then(instrument_price_precision)
             .map_or_else(|| price_decimals(from.price), usize::from);
         let built_in = DefaultPriceFormatter::with_precision(precision);
-        let formatter = view.price_formatter.unwrap_or(&built_in);
+        let price = |value: f64| {
+            view.price_formatter.map_or_else(
+                || group_thousands(built_in.format(value), view.thousands_sep),
+                |formatter| formatter.format(value),
+            )
+        };
         let anchor_label = |point: ChartPoint| {
-            let mut text = formatter.format(point.price);
+            let mut text = price(point.price);
             if view.time_axis {
                 let time = elapsed_ms(view.bars, 0.0, point.bar_idx)
                     .and_then(|ms| view.bars.first()?.time.timestamp_millis().checked_add(ms))
@@ -47,7 +55,7 @@ impl Drawing {
             text
         };
         let change = to.price - from.price;
-        let change_text = formatter.format(change);
+        let change_text = price(change);
         let sign = if change_text.starts_with(['-', '+'])
             || (view.price_formatter.is_some() && change < 0.0)
         {
@@ -240,6 +248,7 @@ mod tests {
                         ui.painter(),
                         &ChartView {
                             price_formatter: None,
+                            thousands_sep: None,
                             time_formatter: None,
                             bar_seconds: 0,
                             instrument: Some(&instrument),
