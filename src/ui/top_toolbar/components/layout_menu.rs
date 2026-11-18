@@ -1205,6 +1205,7 @@ mod tests {
             mode: crate::widget::ChartLayoutMode::TwoHorizontal,
             charts: Vec::new(),
             sizing: None,
+            link_groups: None,
         };
         let mut latest = layout.clone();
         latest.mode = crate::widget::ChartLayoutMode::Single;
