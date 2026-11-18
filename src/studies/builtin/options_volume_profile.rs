@@ -44,6 +44,17 @@ struct CachedProfile {
 /// Every measure, in the order a chain that reports them all lists them.
 const MEASURES: [&str; 3] = ["Volume", "Open interest", "Gamma exposure"];
 
+/// The Sides choices of volume and open interest.
+const VOLUME_SIDES: [&str; 2] = ["Split", "Net (calls minus puts)"];
+
+/// The Sides input of each of [`MEASURES`], with its choices and its default: split bars for
+/// volume and open interest, net bars for gamma exposure.
+const SIDES: [(&str, &[&str], usize); 3] = [
+    ("volume_sides", &VOLUME_SIDES, 0),
+    ("interest_sides", &VOLUME_SIDES, 0),
+    ("gamma_sides", &["Split", "Net (calls plus puts)"], 1),
+];
+
 /// How an input the chain decides on is listed while it waits for the chain, or `None` for any
 /// other id. A measure that waits is listed among [`MEASURES`], whatever the chain then offers.
 fn waiting_input(id: &str, value: InputValue) -> Option<StudyInput> {
@@ -98,7 +109,9 @@ pub struct OptionsVolumeProfile {
     through_date: NaiveDate,
     open_interest: Cell<bool>,
     gamma: Cell<bool>,
-    gamma_split: bool,
+    // The Sides choice of each of MEASURES, as its input lists it.
+    sides: [usize; 3],
+    put_call: bool,
     exposure: Option<OptionExposureHandle>,
     exposure_levels: [Cell<bool>; 3],
     max_pain: Cell<bool>,
@@ -160,7 +173,8 @@ impl OptionsVolumeProfile {
             through_date: NaiveDate::MIN,
             open_interest: Cell::new(false),
             gamma: Cell::new(false),
-            gamma_split: false,
+            sides: SIDES.map(|(.., default)| default),
+            put_call: true,
             exposure: None,
             exposure_levels: Default::default(),
             max_pain: Cell::new(false),
@@ -190,9 +204,13 @@ impl OptionsVolumeProfile {
     /// their combined intrinsic payout over listed strikes, choosing the lower strike on ties.
     /// Rows are as tall as the largest common divisor of the selected strikes, so each strike
     /// is a row centre, and coarser only where the 10,000-row limit requires.
-    /// Gamma uses [`OptionExposure::gamma`], with net bars by default and optional call and
-    /// put walls. Missing contracts are counted in the readout. Attach a provider observation
-    /// with [`Self::with_exposure`]; its signs and net values take precedence, even if empty.
+    /// Gamma uses [`OptionExposure::gamma`], with optional call and put walls. Missing
+    /// contracts are counted in the readout. Attach a provider observation with
+    /// [`Self::with_exposure`]; its signs and net values take precedence, even if empty.
+    /// Each measure keeps its own Sides choice: volume and open interest draw split call and
+    /// put bars by default, or calls minus puts; gamma exposure draws net bars by default, or
+    /// split bars. The put/call and net gamma readouts show in the legend, never on the price
+    /// scale; the Put/call ratio input and their visibility in the style tab hide them.
     /// Expected move is off by default. Its method defaults to the ATM call mid plus put mid;
     /// ATM is the nearest listed strike, lower on a tie. Both bid/ask pairs must be present
     /// and uncrossed. Implied volatility instead uses price × IV × sqrt(calendar days / 365),
@@ -214,9 +232,11 @@ impl OptionsVolumeProfile {
     /// lists it, and otherwise in the order Volume, Open interest, Gamma exposure. A measure
     /// that waits is listed and saved at its place in that order, and a choice made meanwhile
     /// names its measure in it.
-    /// New saves contain hidden `expiry_label` and `measure_label` inputs that older releases
-    /// do not accept. Editors applying all inputs must update the matching label on an explicit
-    /// choice edit or reset, and preserve it on unrelated edits while a measure is unavailable.
+    /// New saves contain hidden `expiry_label` and `measure_label` inputs and the per-measure
+    /// `volume_sides`, `interest_sides` and `gamma_sides`, which older releases do not accept;
+    /// saves with the former `sides` input restore it for every measure. Editors applying all
+    /// inputs must update the matching label on an explicit choice edit or reset, and preserve
+    /// it on unrelated edits while a measure is unavailable.
     /// Returns `None` for an empty symbol or expiry list.
     pub fn from_chain(
         chain: OptionChain,
@@ -239,7 +259,8 @@ impl OptionsVolumeProfile {
             expiries: Expiries::Nearest,
             open_interest: Cell::new(false),
             gamma: Cell::new(false),
-            gamma_split: false,
+            sides: SIDES.map(|(.., default)| default),
+            put_call: true,
             exposure: None,
             exposure_levels: Default::default(),
             max_pain: Cell::new(false),
@@ -283,6 +304,17 @@ impl OptionsVolumeProfile {
     fn gamma_selected(&self, cache: &CachedProfile) -> bool {
         self.gamma.get()
             || (!cache.volume_available && !cache.interest_available && cache.exposure.is_some())
+    }
+
+    /// The measure drawn, as its place in [`MEASURES`].
+    fn drawn_measure(&self, cache: &CachedProfile) -> usize {
+        if self.gamma_selected(cache) {
+            2
+        } else {
+            usize::from(
+                cache.interest_available && (self.open_interest.get() || !cache.volume_available),
+            )
+        }
     }
 
     fn refresh(&self) {
@@ -525,8 +557,7 @@ impl OptionsVolumeProfile {
                     cache.day = Some(day);
                     return;
                 }
-                let interest = cache.interest_available
-                    && (self.open_interest.get() || !cache.volume_available);
+                let interest = self.drawn_measure(&cache) == 1;
                 let values: Arc<[OptionsVolume]> = if interest || cache.volume_available {
                     selected
                         .iter()
@@ -780,8 +811,8 @@ impl Indicator for OptionsVolumeProfile {
         let mut config = self.config;
         config.up_color = self.colors[0].to_srgba_unmultiplied();
         config.down_color = self.colors[1].to_srgba_unmultiplied();
-        if self.gamma_selected(&cache) {
-            config.display = if self.gamma_split {
+        if matches!(self.source, ProfileSource::Chain(..)) {
+            config.display = if self.sides[self.drawn_measure(&cache)] == 0 {
                 ProfileDisplay::UpDown
             } else {
                 ProfileDisplay::Delta
@@ -839,7 +870,7 @@ impl Indicator for OptionsVolumeProfile {
     }
     fn plot_style(&self, line: usize) -> PlotStyle {
         PlotStyle {
-            visible: line == 1 || (3..=7).contains(&line),
+            visible: true,
             color: if (6..=7).contains(&line) {
                 self.colors
                     .get(line)
@@ -861,8 +892,12 @@ impl Indicator for OptionsVolumeProfile {
         if self.gamma_selected(&self.cache.borrow()) {
             line == 2 || (3..=5).contains(&line) && self.exposure_levels[line - 3].get()
         } else {
-            line == 0 || (line == 1 && self.max_pain.get())
+            (line == 0 && self.put_call) || (line == 1 && self.max_pain.get())
         }
+    }
+    fn readout_only(&self, line: usize) -> bool {
+        // The put/call ratio and net gamma are far from the prices they would share a scale with.
+        matches!(self.source, ProfileSource::Chain(..)) && (line == 0 || line == 2)
     }
     fn plot_value(&self, line: usize, bar: usize) -> Option<f64> {
         if !self.matching_instrument || bar >= self.values.len() {
@@ -958,24 +993,6 @@ impl Indicator for OptionsVolumeProfile {
             )
             .with_default(InputValue::Text("Nearest".into()))
             .shown_when("expiry", Vec::new()),
-            StudyInput::new(
-                "sides",
-                "Sides",
-                InputValue::Choice(usize::from(if gamma {
-                    !self.gamma_split
-                } else {
-                    self.config.display == ProfileDisplay::Delta
-                })),
-                InputKind::Choice(vec![
-                    "Split".into(),
-                    if gamma {
-                        "Net (calls plus puts)".into()
-                    } else {
-                        "Net (calls minus puts)".into()
-                    },
-                ]),
-            )
-            .with_default(InputValue::Choice(usize::from(gamma))),
         ];
         inputs.push(StudyInput::new(
             "through_date",
@@ -1027,6 +1044,26 @@ impl Indicator for OptionsVolumeProfile {
                 .shown_when("measure", Vec::new()),
             );
         }
+        for ((id, choices, default), choice) in SIDES.into_iter().zip(self.sides) {
+            inputs.push(
+                StudyInput::new(
+                    id,
+                    "Sides",
+                    InputValue::Choice(choice),
+                    InputKind::Choice(choices.iter().map(|choice| (*choice).into()).collect()),
+                )
+                .with_default(InputValue::Choice(default)),
+            );
+        }
+        inputs.push(
+            StudyInput::new(
+                "put_call",
+                "Put/call ratio",
+                InputValue::Toggle(self.put_call),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(true)),
+        );
         if gamma {
             for (index, id, label) in [
                 (0, "call_wall", "Call wall"),
@@ -1093,6 +1130,33 @@ impl Indicator for OptionsVolumeProfile {
                     position + 1
                 });
             inputs.insert(position, label);
+        }
+        // Each measure's Sides shows while the editor's Measure names that measure, and the ratio
+        // switch while it names volume or open interest.
+        let listed = inputs
+            .iter()
+            .find_map(|input| match (input.id.as_str(), &input.kind) {
+                ("measure", InputKind::Choice(choices)) => Some(choices.clone()),
+                _ => None,
+            });
+        let at = |measure: usize| {
+            listed
+                .iter()
+                .flatten()
+                .position(|name| name == MEASURES[measure])
+        };
+        for input in &mut inputs {
+            let shown: Vec<_> = match SIDES.iter().position(|(id, ..)| *id == input.id) {
+                // Until the chain lists a measure, the Sides of the measure drawn shows.
+                Some(measure) if listed.is_some() || measure != self.drawn_measure(&cache) => {
+                    at(measure).into_iter().collect()
+                }
+                None if input.id == "put_call" && listed.is_some() => {
+                    at(0).into_iter().chain(at(1)).collect()
+                }
+                _ => continue,
+            };
+            input.shown_when = Some(("measure".into(), shown));
         }
         inputs.extend([
             StudyInput::new(
@@ -1199,14 +1263,10 @@ impl Indicator for OptionsVolumeProfile {
                 self.through_date = NaiveDate::parse_from_str(&date, "%Y-%m-%d")
                     .map_err(|_| StudyError::invalid_input(id))?;
             }
-            ("sides", InputValue::Choice(choice)) => {
-                self.gamma_split = choice == 0;
-                self.config.display = if choice == 0 {
-                    ProfileDisplay::UpDown
-                } else {
-                    ProfileDisplay::Delta
-                }
-            }
+            ("volume_sides", InputValue::Choice(choice)) => self.sides[0] = choice,
+            ("interest_sides", InputValue::Choice(choice)) => self.sides[1] = choice,
+            ("gamma_sides", InputValue::Choice(choice)) => self.sides[2] = choice,
+            ("put_call", InputValue::Toggle(shown)) => self.put_call = shown,
             ("expected_move", InputValue::Toggle(enabled)) => self.expected_move = enabled,
             ("move_method", InputValue::Choice(choice)) => self.move_iv = choice == 1,
             _ => return Err(StudyError::invalid_input(id)),
@@ -1676,7 +1736,7 @@ mod tests {
                         (true, vec![90.0, 52.5, 15.0, 60.0]),
                     ] {
                         study
-                            .set_input("sides", InputValue::Choice(usize::from(!split)))
+                            .set_input("gamma_sides", InputValue::Choice(usize::from(!split)))
                             .unwrap();
                         let plot = study.volume_profiles(0..1).remove(0);
                         for direction in [-10.0, -0.1, 0.1, 10.0] {
@@ -1717,7 +1777,9 @@ mod tests {
                             }
                         }
                     }
-                    study.set_input("sides", InputValue::Choice(1)).unwrap();
+                    study
+                        .set_input("gamma_sides", InputValue::Choice(1))
+                        .unwrap();
                     assert_eq!(
                         study.volume_profiles(0..1)[0]
                             .profile
@@ -1978,6 +2040,77 @@ mod tests {
         (chain, sink, rows, expiry, bars)
     }
 
+    /// A live chain listing E1, a day from today, and E2, a week after it, with a call and a
+    /// put at 100 in each: call and put volume 20 and 10 at E1 and 5 and 5 at E2, and at both
+    /// open interest 3 for the call and 1 for the put, gamma 0.05, a multiplier of 100 and the
+    /// underlying at 100. It lists Volume, Open interest and Gamma exposure. One contract's
+    /// gamma is 0.05 * 100 * 100² * 0.01 = 500, so E1's calls give +1500 and its puts -500.
+    fn chain_by_expiry() -> (OptionChain, Vec<NaiveDate>) {
+        let today = Utc::now().date_naive();
+        let dates = vec![
+            today + chrono::TimeDelta::days(1),
+            today + chrono::TimeDelta::days(8),
+        ];
+        let feed = ChainFeed::default();
+        let query = OptionChainQuery::new("SAMPLE", dates[0]..=dates[1]);
+        let chain = OptionChain::new(&feed, query, || {}).unwrap();
+        let rows = dates
+            .iter()
+            .zip([[20.0, 10.0], [5.0, 5.0]])
+            .flat_map(|(&expiry, volumes)| {
+                [OptionKind::Call, OptionKind::Put]
+                    .into_iter()
+                    .zip(volumes)
+                    .map(move |(kind, volume)| {
+                        let call = kind == OptionKind::Call;
+                        let symbol = format!("{expiry}-{kind:?}");
+                        let mut row = OptionQuote::new(symbol, expiry, 100.0, kind, Utc::now());
+                        row.volume = Some(volume);
+                        row.open_interest = Some(if call { 3.0 } else { 1.0 });
+                        row.gamma = Some(0.05);
+                        row.multiplier = Some(100.0);
+                        row.underlying_price = Some(100.0);
+                        row
+                    })
+            })
+            .collect();
+        feed.0.lock().unwrap().as_ref().unwrap().push(rows).unwrap();
+        (chain, dates)
+    }
+
+    /// Applies `study`'s inputs with `edits` made to them, as the settings editor does: a choice
+    /// picked there also names the pick in the choice's hidden label.
+    fn apply_edits(study: &mut dyn Indicator, edits: &[(&str, InputValue)]) {
+        let listed = study.inputs();
+        let edited = |id: &str| {
+            edits
+                .iter()
+                .find_map(|(edit, value)| (*edit == id).then(|| value.clone()))
+        };
+        let inputs: Vec<_> = listed
+            .iter()
+            .map(|input| {
+                let label = input.id.strip_suffix("_label").and_then(|choice| {
+                    let InputValue::Choice(pick) = edited(choice)? else {
+                        return None;
+                    };
+                    listed.iter().find_map(|input| match &input.kind {
+                        InputKind::Choice(choices) if input.id == choice => {
+                            choices.get(pick).cloned()
+                        }
+                        _ => None,
+                    })
+                });
+                let value = edited(&input.id)
+                    .or(label.map(InputValue::Text))
+                    .unwrap_or_else(|| input.value.clone());
+                (input.id.clone(), value)
+            })
+            .collect();
+        let settings = study.settings();
+        study.apply_settings(&inputs, settings).unwrap();
+    }
+
     /// A latest-value line on an option level sits at the value its plot and scale tag show.
     #[cfg(feature = "widget")]
     #[test]
@@ -2061,12 +2194,16 @@ mod tests {
         crate::studies::StudyTemplate::from_study(&study)
     }
 
-    /// A factory that builds the profile over `chain`, as the indicator dialog registers it.
-    fn profile_factory(chain: OptionChain, expiry: NaiveDate) -> crate::studies::IndicatorFactory {
+    /// A factory that builds the profile over `chain` and its listed `dates`, as the indicator
+    /// dialog registers it.
+    fn profile_factory(
+        chain: OptionChain,
+        dates: Vec<NaiveDate>,
+    ) -> crate::studies::IndicatorFactory {
         let mut factory = crate::studies::IndicatorFactory::new();
         factory.register("Options Volume Profile", move || {
             Box::new(
-                OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", vec![expiry]).unwrap(),
+                OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", dates.clone()).unwrap(),
             )
         });
         factory
@@ -2085,7 +2222,7 @@ mod tests {
         sink.push(rows).unwrap();
         let template = saved_hidden_band(chain.clone(), expiry, &bars);
         let mut loaded = template
-            .create_with(&profile_factory(chain, expiry))
+            .create_with(&profile_factory(chain, vec![expiry]))
             .unwrap();
         loaded.calculate(&bars);
         // The last close of 100 stands in for the underlying, so the move is 93..107 again.
@@ -2120,7 +2257,7 @@ mod tests {
         wall.unwrap().1 = InputValue::Toggle(true);
         let (later, later_sink, later_rows, _, _) = expected_move_chain();
         let mut loaded = template
-            .create_with(&profile_factory(later, expiry))
+            .create_with(&profile_factory(later, vec![expiry]))
             .unwrap_or_else(|error| panic!("restore failed: {error:?}"));
         // Saved again before the quotes arrive, it holds what it was saved with.
         assert_eq!(
@@ -2140,7 +2277,7 @@ mod tests {
         // Quotes with volume offer no walls. Keep the saved wall until gamma is selected.
         let (later, later_sink, mut later_rows, _, _) = expected_move_chain();
         let mut loaded = template
-            .create_with(&profile_factory(later, expiry))
+            .create_with(&profile_factory(later, vec![expiry]))
             .unwrap();
         for row in &mut later_rows {
             row.volume = Some(1.0);
@@ -2714,6 +2851,139 @@ mod tests {
                     "reset {reset}: {id}"
                 );
             }
+        }
+    }
+
+    /// Each measure keeps its own Sides choice when the settings editor applies every input with
+    /// only the measure changed, and a saved template restores each: Volume and Open interest
+    /// draw split bars and Gamma exposure net bars until another choice is made for them.
+    #[test]
+    fn each_measure_keeps_its_sides_through_the_editor() {
+        use InputValue::Choice;
+        use ProfileDisplay::{Delta, UpDown};
+        let (chain, dates) = chain_by_expiry();
+        let factory = profile_factory(chain.clone(), dates.clone());
+        let mut study: Box<dyn Indicator> = Box::new(crate::studies::ConfiguredStudy::new(
+            Box::new(OptionsVolumeProfile::from_chain(chain, "SAMPLE", dates).unwrap()),
+        ));
+        let display = |study: &dyn Indicator| study.volume_profiles(0..1)[0].config.display;
+        assert_eq!(display(&*study), UpDown);
+        // The measures are listed as Volume, Open interest and Gamma exposure.
+        for (edits, shown) in [
+            (vec![("measure", Choice(2))], Delta),
+            (vec![("measure", Choice(0))], UpDown),
+            (vec![("volume_sides", Choice(1))], Delta),
+            (vec![("measure", Choice(2))], Delta),
+            (vec![("measure", Choice(0))], Delta),
+            (
+                vec![("measure", Choice(2)), ("gamma_sides", Choice(0))],
+                UpDown,
+            ),
+            (vec![("measure", Choice(1))], UpDown),
+            (vec![("measure", Choice(0))], Delta),
+        ] {
+            apply_edits(&mut *study, &edits);
+            assert_eq!(display(&*study), shown, "{edits:?}");
+        }
+        let mut restored = crate::studies::StudyTemplate::from_study(&*study)
+            .create_with(&factory)
+            .unwrap();
+        assert_eq!(display(&*restored), Delta);
+        apply_edits(&mut *restored, &[("measure", Choice(2))]);
+        assert_eq!(display(&*restored), UpDown);
+    }
+
+    /// The put/call readout shows in the legend while its input and its line in the style tab
+    /// are on, and a saved template restores both; it is never drawn on the price scale. Net
+    /// gamma follows its line the same way.
+    #[test]
+    fn put_call_readout_follows_its_toggle_and_style_line() {
+        let (chain, dates) = chain_by_expiry();
+        let factory = profile_factory(chain.clone(), dates.clone());
+        let mut study: Box<dyn Indicator> = Box::new(crate::studies::ConfiguredStudy::new(
+            Box::new(OptionsVolumeProfile::from_chain(chain, "SAMPLE", dates).unwrap()),
+        ));
+        study.calculate(&[Bar::new(Utc::now(), 100.0, 101.0, 99.0, 100.0, 1.0)]);
+        let show_line = |study: &mut dyn Indicator, line: usize, shown: bool| {
+            let mut settings = study.settings();
+            settings.plots[line].visible = shown;
+            study.apply_settings(&[], settings).unwrap();
+        };
+        let restored = |study: &dyn Indicator| {
+            crate::studies::StudyTemplate::from_study(study)
+                .create_with(&factory)
+                .unwrap()
+        };
+        assert!(study.legend_visible(0));
+        show_line(&mut *study, 0, false);
+        assert!(!study.legend_visible(0));
+        assert!(!restored(&*study).legend_visible(0));
+        show_line(&mut *study, 0, true);
+        assert!(study.legend_visible(0));
+        assert!(
+            !study.plot_style(0).visible,
+            "a ratio drawn on the price scale"
+        );
+        study
+            .set_input("put_call", InputValue::Toggle(false))
+            .unwrap();
+        assert!(!study.legend_visible(0));
+        assert!(!restored(&*study).legend_visible(0));
+        // Cursor payloads and alerts still read 10 put contracts to 20 call contracts.
+        assert_eq!(study.plot_value(0, 0), Some(0.5));
+        apply_edits(&mut *study, &[("measure", InputValue::Choice(2))]);
+        assert!(study.legend_visible(2));
+        assert!(
+            !study.plot_style(2).visible,
+            "net gamma drawn on the price scale"
+        );
+        show_line(&mut *study, 2, false);
+        assert!(!study.legend_visible(2));
+    }
+
+    /// A profile saved while one Sides choice served every measure and its readouts showed with
+    /// their lines unticked draws each measure as before: split or net bars as saved, in its
+    /// first two line colours, at the right of the plot, with its readout in the legend.
+    #[test]
+    fn profiles_saved_with_one_sides_choice_draw_as_before() {
+        use ProfileDisplay::{Delta, UpDown};
+        // Saved over Volume with Net picked and the line colours rgba(1, 2, 3, 200) and
+        // rgba(4, 5, 6, 200).
+        let saved = r#"{"name":"Options Volume Profile","inputs":[["expiry",{"Choice":0}],["expiry_label",{"Text":"Nearest"}],["sides",{"Choice":1}],["through_date",{"Text":"2026-11-26"}],["measure",{"Choice":0}],["measure_label",{"Text":"Volume"}],["max_pain",{"Toggle":false}],["expected_move",{"Toggle":false}],["move_method",{"Choice":0}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.OptionsVolumeProfile.html","plots":[{"color":[1,2,2,200],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[3,4,5,200],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[27,117,109,180],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[27,117,109,180],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[169,59,56,180],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[27,117,109,180],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[38,166,154,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[38,166,154,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[2,7,7,16],"untagged_plots":[0,1,2,3,4,5,6,7],"price_line_plots":[],"plot_variants":[[],[],[],[],[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#;
+        let (chain, dates) = chain_by_expiry();
+        let factory = profile_factory(chain, dates);
+        for (sides, measure, label, display, readout) in [
+            (0, 0, "Volume", UpDown, 0),
+            (1, 0, "Volume", Delta, 0),
+            (0, 2, "Gamma exposure", UpDown, 2),
+            (1, 2, "Gamma exposure", Delta, 2),
+        ] {
+            let mut template: crate::studies::StudyTemplate = serde_json::from_str(saved).unwrap();
+            for (id, value) in &mut template.inputs {
+                match id.as_str() {
+                    "sides" => *value = InputValue::Choice(sides),
+                    "measure" => *value = InputValue::Choice(measure),
+                    "measure_label" => *value = InputValue::Text(label.into()),
+                    _ => {}
+                }
+            }
+            let colours =
+                [0, 1].map(|line| template.settings.plots[line].color.to_srgba_unmultiplied());
+            let restored = template
+                .create_with(&factory)
+                .unwrap_or_else(|error| panic!("{label}, sides {sides}: {error}"));
+            let plot = restored.volume_profiles(0..1).remove(0);
+            assert_eq!(
+                (
+                    plot.config.display,
+                    [plot.config.up_color, plot.config.down_color]
+                ),
+                (display, colours),
+                "{label}, sides {sides}"
+            );
+            assert_eq!((plot.right_aligned, plot.width), (true, 0.9));
+            assert!(restored.legend_visible(readout), "{label}");
+            assert!(!restored.plot_style(readout).visible, "{label}");
         }
     }
 }
