@@ -810,6 +810,11 @@ fn degenerate_lengths_and_hostile_bars_are_survivable() {
                 let mut bars = long.clone();
                 edit(&mut bars[at]);
                 let hostile = values(&mut study, &bars).unwrap_or_default();
+                // Ratings' VWMA alone skips missing volume; its other components retain
+                // the bar. The ratings vote fixture checks this mixed-input case separately.
+                if study.name() == "Technical Ratings" && !bars[at].volume.is_finite() {
+                    continue;
+                }
                 // A study that reads the bad field skips the bar and matches the series
                 // without it; one that does not read it sees an ordinary bar and matches
                 // the full series.

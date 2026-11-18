@@ -43,11 +43,12 @@
 //! coverages; the coverages are hidden by default. The rating basis decides which groups the
 //! summary averages: both by default, or only the moving averages or only the oscillators.
 //!
-//! The table shows the latest bar's score, rating and coverage of each group the basis uses,
-//! each row on the background of its rating. With higher intervals shown, the study requests the
-//! chart symbol's 1-minute, 5-minute, 15-minute, 30-minute, 1-hour, 4-hour, daily, weekly and
-//! monthly bars longer than the chart interval, rates the latest bar of each with the same
-//! components and adds a row with its summary score, rating and coverage.
+//! The pane plots only the summary, which follows the rating basis. The table lists its
+//! interval first and each chosen additional interval once, with the rating of each group
+//! the basis uses, each cell on its rating colour, followed by coverage. Other intervals
+//! default to 1h, 4h, 1D, 1W and 1M; a slot left at Chart interval adds no row. Host-supplied
+//! histories are requested from 2000 periods before the latest rated bar. The plot can wait
+//! for interval close while the table's first row shows the latest rating.
 
 use crate::model::{Bar, Timeframe};
 use crate::studies::palette;
@@ -57,6 +58,7 @@ use crate::studies::{
     StudyDataRequest, StudyTable, TablePosition, TableTextSize, UltimateOscillator, VWMA,
     WilliamsR,
 };
+use chrono::{DateTime, TimeDelta, Utc};
 use egui::Color32;
 use std::cmp::Ordering;
 
@@ -64,18 +66,18 @@ use std::cmp::Ordering;
 /// bar itself.
 const CLOUD_SHIFT: usize = 25;
 
-/// The intervals rated in the table with higher intervals shown, where longer than the chart's.
-const INTERVALS: [Timeframe; 9] = [
-    Timeframe::Min1,
-    Timeframe::Min5,
-    Timeframe::Min15,
-    Timeframe::Min30,
-    Timeframe::Hour1,
-    Timeframe::Hour4,
-    Timeframe::Day1,
-    Timeframe::Week1,
-    Timeframe::Month1,
+/// The intervals the table rates by default with other intervals shown.
+const TABLE_TIMEFRAMES: [Option<Timeframe>; 5] = [
+    Some(Timeframe::Hour1),
+    Some(Timeframe::Hour4),
+    Some(Timeframe::Day1),
+    Some(Timeframe::Week1),
+    Some(Timeframe::Month1),
 ];
+
+/// Periods of a table interval before the latest bar from which its bars are requested: the
+/// 200 bars of the slowest average where the market trades a tenth of the time.
+const TABLE_HISTORY: i64 = 2000;
 
 /// The groups whose ratings the summary averages. The `Debug` names are the choices its
 /// input lists.
@@ -257,6 +259,8 @@ impl std::fmt::Debug for Component {
 pub struct TechnicalRatings {
     basis: RatingBasis,
     table_intervals: bool,
+    /// The intervals the table rates besides the rating's own, `None` for none.
+    table_timeframes: [Option<Timeframe>; 5],
     table_position: TablePosition,
     table_size: TableTextSize,
     table_strong_buy_color: Color32,
@@ -266,8 +270,10 @@ pub struct TechnicalRatings {
     table_strong_sell_color: Color32,
     table_header_color: Color32,
     table_text_color: Color32,
-    /// The chart interval, which decides the higher intervals requested.
+    /// The interval the rating is calculated on: the chart's, or its Interval's.
     timeframe: Option<Timeframe>,
+    /// The latest rated bar's time, from which table histories are requested.
+    latest_time: Option<DateTime<Utc>>,
     /// The latest scores and coverages of each requested interval, `None` without its bars.
     intervals: Vec<(Timeframe, Option<[f64; 6]>)>,
     components: Option<Vec<Component>>,
@@ -295,6 +301,7 @@ impl TechnicalRatings {
         Self {
             basis: RatingBasis::All,
             table_intervals: false,
+            table_timeframes: TABLE_TIMEFRAMES,
             table_position: TablePosition::BottomRight,
             table_size: TableTextSize::Normal,
             table_strong_buy_color: palette::BLUE,
@@ -305,6 +312,7 @@ impl TechnicalRatings {
             table_header_color: Color32::from_rgb(41, 91, 121),
             table_text_color: Color32::WHITE,
             timeframe: None,
+            latest_time: None,
             intervals: Vec::new(),
             components: None,
             bars: Vec::new(),
@@ -312,9 +320,15 @@ impl TechnicalRatings {
             values: IndicatorValues::new(),
             table: StudyTable {
                 title: "Technical Ratings".into(),
-                columns: ["Group", "Score", "Rating", "Coverage"]
-                    .map(String::from)
-                    .to_vec(),
+                columns: [
+                    "Interval",
+                    "Moving averages",
+                    "Oscillators",
+                    "Summary",
+                    "Coverage",
+                ]
+                .map(String::from)
+                .to_vec(),
                 ..Default::default()
             },
             colors: vec![
@@ -510,55 +524,66 @@ impl TechnicalRatings {
         Some(Self::row(&components, &bars, at, self.basis))
     }
 
-    /// The table rows of the latest bar and of the requested intervals, on their ratings'
-    /// backgrounds.
+    /// The table rows of the rating's interval and of the table intervals: each group's rating the
+    /// basis uses on its colour, then the coverage.
     fn fill_table(&mut self) {
-        let latest = self.values.len().checked_sub(1);
-        let at = |line: usize| latest.and_then(|bar| self.values.value(line, bar));
         let groups: &[usize] = match self.basis {
             RatingBasis::All => &[0, 1, 2],
             RatingBasis::MovingAverages => &[0],
             RatingBasis::Oscillators => &[1],
         };
-        let labels = ["Moving averages", "Oscillators", "Summary"];
-        let mut rows: Vec<_> = groups
-            .iter()
-            .map(|&group| (labels[group].to_string(), at(group), at(group + 3)))
+        let names = ["Moving averages", "Oscillators", "Summary"];
+        self.table.columns = std::iter::once("Interval")
+            .chain(groups.iter().map(|&group| names[group]))
+            .chain(std::iter::once("Coverage"))
+            .map(String::from)
             .collect();
-        if self.table_intervals {
-            let finite = |value: f64| value.is_finite().then_some(value);
-            rows.extend(self.intervals.iter().map(|(timeframe, latest)| {
-                (
-                    timeframe.as_str().into_owned(),
-                    latest.and_then(|row| finite(row[2])),
-                    latest.and_then(|row| finite(row[5])),
-                )
-            }));
-        }
-        self.table.cell_colors = rows
-            .iter()
-            .map(|(_, score, _)| match score.map_or("Neutral", rating) {
-                "Strong Buy" => self.table_strong_buy_color,
-                "Buy" => self.table_buy_color,
-                "Sell" => self.table_sell_color,
-                "Strong Sell" => self.table_strong_sell_color,
-                _ => self.table_neutral_color,
-            })
-            .collect();
-        self.table.rows = rows
+        let latest = self.values.len().checked_sub(1).map(|bar| {
+            std::array::from_fn(|line| self.values.value(line, bar).unwrap_or(f64::NAN))
+        });
+        let own = self.timeframe.map_or_else(
+            || "Chart".to_owned(),
+            |timeframe| timeframe.as_str().into_owned(),
+        );
+        let mut rows = vec![(own, latest)];
+        // Only intervals still requested: once an input or the rating's interval leaves none to
+        // request, `update_data` is no longer called to rebuild the rows.
+        let requested = self.data_requests();
+        rows.extend(
+            self.intervals
+                .iter()
+                .filter(|(timeframe, _)| {
+                    requested
+                        .iter()
+                        .any(|request| request.timeframe == Some(*timeframe))
+                })
+                .map(|(timeframe, latest)| (timeframe.as_str().into_owned(), *latest)),
+        );
+        let fill = |score: Option<f64>| match score.map_or("Neutral", rating) {
+            "Strong Buy" => self.table_strong_buy_color,
+            "Buy" => self.table_buy_color,
+            "Sell" => self.table_sell_color,
+            "Strong Sell" => self.table_strong_sell_color,
+            _ => self.table_neutral_color,
+        };
+        (self.table.rows, self.table.cell_colors) = rows
             .into_iter()
-            .map(|(label, score, coverage)| {
-                vec![
-                    StudyCell::Text(label),
-                    StudyCell::Text(score.map_or("N/A".into(), |score| format!("{score:+.2}"))),
-                    StudyCell::Text(score.map_or("N/A", rating).into()),
-                    StudyCell::Text(
-                        coverage
-                            .map_or("N/A".into(), |coverage| format!("{:.0}%", coverage * 100.0)),
-                    ),
-                ]
+            .map(|(label, latest)| {
+                let value = |line: usize| {
+                    latest.and_then(|row: [f64; 6]| row[line].is_finite().then_some(row[line]))
+                };
+                let mut cells = vec![StudyCell::Text(label)];
+                let mut fills = vec![self.table_header_color];
+                for &group in groups {
+                    cells.push(StudyCell::Text(value(group).map_or("N/A", rating).into()));
+                    fills.push(fill(value(group)));
+                }
+                cells.push(StudyCell::Text(value(5).map_or("N/A".into(), |coverage| {
+                    format!("{:.0}%", coverage * 100.0)
+                })));
+                (cells, fills)
             })
-            .collect();
+            .unzip();
         self.table.header_color = Some(self.table_header_color);
         self.table.text_color = Some(self.table_text_color);
         self.table.position = self.table_position;
@@ -603,7 +628,12 @@ fn rating(score: f64) -> &'static str {
 impl Indicator for TechnicalRatings {
     crate::studies::inputs::study_inputs!(self;
         basis: choice("Rating basis", [RatingBasis::All, RatingBasis::MovingAverages, RatingBasis::Oscillators]),
-        table_intervals: toggle("Table shows higher intervals"),
+        table_intervals: toggle("Table shows other intervals"),
+        table_timeframes[0]: timeframe("Table interval 1"),
+        table_timeframes[1]: timeframe("Table interval 2"),
+        table_timeframes[2]: timeframe("Table interval 3"),
+        table_timeframes[3]: timeframe("Table interval 4"),
+        table_timeframes[4]: timeframe("Table interval 5"),
         table_position: choice("Table position", TablePosition::ALL),
         table_size: choice("Table size", TableTextSize::ALL),
         table_strong_buy_color: color("Table strong buy colour"),
@@ -613,7 +643,17 @@ impl Indicator for TechnicalRatings {
         table_strong_sell_color: color("Table strong sell colour"),
         table_header_color: color("Table header colour"),
         table_text_color: color("Table text colour")
-    ; {
+    ; changed, previous => {
+        // Reapplying unchanged inputs must preserve a palette edited in the Style tab.
+        for (id, slots, color) in [
+            ("table_neutral_color", 0..3, self.table_neutral_color),
+            ("table_buy_color", 3..6, self.table_buy_color),
+            ("table_sell_color", 6..9, self.table_sell_color),
+        ] {
+            if changed == id && previous != crate::studies::InputValue::Color(color) {
+                self.colors[slots].fill(color);
+            }
+        }
         self.components = None;
     });
 
@@ -633,23 +673,52 @@ impl Indicator for TechnicalRatings {
         self.timeframe = Some(timeframe);
     }
 
-    /// The chart symbol's bars of each higher interval, with higher intervals shown in the table.
+    fn requests_allow_other_intervals(&self) -> bool {
+        true
+    }
+
+    /// The chart symbol's bars of each table interval: the chosen ones in order, each once, without
+    /// the rating's own interval. Intervals count as the same when they read the same.
     fn data_requests(&self) -> Vec<StudyDataRequest> {
         if !self.table_intervals {
             return Vec::new();
         }
-        let chart = self
+        let mut labels: Vec<_> = self
             .timeframe
-            .map_or(0, |timeframe| timeframe.duration_ms());
-        INTERVALS
-            .into_iter()
-            .filter(|timeframe| timeframe.duration_ms() > chart)
-            .map(|timeframe| StudyDataRequest {
-                symbol: String::new(),
-                timeframe: Some(timeframe),
-                metric: None,
-            })
-            .collect()
+            .iter()
+            .map(|timeframe| timeframe.as_str())
+            .collect();
+        let mut requests = Vec::new();
+        for timeframe in self.table_timeframes.into_iter().flatten() {
+            let label = timeframe.as_str();
+            if !labels.contains(&label) {
+                labels.push(label);
+                requests.push(StudyDataRequest {
+                    symbol: String::new(),
+                    timeframe: Some(timeframe),
+                    metric: None,
+                });
+            }
+        }
+        requests
+    }
+
+    /// Each table interval from `TABLE_HISTORY` of its periods before the latest bar rated: a bounded
+    /// history for intervals shorter than the chart's, enough bars for the 200-bar averages on longer
+    /// ones.
+    fn data_start(&self, request: &StudyDataRequest) -> Option<DateTime<Utc>> {
+        // shortcut: assumes the market trades a tenth of the time; a 1-minute row just after a
+        // weekend rates fewer than 200 bars and shows a lower coverage. Upgrade when a request can
+        // state a number of bars.
+        let timeframe = request
+            .timeframe
+            .filter(|timeframe| !timeframe.is_trade_based())?;
+        if !self.data_requests().contains(request) {
+            return None;
+        }
+        let span =
+            TimeDelta::try_milliseconds(timeframe.duration_ms().checked_mul(TABLE_HISTORY)?)?;
+        self.latest_time?.checked_sub_signed(span)
     }
 
     fn update_data(&mut self, data: &[Bar], from: usize, sources: &[StudyData<'_>]) {
@@ -670,6 +739,9 @@ impl Indicator for TechnicalRatings {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
+        if let Some(bar) = data.last() {
+            self.latest_time = Some(bar.time);
+        }
         let mut from = from.min(self.values.len()).min(data.len());
         if self.components.is_none() {
             self.components = Some(Self::build());
@@ -716,7 +788,7 @@ impl Indicator for TechnicalRatings {
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
             plot_type: crate::studies::PlotType::Columns,
-            visible: line < 3,
+            visible: line == 2,
         }
     }
 
@@ -830,7 +902,7 @@ mod tests {
     use super::*;
     use crate::model::BarClock;
     use crate::studies::InputValue;
-    use chrono::{DateTime, Duration};
+    use chrono::Duration;
 
     /// Bars of `closes` one day apart, with each price at the close.
     fn bars(closes: &[f64]) -> Vec<Bar> {
@@ -850,20 +922,23 @@ mod tests {
             .collect()
     }
 
-    /// The label, score, rating and coverage of each table row, with its background.
-    fn table(study: &TechnicalRatings) -> Vec<([String; 4], Color32)> {
+    /// Each row's cell texts and fills, preserving their column order.
+    fn table(study: &TechnicalRatings) -> Vec<(Vec<String>, Vec<Color32>)> {
         let table = study.table().unwrap();
         assert_eq!(table.cell_colors.len(), table.rows.len());
         table
             .rows
             .iter()
             .zip(&table.cell_colors)
-            .map(|(row, &fill)| {
-                let text = |cell: &StudyCell| match cell {
-                    StudyCell::Text(text) => text.clone(),
-                    _ => panic!("text cells"),
-                };
-                (std::array::from_fn(|column| text(&row[column])), fill)
+            .map(|(row, fills)| {
+                let text = row
+                    .iter()
+                    .map(|cell| match cell {
+                        StudyCell::Text(text) => text.clone(),
+                        _ => panic!("text cells"),
+                    })
+                    .collect();
+                (text, fills.clone())
             })
             .collect()
     }
@@ -1202,16 +1277,16 @@ mod tests {
                     );
                 }
                 if basis == RatingBasis::Oscillators && direction != 0.0 {
-                    let (score, label, fill) = if direction > 0.0 {
-                        ("+0.36", "Buy", Color32::from_rgb(91, 156, 246))
+                    let (label, fill) = if direction > 0.0 {
+                        ("Buy", Color32::from_rgb(91, 156, 246))
                     } else {
-                        ("-0.27", "Sell", Color32::from_rgb(239, 154, 154))
+                        ("Sell", Color32::from_rgb(239, 154, 154))
                     };
                     assert_eq!(
                         table(&study),
                         vec![(
-                            ["Oscillators", score, label, "100%"].map(String::from),
-                            fill
+                            ["Chart", label, "100%"].map(String::from).to_vec(),
+                            vec![Color32::from_rgb(41, 91, 121), fill]
                         )]
                     );
                     let table = study.table().unwrap();
@@ -1269,6 +1344,45 @@ mod tests {
                 full.values.value(line, 259)
             );
         }
+        // Only VWMA reads volume: a missing volume removes its vote, while the other 25
+        // components retain their price history. With no volume at all VWMA is the SMA.
+        for volume in [f64::NAN, f64::INFINITY] {
+            let mut missing_volume = bars.clone();
+            missing_volume[259].volume = volume;
+            let mut study = TechnicalRatings::new();
+            study.calculate(&missing_volume);
+            let votes: Vec<_> =
+                TechnicalRatings::votes(study.components.as_ref().unwrap(), &study.bars, 259)
+                    .map(|(_, vote)| vote)
+                    .collect();
+            let mut expected: Vec<_> =
+                TechnicalRatings::votes(full.components.as_ref().unwrap(), &full.bars, 259)
+                    .map(|(_, vote)| vote)
+                    .collect();
+            expected[13] = None;
+            assert_eq!(votes, expected);
+            for (line, value) in [
+                (0, 1.0),
+                (1, 4.0 / 11.0),
+                (2, 15.0 / 22.0),
+                (3, 14.0 / 15.0),
+                (4, 1.0),
+                (5, 25.0 / 26.0),
+            ] {
+                assert!((study.values.value(line, 259).unwrap() - value).abs() < 1e-12);
+            }
+        }
+        let mut no_volume = bars.clone();
+        for bar in &mut no_volume {
+            bar.volume = 0.0;
+        }
+        let mut study = TechnicalRatings::new();
+        study.calculate(&no_volume);
+        for line in 0..6 {
+            for at in 0..bars.len() {
+                assert_eq!(study.values.value(line, at), full.values.value(line, at));
+            }
+        }
         let n = f64::NAN;
         for (sum, votes, basis, expected) in [
             (
@@ -1318,30 +1432,41 @@ mod tests {
         }
     }
 
-    /// Higher intervals add one row each, rated from their own bars, and never repeat the chart
-    /// interval. Closes 10 and 12 make every component buy; 10, 12 and 11.4 rate as above.
+    /// Table slots choose unique intervals by label, including shorter ones. Two closes
+    /// 10 and 12 put all six seeded EMAs below the last close: 6/15 averages, 6/26 overall.
     #[test]
-    fn higher_intervals_add_rated_rows() {
+    fn table_rates_the_chosen_intervals() {
+        use InputValue::{Choice, Color, Timeframe as Interval, Toggle};
         let mut study = TechnicalRatings::default();
         study.set_timeframe(Timeframe::Hour1);
         assert!(study.data_requests().is_empty());
-        study
-            .set_input("table_intervals", InputValue::Toggle(true))
-            .unwrap();
+        for (id, value) in [
+            ("table_intervals", Toggle(true)),
+            ("table_timeframes [2]", Interval(Some(Timeframe::Hour4))),
+            ("table_timeframes [3]", Interval(Some(Timeframe::Min5))),
+            ("table_timeframes [4]", Interval(None)),
+            ("table_strong_sell_color", Color(Color32::GOLD)),
+        ] {
+            study.set_input(id, value).unwrap();
+        }
         let request = |timeframe| StudyDataRequest {
             symbol: String::new(),
             timeframe: Some(timeframe),
             metric: None,
         };
-        let requests = [
-            Timeframe::Hour4,
-            Timeframe::Day1,
-            Timeframe::Week1,
-            Timeframe::Month1,
-        ]
-        .map(request);
+        let requests = [Timeframe::Hour4, Timeframe::Min5].map(request);
         assert_eq!(study.data_requests(), requests);
-        let (rising, turning) = (bars(&[10.0, 12.0]), bars(&[10.0, 12.0, 11.4]));
+        // A custom duration with the same label is the same interval too.
+        study
+            .set_input(
+                "table_timeframes [2]",
+                Interval(Some(Timeframe::Custom(
+                    std::num::NonZeroU64::new(4 * 3600).unwrap(),
+                ))),
+            )
+            .unwrap();
+        assert_eq!(study.data_requests(), requests);
+        let (rising, falling) = (bars(&[10., 12.]), bars(&[10., 8.]));
         let source = |request: &StudyDataRequest, bars| StudyData {
             request: request.clone(),
             bars,
@@ -1350,31 +1475,103 @@ mod tests {
             timeframe: request.timeframe.unwrap(),
         };
         let sources = [
-            source(&requests[0], &rising[..]),
-            source(&requests[1], &turning[..]),
-            source(&requests[2], &[][..]),
+            source(&requests[0], &falling[..]),
+            source(&requests[1], &[][..]),
         ];
         study.update_data(&rising, 0, &sources);
-        let missing = |label: &str| {
+        let h = Color32::from_rgb(41, 91, 121);
+        let n = palette::DISABLED;
+        let b = palette::BLUE;
+        let row = |texts: &[&str], fills: &[Color32]| {
             (
-                [label, "N/A", "N/A", "N/A"].map(String::from),
-                palette::DISABLED,
+                texts
+                    .iter()
+                    .map(|text| text.to_string())
+                    .collect::<Vec<_>>(),
+                fills.to_vec(),
             )
         };
         assert_eq!(
-            table(&study)[3..],
+            study.table().unwrap().columns,
             [
-                (
-                    ["4h", "+1.00", "Strong Buy", "23%"].map(String::from),
-                    palette::BLUE
-                ),
-                (
-                    ["1D", "+1.00", "Strong Buy", "23%"].map(String::from),
-                    palette::BLUE
-                ),
-                missing("1W"),
-                missing("1M"),
+                "Interval",
+                "Moving averages",
+                "Oscillators",
+                "Summary",
+                "Coverage"
             ]
         );
+        assert_eq!(
+            table(&study),
+            vec![
+                row(
+                    &["1h", "Strong Buy", "N/A", "Strong Buy", "23%"],
+                    &[h, b, n, b]
+                ),
+                row(
+                    &["4h", "Strong Sell", "N/A", "Strong Sell", "23%"],
+                    &[h, Color32::GOLD, n, Color32::GOLD]
+                ),
+                row(&["5min", "N/A", "N/A", "N/A", "N/A"], &[h, n, n, n]),
+            ]
+        );
+        assert_eq!(
+            study.data_start(&requests[0]),
+            Some(rising[1].time - TimeDelta::hours(8000))
+        );
+        assert_eq!(
+            study.data_start(&requests[1]),
+            Some(rising[1].time - TimeDelta::minutes(10000))
+        );
+        assert_eq!(study.data_start(&request(Timeframe::Day1)), None);
+        for (basis, label, rating, coverage, fill) in [
+            (1, "Moving averages", "Strong Buy", "40%", b),
+            (2, "Oscillators", "N/A", "0%", n),
+        ] {
+            study.set_input("basis", Choice(basis)).unwrap();
+            study.update_data(&rising, 0, &sources);
+            assert_eq!(
+                study.table().unwrap().columns,
+                ["Interval", label, "Coverage"]
+            );
+            let other = if basis == 1 { "Strong Sell" } else { "N/A" };
+            assert_eq!(
+                table(&study),
+                vec![
+                    row(&["1h", rating, coverage], &[h, fill]),
+                    row(
+                        &["4h", other, coverage],
+                        &[h, if basis == 1 { Color32::GOLD } else { n }]
+                    ),
+                    row(&["5min", "N/A", "N/A"], &[h, n]),
+                ]
+            );
+        }
+        // The custom duplicate must also be cleared before requests can become empty.
+        for slot in [1, 2, 3] {
+            study
+                .set_input(&format!("table_timeframes [{slot}]"), Interval(None))
+                .unwrap();
+        }
+        assert!(study.data_requests().is_empty());
+        study.calculate(&rising);
+        assert_eq!(table(&study), vec![row(&["1h", "N/A", "0%"], &[h, n])]);
+        // The three category colours also colour columns; repeating a value keeps plot edits.
+        study.set_input("basis", Choice(0)).unwrap();
+        for id in ["table_buy_color", "table_neutral_color", "table_sell_color"] {
+            study.set_input(id, Color(Color32::GOLD)).unwrap();
+        }
+        study.calculate(&rising);
+        assert_eq!(study.plot_color(2, 1), Some(Color32::GOLD));
+        study.set_color(2, Color32::GREEN);
+        study
+            .set_input("table_buy_color", Color(Color32::GOLD))
+            .unwrap();
+        study.calculate(&rising);
+        assert_eq!(study.plot_color(2, 1), Some(Color32::GREEN));
+        // A trailing unusable bar has no latest rating, even if an earlier bar is usable.
+        let mut missing = rising.clone();
+        missing[1].close = f64::NAN;
+        assert!(study.latest(&missing).is_none());
     }
 }

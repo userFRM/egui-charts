@@ -106,7 +106,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 ## Technical Indicators
 
-- [x] Technical Ratings averages its 15 moving-average votes and 11 oscillator votes within each group, then averages the group ratings for its summary. Each component uses its directional or signal rule, and older saved studies recompute with the fixed components.
+- [x] Technical Ratings averages its 15 moving-average votes and 11 oscillator votes within each group, then averages the group ratings for its summary. Each component uses its directional or signal rule, and older saved studies recompute with the fixed components. Its Interval and wait-for-close inputs stay available with a table of five chosen intervals; the table lists each interval once with each selected group's rating, and the pane plots only the rating selected by the basis.
 
 ### Calculations and Rendering
 

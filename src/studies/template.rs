@@ -191,6 +191,13 @@ impl StudyTemplate {
         };
         let mut study = ConfiguredStudy::new(study);
         study.apply_settings(&inputs, settings.clone())?;
+        // Older rating colour inputs styled only the table. Their saved plot colours still win.
+        if self.name == "Technical Ratings"
+            && self.inputs.iter().any(|(id, _)| id == "fast")
+            && !factory.is_host(&self.name)
+        {
+            study.apply_settings(&[], settings.clone())?;
+        }
         study.set_visible(template.visible);
         if let Some(scale) = template.scale {
             study.set_scale(scale);
@@ -529,6 +536,10 @@ impl StudyTemplate {
                 template
                     .inputs
                     .retain(|(id, _)| !REMOVED.contains(&id.as_str()));
+                // Older panes showed all groups; now they show the rating selected by the basis.
+                for plot in template.settings.plots.iter_mut().take(2) {
+                    plot.visible = false;
+                }
             }
             _ => return None,
         }
@@ -1279,7 +1290,10 @@ mod tests {
         )
         .unwrap();
         let mut restored = saved.create().unwrap();
-        assert_eq!(restored.settings().plots, saved.settings.plots);
+        let mut plots = saved.settings.plots.clone();
+        plots[0].visible = false;
+        plots[1].visible = false;
+        assert_eq!(restored.settings().plots, plots);
         assert!(restored.data_requests().is_empty());
         let inputs = restored.inputs();
         let value = |id: &str| inputs.iter().find(|i| i.id == id).unwrap().value.clone();
@@ -1324,7 +1338,65 @@ mod tests {
                 Some(Color32::WHITE)
             )
         );
-        assert_eq!(table.rows.len(), 3);
+        assert_eq!(table.rows.len(), 1);
+        assert_eq!(
+            table.columns,
+            [
+                "Interval",
+                "Moving averages",
+                "Oscillators",
+                "Summary",
+                "Coverage"
+            ]
+        );
+        for basis in [0, 1, 2] {
+            let mut study =
+                ConfiguredStudy::new(Box::new(crate::studies::TechnicalRatings::default()));
+            study.set_input("basis", InputValue::Choice(basis)).unwrap();
+            assert_eq!(
+                study
+                    .settings()
+                    .plots
+                    .iter()
+                    .map(|plot| plot.visible)
+                    .collect::<Vec<_>>(),
+                [false, false, true, false, false, false]
+            );
+            study
+                .apply_settings(
+                    &[(
+                        "table_neutral_color".into(),
+                        InputValue::Color(Color32::GOLD),
+                    )],
+                    study.settings(),
+                )
+                .unwrap();
+            assert_eq!(study.settings().plots[2].color, Color32::GOLD);
+            for (id, value) in [
+                ("table_intervals", InputValue::Toggle(true)),
+                ("table_timeframes [0]", InputValue::Timeframe(None)),
+                (
+                    "table_timeframes [1]",
+                    InputValue::Timeframe(Some(crate::model::Timeframe::Min15)),
+                ),
+                (
+                    "calculation_timeframe",
+                    InputValue::Timeframe(Some(crate::model::Timeframe::Hour1)),
+                ),
+            ] {
+                study.set_input(id, value).unwrap();
+            }
+            let saved = StudyTemplate::from_study(&study);
+            let json = serde_json::to_string(&saved).unwrap();
+            let again = serde_json::from_str::<StudyTemplate>(&json)
+                .unwrap()
+                .create()
+                .unwrap();
+            assert_eq!(
+                serde_json::to_string(&StudyTemplate::from_study(again.as_ref())).unwrap(),
+                json
+            );
+        }
     }
 
     /// A Connors RSI saved with guides at 70, 50 and 30 and a Correlation Coefficient saved with
@@ -1453,7 +1525,11 @@ mod tests {
             });
         }
         for (name, inputs, lines) in rows {
-            let saved = StudyTemplate::from_study(factory.create(name).unwrap().as_ref());
+            let mut original = factory.create(name).unwrap();
+            if name == "Technical Ratings" {
+                original.set_input("fast", Length(21)).unwrap();
+            }
+            let saved = StudyTemplate::from_study(original.as_ref());
             let restored = saved
                 .create_with(&factory)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -1462,6 +1538,11 @@ mod tests {
             assert_eq!(fills, saved.settings.fills, "{name}");
             let restored = restored.inputs();
             for (id, value, _) in inputs {
+                let value = if name == "Technical Ratings" && id == "fast" {
+                    Length(21)
+                } else {
+                    value
+                };
                 let input = restored.iter().find(|input| input.id == id);
                 assert_eq!(input.map(|input| &input.value), Some(&value), "{name} {id}");
             }

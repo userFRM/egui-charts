@@ -389,7 +389,7 @@ fn catalogue_accepts_host_strategies_and_validates_typed_inputs() {
 #[cfg(feature = "studies")]
 #[test]
 fn study_entries_match_hand_placed_crossings_without_lookahead() {
-    use InputValue::{Choice, Length, Number, Toggle};
+    use InputValue::{Choice, Length, Number};
     use OrderSide::{Buy, Sell};
     struct Case {
         name: &'static str,
