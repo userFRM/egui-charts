@@ -362,6 +362,7 @@ mod tests {
             settings: ConfiguredStudy::new(Box::new(Median::default())).settings(),
             visible: true,
             scale: None,
+            metric: None,
         };
         let mut older = saved.create().unwrap();
         older.calculate(&bars);
