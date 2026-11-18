@@ -240,8 +240,8 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(Gaps::new(l(0), x(30.0)).with_trail_limit(Some(l(1)))),
         Box::new(Gaps::new(l(0), x(30.0)).with_partial_closing(true)),
         Box::new(RsiDivergence::new(l(0), l(1), l(2), l(3), 60)),
-        Box::new(TechnicalRatings::new(l(0), l(1), l(2))),
-        Box::new(TechnicalRatings::new(l(0), l(1), l(2)).with_basis(RatingBasis::Oscillators)),
+        Box::new(TechnicalRatings::new()),
+        Box::new(TechnicalRatings::new().with_basis(RatingBasis::Oscillators)),
         Box::new(Reversal::new(l(0))),
         Box::new(ElliottWave::new(l(0), l(1), l(2))),
         Box::new(RisingWedge::new(l(0), l(1), l(2), l(3), l(4), l(5))),
@@ -810,6 +810,11 @@ fn degenerate_lengths_and_hostile_bars_are_survivable() {
                 let mut bars = long.clone();
                 edit(&mut bars[at]);
                 let hostile = values(&mut study, &bars).unwrap_or_default();
+                // Ratings' VWMA alone skips missing volume; its other components retain
+                // the bar. The ratings vote fixture checks this mixed-input case separately.
+                if study.name() == "Technical Ratings" && !bars[at].volume.is_finite() {
+                    continue;
+                }
                 // A study that reads the bad field skips the bar and matches the series
                 // without it; one that does not read it sees an ordinary bar and matches
                 // the full series.
