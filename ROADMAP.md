@@ -156,7 +156,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] The Style editor lists every supported plot type and explains why a plot cannot use one.
 - [x] `Chart::set_study_limit` sets a per-chart study limit; the indicator dialog reports refused additions, while `Chart::add_indicator` stays uncapped for host code.
 - [x] Restore custom registered studies and remap study-source dependencies through a library-owned template operation, including the terminal's indicator templates.
-- [x] `StudyEditor` sends open, save and apply requests to the host and displays diagnostics. The demo applies the documented `close - close[N]` sample to live bars, keeps the last valid study on errors and stores named source documents locally.
+- [x] `StudyEditor` sends open, save and apply requests to the host and displays diagnostics. The demo applies the documented `close - close[N]` sample to live bars, keeps the last valid study on errors and stores named source documents locally. Its registered sample appears under My scripts and in quick search, and keeps its inputs and presentation through workspace and layout saves, clipboard pastes and study templates.
 
 ## Order Flow
 
