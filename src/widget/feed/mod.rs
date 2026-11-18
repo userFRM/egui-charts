@@ -88,7 +88,7 @@ pub(crate) struct FeedLink {
     /// Live trade-bar allocations shared with the sink, independent of paged executions.
     footprint_input: Option<(crate::data::OrderFlowInput, u64)>,
     /// The footprint of the trades before the cutoff, while a candle replay runs under a visible
-    /// volume profile drawing, rebuilt when the cutoff moves.
+    /// volume profile drawing that reads the trades, rebuilt when the cutoff moves.
     pub(super) replay_footprint: Option<(chrono::DateTime<chrono::Utc>, Option<Footprint>)>,
     order_book: Option<OrderBook>,
     order_queue: Option<crate::data::OrderQueue>,
@@ -167,6 +167,20 @@ impl FeedLink {
         }
     }
 
+    fn rebuild_paged_tick_rate(&self, input: &crate::data::OrderFlowInput, history: &[Bar]) {
+        if let Some(Timeframe::Ticks(count)) = self.clock.timeframe()
+            && self.trades_from_start
+            && self.pushed_from.is_none()
+            && self.trades.live().next().is_none()
+            && self.trades.unheld_live().is_none()
+            && self.trades.lost_until().is_none()
+            && self.trades.retained_until().is_none()
+            && self.trades.left_out().is_empty()
+        {
+            input.rebuild_paged_tick_rate(count, &self.trades, history);
+        }
+    }
+
     /// Rebuilds a study's order-flow `input` from prepared history and held trades along the
     /// chart's bars, at the instrument's tick size and latest time, as connecting
     /// it does. Like `OrderFlowInput::replace_trades`, it keeps quote and book sources, and on a
@@ -183,6 +197,7 @@ impl FeedLink {
         }
         input.set_tick_size(self.instrument.as_ref().and_then(|i| i.tick_size));
         input.replace_trades(&self.clock, &self.trades, history, self.footprint.as_ref());
+        self.rebuild_paged_tick_rate(input, history);
         if let Some(now) = self.time {
             input.advance_time(&self.clock, now);
         }
@@ -256,6 +271,8 @@ impl FeedLink {
     /// first instant of a stream, whatever subscriptions changed since: the newest executions
     /// between such instants that prove a bar are kept. With `before`, includes only executions
     /// strictly before that replay cutoff.
+    /// On a trade-based interval, a cutoff after the stream's first held execution gives `None`
+    /// once the store has lost executions: the stream's bars cannot then be summed again.
     pub(super) fn footprint(
         &self,
         before: Option<chrono::DateTime<chrono::Utc>>,
@@ -407,6 +424,13 @@ impl FeedLink {
                     let _ = live.push(trade);
                 }
                 flow.copy_trade_bars((&live).into(), None);
+            } else if (self.trades.unheld_live().and_then(|(_, kept)| kept.first()))
+                .into_iter()
+                .chain(self.trades.live().next())
+                .any(|trade| trade.ts < cutoff)
+            {
+                // Without the stream's bars a span could count the page's volume alone as complete.
+                return None;
             }
         } else if let Some((input, _)) = &self.footprint_input {
             input.copy_footprint(&mut flow, u64::MAX);
