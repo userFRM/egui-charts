@@ -39,7 +39,9 @@ impl DrawingManager {
         if !self.history.pop_add(id) {
             self.finished_text_placement = Some(id);
             match text {
-                Some(text) => self.edit_drawing(id, |d| d.text = Some(text)),
+                Some(text) => {
+                    let _ = self.edit_drawing(id, |d| d.text = Some(text));
+                }
                 None => self.delete_drawing(id),
             }
             return;
@@ -279,42 +281,61 @@ impl DrawingManager {
     /// be saved. Edit a drawing through this rather than [`Self::drawings`] so the change is
     /// saved. A locked drawing accepts only visibility, name and folder changes, or an edit that unlocks it.
     /// An edit that hides the drawing deselects it.
-    /// Does nothing if there is no such drawing.
-    pub fn edit_drawing(&mut self, id: usize, edit: impl FnOnce(&mut Drawing)) {
-        if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
-            let old = drawing.clone();
-            edit(drawing);
-            if old.locked && drawing.locked {
-                let visible = drawing.visible;
-                let timeframe_visibility = drawing.timeframe_visibility.clone();
-                let label = drawing.label.clone();
-                let folder = drawing.folder.clone();
-                let folder_sync = drawing.folder_sync.clone();
-                *drawing = old.clone();
-                if visible == old.visible
-                    && timeframe_visibility == old.timeframe_visibility
-                    && label == old.label
-                    && folder == old.folder
-                    && folder_sync == old.folder_sync
-                {
-                    return;
-                }
-                drawing.visible = visible;
-                drawing.timeframe_visibility = timeframe_visibility;
-                drawing.label = label;
-                drawing.folder = folder;
-                drawing.folder_sync = folder_sync;
+    ///
+    /// Refuses an edit after which saving would refuse the drawing, as
+    /// [`Self::add_synced_drawing`] refuses such a drawing: a cursor tool, fewer anchors than the
+    /// tool draws with, a non-finite coordinate, an anchor too far out to map to a time or a
+    /// setting out of range, such as a line width of 0 or a NaN font size. A refused edit, like
+    /// an unknown id, changes nothing, records no undo step and returns the reason. A drawing
+    /// that saving refuses already, such as one changed directly through [`Self::drawings`],
+    /// accepts any edit.
+    pub fn edit_drawing(
+        &mut self,
+        id: usize,
+        edit: impl FnOnce(&mut Drawing),
+    ) -> Result<(), &'static str> {
+        let drawing = self
+            .drawings
+            .iter_mut()
+            .find(|d| d.id == id)
+            .ok_or("Unknown drawing")?;
+        let old = drawing.clone();
+        edit(drawing);
+        if old.locked && drawing.locked {
+            let visible = drawing.visible;
+            let timeframe_visibility = drawing.timeframe_visibility.clone();
+            let label = drawing.label.clone();
+            let folder = drawing.folder.clone();
+            let folder_sync = drawing.folder_sync.clone();
+            *drawing = old.clone();
+            if visible == old.visible
+                && timeframe_visibility == old.timeframe_visibility
+                && label == old.label
+                && folder == old.folder
+                && folder_sync == old.folder_sync
+            {
+                return Ok(());
             }
-            if !drawing.selectable || (old.visible && !drawing.visible) {
-                self.selection.deselect(id);
-            }
-            self.queue_edit(&old);
-            self.history.push_modify(id, old);
-            self.painted
-                .get_mut()
-                .unwrap_or_else(|e| e.into_inner())
-                .retain(|p| p.id != id);
+            drawing.visible = visible;
+            drawing.timeframe_visibility = timeframe_visibility;
+            drawing.label = label;
+            drawing.folder = folder;
+            drawing.folder_sync = folder_sync;
         }
+        if let Err(reason) = crate::drawings::validation::validate_edit(&old, drawing) {
+            *drawing = old;
+            return Err(reason);
+        }
+        if !drawing.selectable || (old.visible && !drawing.visible) {
+            self.selection.deselect(id);
+        }
+        self.queue_edit(&old);
+        self.history.push_modify(id, old);
+        self.painted
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|p| p.id != id);
+        Ok(())
     }
 
     /// Gives the drawings whose post waits for `link` the host's answer: its content, or `None`
@@ -344,13 +365,20 @@ impl DrawingManager {
 
     /// Edits live drawing ids as one undo step and queues their saved changes.
     /// Locked drawings accept visibility, name and folder changes, or an edit that unlocks them.
-    /// The drawings the edit hides are deselected.
-    pub fn edit_drawings(&mut self, ids: &[usize], mut edit: impl FnMut(&mut Drawing)) {
+    /// The drawings the edit hides are deselected. An edit after which saving would refuse one of
+    /// the drawings, as [`Self::edit_drawing`] describes, changes none of them, records no undo
+    /// step and returns the reason. Ids of no drawing are skipped.
+    pub fn edit_drawings(
+        &mut self,
+        ids: &[usize],
+        mut edit: impl FnMut(&mut Drawing),
+    ) -> Result<(), &'static str> {
         if ids.is_empty() {
-            return;
+            return Ok(());
         }
         let ids: HashSet<_> = ids.iter().copied().collect();
         let mut before = Vec::new();
+        let mut refused = None;
         for (index, drawing) in self
             .drawings
             .iter_mut()
@@ -382,10 +410,25 @@ impl DrawingManager {
                 drawing.folder = folder;
                 drawing.folder_sync = folder_sync;
             }
+            if let Err(reason) = crate::drawings::validation::validate_edit(&old, drawing) {
+                *drawing = old;
+                refused = Some(reason);
+                break;
+            }
+            before.push((index, old));
+        }
+        if let Some(reason) = refused {
+            for (index, old) in before {
+                self.drawings[index] = old;
+            }
+            return Err(reason);
+        }
+        // Only once every drawing took the edit, so that a refused one keeps the selection.
+        for (index, old) in &before {
+            let drawing = &self.drawings[*index];
             if !drawing.selectable || (old.visible && !drawing.visible) {
                 self.selection.deselect(old.id);
             }
-            before.push((index, old));
         }
         for (_, old) in &before {
             self.queue_edit(old);
@@ -395,24 +438,45 @@ impl DrawingManager {
             .get_mut()
             .unwrap_or_else(|e| e.into_inner())
             .retain(|p| !ids.contains(&p.id));
+        Ok(())
     }
 
     /// Applies `edit` as one frame of a continuous edit, such as dragging a colour picker: the
     /// first frame records the drawing's state and nothing is queued until
     /// [`Self::end_drag_handle`], which makes the whole gesture one undo step and queues one
-    /// update. Does nothing if there is no such drawing or it is locked.
-    pub fn drag_edit_drawing(&mut self, id: usize, edit: impl FnOnce(&mut Drawing)) {
+    /// update. A frame after which saving would refuse the drawing, as [`Self::edit_drawing`]
+    /// describes, changes nothing and returns the reason, as do an unknown id and a locked
+    /// drawing; the gesture keeps its earlier frames.
+    pub fn drag_edit_drawing(
+        &mut self,
+        id: usize,
+        edit: impl FnOnce(&mut Drawing),
+    ) -> Result<(), &'static str> {
         if self.drag_old_state.as_ref().is_some_and(|d| d.id != id) {
             self.end_drag_handle();
         }
-        if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id && !d.locked) {
-            self.drag_old_state.get_or_insert_with(|| drawing.clone());
-            edit(drawing);
-            self.painted
-                .get_mut()
-                .unwrap_or_else(|e| e.into_inner())
-                .retain(|p| p.id != id);
+        let drawing = self
+            .drawings
+            .iter_mut()
+            .find(|d| d.id == id)
+            .ok_or("Unknown drawing")?;
+        if drawing.locked {
+            return Err("Drawing is locked");
         }
+        let old = drawing.clone();
+        edit(drawing);
+        if let Err(reason) = crate::drawings::validation::validate_edit(&old, drawing) {
+            *drawing = old;
+            return Err(reason);
+        }
+        // Only an applied frame starts the gesture, so a refused first frame leaves nothing for
+        // `end_drag_handle` to record.
+        self.drag_old_state.get_or_insert(old);
+        self.painted
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|p| p.id != id);
+        Ok(())
     }
 
     // === Coordinate updates ===
@@ -741,8 +805,8 @@ impl DrawingManager {
             );
             d.folder = [path, &d.folder[at..]].concat();
             d.folder_sync = [modes.as_slice(), own.as_slice()].concat();
-        });
-        true
+        })
+        .is_ok()
     }
 
     /// The synchronization set on each folder along `path`.
@@ -772,8 +836,8 @@ impl DrawingManager {
         self.edit_drawings(&ids, |d| {
             d.folder_sync.resize(d.folder_sync.len().max(1), None);
             d.folder_sync[0] = sync;
-        });
-        true
+        })
+        .is_ok()
     }
 
     /// Add a drawing from another source (for multi-chart sync, or restored from storage)
@@ -871,6 +935,72 @@ mod tests {
             );
             assert_eq!(folders(&manager), before);
             assert!(!manager.undo());
+        }
+    }
+
+    /// An edit after which saving would refuse a drawing it accepted, such as a line width of 0
+    /// or a NaN font size, changes no drawing, records no undo step, queues nothing and returns
+    /// the reason through every edit path, and the chart still saves both drawings.
+    #[test]
+    fn edits_that_saving_refuses_change_nothing() {
+        type Setting = fn(&mut Drawing);
+        type Edit = fn(&mut DrawingManager, Setting) -> Result<(), &'static str>;
+        // The labelled drawing gets the bad value. The other one, which the bulk paths edit
+        // first, gets a valid value that a refused bulk edit must undo too.
+        let settings: [(&str, Setting); 2] = [
+            ("a zero line width", |d| {
+                d.stroke_width = if d.label.is_some() { 0.0 } else { 3.0 };
+            }),
+            ("a NaN font size", |d| {
+                d.font_size = if d.label.is_some() { f32::NAN } else { 20.0 };
+            }),
+        ];
+        let paths: [(&str, Edit); 4] = [
+            ("edit_drawing", |m, setting| {
+                let id = m.drawings[1].id;
+                m.edit_drawing(id, setting)
+            }),
+            ("edit_drawings", |m, setting| {
+                let ids: Vec<_> = m.drawings.iter().map(|d| d.id).collect();
+                m.edit_drawings(&ids, setting)
+            }),
+            ("edit_selected", |m, setting| m.edit_selected(setting)),
+            ("drag_edit_drawing", |m, setting| {
+                let id = m.drawings[1].id;
+                let result = m.drag_edit_drawing(id, setting);
+                m.end_drag_handle();
+                result
+            }),
+        ];
+        for (path, edit) in paths {
+            for (name, setting) in settings {
+                let case = format!("{path}, {name}");
+                let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+                let manager = chart.drawings_mut();
+                for label in [None, Some("B")] {
+                    let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+                    drawing.chart_points =
+                        vec![ChartPoint::new(1.0, 105.0), ChartPoint::new(2.0, 106.0)];
+                    drawing.completed = true;
+                    drawing.label = label.map(Into::into);
+                    manager.add_drawing(drawing).unwrap();
+                }
+                let ids: Vec<_> = manager.drawings.iter().map(|d| d.id).collect();
+                manager.select_drawings(ids);
+                manager.history.clear();
+                manager.pending_sync.lock().unwrap().clear();
+                let before = format!("{:?}", manager.drawings);
+                let result = edit(manager, setting);
+                assert_eq!(format!("{:?}", manager.drawings), before, "{case}");
+                assert!(!manager.can_undo(), "{case}");
+                assert!(manager.pending_sync.lock().unwrap().is_empty(), "{case}");
+                assert_eq!(
+                    result,
+                    Err("Drawing settings must be finite and in range"),
+                    "{case}"
+                );
+                assert_eq!(chart.save_drawings().unwrap().drawings.len(), 2, "{case}");
+            }
         }
     }
 

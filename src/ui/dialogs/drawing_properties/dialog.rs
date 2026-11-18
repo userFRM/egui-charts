@@ -837,11 +837,13 @@ mod tests {
                     vec![ChartPoint::new(2.0, 100.0), ChartPoint::new(5.0, 110.0)];
                 chart.drawings_mut().drawings.push(drawing);
             }
-            chart.user_action(|chart| {
-                chart
-                    .drawings_mut()
-                    .edit_drawing(9, |d| d.stroke_width = 8.0)
-            });
+            chart
+                .user_action(|chart| {
+                    chart
+                        .drawings_mut()
+                        .edit_drawing(9, |d| d.stroke_width = 8.0)
+                })
+                .unwrap();
             assert!(chart.undo());
             chart.drawings_mut().select_drawings([7, 8]);
             let mut dialog = DrawingPropertiesDialog::new();
