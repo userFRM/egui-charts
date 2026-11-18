@@ -260,13 +260,17 @@ impl Chart {
             .instrument()
             .and_then(crate::scales::instrument_price_precision)
             .map(usize::from);
-        // Without metadata, prices keep the decimals they hold, so none reads as another number.
-        let price_precision = instrument_precision.unwrap_or_else(|| {
-            held_decimals(
-                bars.iter()
-                    .flat_map(|bar| [bar.open, bar.high, bar.low, bar.close]),
-            )
-        });
+        // The main series' prices take the chart's readout decimals. Without metadata, prices
+        // keep the decimals they hold, so none reads as another number.
+        let price_precision = self
+            .readout_price_decimals()
+            .map(usize::from)
+            .unwrap_or_else(|| {
+                held_decimals(
+                    bars.iter()
+                        .flat_map(|bar| [bar.open, bar.high, bar.low, bar.close]),
+                )
+            });
         let mut studies: Vec<_> = self
             .indicators()
             .map(|(_, study)| study.clone_box())

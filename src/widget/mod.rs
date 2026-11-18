@@ -616,6 +616,16 @@ impl Chart {
         scale.set_tick_size(tick_size);
     }
 
+    /// The decimals of the main series' prices in the status line, the tooltip, the data window
+    /// and the data table: the precision chosen for the price scale, else the instrument's. `None`
+    /// leaves each readout its own rule for prices without metadata.
+    pub(crate) fn readout_price_decimals(&self) -> Option<u8> {
+        self.state.price_scale().chosen_precision().or_else(|| {
+            self.instrument()
+                .and_then(crate::scales::instrument_price_precision)
+        })
+    }
+
     /// Supplies currencies the host can convert the chart into. Choosing one emits an intent;
     /// the host replaces bars and instrument metadata together after conversion.
     pub fn set_currency_choices(&mut self, currencies: Vec<String>) {

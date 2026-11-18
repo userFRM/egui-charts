@@ -9,11 +9,16 @@ use crate::chart::rendering::StudyValue;
 pub(crate) type SeriesFingerprint = (usize, String, u64, Option<(i64, u64)>);
 
 impl Chart {
-    /// The table is current while this is unchanged: the history revision and a revision moved
-    /// by edits of the last bar, study edits, host-fed study data and the instrument.
+    /// The table is current while this is unchanged: the history revision, a revision moved
+    /// by edits of the last bar, study edits, host-fed study data and the instrument, and the
+    /// decimals of its prices.
     #[cfg(feature = "ui")]
-    pub(crate) fn data_table_revision(&self) -> (u64, u64) {
-        (self.state.revision(), self.readout_revision)
+    pub(crate) fn data_table_revision(&self) -> (u64, u64, Option<u8>) {
+        (
+            self.state.revision(),
+            self.readout_revision,
+            self.readout_price_decimals(),
+        )
     }
 
     /// What the table lists of each visible added series: its id, title, bar revision and last

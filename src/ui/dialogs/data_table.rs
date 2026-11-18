@@ -41,7 +41,7 @@ pub enum DataTableAction {
 /// move the chart's table revision, and the added series, which it reads by their own revisions.
 #[derive(Debug, PartialEq)]
 struct Source {
-    revision: (u64, u64),
+    revision: (u64, u64, Option<u8>),
     series: Vec<crate::widget::SeriesFingerprint>,
     symbol: String,
     timeframe: Option<Timeframe>,

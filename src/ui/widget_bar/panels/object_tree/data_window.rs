@@ -69,6 +69,7 @@ impl DataWindowInfo {
         if let Some(instrument) = chart.instrument() {
             info = info.with_instrument(instrument);
         }
+        info.price_decimals = chart.readout_price_decimals();
         info.volume_hidden = !chart.chart_type().supports_volume();
         if let Some((bar, previous_close)) = chart.readout_bar_at(index) {
             info = info

@@ -39,6 +39,18 @@ pub struct ValueFormatters<'a> {
     pub volume: Option<&'a dyn PriceFormatter>,
     /// Percentage changes.
     pub percentage: Option<&'a dyn PriceFormatter>,
+    /// The decimals of built-in prices in place of the instrument's; the chart sets it to the
+    /// precision chosen for its price scale.
+    pub(crate) price_decimals: Option<u8>,
+}
+
+impl ValueFormatters<'_> {
+    /// The decimals of built-in prices: the chart's, else the instrument's.
+    fn decimals(&self, instrument: Option<&Instrument>) -> Option<usize> {
+        self.price_decimals
+            .or_else(|| instrument.and_then(instrument_price_precision))
+            .map(usize::from)
+    }
 }
 
 impl std::fmt::Debug for ValueFormatters<'_> {
@@ -194,10 +206,9 @@ pub fn render_floating_tooltip(
 ) {
     let options = &options.resolved(painter.ctx());
     let price = |price: f64| {
-        let decimals = instrument.and_then(instrument_price_precision).map_or_else(
-            || price_decimals(price).min(options.price_precision),
-            usize::from,
-        );
+        let decimals = formatters
+            .decimals(instrument)
+            .unwrap_or_else(|| price_decimals(price).min(options.price_precision));
         formatters.price.map_or_else(
             || DefaultPriceFormatter::with_precision(decimals).format(price),
             |formatter| formatter.format(price),
@@ -221,14 +232,7 @@ pub fn render_floating_tooltip(
         let change = candle.close - reference;
         let change_pct = percent_change(reference, candle.close);
         let absolute = formatters.price.map_or_else(
-            || {
-                format!(
-                    "{change:+.*}",
-                    instrument
-                        .and_then(instrument_price_precision)
-                        .map_or(2, usize::from)
-                )
-            },
+            || format!("{change:+.*}", formatters.decimals(instrument).unwrap_or(2)),
             |formatter| formatter.format_change(change),
         );
         let percent = formatters.percentage.map_or_else(
@@ -441,9 +445,9 @@ pub fn render_tracking_tooltip(
     painter.rect_filled(bar_rect, 0.0, options.tracking_bar_background);
 
     // Build tracking text
-    let precision = instrument
-        .and_then(instrument_price_precision)
-        .map_or(options.price_precision.min(4), usize::from);
+    let precision = formatters
+        .decimals(instrument)
+        .unwrap_or(options.price_precision.min(4));
     let mut parts: Vec<String> = instrument
         .map(|instrument| instrument.symbol.clone())
         .into_iter()

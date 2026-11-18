@@ -1062,16 +1062,19 @@ mod tests {
         }
     }
 
+    /// Instrument metadata, and a precision chosen over it, set the decimals of the axis, the
+    /// last price tag and the status line alike.
     #[test]
     fn tick_metadata_controls_axis_and_legend_decimals() {
         use crate::model::Instrument;
-        for (tick, price, decimals, explicit) in [
-            (0.25, 125.25, 2, None),
-            (0.00001, 1.23456, 5, None),
-            (1e-18, 3e-18, 18, None),
-            (1.0, 100.0, 0, None),
-            (0.01, 0.0, 2, None),
-            (0.25, 125.25, 4, Some(4)),
+        for (tick, price, decimals, explicit, chosen) in [
+            (0.25, 125.25, 2, None, None),
+            (0.00001, 1.23456, 5, None, None),
+            (1e-12, 3e-12, 12, None, None),
+            (1.0, 100.0, 0, None, None),
+            (0.01, 0.0, 2, None, None),
+            (0.25, 125.25, 4, Some(4), None),
+            (0.01, 100.0, 4, None, Some(4)),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[price], &[price]);
@@ -1083,6 +1086,7 @@ mod tests {
             let mut instrument = Instrument::new("SAMPLE").with_tick_size(tick);
             instrument.price_decimals = explicit;
             chart.set_instrument(Some(instrument));
+            chart.price_scale_mut().set_price_precision(chosen);
             frame(&ctx, &mut chart, 0.0, vec![]);
             let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
             let text: Vec<_> = painted
@@ -1127,8 +1131,10 @@ mod tests {
             }
             let plot = chart.get_rendered_price_rect();
             for shape in &painted {
+                // Study panes keep the instrument's decimals under a chosen precision.
                 if let Shape::Text(text) = shape
                     && text.pos.x > plot.right()
+                    && (chosen.is_none() || text.pos.y < plot.bottom())
                     && text.galley.text().parse::<f64>().is_ok()
                 {
                     assert_eq!(
@@ -1136,7 +1142,9 @@ mod tests {
                             .text()
                             .split_once('.')
                             .map_or(0, |(_, fraction)| fraction.len()),
-                        decimals
+                        decimals,
+                        "{}",
+                        text.galley.text()
                     );
                 }
             }
