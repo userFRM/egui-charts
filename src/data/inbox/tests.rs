@@ -823,6 +823,101 @@ fn depth_columns_sample_the_book_at_the_end_of_each_period() {
     );
 }
 
+/// Guards the depth history across a lost book: a period that ends while the aggregate book or
+/// the order queue waits for a snapshot has no column (an empty one shows no liquidity where the
+/// book was unknown, and merging averages it into the columns beside it), and sampling resumes
+/// with the period the snapshot arrives in, also when the snapshot is the first update to sample
+/// the lost order queue.
+#[test]
+fn depth_columns_leave_a_gap_while_the_book_waits_for_a_snapshot() {
+    use crate::data::OrderFilter;
+    use crate::model::OrderSide::{Buy, Sell};
+    let time = |millis| at(0, 0) + TimeDelta::milliseconds(millis);
+    let level = |price, size| OrderBookLevel {
+        price,
+        size,
+        order_cnt: None,
+    };
+    let book = |millis, bids, asks| OrderBook {
+        ts: time(millis),
+        symbol: "A".into(),
+        bids,
+        asks,
+    };
+    let orders = |bid| {
+        vec![
+            RestingOrder::new(1, Buy, 100.0, bid),
+            RestingOrder::new(2, Sell, 101.0, 7.0),
+        ]
+    };
+    // Changes neither the price nor the size of order 2.
+    let unchanged = || OrderEvent::Modify {
+        id: 2,
+        price: None,
+        size: None,
+        keep_priority: true,
+    };
+    for (name, events, filter) in [
+        ("aggregate depth", false, None),
+        ("order events, aggregate history", true, None),
+        (
+            "order events, history of orders",
+            true,
+            Some(OrderFilter::default()),
+        ),
+    ] {
+        let inbox = Arc::new(Inbox::default());
+        let sink = inbox.subscribe("A".into(), Timeframe::Min1.into(), 10, Some(1.0));
+        let largest = filter.is_some();
+        let config = DepthHistoryConfig {
+            columns: 10,
+            orders: filter,
+            ..Default::default()
+        };
+        inbox.sample_depth(sink.id, Some(config));
+        if events {
+            // 3 does not follow 1, and 4 is held in the same second, so the snapshot's update is
+            // the first to sample the lost queue.
+            sink.push_order_snapshot(1, time(500), orders(5.0));
+            sink.push_order_event(3, time(1_200), unchanged());
+            sink.push_order_event(4, time(1_800), unchanged());
+            sink.push_order_snapshot(4, time(3_400), orders(6.0));
+            sink.push_order_event(5, time(4_500), unchanged());
+            sink.push_order_event(6, time(5_500), unchanged());
+        } else {
+            // 3 does not follow 1.
+            sink.push_depth_snapshot(
+                1,
+                book(500, vec![level(100.0, 5.0)], vec![level(101.0, 7.0)]),
+            );
+            sink.push_depth_delta(3, &book(1_200, vec![], vec![]));
+            sink.push_depth_delta(4, &book(2_300, vec![], vec![]));
+            sink.push_depth_snapshot(
+                4,
+                book(3_400, vec![level(100.0, 6.0)], vec![level(101.0, 7.0)]),
+            );
+            sink.push_depth_delta(5, &book(4_500, vec![], vec![]));
+            sink.push_depth_delta(6, &book(5_500, vec![], vec![]));
+        }
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        // Rows 100 and 101 at tick 1: bid 5 until the gap at 1.2 s, nothing for seconds 1 and 2,
+        // which end while the book waits, then bid 6 from the snapshot at 3.4 s.
+        let column = |second, bid| DepthColumn {
+            time: at(0, second),
+            span: TimeDelta::seconds(1),
+            bids: vec![(100, bid)],
+            asks: vec![(101, 7.0)],
+            largest_bid_orders: if largest { vec![bid] } else { vec![] },
+            largest_ask_orders: if largest { vec![7.0] } else { vec![] },
+        };
+        assert_eq!(
+            Vec::from(updates.depth_columns),
+            [column(0, 5.0), column(3, 6.0), column(4, 6.0)],
+            "{name}"
+        );
+    }
+}
+
 /// Guards the largest order of a row: a column sampled from individual orders records, next to
 /// each row's total, the largest order the filter accepts among the row's ticks, and the same
 /// book sampled as aggregate depth records none, so no heatmap cell of it can be marked.

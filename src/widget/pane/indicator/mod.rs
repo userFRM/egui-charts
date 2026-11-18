@@ -887,6 +887,7 @@ impl IndicatorPane {
                         crate::studies::PlotType::Histogram
                             | crate::studies::PlotType::Columns
                             | crate::studies::PlotType::Area
+                            | crate::studies::PlotType::AreaWithBreaks
                     )
             })
         {
