@@ -2448,7 +2448,10 @@ mod tests {
     fn visibility_tab_shows_menu_choices_and_edits_unit_ranges() {
         use crate::ui::context_menu::study::{IntervalRange, StudyContextMenuAction, apply};
         use egui::accesskit::Toggled;
-        use egui_kittest::{Harness, kittest::Queryable};
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
 
         let custom_7min = Timeframe::Custom(std::num::NonZeroU64::new(420).unwrap());
         for (range, saved_hidden, control, ticked, interval, shown) in [
