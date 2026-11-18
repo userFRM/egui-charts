@@ -242,14 +242,7 @@ fn removed_pane_members_leave_their_drawings_to_a_pane_that_stays() {
     use crate::studies::{MACD, RSI};
     use crate::widget::PaneId;
     use crate::widget::test_frames::chart;
-    for case in [
-        "shared",
-        "preserved",
-        "price",
-        "own",
-        "last",
-        "original",
-    ] {
+    for case in ["shared", "preserved", "price", "own", "last", "original"] {
         let mut chart = chart(&[100.0], &[110.0]);
         let removed = if case == "own" {
             let series = chart.add_series(SeriesOptions::default());
