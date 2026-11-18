@@ -629,6 +629,23 @@ fn chosen_precision_survives_interval_symbol_and_reload() {
             (Some(3), PrecisionMode::Default),
             "older save, fed"
         );
+
+        // A layout saved without its scale holds only the precision shown, in its settings.
+        let mut unscaled = serde_json::to_value(&saved).unwrap();
+        let scale = unscaled.as_object_mut().unwrap().remove("price_scale");
+        assert!(scale.is_some());
+        let unscaled: crate::widget::ChartSnapshot = serde_json::from_value(unscaled).unwrap();
+        let unscaled_feed = Arc::new(Script::default());
+        let mut restored = fed(&unscaled_feed, Some("B"));
+        restored.restore(&unscaled).unwrap();
+        frames.run(&mut restored);
+        answer(&unscaled_feed, "B", 3);
+        frames.run(&mut restored);
+        assert_eq!(
+            shown(&restored),
+            (Some(3), PrecisionMode::Default),
+            "saved without a scale"
+        );
     }
 
     let mut settings = ChartSettingsState::from_chart(&chart);
