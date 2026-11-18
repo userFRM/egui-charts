@@ -33,9 +33,10 @@ then create a destination with
 [`add_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.add_pane).
 [`move_series_to_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.move_series_to_pane)
 moves the main series, an added series or a study to another pane. Pass the main
-series' [`SeriesId::MAIN`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/series/selection/struct.SeriesId.html)
+series' [`SeriesId::MAIN`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/series/selection/struct.SeriesId.html#associatedconstant.MAIN)
 and the destination [`PaneId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.PaneId.html);
-`PaneId::MAIN` brings a series back to the price pane while it exists. Each series keeps its price scale
+[`PaneId::MAIN`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.PaneId.html#associatedconstant.MAIN)
+brings a series back to the price pane while it exists. Each series keeps its price scale
 and the shared time mapping. It returns `false` for an unknown series or pane and for a
 study whose custom presentation rejects the placement.
 
