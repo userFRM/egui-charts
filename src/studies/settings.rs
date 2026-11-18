@@ -312,6 +312,7 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
             .collect();
         settings.fill_between_levels = false;
         settings.level_fill_color = color;
+        settings.mfi_auto_range = study.name() == "MFI";
     } else if settings.levels.len() != levels.len()
         && former_guides(study, settings.levels.len()).is_none()
     {
@@ -498,6 +499,9 @@ pub struct StudySettings {
     /// Colour of the band between the boundary levels.
     #[serde(default)]
     pub level_fill_color: Color32,
+    /// Keep automatic fitting for an MFI saved before it declared a fixed range.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) mfi_auto_range: bool,
     /// Plots, as indices into [`plots`](Self::plots), whose last value has no tag on the price
     /// scale while the chart shows study values; the legend still shows it. A study starts
     /// with the plots its [`Indicator::plot_tagged`] leaves out, every plot of a study with more
@@ -547,6 +551,7 @@ impl Default for StudySettings {
             levels: Vec::new(),
             fill_between_levels: false,
             level_fill_color: Color32::TRANSPARENT,
+            mfi_auto_range: false,
             untagged_plots: Vec::new(),
             price_line_plots: Vec::new(),
             plot_variants: Vec::new(),
@@ -759,6 +764,12 @@ impl ConfiguredStudy {
         let mut pane = self.study.pane();
         if let Some((levels, _)) = former_guides(self.study.as_ref(), self.settings.levels.len()) {
             pane.levels = levels;
+        }
+        if self.settings.mfi_auto_range
+            && self.study.name() == "MFI"
+            && guides_since(self.study.as_ref())
+        {
+            pane.range = None;
         }
         pane
     }
@@ -3085,6 +3096,20 @@ mod tests {
                 (-90.0, Color32::TRANSPARENT, "Lower guide"),
             ]
         );
+        // An older MFI retains automatic fitting, including after saving its upgraded guides.
+        let saved = r#"{"name":"MFI","inputs":[["period",{"Length":14}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MoneyFlowIndex.html","plots":[{"color":[126,87,194,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[8,5,12,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let mut template = serde_json::from_str::<crate::studies::StudyTemplate>(saved).unwrap();
+        for _ in 0..2 {
+            let older = template.create().unwrap();
+            assert_eq!(older.pane().range, None);
+            assert!(older.settings().levels.iter().all(|level| !level.visible));
+            assert!(!older.pane().fill_between_levels);
+            template = serde_json::from_str(
+                &serde_json::to_string(&crate::studies::StudyTemplate::from_study(older.as_ref()))
+                    .unwrap(),
+            )
+            .unwrap();
+        }
         let mut adx = ConfiguredStudy::new(Box::new(AdxBreakout::default()));
         let settings = adx.settings();
         adx.apply_settings(&[("threshold".into(), InputValue::Length(25))], settings)
@@ -3195,6 +3220,11 @@ mod tests {
                 study.apply_settings(&[], settings).unwrap();
                 assert_eq!(study.settings().levels, restored, "{name}");
                 assert!(!study.pane().fill_between_levels, "{name}");
+                assert_eq!(
+                    study.pane().range,
+                    if name == "MFI" { None } else { range },
+                    "{name}"
+                );
                 let shown: Vec<_> = study.pane().levels.iter().map(|level| level.1).collect();
                 let expected: Vec<_> = restored
                     .iter()
@@ -3216,6 +3246,7 @@ mod tests {
             study.apply_settings(&[], edited.clone()).unwrap();
             let again = StudyTemplate::from_study(&study).create().unwrap();
             assert_eq!(again.settings().levels, edited.levels, "{name}");
+            assert_eq!(again.pane().range, study.pane().range, "{name}");
         }
         // Saved as columns, an Awesome Oscillator stays columns; saved smoothed over 14 bars,
         // a Balance of Power keeps its smoothing.
