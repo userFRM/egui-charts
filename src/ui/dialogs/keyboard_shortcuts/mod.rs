@@ -1,7 +1,9 @@
 //! Keyboard shortcuts help dialog.
 //!
-//! Lists the handled keyboard shortcuts by category. The host opens it on `?` or `F1`.
+//! Lists the handled keyboard shortcuts and pointer gestures by category. The host opens it on
+//! `?` or `F1`.
 
+use crate::config::ChartOptions;
 use crate::localization as l10n;
 use egui::{
     Color32, Context, FontId, Frame, Id, Key, KeyboardShortcut, Margin, Modifiers, RichText, Role,
@@ -11,7 +13,7 @@ use egui::{
 use crate::theme::{Theme, ThemeExt};
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::dialog::{DialogFrame, dialog_header};
-use crate::widget::ShortcutMap;
+use crate::widget::{Chart, ShortcutMap};
 
 /// One key combination of a listed entry.
 enum Keys {
@@ -19,6 +21,9 @@ enum Keys {
     Shortcut(KeyboardShortcut),
     /// Keys typed as text, which no shortcut describes.
     Typed(&'static str),
+    /// A pointer action after the modifiers it needs, such as "Double click". An empty action
+    /// is a modifier held during another gesture.
+    Pointer(Modifiers, &'static str),
 }
 
 /// One listed entry: a label and its key combinations.
@@ -30,14 +35,17 @@ struct Entry {
 /// The keys the chart and the library's controls read outside the shortcut map, by category.
 ///
 /// They are not rebindable, so the list is fixed. The state an entry needs is in its label or
-/// its category.
-fn fixed_categories() -> Vec<(&'static str, Vec<Entry>)> {
+/// its category. A pointer gesture that `options` turns off is left out.
+fn fixed_categories(options: &ChartOptions) -> Vec<(&'static str, Vec<Entry>)> {
     let entry = |label: &str, keys: Vec<Keys>| Entry {
         label: label.to_owned(),
         keys,
     };
     let key = |key, modifiers| Keys::Shortcut(KeyboardShortcut::new(modifiers, key));
     let none = Modifiers::NONE;
+    let pointer = |modifiers, action| Keys::Pointer(modifiers, action);
+    let (command, shift) = (Modifiers::COMMAND, Modifiers::SHIFT);
+    let scroll = options.handle_scroll;
     vec![
         (
             "Typing",
@@ -79,6 +87,53 @@ fn fixed_categories() -> Vec<(&'static str, Vec<Entry>)> {
                     ],
                 ),
             ],
+        ),
+        (
+            "Pointer",
+            [
+                Some(entry(
+                    "Maximize or restore pane",
+                    vec![pointer(none, "Double click")],
+                )),
+                options.keyboard.enabled.then(|| {
+                    entry(
+                        "Collapse or restore pane",
+                        vec![pointer(command, "Double click")],
+                    )
+                }),
+                (scroll.enabled && scroll.mouse_wheel)
+                    .then(|| entry("Scroll through time", vec![pointer(shift, "Wheel")])),
+                Some(entry(
+                    "Add or remove from selection",
+                    vec![pointer(shift, "Click"), pointer(command, "Click")],
+                )),
+                Some(entry(
+                    "Select drawings in an area",
+                    vec![pointer(command, "Drag")],
+                )),
+                Some(entry(
+                    "Copy dragged drawings",
+                    vec![pointer(command, "Drag")],
+                )),
+                Some(entry("Start a measurement", vec![pointer(shift, "Click")])),
+                Some(entry("Snap a line to 45 degrees", vec![pointer(shift, "")])),
+                Some(entry("Draw a square or circle", vec![pointer(shift, "")])),
+                Some(entry(
+                    "Move a drawing on one axis",
+                    vec![pointer(shift, "Drag")],
+                )),
+                Some(entry(
+                    "Turn the magnet on or off",
+                    vec![pointer(command, "")],
+                )),
+                Some(entry(
+                    "Move aligned chart dividers",
+                    vec![pointer(shift, "Drag")],
+                )),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
         ),
     ]
 }
@@ -132,11 +187,27 @@ impl KeyboardShortcutsDialog {
         self.show_with_shortcuts(ctx, &ShortcutMap::default())
     }
 
-    /// Show only the host's bound shortcuts, using the same map as its chart.
+    /// Show only the host's bound shortcuts, using the same map as its chart, and the pointer
+    /// gestures of a chart with default options. [`Self::show_for_chart`] also leaves out the
+    /// gestures the chart's options turn off.
     pub fn show_with_shortcuts(
         &mut self,
         ctx: &Context,
         shortcuts: &ShortcutMap,
+    ) -> KeyboardShortcutsAction {
+        self.show_with(ctx, shortcuts, &ChartOptions::default())
+    }
+
+    /// Show the shortcuts `chart` has bound and the pointer gestures its options leave on.
+    pub fn show_for_chart(&mut self, ctx: &Context, chart: &Chart) -> KeyboardShortcutsAction {
+        self.show_with(ctx, chart.shortcuts(), chart.chart_options())
+    }
+
+    fn show_with(
+        &mut self,
+        ctx: &Context,
+        shortcuts: &ShortcutMap,
+        options: &ChartOptions,
     ) -> KeyboardShortcutsAction {
         if !self.is_open {
             return KeyboardShortcutsAction::None;
@@ -150,7 +221,7 @@ impl KeyboardShortcutsDialog {
             DESIGN_TOKENS.sizing.dialog.default_width,
         )
         .show(ctx, |ui| {
-            action = self.render_contents(ui, shortcuts);
+            action = self.render_contents(ui, shortcuts, options);
         });
 
         // Escape belongs to an open popup or a focused text field first. egui closes both on
@@ -173,7 +244,12 @@ impl KeyboardShortcutsDialog {
         action
     }
 
-    fn render_contents(&mut self, ui: &mut Ui, shortcuts: &ShortcutMap) -> KeyboardShortcutsAction {
+    fn render_contents(
+        &mut self,
+        ui: &mut Ui,
+        shortcuts: &ShortcutMap,
+        options: &ChartOptions,
+    ) -> KeyboardShortcutsAction {
         let mut action = KeyboardShortcutsAction::None;
         let theme = ui.active_theme();
 
@@ -205,7 +281,7 @@ impl KeyboardShortcutsDialog {
                     .collect();
                 (name, entries)
             })
-            .chain(fixed_categories())
+            .chain(fixed_categories(options))
             .collect();
         let font = FontId::proportional(theme.text.body);
         let labels: Vec<_> = categories
@@ -312,6 +388,19 @@ fn key_badges(ui: &mut Ui, theme: &Theme, keys: &[Keys]) {
                 let text = l10n::text(ui.ctx(), text);
                 (text.clone(), text)
             }
+            Keys::Pointer(modifiers, action) => {
+                let action = (!action.is_empty()).then(|| l10n::text(ui.ctx(), action));
+                let text = ui
+                    .ctx()
+                    .format_modifiers(*modifiers)
+                    .split('+')
+                    .filter(|modifier| !modifier.is_empty())
+                    .map(str::to_owned)
+                    .chain(action)
+                    .collect::<Vec<_>>()
+                    .join("+");
+                (text.clone(), text)
+            }
         };
         Frame::new()
             .fill(theme.ui.panel_bg_secondary)
@@ -368,7 +457,7 @@ mod tests {
     }
 
     /// Guards #2811: the list also shows the keys read outside the shortcut map, so it is a
-    /// complete guide to the keyboard.
+    /// complete guide to the keyboard, and #3204: the pointer gestures.
     #[test]
     fn the_list_shows_typed_entry_drawing_arrows_and_replay_keys() {
         let mut dialog = KeyboardShortcutsDialog::new();
@@ -391,8 +480,64 @@ mod tests {
             "Move down one tick",
             "Play or pause the replay",
             "Replay one bar forward",
+            "Maximize or restore pane",
+            "Collapse or restore pane",
+            "Scroll through time",
+            "Add or remove from selection",
+            "Select drawings in an area",
+            "Copy dragged drawings",
+            "Start a measurement",
+            "Snap a line to 45 degrees",
+            "Draw a square or circle",
+            "Move a drawing on one axis",
+            "Turn the magnet on or off",
+            "Move aligned chart dividers",
         ] {
             assert!(h.query_by_label(label).is_some(), "missing {label}");
+        }
+    }
+
+    /// Guards #3204: a pointer gesture the chart's options turn off is not listed, as an
+    /// unbound shortcut is not.
+    #[test]
+    fn a_pointer_gesture_the_chart_turns_off_leaves_the_list() {
+        // The options edit, then whether the collapse and the scroll gestures are listed.
+        type Row = (fn(&mut ChartOptions), bool, bool);
+        let rows: [Row; 3] = [
+            (|o| o.keyboard.enabled = false, false, true),
+            (|o| o.handle_scroll.mouse_wheel = false, true, false),
+            (|o| o.handle_scroll.enabled = false, true, false),
+        ];
+        for (idx, (edit, collapse, scroll)) in rows.into_iter().enumerate() {
+            let mut dialog = KeyboardShortcutsDialog::new();
+            dialog.open();
+            let mut chart = crate::widget::ChartBuilder::new().build();
+            let mut options = chart.chart_options().clone();
+            edit(&mut options);
+            chart.set_chart_options(options);
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(900.0, 2400.0))
+                .with_context_setup(|ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &Theme::dark());
+                })
+                .build_ui_state(
+                    |ui, (d, chart): &mut (KeyboardShortcutsDialog, Chart)| {
+                        _ = d.show_for_chart(ui.ctx(), chart)
+                    },
+                    (dialog, chart),
+                );
+            h.run_steps(3);
+            assert_eq!(
+                h.query_by_label("Collapse or restore pane").is_some(),
+                collapse,
+                "row {idx}"
+            );
+            assert_eq!(
+                h.query_by_label("Scroll through time").is_some(),
+                scroll,
+                "row {idx}"
+            );
         }
     }
 }
