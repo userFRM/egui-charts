@@ -313,6 +313,7 @@ impl IndicatorFactory {
                 FallingWedge,
                 MissedPivots,
                 KeyLevels,
+                AutoKeyLevels,
                 IntradayPivotPoints,
                 ProjectedPivotPoints,
                 WilliamsFractals,

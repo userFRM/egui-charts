@@ -51,8 +51,8 @@
 //!
 //! ## Support / resistance
 //! [`PivotPoints`], [`IntradayPivotPoints`], [`ProjectedPivotPoints`], [`PivotPointsHighLow`],
-//! [`MissedPivots`], [`KeyLevels`], [`ElliottWave`], [`Reversal`], [`RisingWedge`], [`FallingWedge`],
-//! [`WilliamsFractals`], [`Gaps`], [`ZigZag`], [`PriceChannel`]
+//! [`MissedPivots`], [`KeyLevels`], [`AutoKeyLevels`], [`ElliottWave`], [`Reversal`],
+//! [`RisingWedge`], [`FallingWedge`], [`WilliamsFractals`], [`Gaps`], [`ZigZag`], [`PriceChannel`]
 //!
 //! ## Patterns
 //! [`CandlestickPatterns`], [`ChartPatterns`]
@@ -166,6 +166,7 @@ mod std_dev;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod auto_drawing;
+mod auto_key_levels;
 mod elliott_wave;
 mod gaps;
 mod intraday_pivot_points;
@@ -388,6 +389,7 @@ pub use std_dev::StandardDeviation;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 pub use auto_drawing::{AutoDrawing, AutoDrawingKind};
+pub use auto_key_levels::AutoKeyLevels;
 pub use elliott_wave::ElliottWave;
 pub use gaps::Gaps;
 pub use intraday_pivot_points::IntradayPivotPoints;

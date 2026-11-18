@@ -233,6 +233,22 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(PivotPointsHighLow::new(l(0), l(1), l(2), l(3))),
         Box::new(MissedPivots::new(l(0), l(1), x(0.1), l(2))),
         Box::new(KeyLevels::new(l(0), l(1), l(2), x(0.25))),
+        Box::new(AutoKeyLevels::new()),
+        {
+            let mut custom = AutoKeyLevels::new();
+            custom
+                .set_input("custom", InputValue::Toggle(true))
+                .unwrap();
+            for id in [
+                "custom_levels [0]",
+                "custom_levels [1]",
+                "custom_levels [2]",
+                "custom_levels [3]",
+            ] {
+                custom.set_input(id, InputValue::Toggle(true)).unwrap();
+            }
+            Box::new(custom)
+        },
         Box::new(IntradayPivotPoints::new(l(0))),
         Box::new(ProjectedPivotPoints::new().with_pivots_back(l(1))),
         Box::new(WilliamsFractals::new(l(0))),
