@@ -15,8 +15,9 @@
 //!   source and the stop restarts at `source - band` (up) or `source + band` (down)
 //!
 //! The first stop is the first source value, in an uptrend. Until the ATR has `n` true ranges
-//! the band is the bar's true range, without the multiplier. The stop is drawn as crosses,
-//! green in an uptrend and red in a downtrend.
+//! the band is the bar's true range, without the multiplier. The stop is drawn as crosses in the
+//! plot colour, teal by default, in an uptrend and the Downtrend colour, red by default, in a
+//! downtrend.
 //!
 //! # Example
 //! ```
@@ -103,6 +104,18 @@ impl Indicator for VolatilityStop {
         self.values.value(0, bar)?;
         let up = *self.uptrend.get(bar)?;
         Some(self.colors[usize::from(!up)])
+    }
+
+    fn plot_variants(&self, _line: usize) -> Vec<crate::studies::PlotVariant> {
+        vec![crate::studies::PlotVariant::new(
+            "Downtrend",
+            self.colors[1],
+        )]
+    }
+
+    fn plot_variant(&self, _line: usize, bar: usize) -> Option<usize> {
+        self.values.value(0, bar)?;
+        (!*self.uptrend.get(bar)?).then_some(0)
     }
 
     fn name(&self) -> &str {

@@ -467,6 +467,14 @@ impl Chart {
         self.main_series_style.alerts = snapshot.main_series_alerts;
         self.main_series_style.display_format = snapshot.main_series_display_format;
         let mut settings = snapshot.settings.clone();
+        // Layouts saved before a precision could be chosen hold the one shown, which followed
+        // the next instrument; the saved scale holds the chosen one.
+        settings.precision = super::settings::PrecisionMode::from_decimals(
+            snapshot
+                .price_scale
+                .as_ref()
+                .and_then(crate::scales::PriceScale::chosen_precision),
+        );
         if settings.chart_type == crate::model::ChartType::HollowCandles {
             // Settings saved before hollow candles had a style hold the switches of the candles.
             let style = &snapshot.chart_type_params.styles.hollow;
@@ -570,7 +578,7 @@ impl Chart {
             self.move_series_to_pane(super::SeriesId::MAIN, panes[&at]);
         }
         for (saved, study) in snapshot.studies.iter().zip(studies) {
-            let id = self.add_indicator(study);
+            let id = self.insert_indicator(study);
             self.set_indicator_inputs(id, saved.caption.clone());
             self.set_indicator_autoscale(id, saved.autoscale);
             self.restored_studies.insert(saved.id, id.0);

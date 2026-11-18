@@ -5,7 +5,7 @@
 
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
-use crate::widget::settings::ChartSettingsState;
+use crate::widget::settings::{ChartSettingsState, PrecisionMode};
 mod tabs;
 
 use crate::icons::icons as embedded_icons;
@@ -73,6 +73,8 @@ pub struct SettingsDialog {
     price_targets_offered: bool,
     /// The axis font family the dialog was opened with, shown while the settings hold none.
     opened_font_family: Option<egui::FontFamily>,
+    /// The precision the dialog was opened with, listed while the list lacks it.
+    opened_precision: PrecisionMode,
     /// The top and bottom margins in percent the margin rows were last filled with.
     loaded_margins: (f32, f32),
 }
@@ -167,6 +169,7 @@ impl SettingsDialog {
             order_flow_layers: [true; 4],
             price_targets_offered: true,
             opened_font_family: None,
+            opened_precision: PrecisionMode::Default,
             loaded_margins: (0.0, 0.0),
         }
     }
@@ -240,6 +243,7 @@ impl SettingsDialog {
         self.save_name = None;
         self.sound_preview = None;
         self.opened_font_family = settings.scales_appearance.font_family.clone();
+        self.opened_precision = settings.precision;
         self.settings = settings;
         self.active_tab = SettingsTab::Symbol;
         self.update_color_pickers_from_settings();
