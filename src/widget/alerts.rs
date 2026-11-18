@@ -40,9 +40,9 @@ impl Chart {
     }
 
     /// Capture calculation inputs for alert creation, independently of later chart changes.
-    /// Copies and edits retain the inputs already carried by the alert. A new alert's drawing
-    /// levels interpolate on the scale of the pane that paints the drawing its first condition
-    /// names.
+    /// Copies and edits retain the inputs already carried by the alert. A new alert on the chart's
+    /// symbol interpolates drawing levels on the scale of the pane that paints the drawing its
+    /// first condition names.
     pub fn prepare_alert(&self, alert: &mut crate::model::Alert) {
         alert.timeframe = alert.timeframe.or(self.timeframe());
         if let Some(inputs) = &mut alert.inputs {
@@ -59,10 +59,12 @@ impl Chart {
             }
             alert.inputs = Some(Box::new(inputs));
         }
-        // The evaluator resolves every drawing level of an alert on this one scale.
+        // The evaluator resolves every drawing level of an alert on this one scale. Another
+        // symbol's drawings reuse the numbers of this chart's, so only its own symbol is looked up.
         // shortcut: one scale per alert, so a later condition's drawing in a pane on another
         // scale resolves on the first one's; upgrade when inputs carry a scale per drawing.
         if alert.id.is_none()
+            && alert.symbol == self.symbol()
             && let Some(inputs) = &mut alert.inputs
             && let Some(drawing) = std::iter::once(&alert.source)
                 .chain(alert.condition.partners().into_iter().flatten())
@@ -427,6 +429,16 @@ mod tests {
                 "{names:?}"
             );
         }
+        // Drawing 7 of another symbol is not this chart's: that alert keeps the price scale.
+        let mut other = crate::model::Alert::new(
+            "OTHER",
+            crate::model::AlertCondition::Compare {
+                other: AlertSource::Drawing("7".into()),
+                comparison: crate::model::AlertComparison::Crossing,
+            },
+        );
+        chart.prepare_alert(&mut other);
+        assert!(other.inputs.unwrap().logarithmic);
         #[cfg(feature = "ui")]
         {
             let study = AlertSource::Study {
