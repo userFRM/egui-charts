@@ -499,6 +499,9 @@ impl Chart {
                         } else {
                             let idx = self.study_ids.iter().position(|study| study == id)?;
                             let study = studies.indicators()[idx].as_ref();
+                            if !self.shows_study(study) {
+                                return None;
+                            }
                             let hit = crate::widget::primitives::primitive_at(
                                 self.primitives_of(*id).map(|item| {
                                     (
@@ -532,8 +535,8 @@ impl Chart {
                 .iter()
                 .filter_map(
                     |id| match self.study_ids.iter().position(|study| study == id) {
-                        Some(idx) => studies.indicators()[idx]
-                            .is_visible()
+                        Some(idx) => self
+                            .shows_study(studies.indicators()[idx].as_ref())
                             .then_some((*id, Some(idx))),
                         None => legends
                             .iter()
@@ -586,7 +589,7 @@ impl Chart {
                 config.show_legend = entry.is_some()
                     && (config.show_name || config.show_values || !config.inputs.is_empty());
                 config.height = height;
-                config.show_grid &= Some(entry) == first;
+                config.show_grid = self.config.show_grid && Some(entry) == first;
                 let mut panel = IndicatorPane::with_config(config);
                 panel.legend_backdrop = self.config.indicator_backdrop_opacity;
                 panel.background = Some((
@@ -595,6 +598,21 @@ impl Chart {
                     self.config.background_color,
                 ));
                 panel.text_color = Some(self.config.text_color);
+                let chart = &self.config;
+                panel.grid = Some(super::indicator::PaneGrid {
+                    horizontal: chart
+                        .show_horizontal_grid
+                        .then_some((chart.grid_color, chart.grid_line_style)),
+                    vertical: chart.show_vertical_grid.then(|| {
+                        (
+                            chart.vertical_grid_color.unwrap_or(chart.grid_color),
+                            chart
+                                .vertical_grid_line_style
+                                .unwrap_or(chart.grid_line_style),
+                            self.last_vertical_grid_x.clone(),
+                        )
+                    }),
+                });
                 panel.axis_options = crate::config::PriceAxisOptions {
                     show_study_values: self.config.price_axis.show_study_values,
                     ..self.config.price_axis
@@ -622,6 +640,8 @@ impl Chart {
                         | crate::scales::PriceScaleMode::IndexedTo100
                 ) {
                     panel.price_formatter = self.percentage_formatter.clone();
+                } else if let Some(id) = id {
+                    panel.price_formatter = self.study_formatter(id, indicator.value_format());
                 }
                 panel.axis_rect = axes
                     .iter()
@@ -629,6 +649,7 @@ impl Chart {
                     .map(|(_, rect)| *rect);
                 panel.legend_offset = legend_offset;
                 panel.pane_controls = true;
+                panel.show_settings = !self.settings_hidden;
                 // A series legend reports its value at any bar, the last close without a crosshair.
                 panel.bar_index = self
                     .readout_index
@@ -787,7 +808,7 @@ impl Chart {
                                     return Vec::new();
                                 };
                                 let study = studies.indicators()[idx].as_ref();
-                                if !study.is_visible() {
+                                if !self.shows_study(study) {
                                     return Vec::new();
                                 }
                                 let map = if matches!(
@@ -1001,7 +1022,13 @@ impl Chart {
                                 pos: menu.unwrap(),
                             });
                         }
-                        (None, Some(id)) if control_clicked => {
+                        // A series row's More button and right click open its settings, which a
+                        // hidden `Control::Settings` withholds.
+                        (None, Some(id))
+                            if close_clicked
+                                || visibility_clicked
+                                || (control_clicked && !self.settings_hidden) =>
+                        {
                             pending_series_action = Some((id, close_clicked, visibility_clicked));
                         }
                         _ => {}
@@ -1089,6 +1116,9 @@ impl Chart {
                                         .map(|_| ChartElementId::Series(*id));
                                 }
                                 let idx = self.study_ids.iter().position(|study| study == id)?;
+                                if !self.shows_study(studies.indicators()[idx].as_ref()) {
+                                    return None;
+                                }
                                 hit_test_pane_indicator(
                                     pos,
                                     studies.indicators()[idx].as_ref(),
@@ -1362,7 +1392,7 @@ impl Chart {
                         .drawings
                         .iter()
                         .filter(|drawing| {
-                            drawing.is_visible_on_timeframe(&self.drawings.curr_timeframe)
+                            self.drawings.shows(drawing)
                                 && (drawing.pane == Some(pane_id.0)
                                     || members.iter().any(|id| drawing.pane == Some(id.0)))
                         })
@@ -1589,7 +1619,7 @@ impl Chart {
                 for id in &members {
                     if let Some(idx) = self.study_ids.iter().position(|study| study == id) {
                         let study = &studies.indicators()[idx];
-                        if study.is_visible()
+                        if self.shows_study(study.as_ref())
                             && let Some(table) = study.table()
                         {
                             table_rect.max.y = crate::studies::table::paint(

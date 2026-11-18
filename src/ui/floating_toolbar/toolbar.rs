@@ -8,6 +8,8 @@ use crate::localization as l10n;
 use crate::model::LineStyle;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::ui::Control;
+use crate::ui::app_state::set_control_visible;
 use crate::ui::context_menu::drawing::{DrawingContextMenu, DrawingContextMenuAction};
 use crate::ui_kit::buttons::{ButtonSize, IconButton};
 use crate::ui_kit::color_picker::keep_opacity;
@@ -164,9 +166,12 @@ impl FloatingSelectionToolbar {
     }
 
     /// Show the Add alert button, for an object an alert can follow, such as a drawing with
-    /// [`alert_levels`](crate::drawings::Drawing::alert_levels). Hidden by default.
+    /// [`alert_levels`](crate::drawings::Drawing::alert_levels). Hidden by default. `false` also
+    /// leaves the More menu's alert row and its separator out, as hiding `Control::Alerts` does
+    /// in the drawing context menu.
     pub fn set_alert_available(&mut self, available: bool) {
         self.alert_available = available;
+        set_control_visible(&mut self.menu.hidden, Control::Alerts, available);
     }
 
     /// Follow the selected drawing, applying quick style edits as undoable chart actions.

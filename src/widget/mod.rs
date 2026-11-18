@@ -238,6 +238,8 @@ pub struct Chart {
     applied_config_scale_mode: crate::scales::PriceScaleMode,
     /// Whether the main price series and its volume are drawn.
     pub(crate) main_series_visible: bool,
+    /// Whether every study is hidden as a group; see [`Self::set_indicators_hidden`].
+    indicators_hidden: bool,
     main_series_present: bool,
     main_series_scale: crate::model::SeriesScale,
     price_series: Vec<series::PriceSeries>,
@@ -404,6 +406,10 @@ pub struct Chart {
     volume_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     series_formatters:
         std::collections::HashMap<SeriesId, std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    /// Host formatters of single studies. Kept after a study's removal, so that undo restores
+    /// it with its formatter; study ids are never reused.
+    study_formatters:
+        std::collections::HashMap<SeriesId, std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     extended_hours: bool,
     conversion: Option<String>,
     pub(crate) measured_axis_width: f32,
@@ -450,6 +456,9 @@ pub struct Chart {
     pub(crate) last_rendered_price_rect: Rect,
     /// Last rendered volume rect (actual rect used for volume rendering)
     pub(crate) last_rendered_volume_rect: Rect,
+    /// X positions of the vertical grid lines of the last rendered price pane, which the study
+    /// panes below it repeat; empty when the chart hides its vertical grid.
+    pub(crate) last_vertical_grid_x: Vec<f32>,
     /// Last rendered indicator pane info for hit testing
     /// Each entry: (indicator_index, panel_rect, chart_rect, y_min, y_max, coords)
     pub(crate) last_rendered_indicator_panes: Vec<RenderedIndicatorPane>,
@@ -460,8 +469,9 @@ pub struct Chart {
     pub(crate) layout_inactive: bool,
     /// The layout's field selectors occupy the right end of the status line's first row this frame.
     pub(crate) layout_link_controls: bool,
-    /// `Control::Settings` is hidden: the legend's series settings button and the price axis
-    /// corner's scale settings button are not drawn.
+    /// `Control::Settings` is hidden: the legend's series settings button, the settings buttons
+    /// of study and added series legend rows and the price axis corner's scale settings button
+    /// are not drawn.
     pub(crate) settings_hidden: bool,
     /// Tells `ChartLayout` this is another chart: new for each chart and each restored snapshot,
     /// whose symbol and interval are no change for the layout to send to linked charts.
@@ -774,9 +784,11 @@ impl Chart {
     }
 
     /// Shows or hides the chart's own settings buttons: the series settings button among the
-    /// legend's title controls and the scale settings button in the price axis corner. Hidden,
-    /// they are not drawn and take no keyboard focus, while the legend's other controls stay.
-    /// Hosts call it with the visibility they give `Control::Settings`. Both start visible.
+    /// legend's title controls, the settings button of each study and added series legend row,
+    /// and the scale settings button in the price axis corner. Hidden, they are not drawn and
+    /// take no keyboard focus, while the legend's other controls stay, and an added series row's
+    /// More button and right click, which open its settings, do nothing. Hosts call it with the
+    /// visibility they give `Control::Settings`. All start visible.
     pub fn set_settings_buttons_visible(&mut self, visible: bool) {
         self.settings_hidden = !visible;
     }

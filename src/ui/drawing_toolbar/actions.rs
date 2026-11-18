@@ -57,9 +57,13 @@ pub enum DrawingToolbarAction {
     ColorChanged([u8; 4]),
     /// Eraser mode toggled
     ToggleEraserMode,
-    /// Hide all drawings
+    /// Hide or show the drawing group, keeping each drawing's own visibility. Apply the
+    /// requested `ToolbarState::hide_drawings` with
+    /// [`DrawingManager::set_hidden`](crate::drawings::DrawingManager::set_hidden).
     HideAllDrawings,
-    /// Hide all indicators
+    /// Hide or show the study group, keeping each study's own visibility. Apply the requested
+    /// `ToolbarState::hide_indicators` with
+    /// [`Chart::set_indicators_hidden`](crate::widget::Chart::set_indicators_hidden).
     HideAllIndicators,
     /// Hide all positions
     HideAllPoss,

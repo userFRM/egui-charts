@@ -267,6 +267,8 @@ impl Chart {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
+        // Value-format edits, undo and pasted studies can leave a study another formatter.
+        self.sync_study_formatters();
         self.sync_primitives(ui.ctx());
         let frame = ui.ctx().cumulative_frame_nr();
         let width = ui.available_width();
@@ -798,7 +800,7 @@ impl Chart {
             .study_ids
             .iter()
             .enumerate()
-            .filter(|(_, id)| self.series_pane(**id) == Some(main_pane))
+            .filter(|(_, id)| !self.indicators_hidden && self.series_pane(**id) == Some(main_pane))
             .map(|(idx, _)| idx)
             .collect();
 
@@ -957,6 +959,7 @@ impl Chart {
             self.last_crosshair = None;
             self.last_rendered_price_rect = layout.price_rect;
             self.last_rendered_volume_rect = Rect::NOTHING;
+            self.last_vertical_grid_x.clear();
             let scale = self.state.price_scale();
             self.last_price_map = scale
                 .map(scale.transform(), chart_rect.top(), chart_rect.bottom())
@@ -1158,7 +1161,7 @@ impl Chart {
         let (mut primitive_prices, mut primitive_margins) = self.main_primitive_prices();
         for idx in &study_indices {
             let study = &self.rendered_studies().indicators()[*idx];
-            if study.is_visible()
+            if self.shows_study(study.as_ref())
                 && !study.is_overlay()
                 && self.study_autoscale[*idx]
                 && !self.config.scale_price_chart_only
@@ -1574,7 +1577,7 @@ impl Chart {
             (Vec::new(), Vec::new(), time_coords.clone())
         };
 
-        if self.config.show_grid && self.config.show_vertical_grid {
+        self.last_vertical_grid_x = if self.config.show_grid && self.config.show_vertical_grid {
             let style = self
                 .config
                 .vertical_grid_line_style
@@ -1591,7 +1594,7 @@ impl Chart {
                     style,
                     horizontal_grid
                         .then_some((self.config.grid_color, self.config.grid_line_style)),
-                );
+                )
             } else {
                 rendering::render_vertical_grid(
                     &painter,
@@ -1601,9 +1604,11 @@ impl Chart {
                         .vertical_grid_color
                         .unwrap_or(self.config.grid_color),
                     style,
-                );
+                )
             }
-        }
+        } else {
+            Vec::new()
+        };
 
         let session_tf = self.resolve_session_timeframe(visible_data);
         let exchange_session = rendering::exchange_session(
@@ -1915,7 +1920,7 @@ impl Chart {
                         .find(|study| {
                             study.is_volume()
                                 && study.is_overlay()
-                                && study.is_visible()
+                                && self.shows_study(study.as_ref())
                                 && !matches!(study.scale(), crate::studies::StudyScale::Shared(_))
                         })
                         // The painted columns scale by the largest visible volume, also below 1.
@@ -1997,7 +2002,11 @@ impl Chart {
             let hit = hit_test_main_chart(
                 pos,
                 studies,
-                &self.study_ids,
+                if self.indicators_hidden {
+                    &[]
+                } else {
+                    &self.study_ids[..]
+                },
                 &hit_order,
                 &coords,
                 volume_coords.as_ref(),
@@ -2087,7 +2096,7 @@ impl Chart {
                 .iter()
                 .position(|study| study == id)
                 .map(|idx| &studies.indicators()[idx])
-                .filter(|study| study.is_visible())
+                .filter(|study| self.shows_study(study.as_ref()))
             else {
                 return;
             };
@@ -2420,7 +2429,7 @@ impl Chart {
         for study in studies
             .indicators()
             .iter()
-            .filter(|study| study.is_visible() && study.labels_on_price())
+            .filter(|study| self.shows_study(study.as_ref()) && study.labels_on_price())
         {
             crate::chart::indicators::plots::paint_labels(
                 &clipped_painter,
@@ -2912,12 +2921,16 @@ impl Chart {
         }
         if show_price_axis && study_axis.show_study_values {
             let last_in_view = rendering::axes::last_bar_in_view(&coords);
-            for study in studies
+            let relative = matches!(
+                price_map.transform().mode,
+                crate::scales::PriceScaleMode::Percentage
+                    | crate::scales::PriceScaleMode::IndexedTo100
+            );
+            for (idx, study) in studies
                 .indicators()
                 .iter()
                 .enumerate()
                 .filter(|(idx, _)| study_indices.contains(idx))
-                .map(|(_, study)| study)
             {
                 // A chart type that hides volume tags no volume value.
                 if study.is_volume() && !self.chart_type.supports_volume() {
@@ -2953,6 +2966,10 @@ impl Chart {
                 {
                     continue;
                 }
+                let formatter = self
+                    .study_formatter(self.study_ids[idx], study.value_format())
+                    .filter(|_| !relative)
+                    .or_else(|| price_formatter.clone());
                 rendering::axes::render_study_tags(
                     &painter,
                     price_rect,
@@ -2961,7 +2978,7 @@ impl Chart {
                     last_in_view,
                     axis_edge,
                     &mut tags,
-                    price_formatter.as_deref(),
+                    formatter.as_deref(),
                     &study_axis,
                 );
             }
@@ -3305,7 +3322,9 @@ impl Chart {
             .study_ids
             .iter()
             .zip(self.rendered_studies().indicators())
-            .filter(|(id, study)| study.is_visible() && self.series_pane(**id) == Some(main_pane))
+            .filter(|(id, study)| {
+                self.shows_study(study.as_ref()) && self.series_pane(**id) == Some(main_pane)
+            })
         {
             if let Some(table) = study.table() {
                 table_rect.max.y =
@@ -3392,8 +3411,15 @@ impl Chart {
                         background: *background,
                     })
                     .collect();
+                let study_formatters: Vec<_> = self
+                    .study_ids
+                    .iter()
+                    .zip(self.rendered_studies().indicators())
+                    .map(|(id, study)| self.study_formatter(*id, study.value_format()))
+                    .collect();
                 let raw_price_formatter = self.series_price_formatter(super::SeriesId::MAIN);
                 legend.formatters = self.value_formatters(raw_price_formatter.as_deref());
+                legend.study_formatters = &study_formatters;
                 legend.thousands_sep = price_map.thousands_sep();
                 legend.price_decimals = self.readout_price_decimals();
                 legend.instrument = self.instrument();
@@ -3425,7 +3451,7 @@ impl Chart {
                     }
                 }
                 legend.series_visible = self.main_series_visible;
-                legend.show_series_settings = !self.settings_hidden;
+                legend.show_settings = !self.settings_hidden;
                 legend.title_as_description = self.config.title_as_description;
                 // A whitespace bar has no values to show.
                 let values = self.main_series_visible && !bar.is_whitespace();

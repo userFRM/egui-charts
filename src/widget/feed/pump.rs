@@ -559,10 +559,6 @@ impl Chart {
             && link.extended_hours == self.extended_hours
             && link.conversion == self.conversion
             && link
-                .instrument
-                .as_ref()
-                .is_some_and(|instrument| instrument.symbol == self.symbol)
-            && link
                 .footprint
                 .as_ref()
                 .is_some_and(|flow| flow.live.prepared_before().is_some());
@@ -587,11 +583,6 @@ impl Chart {
                 retain_trades = false;
             }
             link.feed.unsubscribe(id);
-        } else {
-            retain_trades &= link
-                .instrument
-                .as_ref()
-                .is_some_and(|i| i.symbol == self.symbol);
         }
         let resume = resumed && retain_trades;
         retain_prepared &= resume;
@@ -599,10 +590,9 @@ impl Chart {
         let feed_wide = |request: &Request| matches!(request, Request::Capabilities);
         link.pending.retain(|(_, request, _)| feed_wide(request));
         link.retries.retain(|(_, request, _)| feed_wide(request));
-        self.legend_instrument = link
-            .instrument
-            .take()
-            .filter(|instrument| instrument.symbol == self.symbol);
+        // A changed symbol or conversion drops the instrument of the earlier request: this one
+        // describes the chart's symbol, whatever its own `symbol` holds.
+        self.legend_instrument = link.instrument.take();
         self.state.price_scale_mut().set_instrument_precision(None);
         self.state.price_scale_mut().set_tick_size(None);
         if retain_trades {

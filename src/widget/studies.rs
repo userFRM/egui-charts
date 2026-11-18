@@ -49,9 +49,7 @@ impl Chart {
         if let Some(timeframe) = self.timeframe() {
             indicator.set_timeframe(timeframe);
         }
-        if indicator.value_format() == crate::scales::StudyFormat::Volume {
-            indicator.set_value_formatter(self.volume_formatter.clone());
-        }
+        indicator.set_value_formatter(self.inherited_study_formatter(indicator.value_format()));
         indicator.set_instrument(self.instrument());
         indicator.set_time_scale_events(held_events(
             &self.time_scale_events,
@@ -224,6 +222,36 @@ impl Chart {
         self.readout_revision = crate::model::next_revision();
         self.studies.indicators_mut()[at].set_visible(visible);
         true
+    }
+
+    /// Hides or shows all studies without changing each study's [`Indicator::is_visible`].
+    /// The group flag gates painting, legends, fitting, hits, selection and readouts, except
+    /// [`CursorDataPolicy::IncludeHidden`](super::CursorDataPolicy::IncludeHidden). Panes behave
+    /// as when their studies are hidden individually. New studies join the hidden group;
+    /// calculation, data requests and alerts continue. Hiding deselects a selected study.
+    /// Inside [`Self::user_action`] this is one undo step. The flag is kept on restore but
+    /// is not saved in a chart snapshot.
+    pub fn set_indicators_hidden(&mut self, hidden: bool) {
+        self.indicators_hidden = hidden;
+        self.readout_revision = crate::model::next_revision();
+        if hidden
+            && matches!(
+                self.selection.selected_id(),
+                Some(ChartElementId::Indicator(_))
+            )
+        {
+            self.selection.deselect();
+        }
+    }
+
+    /// Whether [`Self::set_indicators_hidden`] hides every study.
+    pub fn indicators_hidden(&self) -> bool {
+        self.indicators_hidden
+    }
+
+    /// Whether the study's own visibility and its group's visibility allow it to be shown.
+    pub(super) fn shows_study(&self, study: &dyn Indicator) -> bool {
+        !self.indicators_hidden && study.is_visible()
     }
 
     /// Whether an existing study permits user edits. Unknown ids return false.
@@ -681,6 +709,71 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Instant;
+
+    /// Group hiding covers main and study panes, keeps own settings, and is undoable (#3152).
+    #[test]
+    fn hiding_all_studies_keeps_each_studys_own_visibility() {
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        use crate::widget::ChartElementId;
+        use crate::widget::test_frames::{chart, frame, shapes};
+        use egui::{Color32, Shape, epaint::ColorMode};
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        let colors = [
+            Color32::from_rgb(1, 2, 3),
+            Color32::from_rgb(4, 5, 6),
+            Color32::from_rgb(7, 8, 9),
+        ];
+        let ids: Vec<_> = colors
+            .iter()
+            .enumerate()
+            .map(|(idx, color)| {
+                chart.add_indicator(Box::new(
+                    CustomIndicator::new(format!("Line {idx}"), |bars| {
+                        vec![IndicatorValue::Single(15.0); bars.len()]
+                    })
+                    .with_color(*color)
+                    .with_overlay(idx != 2),
+                ))
+            })
+            .collect();
+        chart.set_indicator_visible(ids[0], false);
+        let own = |chart: &Chart| {
+            chart
+                .indicators()
+                .filter(|(id, _)| ids.contains(id))
+                .map(|(_, study)| study.is_visible())
+                .collect::<Vec<_>>()
+        };
+        let painted = |chart: &mut Chart, time| {
+            let output = shapes(&ctx, chart, time, vec![]);
+            colors.map(|color| {
+                output.iter().any(|shape| match shape {
+                    Shape::Path(path) => path.stroke.color == ColorMode::Solid(color),
+                    _ => false,
+                })
+            })
+        };
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        assert_eq!(painted(&mut chart, 1.0), [false, true, true]);
+        chart
+            .selection
+            .select(ChartElementId::Indicator(ids[1]), None);
+        chart.user_action(|chart| chart.set_indicators_hidden(true));
+        assert_eq!(own(&chart), [false, true, true]);
+        assert_eq!(chart.selected_element(), None);
+        assert_eq!(painted(&mut chart, 2.0), [false; 3]);
+        assert!(!chart.is_series_visible(ids[1]));
+        assert!(chart.undo());
+        assert!(!chart.indicators_hidden());
+        assert_eq!(painted(&mut chart, 3.0), [false, true, true]);
+        assert!(chart.redo());
+        assert!(chart.indicators_hidden());
+        assert_eq!(painted(&mut chart, 4.0), [false; 3]);
+        chart.user_action(|chart| chart.set_indicators_hidden(false));
+        assert_eq!(own(&chart), [false, true, true]);
+        assert_eq!(painted(&mut chart, 5.0), [false, true, true]);
+    }
 
     /// SMA(1)(x) = x, including gaps and past values repainted as new swings arrive.
     #[test]

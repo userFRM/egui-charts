@@ -66,7 +66,8 @@ pub enum Control {
     /// The top toolbar's quick search button.
     QuickSearch,
     /// Chart and series settings buttons and menu entries, including the series settings button
-    /// among a chart's legend controls and the scale settings button in its price axis corner,
+    /// among a chart's legend controls, the settings buttons of its study and added series
+    /// legend rows and the scale settings button in its price axis corner,
     /// which [`Chart::set_settings_buttons_visible`](crate::widget::Chart::set_settings_buttons_visible)
     /// hides.
     Settings,

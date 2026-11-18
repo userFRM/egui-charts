@@ -719,7 +719,8 @@ impl Chart {
             .map(|item| (item.id, &item.options))
     }
 
-    /// Whether a bar series or study is present and visible.
+    /// Whether a bar series or study is present and shown. Studies are not shown while
+    /// [`Self::set_indicators_hidden`] hides their group.
     pub fn is_series_visible(&self, id: SeriesId) -> bool {
         if id == SeriesId::MAIN {
             self.main_series_present && self.main_series_visible
@@ -727,7 +728,7 @@ impl Chart {
             item.visible
         } else {
             self.indicators()
-                .any(|(current, study)| current == id && study.is_visible())
+                .any(|(current, study)| current == id && self.shows_study(study))
         }
     }
 

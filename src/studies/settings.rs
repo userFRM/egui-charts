@@ -1243,6 +1243,9 @@ impl Indicator for ConfiguredStudy {
     fn candles(&self) -> &[super::StudyCandle] {
         self.study.candles()
     }
+    fn solid_candles(&self) -> bool {
+        self.study.solid_candles()
+    }
     fn tpo(&self) -> Option<&crate::model::TPOConfig> {
         self.study.tpo()
     }

@@ -57,6 +57,9 @@ struct Action {
     main_series: Option<MainSeries>,
     main_series_visible: Option<bool>,
     price_targets_visible: Option<bool>,
+    indicators_hidden: Option<bool>,
+    #[cfg(feature = "drawings")]
+    drawings_hidden: Option<bool>,
     event_visibility: Option<crate::model::EventVisibility>,
     options: Option<ChartOptions>,
     order_flow: Option<FeedDisplay>,
@@ -88,7 +91,8 @@ impl Action {
 
     fn keeps_all_but_the_view(&self) -> bool {
         #[cfg(feature = "drawings")]
-        let drawings_changed = self.drawings.can_undo() || self.unshown.is_some();
+        let drawings_changed =
+            self.drawings.can_undo() || self.unshown.is_some() || self.drawings_hidden.is_some();
         #[cfg(not(feature = "drawings"))]
         let drawings_changed = false;
         self.layout_sizes.is_none()
@@ -99,6 +103,7 @@ impl Action {
             && self.config.is_none()
             && self.main_series.is_none()
             && self.main_series_visible.is_none()
+            && self.indicators_hidden.is_none()
             && self.price_targets_visible.is_none()
             && self.event_visibility.is_none()
             && self.options.is_none()
@@ -470,6 +475,9 @@ impl Chart {
                 config: Some(self.config.clone()),
                 main_series_visible: Some(self.main_series_visible),
                 price_targets_visible: Some(self.show_price_targets),
+                indicators_hidden: Some(self.indicators_hidden),
+                #[cfg(feature = "drawings")]
+                drawings_hidden: Some(self.drawings.is_hidden()),
                 event_visibility: Some(self.event_visibility.clone()),
                 options: Some(self.chart_options.clone()),
                 order_flow: FeedDisplay::capture(self),
@@ -560,6 +568,13 @@ impl Chart {
         }
         if action.event_visibility.as_ref() == Some(&self.event_visibility) {
             action.event_visibility = None;
+        }
+        if action.indicators_hidden == Some(self.indicators_hidden) {
+            action.indicators_hidden = None;
+        }
+        #[cfg(feature = "drawings")]
+        if action.drawings_hidden == Some(self.drawings.is_hidden()) {
+            action.drawings_hidden = None;
         }
         if action.main_series_visible == Some(self.main_series_visible) {
             action.main_series_visible = None;
@@ -1081,6 +1096,17 @@ impl Chart {
         // Before the visibility, which an absent main series ignores.
         if let Some(main) = &mut action.main_series {
             self.swap_main_series(main);
+        }
+        if let Some(hidden) = &mut action.indicators_hidden {
+            let current = self.indicators_hidden;
+            self.set_indicators_hidden(*hidden);
+            *hidden = current;
+        }
+        #[cfg(feature = "drawings")]
+        if let Some(hidden) = &mut action.drawings_hidden {
+            let current = self.drawings.is_hidden();
+            self.drawings.set_hidden(*hidden);
+            *hidden = current;
         }
         if let Some(visible) = &mut action.main_series_visible {
             let current = self.main_series_visible;

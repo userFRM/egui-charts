@@ -160,9 +160,10 @@ fn hidden_menu_controls_remove_rows_and_empty_sections() {
     }
 }
 
-/// Guards #3245: hiding `Alerts` drops the drawing menu's alert row with its separator, hiding
-/// `Settings` drops the chart's series and scale settings buttons from paint and from the Tab
-/// order while the other legend buttons stay, and showing either control restores them.
+/// Guards #3245 and #3350: hiding `Alerts` drops the drawing menu's alert row with its separator,
+/// including the toolbar's More menu when given the same availability. Hiding `Settings` drops
+/// the chart's series, study row and scale settings buttons from paint and Tab order, and an
+/// added series row's menu then requests nothing. Other buttons stay; showing restores them.
 #[test]
 fn hidden_alerts_and_settings_leave_the_drawing_menu_and_chart() {
     fn drawing_menu_head(chart: &mut Chart, menus: &mut ChartMenus) -> Vec<String> {
@@ -227,6 +228,170 @@ fn hidden_alerts_and_settings_leave_the_drawing_menu_and_chart() {
         }
         order
     }
+    fn study_row_buttons(chart: &mut Chart, _: &mut ChartMenus) -> Vec<String> {
+        if chart.indicators().next().is_none() {
+            chart.config_mut().show_volume = false;
+            chart.add_indicator(Box::new(crate::studies::SMA::new(3)));
+            chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+            let series = chart.add_series(crate::widget::SeriesOptions {
+                name: "Other".into(),
+                ..Default::default()
+            });
+            chart.set_data(series, chart.bars(SeriesId::MAIN).to_vec());
+            let pane = chart.add_pane();
+            assert!(chart.move_series_to_pane(series, pane));
+        }
+        const NAMES: [&str; 4] = [
+            "Hide study",
+            "Study settings",
+            "Remove study",
+            "More actions",
+        ];
+        let ctx = Context::default();
+        let frame = |chart: &mut Chart, events| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        chart.show(ui);
+                    });
+                },
+            )
+        };
+        let mut order = Vec::new();
+        let mut seen = Vec::new();
+        for _ in 0..80 {
+            let output = frame(
+                chart,
+                vec![Event::Key {
+                    key: egui::Key::Tab,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }],
+            );
+            for event in &output.platform_output.events {
+                if let egui::output::OutputEvent::FocusGained(info) = event
+                    && let Some(label) = info.label.as_deref()
+                    && NAMES.contains(&label)
+                    && let Some(id) = ctx.memory(|memory| memory.focused())
+                    && !seen.contains(&id)
+                {
+                    seen.push(id);
+                    order.push(label.to_owned());
+                }
+            }
+            output.drop_without_applying_deltas();
+        }
+        let output = frame(chart, Vec::new());
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text().starts_with("Other") => {
+                    Some(text.pos + Vec2::new(4.0, text.galley.size().y / 2.0))
+                }
+                _ => None,
+            })
+            .expect("added series legend");
+        output.drop_without_applying_deltas();
+        let more = ctx
+            .read_response(*seen.last().expect("series row actions"))
+            .unwrap()
+            .rect
+            .center();
+        // The pane's collapse header can take a secondary click on the title; also exercise
+        // More directly so the fixture always reaches the series row's settings dispatch.
+        for (pos, button) in [
+            (pos, PointerButton::Secondary),
+            (more, PointerButton::Primary),
+        ] {
+            frame(chart, vec![Event::PointerMoved(pos)]).drop_without_applying_deltas();
+            for pressed in [true, false] {
+                frame(
+                    chart,
+                    vec![Event::PointerButton {
+                        pos,
+                        button,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    }],
+                )
+                .drop_without_applying_deltas();
+            }
+        }
+        if chart.take_indicator_settings_request().is_some() {
+            order.push("Series settings request".into());
+        }
+        order
+    }
+    fn toolbar_more_menu(chart: &mut Chart, menus: &mut ChartMenus) -> Vec<String> {
+        let ctx = Context::default();
+        chart.drawings_mut().select(7);
+        let mut toolbar = crate::ui::floating_toolbar::FloatingSelectionToolbar::new();
+        toolbar.set_alert_available(!menus.drawing.hidden.contains(&Control::Alerts));
+        let mut frame = |events| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    toolbar.show_and_apply(ui, chart);
+                },
+            )
+        };
+        for _ in 0..2 {
+            frame(Vec::new()).drop_without_applying_deltas();
+        }
+        for _ in 0..20 {
+            let output = frame(vec![Event::Key {
+                key: egui::Key::Tab,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }]);
+            let more = output.platform_output.events.iter().any(|event| {
+                matches!(event, egui::output::OutputEvent::FocusGained(info)
+                    if info.label.as_deref() == Some("More"))
+            });
+            output.drop_without_applying_deltas();
+            if more {
+                break;
+            }
+        }
+        frame(vec![Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }])
+        .drop_without_applying_deltas();
+        frame(Vec::new()).drop_without_applying_deltas();
+        let output = frame(Vec::new());
+        let labels = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if ["Add alert on Horizontal Line…", "Edit…"].contains(&text.galley.text()) =>
+                {
+                    Some(text.galley.text().to_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        labels
+    }
     type Observe = fn(&mut Chart, &mut ChartMenus) -> Vec<String>;
     type Row = (
         Control,
@@ -234,7 +399,7 @@ fn hidden_alerts_and_settings_leave_the_drawing_menu_and_chart() {
         &'static [&'static str],
         Observe,
     );
-    let rows: [Row; 2] = [
+    let rows: [Row; 4] = [
         (
             Control::Alerts,
             &["Add alert on Horizontal Line…", "-", "Edit…"],
@@ -252,7 +417,44 @@ fn hidden_alerts_and_settings_leave_the_drawing_menu_and_chart() {
             &["Hide series", "Remove series"],
             settings_focus_order,
         ),
+        (
+            Control::Settings,
+            &[
+                "Hide study",
+                "Study settings",
+                "Remove study",
+                "More actions",
+                "Hide study",
+                "Study settings",
+                "Remove study",
+                "More actions",
+                "Hide study",
+                "Study settings",
+                "Remove study",
+                "More actions",
+                "Series settings request",
+            ],
+            &[
+                "Hide study",
+                "Remove study",
+                "More actions",
+                "Hide study",
+                "Remove study",
+                "More actions",
+                "Hide study",
+                "Remove study",
+                "More actions",
+            ],
+            study_row_buttons,
+        ),
+        (
+            Control::Alerts,
+            &["Add alert on Horizontal Line…", "Edit…"],
+            &["Edit…"],
+            toolbar_more_menu,
+        ),
     ];
+    let mut failures = Vec::new();
     for (control, shown, hidden, observe) in rows {
         let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
         chart.symbol = "SYNTH".into();
@@ -265,13 +467,16 @@ fn hidden_alerts_and_settings_leave_the_drawing_menu_and_chart() {
         for visible in [true, false, true] {
             menus.set_control_visible(control, visible);
             chart.set_settings_buttons_visible(control != Control::Settings || visible);
-            assert_eq!(
-                observe(&mut chart, &mut menus),
-                if visible { shown } else { hidden },
-                "{control:?} visible: {visible}"
-            );
+            let observed = observe(&mut chart, &mut menus);
+            let expected = if visible { shown } else { hidden };
+            if observed != expected {
+                failures.push(format!(
+                    "{control:?} visible: {visible}: {observed:?}, expected {expected:?}"
+                ));
+            }
         }
     }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]

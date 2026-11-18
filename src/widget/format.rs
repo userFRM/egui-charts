@@ -284,8 +284,9 @@ impl Chart {
     /// price tags with [`PriceFormatter::format`], and the axis ticks with
     /// [`PriceFormatter::format_ticks`], which receives the complete ordered list for each
     /// axis, separately for layout and painting. The formatter receives prices and replaces
-    /// the instrument's decimals. It applies to every price scale and to the prices drawings
-    /// print; studies keep their own formats.
+    /// the instrument's decimals. It applies to every price scale, to the prices drawings print
+    /// and to studies in price units, unless [`set_series_formatter`](Self::set_series_formatter)
+    /// for `MAIN` or [`set_indicator_formatter`](Self::set_indicator_formatter) overrides it.
     /// `None` restores the built-in labels.
     ///
     /// [`PriceFormatter::format`]: crate::scales::PriceFormatter::format
@@ -295,6 +296,7 @@ impl Chart {
         formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     ) {
         self.price_formatter = formatter;
+        self.sync_study_formatters();
     }
 
     /// Formats price scale labels in the percentage and indexed-to-100 modes, as
@@ -316,20 +318,12 @@ impl Chart {
         &mut self,
         formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     ) {
-        self.volume_formatter = formatter.clone();
-        for study in self
-            .studies
-            .indicators_mut()
-            .iter_mut()
-            .chain(self.element_studies.studies.indicators_mut().iter_mut())
-        {
-            if study.value_format() == crate::scales::StudyFormat::Volume {
-                study.set_value_formatter(formatter.clone());
-            }
-        }
+        self.volume_formatter = formatter;
+        self.sync_study_formatters();
     }
 
-    /// Overrides raw-price formatting for one bar series, including `MAIN`. This affects
+    /// Overrides raw-price formatting for one bar series, including `MAIN`. The `MAIN` formatter
+    /// also formats studies in price units. This affects
     /// readouts, price tags, ticks and the prices drawings in its pane print; percentage and
     /// indexed scales retain the chart's percentage formatter. `None` restores chart-wide
     /// formatting, then the saved [`SeriesStyle::display_format`](crate::model::SeriesStyle::display_format).
@@ -350,6 +344,37 @@ impl Chart {
         } else {
             self.series_formatters.remove(&id);
         }
+        self.sync_study_formatters();
+        true
+    }
+
+    /// Formats study `id`'s values with `formatter`: its legend values, data window and tooltip
+    /// readouts, axis tags and, in a pane of its own, its axis labels and crosshair label, for
+    /// every output of the study. It takes precedence over the chart's formatters. A study in
+    /// price units otherwise takes the main series' formatter, then
+    /// [`set_price_formatter`](Self::set_price_formatter)'s, and a volume study
+    /// [`set_volume_formatter`](Self::set_volume_formatter)'s. `None` restores that formatting,
+    /// then the study's declared units and precision. Returns false for an id that is not a
+    /// study of the chart, or a custom presentation that keeps its own formatting.
+    pub fn set_indicator_formatter(
+        &mut self,
+        id: super::SeriesId,
+        formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    ) -> bool {
+        let Some(at) = self.study_ids.iter().position(|study| *study == id) else {
+            return false;
+        };
+        if let Some(formatter) = formatter {
+            self.study_formatters.insert(id, formatter);
+        } else {
+            self.study_formatters.remove(&id);
+        }
+        let resolved = self.study_formatter(id, self.studies.indicators()[at].value_format());
+        if !self.studies.indicators_mut()[at].set_value_formatter(resolved) {
+            self.study_formatters.remove(&id);
+            return false;
+        }
+        self.sync_study_formatters();
         true
     }
 
@@ -384,6 +409,51 @@ impl Chart {
         id: super::SeriesId,
     ) -> Option<std::sync::Arc<dyn crate::scales::PriceFormatter>> {
         self.series_label_formatter(id, crate::scales::PriceScaleMode::Normal)
+    }
+
+    /// The formatter of study `id` with value format `format`: its own, else the one it
+    /// inherits.
+    pub(super) fn study_formatter(
+        &self,
+        id: super::SeriesId,
+        format: crate::scales::StudyFormat,
+    ) -> Option<std::sync::Arc<dyn crate::scales::PriceFormatter>> {
+        self.study_formatters
+            .get(&id)
+            .cloned()
+            .or_else(|| self.inherited_study_formatter(format))
+    }
+
+    /// A study's formatter from the chart: the main series' host formatter, then the chart's,
+    /// for prices, and the volume formatter for volumes. Saved display formats stay with series.
+    pub(super) fn inherited_study_formatter(
+        &self,
+        format: crate::scales::StudyFormat,
+    ) -> Option<std::sync::Arc<dyn crate::scales::PriceFormatter>> {
+        match format {
+            crate::scales::StudyFormat::Price => self
+                .series_formatters
+                .get(&super::SeriesId::MAIN)
+                .or(self.price_formatter.as_ref())
+                .cloned(),
+            crate::scales::StudyFormat::Volume => self.volume_formatter.clone(),
+            _ => None,
+        }
+    }
+
+    /// Passes every study, and its element copy, the formatter [`Self::study_formatter`] gives.
+    pub(super) fn sync_study_formatters(&mut self) {
+        let formatters: Vec<_> = self
+            .study_ids
+            .iter()
+            .zip(self.studies.indicators())
+            .map(|(id, study)| self.study_formatter(*id, study.value_format()))
+            .collect();
+        for registry in [&mut self.studies, &mut self.element_studies.studies] {
+            for (study, formatter) in registry.indicators_mut().iter_mut().zip(&formatters) {
+                study.set_value_formatter(formatter.clone());
+            }
+        }
     }
 
     /// First visible bar series owning an axis. The main series precedes added series.
@@ -769,7 +839,7 @@ mod tests {
         // Wednesday 13 March 2024, 14:30 UTC, at the hovered bar.
         let time = Utc.with_ymd_and_hms(2024, 3, 13, 14, 30, 0).unwrap();
         type Setup = fn(&mut crate::widget::Chart);
-        let cases: [(Setup, &[&str]); 6] = [
+        let cases: [(Setup, &[&str]); 7] = [
             (
                 |chart| chart.set_locale(Some("de-DE".into())),
                 &[if cfg!(feature = "locales") {
@@ -811,6 +881,33 @@ mod tests {
                     });
                 },
                 &["label price", "tick price"],
+            ),
+            (
+                |chart| {
+                    chart.add_indicator(Box::new(crate::studies::CustomIndicator::new(
+                        "Price units",
+                        |bars| vec![crate::studies::IndicatorValue::Single(151.234); bars.len()],
+                    )));
+                    chart.add_indicator(Box::new(
+                        crate::studies::CustomIndicator::new("Pane units", |bars| {
+                            vec![crate::studies::IndicatorValue::Single(161.234); bars.len()]
+                        })
+                        .with_overlay(false)
+                        .with_value_format(crate::scales::StudyFormat::Price),
+                    ));
+                    chart.set_price_formatter(Some(Arc::new(
+                        crate::scales::CustomPriceFormatter::new(|value| format!("{value:.3} u")),
+                    )));
+                    chart.set_quote(Some(crate::model::Level1Quote {
+                        ts: Utc.with_ymd_and_hms(2024, 3, 13, 14, 30, 0).unwrap(),
+                        symbol: String::new(),
+                        bid: 120.125,
+                        bid_size: 1.0,
+                        ask: 120.5,
+                        ask_size: 1.0,
+                    }));
+                },
+                &["120.125 u", "120.500 u", "0.375 u", "161.234 u"],
             ),
         ];
         for (setup, expected) in cases {
@@ -864,6 +961,79 @@ mod tests {
                     labels, 2,
                     "the volume row and overlay legend use the host formatter"
                 );
+            }
+            if chart.quote.is_some() {
+                // Sections, so that a row joining a name and a value in one shape counts too.
+                let sections = |label: &str| {
+                    painted
+                        .iter()
+                        .filter_map(|shape| match shape {
+                            Shape::Text(text)
+                                if text.galley.job.sections.iter().any(|section| {
+                                    &text.galley.job.text
+                                        [section.byte_range.start.0..section.byte_range.end.0]
+                                        == label
+                                }) =>
+                            {
+                                Some(text)
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let plot = chart.last_rendered_price_rect;
+                let overlay = sections("151.234 u");
+                assert_eq!(
+                    overlay
+                        .iter()
+                        .filter(|text| text.pos.x < plot.center().x)
+                        .count(),
+                    1,
+                    "the overlay's legend value uses the host formatter"
+                );
+                assert!(
+                    overlay.iter().any(|text| text.pos.x > plot.right()),
+                    "the overlay's price axis tag shows the same text"
+                );
+                assert!(
+                    sections("161.234 u")
+                        .iter()
+                        .any(|text| text.galley.text().starts_with("Pane units")),
+                    "the pane legend uses the host formatter"
+                );
+                let readouts = |chart: &crate::widget::Chart| {
+                    chart
+                        .study_values_at(50)
+                        .into_iter()
+                        .filter(|row| row.study.ends_with(" units"))
+                        .map(|row| row.formatted_value())
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(readouts(&chart), ["151.234 u", "161.234 u"], "data window");
+                let pane = chart
+                    .indicators()
+                    .find(|(_, study)| study.name() == "Pane units")
+                    .unwrap()
+                    .0;
+                assert!(chart.set_indicator_formatter(
+                    pane,
+                    Some(Arc::new(crate::scales::CustomPriceFormatter::new(
+                        |value| { format!("{value:.3} p") }
+                    ))),
+                ));
+                chart.set_price_formatter(None);
+                assert_eq!(
+                    readouts(&chart),
+                    ["151.23", "161.234 p"],
+                    "a study's own formatter outlasts the chart's"
+                );
+                assert!(chart.set_indicator_formatter(pane, None));
+                assert_eq!(
+                    readouts(&chart),
+                    ["151.23", "161.23"],
+                    "None restores the declared format"
+                );
+                assert!(!chart.set_indicator_formatter(crate::widget::SeriesId::MAIN, None));
             }
             if expected.contains(&"O label price") {
                 chart.chart_options.tooltip.enabled = true;
