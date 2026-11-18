@@ -138,6 +138,7 @@ impl Inbox {
                 capacity: trade_capacity,
             },
             rebuilt_bars: 0,
+            queued_from: Some(TradeBars::default()),
             updates: Updates::new(Trades::new(trade_capacity)),
         };
         self.state().subscriptions.insert(id, live);
@@ -220,6 +221,7 @@ impl Sink {
             live.taken.ids.clear();
             live.updates = Updates::new(live.updates.trades.empty());
             live.updates.reset = true;
+            live.queued_from = Some(TradeBars::default());
             live.updates.replay_depth = live.sampler.as_ref().map(|sampler| {
                 crate::data::DepthHistory::new(sampler.config.clone())
                     .expect("existing depth history configuration")
@@ -291,9 +293,9 @@ impl Sink {
                 live.updates.rejected += 1;
                 return;
             }
-            if live.clock.timeframe().is_some_and(|tf| tf.is_trade_based())
-                && live.forming.is_none_or(|last| slot >= last)
-            {
+            let regroups = live.clock.timeframe().is_some_and(|tf| tf.is_trade_based())
+                && live.forming.is_none_or(|last| slot >= last);
+            if regroups {
                 live.count_bar = None;
                 live.event_closed = false;
                 live.delta = 0.0;
@@ -309,6 +311,11 @@ impl Sink {
                 live.empty = false;
             }
             live.forming = live.forming.max(Some(slot));
+            if regroups {
+                // Executions queued before the bar were grouped apart from those after it.
+                let idle = live.queued().next().is_none();
+                live.queued_from = idle.then(|| live.grouping());
+            }
             live.updates.bars.insert(slot, (bar, Origin::Live));
         });
     }
@@ -699,17 +706,68 @@ impl Live {
             }
             if trade_based {
                 // The chart rebuilt drained history; include the executions still queued.
-                let repeats = &self.updates.repeats;
-                let queued = self.updates.trades.iter();
-                for trade in queued.filter(|t| t.id.is_none_or(|id| !repeats.contains(&id))) {
-                    input.push_trade(&self.clock, trade);
-                }
-                if let Some(open) = self.forming {
-                    input.set_trade_bar(open);
-                }
+                self.give_queued(input);
             }
         }
         self.study_inputs = inputs;
+    }
+
+    /// Replays queued executions from the grouping the sink allocated them from. Queue loss or
+    /// regrouping by a pushed bar makes replay unreliable, so the source leaves those bars out.
+    #[cfg(any(feature = "widget", feature = "alert-engine"))]
+    fn give_queued(&self, input: &crate::data::OrderFlowInput) {
+        let mut grouping =
+            (self.queued_from.clone()).filter(|_| self.updates.trades.lost_until().is_none());
+        let parts = grouping.as_mut().and_then(|grouping| {
+            let timeframe = self.clock.timeframe()?;
+            (self.queued())
+                .map(|trade| {
+                    let bars = grouping.push(timeframe, trade, self.tick_size).ok()?;
+                    Some((trade, bars))
+                })
+                .collect::<Option<Vec<_>>>()
+        });
+        match parts {
+            Some(parts) => {
+                // A source that holds nothing yet lacks the drained executions of that bar.
+                if let Some(open) = self.queued_from.as_ref().and_then(|bars| bars.forming) {
+                    input.set_trade_bar(open);
+                }
+                for (trade, bars) in parts {
+                    for (i, (bar, size)) in bars.into_iter().enumerate() {
+                        input.push_trade_part(&self.clock, trade, bar.time, size, i == 0);
+                    }
+                }
+            }
+            None => {
+                let newest = (self.queued().map(|trade| trade.ts))
+                    .chain(self.updates.trades.lost_until())
+                    .max();
+                if let (Some(open), Some(until)) = (self.forming, newest) {
+                    input.leave_out_queued(open, until);
+                }
+            }
+        }
+        if let Some(open) = self.forming {
+            input.set_trade_bar(open);
+        }
+    }
+
+    /// Queued executions without repeats that only complete the order ids of drained ones.
+    fn queued(&self) -> impl Iterator<Item = &Tick> {
+        let repeats = &self.updates.repeats;
+        (self.updates.trades.iter()).filter(|t| t.id.is_none_or(|id| !repeats.contains(&id)))
+    }
+
+    /// The stream's grouping of trade-based bars, which its next execution continues.
+    pub(super) fn grouping(&self) -> TradeBars {
+        TradeBars {
+            forming: self.forming,
+            current: self.count_bar.clone(),
+            delta: self.delta,
+            closed: self.event_closed,
+            last: self.last_trade,
+        }
     }
 
     fn bound_bars(&mut self) {
@@ -873,13 +931,7 @@ impl Live {
 
     /// Folds exact thresholds before publishing any execution allocation to studies.
     fn fold_trade_bar(&mut self, tick: &Tick) -> Result<(), ()> {
-        let mut state = TradeBars {
-            forming: self.forming,
-            current: self.count_bar.clone(),
-            delta: self.delta,
-            closed: self.event_closed,
-            last: self.last_trade,
-        };
+        let mut state = self.grouping();
         let bars = state.push(self.clock.timeframe().ok_or(())?, tick, self.tick_size)?;
         self.forming = state.forming;
         self.count_bar = state.current;
