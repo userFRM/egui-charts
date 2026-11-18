@@ -89,11 +89,53 @@ impl Chart {
 
     /// Adds a study, computed at once from the bars. An [`Indicator::is_overlay`] study uses
     /// the original price pane or, after its removal, the surviving main series' pane. Other
-    /// studies start in new panes, as do overlays with neither destination. Returns the study's
-    /// id, which stays valid when other studies are removed. Host code adds past the cap; the
-    /// interface goes through
-    /// [`try_add_indicator`](Self::try_add_indicator).
+    /// studies start in new panes, as do overlays with neither destination. A study that reads
+    /// another study's output ([`StudySource::Study`]) opens in that study's pane when the source
+    /// has a pane of its own, and takes the source's scale when the two share a pane; move it
+    /// afterwards with [`move_indicator_to_pane`](Self::move_indicator_to_pane).
+    /// Returns the study's id, which stays valid when other studies are removed. Host code adds
+    /// past the cap; the interface goes through [`try_add_indicator`](Self::try_add_indicator).
     pub fn add_indicator(&mut self, indicator: Box<dyn Indicator>) -> SeriesId {
+        let id = self.insert_indicator(indicator);
+        self.place_on_source(id);
+        id
+    }
+
+    /// Puts a study reading another study into its source's pane when the source has its own,
+    /// and on its source's scale when both share a pane. Prices and missing sources keep their place.
+    pub(super) fn place_on_source(&mut self, id: SeriesId) {
+        let Some(StudySource::Study { id: source, .. }) = self
+            .indicators()
+            .find(|(study, _)| *study == id)
+            .and_then(|(_, study)| study.source())
+        else {
+            return;
+        };
+        let Some((source, overlay, scale)) = self
+            .indicators()
+            .find(|(study, _)| study.0 == source)
+            .map(|(study, item)| (study, item.is_overlay(), item.scale()))
+        else {
+            return;
+        };
+        if !overlay && let Some(pane) = self.series_pane(source) {
+            self.move_series_to_pane(id, pane);
+        }
+        let own = self
+            .indicators()
+            .find(|(study, _)| *study == id)
+            .map(|(_, study)| study.scale());
+        if self.series_pane(id).is_some()
+            && self.series_pane(id) == self.series_pane(source)
+            && own != Some(scale)
+        {
+            self.set_indicator_scale(id, scale);
+        }
+    }
+
+    /// Adds a study where [`add_indicator`](Self::add_indicator) places a study reading prices,
+    /// regardless of its source. Restores use this before their saved source ids are remapped.
+    pub(super) fn insert_indicator(&mut self, indicator: Box<dyn Indicator>) -> SeriesId {
         let indicator = self.prepare_indicator(indicator);
         let id = SeriesId(self.next_series);
         self.next_series += 1;
@@ -908,6 +950,64 @@ mod tests {
         settle(&mut chart);
         assert!((output(&chart, 3).unwrap() - 125.0 / 3.0).abs() < 1e-8);
     }
+    /// A study of another study shares its pane and scale without changing the price range.
+    #[test]
+    fn studies_on_study_output_open_with_their_source() {
+        use crate::studies::{ConfiguredStudy, Volume};
+        use crate::widget::test_frames;
+
+        type Make = fn() -> Box<dyn Indicator>;
+        type Row = (Make, Make, bool);
+        let rows: [Row; 4] = [
+            (|| Box::new(RSI::new(14)), || Box::new(SMA::new(9)), true),
+            (|| Box::new(SMA::new(2)), || Box::new(SMA::new(9)), true),
+            (
+                || Box::new(Volume::default()),
+                || Box::new(SMA::new(9)),
+                true,
+            ),
+            (|| Box::new(SMA::new(2)), || Box::new(RSI::new(14)), false),
+        ];
+        for (parent, child, shared) in rows {
+            let ctx = egui::Context::default();
+            let mut chart = test_frames::chart(&[1000.0, 1040.0], &[1060.0, 1100.0]);
+            chart.config_mut().show_volume = false;
+            let parent = chart.add_indicator(parent());
+            shapes(&ctx, &mut chart, 0.0, vec![]);
+            let range = chart.state.price_scale().range();
+            let panes = chart.panes().len();
+            let mut child = ConfiguredStudy::new(child());
+            child
+                .set_input(
+                    "source",
+                    InputValue::Source(StudySource::Study {
+                        id: parent.0,
+                        plot: 0,
+                    }),
+                )
+                .unwrap();
+            let child = chart.add_indicator(Box::new(child));
+            shapes(&ctx, &mut chart, 0.1, vec![]);
+            assert_eq!(chart.state.price_scale().range(), range);
+            assert_eq!(
+                chart.series_pane(child) == chart.series_pane(parent),
+                shared
+            );
+            assert_eq!(chart.panes().len(), panes + usize::from(!shared));
+            if shared {
+                let scale = |id| {
+                    chart
+                        .indicators()
+                        .find(|(study, _)| *study == id)
+                        .unwrap()
+                        .1
+                        .scale()
+                };
+                assert_eq!(scale(child), scale(parent));
+            }
+        }
+    }
+
     /// A flat bar at `close`, stamped `seconds` after 10:00.
     fn bar(seconds: i64, close: f64) -> Bar {
         let t =

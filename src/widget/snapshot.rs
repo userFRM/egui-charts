@@ -570,7 +570,7 @@ impl Chart {
             self.move_series_to_pane(super::SeriesId::MAIN, panes[&at]);
         }
         for (saved, study) in snapshot.studies.iter().zip(studies) {
-            let id = self.add_indicator(study);
+            let id = self.insert_indicator(study);
             self.set_indicator_inputs(id, saved.caption.clone());
             self.set_indicator_autoscale(id, saved.autoscale);
             self.restored_studies.insert(saved.id, id.0);

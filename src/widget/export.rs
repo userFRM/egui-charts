@@ -766,7 +766,7 @@ impl Chart {
         chart.apply_visible_bars_once = self.apply_visible_bars_once;
         chart.start_idx = self.start_idx;
         for (_, study) in self.indicators() {
-            chart.add_indicator(study.clone_for_export());
+            chart.insert_indicator(study.clone_for_export());
         }
         chart.study_ids = self.study_ids.clone();
         chart.study_inputs = self.study_inputs.clone();
@@ -1111,6 +1111,44 @@ mod tests {
         };
         assert!(value(&chart).is_some());
         assert_eq!(value(&snapshot), value(&chart));
+    }
+
+    /// Copies retain a linked study's explicit price-pane placement and main scale.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn copies_keep_a_linked_study_where_the_user_put_it() {
+        use crate::studies::{InputValue, MACD, RSI, SMA, StudyScale, StudySource};
+        use crate::widget::{PaneId, test_frames};
+
+        let mut chart = test_frames::chart(&[95.0], &[105.0]);
+        chart.add_indicator(Box::new(RSI::new(14)));
+        let macd = chart.add_indicator(Box::new(MACD::new(12, 26, 9)));
+        let sma = chart.add_indicator(Box::new(SMA::new(9)));
+        chart
+            .indicator_mut(sma)
+            .unwrap()
+            .set_input(
+                "source",
+                InputValue::Source(StudySource::Study {
+                    id: macd.0,
+                    plot: 0,
+                }),
+            )
+            .unwrap();
+        assert!(chart.move_indicator_to_pane(sma, SeriesId::MAIN));
+        assert!(chart.set_indicator_scale(sma, StudyScale::Main));
+        let mut restored = test_frames::chart(&[95.0], &[105.0]);
+        restored.restore(&chart.snapshot().unwrap()).unwrap();
+        let restored_id = restored.restored_series_id(sma.0).unwrap();
+        for (copy, id) in [
+            (chart.frozen_export_snapshot(), sma),
+            (restored, restored_id),
+        ] {
+            let study = copy.indicators().find(|(study, _)| *study == id).unwrap().1;
+            assert!(study.is_overlay());
+            assert_eq!(study.scale(), StudyScale::Main);
+            assert_eq!(copy.series_pane(id), Some(PaneId::MAIN));
+        }
     }
 
     #[test]
