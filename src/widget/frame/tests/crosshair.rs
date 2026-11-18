@@ -2593,7 +2593,7 @@ fn study_titles_reach_the_translator_apart_from_plot_names() {
 }
 
 /// Hovering a study's mark or boundary shows the full name of every pattern it labels, and
-/// hovering where none is shows no name.
+/// hovering where none is shows no name. Names of studies marking the same spot stack.
 #[cfg(all(feature = "studies", feature = "drawings"))]
 #[test]
 fn pattern_marks_and_boundaries_name_their_patterns_on_hover() {
@@ -2603,13 +2603,14 @@ fn pattern_marks_and_boundaries_name_their_patterns_on_hover() {
     };
     use chrono::{TimeZone, Utc};
 
-    /// The texts painted on the third frame with the pointer over `price` at `bar`.
+    /// The texts painted on the third frame with the pointer over `price` at `bar`, with their
+    /// screen bounds.
     fn hovered(
         ohlc: &[(f64, f64, f64, f64)],
-        study: Box<dyn Indicator>,
+        studies: Vec<Box<dyn Indicator>>,
         bar: usize,
         price: f64,
-    ) -> Vec<String> {
+    ) -> Vec<(String, egui::Rect)> {
         let bars = ohlc
             .iter()
             .enumerate()
@@ -2624,7 +2625,9 @@ fn pattern_marks_and_boundaries_name_their_patterns_on_hover() {
         let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
         chart.config.show_volume = false;
         chart.chart_options.tooltip.enabled = false;
-        chart.add_indicator(study);
+        for study in studies {
+            chart.add_indicator(study);
+        }
         frame(&ctx, &mut chart, 0.0, vec![Event::PointerGone]);
         let map = chart.get_chart_mapping();
         let pos = Pos2::new(map.idx_to_x(bar), map.price_to_y(price));
@@ -2641,7 +2644,10 @@ fn pattern_marks_and_boundaries_name_their_patterns_on_hover() {
         painted
             .iter()
             .filter_map(|shape| match shape {
-                Shape::Text(text) => Some(text.galley.text().to_owned()),
+                Shape::Text(text) => Some((
+                    text.galley.text().to_owned(),
+                    text.galley.rect.translate(text.pos.to_vec2()),
+                )),
                 _ => None,
             })
             .collect()
@@ -2673,7 +2679,10 @@ fn pattern_marks_and_boundaries_name_their_patterns_on_hover() {
     ];
     for (bar, price, names) in rows {
         let study = CandlestickPatterns::new(PatternTrend::NoDetection);
-        let texts = hovered(&candles, Box::new(study), bar, price);
+        let texts: Vec<String> = hovered(&candles, vec![Box::new(study)], bar, price)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
         // Each pattern is its name over a line with its rule, a blank line apart.
         let named = |t: &String| {
             let entries: Vec<Vec<&str>> = t.split("\n\n").map(|e| e.lines().collect()).collect();
@@ -2697,20 +2706,32 @@ fn pattern_marks_and_boundaries_name_their_patterns_on_hover() {
     }
 
     // Legs of five flat bars through 100, 120, 105, 119, 60: a double top over the valley at 105
-    // on bar 10, confirmed bearish on bar 18, whose neckline runs from bar 10 to bar 18.
+    // on bar 10, confirmed bearish on bar 18, whose neckline runs from bar 10 to bar 18. Bar 18
+    // is a gravestone doji, so a candlestick mark shares its high with the formation's mark.
     let anchors = [100.0, 120.0, 105.0, 119.0, 60.0];
     let closes: Vec<f64> = anchors
         .windows(2)
         .flat_map(|leg| (0..5).map(move |k| leg[0] + (leg[1] - leg[0]) * k as f64 / 5.0))
         .chain([60.0])
         .collect();
-    let flat: Vec<_> = closes.iter().map(|&c| (c, c, c, c)).collect();
-    for (bar, price) in [(18, 83.6), (14, 105.0)] {
-        let study = ChartPatterns::new(PatternFamily::Reversal);
-        let texts = hovered(&flat, Box::new(study), bar, price);
-        assert!(
-            texts.iter().any(|t| t == "Double Top"),
-            "{bar} {price}: {texts:?}"
-        );
+    let mut flat: Vec<_> = closes.iter().map(|&c| (c, c, c, c)).collect();
+    flat[18].1 = 90.0;
+    for (bar, price) in [(18, 90.0), (14, 105.0)] {
+        let studies: Vec<Box<dyn Indicator>> = vec![
+            Box::new(ChartPatterns::new(PatternFamily::Reversal)),
+            Box::new(CandlestickPatterns::new(PatternTrend::NoDetection)),
+        ];
+        let texts = hovered(&flat, studies, bar, price);
+        let formation = texts.iter().find(|(t, _)| t == "Double Top");
+        assert!(formation.is_some(), "{bar} {price}: {texts:?}");
+        if bar == 18 {
+            let candle = texts
+                .iter()
+                .find(|(t, _)| t.starts_with("Gravestone Doji - Bearish\n"));
+            assert!(
+                candle.is_some_and(|(_, at)| !at.intersects(formation.unwrap().1)),
+                "{texts:?}"
+            );
+        }
     }
 }

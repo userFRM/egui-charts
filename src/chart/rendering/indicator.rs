@@ -761,13 +761,11 @@ impl IndicatorRenderer {
                         egui::Tooltip::always_open(
                             ctx.clone(),
                             context.painter.layer_id(),
+                            // One id per pane, so the tooltips of several studies stack.
                             egui::Id::unique((
                                 "study-mark",
                                 context.rect.min.x.to_bits(),
                                 context.rect.min.y.to_bits(),
-                                indicator.name(),
-                                line_idx,
-                                i,
                             )),
                             target,
                         )

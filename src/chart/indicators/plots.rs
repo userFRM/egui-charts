@@ -377,27 +377,21 @@ pub(crate) fn paint_drawings(
     // Pattern boundaries share ids, so hit-test each drawing on its own, topmost first.
     if let Some(pos) = ctx.pointer_hover_pos().filter(|&pos| {
         context.rect.contains(pos) && ctx.layer_id_at(pos) == Some(context.painter.layer_id())
-    }) && let Some((index, label)) =
-        drawings
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(index, drawing)| {
-                let label = drawing.label.as_deref()?;
-                crate::drawings::services::DrawingInteraction::new()
-                    .hit_test(pos, std::slice::from_ref(drawing), "")
-                    .map(|_| (index, label))
-            })
-    {
+    }) && let Some(label) = drawings.iter().rev().find_map(|drawing| {
+        let label = drawing.label.as_deref()?;
+        crate::drawings::services::DrawingInteraction::new()
+            .hit_test(pos, std::slice::from_ref(drawing), "")
+            .map(|_| label)
+    }) {
+        // One id per pane, shared with the marks, so egui stacks the tooltips of every study
+        // under the pointer instead of painting them over each other.
         egui::Tooltip::always_open(
             ctx.clone(),
             context.painter.layer_id(),
             egui::Id::unique((
-                "study-drawing",
+                "study-mark",
                 context.rect.min.x.to_bits(),
                 context.rect.min.y.to_bits(),
-                study.name(),
-                index,
             )),
             egui::Rect::from_center_size(pos, egui::Vec2::splat(10.0)),
         )
