@@ -579,7 +579,7 @@ Studies,Indicators,Accumulative Swing Index,unverified,library,src/studies/built
 Studies,Indicators,Advance/Decline,incomplete,library,src/studies/builtin/advance_decline_ratio_bars.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/widget/studies.rs,3252
 Studies,Indicators,Advance/Decline Line,verified,host,src/studies/builtin/market_breadth.rs;src/widget/studies_data.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Advance/Decline Ratio,verified,host,src/studies/builtin/market_breadth.rs;src/widget/studies_data.rs;src/studies/factory/mod.rs,
-Studies,Indicators,Advance/Decline Ratio bars,incomplete,library,src/studies/builtin/advance_decline_ratio_bars.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,3252
+Studies,Indicators,Advance/Decline Ratio bars,unverified,library,src/studies/builtin/advance_decline_ratio_bars.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/studies/settings.rs,3252
 Studies,Indicators,All Candlestick Patterns,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/chart/rendering/indicator.rs,177;3172
 Studies,Indicators,All Chart Patterns,incomplete,library,;src/studies/builtin/chart_patterns.rs,1084;1085;3173
 Studies,Indicators,Analyst price forecast,incomplete,host,src/data/mod.rs;src/data/targets.rs;src/widget/targets.rs;src/widget/frame/mod.rs;src/ui/dialogs/chart_settings/mod.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs;src/widget/feed/mod.rs;src/widget/replay.rs,2981;3047;3048;3167
