@@ -5,6 +5,7 @@ use super::{DemoApp, LiveFeed};
 use crate::sampledata::DemoSymbol;
 use egui_charts::model::Timeframe;
 use egui_charts::services::UserSettings;
+use egui_charts::studies::IndicatorFactory;
 use egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction;
 use egui_charts::ui::widget_bar::panels::object_tree::ObjectTreeAction;
 use egui_charts::widget::{Chart, ChartLayout, ChartLayoutMode, SavedLayout, SeriesId};
@@ -595,17 +596,21 @@ impl DemoApp {
             Some(self.layout_tabs[self.layout_tab].name.clone());
     }
 
-    /// The chart in `slot` of the open layout, counted from the first.
-    fn chart_in_slot(&mut self, slot: usize) -> Option<&mut Chart> {
+    /// The chart in `slot` of the open layout, counted from the first, with the factory that
+    /// rebuilds the studies the demo offers.
+    fn chart_in_slot(&mut self, slot: usize) -> Option<(&mut Chart, &IndicatorFactory)> {
+        let factory = self.indicator_dialog.factory();
         if slot == self.layout_slot {
-            return Some(&mut self.chart);
+            return Some((&mut self.chart, factory));
         }
         let index = if slot < self.layout_slot {
             slot
         } else {
             slot - 1
         };
-        self.extra_charts.get_mut(index).map(|c| &mut c.chart)
+        self.extra_charts
+            .get_mut(index)
+            .map(|c| (&mut c.chart, factory))
     }
 
     /// Gives the object tree the layout's drawings by symbol, while it lists them.
@@ -649,7 +654,10 @@ impl DemoApp {
             mode.chart_count().min(self.extra_charts.len() + 1)
         };
         let charts = (0..count)
-            .filter_map(|slot| self.chart_in_slot(slot).map(|chart| chart.snapshot()))
+            .filter_map(|slot| {
+                self.chart_in_slot(slot)
+                    .map(|(chart, factory)| chart.snapshot_with(factory))
+            })
             .collect::<Result<_, _>>()
             .map_err(|error| format!("Could not save the layout: {error}"))?;
         // The demo keeps the chart sizes in the layout's groups document.
@@ -758,7 +766,7 @@ impl DemoApp {
                 super::marks::remove_samples(snapshot);
             }
             let mut check = Chart::new(egui_charts::model::BarData::new());
-            if let Err(error) = check.restore(snapshot) {
+            if let Err(error) = check.restore_with(snapshot, self.indicator_dialog.factory()) {
                 self.toasts.error(format!("Could not open layout: {error}"));
                 return false;
             }
@@ -795,7 +803,7 @@ impl DemoApp {
             snapshot.series = None;
             let restored = self
                 .chart_in_slot(slot)
-                .map(|chart| chart.restore(&snapshot));
+                .map(|(chart, factory)| chart.restore_with(&snapshot, factory));
             match restored {
                 Some(Err(error)) => self
                     .toasts

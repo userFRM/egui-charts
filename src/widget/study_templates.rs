@@ -156,10 +156,19 @@ impl Chart {
         &mut self,
         set: &StudyTemplateSet,
     ) -> Result<Vec<SeriesId>, String> {
-        self.user_action(|chart| {
-            chart.place_study_template_set(set, &IndicatorFactory::new(), Keep::ReadOnly)
-        })
-        .map(|ids| ids.into_iter().flatten().collect())
+        self.apply_chosen_study_template_set_with(set, &IndicatorFactory::new())
+    }
+
+    /// Applies `set` as a user's choice through `factory`, which resolves built-in and
+    /// host-registered studies, with the same permissions, study cap and undo behaviour as
+    /// [`apply_chosen_study_template_set`](Self::apply_chosen_study_template_set).
+    pub fn apply_chosen_study_template_set_with(
+        &mut self,
+        set: &StudyTemplateSet,
+        factory: &IndicatorFactory,
+    ) -> Result<Vec<SeriesId>, String> {
+        self.user_action(|chart| chart.place_study_template_set(set, factory, Keep::ReadOnly))
+            .map(|ids| ids.into_iter().flatten().collect())
     }
 
     /// Adds the studies of `set` that `keep` adds in place of the chart's own, but for those

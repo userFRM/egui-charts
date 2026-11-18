@@ -1,7 +1,9 @@
 //! A local sample document and a deliberately small host expression evaluator.
 
 use super::DemoApp;
-use egui_charts::studies::{CustomIndicator, IndicatorValue, InputKind, InputValue, StudyInput};
+use egui_charts::studies::{
+    CustomIndicator, IndicatorFactory, IndicatorValue, InputKind, InputValue, StudyInput,
+};
 use egui_charts::ui::study_editor::{Diagnostic, Severity, StudyEditor, StudyEditorAction};
 
 const TITLE: &str = "Sample close difference";
@@ -55,6 +57,15 @@ fn compile(source: &str, color: egui::Color32) -> Result<CustomIndicator, String
             },
         )
         .map_err(|error| error.to_string())
+}
+
+/// The demo catalogue, including the sample study so saved charts can rebuild it from startup.
+pub(super) fn study_factory(color: egui::Color32) -> IndicatorFactory {
+    let mut factory = IndicatorFactory::new();
+    factory.register_in(IndicatorFactory::PERSONAL, TITLE, move || {
+        Box::new(compile(SOURCE, color).expect("the built-in sample compiles"))
+    });
+    factory
 }
 
 fn difference(bars: &[egui_charts::model::Bar], lookback: usize) -> Vec<IndicatorValue> {
@@ -396,5 +407,19 @@ mod tests {
                 .iter()
                 .any(|(text, _)| text == "close - close[2]")
         );
+
+        // The workspace kept the applied study with its input, and the study copies and applies.
+        let restored_study = |app: &DemoApp| {
+            app.chart
+                .indicators()
+                .filter(|(_, study)| study.name() == "Sample close difference")
+                .map(|(_, study)| study.inputs()[0].value.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(restored_study(&restored), [InputValue::Length(1)]);
+        restored.paste_drawing_text(&app.chart.copy_indicator(id).unwrap());
+        assert_eq!(restored_study(&restored).len(), 2);
+        restored.load_study_template(&app.chart.study_template_set());
+        assert_eq!(restored_study(&restored), [InputValue::Length(1)]);
     }
 }
