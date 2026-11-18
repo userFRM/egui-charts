@@ -42,7 +42,7 @@ pub(crate) fn draw_cached_dashed_segments(
     dash_len: f32,
     gap_len: f32,
 ) {
-    draw_dashed_segments_inner(painter, segments, stroke, dash_len, gap_len, true, false);
+    draw_dashed_segments_inner(painter, segments, stroke, dash_len, gap_len, true);
 }
 
 /// Draw a polyline with a continuous dash phase, clipping each segment before walking dashes.
@@ -180,20 +180,7 @@ pub(crate) fn draw_dashed_segments(
     dash_len: f32,
     gap_len: f32,
 ) {
-    draw_dashed_segments_inner(painter, segments, stroke, dash_len, gap_len, false, false);
-}
-
-/// Like [`draw_dashed_segments`], for the long lines of a grid. Their dots are clipped to the
-/// lines' snapped extent across, which shows the same pixels, so tessellation gives the dots a
-/// mesh of their own instead of growing, and copying, the mesh of the shapes painted around them.
-pub(crate) fn draw_grid_dashes(
-    painter: &egui::Painter,
-    segments: impl IntoIterator<Item = (Pos2, Pos2, f64), IntoIter: Clone>,
-    stroke: Stroke,
-    dash_len: f32,
-    gap_len: f32,
-) {
-    draw_dashed_segments_inner(painter, segments, stroke, dash_len, gap_len, false, true);
+    draw_dashed_segments_inner(painter, segments, stroke, dash_len, gap_len, false);
 }
 
 fn draw_dashed_segments_inner(
@@ -203,19 +190,10 @@ fn draw_dashed_segments_inner(
     dash_len: f32,
     gap_len: f32,
     cache_lines: bool,
-    own_clip: bool,
 ) {
     if !painter.is_visible() || stroke.is_empty() {
         return;
     }
-    let paint = |mesh, extent| {
-        let mesh = egui::Shape::Mesh(mesh);
-        if own_clip {
-            painter.with_clip_rect(extent).add(mesh);
-        } else {
-            painter.add(mesh);
-        }
-    };
     let segments = segments.into_iter();
     let mut dots = Mesh::default();
     let mut key = None;
@@ -257,8 +235,8 @@ fn draw_dashed_segments_inner(
                 tessellation,
             })
         });
-        if let Some((mesh, extent)) = key.as_ref().and_then(|key| cached_dashes(painter, key)) {
-            paint(mesh, extent);
+        if let Some(mesh) = key.as_ref().and_then(|key| cached_dashes(painter, key)) {
+            painter.add(egui::Shape::Mesh(mesh));
             return;
         }
         let clip = clip.expand(stroke.width * 0.5);
@@ -290,7 +268,6 @@ fn draw_dashed_segments_inner(
             egui::epaint::Tessellator::new(painter.pixels_per_point(), options, [1, 1], Vec::new())
         });
     let mut spans = DotSpans::default();
-    let mut extent = Rect::NOTHING;
     for (start, end, phase) in segments {
         if let Some(tessellator) = &mut tessellator {
             let clip = finite_clip(painter).unwrap().expand(stroke.width * 0.5);
@@ -298,18 +275,18 @@ fn draw_dashed_segments_inner(
                 tessellator.tessellate_line_segment([a, b], stroke, &mut dots);
             });
         } else {
-            extent = extent.union(append_dashed_segment(
+            append_dashed_segment(
                 painter, &mut dots, &mut spans, start, end, stroke, dash_len, gap_len, phase,
-            ));
+            );
         }
     }
     if !dots.is_empty() {
         let mesh = Arc::new(dots);
         if let Some(key) = key {
             let pass = painter.ctx().cumulative_pass_nr();
-            DASHES.with_borrow_mut(|cache| cache.push((pass, key, mesh.clone(), extent)));
+            DASHES.with_borrow_mut(|cache| cache.push((pass, key, mesh.clone())));
         }
-        paint(mesh, extent);
+        painter.add(egui::Shape::Mesh(mesh));
     }
 }
 
@@ -327,24 +304,19 @@ struct DashesKey {
     tessellation: Option<egui::epaint::TessellationOptions>,
 }
 
-/// A kept mesh: the pass that last painted it, what it was laid out from, and the extent of its
-/// dots that [`draw_grid_dashes`] clips them to.
-type KeptDashes = (u64, DashesKey, Arc<Mesh>, Rect);
-
 thread_local! {
     /// Keep only this pass and the previous one, so moving guides do not accumulate meshes.
-    static DASHES: RefCell<Vec<KeptDashes>> = const { RefCell::new(Vec::new()) };
+    static DASHES: RefCell<Vec<(u64, DashesKey, Arc<Mesh>)>> = const { RefCell::new(Vec::new()) };
 }
 
-/// The mesh built from `key` in this pass or the last, and its dots' extent, kept for the next
-/// pass.
-fn cached_dashes(painter: &egui::Painter, key: &DashesKey) -> Option<(Arc<Mesh>, Rect)> {
+/// The mesh built from `key` in this pass or the last, kept for the next pass.
+fn cached_dashes(painter: &egui::Painter, key: &DashesKey) -> Option<Arc<Mesh>> {
     let pass = painter.ctx().cumulative_pass_nr();
     DASHES.with_borrow_mut(|cache| {
-        cache.retain(|(used, ..)| used.saturating_add(1) >= pass);
-        let (used, _, mesh, extent) = cache.iter_mut().find(|(_, cached, ..)| cached == key)?;
+        cache.retain(|(used, _, _)| used.saturating_add(1) >= pass);
+        let (used, _, mesh) = cache.iter_mut().find(|(_, cached, _)| cached == key)?;
         *used = pass;
-        Some((mesh.clone(), *extent))
+        Some(mesh.clone())
     })
 }
 
@@ -357,8 +329,6 @@ struct DotSpans {
     spans: Vec<(f32, f32)>,
 }
 
-/// Adds the dots of an axis-aligned dotted segment to `dots` and returns their extent across
-/// the line, unbounded along it, or paints the dashes of any other segment as line segments.
 fn append_dashed_segment(
     painter: &egui::Painter,
     dots: &mut Mesh,
@@ -369,11 +339,11 @@ fn append_dashed_segment(
     dash_len: f32,
     gap_len: f32,
     phase: f64,
-) -> Rect {
-    let Some(visible) = finite_clip(painter) else {
-        return Rect::NOTHING;
+) {
+    let Some(clip) = finite_clip(painter) else {
+        return;
     };
-    let clip = visible.expand(stroke.width * 0.5);
+    let clip = clip.expand(stroke.width * 0.5);
     if dash_len != 1.0 || !stroke.width.is_finite() || (start.x != end.x && start.y != end.y) {
         // One paint list lock for all dashes, not one per dash.
         let mut dashes = Vec::new();
@@ -381,7 +351,7 @@ fn append_dashed_segment(
             dashes.push(egui::Shape::line_segment([a, b], stroke));
         });
         painter.extend(dashes);
-        return Rect::NOTHING;
+        return;
     }
     // A mesh keeps one-point dots visible; short segments can round to zero length. Callers
     // reserve the mesh for the clipped spans, so adding dots never copies growing buffers.
@@ -393,31 +363,9 @@ fn append_dashed_segment(
     };
     // Where along the axis the dots fall does not depend on where across the clip the line is.
     if !across_clip.contains(across) {
-        return Rect::NOTHING;
+        return;
     }
     let pixels_per_point = painter.pixels_per_point();
-    // A quad thinner than a device pixel can miss every pixel centre, so it fills one pixel at the
-    // opacity egui gives a line that thin.
-    let device_width = stroke.width * pixels_per_point;
-    let (width, color) = if device_width < 1.0 {
-        (
-            pixels_per_point.recip(),
-            stroke.color.gamma_multiply(device_width),
-        )
-    } else {
-        (stroke.width, stroke.color)
-    };
-    let edge = ((across - width * 0.5) * pixels_per_point).round() / pixels_per_point;
-    // Dots wholly outside the clip paint nothing. Dots starting on its far edge can show, where a
-    // moved layer puts that edge on a pixel centre and renderers round the clip out to take it in.
-    let shown = if vertical {
-        visible.x_range()
-    } else {
-        visible.y_range()
-    };
-    if edge > shown.max || edge + width <= shown.min {
-        return Rect::NOTHING;
-    }
     let key = if vertical {
         (true, start.y, end.y, phase)
     } else {
@@ -435,6 +383,18 @@ fn append_dashed_segment(
             ));
         });
     }
+    // A quad thinner than a device pixel can miss every pixel centre, so it fills one pixel at the
+    // opacity egui gives a line that thin.
+    let device_width = stroke.width * pixels_per_point;
+    let (width, color) = if device_width < 1.0 {
+        (
+            pixels_per_point.recip(),
+            stroke.color.gamma_multiply(device_width),
+        )
+    } else {
+        (stroke.width, stroke.color)
+    };
+    let edge = ((across - width * 0.5) * pixels_per_point).round() / pixels_per_point;
     for &(min, len) in &spans.spans {
         let len = if pixels_per_point < 1.0 {
             len.max(pixels_per_point.recip())
@@ -447,14 +407,6 @@ fn append_dashed_segment(
             Rect::from_min_size(Pos2::new(min, edge), egui::vec2(len, width))
         };
         dots.add_colored_rect(rect, color);
-    }
-    // Half a pixel either side, so rounding a clip to whole pixels never cuts a dot.
-    let margin = 0.5 / pixels_per_point;
-    let extent = egui::Rangef::new(edge - margin, edge + width + margin);
-    if vertical {
-        Rect::from_x_y_ranges(extent, egui::Rangef::EVERYTHING)
-    } else {
-        Rect::from_x_y_ranges(egui::Rangef::EVERYTHING, extent)
     }
 }
 
@@ -732,207 +684,6 @@ mod tests {
                     assert_eq!(batched.indices, individual.indices);
                 }
             }
-        }
-    }
-
-    /// A grid's dotted lines paint their kept mesh, under its kept clip, again while nothing they
-    /// were laid out from changes, and are laid out again, mesh and clip, after a change of the
-    /// clip, of any line's position, of the pixels per point, of the colour or of the dot pattern.
-    #[test]
-    fn kept_dots_follow_clip_lines_scale_colour_and_pattern() {
-        let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 100.0));
-        // Quarter-point positions, which one and two pixels per point snap differently, on
-        // parallel lines, so that the dots' clip follows each of them.
-        let lines = [
-            [Pos2::new(0.25, 10.75), Pos2::new(200.0, 10.75)],
-            [Pos2::new(0.25, 30.75), Pos2::new(200.0, 30.75)],
-        ];
-        let moved = |line: usize| {
-            let mut moved = lines;
-            moved[line] = moved[line].map(|point| point + egui::vec2(20.0, 20.0));
-            moved
-        };
-        // (clip, lines, pixels per point, colour, gap between dots) of one frame.
-        type Grid = (Rect, [[Pos2; 2]; 2], f32, Color32, f32);
-        let first: Grid = (screen, lines, 1.0, Color32::RED, 3.0);
-        let paint = |ctx: &Context, (clip, lines, scale, color, gap): Grid| {
-            ctx.set_pixels_per_point(scale);
-            let output = ctx.run_ui(
-                RawInput {
-                    screen_rect: Some(screen),
-                    ..Default::default()
-                },
-                |_| {
-                    draw_grid_dashes(
-                        &Painter::new(ctx.clone(), LayerId::background(), clip),
-                        lines.map(|[start, end]| (start, end, 0.0)),
-                        Stroke::new(1.0, color),
-                        1.0,
-                        gap,
-                    );
-                },
-            );
-            let dots = output
-                .shapes
-                .iter()
-                .find_map(|shape| match &shape.shape {
-                    egui::Shape::Mesh(mesh) => Some((mesh.clone(), shape.clip_rect)),
-                    _ => None,
-                })
-                .expect("the dots are a mesh");
-            output.drop_without_applying_deltas();
-            dots
-        };
-        for (change, next) in [
-            ("nothing", first),
-            (
-                "the clip",
-                (screen.shrink(20.0), lines, 1.0, Color32::RED, 3.0),
-            ),
-            ("the first line", (screen, moved(0), 1.0, Color32::RED, 3.0)),
-            ("another line", (screen, moved(1), 1.0, Color32::RED, 3.0)),
-            ("pixels per point", (screen, lines, 2.0, Color32::RED, 3.0)),
-            ("the colour", (screen, lines, 1.0, Color32::BLUE, 3.0)),
-            ("the pattern", (screen, lines, 1.0, Color32::RED, 7.0)),
-        ] {
-            let ctx = Context::default();
-            let (kept, _) = paint(&ctx, first);
-            let (painted, clip) = paint(&ctx, next);
-            assert_eq!(
-                Arc::ptr_eq(&kept, &painted),
-                change == "nothing",
-                "kept mesh after a change of {change}"
-            );
-            // Another thread lays the dots out without kept meshes.
-            let (fresh, fresh_clip) = std::thread::scope(|scope| {
-                scope
-                    .spawn(|| paint(&Context::default(), next))
-                    .join()
-                    .unwrap()
-            });
-            assert_eq!(
-                painted.vertices, fresh.vertices,
-                "after a change of {change}"
-            );
-            assert_eq!(painted.indices, fresh.indices, "after a change of {change}");
-            assert_eq!(clip, fresh_clip, "after a change of {change}");
-        }
-    }
-
-    /// A grid's dots, clipped to their own extent, show every device pixel they show under the
-    /// painter's clip, at any scale, in a scaled layer, and for lines on, near and inside the
-    /// clip's edges.
-    #[test]
-    fn grid_dots_keep_their_pixels_in_their_own_clip() {
-        let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 100.0));
-        let clip = Rect::from_min_max(Pos2::new(10.0, 10.25), Pos2::new(150.5, 90.75));
-        let across = [
-            9.75, 10.0, 10.25, 10.6, 40.4, 90.5, 90.75, 91.0, 150.25, 150.75,
-        ];
-        let scaled = TSTransform::new(egui::vec2(0.5, 0.5), 1.3);
-        for (scale, layer) in [
-            (1.0, TSTransform::IDENTITY),
-            (1.25, TSTransform::IDENTITY),
-            (1.5, TSTransform::IDENTITY),
-            (2.0, TSTransform::IDENTITY),
-            (1.0, scaled),
-        ] {
-            for vertical in [false, true] {
-                let ctx = Context::default();
-                ctx.set_pixels_per_point(scale);
-                let output = ctx.run_ui(
-                    RawInput {
-                        screen_rect: Some(screen),
-                        ..Default::default()
-                    },
-                    |_| {
-                        ctx.set_transform_layer(LayerId::background(), layer);
-                        let painter = Painter::new(ctx.clone(), LayerId::background(), clip);
-                        // Each line in a mesh of its own, then two lines in one mesh.
-                        let groups = across.iter().map(std::slice::from_ref);
-                        for group in groups.chain([&[40.4, 60.6][..]]) {
-                            let lines = group.iter().map(move |&at| {
-                                let (start, end) = if vertical {
-                                    (Pos2::new(at, 0.0), Pos2::new(at, 100.0))
-                                } else {
-                                    (Pos2::new(0.0, at), Pos2::new(200.0, at))
-                                };
-                                (start, end, 0.0)
-                            });
-                            let stroke = Stroke::new(1.0, Color32::RED);
-                            draw_grid_dashes(&painter, lines, stroke, 1.0, 3.0);
-                        }
-                    },
-                );
-                // The device pixels of `dot` along `axis` that a renderer shows: those whose
-                // centres the dot covers, inside the clip rounded to whole pixels.
-                let shown = |dot: Rect, clip: Rect, axis: usize| {
-                    let first = (dot.min[axis] * scale - 0.5).ceil();
-                    let last = (dot.max[axis] * scale - 0.5).ceil();
-                    let low = (clip.min[axis] * scale).round();
-                    let high = (clip.max[axis] * scale).round();
-                    (last.min(high) - first.max(low)).max(0.0)
-                };
-                // The layer's shapes reach the output moved into place, clips included.
-                let painter_clip = layer * clip;
-                let mut dots = 0;
-                for shape in &output.shapes {
-                    let egui::Shape::Mesh(mesh) = &shape.shape else {
-                        continue;
-                    };
-                    assert!(painter_clip.contains_rect(shape.clip_rect));
-                    for dot in mesh.vertices.as_chunks::<4>().0 {
-                        let dot = Rect::from_points(&dot.map(|vertex| vertex.pos));
-                        for axis in [0, 1] {
-                            assert_eq!(
-                                shown(dot, shape.clip_rect, axis),
-                                shown(dot, painter_clip, axis),
-                                "scale {scale}, layer {layer:?}, vertical {vertical}, dot {dot:?}"
-                            );
-                        }
-                        dots += 1;
-                    }
-                }
-                assert!(dots > 0);
-                output.drop_without_applying_deltas();
-            }
-        }
-    }
-
-    /// A dotted line starting on the clip's far edge shows in a layer moved by half a pixel, where
-    /// that edge falls on a pixel centre and renderers round the clip out to take it in.
-    #[test]
-    fn dots_on_the_far_clip_edge_show_in_a_moved_layer() {
-        let clip = Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(150.0, 90.0));
-        for vertical in [false, true] {
-            let ctx = Context::default();
-            let output = ctx.run_ui(RawInput::default(), |_| {
-                let layer = TSTransform::from_translation(egui::vec2(0.5, 0.5));
-                ctx.set_transform_layer(LayerId::background(), layer);
-                let line = if vertical {
-                    (Pos2::new(150.0, 10.0), Pos2::new(150.0, 90.0), 0.0)
-                } else {
-                    (Pos2::new(10.0, 90.0), Pos2::new(150.0, 90.0), 0.0)
-                };
-                let painter = Painter::new(ctx.clone(), LayerId::background(), clip);
-                draw_grid_dashes(&painter, [line], Stroke::new(1.0, Color32::RED), 1.0, 3.0);
-            });
-            // At one pixel per point, a renderer shows the pixels whose centres a dot covers,
-            // inside the clip rounded to whole pixels.
-            let axis = usize::from(!vertical);
-            let shown = output.shapes.iter().any(|shape| {
-                let egui::Shape::Mesh(mesh) = &shape.shape else {
-                    return false;
-                };
-                let low = shape.clip_rect.min[axis].round();
-                let high = shape.clip_rect.max[axis].round();
-                mesh.vertices.as_chunks::<4>().0.iter().any(|dot| {
-                    let dot = Rect::from_points(&dot.map(|vertex| vertex.pos));
-                    (dot.max[axis] - 0.5).ceil().min(high) > (dot.min[axis] - 0.5).ceil().max(low)
-                })
-            });
-            output.drop_without_applying_deltas();
-            assert!(shown, "vertical {vertical}");
         }
     }
 
