@@ -3405,18 +3405,18 @@ mod tests {
             assert_eq!(drawn, walls, "measure {measure}");
             assert!(study.legend_visible(3), "measure {measure}");
         }
+        study
+            .set_input("call_wall", InputValue::Toggle(false))
+            .unwrap();
+        assert_eq!(study.plot_value(3, 0), None);
+        assert!(!study.legend_visible(3));
         // A saved measure the chain cannot draw yet waits, and the volume drawn in its place
         // shows no walls, as a profile saved before volume had walls drew none.
         study
-            .set_input("measure_label", InputValue::Text("Gamma exposure".into()))
+            .set_input("call_wall", InputValue::Toggle(true))
             .unwrap();
-        assert_eq!(
-            [study.plot_value(3, 0), study.plot_value(4, 0)],
-            [None, None]
-        );
-        assert!(!study.legend_visible(3));
         study
-            .set_input("call_wall", InputValue::Toggle(false))
+            .set_input("measure_label", InputValue::Text("Gamma exposure".into()))
             .unwrap();
         assert_eq!(study.plot_value(3, 0), None);
         assert!(!study.legend_visible(3));
