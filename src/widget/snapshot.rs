@@ -1169,7 +1169,7 @@ mod tests {
                             InputValue::Length(1),
                             InputKind::Length(1, 10),
                         )],
-                        |bars, _| {
+                        |bars, _, _, _| {
                             bars.iter()
                                 .map(|bar| IndicatorValue::Single(bar.high - bar.low))
                                 .collect()
