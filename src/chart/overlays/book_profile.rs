@@ -79,7 +79,8 @@ impl OrderBookView {
 /// unavailable. Nothing is drawn outside the strip unless the pointer is over it: then a key
 /// identifies the measure, quantity unit and maximum across all supplied levels, including
 /// offscreen ones, after filtering, and the row under the pointer, anywhere in the 60-point strip,
-/// shows its exact price, side and measured resting size, without abbreviating quantities.
+/// shows its exact price, side and measured resting size, as the decimal its orders add up to,
+/// without abbreviating quantities.
 pub fn render_book_profile(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -193,7 +194,7 @@ pub fn render_book_profile(
         &[
             ("measure", measure.as_str()),
             ("unit", &unit),
-            ("max", &max.to_string()),
+            ("max", &quantity(max)),
         ],
     );
     // Liquidity paints before candles; keep its readout above the series in the same pane.
@@ -241,7 +242,7 @@ pub fn render_book_profile(
                     format!("{price:.*}", crate::scales::decimals(tick)),
                 ),
                 ("measure", measure),
-                ("size", size.to_string()),
+                ("size", quantity(size)),
                 ("unit", unit),
             ],
         );
@@ -251,6 +252,18 @@ pub fn render_book_profile(
         );
     }
     Ok(())
+}
+
+/// `size` as the decimal it stands for: rounded to the 15 significant digits an `f64` holds for
+/// any decimal, as `scales::decimals` reads a step, which drops the residue binary addition
+/// leaves, such as the 0.30000000000000004 of 0.1 + 0.2. Written in full, never abbreviated.
+fn quantity(size: f64) -> String {
+    format!("{size:.14e}")
+        .parse::<f64>()
+        .ok()
+        .filter(|rounded| rounded.is_finite())
+        .unwrap_or(size)
+        .to_string()
 }
 
 #[cfg(test)]
@@ -610,6 +623,83 @@ mod tests {
                     )));
                     }
                 }
+            }
+        }
+    }
+
+    /// A level's total reads as the decimal its orders add up to, without the residue of binary
+    /// addition, however many orders it holds; the key's full width likewise.
+    #[test]
+    fn readout_writes_the_decimal_total_of_the_orders() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(800.0, 600.0));
+        let map = ChartMapping::new(
+            rect,
+            10.0,
+            0,
+            0,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(99.0, 102.0),
+                0.0,
+                600.0,
+                false,
+            ),
+        );
+        let view = OrderBookView {
+            quantity_unit: Some("BTC".into()),
+            ..Default::default()
+        };
+        // In binary, 0.1 + 0.2 is 0.30000000000000004, and a hundred orders of 0.1 added one by
+        // one are 9.99999999999998.
+        for (sizes, total) in [(vec![0.1, 0.2], "0.3"), (vec![0.1; 100], "10")] {
+            let mut queue = OrderQueue::new(Some(0.25));
+            let orders = sizes
+                .iter()
+                .enumerate()
+                .map(|(id, &size)| RestingOrder::new(id as u64, OrderSide::Buy, 100.0, size))
+                .collect();
+            queue.snapshot(1, time, orders).unwrap();
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    events: vec![egui::Event::PointerMoved(pos2(
+                        790.0,
+                        map.price_to_y(100.0),
+                    ))],
+                    ..Default::default()
+                },
+                |ui| {
+                    render_book_profile(
+                        ui.painter(),
+                        &map,
+                        None,
+                        Some(&queue),
+                        0.25,
+                        &view,
+                        [Color32::GREEN, Color32::RED],
+                    )
+                    .unwrap();
+                },
+            );
+            output.textures_delta.clear();
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(t) => Some(t.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            for expected in [
+                format!("Bid · Price 100.00\nResting total: {total} BTC"),
+                format!(
+                    "Resting total (BTC)\nFull width = {total} BTC\nAll supplied levels, after filtering"
+                ),
+            ] {
+                assert!(texts.contains(&expected), "{texts:?}");
             }
         }
     }
