@@ -343,9 +343,9 @@ impl LiquidityHeatmap {
                     |offset: usize| (row as f64 * size as f64 + offset as f64) * step - half_tick;
                 let u0 = (column.slot % size) as f32 / size as f32;
                 let u1 = (column.slot % size + 1) as f32 / size as f32;
-                // A quad spaces its rows evenly, so a run is halved while the scale bends more
-                // than BEND_TOLERANCE across it: one quad a tile on a linear scale, a few on a
-                // logarithmic one, which also leaves out the rows from price zero down.
+                // A quad spaces its rows evenly, so a linear scale draws one quad a tile and a
+                // logarithmic one halves a run while the scale bends more than BEND_TOLERANCE
+                // across it, which also leaves out the rows from price zero down.
                 runs.push(0..size);
                 while let Some(run) = runs.pop() {
                     let (low, high) = (edge(run.start), edge(run.end));
@@ -361,7 +361,8 @@ impl LiquidityHeatmap {
                     if !rect.intersects(mapping.rect) {
                         continue;
                     }
-                    if run.len() > 1
+                    if log
+                        && run.len() > 1
                         && (!positive
                             || (mapping.price_to_y((low + high) * 0.5) - (y0 + y1) * 0.5).abs()
                                 > BEND_TOLERANCE)
