@@ -483,8 +483,9 @@ impl<'a> Legend<'a> {
             );
         }
         // Values follow the title directly; the controls take the space after them on hover.
+        // A first row too narrow for the flag button shows no controls.
         #[cfg(feature = "icons")]
-        if self.show_title {
+        if self.show_title && title_end - bounds.left() >= 20.0 {
             let width = if self.show_series_settings {
                 116.0
             } else {
@@ -504,6 +505,11 @@ impl<'a> Legend<'a> {
             } else {
                 layout.reserve(size)
             };
+            // The controls end with the first row: a narrower row shows the buttons that fit.
+            let controls = Rect::from_x_y_ranges(
+                controls.left()..=controls.right().min(title_end),
+                controls.y_range(),
+            );
             let row_right = if layout.pos.y > title_start.y {
                 title_end
             } else {
@@ -541,8 +547,7 @@ impl<'a> Legend<'a> {
             {
                 let flag = Rect::from_min_size(controls.min, Vec2::splat(20.0)).intersect(bounds);
                 let more =
-                    Rect::from_min_size(controls.min + Vec2::new(28.0, 0.0), Vec2::splat(20.0))
-                        .intersect(bounds);
+                    Rect::from_min_size(controls.min + Vec2::new(28.0, 0.0), Vec2::splat(20.0));
                 painter.rect_stroke(
                     title_rect.union(controls.expand2(Vec2::new(0.0, 2.0))),
                     theme.radius.sm,
@@ -568,39 +573,42 @@ impl<'a> Legend<'a> {
                     ui.ctx()
                         .data_mut(|data| data.insert_temp(id.with("flag"), !flagged));
                 }
-                let more_response = ui
-                    .interact(more, id.with("more"), Sense::click())
-                    .on_hover_text(l10n::text(ui.ctx(), "Series actions"));
-                crate::icons::icons::UI_MORE_HORIZONTAL
-                    .as_image_tinted(Vec2::splat(16.0), theme.ui.text)
-                    .paint_at(ui, more.shrink(2.0));
-                egui::Popup::menu(&more_response).show(|ui| {
-                    if ui.button(l10n::text(ui.ctx(), "Copy symbol")).clicked() {
-                        ui.ctx().copy_text(self.symbol.to_owned());
-                        ui.close();
-                    }
-                    if ui.button(l10n::text(ui.ctx(), "Copy values")).clicked() {
-                        let values = [
-                            self.bar.open,
-                            self.bar.high,
-                            self.bar.low,
-                            self.bar.close,
-                            self.bar.volume,
-                        ];
-                        ui.ctx().copy_text(l10n::format_text(
-                            ui.ctx(),
-                            "Open {0} High {1} Low {2} Close {3} Vol {4}",
-                            &[
-                                ("0", values[0].to_string()),
-                                ("1", values[1].to_string()),
-                                ("2", values[2].to_string()),
-                                ("3", values[3].to_string()),
-                                ("4", values[4].to_string()),
-                            ],
-                        ));
-                        ui.close();
-                    }
-                });
+                if more.right() <= controls.right() {
+                    let more = more.intersect(bounds);
+                    let more_response = ui
+                        .interact(more, id.with("more"), Sense::click())
+                        .on_hover_text(l10n::text(ui.ctx(), "Series actions"));
+                    crate::icons::icons::UI_MORE_HORIZONTAL
+                        .as_image_tinted(Vec2::splat(16.0), theme.ui.text)
+                        .paint_at(ui, more.shrink(2.0));
+                    egui::Popup::menu(&more_response).show(|ui| {
+                        if ui.button(l10n::text(ui.ctx(), "Copy symbol")).clicked() {
+                            ui.ctx().copy_text(self.symbol.to_owned());
+                            ui.close();
+                        }
+                        if ui.button(l10n::text(ui.ctx(), "Copy values")).clicked() {
+                            let values = [
+                                self.bar.open,
+                                self.bar.high,
+                                self.bar.low,
+                                self.bar.close,
+                                self.bar.volume,
+                            ];
+                            ui.ctx().copy_text(l10n::format_text(
+                                ui.ctx(),
+                                "Open {0} High {1} Low {2} Close {3} Vol {4}",
+                                &[
+                                    ("0", values[0].to_string()),
+                                    ("1", values[1].to_string()),
+                                    ("2", values[2].to_string()),
+                                    ("3", values[3].to_string()),
+                                    ("4", values[4].to_string()),
+                                ],
+                            ));
+                            ui.close();
+                        }
+                    });
+                }
                 // The id keeps the button's index, so a focused remove button keeps its focus
                 // when the settings button comes or goes.
                 for (slot, (index, (action, icon, label))) in [
@@ -638,8 +646,11 @@ impl<'a> Legend<'a> {
                     let rect = Rect::from_min_size(
                         controls.min + Vec2::new(56.0 + slot as f32 * 20.0, 0.0),
                         Vec2::splat(20.0),
-                    )
-                    .intersect(bounds);
+                    );
+                    if rect.right() > controls.right() {
+                        continue;
+                    }
+                    let rect = rect.intersect(bounds);
                     let label = l10n::text(ui.ctx(), label);
                     let response = ui
                         .interact(rect, id.with(("series_control", index)), Sense::click())

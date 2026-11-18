@@ -144,8 +144,10 @@ impl Chart {
     ) -> Result<(), FeedError> {
         let invalid = |message: &str| FeedError::InvalidData(message.to_owned());
         let available = page.is_available();
+        let partial = page.partial_slots().is_some();
+        let supplied = available || partial;
         let empty = page.bars.is_empty();
-        if !available && (!empty || page.continue_before.is_none() || page.end_of_history) {
+        if !supplied && (!empty || page.continue_before.is_none() || page.end_of_history) {
             return Err(invalid(
                 "unavailable footprint history must name a span and carry no bars or end-of-history claim",
             ));
@@ -153,6 +155,23 @@ impl Chart {
         if page.bars.len() > request.count {
             return Err(invalid("footprint page exceeds the requested bar count"));
         }
+        if let Some(slots) = page.partial_slots()
+            && (empty
+                || slots.is_empty()
+                || slots.len() > page.bars.len()
+                || link.clock.bar_open(page.complete_before) != page.complete_before)
+        {
+            return Err(invalid(
+                "partial footprint history requires supplied slots and an aligned cutoff",
+            ));
+        }
+        // Marked slots must be sealed; an unmarked boundary bar can still seed live trades.
+        let partial_end = (partial && request.before.is_none()).then(|| {
+            request
+                .clock
+                .instant_open(page.complete_before)
+                .min(page.complete_before)
+        });
         // The bar of the last execution the page can hold: on a daily or longer clock with a
         // session a bar opening after the cutoff can hold executions before it.
         let last = (page
@@ -163,6 +182,9 @@ impl Chart {
             request.before.is_some_and(|before| bar.time >= before)
                 || request.since.is_some_and(|since| bar.time < since)
                 || last.is_none_or(|last| bar.time > last)
+        }) || partial_end.is_some_and(|end| {
+            page.partial_slots()
+                .is_some_and(|slots| slots.iter().any(|&slot| slot >= end))
         }) {
             return Err(invalid(
                 "footprint page lies outside its requested range or execution cutoff",
@@ -215,21 +237,24 @@ impl Chart {
                 .iter()
                 .any(|(input, _)| input.is_footprint());
         let mut incoming = FootprintState::from_page(request, page.bars, retain)?;
+        if let Some(slots) = page.partial_slots {
+            incoming.mark_partial(slots)?;
+        }
         if prepared.is_some() {
             let held = link.footprint.as_mut().unwrap();
-            if available {
+            if supplied {
                 held.insert_prepared(incoming, from, before)?;
             }
-            held.record_prepared_span(from, before, available);
+            held.record_prepared_span(from, before, supplied);
         } else {
             incoming.prepare_history(before, &link.trades, link.trades_from_start);
-            incoming.record_prepared_span(from, before, available);
+            incoming.record_prepared_span(from, before, supplied);
             incoming.live.rebuild_prepared(&link.trades);
             link.footprint = Some(incoming);
         }
         // Requests name bars, and the initial page's cutoff lies in the bar the trades continue.
         let end = prepared.map_or_else(|| link.clock.instant_open(before), |_| before);
-        if !available && from < end {
+        if !supplied && from < end {
             link.suppress_footprint_span(from, end);
         }
         let held = link.footprint.as_ref().unwrap();
@@ -241,7 +266,7 @@ impl Chart {
                     &self.state.data().bars,
                     held,
                     from..before,
-                    available,
+                    supplied,
                 )?;
             }
         }

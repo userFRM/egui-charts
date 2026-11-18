@@ -493,6 +493,34 @@ impl StudyTemplate {
                     fill.visible = false;
                 }
             }
+            // The unused navy plot colour in older saves still drew rising columns green.
+            "Accelerator Oscillator"
+                if self.settings.plot_variants.iter().all(Vec::is_empty)
+                    && self.settings.plots.first().map(|plot| plot.color)
+                        == Some(egui::Color32::from_rgb(0, 0, 128)) =>
+            {
+                template.settings.plots[0].color = crate::studies::AcceleratorOscillator::new()
+                    .plot_style(0)
+                    .color;
+            }
+            // Before state colours were editable every impulse used the saved plot's style.
+            "Impulse"
+                if self.settings.plot_variants.iter().all(Vec::is_empty)
+                    && !self.settings.plots.is_empty() =>
+            {
+                let plot = self.settings.plots[0];
+                template.settings.plot_variants = vec![
+                    crate::studies::ElderImpulseSystem::default()
+                        .plot_variants(0)
+                        .into_iter()
+                        .map(|mut variant| {
+                            variant.color = plot.color;
+                            variant.width = plot.width;
+                            variant
+                        })
+                        .collect(),
+                ];
+            }
             // An options profile kept one Sides choice for every measure, coloured its bars with
             // its first two line colours and showed its readouts with their lines unticked in the
             // style tab, before each measure kept its own choice, the bars took colours of their
@@ -1067,9 +1095,102 @@ mod tests {
     /// Majority Rule saved before its guide at 50, restore without them. So do an SMI, a
     /// Stochastic RSI and a Connors RSI saved before their guides, a Stochastic saved before its
     /// guides had styles, a Donchian channel saved before its band and a band saved with its
-    /// boundary plots hidden before it could be drawn without them.
+    /// boundary plots hidden before it could be drawn without them. Older per-bar studies keep
+    /// the colours and widths they drew before every state had its own style control. Renamed
+    /// input labels retain the ids, values and styles of the saved studies.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
+        // Chart saves made before the input labels changed keep every saved id, value and
+        // style while the editor describes the three study-local controls distinctly.
+        for (saved, id, label) in [
+            (
+                r#"{"name":"LSMA","inputs":[["period",{"Length":25}],["offset",{"Integer":0}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.LSMA.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                "offset",
+                "Regression offset",
+            ),
+            (
+                r#"{"name":"ALMA","inputs":[["period",{"Length":9}],["offset",{"Number":0.85}],["sigma",{"Number":6.0}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ALMA.html","plots":[{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[2,9,15,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                "offset",
+                "Weight offset",
+            ),
+            (
+                r#"{"name":"Higher Interval Candles","inputs":[["auto_interval",{"Toggle":true}],["interval",{"Choice":14}],["extended_hours",{"Toggle":true}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.HigherIntervalCandles.html","plots":[{"color":[0,150,136,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[244,67,54,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[0,9,9,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                "interval",
+                "Candle interval",
+            ),
+        ] {
+            let saved: StudyTemplate = serde_json::from_str(saved).unwrap();
+            let restored = saved.create().unwrap();
+            assert_eq!(restored.settings(), saved.settings, "{} styles", saved.name);
+            let inputs = restored.inputs();
+            for (id, value) in &saved.inputs {
+                let input = inputs.iter().find(|input| input.id == *id).unwrap();
+                assert_eq!(&input.value, value, "{} {id}", saved.name);
+            }
+            assert_eq!(
+                inputs.iter().find(|input| input.id == id).unwrap().label,
+                label
+            );
+        }
+
+        // Actual chart saves from before state colours had their own controls retain the
+        // colours and widths they drew, and saving the upgrade again keeps those choices.
+        use crate::studies::palette;
+        for (saved, plot, colours) in [
+            (
+                r#"{"name":"Accelerator Oscillator","inputs":[["source",{"Source":{"Price":"HL2"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.AcceleratorOscillator.html","plots":[{"color":[0,0,128,255],"width":1.0,"pattern":"Solid","plot_type":"Histogram","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[0,0,8,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+                palette::GREEN,
+                vec![palette::RED],
+            ),
+            (
+                r#"{"name":"Chop Zone","inputs":[["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ChopZone.html","plots":[{"color":[38,198,218,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true}],"precision":0,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[2,12,14,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+                palette::CYAN,
+                vec![
+                    palette::DARK_GREEN,
+                    palette::LIGHT_GREEN,
+                    palette::DEEP_TEAL,
+                    palette::YELLOW,
+                    palette::LIGHT_ORANGE,
+                    palette::ORANGE,
+                    palette::PINK,
+                    palette::DEEP_RED,
+                ],
+            ),
+            (
+                r#"{"name":"Impulse","inputs":[["ema_period",{"Length":13}],["macd_fast",{"Length":12}],["macd_slow",{"Length":26}],["macd_signal",{"Length":9}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ElderImpulseSystem.html","plots":[{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[5,11,5,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+                palette::GREEN,
+                vec![palette::GREEN, palette::GREEN],
+            ),
+            (
+                r#"{"name":"Volatility Stop","inputs":[["length",{"Length":20}],["multiplier",{"Number":2.0}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolatilityStop.html","plots":[{"color":[0,150,136,255],"width":1.0,"pattern":"Solid","plot_type":"Crosses","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[0,9,9,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                palette::DEEP_TEAL,
+                vec![palette::BRIGHT_RED],
+            ),
+        ] {
+            let saved: StudyTemplate = serde_json::from_str(saved).unwrap();
+            let restored = saved.create().unwrap();
+            let mut plots = saved.settings.plots.clone();
+            plots[0].color = plot;
+            assert_eq!(restored.settings().plots, plots, "{}", saved.name);
+            let variants = restored.plot_variants(0);
+            assert_eq!(
+                variants.iter().map(|v| v.color).collect::<Vec<_>>(),
+                colours,
+                "{}",
+                saved.name
+            );
+            assert!(variants.iter().all(|v| v.width == plots[0].width));
+            let again = StudyTemplate::from_study(restored.as_ref())
+                .create()
+                .unwrap();
+            assert_eq!(
+                again.settings(),
+                restored.settings(),
+                "{} saved again",
+                saved.name
+            );
+        }
+
         let mut rsi = ConfiguredStudy::new(Box::new(RSI::new(9)));
         let mut settings = rsi.settings();
         settings.levels[0].value = Some(80.0);

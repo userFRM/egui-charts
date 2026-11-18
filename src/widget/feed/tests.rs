@@ -12,6 +12,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[path = "rebinding_tests.rs"]
 mod rebinding;
 
+#[path = "partial_tests.rs"]
+mod partial;
+
 #[derive(Debug, Clone, PartialEq)]
 enum Call {
     Resolve(String),

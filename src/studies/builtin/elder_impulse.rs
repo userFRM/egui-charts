@@ -16,9 +16,9 @@ pub enum ImpulseSignal {
     Neutral,
 }
 
-/// Elder Impulse System
-/// Combines EMA slope and MACD histogram for trend signals
-/// Green = bullish, Red = bearish, Blue = neutral
+/// Elder Impulse System: the impulse of the EMA slope and the MACD histogram, 1 when both rise,
+/// -1 when both fall and 0 otherwise. Bullish values use the plot colour, green by default;
+/// bearish and neutral values use their own colours, red and blue by default.
 #[derive(Clone, Debug)]
 pub struct ElderImpulseSystem {
     /// EMA period (typically 13)
@@ -31,8 +31,8 @@ pub struct ElderImpulseSystem {
     macd_signal: usize,
     values: IndicatorValues,
     stepper: Stepper<(usize, [Smoothing; 4], [f64; 2])>,
-    /// Colors: [Bullish, Bearish, Neutral]
-    colors: Vec<Color32>,
+    /// Bullish, bearish and neutral colours.
+    colors: [Color32; 3],
     visible: bool,
 }
 
@@ -47,7 +47,7 @@ impl ElderImpulseSystem {
             macd_signal: macd_signal.max(1),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            colors: vec![
+            colors: [
                 palette::GREEN, // Green - Bullish
                 palette::RED,   // Red - Bearish
                 palette::BLUE,  // Blue - Neutral
@@ -56,9 +56,9 @@ impl ElderImpulseSystem {
         }
     }
 
-    /// Set plot colors in the order returned by [`Indicator::line_names`].
+    /// Set the bullish, bearish and neutral colours in that order, keeping any not given.
     pub fn with_colors(mut self, colors: Vec<Color32>) -> Self {
-        self.colors = colors;
+        self.set_colors(colors);
         self
     }
 }
@@ -70,6 +70,33 @@ impl Default for ElderImpulseSystem {
 }
 
 impl Indicator for ElderImpulseSystem {
+    fn plot_variants(&self, _line: usize) -> Vec<crate::studies::PlotVariant> {
+        vec![
+            crate::studies::PlotVariant::new("Bearish", self.colors[1]),
+            crate::studies::PlotVariant::new("Neutral", self.colors[2]),
+        ]
+    }
+
+    fn plot_variant(&self, _line: usize, bar: usize) -> Option<usize> {
+        let value = self.values.value(0, bar)?;
+        if value < 0.0 {
+            Some(0)
+        } else if value == 0.0 {
+            Some(1)
+        } else {
+            None
+        }
+    }
+
+    fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
+        self.values.value(0, bar)?;
+        Some(
+            self.colors[self
+                .plot_variant(line, bar)
+                .map_or(0, |variant| variant + 1)],
+        )
+    }
+
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
             crate::model::PriceSource::Close,
@@ -137,12 +164,12 @@ impl Indicator for ElderImpulseSystem {
     }
 
     fn colors(&self) -> Vec<Color32> {
-        self.colors.clone()
+        self.colors.to_vec()
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
-        if colors.len() >= 3 {
-            self.colors = colors;
+        for (old, new) in self.colors.iter_mut().zip(colors) {
+            *old = new;
         }
     }
 
@@ -182,13 +209,37 @@ mod tests {
                 .collect();
             impulse.calculate(&data);
             assert_eq!(impulse.values.len(), data.len());
+            let (variant, color) = if direction > 0.0 {
+                (None, palette::GREEN)
+            } else if direction < 0.0 {
+                (Some(0), palette::RED)
+            } else {
+                (Some(1), palette::BLUE)
+            };
             for bar in 0..data.len() {
                 assert_eq!(
                     impulse.values().value(0, bar),
                     (bar >= 16).then_some(direction),
                     "direction {direction}, bar {bar}"
                 );
+                assert_eq!(
+                    impulse.plot_variant(0, bar),
+                    (bar >= 16).then_some(variant).flatten()
+                );
+                assert_eq!(impulse.plot_color(0, bar), (bar >= 16).then_some(color));
             }
+        }
+        // Short palettes keep the states not supplied; extras never create extra states.
+        for count in 0..=4 {
+            let mut impulse =
+                ElderImpulseSystem::default().with_colors(vec![Color32::BLACK; count]);
+            let mut expected = [palette::GREEN, palette::RED, palette::BLUE];
+            expected[..count.min(3)].fill(Color32::BLACK);
+            assert_eq!(impulse.colors(), expected);
+            impulse.set_colors(vec![Color32::WHITE]);
+            expected[0] = Color32::WHITE;
+            assert_eq!(impulse.colors(), expected);
+            assert_eq!(impulse.plot_variants(0).len(), 2);
         }
     }
 }

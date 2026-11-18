@@ -141,7 +141,7 @@ impl Indicator for LSMA {
 
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX),
-        offset: integer("Offset", i32::MIN, i32::MAX)
+        offset: integer("Regression offset", i32::MIN, i32::MAX)
     ; {});
 
     fn name(&self) -> &str {
