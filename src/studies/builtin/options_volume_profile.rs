@@ -256,7 +256,8 @@ impl OptionsVolumeProfile {
     /// with its date in a key. Gamma exposure draws net bars by default, or split bars. Call
     /// and put walls, off by default, mark the strikes with the largest call and the largest
     /// put figure of the measure in size, summed over the selected expiries, the lower strike
-    /// on a tie; a side whose figures are all zero has none. Split, net and calls plus puts
+    /// on a tie; a side whose figures are all zero has none, and volume or open interest drawn in
+    /// place of a saved measure that waits for its data has none. Split, net and calls plus puts
     /// bars take their own colour inputs. The profile takes the right or the left 30% of the
     /// plot, its widest row from 1% to 30% of the plot's width, 27% by default.
     /// Under Through date, Maximum expirations keeps the first N listed expiries on or after the
@@ -372,6 +373,19 @@ impl OptionsVolumeProfile {
     fn gamma_selected(&self, cache: &CachedProfile) -> bool {
         self.gamma.get()
             || (!cache.volume_available && !cache.interest_available && cache.exposure.is_some())
+    }
+
+    /// Whether wall `side`, 0 for calls and 1 for puts, is drawn: its switch is on, and volume or
+    /// open interest drawn in place of a saved measure that waits for its data shows no walls,
+    /// as before those measures had them.
+    fn wall_drawn(&self, side: usize, cache: &CachedProfile) -> bool {
+        self.exposure_levels[side].get()
+            && (self.gamma_selected(cache)
+                || !self
+                    .waiting_inputs
+                    .borrow()
+                    .iter()
+                    .any(|(id, _)| id == "measure_label"))
     }
 
     /// The measure drawn, as its place in [`MEASURES`].
@@ -1078,7 +1092,7 @@ impl Indicator for OptionsVolumeProfile {
         }
         self.refresh();
         if (3..=4).contains(&line) {
-            self.exposure_levels[line - 3].get()
+            self.wall_drawn(line - 3, &self.cache.borrow())
         } else if self.gamma_selected(&self.cache.borrow()) {
             line == 2 || line == 5 && self.exposure_levels[2].get()
         } else {
@@ -1099,8 +1113,8 @@ impl Indicator for OptionsVolumeProfile {
         self.refresh();
         let cache = self.cache.borrow();
         if (3..=4).contains(&line) {
-            return self.exposure_levels[line - 3]
-                .get()
+            return self
+                .wall_drawn(line - 3, &cache)
                 .then_some(cache.walls[line - 3])
                 .flatten();
         }
@@ -3391,6 +3405,16 @@ mod tests {
             assert_eq!(drawn, walls, "measure {measure}");
             assert!(study.legend_visible(3), "measure {measure}");
         }
+        // A saved measure the chain cannot draw yet waits, and the volume drawn in its place
+        // shows no walls, as a profile saved before volume had walls drew none.
+        study
+            .set_input("measure_label", InputValue::Text("Gamma exposure".into()))
+            .unwrap();
+        assert_eq!(
+            [study.plot_value(3, 0), study.plot_value(4, 0)],
+            [None, None]
+        );
+        assert!(!study.legend_visible(3));
         study
             .set_input("call_wall", InputValue::Toggle(false))
             .unwrap();
