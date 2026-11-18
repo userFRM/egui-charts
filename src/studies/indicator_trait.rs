@@ -468,6 +468,14 @@ pub trait Indicator: Send {
         false
     }
 
+    /// Visible logical slots, including the empty space beyond the last bar. Supplied before
+    /// autoscaling, alongside `set_visible_range`, so projected levels can follow the right
+    /// edge. Returns whether calculation must run again. The default ignores the viewport.
+    fn set_visible_logical_range(&mut self, range: crate::model::LogicalRange) -> bool {
+        let _ = range;
+        false
+    }
+
     /// The chart's current interval, supplied when added and when the interval changes.
     fn set_timeframe(&mut self, timeframe: crate::model::Timeframe) {
         let _ = timeframe;

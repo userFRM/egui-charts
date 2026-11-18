@@ -51,7 +51,7 @@ const PERIODS: [(AnchorPeriod, &str); 3] = [
 /// The levels of a period, in the order [`levels_of`] returns them.
 const LEVELS: [&str; 7] = ["POC", "VAL", "VAH", "O", "H", "L", "C"];
 
-/// Bars a level started from the current bar runs to the right.
+/// Projection used by direct callers until a visible range is supplied.
 const RIGHT_BARS: usize = 20;
 
 /// The most custom periods that can be counted back.
@@ -129,6 +129,7 @@ pub struct AutoKeyLevels {
     length: usize,
     unit: CustomUnit,
     start: LevelsStart,
+    right_edge: Option<usize>,
     days: ExchangeDays,
     intraday: bool,
     clock: BarClock,
@@ -178,6 +179,7 @@ impl AutoKeyLevels {
             length: 1,
             unit: UNITS[0],
             start: LevelsStart::Period,
+            right_edge: None,
             days: ExchangeDays::default(),
             intraday: false,
             clock: BarClock::new(Timeframe::Min1),
@@ -416,10 +418,10 @@ impl Indicator for AutoKeyLevels {
         let source = self.stepper.state().source;
         // Each group: its plot, label prefix, bar range and levels shown.
         let mut groups = Vec::new();
-        if self.custom {
-            if let Some(start) = self.custom_start(data) {
-                groups.push((6, "Custom ".to_owned(), start..source, self.custom_levels));
-            }
+        if self.custom
+            && let Some(start) = self.custom_start(data)
+        {
+            groups.push((6, "Custom ".to_owned(), start..source, self.custom_levels));
         }
         for (t, ((_, prefix), [current, previous], shown)) in PERIODS
             .iter()
@@ -495,7 +497,13 @@ impl Indicator for AutoKeyLevels {
             self.cache.push((bars.clone(), levels));
             let span = match self.start {
                 LevelsStart::Period => bars.start..source,
-                LevelsStart::CurrentBar => source - 1..source - 1 + RIGHT_BARS,
+                LevelsStart::CurrentBar => {
+                    source - 1
+                        ..self
+                            .right_edge
+                            .unwrap_or(source - 1 + RIGHT_BARS)
+                            .max(source)
+                }
             };
             for (k, price) in levels.into_iter().flatten().enumerate() {
                 let Some(price) = price.filter(|_| shown[k.min(3)]) else {
@@ -585,6 +593,17 @@ impl Indicator for AutoKeyLevels {
         }
         self.events = pairs().collect();
         self.custom && self.anchor != CustomAnchor::Custom
+    }
+
+    fn set_visible_logical_range(&mut self, range: crate::model::LogicalRange) -> bool {
+        let end = range.to_strict_range().1;
+        let changed = self.right_edge != Some(end);
+        self.right_edge = Some(end);
+        changed && self.start == LevelsStart::CurrentBar
+    }
+
+    fn legend_lines(&self) -> Vec<usize> {
+        Vec::new()
     }
 
     fn table(&self) -> Option<&StudyTable> {
@@ -943,6 +962,7 @@ mod tests {
         };
         for (name, seen, in_tokyo, inputs, want) in rows {
             let mut study = AutoKeyLevels::new();
+            assert!(study.legend_lines().is_empty());
             for id in ["current [0]", "current [1]"] {
                 study.set_input(id, Toggle(false)).unwrap();
             }
@@ -997,6 +1017,25 @@ mod tests {
                 run(restored.as_mut(), seen, in_tokyo),
                 drawn,
                 "{name} restored"
+            );
+        }
+        let mut study = AutoKeyLevels::new();
+        study.set_input("start", Choice(1)).unwrap();
+        for end in [40, 80, 30] {
+            assert!(
+                study.set_visible_logical_range(crate::model::LogicalRange::new(
+                    0.0,
+                    (end - 1) as f32
+                ))
+            );
+            study.calculate(&data);
+            assert!(study.zones().iter().all(|zone| zone.bars == (5..end)));
+            assert!(study.labels().iter().all(|label| label.bar == end - 1));
+            assert!(
+                !study.set_visible_logical_range(crate::model::LogicalRange::new(
+                    0.0,
+                    (end - 1) as f32
+                ))
             );
         }
     }
