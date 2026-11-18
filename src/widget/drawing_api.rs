@@ -237,8 +237,9 @@ impl Chart {
     }
 
     /// Replace a regression trend's settings (source, upper and lower bounds and whether each is
-    /// a deviation or the extreme price, fitted line pattern and correlation precision) as one
-    /// undoable edit. Unknown ids, locked drawings and other tools change nothing.
+    /// a deviation or the extreme price, the visibility and style of each line, the correlation
+    /// label and its precision) as one undoable edit. Unknown ids, locked drawings and other tools
+    /// change nothing.
     pub fn set_regression_trend_config(
         &mut self,
         id: usize,
@@ -1122,8 +1123,8 @@ mod tests {
         assert!(!chart.can_undo());
     }
 
-    /// Hosts set a regression trend's source, bounds, line pattern and precision in one history
-    /// entry, which templates and saved drawings carry; locked, missing and other drawings
+    /// Hosts set a regression trend's source, bounds, line styles and correlation label in one
+    /// history entry, which templates and saved drawings carry; locked, missing and other drawings
     /// change nothing.
     #[test]
     fn regression_trend_settings_are_undoable_and_saved() {
@@ -1140,6 +1141,13 @@ mod tests {
         edited.use_upper = false;
         edited.source = crate::model::PriceSource::HL2;
         edited.line_style = crate::model::LineStyle::Dotted;
+        edited.show_base_line = false;
+        edited.upper_line = crate::drawings::RegressionBandLine::new([200, 0, 0, 128])
+            .with_width(Some(5.0))
+            .unwrap();
+        edited.upper_line.line_style = crate::model::LineStyle::Dotted;
+        edited.lower_line.visible = false;
+        edited.show_correlation = false;
         chart.set_regression_trend_config(7, edited).unwrap();
         assert_eq!(chart.drawings().drawings[0].regression_trend, Some(edited));
         assert!(chart.undo());

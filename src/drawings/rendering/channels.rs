@@ -67,13 +67,12 @@ impl Drawing {
         let color = style.color.map_or(self.color32(), |[r, g, b, a]| {
             Color32::from_rgba_unmultiplied(r, g, b, a)
         });
-        let stroke = Stroke::new(style.width, color);
-        match style.line_style.dash_pattern() {
-            None => {
-                painter.line_segment([a, b], stroke);
-            }
-            Some((dash, gap)) => super::utils::draw_dashed_line(painter, a, b, stroke, dash, gap),
-        }
+        patterned_segment(
+            painter,
+            [a, b],
+            Stroke::new(style.width, color),
+            style.line_style,
+        );
     }
 
     /// The style of a flat top/bottom's or disjoint channel's prices: their own, else the line
@@ -189,11 +188,16 @@ impl Drawing {
 
     /// Render Regression Trend - least-squares line through the source prices of
     /// the bars between the anchors, with each band the configured number of
-    /// standard deviations away or through that side's extreme price
-    pub(crate) fn render_regression_trend(&self, painter: &egui::Painter, view: &ChartView) {
-        if let Some((first, len, fit)) = self.regression_fit(view) {
-            self.draw_regression_channel(painter, view, first, len, &fit, self.color32());
-        }
+    /// standard deviations away or through that side's extreme price. Returns the correlation
+    /// label, which the caller paints after the drawing's style.
+    pub(crate) fn render_regression_trend(
+        &self,
+        painter: &egui::Painter,
+        view: &ChartView,
+    ) -> Option<egui::Shape> {
+        self.regression_fit(view).and_then(|(first, len, fit)| {
+            self.draw_regression_channel(painter, view, first, len, &fit, self.color32())
+        })
     }
 
     /// The first fitted bar, the number of bars and the least-squares fit of the anchored range,
@@ -235,7 +239,7 @@ impl Drawing {
         len: usize,
         fit: &LinearFit,
         color: Color32,
-    ) {
+    ) -> Option<egui::Shape> {
         let last = len - 1;
         let config = self.regression_trend.unwrap_or_default();
         let [above, below] = fit.bounds(&view.bars[first..first + len], config.band_deviations());
@@ -292,30 +296,40 @@ impl Drawing {
                 ));
             }
         }
-        for band in [upper, lower] {
-            painter.line_segment(band, Stroke::new(self.stroke_width, band_color));
-        }
-        let stroke = Stroke::new(self.stroke_width, color);
-        match config.line_style.dash_pattern() {
-            None => {
-                painter.line_segment(center, stroke);
+        for (band, line) in [(upper, config.upper_line), (lower, config.lower_line)] {
+            if line.visible {
+                let [r, g, b, a] = line.color;
+                let width = line.width().unwrap_or(self.stroke_width);
+                patterned_segment(
+                    painter,
+                    band,
+                    Stroke::new(width, Color32::from_rgba_unmultiplied(r, g, b, a)),
+                    line.line_style,
+                );
             }
-            Some((dash, gap)) => {
-                super::utils::draw_dashed_line(painter, center[0], center[1], stroke, dash, gap)
-            }
         }
-        let places = usize::from(config.precision().unwrap_or(2));
-        painter.text(
-            label_pos,
-            egui::Align2::LEFT_TOP,
-            fit.correlation.map_or_else(
+        if config.show_base_line {
+            patterned_segment(
+                painter,
+                center,
+                Stroke::new(self.stroke_width, color),
+                config.line_style,
+            );
+        }
+        self.render_line_text(painter, fitted[0], fitted[1], true);
+        config.show_correlation.then(|| {
+            let places = usize::from(config.precision().unwrap_or(2));
+            let text = fit.correlation.map_or_else(
                 || crate::localization::text(painter.ctx(), "n/a"),
                 |r| format!("{r:.places$}"),
-            ),
-            egui::FontId::proportional(typography::XS),
-            band_color,
-        );
-        self.render_line_text(painter, fitted[0], fitted[1], true);
+            );
+            let galley = painter.layout_no_wrap(
+                text,
+                egui::FontId::proportional(typography::XS),
+                band_color,
+            );
+            egui::Shape::galley(label_pos, galley, band_color)
+        })
     }
 
     /// Unextended endpoints in anchor order, shared with selection handles.
@@ -419,6 +433,23 @@ pub(super) fn offset_onto(p1: Pos2, p2: Pos2, p3: Pos2) -> egui::Vec2 {
         egui::vec2(p3.x - p1.x, 0.0)
     } else {
         egui::vec2(0.0, p3.y - (p1.y + (p3.x - p1.x) * d.y / d.x))
+    }
+}
+
+/// Draws `line` with `stroke` in `style`.
+fn patterned_segment(
+    painter: &egui::Painter,
+    line: [Pos2; 2],
+    stroke: Stroke,
+    style: crate::model::LineStyle,
+) {
+    match style.dash_pattern() {
+        None => {
+            painter.line_segment(line, stroke);
+        }
+        Some((dash, gap)) => {
+            super::utils::draw_dashed_line(painter, line[0], line[1], stroke, dash, gap)
+        }
     }
 }
 
@@ -920,7 +951,7 @@ mod tests {
     /// residual sigma = sqrt(3), r = 1/2. Each half ends on that same centre line.
     #[test]
     fn regression_channel_respects_fill_extension_and_line_roles() {
-        use crate::drawings::{ChartPoint, RegressionTrendConfig};
+        use crate::drawings::{ChartPoint, RegressionBandLine, RegressionTrendConfig};
         use crate::model::LineStyle;
         use egui::{Context, RawInput, Shape};
         // Highs 13, 15, 16 rise 2, 3, 3 above y = 11 + x and lows 9, 10, 12 fall 2, 2, 1 below.
@@ -1185,6 +1216,99 @@ mod tests {
                 shapes
                     .iter()
                     .any(|s| matches!(s, Shape::Text(t) if t.galley.job.text == label))
+            );
+        }
+
+        // Each line drawn from its own switch, colour, width and pattern, and the correlation
+        // from its switch. The base line runs (100, 390) to (300, 370) and the bands sqrt(3)
+        // above and below it, 10 * sqrt(3) px.
+        let band_offset = 10.0 * 3f32.sqrt();
+        for (show_base, show_upper, show_lower, show_correlation) in [
+            (true, true, true, true),
+            (false, true, true, false),
+            (true, false, true, true),
+            (true, true, false, false),
+        ] {
+            let mut drawing = Drawing::new(1, DrawingToolType::RegressionTrend);
+            drawing.chart_points = vec![ChartPoint::new(0.0, 30.0), ChartPoint::new(2.0, 5.0)];
+            drawing.update_screen_coords(|b| 100.0 + b * 100.0, |p| 500.0 - p as f32 * 10.0);
+            drawing.color = [0, 128, 0, 200];
+            drawing.stroke_width = 3.0;
+            let mut config = RegressionTrendConfig::new(1.0).unwrap();
+            config.line_style = LineStyle::Solid;
+            config.show_base_line = show_base;
+            config.upper_line = RegressionBandLine::new([200, 0, 0, 128])
+                .with_width(Some(5.0))
+                .unwrap();
+            config.upper_line.line_style = LineStyle::Dotted;
+            config.upper_line.visible = show_upper;
+            config.lower_line = RegressionBandLine::new([0, 0, 0, 255]);
+            config.lower_line.line_style = LineStyle::LargeDashed;
+            config.lower_line.visible = show_lower;
+            config.show_correlation = show_correlation;
+            drawing.regression_trend = Some(config);
+            let shapes = paint(&drawing);
+            let row = (show_base, show_upper, show_lower, show_correlation);
+            for (shown, color, width, offset, style) in [
+                (show_base, drawing.color32(), 3.0, 0.0, LineStyle::Solid),
+                (
+                    show_upper,
+                    Color32::from_rgba_unmultiplied(200, 0, 0, 128),
+                    5.0,
+                    -band_offset,
+                    LineStyle::Dotted,
+                ),
+                (
+                    show_lower,
+                    Color32::from_rgb(0, 0, 0),
+                    3.0,
+                    band_offset,
+                    LineStyle::LargeDashed,
+                ),
+            ] {
+                let pieces: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|s| match s {
+                        Shape::LineSegment { points, stroke } if stroke.color == color => {
+                            Some((*points, stroke.width))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if !shown {
+                    assert!(pieces.is_empty(), "{row:?}: hidden {style:?} line painted");
+                    continue;
+                }
+                let on_line =
+                    |p: Pos2| (p.y - (390.0 - (p.x - 100.0) / 10.0 + offset)).abs() < 1e-3;
+                for (points, stroke_width) in &pieces {
+                    assert_eq!(*stroke_width, width, "{row:?}: {style:?} width");
+                    assert!(points.iter().all(|p| on_line(*p)), "{row:?}: {points:?}");
+                }
+                let longest = pieces
+                    .iter()
+                    .map(|(p, _)| p[0].distance(p[1]))
+                    .fold(0.0, f32::max);
+                match style.dash_pattern() {
+                    None => assert_eq!(
+                        pieces.iter().map(|(p, _)| *p).collect::<Vec<_>>(),
+                        [[Pos2::new(100.0, 390.0), Pos2::new(300.0, 370.0)]],
+                        "{row:?}: solid base line"
+                    ),
+                    Some((dash, _)) => {
+                        assert!(
+                            (longest - dash).abs() < 1e-3,
+                            "{row:?}: {style:?} {longest}"
+                        );
+                    }
+                }
+            }
+            assert_eq!(
+                shapes
+                    .iter()
+                    .any(|s| matches!(s, Shape::Text(t) if t.galley.job.text == "0.50")),
+                show_correlation,
+                "{row:?}: correlation"
             );
         }
     }
