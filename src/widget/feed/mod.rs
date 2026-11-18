@@ -264,13 +264,36 @@ impl FeedLink {
         let tick_size = self.instrument.as_ref()?.tick_size?;
         let mut flow = Footprint::new(self.clock.clone(), tick_size, 1).ok()?;
         flow.set_budget(FOOTPRINT_BARS, FOOTPRINT_ROWS);
+        // Replay cannot repair a sealed partial slot with later raw history.
+        let excluded = self
+            .footprint
+            .as_ref()
+            .map(FootprintState::view)
+            .filter(|source| !source.partial_slots().is_empty());
+        if let Some(source) = excluded {
+            for &open in source.partial_slots() {
+                flow.add_missing(
+                    self.clock.bar_start(open),
+                    self.clock
+                        .next_open(open)
+                        .map(|next| self.clock.bar_start(next))
+                        .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC),
+                );
+            }
+        }
         let trade_based = self.clock.timeframe().is_some_and(|tf| tf.is_trade_based());
         let held = || {
-            self.trades.iter().take(if trade_based {
-                self.trades.iter().count() - self.trades.live().count()
-            } else {
-                usize::MAX
-            })
+            self.trades
+                .iter()
+                .take(if trade_based {
+                    self.trades.iter().count() - self.trades.live().count()
+                } else {
+                    usize::MAX
+                })
+                .filter(|trade| {
+                    excluded
+                        .is_none_or(|source| !source.partial_at(self.clock.instant_open(trade.ts)))
+                })
         };
         let trades = || held().take_while(|trade| before.is_none_or(|time| trade.ts < time));
         // Paged executions have their own anchor; the sink supplies live allocations below.
@@ -487,7 +510,7 @@ impl Chart {
         self.set_quote(None);
         self.quote_action = None;
         self.session_quote = None;
-        self.state.price_scale_mut().set_price_precision(None);
+        self.state.price_scale_mut().set_instrument_precision(None);
         self.state.price_scale_mut().set_tick_size(None);
         let initial_bars = previous.as_ref().map_or(1000, |link| link.initial_bars);
         self.attach_feed(feed, initial_bars);
@@ -753,7 +776,7 @@ impl Chart {
             self.time_scale_events = Default::default();
             self.event_click = None;
             self.axis_hover = None;
-            self.state.price_scale_mut().set_price_precision(None);
+            self.state.price_scale_mut().set_instrument_precision(None);
             self.state.price_scale_mut().set_tick_size(None);
         }
         self.symbol = symbol;

@@ -427,6 +427,7 @@ impl Chart {
             price,
             volume: self.volume_formatter.as_deref(),
             percentage: self.percentage_formatter.as_deref(),
+            ..Default::default()
         }
     }
 

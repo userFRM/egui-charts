@@ -367,7 +367,8 @@ pub struct DataWindowInfo {
     pub volume_precision: Option<u8>,
     /// Previous close price
     pub prev_close: f64,
-    /// Instrument price decimals; `None` keeps magnitude-based formatting.
+    /// Price decimals: the instrument's, or after [`Self::with_chart_formatters`] the chart's;
+    /// `None` keeps magnitude-based formatting.
     pub price_decimals: Option<u8>,
     /// Open, high, low and close as the chart's status line writes them, set by
     /// [`Self::with_chart_formatters`]; `None` formats them with [`Self::price_decimals`].
