@@ -9,7 +9,7 @@ use crate::data::{
     ExposureProfile, ProfileDisplay, StrikeExposure, StudyProfile, VolumeProfile,
     VolumeProfileConfig,
 };
-use crate::model::{Bar, Instrument};
+use crate::model::Bar;
 use crate::studies::{
     Indicator, IndicatorValues, InputKind, InputValue, PlotStyle, StudyError, StudyInput, palette,
 };
@@ -163,7 +163,7 @@ pub struct OptionsVolumeProfile {
     as_of: Option<DateTime<Utc>>,
     last_close: Option<f64>,
     symbol: String,
-    matching_instrument: bool,
+    matching_symbol: bool,
     config: VolumeProfileConfig,
     cache: RefCell<CachedProfile>,
     values: IndicatorValues,
@@ -177,8 +177,8 @@ impl OptionsVolumeProfile {
     /// context. Rows are centered on multiples of `row_size`, in underlying price units.
     /// Returns `None` for an empty symbol, reversed expiry range or nonpositive/nonfinite size.
     /// Add the result with `Chart::add_indicator`. The query is host-owned: recreate the
-    /// study when changing the underlying, expiry range or row size. A chart with metadata
-    /// for another symbol hides the profile until its underlying is shown again.
+    /// study when changing the underlying, expiry range or row size. A chart showing another
+    /// symbol hides the profile until it shows the underlying again.
     ///
     /// ```
     /// # use egui_charts::data::{Datafeed, HistoryRequest, HistoryPage, Reply};
@@ -230,7 +230,7 @@ impl OptionsVolumeProfile {
             as_of: None,
             last_close: None,
             symbol,
-            matching_instrument: true,
+            matching_symbol: true,
             config,
             cache: RefCell::new(CachedProfile::default()),
             values: IndicatorValues::new(),
@@ -329,7 +329,7 @@ impl OptionsVolumeProfile {
             expected_move: false,
             move_iv: false,
             symbol,
-            matching_instrument: true,
+            matching_symbol: true,
             config,
             cache: RefCell::new(CachedProfile::default()),
             values: IndicatorValues::new(),
@@ -748,7 +748,7 @@ impl OptionsVolumeProfile {
     }
 
     fn move_band(&self) -> Option<(NaiveDate, [f64; 2])> {
-        if !self.matching_instrument || !self.expected_move {
+        if !self.matching_symbol || !self.expected_move {
             return None;
         }
         self.refresh();
@@ -972,7 +972,7 @@ impl Indicator for OptionsVolumeProfile {
         }
     }
     fn calculate(&mut self, data: &[Bar]) {
-        let close = if self.matching_instrument {
+        let close = if self.matching_symbol {
             data.iter().enumerate().rev().find_map(|(index, bar)| {
                 (!bar.is_whitespace()
                     && bar.close.is_finite()
@@ -994,10 +994,11 @@ impl Indicator for OptionsVolumeProfile {
     fn values(&self) -> &IndicatorValues {
         &self.values
     }
-    fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {
-        let matching = instrument.is_none_or(|i| i.symbol == self.symbol);
-        let changed = self.matching_instrument != matching;
-        self.matching_instrument = matching;
+    fn set_chart_symbol(&mut self, symbol: &str) -> bool {
+        // The chart's instrument may name the underlying otherwise, such as `X:ABC` for `ABC`.
+        let matching = symbol.is_empty() || symbol == self.symbol;
+        let changed = self.matching_symbol != matching;
+        self.matching_symbol = matching;
         if changed {
             self.last_close = None;
             self.cache.get_mut().move_time = None;
@@ -1005,7 +1006,7 @@ impl Indicator for OptionsVolumeProfile {
         changed && matches!(self.source, ProfileSource::Chain(..))
     }
     fn volume_profiles(&self, visible: Range<usize>) -> Vec<StudyProfile> {
-        if !self.visible || !self.matching_instrument || visible.is_empty() {
+        if !self.visible || !self.matching_symbol || visible.is_empty() {
             return Vec::new();
         }
         self.refresh();
@@ -1104,7 +1105,7 @@ impl Indicator for OptionsVolumeProfile {
         matches!(self.source, ProfileSource::Chain(..)) && (line == 0 || line == 2)
     }
     fn plot_value(&self, line: usize, bar: usize) -> Option<f64> {
-        if !self.matching_instrument || bar >= self.values.len() {
+        if !self.matching_symbol || bar >= self.values.len() {
             return None;
         }
         if (6..=7).contains(&line) {
@@ -1686,38 +1687,47 @@ mod tests {
                 })
                 .collect();
             let mut chart = crate::widget::Chart::new(crate::model::BarData::from_bars(data));
-            chart.set_symbol("SAMPLE");
             chart.set_timeframe(crate::model::Timeframe::Day1);
             chart.add_indicator(study.clone_box());
             let fill_color = study.fills()[0].color;
             let ctx = egui::Context::default();
-            let mut painted = false;
-            for _ in 0..2 {
-                let output = ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            egui::vec2(800.0, 500.0),
-                        )),
-                        ..Default::default()
-                    },
-                    |ui| {
-                        chart.show(ui);
-                    },
+            let painted = |chart: &mut crate::widget::Chart| {
+                let mut painted = false;
+                for _ in 0..2 {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(800.0, 500.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            chart.show(ui);
+                        },
+                    );
+                    painted |= output.shapes.iter().any(|shape| {
+                        matches!(&shape.shape, egui::Shape::Mesh(mesh)
+                            if mesh.vertices.len() >= 4
+                                && mesh.vertices.iter().all(|vertex| vertex.color == fill_color)
+                                && mesh.calc_bounds().left() <= chart.get_rendered_price_rect().left()
+                                && mesh.calc_bounds().right() >= chart.get_rendered_price_rect().right())
+                    });
+                    output.drop_without_applying_deltas();
+                }
+                painted
+            };
+            for (symbol, shown) in [("SAMPLE", true), ("OTHER", false), ("SAMPLE", true)] {
+                chart.set_symbol(symbol);
+                assert_eq!(painted(&mut chart), shown, "{symbol} before resolution");
+                // A feed may describe a symbol under another name.
+                chart.set_instrument(Some(crate::model::Instrument::new(format!("X:{symbol}"))));
+                assert_eq!(
+                    painted(&mut chart),
+                    shown,
+                    "{symbol} with {count} underlying bars"
                 );
-                painted |= output.shapes.iter().any(|shape| {
-                    matches!(&shape.shape, egui::Shape::Mesh(mesh)
-                        if mesh.vertices.len() >= 4
-                            && mesh.vertices.iter().all(|vertex| vertex.color == fill_color)
-                            && mesh.calc_bounds().left() <= chart.get_rendered_price_rect().left()
-                            && mesh.calc_bounds().right() >= chart.get_rendered_price_rect().right())
-                });
-                output.drop_without_applying_deltas();
             }
-            assert!(
-                painted,
-                "expected move does not fill the pane with {count} underlying bars"
-            );
         }
         study
             .set_input("move_method", InputValue::Choice(0))
@@ -1837,7 +1847,7 @@ mod tests {
         assert!(study.fills().is_empty());
         assert!(study.plot_label().is_none());
         study.set_visible(true);
-        study.set_instrument(Some(&Instrument::new("OTHER")));
+        study.set_chart_symbol("OTHER");
         assert_eq!(study.plot_value(7, 0), None);
         assert!(study.plot_label().is_none());
     }
@@ -2230,8 +2240,8 @@ mod tests {
                     assert_eq!(plot.profile.volume(), [calls + puts]);
                 }
             }
-            for (symbol, shown) in [("SAMPLE", true), ("OTHER", false), ("SAMPLE", true)] {
-                study.set_instrument(Some(&Instrument::new(symbol)));
+            for (symbol, shown) in [("SAMPLE", true), ("OTHER", false), ("", true)] {
+                study.set_chart_symbol(symbol);
                 assert_eq!(study.volume_profiles(0..10).is_empty(), !shown, "{symbol}");
             }
             sink.push(Vec::new());

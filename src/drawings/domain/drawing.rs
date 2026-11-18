@@ -302,7 +302,7 @@ pub struct Drawing {
     pub fib_config: Option<FibonacciConfig>,
     /// Rows and value area of the volume profile tools
     pub volume_profile: Option<VolumeProfileConfig>,
-    /// Source, bounds, line pattern and correlation precision of the regression trend tool
+    /// Source, bounds, line styles and correlation label of the regression trend tool
     pub regression_trend: Option<RegressionTrendConfig>,
     /// Bands of the anchored VWAP. Older drawings use the defaults.
     #[serde(default)]
@@ -350,6 +350,11 @@ pub struct Drawing {
     /// Notation of the wave labels of the Elliott wave tools. Older drawings use the default.
     #[serde(default)]
     pub elliott_degree: ElliottDegree,
+    /// Whether the Elliott wave tools draw the legs between their wave points. Off leaves the
+    /// wave labels where they are, and the drawing is selected by its labels only. New drawings
+    /// and drawings saved before this setting show their legs; other tools ignore it.
+    #[serde(default = "enabled")]
+    pub elliott_show_wave: bool,
 
     /// Draw mode, mirroring and flipping of a bars pattern's copy. New patterns draw high-low
     /// bars; `None` uses the defaults, OHLC bars, as drawings saved before this setting do.
@@ -687,6 +692,7 @@ impl Drawing {
             )
             .then(|| PitchforkConfig::for_tool(tool_type)),
             elliott_degree: ElliottDegree::default(),
+            elliott_show_wave: true,
             channel_midline: tool_type == DrawingToolType::ParallelChannel,
             anchor_price_style: None,
             middle_line: MiddleLineStyle::default(),

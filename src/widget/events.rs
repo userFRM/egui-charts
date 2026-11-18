@@ -1414,6 +1414,8 @@ mod tests {
             chart.config.show_volume = false;
             chart.config.show_ohlc_info = false;
             chart.config.show_symbol_labels = false;
+            // Touch reports its position at once, as a hover does.
+            chart.chart_options.tooltip.touch_long_press = false;
             for t in [0.0, 0.1, 0.2] {
                 frame(&ctx, &mut chart, t, vec![]);
             }
@@ -2336,6 +2338,8 @@ mod tests {
         chart.drain_events().for_each(drop);
         let map = chart.get_chart_mapping();
         let pos = Pos2::new(map.idx_to_x(70), map.price_to_y(150.0));
+        // Touch reports its position at once, as a hover does.
+        chart.chart_options.tooltip.touch_long_press = false;
         frame(
             &ctx,
             &mut chart,
