@@ -1551,8 +1551,6 @@ mod tests {
         HistoryPage, HistoryRequest, OptionChainQuery, OptionChainSink, OptionExposureQuery,
         OptionExposureSink, OptionsVolumeSink, Reply,
     };
-    #[cfg(feature = "widget")]
-    use crate::model::Instrument;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1723,7 +1721,7 @@ mod tests {
                 chart.set_symbol(symbol);
                 assert_eq!(painted(&mut chart), shown, "{symbol} before resolution");
                 // A feed may describe a symbol under another name.
-                chart.set_instrument(Some(Instrument::new(format!("X:{symbol}"))));
+                chart.set_instrument(Some(crate::model::Instrument::new(format!("X:{symbol}"))));
                 assert_eq!(
                     painted(&mut chart),
                     shown,
