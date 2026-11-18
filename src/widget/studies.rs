@@ -102,7 +102,8 @@ impl Chart {
     }
 
     /// Puts a study reading another study into its source's pane when the source has its own,
-    /// and on its source's scale when both share a pane. Prices and missing sources keep their place.
+    /// and on its source's scale when both share a pane. A study reading prices or a missing
+    /// study keeps its place.
     pub(super) fn place_on_source(&mut self, id: SeriesId) {
         let Some(StudySource::Study { id: source, .. }) = self
             .indicators()
@@ -950,6 +951,7 @@ mod tests {
         settle(&mut chart);
         assert!((output(&chart, 3).unwrap() - 125.0 / 3.0).abs() < 1e-8);
     }
+
     /// A study of another study shares its pane and scale without changing the price range.
     #[test]
     fn studies_on_study_output_open_with_their_source() {
