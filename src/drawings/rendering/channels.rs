@@ -947,6 +947,7 @@ mod tests {
                         pane,
                         &ChartView {
                             price_formatter: None,
+                            thousands_sep: None,
                             time_formatter: None,
                             bar_seconds: 0,
                             instrument: None,

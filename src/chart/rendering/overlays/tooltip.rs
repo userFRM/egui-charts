@@ -42,8 +42,8 @@ pub struct ValueFormatters<'a> {
     /// The decimals of built-in prices in place of the instrument's; the chart sets it to the
     /// precision chosen for its price scale.
     pub(crate) price_decimals: Option<u8>,
-    /// Groups the thousands of built-in prices and of studies in price units; the chart sets it
-    /// from `ChartConfig::thousands_sep`.
+    /// Groups the thousands of built-in prices; the chart sets it from
+    /// `ChartConfig::thousands_sep`.
     pub(crate) thousands_sep: Option<char>,
 }
 
@@ -65,16 +65,6 @@ impl ValueFormatters<'_> {
             |formatter| formatter.format(price),
         )
     }
-
-    /// The study's value, its thousands grouped in price units as the legend groups them.
-    fn study(&self, study: &StudyValue) -> String {
-        let text = study.formatted_value();
-        if study.format == crate::scales::StudyFormat::Price {
-            group_thousands(text, self.thousands_sep)
-        } else {
-            text
-        }
-    }
 }
 
 impl std::fmt::Debug for ValueFormatters<'_> {
@@ -87,7 +77,8 @@ impl std::fmt::Debug for ValueFormatters<'_> {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct StudyValue {
-    /// Host-formatted text, when supplied by the chart. `None` uses the units and precision.
+    /// The value as the chart writes it: in the host formatter of its study, else in its units
+    /// with the thousands of a price grouped. `None` uses the units and precision.
     pub formatted: Option<String>,
     /// Study title.
     pub study: String,
@@ -287,7 +278,7 @@ pub fn render_floating_tooltip(
     rows.extend(studies.iter().map(|study| {
         (
             study.translated_label(painter.ctx()),
-            formatters.study(study),
+            study.formatted_value(),
             // A fully transparent colour holds no RGB, so it has no opaque form.
             if study.color.a() == 0 {
                 options.text_color
@@ -520,7 +511,7 @@ pub fn render_tracking_tooltip(
         format!(
             "{}: {}",
             study.translated_label(painter.ctx()),
-            formatters.study(study)
+            study.formatted_value()
         )
     }));
 

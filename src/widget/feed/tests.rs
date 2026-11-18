@@ -7999,6 +7999,7 @@ fn profile_drawings_read_executions_on_every_time_based_chart_type() {
         let view = ChartView {
             instrument: None,
             price_formatter: None,
+            thousands_sep: None,
             time_formatter: None,
             bar_seconds: 0,
             bars: chart.state.shown(),
