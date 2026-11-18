@@ -664,7 +664,7 @@ impl DemoApp {
                 .and_then(|()| driver.advance(elapsed))
             {
                 replay.handle_action(ReplayAction::Pause);
-                self.notify(&error.to_string());
+                self.notify(error.to_string());
                 return;
             }
             playback_time = Some(driver.time() + chrono::TimeDelta::nanoseconds(1));
@@ -1301,6 +1301,23 @@ fn source_clock(chart: &egui_charts::Chart, interval: Timeframe) -> BarClock {
         zone => zone
             .to_tz()
             .map_or(clock.clone(), |zone| clock.with_timezone(zone)),
+    }
+}
+
+pub(super) fn book_snapshot(
+    market: &super::market::Market,
+    orders: Option<&super::orders::Orders>,
+    time: DateTime<Utc>,
+) -> MarketEvent {
+    match orders {
+        Some(orders) => {
+            let (sequence, orders) = orders.snapshot();
+            MarketEvent::OrderSnapshot { sequence, orders }
+        }
+        None => {
+            let (sequence, book) = market.snapshot(time);
+            MarketEvent::DepthSnapshot { sequence, book }
+        }
     }
 }
 
@@ -1965,22 +1982,5 @@ mod tests {
         app.stop_replay();
         assert!(!app.recording_files.opened && app.chart.replay_driver().is_none());
         assert_eq!(app.bars, app.chart.bars(SeriesId::MAIN));
-    }
-}
-
-pub(super) fn book_snapshot(
-    market: &super::market::Market,
-    orders: Option<&super::orders::Orders>,
-    time: DateTime<Utc>,
-) -> MarketEvent {
-    match orders {
-        Some(orders) => {
-            let (sequence, orders) = orders.snapshot();
-            MarketEvent::OrderSnapshot { sequence, orders }
-        }
-        None => {
-            let (sequence, book) = market.snapshot(time);
-            MarketEvent::DepthSnapshot { sequence, book }
-        }
     }
 }
