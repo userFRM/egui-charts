@@ -4036,9 +4036,10 @@ fn footprint_after_store_loss_does_not_fill_the_first_bar_from_the_page() {
 /// 5 and 6 (11), and the live 7 and 8 (15). A store of seven leaves out the buy of 1 in both
 /// orders, and a store of six the buys of 1 and 2, so that the oldest held execution opens the
 /// second bar. Either way the first bar draws a candle and the others keep their cells, however
-/// many pages rebuild the footprint afterwards.
-/// Replay keeps the page's cells through the first live buy at 6 s, then falls back once its
-/// cutoff includes that buy, since the lost stream cannot be summed again.
+/// many pages rebuild the footprint afterwards. The last row's page also holds a copy of the live
+/// 7, which the store keeps apart, and the live 8 then drops the buy of 1. A bar replay keeps the
+/// page's cells while its cutoff is at or before the first live buy, at 6 s, held or kept apart,
+/// and has no footprint past it, since after the loss the stream is not summed again.
 #[test]
 fn history_page_after_a_store_loss_keeps_the_matched_cells() {
     use crate::model::OrderSide::Buy;
@@ -4069,11 +4070,12 @@ fn history_page_after_a_store_loss_keeps_the_matched_cells() {
             })
             .collect()
     };
-    for (label, live_first, capacity) in [
-        ("history page after the loss", false, 7),
-        ("trade page that overflows the store", true, 7),
-        ("history page after the loss of a whole bar", false, 6),
-        ("trade page that leaves out a whole bar", true, 6),
+    for (label, live_first, capacity, page_buys) in [
+        ("history page after the loss", false, 7, 6),
+        ("trade page that overflows the store", true, 7, 6),
+        ("history page after the loss of a whole bar", false, 6, 6),
+        ("trade page that leaves out a whole bar", true, 6, 6),
+        ("trade page that holds the first live buy", false, 7, 7),
     ] {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
@@ -4097,7 +4099,8 @@ fn history_page_after_a_store_loss_keeps_the_matched_cells() {
         if live_first {
             live(&mut chart, &mut frames);
         }
-        (feed.trades.lock().unwrap().remove(0)).send(Ok(TradePage::new(tape.clone(), false)));
+        let trade_page = TradePage::new((0..page_buys).map(buy).collect(), false);
+        (feed.trades.lock().unwrap().remove(0)).send(Ok(trade_page));
         frames.run(&mut chart);
         if !live_first {
             live(&mut chart, &mut frames);
