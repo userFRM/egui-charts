@@ -596,8 +596,10 @@ pub enum RightClickTarget {
 
 impl Chart {
     /// Supplies instrument metadata for a chart without a feed, including price precision
-    /// and the default tick-mark grid. An explicit `tick_marks.min_price_step` takes precedence.
-    /// Pass `None` to clear the metadata. Feed metadata takes precedence when available.
+    /// and the default tick-mark grid. An explicit `tick_marks.min_price_step` takes precedence,
+    /// and so does a precision chosen in the chart settings or with
+    /// [`PriceScale::set_price_precision`]. Pass `None` to clear the metadata. Feed metadata
+    /// takes precedence when available.
     pub fn set_instrument(&mut self, instrument: Option<crate::model::Instrument>) {
         if self.legend_instrument != instrument {
             self.readout_revision = crate::model::next_revision();
@@ -610,8 +612,18 @@ impl Chart {
             .instrument()
             .and_then(|instrument| instrument.tick_size);
         let scale = self.state.price_scale_mut();
-        scale.set_price_precision(precision);
+        scale.set_instrument_precision(precision);
         scale.set_tick_size(tick_size);
+    }
+
+    /// The decimals of the main series' prices in the status line, the tooltip, the data window
+    /// and the data table: the precision chosen for the price scale, else the instrument's. `None`
+    /// leaves each readout its own rule for prices without metadata.
+    pub(crate) fn readout_price_decimals(&self) -> Option<u8> {
+        self.state.price_scale().chosen_precision().or_else(|| {
+            self.instrument()
+                .and_then(crate::scales::instrument_price_precision)
+        })
     }
 
     /// Supplies currencies the host can convert the chart into. Choosing one emits an intent;
