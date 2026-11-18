@@ -178,10 +178,37 @@ impl StudyTemplate {
             && !saved("swing_size")
             && saved("deviation_percent"))
         .then(|| ("swing_size".to_owned(), InputValue::Choice(1)));
-        let inputs: Vec<_> = percent_swings
+        let mut inputs: Vec<_> = percent_swings
             .into_iter()
             .chain(template.inputs.iter().cloned())
             .collect();
+        // A study's own Source input once kept another study's output that never reached its
+        // calculation, which read the input's default instead. An output the study now refuses
+        // there, or in `source` while it runs on other bars, keeps that default.
+        let output = |value: &InputValue| {
+            matches!(
+                value,
+                InputValue::Source(crate::studies::StudySource::Study { .. })
+            )
+        };
+        if inputs.iter().any(|(_, value)| output(value)) {
+            let mut probe = ConfiguredStudy::new(study.clone_box());
+            for (id, value) in &inputs {
+                if matches!(id.as_str(), "calculation_symbol" | "calculation_timeframe") {
+                    let _ = probe.set_input(id, value.clone());
+                }
+            }
+            for (id, value) in &mut inputs {
+                let declared = declared.iter().find(|input| {
+                    input.id == *id && matches!(input.kind, crate::studies::InputKind::Source)
+                });
+                if let Some(input) = declared.filter(|_| output(value)) {
+                    if probe.set_input(id, value.clone()).is_err() {
+                        *value = input.default.clone();
+                    }
+                }
+            }
+        }
         // A host study registered under a built-in's name never had the presentation an upgrade
         // gives that built-in's older templates either. The options profile reads the host's
         // option chain, so only a host registers it, and its own older templates are upgraded.

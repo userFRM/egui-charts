@@ -651,8 +651,16 @@ impl Chart {
                         id: self.restored_studies[parent],
                         plot: *plot,
                     };
-                    self.indicator_mut(id)
-                        .expect("restored study")
+                    let study = self.indicator_mut(id).expect("restored study");
+                    // An input restored on its default in place of the saved output keeps it.
+                    let own = study.inputs();
+                    if !own
+                        .iter()
+                        .any(|own| own.id == *input && own.value == *value)
+                    {
+                        continue;
+                    }
+                    study
                         .set_input(input, crate::studies::InputValue::Source(source))
                         .expect("validated study source");
                 }
@@ -1245,6 +1253,114 @@ mod tests {
             restored.pane_layout.main,
             [super::super::SeriesId::MAIN, new_spread]
         );
+    }
+
+    /// A custom study saved with another study's output in a Source input its calculation never
+    /// read, or in `source` while it ran on another interval, restores through a snapshot and a
+    /// study template set on that input's default, as it calculated when it was saved.
+    #[test]
+    fn custom_study_outputs_its_calculation_never_read_restore_on_input_defaults() {
+        use crate::model::{PriceSource, Timeframe};
+        use crate::studies::{
+            CustomIndicator, IndicatorFactory, IndicatorValue, InputKind, InputValue, StudyInput,
+            StudySource,
+        };
+        let bars: Vec<_> = (0..3)
+            .map(|i| {
+                Bar::new(
+                    Utc.timestamp_opt(i * 60, 0).unwrap(),
+                    1.0,
+                    9.0,
+                    1.0,
+                    5.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut factory = IndicatorFactory::new();
+        factory.register("Echo", || {
+            let price = |id: &str, price| {
+                StudyInput::new(
+                    id,
+                    id,
+                    InputValue::Source(StudySource::Price(price)),
+                    InputKind::Source,
+                )
+            };
+            let inputs = vec![
+                price("source", PriceSource::HL2),
+                price("basis", PriceSource::Open),
+            ];
+            Box::new(
+                CustomIndicator::new("Echo", |_| Vec::new())
+                    .with_inputs(inputs, |bars, inputs, source, _| {
+                        let InputValue::Source(StudySource::Price(basis)) = inputs[1].value else {
+                            unreachable!()
+                        };
+                        bars.iter()
+                            .zip(source)
+                            .map(|(bar, source)| {
+                                let basis = basis.compute(bar.open, bar.high, bar.low, bar.close);
+                                IndicatorValue::Single(source + basis)
+                            })
+                            .collect()
+                    })
+                    .unwrap(),
+            )
+        });
+        let price = |price| InputValue::Source(StudySource::Price(price));
+        let output = |id| InputValue::Source(StudySource::Study { id, plot: 0 });
+        for (input, interval) in [("basis", None), ("source", Some(Timeframe::Min5))] {
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            chart.add_indicator(Box::new(RSI::new(2)));
+            let echo = chart.add_indicator(factory.create("Echo").unwrap());
+            chart
+                .indicator_mut(echo)
+                .unwrap()
+                .set_input("calculation_timeframe", InputValue::Timeframe(interval))
+                .unwrap();
+            let mut snapshot = chart.snapshot_with(&factory).unwrap();
+            let rsi = snapshot.studies[0].id;
+            let mut set = chart.study_template_set();
+            for (inputs, rsi) in [
+                (&mut snapshot.studies[1].study.inputs, rsi),
+                (&mut set.studies[1].inputs, 0),
+            ] {
+                inputs
+                    .iter_mut()
+                    .filter(|(id, _)| id == input)
+                    .for_each(|(_, value)| *value = output(rsi));
+            }
+
+            let mut restored = Chart::new(BarData::from_bars(bars.clone()));
+            restored.restore_with(&snapshot, &factory).unwrap();
+            let mut applied = Chart::new(BarData::from_bars(bars.clone()));
+            applied
+                .apply_study_template_set_with(&set, &factory)
+                .unwrap();
+            for chart in [&restored, &applied] {
+                let (_, echo) = chart.indicators().nth(1).unwrap();
+                let value = |id| echo.inputs().into_iter().find(|own| own.id == id).unwrap();
+                assert_eq!(
+                    [
+                        value("source"),
+                        value("basis"),
+                        value("calculation_timeframe")
+                    ]
+                    .map(|input| input.value),
+                    [
+                        price(PriceSource::HL2),
+                        price(PriceSource::Open),
+                        InputValue::Timeframe(interval)
+                    ],
+                    "{input}"
+                );
+                // On the chart's own bars the study reads the high-low midpoint 5 and open 1.
+                if interval.is_none() {
+                    assert_eq!(echo.values().value(0, 2), Some(6.0));
+                }
+            }
+        }
     }
 
     #[test]

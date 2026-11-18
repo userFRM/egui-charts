@@ -245,8 +245,16 @@ impl Chart {
                             .map_or(usize::MAX, |parent| parent.0),
                         plot: *plot,
                     };
-                    self.indicator_mut(id)
-                        .expect("added study")
+                    let study = self.indicator_mut(id).expect("added study");
+                    // An input restored on its default in place of the saved output keeps it.
+                    let own = study.inputs();
+                    if !own
+                        .iter()
+                        .any(|own| own.id == *input && own.value == *value)
+                    {
+                        continue;
+                    }
+                    study
                         .set_input(input, InputValue::Source(source))
                         .expect("validated study source");
                 }
