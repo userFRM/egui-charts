@@ -4128,6 +4128,101 @@ fn history_page_after_a_store_loss_keeps_the_matched_cells() {
     }
 }
 
+#[cfg(feature = "studies")]
+#[test]
+fn history_only_tick_trade_rate_uses_proven_receipts() {
+    use crate::data::OrderFlowKind;
+    use crate::studies::OrderFlowStudy;
+
+    let start = bars(1)[0].time;
+    let later = start + TimeDelta::seconds(1);
+    let tape = [
+        (start, 1.0),
+        (start, 2.0),
+        (start, 4.0),
+        (later, 8.0),
+        (later, 16.0),
+    ]
+    .map(|(ts, size)| Tick::new(ts, 100.0, size, None));
+    let bar = |at, volume| Bar::new(at, 100.0, 100.0, 100.0, 100.0, volume);
+    // Same data, separate drains: either feed response can arrive first.
+    for (trades_first, complete, middle_volume) in [
+        (false, true, 12.0),
+        (true, true, 12.0),
+        (false, false, 12.0),
+        (true, true, 13.0),
+    ] {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_timeframe("2t".parse().unwrap());
+        let rate = chart.add_indicator(Box::new(OrderFlowStudy::new(OrderFlowKind::TradeRate {
+            volume: false,
+            seconds: 2,
+            instant: 1,
+        })));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        frames.run(&mut chart);
+        let candles = || {
+            feed.page().send(page(
+                vec![
+                    bar(start, 3.0),
+                    bar(start + TimeDelta::nanoseconds(1), middle_volume),
+                    bar(later, 16.0),
+                ],
+                true,
+            ));
+        };
+        let trades = || {
+            let held = if complete { &tape[..] } else { &tape[3..] };
+            feed.trades
+                .lock()
+                .unwrap()
+                .remove(0)
+                .send(Ok(TradePage::new(held.to_vec(), complete)));
+        };
+        if trades_first {
+            trades();
+            frames.run(&mut chart);
+            candles();
+        } else {
+            candles();
+            frames.run(&mut chart);
+            trades();
+        }
+        frames.run(&mut chart);
+        // Volume and Trade Rate each get a frame for their full recalculation.
+        frames.run(&mut chart);
+        let study = chart.indicators().find(|(id, _)| *id == rate).unwrap().1;
+        let values = |i| [0, 1, 2].map(|line| study.values().value(line, i));
+        if complete && middle_volume == 12.0 {
+            // Window rates use provider times through the last receipt of this bar,
+            // not the allocated bar open or later receipts sharing that timestamp.
+            assert_eq!(values(0), [2.0, 1.0, 2.0].map(Some));
+            assert_eq!(values(1), [2.0, 2.0, 1.0].map(Some));
+            assert_eq!(values(2), [1.0, 2.5, 2.0].map(Some));
+
+            // The sink allocates this fill to the last bar key independently. The page
+            // proves no join there: neither its count nor its windows carry over.
+            feed.sink().push_tick(tape[4].clone());
+            frames.run(&mut chart);
+            frames.run(&mut chart);
+            let study = chart.indicators().find(|(id, _)| *id == rate).unwrap().1;
+            assert_eq!(
+                [0, 1, 2].map(|line| study.values().value(line, 2)),
+                [1.0, 0.5, 1.0].map(Some)
+            );
+        } else {
+            // A truncated tape or a mismatched candle proves no full run.
+            for i in 0..3 {
+                assert_eq!(values(i), [None; 3]);
+            }
+        }
+    }
+}
+
 /// Hand counts at price 100, one a second, with a store of three. 2t: buys of 1 and 2 (delta 3),
 /// 4 and 8 (12), 16 and 32 (48), then 64. 5v: buy 3 and 2 of the buy of 4 (5); its other 2 and 3
 /// of the sell of 4 (-1); its last unit, the buy of 2 and 2 of the sell of 6 (-1); its other 4 and
