@@ -162,19 +162,9 @@ pub(crate) fn draw_dotted_segments(
     for &[start, end] in segments {
         visible_dashes(start, end, clip, size, spacing - size, 0.0, |a, b| {
             let centre = a.lerp(b, 0.5);
-            // Each axis keeps a dot centred inside the clip in it, as for one-point dotted lines.
-            let snap = |centre: f32, range: egui::Rangef| {
-                let first = ((centre - side * 0.5) * pixels_per_point).round();
-                let first = if range.contains(centre) {
-                    keep_inside(first, side * pixels_per_point, range, pixels_per_point)
-                } else {
-                    first
-                };
-                first / pixels_per_point
-            };
             let min = Pos2::new(
-                snap(centre.x, visible.x_range()),
-                snap(centre.y, visible.y_range()),
+                dot_start(centre.x, side, visible.x_range(), pixels_per_point),
+                dot_start(centre.y, side, visible.y_range(), pixels_per_point),
             );
             dots.add_colored_rect(Rect::from_min_size(min, egui::Vec2::splat(side)), color);
         });
@@ -406,19 +396,7 @@ fn append_dashed_segment(
     } else {
         (stroke.width, stroke.color)
     };
-    let edge = ((across - width * 0.5) * pixels_per_point).round();
-    // A line on the clip's edge keeps its dots in the pane rather than in the pixel outside it.
-    let edge = if across_visible.contains(across) {
-        keep_inside(
-            edge,
-            width * pixels_per_point,
-            across_visible,
-            pixels_per_point,
-        )
-    } else {
-        edge
-    };
-    let edge = edge / pixels_per_point;
+    let edge = dot_start(across, width, across_visible, pixels_per_point);
     for &(min, len) in &spans.spans {
         let len = if pixels_per_point < 1.0 {
             len.max(pixels_per_point.recip())
@@ -434,16 +412,20 @@ fn append_dashed_segment(
     }
 }
 
-/// The device pixel at which a dot quad `size` device pixels thick starts, moved from `start` by
-/// at most one pixel so that the quad lights a pixel inside `clip`. Renderers round the clip to
-/// whole device pixels and a quad lights the pixels whose centres it holds, so rounding the
-/// start of a dot centred on the clip's edge can put it in the pixel just outside.
-fn keep_inside(start: f32, size: f32, clip: egui::Rangef, pixels_per_point: f32) -> f32 {
+/// Where a dot `size` points thick centred at `centre` starts, snapped to the device pixel grid.
+/// Renderers round the clip to whole device pixels and a quad lights the pixels whose centres it
+/// holds, so a dot centred inside `clip` moves by at most one pixel to light a pixel inside it
+/// rather than the pixel just outside its edge.
+fn dot_start(centre: f32, size: f32, clip: egui::Rangef, pixels_per_point: f32) -> f32 {
+    let start = ((centre - size * 0.5) * pixels_per_point).round();
+    if !clip.contains(centre) {
+        return start / pixels_per_point;
+    }
     let lo = (clip.min * pixels_per_point).round();
     let hi = (clip.max * pixels_per_point).round();
     // The quad lights this many pixels from `start`: those whose centre lies before its far edge.
-    let lit = (size - 0.5).ceil();
-    start.max(lo + 1.0 - lit).min(hi - 1.0)
+    let lit = (size * pixels_per_point - 0.5).ceil();
+    start.max(lo + 1.0 - lit).min(hi - 1.0) / pixels_per_point
 }
 
 /// The dashes of a polyline whose strokes overlap `clip`, with the dash phase carried
