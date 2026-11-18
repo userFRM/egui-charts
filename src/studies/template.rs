@@ -1642,6 +1642,27 @@ mod tests {
         let millis = || InputKind::Number(0.0, 1e13);
         let rows = [
             ("RSI", vec![], 1),
+            (
+                "Echo",
+                vec![
+                    (
+                        "source",
+                        InputValue::Source(crate::studies::StudySource::Price(PriceSource::HL2)),
+                        InputKind::Source,
+                    ),
+                    (
+                        "basis",
+                        InputValue::Source(crate::studies::StudySource::Price(PriceSource::OHLC4)),
+                        InputKind::Source,
+                    ),
+                    (
+                        "symbol",
+                        InputValue::Symbol("OTHER".into()),
+                        InputKind::Symbol,
+                    ),
+                ],
+                1,
+            ),
             // Built-in templates with the former component inputs drop them.
             (
                 "Technical Ratings",
@@ -1688,15 +1709,20 @@ mod tests {
                 .map(|(id, value, kind)| StudyInput::new(id, id, value, kind))
                 .collect();
             factory.register(name, move || {
-                let close = |bars: &[Bar], _: &[StudyInput]| {
-                    bars.iter()
-                        .map(|bar| IndicatorValue::Single(bar.close))
-                        .collect()
-                };
                 Box::new(
                     CustomIndicator::new(name, |_| Vec::new())
+                        .with_overlay(name != "Echo")
                         .with_line_count(lines)
-                        .with_inputs(schema.clone(), close)
+                        .with_inputs(schema.clone(), |bars, _, source, _| {
+                            bars.iter()
+                                .enumerate()
+                                .map(|(at, bar)| {
+                                    IndicatorValue::Single(
+                                        source.get(at).copied().unwrap_or(bar.close),
+                                    )
+                                })
+                                .collect()
+                        })
                         .unwrap(),
                 )
             });
@@ -1706,11 +1732,33 @@ mod tests {
             if name == "Technical Ratings" {
                 original.set_input("fast", Length(21)).unwrap();
             }
-            let saved = StudyTemplate::from_study(original.as_ref());
-            let restored = saved
+            // Echo is a literal chart study saved on origin/main before source routing changed.
+            let saved = if name == "Echo" {
+                serde_json::from_str(r#"{"name":"Echo","inputs":[["source",{"Source":{"Price":"HL2"}}],["basis",{"Source":{"Price":"OHLC4"}}],["symbol",{"Symbol":"OTHER"}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":null,"plots":[{"color":[240,145,40,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[15,9,3,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#).unwrap()
+            } else {
+                StudyTemplate::from_study(original.as_ref())
+            };
+            let mut restored = saved
                 .create_with(&factory)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!((restored.name(), restored.line_count()), (name, lines));
+            if name == "Echo" {
+                assert_eq!(restored.settings(), saved.settings);
+                assert_eq!(
+                    restored.source(),
+                    Some(crate::studies::StudySource::Price(PriceSource::HL2))
+                );
+                assert_eq!(restored.scale(), crate::studies::StudyScale::Independent);
+                restored.calculate(&[Bar::new(
+                    chrono::DateTime::UNIX_EPOCH,
+                    3.0,
+                    5.0,
+                    1.0,
+                    4.0,
+                    1.0,
+                )]);
+                assert_eq!(restored.values().value(0, 0), Some(3.0));
+            }
             let fills = StudyTemplate::from_study(restored.as_ref()).settings.fills;
             assert_eq!(fills, saved.settings.fills, "{name}");
             let restored = restored.inputs();
