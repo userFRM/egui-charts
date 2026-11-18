@@ -452,11 +452,15 @@ impl Chart {
                 if parent == id.0 {
                     return Err(StudyError::CyclicSource);
                 }
-                let index = self
+                // A removed ancestor ends the chain; no cycle runs through it.
+                let Some(index) = self
                     .study_ids
                     .iter()
                     .position(|candidate| candidate.0 == parent)
-                    .ok_or(StudyError::UnknownSourceStudy(parent))?;
+                else {
+                    next = None;
+                    break;
+                };
                 next = match self.studies.indicators()[index].source() {
                     Some(StudySource::Study { id, .. }) => Some(id),
                     _ => None,
@@ -925,6 +929,7 @@ mod tests {
 
     #[test]
     fn price_sources_and_study_dependencies_follow_edits_and_live_bars() {
+        use crate::studies::{CustomIndicator, IndicatorValue, InputKind, StudyInput};
         let start = chrono::DateTime::<Utc>::UNIX_EPOCH;
         let bars: Vec<_> = (0..3)
             .map(|i| {
@@ -989,6 +994,34 @@ mod tests {
         let mut chart = Chart::new(BarData::from_bars(bars.clone()));
         let mean = chart.add_indicator(Box::new(SMA::new(2)));
         let rsi = chart.add_indicator(Box::new(RSI::new(1)));
+        // A custom study that plots its source reads the RSI once the chart supplies it.
+        let echo = chart.add_indicator(Box::new(
+            CustomIndicator::new("Echo", |_| Vec::new())
+                .with_inputs(
+                    vec![StudyInput::new(
+                        "source",
+                        "Source",
+                        InputValue::Source(StudySource::Price(PriceSource::Close)),
+                        InputKind::Source,
+                    )],
+                    |_, _, source, _| source.iter().copied().map(IndicatorValue::Single).collect(),
+                )
+                .unwrap(),
+        ));
+        chart
+            .set_indicator_source(echo, StudySource::Study { id: rsi.0, plot: 0 })
+            .unwrap();
+        assert!(matches!(
+            chart.set_indicator_source(echo, StudySource::Study { id: 999, plot: 0 }),
+            Err(StudyError::UnknownSourceStudy(999))
+        ));
+        let echoed = |chart: &Chart| {
+            let (_, study) = chart.indicators().find(|(id, _)| *id == echo).unwrap();
+            (0..4)
+                .map(|bar| study.values().value(0, bar))
+                .collect::<Vec<_>>()
+        };
+
         let value = InputValue::Source(StudySource::Study { id: rsi.0, plot: 0 });
         chart
             .indicator_mut(mean)
@@ -1008,12 +1041,25 @@ mod tests {
         };
         assert_eq!(output(&chart, 1), None);
         assert!((output(&chart, 3).unwrap() - 50.0).abs() < 1e-8);
+        assert_eq!(echoed(&chart), [None, Some(100.0), Some(0.0), Some(100.0)]);
         chart.update(
             SeriesId::MAIN,
             Bar::new(bars[3].time, 0.5, 0.5, 0.5, 0.5, 1.0),
         );
         settle(&mut chart);
         assert_eq!(output(&chart, 3), Some(0.0));
+        assert_eq!(echoed(&chart), [None, Some(100.0), Some(0.0), Some(0.0)]);
+        assert!(matches!(
+            chart.set_indicator_source(
+                rsi,
+                StudySource::Study {
+                    id: echo.0,
+                    plot: 0
+                }
+            ),
+            Err(StudyError::CyclicSource)
+        ));
+
         chart
             .indicator_mut(rsi)
             .unwrap()
@@ -1043,6 +1089,26 @@ mod tests {
         assert!(chart.undo());
         settle(&mut chart);
         assert!((output(&chart, 3).unwrap() - 125.0 / 3.0).abs() < 1e-8);
+        // A study whose own source is gone still takes consumers, which read its gaps.
+        chart
+            .indicator_mut(echo)
+            .unwrap()
+            .set_input(
+                "source",
+                InputValue::Source(StudySource::Study { id: 999, plot: 0 }),
+            )
+            .unwrap();
+        chart
+            .set_indicator_source(
+                mean,
+                StudySource::Study {
+                    id: echo.0,
+                    plot: 0,
+                },
+            )
+            .unwrap();
+        settle(&mut chart);
+        assert_eq!(output(&chart, 3), None);
     }
 
     /// A study of another study shares its pane and scale without changing the price range.

@@ -171,8 +171,15 @@ assert_eq!(change.values().value(0, 2), Some(-2.0));
 
 The chart recalculates the closure when bars change. Implement [`studies::Indicator`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html)
 directly when incremental calculation is needed. [`CustomIndicator::with_inputs`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CustomIndicator.html#method.with_inputs)
-declares validated editable settings. Additional symbol and interval histories use
-[`studies::StudyDataRequest`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.StudyDataRequest.html).
+declares validated editable settings. Its calculation takes `|bars, inputs, source, histories|`:
+read the selected series from `source`, while `bars` retain their original prices. The chart can
+supply another study's output as this source and checks its dependencies and cycles.
+[`with_data_requests`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CustomIndicator.html#method.with_data_requests)
+declares histories from the current inputs, such as another symbol on another interval
+([`StudyDataRequest`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.StudyDataRequest.html)).
+Find each available history by its request and align its bars with
+[`StudyData::bar_at`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.StudyData.html#method.bar_at).
+A study declaring histories, and any Source input other than `source`, accepts price fields only.
 
 ## Save and load drawings
 

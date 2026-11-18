@@ -300,6 +300,7 @@ mod tests {
                         bars: source,
                         revision: 0,
                         price_formatter: None,
+                        thousands_sep: None,
                         time_formatter: None,
                         bar_seconds: 0,
                         instrument: None,

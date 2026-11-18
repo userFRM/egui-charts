@@ -6,7 +6,8 @@ use crate::drawings::rendering::{
     style::{BOLD_OFFSET, TextBoxColors, label_text_color},
 };
 use crate::scales::{
-    DefaultPriceFormatter, PriceFormatter, instrument_price_precision, price_decimals,
+    DefaultPriceFormatter, PriceFormatter, group_thousands, instrument_price_precision,
+    price_decimals,
 };
 use crate::styles::stroke;
 use crate::tokens::DESIGN_TOKENS;
@@ -88,7 +89,8 @@ pub(super) fn paint_anchor_line(
     }
 }
 
-/// `price` in the chart's price formatter, else the instrument's precision, else by magnitude.
+/// `price` in the chart's price formatter, else the instrument's precision, else by magnitude,
+/// with built-in prices grouped by `view.thousands_sep`.
 pub(in crate::drawings::rendering) fn price_text(price: f64, view: &ChartView) -> Option<String> {
     if !price.is_finite() {
         return None;
@@ -100,12 +102,16 @@ pub(in crate::drawings::rendering) fn price_text(price: f64, view: &ChartView) -
         .instrument
         .and_then(instrument_price_precision)
         .map_or_else(|| price_decimals(price), usize::from);
-    Some(DefaultPriceFormatter::with_precision(precision).format(price))
+    Some(group_thousands(
+        DefaultPriceFormatter::with_precision(precision).format(price),
+        view.thousands_sep,
+    ))
 }
 
 impl Drawing {
     /// The first anchor's price in the chart's price format, else in the instrument's precision,
-    /// else by its magnitude; `None` when the price is not finite.
+    /// else by its magnitude, with built-in prices grouped by `view.thousands_sep`; `None` when
+    /// the price is not finite.
     fn anchor_price_text(&self, view: &ChartView) -> Option<String> {
         let price = match self.chart_points.first() {
             Some(point) => point.price,
@@ -344,6 +350,7 @@ mod tests {
             instrument.price_decimals = decimals;
             let view = ChartView {
                 price_formatter: formatter,
+                thousands_sep: None,
                 time_formatter: None,
                 bar_seconds: 0,
                 instrument: (tick_size.is_some() || decimals.is_some()).then_some(&instrument),
@@ -386,6 +393,7 @@ mod tests {
         let output = egui::Context::default().run_ui(input, |ui| {
             let view = ChartView {
                 price_formatter: None,
+                thousands_sep: None,
                 time_formatter: None,
                 bar_seconds: 0,
                 instrument: None,

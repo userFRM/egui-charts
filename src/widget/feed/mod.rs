@@ -407,11 +407,18 @@ impl FeedLink {
             flow.received_from(first);
         }
         if let Some(cutoff) = before.filter(|_| trade_based) {
-            // A cutoff can fall inside a sink allocation, so the live bars are summed again up to
-            // it. Their anchor is known only while the whole live stream is held.
+            // A cutoff can fall inside a sink allocation. Rebuild from every streamed execution:
+            // the held live ones, those kept apart at the first instant a page covers and the
+            // page's later copies. Their anchor is known only while the whole stream is held.
             if self.trades.lost_until().is_none() {
+                let (unheld_at, unheld) = self.trades.unheld_live().unzip();
+                let copies = unheld_at
+                    .into_iter()
+                    .flat_map(|at| held().filter(move |trade| trade.ts > at));
+                let unheld = by_time(copies, unheld.into_iter().flatten());
+                let stream = by_time(unheld, self.trades.live());
                 let mut live = Footprint::new(self.clock.clone(), tick_size, 1).ok()?;
-                for trade in self.trades.live().take_while(|trade| trade.ts < cutoff) {
+                for trade in stream.take_while(|trade| trade.ts < cutoff) {
                     let _ = live.push(trade);
                 }
                 flow.copy_trade_bars((&live).into(), None);
@@ -1258,6 +1265,19 @@ pub(super) fn retry_delay(failures: u32, error: &FeedError) -> Duration {
 /// `wake`, also after a panic while it was held.
 fn lock(wake: &Mutex<Option<ViewportId>>) -> std::sync::MutexGuard<'_, Option<ViewportId>> {
     wake.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Merges ordered trades by time, keeping `a` before `b` at equal times, as a stable sort would.
+fn by_time<'a>(
+    a: impl Iterator<Item = &'a Tick>,
+    b: impl Iterator<Item = &'a Tick>,
+) -> impl Iterator<Item = &'a Tick> {
+    let (mut a, mut b) = (a.peekable(), b.peekable());
+    std::iter::from_fn(move || match (a.peek(), b.peek()) {
+        (Some(x), Some(y)) if y.ts < x.ts => b.next(),
+        (Some(_), _) => a.next(),
+        (None, _) => b.next(),
+    })
 }
 
 #[cfg(test)]

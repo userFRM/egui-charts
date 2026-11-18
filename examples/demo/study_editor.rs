@@ -49,7 +49,7 @@ fn compile(source: &str, color: egui::Color32) -> Result<CustomIndicator, String
                 InputValue::Length(lookback),
                 InputKind::Length(1, 10_000),
             )],
-            |bars, inputs| {
+            |bars, inputs, _, _| {
                 let InputValue::Length(lookback) = inputs[0].value else {
                     return Vec::new();
                 };
