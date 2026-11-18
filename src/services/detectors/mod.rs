@@ -1744,6 +1744,8 @@ mod tests {
     fn stop_sweeps_use_closed_footprints_and_rebuild_on_interval_changes() {
         for (name, buy_size, close, extra_low, extra_sell, expected) in [
             ("qualifies", 10.0, 100.75, 0.0, 0.0, true),
+            ("loaded history", 10.0, 100.75, 0.0, 0.0, true),
+            ("live finish", 10.0, 100.75, 0.0, 0.0, true),
             ("ratio below three", 2.0, 100.75, 30.0, 0.0, false),
             ("small body", 10.0, 100.25, 0.0, 0.0, false),
             ("low volume", 3.0, 100.75, 0.0, 0.0, false),
@@ -1753,16 +1755,19 @@ mod tests {
             let mut host = Host::new(Some(1_000.0));
             let mut settings = host.detectors.settings();
             settings.stop_sweeps.enabled = true;
+            settings.stop_sweeps.alert = true;
             host.detectors.set_settings(settings);
+            let push = |trade: Tick| {
+                if matches!(name, "loaded history" | "live finish") {
+                    host.detectors.push_history("ES", &[trade]);
+                    host.events();
+                } else {
+                    host.push(MarketEvent::Trade(trade));
+                }
+            };
             // Eleven preceding bars: the first may be partial, the next ten each have volume 20.
             for minute in 0..11 {
-                host.push(MarketEvent::Trade(fill(
-                    minute * 60,
-                    100.0,
-                    20.0,
-                    OrderSide::Buy,
-                    None,
-                )));
+                push(fill(minute * 60, 100.0, 20.0, OrderSide::Buy, None));
             }
             // Bid at 100, 100.25, 100.5 is 1 each. Ask at the next three ticks is 10 each:
             // diagonal ratios 10:1, volume 33, delta 27 (81.8%), full-range body, baseline 20.
@@ -1776,7 +1781,7 @@ mod tests {
                 (665, 100.0, extra_low, OrderSide::Buy),
                 (665, 100.75, extra_sell, OrderSide::Sell),
             ] {
-                host.push(MarketEvent::Trade(fill(second, price, size, side, None)));
+                push(fill(second, price, size, side, None));
             }
             if name == "truncated executions" {
                 let trades: Vec<_> =
@@ -1785,13 +1790,13 @@ mod tests {
                 host.detectors.push_history("ES", &trades);
                 host.events();
             }
-            host.push(MarketEvent::Trade(fill(
-                666,
-                close,
-                0.1,
-                OrderSide::Buy,
-                None,
-            )));
+            let last = fill(666, close, 0.1, OrderSide::Buy, None);
+            if name == "loaded history" {
+                host.detectors.push_history("ES", &[last]);
+                host.events();
+            } else {
+                host.push(MarketEvent::Trade(last));
+            }
             // An unclassified print advances feed time without entering the footprint history.
             host.detectors.push(
                 "ES",
@@ -1807,6 +1812,12 @@ mod tests {
                 })
                 .collect();
             assert_eq!(sweeps.len(), usize::from(expected), "{name}");
+            let alerts = host.detectors.take_alerts();
+            assert_eq!(
+                alerts.len(),
+                usize::from(expected && name != "loaded history"),
+                "{name}: only bars with live executions alert"
+            );
             let (listener, events) = Listener::new(&host.inbox, 1);
             host.listeners.push(listener);
             host.detectors.subscribe("ES", Timeframe::Min5, events);
@@ -1826,6 +1837,10 @@ mod tests {
                 of_kind(host.events(), "Stop sweeps").len(),
                 usize::from(expected),
                 "{name}: rebuilt back at one minute after the last sided execution"
+            );
+            assert!(
+                host.detectors.take_alerts().is_empty(),
+                "{name}: rebuilt bars"
             );
         }
     }

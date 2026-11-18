@@ -321,8 +321,10 @@ impl Tracked {
                 _ => (settings.liquidity.alert, settings.liquidity.sound),
             };
             // A condition met by a bar that opened before the first live event's bar is history.
-            let current = kind != DetectionKind::FootprintCondition
-                || matches!(&signal.shape, SignalShape::Marker { time, .. }
+            let current = !matches!(
+                kind,
+                DetectionKind::FootprintCondition | DetectionKind::StopSweep
+            ) || matches!(&signal.shape, SignalShape::Marker { time, .. }
                     if self.stop_sweeps.live_open.is_some_and(|live| *time >= live));
             if live && alert && current {
                 let title = match (&signal.label, kind) {

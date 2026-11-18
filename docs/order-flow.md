@@ -444,6 +444,8 @@ Stop sweeps use closed bars of the latest subscribed time interval: directional 
 retains the latest 100,000 sided executions and rebuilds this category on interval changes;
 the first retained bar is excluded because it may be partial. Trade-based intervals have no
 stop sweeps. Another feed event at or after the next boundary closes a bar; no wall clock runs.
+A bar opened before the bar of the first live event since tracking or reset is still marked
+without an alert, even when that live event closes it; a bar receiving live executions can alert.
 
 Footprint conditions read the same bars. `FootprintRule` marks a closed bar with a buy or sell
 imbalance, or a stack of the rule's number of adjacent ones, using the rule's ratio, comparison
