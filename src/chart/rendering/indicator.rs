@@ -457,13 +457,17 @@ impl IndicatorRenderer {
                     .is_some_and(|bar| indicator.plot_value(line_idx, bar).is_some())
             };
             let walk = if joins {
-                (0..source_start)
-                    .rev()
-                    .find(|&i| defined(i))
-                    .unwrap_or(source_start)
-                    ..(source_end..values.len())
-                        .find(|&i| defined(i))
-                        .map_or(source_end, |i| i + 1)
+                let before = (0..source_start).rev().find(|&i| defined(i));
+                let after = (source_end..values.len()).find(|&i| defined(i));
+                // A value beyond one edge joins the path through a value in view or beyond the
+                // other edge; alone it would carry the plot's label into a view it is not in.
+                if before.is_some() == after.is_some()
+                    || (source_start..source_end).any(|i| defined(i))
+                {
+                    before.unwrap_or(source_start)..after.map_or(source_end, |i| i + 1)
+                } else {
+                    source_start..source_end
+                }
             } else {
                 source_start..source_end
             };
@@ -1311,6 +1315,47 @@ mod tests {
         values[3] = Some(25.0);
         values[5] = Some(75.0);
         assert_eq!(diamonds(values, &coords), pos(&[(139.0, 22.0)]));
+    }
+
+    /// A joined line reaches past the view only to join a value in it or beyond its other edge,
+    /// so a regression channel fitted to bars 9 to 11 draws no fit label over bars 0 to 4.
+    #[test]
+    fn fit_label_stays_hidden_while_the_channel_is_out_of_view() {
+        let bars: Vec<_> = (0..12)
+            .map(|i| {
+                let close = 10.0 + i as f64;
+                Bar::new(Utc.timestamp_opt(i, 0).unwrap(), close, close, close, close, 1.0)
+            })
+            .collect();
+        let mut study = LinearRegressionChannel::new(3, 0.0);
+        study.calculate(&bars);
+        assert!(study.plot_label().is_some());
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(200.0, 100.0));
+        let price = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 30.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let coords = ChartMapping::new(rect, 40.0, 0, 4, 0.0, price);
+        let mut output = Context::default().run_ui(RawInput::default(), |ui| {
+            IndicatorRenderer::render_study(
+                &RenderContext::new(ui.painter(), rect),
+                &study,
+                &bars,
+                0,
+                &price,
+                &coords,
+            );
+        });
+        let shapes = std::mem::take(&mut output.shapes);
+        output.drop_without_applying_deltas();
+        assert!(
+            !shapes
+                .iter()
+                .any(|clipped| matches!(clipped.shape, Shape::Text(_)))
+        );
     }
 
     #[test]
