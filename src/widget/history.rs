@@ -1167,6 +1167,7 @@ impl Chart {
                 indicator.set_timeframe(timeframe);
             }
             indicator.set_instrument(self.instrument());
+            indicator.set_chart_symbol(&self.symbol);
             indicator.set_bar_clock(&self.bar_clock());
             let at = index.min(self.study_ids.len());
             // The registry exposes a slice; append then rotate to insert at the saved position.

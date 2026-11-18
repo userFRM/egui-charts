@@ -121,10 +121,11 @@ impl Default for IndicatorDialog {
 impl IndicatorDialog {
     /// Restrict studies in the factory's Order flow category to services explicitly declared
     /// for the resolved instrument. Pass [`Chart::feed_capabilities`](crate::widget::Chart::feed_capabilities)
-    /// and [`Chart::instrument`](crate::widget::Chart::instrument) when they change. Missing
-    /// metadata declares no services. The options profile is offered on Profiles only when the
-    /// instrument declares the option-chain service. Other categories and saved favorites are
-    /// unchanged.
+    /// and [`Chart::instrument`](crate::widget::Chart::instrument) when they change. The instrument
+    /// describes the symbol given to [`set_metric_source`](Self::set_metric_source) even when
+    /// its own `symbol` differs. Missing metadata declares no services. The options profile is
+    /// offered on Profiles only when the instrument declares the option-chain service. Other
+    /// categories and saved favorites are unchanged.
     /// Until the first call every study is offered. Requirements are cached between updates.
     pub fn set_feed_capabilities(
         &mut self,
@@ -263,10 +264,7 @@ impl IndicatorDialog {
         let Some((Some(capabilities), Some(instrument))) = &self.feed_capabilities else {
             return;
         };
-        if symbol.is_empty()
-            || instrument.symbol != *symbol
-            || !capabilities.declares(FeedService::OptionChain, instrument)
-        {
+        if symbol.is_empty() || !capabilities.declares(FeedService::OptionChain, instrument) {
             return;
         }
         if self.option_catalog.is_none() {
@@ -2463,7 +2461,7 @@ mod options_profile_tests {
     }
 
     #[test]
-    fn options_profile_browser_requires_matching_declared_chain_and_releases_subscriptions() {
+    fn options_profile_browser_requires_a_declared_chain_and_releases_subscriptions() {
         let today = Utc::now().date_naive();
         let feed = Arc::new(Feed {
             dates: vec![today],
@@ -2475,7 +2473,7 @@ mod options_profile_tests {
         let caps = FeedCapabilities::new().with_services([FeedService::OptionChain]);
         for (capabilities, instrument, offered) in [
             (None, None, false),
-            (Some(&caps), Some(Instrument::new("OTHER")), false),
+            (Some(&caps), Some(Instrument::new("X:SAMPLE")), true),
             (
                 Some(&caps),
                 Some(Instrument::new("SAMPLE").with_services([])),

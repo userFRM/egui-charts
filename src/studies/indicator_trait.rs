@@ -727,6 +727,16 @@ pub trait Indicator: Send {
         false
     }
 
+    /// The symbol the chart shows, or the symbol a study calculated on another symbol uses.
+    /// The instrument given to [`set_instrument`](Indicator::set_instrument) describes it even
+    /// when its own `symbol` differs, such as `X:ABC` for `ABC`. Empty on a chart without a
+    /// symbol. Returns `true` if the caller must recalculate from bar 0. The chart calls this
+    /// wherever it calls `set_instrument`. Studies independent of the symbol keep the default.
+    fn set_chart_symbol(&mut self, symbol: &str) -> bool {
+        let _ = symbol;
+        false
+    }
+
     /// The typed events the chart holds for its symbol, those given to
     /// `Chart::set_time_scale_events`, in the order supplied. Returns `true` if calculation
     /// settings changed and the caller must recalculate from bar 0. The chart calls this on add
