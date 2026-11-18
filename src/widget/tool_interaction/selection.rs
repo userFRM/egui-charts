@@ -157,11 +157,18 @@ pub fn handle_selection<F1, F2, F3>(
                 if let Some(id) = drawing_manager.hit_test(pos) {
                     drawing_manager.toggle_selection(id);
                 } else if ui.input(|i| i.modifiers.shift) {
+                    let snap_to_time = drawing_manager.options.snap_to_time;
                     drawing_manager.set_active_tool(Some(DrawingToolType::Measure));
                     drawing_manager.start_drawing_with_coords(
                         DrawingToolType::Measure,
                         pos,
-                        |x| x_to_bar(x).round(),
+                        |x| {
+                            if snap_to_time {
+                                x_to_bar(x).round()
+                            } else {
+                                x_to_bar(x)
+                            }
+                        },
                         y_to_price,
                     );
                 }
@@ -556,15 +563,21 @@ mod tests {
             (DrawingToolType::TrendLine, false, vec2(0.0, 20.0)),
         ] {
             for body in [false, true] {
-                for modifiers in [Modifiers::SHIFT, Modifiers::CTRL, Modifiers::COMMAND] {
+                for (modifiers, snap_to_time) in [
+                    (Modifiers::SHIFT, true),
+                    (Modifiers::CTRL, true),
+                    (Modifiers::COMMAND, true),
+                    (Modifiers::SHIFT, false),
+                ] {
                     if (off_pane || pan != egui::Vec2::ZERO)
-                        && (body || modifiers != Modifiers::SHIFT)
+                        && (body || modifiers != Modifiers::SHIFT || !snap_to_time)
                     {
                         continue;
                     }
                     let ctx = Context::default();
                     let pane = Rect::from_min_size(Pos2::ZERO, vec2(500.0, 400.0));
                     let mut manager = DrawingManager::new();
+                    manager.options.snap_to_time = snap_to_time;
                     manager.update_pane_anchors(pane);
                     let mut cursors = CursorModeState::default();
                     let mut drawing = Drawing::new(7, tool);
@@ -689,8 +702,9 @@ mod tests {
                         moved.points[1], expected,
                         "{tool:?}, body {body}, {modifiers:?}"
                     );
-                    // A Shift move keeps whole bars, though its converter is precise.
-                    let bar = if body && !copying {
+                    // A Shift move keeps whole bars, though its converter is precise, while
+                    // anchors snap to bars in time.
+                    let bar = if body && !copying && snap_to_time {
                         expected.x.round()
                     } else {
                         expected.x
