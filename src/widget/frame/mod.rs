@@ -1798,7 +1798,9 @@ impl Chart {
                 let first = if session_profiles {
                     flow.complete_from()
                 } else {
-                    flow.complete_bars(..).next().map(|bar| bar.time)
+                    flow.bars(..)
+                        .find(|bar| flow.complete_at(bar.time) || flow.partial_at(bar.time))
+                        .map(|bar| bar.time)
                 };
                 let candles = first.map_or(visible_data.len(), |first| {
                     visible_data.partition_point(|bar| bar.time < first)
@@ -2253,7 +2255,10 @@ impl Chart {
                 paint_series(&data, params, merged.as_ref().map(|(merged, _)| merged));
                 if let Some((flow, config, candles)) = executions {
                     let has_cells = |bar: &crate::model::Bar| {
-                        session_profiles || flow.complete_bar_at(bar.time).is_some()
+                        session_profiles
+                            || flow.bar_at(bar.time).is_some_and(|source| {
+                                flow.complete_at(source.time) || flow.partial_at(source.time)
+                            })
                     };
                     let mut first = start_idx + candles;
                     // A bar nothing traded in shows its candle among the cells.

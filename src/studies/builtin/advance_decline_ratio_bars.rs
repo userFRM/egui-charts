@@ -5,11 +5,12 @@
 //!
 //! # Formula
 //! ```text
-//! up bar:   close > open
-//! down bar: close < open   (a bar with close == open counts as neither)
+//! up bar:   close >= open   (unchanged bars count as up)
+//! down bar: close < open
 //! ratio = count(up bars, length) / count(down bars, length)
+//!       = count(up bars, length) when there are no down bars
 //! ```
-//! with conventional length 9. A window without a down bar has no value.
+//! with conventional length 9. The pane marks equal up and down counts with a level at 1.
 //!
 //! # Example
 //! ```
@@ -51,21 +52,21 @@ impl AdvanceDeclineRatioBars {
 
     /// The values over `data`, every bar of which has a finite open and close.
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let direction = |b: &Bar| (usize::from(b.close > b.open), usize::from(b.close < b.open));
-        let (mut up, mut down) = (0, 0);
+        let down = |b: &Bar| usize::from(b.close < b.open);
+        let mut downs = 0;
         let mut values = IndicatorValues::new();
         for (i, bar) in data.iter().enumerate() {
-            let (u, d) = direction(bar);
-            (up, down) = (up + u, down + d);
+            downs += down(bar);
             if let Some(gone) = i.checked_sub(self.period) {
-                let (u, d) = direction(&data[gone]);
-                (up, down) = (up - u, down - d);
+                downs -= down(&data[gone]);
             }
-            let full = i + 1 >= self.period;
-            values.push_lines(&[if full && down > 0 {
-                up as f64 / down as f64
-            } else {
+            let ups = (self.period - downs) as f64;
+            values.push_lines(&[if i + 1 < self.period {
                 f64::NAN
+            } else if downs == 0 {
+                ups
+            } else {
+                ups / downs as f64
             }]);
         }
         values
@@ -133,6 +134,13 @@ impl Indicator for AdvanceDeclineRatioBars {
         }
     }
 
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            levels: vec![(1.0, palette::GRAY, "Equality")],
+            ..Default::default()
+        }
+    }
+
     fn is_overlay(&self) -> bool {
         false
     }
@@ -151,5 +159,44 @@ impl Indicator for AdvanceDeclineRatioBars {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!("A/D Ratio({})", self.period)]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Unchanged bars count as up; a window without down bars gives its up count, calculated
+    /// at once and bar by bar.
+    #[test]
+    fn unchanged_bars_count_as_up_and_a_window_without_down_bars_gives_the_up_count() {
+        // Up, down, unchanged, up, up, up, unchanged, down.
+        let bars: Vec<_> = [1.0, -1.0, 0.0, 1.0, 1.0, 1.0, 0.0, -1.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, change)| {
+                let time = chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(i as i64);
+                Bar::new(time, 10.0, 12.0, 8.0, 10.0 + change, 1.0)
+            })
+            .collect();
+        let mut ratio = AdvanceDeclineRatioBars::new(3);
+        ratio.calculate(&bars);
+        let values: Vec<_> = (0..bars.len())
+            .map(|i| ratio.values().value(0, i))
+            .collect();
+        assert_eq!(
+            values,
+            [
+                None,
+                None,
+                Some(2.0),
+                Some(2.0),
+                Some(3.0),
+                Some(3.0),
+                Some(3.0),
+                Some(2.0)
+            ]
+        );
+        super::super::assert_replay_matches_batch(&ratio, &bars);
     }
 }

@@ -203,7 +203,7 @@ impl Indicator for HigherIntervalCandles {
             .with_default(InputValue::Toggle(true)),
             StudyInput::new(
                 "interval",
-                "Interval",
+                "Candle interval",
                 InputValue::Choice(intervals.iter().position(|t| *t == self.interval).unwrap()),
                 InputKind::Choice(intervals.iter().map(ToString::to_string).collect()),
             )

@@ -5538,28 +5538,43 @@ mod tests {
     /// points left of the slot's right edge, so their flag button stays inside the status line,
     /// which starts 8 points right of the plot's left edge, only from 8 + 116 + 228 = 352 points
     /// of plot left to slot right. Narrower slots leave the selectors to the corner menu, the
-    /// slot of exactly 352 keeps them, and a left price axis takes its width from those 352. In
-    /// slots too narrow for the controls the flag button stays at the start of the status line.
+    /// slot of exactly 352 keeps them, and a left price axis takes its width from those 352.
+    /// Narrower slots show their group markers instead, and the hovered title shows only the
+    /// buttons that fit before the legend's end, which is 126 points left of the slot's right
+    /// edge with a 70 point right axis: none at 120, the flag at 160, flag and menu at 200, and
+    /// all but the remove button with a left axis at 300.
     #[cfg(feature = "icons")]
     #[test]
     fn title_controls_fit_in_narrow_linked_slots() {
-        for (target, left_axis, shows_selectors) in [
-            (200.0_f32, false, false),
-            (320.0, false, false),
-            (336.0, false, false),
-            (351.0, false, false),
-            (352.0, false, true),
-            (300.0, true, false),
-            (352.0, true, false),
-            (411.0, true, false),
-            (430.0, true, false),
-            (480.0, true, true),
+        for (target, left_axis, shows_selectors, buttons) in [
+            (120.0_f32, false, false, 0),
+            (145.0, false, false, 0),
+            (160.0, false, false, 1),
+            (200.0, false, false, 2),
+            (320.0, false, false, 5),
+            (336.0, false, false, 5),
+            (351.0, false, false, 5),
+            (352.0, false, true, 5),
+            (300.0, true, false, 4),
+            (352.0, true, false, 5),
+            (411.0, true, false, 5),
+            (430.0, true, false, 5),
+            (480.0, true, true, 5),
         ] {
             let ctx = egui::Context::default();
             let mut layout = ChartLayout {
                 mode: ChartLayoutMode::TwoHorizontal,
                 ..Default::default()
             };
+            let marker_colors = [LINK_MARKERS[0].1, LINK_MARKERS[2].1];
+            layout.set_link_groups(
+                0,
+                ChartLinkGroups {
+                    symbol: ChartLink::Group(LINK_MARKERS[0].0.into()),
+                    interval: ChartLink::Group(LINK_MARKERS[2].0.into()),
+                },
+                true,
+            );
             let mut charts = [chart(60), chart(60)];
             for chart in &mut charts {
                 chart.config_mut().show_left_axis = left_axis;
@@ -5570,8 +5585,7 @@ mod tests {
             size.x += 2.0 * (target - slot.width());
             let slot = layout.rects(Rect::from_min_size(Pos2::ZERO, size), 2)[0];
             assert_eq!(slot.width(), target, "{size:?}");
-            let bg = ctx.active_theme().chart.bg;
-            let mut controls = None;
+            let (mut icons, mut markers, mut load_errors) = (Vec::new(), Vec::new(), 0);
             let mut selectors = false;
             for frame in 0..5 {
                 let plot = charts[0].last_rendered_price_rect;
@@ -5580,12 +5594,13 @@ mod tests {
                 } else {
                     slot.left()
                 };
+                // On the symbol mark, inside the title at every width.
                 let output = ctx.run_ui(
                     RawInput {
                         screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
                         time: Some(frame as f64 * 0.1),
                         events: vec![Event::PointerMoved(pos2(
-                            plot_left + 40.0,
+                            plot_left + 12.0,
                             slot.top() + 14.0,
                         ))],
                         ..Default::default()
@@ -5594,17 +5609,30 @@ mod tests {
                         layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
                     },
                 );
+                (icons, markers, load_errors) = (Vec::new(), Vec::new(), 0);
                 selectors = false;
                 for shape in &output.shapes {
                     match &shape.shape {
                         egui::Shape::Rect(rect)
-                            if rect.fill == bg
-                                && rect.rect.size() == vec2(116.0, 20.0)
-                                && slot.intersects(rect.rect) =>
+                            if rect.brush.as_ref().is_some_and(|brush| {
+                                brush.fill_texture_id != egui::TextureId::default()
+                            }) && slot.intersects(rect.rect)
+                                && rect.rect.bottom() < slot.center().y =>
                         {
-                            controls = Some(rect.rect);
+                            icons.push(rect.rect);
                         }
-                        egui::Shape::Text(text) if text.galley.text().starts_with("S ") => {
+                        egui::Shape::Path(path)
+                            if marker_colors.contains(&path.fill)
+                                && slot.intersects(path.visual_bounding_rect()) =>
+                        {
+                            markers.push(path.visual_bounding_rect());
+                        }
+                        // egui's mark for an image it cannot load at the size it is given.
+                        egui::Shape::Text(text) if text.galley.text().starts_with('\u{26a0}') => {
+                            load_errors += 1;
+                        }
+                        // The compact symbol selector's caption beside its painted marker.
+                        egui::Shape::Text(text) if text.galley.text().ends_with(" S") => {
                             selectors |= slot.contains(text.pos);
                         }
                         _ => {}
@@ -5612,22 +5640,42 @@ mod tests {
                 }
                 output.drop_without_applying_deltas();
             }
-            let controls = controls.expect("the hovered title shows its controls");
-            let flag = Rect::from_min_size(controls.min, Vec2::splat(20.0));
-            assert!(
-                flag.left() >= charts[0].last_rendered_price_rect.left() + 8.0
-                    && slot.contains_rect(flag),
-                "slot {target}, left axis {left_axis}: flag {flag:?} leaves the status line"
+            let plot = charts[0].last_rendered_price_rect;
+            assert_eq!(
+                load_errors, 0,
+                "slot {target}, left axis {left_axis}: a squeezed button"
             );
+            assert_eq!(
+                icons.len(),
+                buttons,
+                "slot {target}, left axis {left_axis}: buttons {icons:?}"
+            );
+            for icon in &icons {
+                assert!(
+                    icon.width() >= 14.0
+                        && icon.left() >= plot.left() + 8.0
+                        && slot.contains_rect(*icon),
+                    "slot {target}, left axis {left_axis}: button {icon:?} leaves the status line"
+                );
+                for marker in &markers {
+                    assert!(
+                        icon.right() < marker.left(),
+                        "slot {target}, left axis {left_axis}: button {icon:?} reaches marker {marker:?}"
+                    );
+                }
+            }
             assert_eq!(
                 selectors, shows_selectors,
                 "slot {target}, left axis {left_axis}"
             );
+            assert_eq!(markers.len(), 2, "slot {target}, left axis {left_axis}");
             if shows_selectors {
-                assert!(
-                    controls.right() <= slot.right() - LINK_CONTROLS_INSET,
-                    "slot {target}: controls {controls:?} reach the selectors"
-                );
+                for icon in &icons {
+                    assert!(
+                        icon.right() <= slot.right() - LINK_CONTROLS_INSET,
+                        "slot {target}: button {icon:?} reaches the selectors"
+                    );
+                }
             }
         }
     }
