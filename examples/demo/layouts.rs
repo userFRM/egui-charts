@@ -898,7 +898,7 @@ impl DemoApp {
         self.object_tree.state_mut().drawing_sort = settings
             .drawing_sort
             .iter()
-            .map(|(symbol, sort)| (DemoSymbol::current(symbol), *sort))
+            .map(|(symbol, sort)| (DemoSymbol::current(symbol), sort.clone()))
             .collect();
         self.update_theme(ctx);
         // Switching stops a replay the demo restored from its own storage.

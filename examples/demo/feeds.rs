@@ -132,8 +132,6 @@ impl DemoMarket {
     }
 }
 
-type QuoteSubscription = (Vec<String>, Events<(String, Quote)>);
-
 /// The watchlist's quote service: the chart symbol's quote from the live feed, with its regular
 /// and extended-hours prices, session volume and best bid and ask, and retained executions for
 /// other catalog symbols. The quotes follow the feed's simulation clock, which the pause freezes.
@@ -141,7 +139,7 @@ type QuoteSubscription = (Vec<String>, Events<(String, Quote)>);
 /// quote only wakes the UI, so it is pushed again only when a displayed value changes.
 pub(super) struct DemoQuotes {
     live: Mutex<Arc<LiveFeed>>,
-    stream: Mutex<Option<QuoteSubscription>>,
+    stream: Mutex<Option<(Vec<String>, Events<(String, Quote)>)>>,
     /// The last quote pushed per symbol, with times at display precision.
     last_pushed: Mutex<BTreeMap<String, Quote>>,
 }
@@ -302,7 +300,7 @@ const HIGHLIGHTS: &[(&str, &str)] = &[
 /// Up to `query.limit` synthetic stories, newest first, published on the hour before `now`.
 pub(super) fn news(query: &NewsQuery, now: DateTime<Utc>) -> Vec<NewsStory> {
     let mut stories = stories(&query.symbols, query.highlights, now);
-    stories.sort_by_key(|story| std::cmp::Reverse(story.time));
+    stories.sort_by(|a, b| b.time.cmp(&a.time));
     stories.truncate(query.limit);
     stories
 }
@@ -453,7 +451,7 @@ pub(super) fn calendar(query: &CalendarQuery, now: DateTime<Utc>) -> Vec<Calenda
                     }
                     events.push(event);
                 }
-                CalendarKind::Ipos if n.is_multiple_of(2) => {
+                CalendarKind::Ipos if n % 2 == 0 => {
                     let (symbol, name, price) = OFFERINGS[n / 2 % OFFERINGS.len()];
                     let mut event = CalendarEvent::new(id("ipo", 0), query.kind, at(14), name);
                     event.country = "US".into();
@@ -1040,7 +1038,7 @@ mod tests {
         let mut shifted = daily.clone();
         shifted.time = "2026-11-02T05:00:00Z".parse().unwrap();
         assert_eq!(
-            crate::sampledata::calendar_history(std::slice::from_ref(&daily), &[], clock.clone()),
+            crate::sampledata::calendar_history(&[daily.clone()], &[], clock.clone()),
             vec![shifted]
         );
         let mut sunday = daily;
