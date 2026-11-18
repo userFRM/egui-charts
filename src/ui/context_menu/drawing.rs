@@ -7,7 +7,7 @@ use crate::config::KeyboardAction;
 use crate::drawings::TimeframeVisibility;
 use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
-use crate::model::{Alert, AlertComparison, AlertCondition, Timeframe};
+use crate::model::{Alert, AlertComparison, AlertCondition, AlertPositionProgress, Timeframe};
 use crate::theme::Theme;
 use crate::ui::Control;
 use crate::ui::context_menu::{MenuEntry, MenuItem, show_menu};
@@ -49,7 +49,8 @@ pub enum DrawingContextMenuAction {
     /// No action requested.
     None,
     /// Open the alert dialog on this alert: the price, or the first output of the study leading a
-    /// study pane, crossing the drawing's first visible level, for example with [`AlertDialog::edit`](crate::ui::dialogs::AlertDialog::edit),
+    /// study pane, crossing the drawing's first visible level, or on a long or short position a
+    /// [`Position`](crate::model::AlertCondition::Position) alert on its entry, target and stop, for example with [`AlertDialog::edit`](crate::ui::dialogs::AlertDialog::edit),
     /// listing the levels of [`Drawing::alert_levels_with_bars`](crate::drawings::Drawing::alert_levels_with_bars)
     /// as its sources.
     AddAlert(Box<Alert>),
@@ -158,7 +159,7 @@ impl DrawingContextMenu {
         self.is_visible = visible;
     }
 
-    /// Open the menu on drawing `drawing_id` of `chart`, offering an alert when the chart has a
+    /// Open the menu on drawing `drawing_id` of `chart`, offering an alert (on a position, from entry to first exit) when the chart has a
     /// symbol, the drawing has levels and its pane marks the price or a study, as
     /// `Chart::drawing_subject` gives, and the chart's other panes.
     pub(crate) fn open_on(&mut self, ctx: &Context, chart: &Chart, pos: Pos2, drawing_id: usize) {
@@ -183,13 +184,19 @@ impl DrawingContextMenu {
                     .alert_levels_with_bars(bars.len().saturating_sub(1) as f64, scale, bars)
                     .into_iter()
                     .next()?;
-                let mut alert = Alert::new(
-                    chart.symbol.clone(),
+                use crate::drawings::DrawingToolType as T;
+                let condition = if matches!(drawing.tool_type, T::LongPos | T::ShortPos) {
+                    AlertCondition::Position {
+                        levels: Box::new([0, 1, 2].map(|level| drawing.alert_source(level))),
+                        progress: AlertPositionProgress::AwaitingEntry,
+                    }
+                } else {
                     AlertCondition::Compare {
                         other: drawing.alert_source(level),
                         comparison: AlertComparison::Crossing,
-                    },
-                );
+                    }
+                };
+                let mut alert = Alert::new(chart.symbol.clone(), condition);
                 alert.source = source?;
                 Some(alert)
             });
@@ -495,6 +502,32 @@ mod tests {
                         comparison: AlertComparison::Crossing,
                     })
                     .as_ref()
+            );
+        }
+    }
+
+    #[test]
+    fn positions_offer_one_alert_from_entry_to_exit() {
+        for (tool, prices) in [
+            (DrawingToolType::LongPos, vec![100.0, 110.0, 95.0]),
+            (DrawingToolType::ShortPos, vec![100.0, 90.0]),
+        ] {
+            let mut chart = Chart::new(BarData::default());
+            chart.symbol = "SAMPLE".into();
+            let mut drawing = Drawing::new(7, tool);
+            drawing.chart_points = prices
+                .into_iter()
+                .map(|price| ChartPoint::new(0.0, price))
+                .collect();
+            chart.drawings_mut().drawings.push(drawing);
+            let mut menu = DrawingContextMenu::new();
+            menu.open_on(&Context::default(), &chart, Pos2::ZERO, 7);
+            assert_eq!(
+                menu.alert.map(|a| a.condition),
+                Some(AlertCondition::Position {
+                    levels: Box::new(["7", "7#1", "7#2"].map(|id| AlertSource::Drawing(id.into()))),
+                    progress: AlertPositionProgress::AwaitingEntry,
+                })
             );
         }
     }

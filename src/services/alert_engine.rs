@@ -9,7 +9,7 @@ use super::{AlertEvent, Alerts, Events};
 use crate::data::{FeedError, MaybeSend, Reply};
 use crate::model::{
     Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertFrequency, AlertId,
-    AlertSource, AlertStatus, Bar, BarClock, Timeframe,
+    AlertPositionProgress, AlertSource, AlertStatus, Bar, BarClock, Timeframe,
 };
 
 /// An [`Alerts`] service that keeps alerts in memory and evaluates them on the bars the host
@@ -23,7 +23,8 @@ use crate::model::{
 /// storage, and [`with_alerts`](Self::with_alerts) restores them. Evaluation state lives in
 /// memory only, so after a restart an alert that fires on every occurrence may fire again while
 /// its condition still holds; an alert with frequency [`Once`](AlertFrequency::Once) that fired
-/// stays [`Triggered`](AlertStatus::Triggered).
+/// stays [`Triggered`](AlertStatus::Triggered). A [`Position`](AlertCondition::Position) keeps
+/// its progress in its condition, so it resumes waiting for the entry or for an exit.
 ///
 /// # Rules
 ///
@@ -78,6 +79,12 @@ use crate::model::{
 /// [`AlertEvent::SilentTriggered`] entry without calling the delivery callback or consuming an
 /// occurrence, so a once alert stays armed. It records at most one entry per occurrence of its
 /// frequency, a once alert one per bar. `starts` holds back evaluation altogether until that time.
+///
+/// *Positions.* A [`Position`](AlertCondition::Position) fires on its entry and its first exit,
+/// after an `Upsert` carrying its new progress, and becomes `Triggered` after the exit. Outside
+/// its schedule the triggers are silent but progress still moves. An empty message reads the
+/// progress reached, such as "Position entered". Saving it active after its exit starts it again
+/// from the entry.
 ///
 /// *Expiry.* Every `update` and [`tick`](Self::tick) first marks active alerts whose expiry has
 /// passed as [`Expired`](AlertStatus::Expired), so an alert never fires at or after its expiry
@@ -168,7 +175,7 @@ struct Observation {
     /// tested when the alert evaluates, see [`reads_previous`].
     holds: bool,
     /// The values of `seen.rules` one bar earlier, read when this bar first arrived.
-    before: Vec<[Option<f64>; 3]>,
+    before: Vec<[Option<f64>; 4]>,
     clock: BarClock,
     event: DateTime<Utc>,
     bar: Bar,
@@ -190,7 +197,7 @@ struct Seen {
     minute: Option<DateTime<Utc>>,
     /// The bits of the close and volume, so that a value that is not a number equals itself.
     bar: (u64, u64),
-    rules: Vec<[Option<f64>; 3]>,
+    rules: Vec<[Option<f64>; 4]>,
 }
 
 impl Default for AlertEngine {
@@ -409,24 +416,40 @@ impl AlertEngine {
             if !matched || !ready {
                 continue;
             }
-            let Some((bar, message, silent)) = evaluate(alert, run, symbol, exchange, now) else {
+            let Some((bar, messages, silent)) = evaluate(alert, run, symbol, exchange, now) else {
                 continue;
             };
             let price = bar.close.is_finite().then_some(bar.close);
+            let position = matches!(alert.condition, AlertCondition::Position { .. });
             if silent {
                 if let Some(events) = events {
-                    events.push(AlertEvent::SilentTriggered {
-                        id,
-                        symbol: symbol.to_owned(),
-                        time: now,
-                        price,
-                        message,
-                    });
+                    for message in &messages {
+                        events.push(AlertEvent::SilentTriggered {
+                            id: id.clone(),
+                            symbol: symbol.to_owned(),
+                            time: now,
+                            price,
+                            message: message.clone(),
+                        });
+                    }
                 }
-                continue;
+                // A position alert moves on outside its schedule too.
+                if !position {
+                    continue;
+                }
+            } else {
+                alert.last_triggered_at =
+                    Some(alert.last_triggered_at.map_or(now, |old| old.max(now)));
             }
-            alert.last_triggered_at = Some(alert.last_triggered_at.map_or(now, |old| old.max(now)));
-            if alert.frequency == AlertFrequency::Once {
+            // An entered position keeps watching for its exit.
+            let open = matches!(
+                alert.condition,
+                AlertCondition::Position {
+                    progress: AlertPositionProgress::Entered,
+                    ..
+                }
+            );
+            if alert.frequency == AlertFrequency::Once && !open {
                 run.done = true;
                 if alert.watchlist.is_none() {
                     alert.status = AlertStatus::Triggered;
@@ -434,21 +457,26 @@ impl AlertEngine {
             }
             run.fired = Some(occurrence(alert.frequency, &bar, now));
             if let Some(events) = events
-                && alert.status != AlertStatus::Active
+                && (alert.status != AlertStatus::Active || position)
             {
                 events.push(AlertEvent::Upsert(Box::new(alert.clone())));
             }
-            let event = AlertEvent::TriggeredForSymbol {
-                id,
-                symbol: symbol.to_owned(),
-                time: now,
-                price,
-                message,
-            };
-            if let Some(events) = events {
-                events.push(event.clone());
+            if silent {
+                continue;
             }
-            fired.push((alert.clone(), event));
+            for message in messages {
+                let event = AlertEvent::TriggeredForSymbol {
+                    id: id.clone(),
+                    symbol: symbol.to_owned(),
+                    time: now,
+                    price,
+                    message,
+                };
+                if let Some(events) = events {
+                    events.push(event.clone());
+                }
+                fired.push((alert.clone(), event));
+            }
         }
         // An alert on host events keeps what it received while paused, so resuming it replays
         // nothing.
@@ -757,6 +785,16 @@ impl AlertEngine {
 impl State {
     /// Adds `alert` or replaces the one with its id, giving it an id if it has none.
     fn insert(&mut self, mut alert: Alert) -> Alert {
+        // A position alert made active again after its exit waits for the entry again.
+        if alert.status == AlertStatus::Active
+            && let AlertCondition::Position { progress, .. } = &mut alert.condition
+            && matches!(
+                progress,
+                AlertPositionProgress::TargetReached | AlertPositionProgress::StopReached
+            )
+        {
+            *progress = AlertPositionProgress::AwaitingEntry;
+        }
         if alert.id.is_none() {
             alert.created_at = Some(Utc::now());
             alert.last_triggered_at = None;
@@ -919,8 +957,8 @@ fn observe(
         rules
             .iter()
             .map(|(src, condition)| {
-                let [a, b] = condition.partners().map(|other| other.and_then(source));
-                [source(src), a, b]
+                let [a, b, c] = condition.partners().map(|other| other.and_then(source));
+                [source(src), a, b, c]
             })
             .collect()
     };
@@ -946,14 +984,14 @@ fn observe(
         let holds = rules
             .iter()
             .zip(&seen.rules)
-            .all(|((src, condition), &[current, a, b])| {
+            .all(|((src, condition), &[current, a, b, c])| {
                 reads_previous(condition)
                     || current.is_some_and(|current| {
                         condition_holds(
                             condition,
                             current,
-                            [None; 3],
-                            [a, b],
+                            [None; 4],
+                            [a, b, c],
                             &bars[..=at],
                             |back| at.checked_sub(back as usize).and_then(|at| source(src, at)),
                         )
@@ -1012,14 +1050,15 @@ fn observe(
 }
 
 /// Test one coherent set of interval observations and consume its occurrence. Returns the bar
-/// and message to fire, and whether the trigger falls outside the schedule and is only logged.
+/// and messages to fire, one per trigger (a position can enter and exit on one evaluation), and
+/// whether they fall outside the schedule and are only logged.
 fn evaluate(
-    alert: &Alert,
+    alert: &mut Alert,
     run: &mut Run,
     symbol: &str,
     exchange: Option<&str>,
     now: DateTime<Utc>,
-) -> Option<(Bar, String, bool)> {
+) -> Option<(Bar, Vec<String>, bool)> {
     let intervals = alert.timeframes();
     let anchor = run.intervals.get(&intervals[0])?;
     if alert.frequency == AlertFrequency::OncePerBarClose
@@ -1080,13 +1119,21 @@ fn evaluate(
     if !fires {
         return None;
     }
+    let position = match &alert.condition {
+        AlertCondition::Position { progress, .. } => Some(*progress),
+        _ => None,
+    };
     let silent = alert
         .schedule
         .as_ref()
         .is_some_and(|schedule| !schedule.allows(now));
     if silent {
         let at = occurrence(alert.frequency, bar, now);
-        if alert.frequency != AlertFrequency::EveryTime && run.silent == Some(at) {
+        // A position alert moves on with each trigger, so it never repeats one.
+        if position.is_none()
+            && alert.frequency != AlertFrequency::EveryTime
+            && run.silent == Some(at)
+        {
             return None;
         }
         run.silent = Some(at);
@@ -1096,14 +1143,39 @@ fn evaluate(
         .iter()
         .zip(&intervals)
         .find(|(_, interval)| **interval == first)?;
-    let message = alert.expand_message(symbol, exchange, first, &primary.bar, now, |source| {
-        primary
-            .values
-            .iter()
-            .find(|(kept, _)| kept == source)
-            .and_then(|(_, value)| *value)
-    });
-    Some((bar.clone(), message, silent))
+    let message = |alert: &Alert| {
+        alert.expand_message(symbol, exchange, first, &primary.bar, now, |source| {
+            primary
+                .values
+                .iter()
+                .find(|(kept, _)| kept == source)
+                .and_then(|(_, value)| *value)
+        })
+    };
+    let Some(progress) = position else {
+        return Some((bar.clone(), vec![message(alert)], silent));
+    };
+    // A position alert has one rule: the value and its entry, target and stop.
+    let [value, entry, target, stop] = primary.seen.rules[0];
+    let mut stages = Vec::new();
+    if progress != AlertPositionProgress::Entered {
+        stages.push(AlertPositionProgress::Entered);
+    }
+    if let (Some(value), Some(entry), Some(target), Some(stop)) = (value, entry, target, stop) {
+        stages.extend(position_exit(value, entry, target, stop));
+    }
+    let mut messages = Vec::new();
+    for stage in stages {
+        if let AlertCondition::Position { progress, .. } = &mut alert.condition {
+            *progress = stage;
+        }
+        messages.push(if alert.message.is_empty() {
+            stage.to_string()
+        } else {
+            message(alert)
+        });
+    }
+    Some((bar.clone(), messages, silent))
 }
 
 /// Whether the rules of `interval` that compare two evaluations hold between `last`, the inputs of
@@ -1121,7 +1193,7 @@ fn previous_rules_hold(
         .enumerate()
         .filter(|(_, (_, condition, _))| reads_previous(condition))
         .all(|(n, (_, condition, _))| {
-            let [current, a, b] = observation.seen.rules[n];
+            let [current, a, b, c] = observation.seen.rules[n];
             let previous = match last {
                 Some(last)
                     if last.time == observation.seen.time
@@ -1132,7 +1204,7 @@ fn previous_rules_hold(
                 _ => observation.before[n],
             };
             current.is_some_and(|current| {
-                condition_holds(condition, current, previous, [a, b], &[], |_| None)
+                condition_holds(condition, current, previous, [a, b, c], &[], |_| None)
             })
         })
 }
@@ -1144,7 +1216,8 @@ fn reads_previous(condition: &AlertCondition) -> bool {
         | AlertCondition::CrossingUp(_)
         | AlertCondition::CrossingDown(_)
         | AlertCondition::EnteringChannel { .. }
-        | AlertCondition::ExitingChannel { .. } => true,
+        | AlertCondition::ExitingChannel { .. }
+        | AlertCondition::Position { .. } => true,
         AlertCondition::Compare { comparison, .. } => matches!(
             comparison,
             AlertComparison::Crossing | AlertComparison::CrossingUp | AlertComparison::CrossingDown
@@ -1168,17 +1241,17 @@ fn occurrence(frequency: AlertFrequency, bar: &Bar, now: DateTime<Utc>) -> DateT
 }
 
 /// Whether `condition` holds for `value`, given the previous value of the source, the current and
-/// previous value of the other output for a comparison, the bars up to the evaluated one and the
+/// previous value of the other outputs, the bars up to the evaluated one and the
 /// value of the source `back` bars before it.
 fn condition_holds(
     condition: &AlertCondition,
     value: f64,
-    previous: [Option<f64>; 3],
-    other: [Option<f64>; 2],
+    previous: [Option<f64>; 4],
+    other: [Option<f64>; 3],
     bars: &[Bar],
     lookback: impl Fn(u32) -> Option<f64>,
 ) -> bool {
-    let [previous, previous_other, previous_second] = previous;
+    let [previous, previous_other, previous_second, _] = previous;
     match condition {
         AlertCondition::StrategyFills(_)
         | AlertCondition::DetectorSignals(_)
@@ -1244,6 +1317,23 @@ fn condition_holds(
                 AlertChannelComparison::Outside => !current,
             }
         }
+        AlertCondition::Position { progress, .. } => {
+            let [Some(entry), Some(target), Some(stop)] = other else {
+                return false;
+            };
+            match progress {
+                AlertPositionProgress::Entered => {
+                    position_exit(value, entry, target, stop).is_some()
+                }
+                _ => compare(
+                    AlertComparison::Crossing,
+                    value,
+                    previous,
+                    entry,
+                    previous_other,
+                ),
+            }
+        }
         AlertCondition::VolumeAboveAverage {
             multiplier,
             bars: count,
@@ -1278,6 +1368,30 @@ fn compare(
         AlertComparison::CrossingDown => down,
         AlertComparison::Above => value > level,
         AlertComparison::Below => value < level,
+    }
+}
+
+/// The exit a position entered at `entry` reaches at `value`, the stop first: long when the
+/// target is above the entry, short when it is below, and none while they are equal.
+fn position_exit(value: f64, entry: f64, target: f64, stop: f64) -> Option<AlertPositionProgress> {
+    let long = match target.partial_cmp(&entry)? {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => return None,
+    };
+    let beyond = |level: f64, above: bool| {
+        if above {
+            value >= level
+        } else {
+            value <= level
+        }
+    };
+    if beyond(stop, !long) {
+        Some(AlertPositionProgress::StopReached)
+    } else if beyond(target, long) {
+        Some(AlertPositionProgress::TargetReached)
+    } else {
+        None
     }
 }
 
@@ -1382,6 +1496,247 @@ mod tests {
     /// on which the alert fires.
     type Tick = (f64, f64, f64);
     type Row = (AlertCondition, Vec<Tick>, Vec<Tick>, Vec<usize>);
+
+    #[test]
+    fn position_alerts_report_the_entry_then_the_first_exit_and_end() {
+        use AlertPositionProgress::{AwaitingEntry, Entered, StopReached, TargetReached};
+        type PositionRow = (
+            [f64; 3],
+            f64,
+            Vec<f64>,
+            Vec<(&'static str, f64)>,
+            Vec<AlertPositionProgress>,
+        );
+        let entered = "Position entered";
+        let target = "Position target reached";
+        let stop = "Position stop reached";
+        let rows: Vec<PositionRow> = vec![
+            (
+                [100.0, 110.0, 95.0],
+                98.0,
+                vec![99.0, 100.0, 105.0, 110.0, 111.0],
+                vec![(entered, 100.0), (target, 110.0)],
+                vec![Entered, TargetReached],
+            ),
+            (
+                [100.0, 110.0, 95.0],
+                102.0,
+                vec![101.0, 100.0, 97.0, 95.0, 94.0],
+                vec![(entered, 100.0), (stop, 95.0)],
+                vec![Entered, StopReached],
+            ),
+            (
+                [100.0, 110.0, 95.0],
+                98.0,
+                vec![95.0, 93.0, 100.0, 96.0, 95.0],
+                vec![(entered, 100.0), (stop, 95.0)],
+                vec![Entered, StopReached],
+            ),
+            (
+                [100.0, 110.0, 95.0],
+                105.0,
+                vec![108.0, 111.0, 112.0],
+                vec![],
+                vec![],
+            ),
+            (
+                [100.0, 90.0, 105.0],
+                102.0,
+                vec![101.0, 99.5, 95.0, 90.0, 89.0],
+                vec![(entered, 99.5), (target, 90.0)],
+                vec![Entered, TargetReached],
+            ),
+            (
+                [100.0, 90.0, 105.0],
+                98.0,
+                vec![99.0, 100.5, 104.0, 105.5],
+                vec![(entered, 100.5), (stop, 105.5)],
+                vec![Entered, StopReached],
+            ),
+            ([100.0, 90.0, 105.0], 95.0, vec![92.0, 89.0], vec![], vec![]),
+            (
+                [100.0, 110.0, 95.0],
+                98.0,
+                vec![99.0, 112.0, 113.0],
+                vec![(entered, 112.0), (target, 112.0)],
+                vec![TargetReached],
+            ),
+            // A gap down enters and exits a short on the same update.
+            (
+                [100.0, 90.0, 105.0],
+                102.0,
+                vec![89.0],
+                vec![(entered, 89.0), (target, 89.0)],
+                vec![TargetReached],
+            ),
+            // With both exits reached, the protective stop takes precedence.
+            (
+                [100.0, 110.0, 115.0],
+                98.0,
+                vec![112.0],
+                vec![(entered, 112.0), (stop, 112.0)],
+                vec![StopReached],
+            ),
+            // Coincident entry and target have no direction, so entry stays open.
+            (
+                [100.0, 100.0, 95.0],
+                98.0,
+                vec![100.0, 94.0],
+                vec![(entered, 100.0)],
+                vec![Entered],
+            ),
+            // Every level must be available, including the stop before entry.
+            (
+                [100.0, 110.0, f64::NAN],
+                98.0,
+                vec![100.0, 112.0],
+                vec![],
+                vec![],
+            ),
+        ];
+        for (index, (levels, history, updates, triggers, progress)) in rows.into_iter().enumerate()
+        {
+            let condition = AlertCondition::Position {
+                levels: Box::new(["p", "p#1", "p#2"].map(|id| AlertSource::Drawing(id.into()))),
+                progress: AwaitingEntry,
+            };
+            let host = Host::new(vec![alert(condition, AlertFrequency::Once)]);
+            host.events();
+            let mut bars = vec![bar(0, history, 1.0)];
+            for (i, close) in updates.into_iter().enumerate() {
+                bars.push(bar(i as i64 + 1, close, 1.0));
+                host.engine.update(
+                    "SYM",
+                    None,
+                    Timeframe::Min1,
+                    &bars,
+                    time(1_000 + i as i64),
+                    |source, _| {
+                        let AlertSource::Drawing(id) = source else {
+                            return None;
+                        };
+                        ["p", "p#1", "p#2"]
+                            .iter()
+                            .position(|name| *name == id)
+                            .map(|n| levels[n])
+                    },
+                );
+            }
+            let events = host.events();
+            let fired: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    AlertEvent::TriggeredForSymbol {
+                        message,
+                        price: Some(price),
+                        ..
+                    } => Some((message.as_str(), *price)),
+                    _ => None,
+                })
+                .collect();
+            let reported: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    AlertEvent::Upsert(alert) => match alert.condition {
+                        AlertCondition::Position { progress, .. } => Some(progress),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(fired, triggers, "row {index}");
+            assert_eq!(reported, progress, "row {index}");
+            let saved = host.engine.alerts().remove(0);
+            assert!(
+                matches!(saved.condition,AlertCondition::Position {progress:p,..} if p == progress.last().copied().unwrap_or(AwaitingEntry)),
+                "row {index}"
+            );
+            assert_eq!(
+                saved.status == AlertStatus::Triggered,
+                progress
+                    .last()
+                    .is_some_and(|p| matches!(p, TargetReached | StopReached)),
+                "row {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_position_alert_resumes_after_a_restart_and_follows_a_moved_stop() {
+        use AlertPositionProgress::{AwaitingEntry, StopReached};
+        let condition = AlertCondition::Position {
+            levels: Box::new(["p", "p#1", "p#2"].map(|id| AlertSource::Drawing(id.into()))),
+            progress: AwaitingEntry,
+        };
+        let stop = std::cell::Cell::new(95.0);
+        let feed_position = |host: &Host, prices: &[f64]| {
+            let bars: Vec<_> = std::iter::once(98.0)
+                .chain(prices.iter().copied())
+                .enumerate()
+                .map(|(i, close)| bar(i as i64, close, 1.0))
+                .collect();
+            host.engine.update(
+                "SYM",
+                None,
+                Timeframe::Min1,
+                &bars,
+                time(1_000 + prices.len() as i64),
+                |source, _| match source {
+                    AlertSource::Drawing(id) => match id.as_str() {
+                        "p" => Some(100.0),
+                        "p#1" => Some(110.0),
+                        "p#2" => Some(stop.get()),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+            );
+        };
+        let host = Host::new(vec![alert(condition, AlertFrequency::Once)]);
+        feed_position(&host, &[99.0]);
+        assert!(host.fired().is_empty());
+        let saved = serde_json::to_value(&host.engine.alerts()[0]).unwrap();
+        assert_eq!(saved["condition"]["Position"]["progress"], "AwaitingEntry");
+        let host = Host::new(vec![serde_json::from_value(saved).unwrap()]);
+        feed_position(&host, &[99.0]);
+        feed_position(&host, &[99.0, 94.0]);
+        assert!(host.fired().is_empty());
+        feed_position(&host, &[99.0, 94.0, 100.0]);
+        assert_eq!(host.fired(), [100.0]);
+        let saved = serde_json::to_value(&host.engine.alerts()[0]).unwrap();
+        assert_eq!(
+            saved["condition"],
+            serde_json::json!({"Position": {
+                "levels": [{"Drawing":"p"},{"Drawing":"p#1"},{"Drawing":"p#2"}], "progress":"Entered"
+            }})
+        );
+        let host = Host::new(vec![serde_json::from_value(saved).unwrap()]);
+        feed_position(&host, &[104.0]);
+        assert!(host.fired().is_empty());
+        stop.set(102.0);
+        feed_position(&host, &[104.0, 103.0]);
+        assert!(host.fired().is_empty());
+        feed_position(&host, &[104.0, 103.0, 102.0]);
+        assert_eq!(host.fired(), [102.0]);
+        let mut again = host.engine.alerts().remove(0);
+        assert_eq!(again.status, AlertStatus::Triggered);
+        assert!(matches!(
+            again.condition,
+            AlertCondition::Position {
+                progress: StopReached,
+                ..
+            }
+        ));
+        again.status = AlertStatus::Active;
+        assert_eq!(host.save(again), Ok(()));
+        assert!(matches!(
+            host.engine.alerts()[0].condition,
+            AlertCondition::Position {
+                progress: AwaitingEntry,
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn crossings_follow_the_previous_value_tick_to_tick() {

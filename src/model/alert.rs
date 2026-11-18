@@ -335,6 +335,16 @@ impl Alert {
         copy.extend_line = other.extend_line;
         copy.blink_on_trigger = other.blink_on_trigger;
         copy.delivery.clone_from(&other.delivery);
+        // A position's progress is what evaluation reports, not what it watches.
+        if let (
+            AlertCondition::Position { progress, .. },
+            AlertCondition::Position {
+                progress: reported, ..
+            },
+        ) = (&mut copy.condition, &other.condition)
+        {
+            *progress = *reported;
+        }
         copy == *other
     }
 
@@ -400,7 +410,8 @@ impl Alert {
     /// value of output `N` of the study `ID` whatever the source is, and `{{level}}` the English
     /// name that [`AlertInputs::sources`] gives the drawing level the first condition tests: the source
     /// if it is a drawing, otherwise the drawing it compares with or those bounding its channel,
-    /// joined by `, `, and empty if it tests no drawing. `value` gives the value of a source at
+    /// joined by `, `, for a position the level reached last (the entry until its exit),
+    /// and empty if it tests no drawing. `value` gives the value of a source at
     /// the bar. A value that is missing or not finite becomes `NaN`, a number is written in the
     /// shortest form that reads back the same, and a placeholder the alert does not know stays as
     /// written.
@@ -454,10 +465,18 @@ impl Alert {
                 "volume" => number(Some(bar.volume)),
                 "value" => number(value(&self.source)),
                 "level" => {
-                    let tested = if matches!(self.source, AlertSource::Drawing(_)) {
-                        [Some(&self.source), None]
-                    } else {
-                        self.condition.partners()
+                    let tested = match (&self.source, &self.condition) {
+                        (_, AlertCondition::Position { levels, progress }) => [
+                            Some(match progress {
+                                AlertPositionProgress::TargetReached => &levels[1],
+                                AlertPositionProgress::StopReached => &levels[2],
+                                _ => &levels[0],
+                            }),
+                            None,
+                            None,
+                        ],
+                        (AlertSource::Drawing(_), _) => [Some(&self.source), None, None],
+                        _ => self.condition.partners(),
                     };
                     let saved = self.inputs.as_ref().map_or(&[][..], |i| &i.sources);
                     let labels: Vec<_> = tested
@@ -616,6 +635,27 @@ pub enum AlertCondition {
         /// State or transition to test.
         comparison: AlertChannelComparison,
     },
+    /// A long or short position: the value reaching the entry, then the first of the target and
+    /// the stop. The entry is reached by crossing it, as [`Compare`](Self::Compare) with
+    /// [`AlertComparison::Crossing`] crosses a moving level, and an exit reached before the entry
+    /// counts for nothing. Once entered, a target above the entry makes the position long and one
+    /// below it short, read from the current levels on each evaluation. A long position reaches
+    /// its target at or above it and its stop at or below it, a short one the reverse, whatever
+    /// the previous value was; the stop counts first when both are reached, and no exit is
+    /// reached while the target equals the entry. The alert fires on the entry and on the exit,
+    /// both on one evaluation that passes through the entry to an exit, and ends after the exit
+    /// with status `Triggered`. Each trigger moves `progress` on, also outside the alert's
+    /// schedule, where it is only logged. It takes frequency `Once`, no additional rules and no
+    /// watchlist.
+    Position {
+        /// The entry, the target and the stop, in this order, such as levels 0, 1 and 2 of a
+        /// position drawing's `Drawing::alert_source`.
+        levels: Box<[AlertSource; 3]>,
+        /// How far the alert has come. The service saves it with the alert on each trigger,
+        /// so a restored alert resumes there.
+        #[serde(default)]
+        progress: AlertPositionProgress,
+    },
     /// Current volume exceeds `multiplier` times the mean of the preceding `bars` completed volumes.
     VolumeAboveAverage {
         /// Positive, finite multiple of the preceding mean volume.
@@ -724,6 +764,15 @@ impl AlertSourceName {
         }
     }
 
+    /// The English label `part` of a name built from parts.
+    #[cfg(feature = "ui")]
+    pub(crate) fn label(&self, part: &str) -> Option<&str> {
+        match &self.0 {
+            SourceName::Parts { labels, .. } => labels.get(part).map(String::as_str),
+            SourceName::Text(_) => None,
+        }
+    }
+
     /// The English text.
     fn english(&self) -> &str {
         match &self.0 {
@@ -800,6 +849,46 @@ impl std::fmt::Display for AlertChannelComparison {
     }
 }
 
+/// How far a [`Position`](AlertCondition::Position) alert has come.
+///
+/// ```
+/// use egui_charts::model::{Alert, AlertCondition, AlertPositionProgress, AlertSource};
+///
+/// let level = |id: &str| AlertSource::Drawing(id.into());
+/// let alert = Alert::new(
+///     "AAPL",
+///     AlertCondition::Position {
+///         levels: Box::new([level("7"), level("7#1"), level("7#2")]),
+///         progress: AlertPositionProgress::AwaitingEntry,
+///     },
+/// );
+/// assert!(alert.is_valid());
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum AlertPositionProgress {
+    /// Waiting for the value to reach the entry, also after an ended alert is made active again.
+    #[default]
+    AwaitingEntry,
+    /// The entry was reached; waiting for the target or the stop.
+    Entered,
+    /// The target was reached first, which ended the alert.
+    TargetReached,
+    /// The stop was reached first, which ended the alert.
+    StopReached,
+}
+
+impl std::fmt::Display for AlertPositionProgress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::AwaitingEntry => "Waiting for position entry",
+            Self::Entered => "Position entered",
+            Self::TargetReached => "Position target reached",
+            Self::StopReached => "Position stop reached",
+        })
+    }
+}
+
 /// One additional condition of an alert; all rules must hold at the same event time.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -827,12 +916,14 @@ impl AlertSource {
 }
 
 impl AlertCondition {
-    /// Other sources required on the same bar, in boundary order for a channel.
-    pub(crate) fn partners(&self) -> [Option<&AlertSource>; 2] {
+    /// Other sources required on the same bar, in boundary order for a channel and as entry,
+    /// target and stop for a position.
+    pub(crate) fn partners(&self) -> [Option<&AlertSource>; 3] {
         match self {
-            Self::Compare { other, .. } => [Some(other), None],
-            Self::Channel { boundaries, .. } => [Some(&boundaries[0]), Some(&boundaries[1])],
-            _ => [None, None],
+            Self::Compare { other, .. } => [Some(other), None, None],
+            Self::Channel { boundaries, .. } => [Some(&boundaries[0]), Some(&boundaries[1]), None],
+            Self::Position { levels, .. } => [Some(&levels[0]), Some(&levels[1]), Some(&levels[2])],
+            _ => [None; 3],
         }
     }
 
@@ -868,6 +959,12 @@ impl AlertCondition {
             Self::Compare { other, .. } => other.is_valid(),
             Self::Channel { boundaries, .. } => {
                 boundaries[0] != boundaries[1] && boundaries.iter().all(AlertSource::is_valid)
+            }
+            Self::Position { levels, .. } => {
+                levels.iter().all(AlertSource::is_valid)
+                    && levels[0] != levels[1]
+                    && levels[1] != levels[2]
+                    && levels[0] != levels[2]
             }
             Self::VolumeAboveAverage { multiplier, bars } => {
                 multiplier.is_finite() && *multiplier > 0.0 && *bars > 0
@@ -909,6 +1006,7 @@ impl std::fmt::Display for AlertCondition {
             }
             Self::Compare { comparison, .. } => write!(f, "{} another output", comparison),
             Self::Channel { comparison, .. } => write!(f, "{comparison}"),
+            Self::Position { progress, .. } => write!(f, "{progress}"),
             Self::VolumeAboveAverage { multiplier, bars } => write!(
                 f,
                 "Volume above {multiplier} times the preceding {bars}-bar mean"
@@ -938,10 +1036,14 @@ impl Alert {
                         self.frequency,
                         AlertFrequency::EveryTime | AlertFrequency::Once
                     )))
-            && self
-                .additional_conditions
-                .iter()
-                .all(|rule| !rule.condition.is_event())
+            && self.additional_conditions.iter().all(|rule| {
+                !rule.condition.is_event()
+                    && !matches!(rule.condition, AlertCondition::Position { .. })
+            })
+            && (!matches!(self.condition, AlertCondition::Position { .. })
+                || (self.frequency == AlertFrequency::Once
+                    && self.additional_conditions.is_empty()
+                    && self.watchlist.is_none()))
             && self.additional_conditions.len() < 5
             && self.additional_timeframes.len() <= self.additional_conditions.len()
             && {
@@ -1275,6 +1377,20 @@ mod tests {
                 },
                 "SAMPLE crossed ",
             ),
+            (
+                AlertCondition::Position {
+                    levels: Box::new([drawing("fib#2"), drawing("fib#3"), drawing("fib#1")]),
+                    progress: AlertPositionProgress::Entered,
+                },
+                "SAMPLE crossed Fib Retracement 7: 0.382",
+            ),
+            (
+                AlertCondition::Position {
+                    levels: Box::new([drawing("fib#2"), drawing("fib#3"), drawing("fib#1")]),
+                    progress: AlertPositionProgress::StopReached,
+                },
+                "SAMPLE crossed Fib Retracement 7: 0.236",
+            ),
         ] {
             let mut alert = Alert::new("SAMPLE", condition);
             alert.inputs = Some(Box::new(AlertInputs {
@@ -1295,7 +1411,54 @@ mod tests {
     #[test]
     fn saved_alerts_require_finite_levels_ordered_channels_and_positive_lookbacks() {
         type Edit = fn(&mut Alert);
-        let rows: [(Edit, bool); 35] = [
+        fn position() -> AlertCondition {
+            AlertCondition::Position {
+                levels: Box::new(["d", "d#1", "d#2"].map(|id| AlertSource::Drawing(id.into()))),
+                progress: AlertPositionProgress::AwaitingEntry,
+            }
+        }
+        let rows: [(Edit, bool); 41] = [
+            (|a| a.condition = position(), true),
+            (
+                |a| {
+                    a.condition = position();
+                    a.frequency = AlertFrequency::EveryTime;
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.condition = position();
+                    a.watchlist = Some("technology".into());
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.condition = position();
+                    a.additional_conditions.push(AlertRule::new(
+                        AlertSource::Price,
+                        AlertCondition::Above(1.0),
+                    ));
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.additional_conditions
+                        .push(AlertRule::new(AlertSource::Price, position()))
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.condition = position();
+                    if let AlertCondition::Position { levels, .. } = &mut a.condition {
+                        levels[2] = levels[0].clone();
+                    }
+                },
+                false,
+            ),
             (
                 |a| {
                     a.delivery.webhook = true;
