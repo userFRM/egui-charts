@@ -62,7 +62,7 @@ pub enum DrawingSyncAction {
 /// let mut handles = HandleConfig::default();
 /// handles.size = 10.0;
 /// let mut options = DrawingManagerOptions::default();
-/// options.snap_to_price = true;
+/// options.snap_to_time = false;
 /// options.handle_config = handles;
 /// let mut manager = DrawingManager::new();
 /// manager.options = options;
@@ -97,12 +97,9 @@ pub struct DrawingManagerOptions {
     /// Line colour every new drawing takes instead of its tool's own, as RGBA bytes. `None`
     /// (the default) keeps each tool's colour; a default saved for a tool wins over both.
     pub default_color: Option<[u8; 4]>,
-    /// Enable snap-to-price (Y-axis snapping to OHLC levels).
-    pub snap_to_price: bool,
-    /// Enable snap-to-time (X-axis snapping to candle timestamps).
+    /// Place and move anchors on whole bars (the default). `false` keeps the fractional bar
+    /// under the pointer, as freeform tools do; a magnet target keeps its own bar either way.
     pub snap_to_time: bool,
-    /// Snap distance threshold in screen pixels.
-    pub snap_distance: f32,
     /// Enable magnet mode (snap to existing drawing anchor points).
     pub magnet_mode: bool,
     /// Magnet snap distance threshold in screen pixels.
@@ -120,9 +117,7 @@ impl Default for DrawingManagerOptions {
     fn default() -> Self {
         Self {
             default_color: None,
-            snap_to_price: true,
             snap_to_time: true,
-            snap_distance: DESIGN_TOKENS.spacing.lg + DESIGN_TOKENS.spacing.xs,
             magnet_mode: false,
             magnet_distance: DESIGN_TOKENS.sizing.drawing.magnet_distance,
             strong_magnet: false,
@@ -355,7 +350,7 @@ impl DrawingManager {
 
     /// Creates a new `DrawingManager` with default options and empty drawing list.
     pub fn new() -> Self {
-        Self {
+        let mut manager = Self {
             registry: Default::default(),
             active_custom_tool: None,
             drawings: Vec::new(),
@@ -394,7 +389,9 @@ impl DrawingManager {
             identity: crate::model::next_revision(),
             mapped_bars: None,
             mapped_key: None,
-        }
+        };
+        manager.update_snap_options();
+        manager
     }
 
     /// Apply the host's tool, snapping, color, eraser and selection state. A state with both
@@ -648,15 +645,13 @@ impl DrawingManager {
 
     // === Snap delegation ===
 
-    /// Rebuilds the internal [`SnapService`] from the current manager options.
-    /// Call this after changing snap-related options.
+    /// Applies `magnet_mode` and `magnet_distance` to the snapping service. Call this after
+    /// changing `magnet_distance`; the other options take effect on the next frame.
     pub fn update_snap_options(&mut self) {
         self.snap_service = SnapService::with_options(SnapOptions {
-            snap_to_price: self.options.snap_to_price,
-            snap_to_time: self.options.snap_to_time,
-            snap_distance: self.options.snap_distance,
             magnet_mode: self.options.magnet_mode,
             magnet_distance: self.options.magnet_distance,
+            ..SnapOptions::default()
         });
     }
 
@@ -1416,19 +1411,20 @@ mod tests {
         assert_eq!(manager.hit_test(click), Some(11));
     }
 
-    /// The magnet snaps to a drawing anchor, excluding members of the group being dragged.
+    /// The magnet snaps to a drawing anchor within the default distance, excluding members of
+    /// the group being dragged.
     #[test]
     fn magnet_snaps_to_anchors_except_the_group_being_dragged() {
         let mut manager = DrawingManager::new();
         manager.options.magnet_mode = true;
-        manager.update_snap_options();
 
         let mut d = Drawing::new(1, DrawingToolType::TrendLine);
         d.points = vec![Pos2::new(100.0, 100.0), Pos2::new(200.0, 200.0)];
         let drawings = vec![d];
 
-        // A pointer near the first anchor snaps to it under magnet mode.
-        let snapped = manager.snap_point(Pos2::new(103.0, 102.0), &drawings);
+        // A pointer just inside the default distance of the first anchor snaps to it.
+        let reach = manager.options.magnet_distance - 1.0;
+        let snapped = manager.snap_point(Pos2::new(100.0 + reach, 100.0), &drawings);
         assert_eq!(snapped, Pos2::new(100.0, 100.0));
 
         // A group being translated cannot magnetize to another member's old position.

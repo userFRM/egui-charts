@@ -1647,14 +1647,14 @@ mod tests {
                     let before = drawing.chart_points.clone();
                     manager.start_drag_handle(1, handle);
                     manager.update_drag_handle(
-                        position + egui::vec2(0.0, 10.0),
+                        position + egui::vec2(3.0, 10.0),
                         |x| (x - 100.0) / 10.0,
                         view.y_to_price,
                         |p, from, to| p - f64::from(to - from) / 10.0,
                     );
                     assert_eq!(
                         manager.drawings[0].chart_points, before,
-                        "{name}: vertical drag"
+                        "{name}: drag within its bar"
                     );
                     manager.update_drag_handle(
                         position + egui::vec2(10.0, 0.0),
