@@ -1209,6 +1209,14 @@ impl Indicator for ConfiguredStudy {
             false
         }
     }
+    fn set_chart_symbol(&mut self, symbol: &str) -> bool {
+        self.study
+            .set_chart_symbol(if self.calculation_symbol.is_empty() {
+                symbol
+            } else {
+                &self.calculation_symbol
+            })
+    }
     fn set_time_scale_events(&mut self, events: &[crate::model::TimeScaleEvent]) -> bool {
         // A study calculated on another symbol has none of the chart's events.
         self.study
