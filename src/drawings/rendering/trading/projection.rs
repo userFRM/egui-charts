@@ -495,7 +495,15 @@ mod tests {
                 "dotted trend",
                 |c| c["trend_line_style"] = json!("Dotted"),
                 |s, p| {
-                    text(s,"50.00 (50.0%)") && !line(s, p[0], p[1], Stroke::new(2.0, Color32::from_rgb(41,98,255))) && s.iter().filter(|s| matches!(s, Shape::LineSegment {stroke,..} if stroke.color == Color32::from_rgb(41,98,255))).count() > 2
+                    let blue = Color32::from_rgb(41, 98, 255);
+                    text(s, "50.00 (50.0%)")
+                        && !line(s, p[0], p[1], Stroke::new(2.0, blue))
+                        && s.iter()
+                            .filter(|s| {
+                                matches!(s, Shape::LineSegment { stroke, .. } if stroke.color == blue)
+                            })
+                            .count()
+                            > 2
                 },
             ),
             (

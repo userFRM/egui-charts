@@ -25,6 +25,26 @@ pub struct ProjectionLevel {
 
 /// The projection's levels, the target zone behind each level, its coefficient labels and the
 /// style of its measured leg, which takes the drawing's colour and width.
+///
+/// ```
+/// use egui_charts::drawings::{ProjectionConfig, ProjectionLevel};
+/// use egui_charts::model::LineStyle;
+///
+/// let mut config = ProjectionConfig {
+///     show_coefficients: false,
+///     trend_line_style: LineStyle::Dashed,
+///     ..Default::default()
+/// };
+/// config.levels.push(ProjectionLevel {
+///     coefficient: 1.618,
+///     visible: true,
+///     color: [242, 54, 69, 255],
+///     line_style: LineStyle::Dotted,
+///     width: Some(1.0),
+/// });
+/// config.background_colors[1] = [76, 175, 80, 51];
+/// assert!(config.is_valid());
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectionConfig {
     /// Projected targets, drawn in list order.

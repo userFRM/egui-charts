@@ -133,9 +133,9 @@
 //!
 //! A few types stay exhaustive on purpose. `widget::SeriesOptions`,
 //! `chart::overlays::VolumeBubblesConfig`, `model::ChartTypeParams`, `theme::Theme` and
-//! `drawings::{FibonacciConfig, PitchforkConfig, GannConfig, ProjectionConfig}` are built in one expression
-//! that ends in `..Default::default()` or `..Theme::light()`, which keeps compiling when a
-//! field is added. The records a custom study returns from `studies::Indicator` methods,
+//! `drawings::{FibonacciConfig, PitchforkConfig, GannConfig, ProjectionConfig}` are built
+//! in one expression that ends in `..Default::default()` or `..Theme::light()`, which keeps
+//! compiling when a field is added. The records a custom study returns from `studies::Indicator` methods,
 //! such as `studies::PlotStyle` and `studies::StudyZone`, stay exhaustive so that a study
 //! can build them directly; studies grow through new default trait methods instead.
 //! `widget::MismatchDirection`, `model::PriceLineSource`, `model::LogicalRange` and the
