@@ -151,6 +151,7 @@ fn same_profiles(old: &TPOConfig, new: &TPOConfig) -> bool {
         && old.value_area_pct.to_bits() == new.value_area_pct.to_bits()
         && old.custom_letters == new.custom_letters
         && old.split_sessions == new.split_sessions
+        && old.session == new.session
         && old.composites == new.composites
         && old.instrument_tick.map(f64::to_bits) == new.instrument_tick.map(f64::to_bits)
 }
@@ -2195,6 +2196,8 @@ mod tests {
             ("grid", [false, false], [3, 3], 'x', 2.0),
             ("global span", [false, false], [2, 502], 'x', 4.0),
             ("zone", [false, false], [2, 502], 'x', 4.0),
+            // Without trading hours, regular hours keep each whole day.
+            ("hours", [false, false], [2, 502], 'x', 4.0),
         ];
         for (change, reused, counts, first_letter, tick) in cases {
             match change {
@@ -2218,6 +2221,7 @@ mod tests {
                 "grid" => config.tick_size = 2.0,
                 "global span" => bars.last_mut().unwrap().high = 2103.0,
                 "zone" => clock = clock.with_timezone("+09:00".parse().unwrap()),
+                "hours" => config.session = crate::model::ProfileSession::Regular,
                 _ => unreachable!(),
             }
             let current = cached_profiles(

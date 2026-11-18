@@ -3,9 +3,7 @@
 use super::frame::session_ranges;
 use super::{Chart, SeriesId};
 use crate::chart::overlays::TradeProfileSettings;
-use crate::model::{
-    Bar, BarClock, ChartType, ProfileSession, SessionProvider, Timeframe, TimezoneId,
-};
+use crate::model::{Bar, BarClock, ChartType, ProfileSession, SessionProvider};
 use crate::studies::TradeProfileRanges;
 use chrono::{DateTime, Utc};
 use std::ops::{Range, RangeInclusive};
@@ -99,45 +97,16 @@ impl Chart {
     }
 
     /// The calendar that divides the chart into profile sessions and the choice that keeps the
-    /// bars of their hours ([`ProfileSession::profiled`]): the settings' choice on intraday
-    /// bars, otherwise [`ProfileSession::Chart`].
+    /// bars of their hours, as [`Chart::profile_hours`] resolves the session volume profile's
+    /// choice.
     fn profile_division(&self) -> (BarClock, &ProfileSession) {
-        let mut clock = self.bar_clock();
-        let instrument = self.instrument();
         // The profile settings divide only the session volume profile chart: the market profile
         // chart and its menu keep the chart's calendar.
         let selection = match self.chart_type {
             ChartType::SessionVolumeProfile => &self.trade_profile_settings().session,
             _ => &ProfileSession::Chart,
         };
-        // Daily and longer bars carry a trading date rather than a time of day to divide or re-zone.
-        let intraday =
-            self.timeframe.unwrap_or_default().duration_ms() < Timeframe::Day1.duration_ms();
-        let zone = instrument
-            .and_then(|i| i.time_zone.clone())
-            .unwrap_or_else(TimezoneId::utc);
-        let hours = instrument.and_then(|i| i.session.as_ref());
-        let by_time_of_day =
-            !matches!(selection, ProfileSession::Regular | ProfileSession::Extended);
-        if (intraday || !by_time_of_day)
-            && let Some(divided) = selection.session_clock(&clock, &zone, hours)
-        {
-            // Daily and longer bars keep every bar of their trading dates.
-            let kept = if intraday {
-                selection
-            } else {
-                &ProfileSession::Chart
-            };
-            return (divided, kept);
-        }
-        // Without instrument hours there is nothing to select among, so the chart's calendar stays.
-        if let Some(zone) = instrument
-            .filter(|i| i.session.is_none())
-            .and_then(|i| i.time_zone.as_ref())
-        {
-            clock = clock.with_timezone(zone.clone());
-        }
-        (clock, &ProfileSession::Chart)
+        self.profile_hours(selection)
     }
 
     fn profile_edits_current(&self) -> bool {
@@ -538,5 +507,71 @@ mod tests {
             ranges(&hourly(regular.clone(), ProfileSession::Segments)),
             ranges(&hourly(regular, ProfileSession::Chart))
         );
+    }
+
+    /// Each hours choice of the Time Price Opportunity study profiles only the bars of its
+    /// hours, counting its periods from their open, on both sides of the New York clock change:
+    /// custom hours from 08:00 to 12:30 in the exchange zone give one profile a day, and the
+    /// trading day split by extended hours one per segment.
+    #[test]
+    fn tpo_study_hours_profile_only_their_bars() {
+        use crate::model::{TPOConfig, to_tpo_profiles};
+        use crate::studies::{Indicator, InputValue, TimePriceOpportunity};
+        let chart = hourly(us_equity_hours(), ProfileSession::Chart);
+        // (hours, split, profiles as first bar and period letters); periods are the bar's hour.
+        let rows: [(usize, bool, &[&str]); 5] = [
+            (1, false, &["08 20:00 F", "11 14:00 ABCDEF"]),
+            (
+                2,
+                false,
+                &["09 13:00 ABCDE", "10 12:00 ABCDE", "11 12:00 ABCDE"],
+            ),
+            (3, false, &["11 08:00 ABCDEF"]),
+            (4, false, &["08 21:00 ABCD", "11 20:00 ABCD"]),
+            (
+                0,
+                true,
+                &[
+                    "08 20:00 F",
+                    "08 21:00 ABCD",
+                    "11 08:00 ABCDEF",
+                    "11 14:00 ABCDEF",
+                    "11 20:00 ABCD",
+                ],
+            ),
+        ];
+        for (hours, split, expected) in rows {
+            let mut study = TimePriceOpportunity::default();
+            for (id, value) in [
+                ("hours", InputValue::Choice(hours)),
+                ("split_sessions", InputValue::Toggle(split)),
+                ("session_start", InputValue::Length(8 * 60)),
+                ("session_end", InputValue::Length(12 * 60 + 30)),
+            ] {
+                study.set_input(id, value).unwrap();
+            }
+            // As the chart draws the study, on rows of one price unit.
+            let config = study.tpo().unwrap();
+            let (clock, session) = chart.profile_hours(&config.session);
+            let config = TPOConfig {
+                session: session.clone(),
+                tick_size: 1.0,
+                ..config.clone()
+            };
+            let observed: Vec<_> =
+                to_tpo_profiles(chart.bars(crate::widget::SeriesId::MAIN), &config, &clock)
+                    .iter()
+                    .map(|profile| {
+                        let mut periods: Vec<_> = (profile.letters.iter())
+                            .map(|l| (l.period_idx, l.letter))
+                            .collect();
+                        periods.sort_unstable();
+                        periods.dedup();
+                        let letters: String = periods.into_iter().map(|(_, l)| l).collect();
+                        format!("{} {letters}", profile.session_date.format("%d %H:%M"))
+                    })
+                    .collect();
+            assert_eq!(observed, expected, "hours {hours} split {split}");
+        }
     }
 }

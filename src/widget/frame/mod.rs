@@ -2140,11 +2140,16 @@ impl Chart {
             if study.is_volume() && !self.chart_type.supports_volume() {
                 return;
             }
-            // TPO studies draw the chart type's profiles beside the bars.
+            // TPO studies draw the chart type's profiles beside the bars, in the hours they keep.
             if let Some(config) = study
                 .tpo()
                 .filter(|_| !self.chart_type.is_time_independent())
             {
+                let (clock, session) = self.profile_hours(&config.session);
+                let config = crate::model::TPOConfig {
+                    session: session.clone(),
+                    ..config.clone()
+                };
                 rendering::candles::tpo::render_live_tpo(
                     &clipped_painter,
                     price_rect,
@@ -2152,9 +2157,9 @@ impl Chart {
                     start_idx..start_idx + visible_data.len(),
                     self.state.revision(),
                     &price_map,
-                    config,
+                    &config,
                     render_ctx.tick_size,
-                    &bar_clock,
+                    &clock,
                     idx_to_coord,
                     chart_rect.min.x,
                     colors.bullish,

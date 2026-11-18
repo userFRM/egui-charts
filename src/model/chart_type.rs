@@ -498,13 +498,13 @@ pub enum ProfileSession {
     Segments,
 }
 
-#[cfg(feature = "studies")]
 impl ProfileSession {
     /// `clock` dividing intraday bars at the opens of the hours this choice selects, for an
     /// instrument trading `hours` in `zone`: a window opening every day, in its own zone or else
     /// `zone`, or `hours` with or without their extended windows. `None` for [`Self::Chart`],
     /// for regular or extended hours without `hours`, and for the pre-market, post-market and
     /// segment choices without extended windows in `hours`.
+    #[cfg(any(feature = "widget", feature = "studies"))]
     pub(crate) fn session_clock(
         &self,
         clock: &super::BarClock,
