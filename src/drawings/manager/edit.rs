@@ -289,9 +289,9 @@ impl DrawingManager {
     /// change of `id`, which the manager assigns, and a `stored_id` another saved drawing is
     /// stored under. A manager outside a chart, or on a chart without bars, refuses only anchors
     /// 1e30 bars or more from the first bar. A refused edit, like an unknown id, changes nothing,
-    /// records no undo step and returns the reason. A drawing
-    /// that saving refuses already, such as one changed directly through [`Self::drawings`],
-    /// accepts edits to its anchors and settings even if they remain invalid.
+    /// records no undo step and returns the reason. A drawing that saving refuses already, such
+    /// as one changed directly through [`Self::drawings`], accepts edits to its anchors and
+    /// settings even if they remain invalid.
     pub fn edit_drawing(
         &mut self,
         id: usize,
