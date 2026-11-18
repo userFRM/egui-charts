@@ -1007,38 +1007,36 @@ impl Chart {
                 .footprint(None, &self.state.data().bars)
                 .map(crate::data::FootprintState::new);
         }
-        if !reset {
-            for (input, _) in &link.study_inputs {
-                // A prepared footprint input keeps the executions it received: only a page that
-                // changes executions from the cutoff on rebuilds it, as it does the chart's footprint.
-                let prepared = prepared_before.is_some() && input.is_footprint();
-                let rebuild = if prepared { tail_changed } else { changed };
-                if rebuild {
-                    input.replace_trades(
-                        &link.clock,
-                        &link.trades,
-                        &self.state.data().bars,
-                        link.footprint.as_ref(),
-                    );
-                } else if prepared {
-                    if rejected == 0
-                        && let Some((from, end, oldest, live)) = coverage
-                    {
-                        // The store's losses can include executions the input never received, so the
-                        // page proves its coverage only after the newest of them.
-                        let from = link.trades.lost_until().map_or(from, |lost| {
-                            from.max(
-                                lost.checked_add_signed(chrono::TimeDelta::nanoseconds(1))
-                                    .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC),
-                            )
-                        });
-                        input.cover_footprint(from, end.min(oldest.unwrap_or(end)));
-                        if let Some(retained) = unproven.1 {
-                            input.cover_footprint(from.max(retained), end.min(live.unwrap_or(end)));
-                        }
+        for (input, _) in link.study_inputs.iter().filter(|_| !reset) {
+            // A prepared footprint input keeps the executions it received: only a page that
+            // changes executions from the cutoff on rebuilds it, as it does the chart's footprint.
+            let prepared = prepared_before.is_some() && input.is_footprint();
+            let rebuild = if prepared { tail_changed } else { changed };
+            if rebuild {
+                input.replace_trades(
+                    &link.clock,
+                    &link.trades,
+                    &self.state.data().bars,
+                    link.footprint.as_ref(),
+                );
+            } else if prepared {
+                if rejected == 0
+                    && let Some((from, end, oldest, live)) = coverage
+                {
+                    // The store's losses can include executions the input never received, so the
+                    // page proves its coverage only after the newest of them.
+                    let from = link.trades.lost_until().map_or(from, |lost| {
+                        from.max(
+                            lost.checked_add_signed(chrono::TimeDelta::nanoseconds(1))
+                                .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC),
+                        )
+                    });
+                    input.cover_footprint(from, end.min(oldest.unwrap_or(end)));
+                    if let Some(retained) = unproven.1 {
+                        input.cover_footprint(from.max(retained), end.min(live.unwrap_or(end)));
                     }
-                    input.refresh_footprint_coverage(&link.trades, None, None);
                 }
+                input.refresh_footprint_coverage(&link.trades, None, None);
             }
         }
         link.trade_cursor = continuation;
