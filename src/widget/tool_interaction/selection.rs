@@ -563,169 +563,165 @@ mod tests {
             (DrawingToolType::TrendLine, false, vec2(0.0, 20.0)),
         ] {
             for body in [false, true] {
-                for snap_to_time in [true, false] {
-                    for modifiers in [Modifiers::SHIFT, Modifiers::CTRL, Modifiers::COMMAND] {
-                        if !snap_to_time
-                            && (modifiers != Modifiers::SHIFT
-                                || off_pane
-                                || pan != egui::Vec2::ZERO)
-                        {
-                            continue;
-                        }
-                        if (off_pane || pan != egui::Vec2::ZERO)
-                            && (body || modifiers != Modifiers::SHIFT)
-                        {
-                            continue;
-                        }
-                        let ctx = Context::default();
-                        let pane = Rect::from_min_size(Pos2::ZERO, vec2(500.0, 400.0));
-                        let mut manager = DrawingManager::new();
-                        manager.options.snap_to_time = snap_to_time;
-                        manager.update_pane_anchors(pane);
-                        let mut cursors = CursorModeState::default();
-                        let mut drawing = Drawing::new(7, tool);
-                        drawing.points = vec![pos2(80.0, 80.0), pos2(180.0, 180.0)];
-                        if tool == DrawingToolType::ParallelChannel {
-                            drawing.points.push(pos2(80.0, 260.0));
-                        }
-                        if off_pane {
-                            drawing.points[0] = pos2(
-                                if tool == DrawingToolType::Ray {
-                                    800.0
-                                } else {
-                                    80.0
-                                },
-                                -100.0,
+                for (modifiers, snap_to_time) in [
+                    (Modifiers::SHIFT, true),
+                    (Modifiers::CTRL, true),
+                    (Modifiers::COMMAND, true),
+                    (Modifiers::SHIFT, false),
+                ] {
+                    if (off_pane || pan != egui::Vec2::ZERO)
+                        && (body || modifiers != Modifiers::SHIFT || !snap_to_time)
+                    {
+                        continue;
+                    }
+                    let ctx = Context::default();
+                    let pane = Rect::from_min_size(Pos2::ZERO, vec2(500.0, 400.0));
+                    let mut manager = DrawingManager::new();
+                    manager.options.snap_to_time = snap_to_time;
+                    manager.update_pane_anchors(pane);
+                    let mut cursors = CursorModeState::default();
+                    let mut drawing = Drawing::new(7, tool);
+                    drawing.points = vec![pos2(80.0, 80.0), pos2(180.0, 180.0)];
+                    if tool == DrawingToolType::ParallelChannel {
+                        drawing.points.push(pos2(80.0, 260.0));
+                    }
+                    if off_pane {
+                        drawing.points[0] = pos2(
+                            if tool == DrawingToolType::Ray {
+                                800.0
+                            } else {
+                                80.0
+                            },
+                            -100.0,
+                        );
+                    }
+                    drawing.chart_points = drawing
+                        .points
+                        .iter()
+                        .map(|p| ChartPoint::new(p.x, f64::from(p.y)))
+                        .collect();
+                    drawing.completed = true;
+                    drawing.stored_id = Some("original".into());
+                    let before = drawing.chart_points.clone();
+                    manager.drawings.push(drawing);
+                    if modifiers != Modifiers::CTRL {
+                        manager.select(7);
+                    }
+                    let from = if body {
+                        pos2(110.0, 110.0)
+                    } else {
+                        pos2(180.0, 180.0)
+                    };
+                    let to = if off_pane {
+                        pos2(140.0, 0.0)
+                    } else if body {
+                        pos2(210.5, 160.0)
+                    } else {
+                        pos2(240.0, 200.0)
+                    };
+                    let button = |pos, pressed| Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers,
+                    };
+                    for (frame, events) in [
+                        vec![Event::PointerMoved(from)],
+                        vec![button(from, true)],
+                        vec![Event::PointerMoved(to)],
+                        vec![button(to, false)],
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let offset = if frame == 3 { pan } else { egui::Vec2::ZERO };
+                        if offset != egui::Vec2::ZERO {
+                            manager.update_pane_screen_coords(
+                                |bar| bar + offset.x,
+                                |price| price as f32 + offset.y,
+                                1.0,
                             );
                         }
-                        drawing.chart_points = drawing
-                            .points
-                            .iter()
-                            .map(|p| ChartPoint::new(p.x, f64::from(p.y)))
-                            .collect();
-                        drawing.completed = true;
-                        drawing.stored_id = Some("original".into());
-                        let before = drawing.chart_points.clone();
-                        manager.drawings.push(drawing);
-                        if modifiers != Modifiers::CTRL {
-                            manager.select(7);
-                        }
-                        let from = if body {
-                            pos2(110.0, 110.0)
-                        } else {
-                            pos2(180.0, 180.0)
-                        };
-                        let to = if off_pane {
-                            pos2(140.0, 0.0)
-                        } else if body {
-                            pos2(210.5, 160.0)
-                        } else {
-                            pos2(240.0, 200.0)
-                        };
-                        let button = |pos, pressed| Event::PointerButton {
-                            pos,
-                            button: PointerButton::Primary,
-                            pressed,
-                            modifiers,
-                        };
-                        for (frame, events) in [
-                            vec![Event::PointerMoved(from)],
-                            vec![button(from, true)],
-                            vec![Event::PointerMoved(to)],
-                            vec![button(to, false)],
-                        ]
-                        .into_iter()
-                        .enumerate()
-                        {
-                            let offset = if frame == 3 { pan } else { egui::Vec2::ZERO };
-                            if offset != egui::Vec2::ZERO {
-                                manager.update_pane_screen_coords(
-                                    |bar| bar + offset.x,
-                                    |price| price as f32 + offset.y,
-                                    1.0,
+                        ctx.run_ui(
+                            RawInput {
+                                screen_rect: Some(pane),
+                                events: std::iter::once(Event::ModifiersChanged(modifiers))
+                                    .chain(events)
+                                    .collect(),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                let response = ui.interact(
+                                    pane,
+                                    Id::NULL.with("chart"),
+                                    Sense::click_and_drag(),
                                 );
-                            }
-                            ctx.run_ui(
-                                RawInput {
-                                    screen_rect: Some(pane),
-                                    events: std::iter::once(Event::ModifiersChanged(modifiers))
-                                        .chain(events)
-                                        .collect(),
-                                    ..Default::default()
-                                },
-                                |ui| {
-                                    let response = ui.interact(
-                                        pane,
-                                        Id::NULL.with("chart"),
-                                        Sense::click_and_drag(),
-                                    );
-                                    handle_selection(
-                                        ui,
-                                        &mut manager,
-                                        &mut cursors,
-                                        &response,
-                                        pane,
-                                        None,
-                                        &|x| x - offset.x,
-                                        &|y: f32| {
-                                            f64::from(y.clamp(pane.top(), pane.bottom()) - offset.y)
-                                        },
-                                        &|price, from, to| price + f64::from(to - from),
-                                    );
-                                },
-                            )
-                            .drop_without_applying_deltas();
-                        }
-                        let copying = modifiers != Modifiers::SHIFT;
-                        assert_eq!(manager.drawings.len(), if copying { 2 } else { 1 });
-                        if copying {
-                            assert_eq!(manager.drawings[0].chart_points, before);
-                        }
-                        let moved = manager.drawings.last().unwrap();
-                        let expected = if pan != egui::Vec2::ZERO {
-                            pos2(210.0 + pan.x, 210.0 + pan.y)
-                        } else if off_pane {
-                            if tool == DrawingToolType::Ray {
-                                pos2(140.0, -100.0)
-                            } else {
-                                pos2(180.0, 0.0)
-                            }
-                        } else if body {
-                            if copying {
-                                pos2(280.5, 230.0)
-                            } else {
-                                pos2(280.5, 180.0)
-                            }
-                        } else if copying {
-                            to
-                        } else {
-                            pos2(220.0, 220.0)
-                        };
-                        assert_eq!(
-                            moved.points[1], expected,
-                            "{tool:?}, body {body}, {modifiers:?}"
-                        );
-                        // A Shift move keeps whole bars, though its converter is precise, while
-                        // anchors snap to bars in time.
-                        let bar = if body && !copying && snap_to_time {
-                            expected.x.round()
-                        } else {
-                            expected.x
-                        };
-                        assert_eq!(
-                            moved.chart_points[1],
-                            ChartPoint::new(bar - pan.x, f64::from(expected.y - pan.y))
-                        );
-                        if copying {
-                            assert_eq!(moved.stored_id, None);
-                        }
-                        assert!(manager.undo());
-                        assert_eq!(manager.drawings.len(), 1);
-                        assert_eq!(manager.drawings[0].chart_points, before);
-                        assert!(!manager.undo());
-                        assert!(manager.redo());
-                        assert_eq!(manager.drawings.last().unwrap().points[1], expected);
+                                handle_selection(
+                                    ui,
+                                    &mut manager,
+                                    &mut cursors,
+                                    &response,
+                                    pane,
+                                    None,
+                                    &|x| x - offset.x,
+                                    &|y: f32| {
+                                        f64::from(y.clamp(pane.top(), pane.bottom()) - offset.y)
+                                    },
+                                    &|price, from, to| price + f64::from(to - from),
+                                );
+                            },
+                        )
+                        .drop_without_applying_deltas();
                     }
+                    let copying = modifiers != Modifiers::SHIFT;
+                    assert_eq!(manager.drawings.len(), if copying { 2 } else { 1 });
+                    if copying {
+                        assert_eq!(manager.drawings[0].chart_points, before);
+                    }
+                    let moved = manager.drawings.last().unwrap();
+                    let expected = if pan != egui::Vec2::ZERO {
+                        pos2(210.0 + pan.x, 210.0 + pan.y)
+                    } else if off_pane {
+                        if tool == DrawingToolType::Ray {
+                            pos2(140.0, -100.0)
+                        } else {
+                            pos2(180.0, 0.0)
+                        }
+                    } else if body {
+                        if copying {
+                            pos2(280.5, 230.0)
+                        } else {
+                            pos2(280.5, 180.0)
+                        }
+                    } else if copying {
+                        to
+                    } else {
+                        pos2(220.0, 220.0)
+                    };
+                    assert_eq!(
+                        moved.points[1], expected,
+                        "{tool:?}, body {body}, {modifiers:?}"
+                    );
+                    // A Shift move keeps whole bars, though its converter is precise, while
+                    // anchors snap to bars in time.
+                    let bar = if body && !copying && snap_to_time {
+                        expected.x.round()
+                    } else {
+                        expected.x
+                    };
+                    assert_eq!(
+                        moved.chart_points[1],
+                        ChartPoint::new(bar - pan.x, f64::from(expected.y - pan.y))
+                    );
+                    if copying {
+                        assert_eq!(moved.stored_id, None);
+                    }
+                    assert!(manager.undo());
+                    assert_eq!(manager.drawings.len(), 1);
+                    assert_eq!(manager.drawings[0].chart_points, before);
+                    assert!(!manager.undo());
+                    assert!(manager.redo());
+                    assert_eq!(manager.drawings.last().unwrap().points[1], expected);
                 }
             }
         }
