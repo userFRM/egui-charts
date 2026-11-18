@@ -961,7 +961,7 @@ mod tests {
         const MARK: &[(f32, f32)] = &[(200., 200.)];
         type Case = (T, &'static [(f32, f32)], f32, A, (f32, f32));
         #[rustfmt::skip]
-        let cases: [Case; 25] = [
+        let cases: [Case; 29] = [
             (T::TrendLine, RISING, -FRAC_PI_4, A::CENTER_BOTTOM, (196.4645, 196.4645)),
             (T::TrendLine, &[(300., 300.), (100., 100.)], FRAC_PI_4, A::CENTER_BOTTOM, (203.5355, 196.4645)),
             (T::Ray, &[(100., 200.), (200., 200.)], 0.0, A::CENTER_BOTTOM, (150., 195.)),
@@ -987,6 +987,11 @@ mod tests {
             (T::DisjointChannel, CHANNEL, -FRAC_PI_4, A::CENTER_TOP, (203.5355, 203.5355)),
             (T::Arrow, RISING, -FRAC_PI_4, A::LEFT_BOTTOM, (96.4645, 296.4645)),
             (T::CrossLine, &[(150., 120.)], 0.0, A::RIGHT_TOP, (496., 125.)),
+            // Along the fitted line from (100, 390) to (300, 370), 5 pt off it at its normal.
+            (T::RegressionTrend, &[(100., 200.), (300., 250.)], -0.0996687, A::LEFT_BOTTOM, (99.5025, 385.0248)),
+            (T::RegressionTrend, &[(100., 200.), (300., 250.)], -0.0996687, A::RIGHT_TOP, (300.4975, 374.9752)),
+            (T::RegressionTrend, &[(100., 200.), (300., 250.)], -0.0996687, A::LEFT_CENTER, (100., 390.)),
+            (T::RegressionTrend, &[(100., 200.), (300., 250.)], -0.0996687, A::RIGHT_BOTTOM, (299.5025, 365.0248)),
         ];
         for (tool, points, angle, anchor, expected) in cases {
             let mut drawing = Drawing::new(1, tool);
@@ -1030,6 +1035,7 @@ mod tests {
                     | T::ParallelChannel
                     | T::FlatTopBottom
                     | T::DisjointChannel
+                    | T::RegressionTrend
                     | T::Arrow
                     | T::ArrowMarker
             ) {
@@ -1069,6 +1075,16 @@ mod tests {
                 assert_eq!(strings(&texts(&plain)), others, "{tool:?} without text");
             }
         }
+
+        // Synthetic bold paints a regression trend's text twice and its correlation once.
+        let mut trend = Drawing::new(1, T::RegressionTrend);
+        trend.text = Some(LABEL.into());
+        trend.font_weight = crate::drawings::FontWeight::Bold;
+        trend.points = vec![Pos2::new(100., 200.), Pos2::new(300., 250.)];
+        trend.chart_points = vec![ChartPoint::new(0.0, 30.0), ChartPoint::new(2.0, 25.0)];
+        let painted = strings(&texts(&trend));
+        let count = |text: &str| painted.iter().filter(|t| *t == text).count();
+        assert_eq!((count(LABEL), count("0.50")), (2, 1), "{painted:?}");
 
         // A horizontal ray starting 40 pt right of the pane is out of view, text and all.
         let mut ray = Drawing::new(1, T::HorizontalRay);
