@@ -592,3 +592,27 @@ fn per_bar_states_offer_the_colours_they_draw() {
         }
     }
 }
+
+/// No catalogue study configured as the chart configures it lists two inputs under one
+/// label, so every field of its Inputs tab says which value it sets.
+#[test]
+fn configured_studies_label_every_input_once() {
+    use crate::studies::ConfiguredStudy;
+
+    let factory = IndicatorFactory::new();
+    let mut repeated: Vec<(String, String)> = Vec::new();
+    for name in factory.list() {
+        let labels: Vec<_> = ConfiguredStudy::new(factory.create(&name).unwrap())
+            .inputs()
+            .into_iter()
+            .map(|input| input.label)
+            .collect();
+        for (index, label) in labels.iter().enumerate() {
+            if labels[..index].contains(label) {
+                repeated.push((name.clone(), label.clone()));
+            }
+        }
+    }
+    repeated.sort();
+    assert_eq!(repeated, Vec::<(String, String)>::new());
+}

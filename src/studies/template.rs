@@ -1048,9 +1048,43 @@ mod tests {
     /// Stochastic RSI and a Connors RSI saved before their guides, a Stochastic saved before its
     /// guides had styles, a Donchian channel saved before its band and a band saved with its
     /// boundary plots hidden before it could be drawn without them. Older per-bar studies keep
-    /// the colours and widths they drew before every state had its own style control.
+    /// the colours and widths they drew before every state had its own style control. Renamed
+    /// input labels retain the ids, values and styles of the saved studies.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
+        // Chart saves made before the input labels changed keep every saved id, value and
+        // style while the editor describes the three study-local controls distinctly.
+        for (saved, id, label) in [
+            (
+                r#"{"name":"LSMA","inputs":[["period",{"Length":25}],["offset",{"Integer":0}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.LSMA.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                "offset",
+                "Regression offset",
+            ),
+            (
+                r#"{"name":"ALMA","inputs":[["period",{"Length":9}],["offset",{"Number":0.85}],["sigma",{"Number":6.0}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ALMA.html","plots":[{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[2,9,15,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                "offset",
+                "Weight offset",
+            ),
+            (
+                r#"{"name":"Higher Interval Candles","inputs":[["auto_interval",{"Toggle":true}],["interval",{"Choice":14}],["extended_hours",{"Toggle":true}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.HigherIntervalCandles.html","plots":[{"color":[0,150,136,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[244,67,54,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[0,9,9,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                "interval",
+                "Candle interval",
+            ),
+        ] {
+            let saved: StudyTemplate = serde_json::from_str(saved).unwrap();
+            let restored = saved.create().unwrap();
+            assert_eq!(restored.settings(), saved.settings, "{} styles", saved.name);
+            let inputs = restored.inputs();
+            for (id, value) in &saved.inputs {
+                let input = inputs.iter().find(|input| input.id == *id).unwrap();
+                assert_eq!(&input.value, value, "{} {id}", saved.name);
+            }
+            assert_eq!(
+                inputs.iter().find(|input| input.id == id).unwrap().label,
+                label
+            );
+        }
+
         // Actual chart saves from before state colours had their own controls retain the
         // colours and widths they drew, and saving the upgrade again keeps those choices.
         use crate::studies::palette;
