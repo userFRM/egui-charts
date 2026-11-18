@@ -10,9 +10,9 @@
 #[non_exhaustive]
 pub enum TouchTrackingExitMode {
     /// Hide the crosshair and readout when the touch ends.
-    #[default]
     OnTouchEnd,
     /// Keep the crosshair and readout after release until the next tap.
+    #[default]
     OnNextTap,
 }
 

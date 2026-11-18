@@ -40,10 +40,16 @@ pub enum CrosshairStyle {
     Dot,
     /// Standard arrow cursor and axis readouts, without crosshair lines
     Arrow,
-    /// A fading pointer trail for presentations, with axis readouts.
+    /// A presentation cursor with axis readouts. A click marks that point and a drag marks its
+    /// path; the mark stays whole until the button is released, then fades. Moving the pointer
+    /// without a button held marks nothing, and a mark neither pans the chart nor selects, moves
+    /// or creates drawings. Holding Alt (Option on macOS) while pressing on the plot marks the
+    /// same way under the other cursors.
     Demonstration,
-    /// A trail that follows the pointer while the primary button is held and fades after it is
-    /// released, with axis readouts. It creates no drawings.
+    /// A trail that follows the pointer while the primary button is held, with axis readouts.
+    /// Unlike a Demonstration mark, each point fades half a second after it is drawn, so the trail
+    /// shortens behind a moving pointer. It neither pans the chart nor selects, moves or creates
+    /// drawings.
     Magic,
     /// No crosshair lines or axis labels. Legends, the data window and tooltips still follow
     /// the pointer.
