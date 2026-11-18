@@ -168,6 +168,7 @@ pub struct StudyPane {
 /// let mut table = StudyTable::default();
 /// table.title = "Momentum".into();
 /// table.rows = vec![vec![StudyCell::Text("RSI".into()), StudyCell::Percent(Some(0.42))]];
+/// table.cell_colors = vec![vec![Color32::from_rgb(91, 156, 246)]];
 /// // `fills`
 /// let fill = StudyFill {
 ///     first: FillBoundary::Plot(0),
@@ -569,6 +570,16 @@ pub trait Indicator: Send {
     fn update_data(&mut self, data: &[Bar], from: usize, sources: &[super::StudyData<'_>]) {
         let _ = sources;
         self.update(data, from);
+    }
+
+    /// Whether the histories this study requests still apply when it is calculated on another
+    /// interval than the chart's. A [`ConfiguredStudy`](super::ConfiguredStudy) then offers it the
+    /// Interval and Wait for interval close inputs, otherwise offered to source-aware studies and
+    /// studies that request nothing. On another interval it passes every request on with the
+    /// start [`data_start`](Indicator::data_start) states. The default, `false`, keeps a study
+    /// that requests data on the chart's interval.
+    fn requests_allow_other_intervals(&self) -> bool {
+        false
     }
 
     /// The single price series this study reads, or `None` for OHLC or multi-source studies.
