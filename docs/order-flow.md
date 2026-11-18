@@ -153,11 +153,13 @@ and asks, at `ln(1 + size) / ln(1 + cut_off)`; its contrast against the chart ba
 with size and sizes near zero fade away. The cut-off is by default the size that 96% of the held
 rows do not exceed, shared by every column; the held columns redraw only when it moves by more
 than 10%. Bid and ask size at a crossed price are summed. Best bid and ask are 2 point lines in
-the chart's bullish and bearish colours. Linear scales draw a quad per tile and column.
-Logarithmic scales map each row edge individually to preserve price geometry. Expired history
-releases texture slots. No tile side exceeds the backend limit. The current book appears as a size
-profile at the right of the pane; a key and the row's exact price, side and size appear while the
-pointer is over it.
+the chart's bullish and bearish colours through the middle of each side's best row. With one tick
+per row each line is on the best price itself. Each tile of a column draws as one quad; on a
+logarithmic scale a tile is halved into a few quads where the scale bends by more than half a point
+across it, which keeps every row within a point of its price at about the cost of a linear scale.
+Expired history releases texture slots. No tile side exceeds the backend limit. The current book
+appears as a size profile at the right of the pane; a key and the row's exact price, side and size
+appear while the pointer is over it.
 
 [`set_volume_bubbles(Some(Default::default()))`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_volume_bubbles) overlays executed volume using the same feed's
 trades. Disabling the heatmap releases its textures and retains configured depth history.
@@ -229,15 +231,20 @@ chart.set_liquidity_heatmap(true);
 
 The heatmap shows a new column for every 50 ms period in which the host sent an update, so the
 visible cadence is that of the feed, up to 20 columns a second. `cargo bench --bench heatmap`
-measures it: 400 depth deltas a second, each changing 8 levels near the touch, into a book of
-1,000 levels a side, in a 1440 by 900 window showing the last three one-minute bars, on an Intel
-Core i7-10700KF (16 threads, release build, 60 s of market time):
+measures it: 360 depth deltas a second (six per frame at 60 frames a second), each changing 8 levels
+near the touch, into a book of 1,000 levels a side, in a 1440 by 900 window showing the last three
+one-minute bars, on an Intel Core i7-10700KF (16 threads, release build, one run per case of 60 s of
+market time on 18 November 2026):
 
 | Scenario | Sink per delta | Frame p50 / p95 / max | Texture upload | Textures | Heap retained |
 |---|---:|---:|---:|---:|---:|
-| 100 levels, 1 s columns (defaults) | 0.4 µs | 0.3 / 0.4 / 1.6 ms | 11 KB/s | 0.8 MB | 0.6 MB |
-| 1,000 levels, 50 ms columns | 1.8 µs | 1.0 / 2.2 / 3.5 ms | 394 KB/s | 7.3 MB | 20 MB |
-| the same, history filled to every resolution | 2.2 µs | 2.1 / 3.9 / 5.8 ms | 367 KB/s | 16.8 MB | 56 MB |
+| 100 levels, 1 s columns (defaults) | 0.71 µs | 0.323 / 0.370 / 1.448 ms | 11 KB/s | 0.8 MB | 0.0 MB |
+| 1,000 levels, 50 ms columns | 2.04 µs | 1.170 / 3.079 / 5.204 ms | 394 KB/s | 7.3 MB | 18.0 MB |
+| the same, history filled to every resolution | 1.43 µs | 1.469 / 3.819 / 8.892 ms | 367 KB/s | 16.8 MB | 54.7 MB |
+| 1,000 levels, 50 ms columns, logarithmic price scale | 1.37 µs | 0.868 / 2.145 / 3.570 ms | 394 KB/s | 7.3 MB | 19.0 MB |
+
+Heap is the net increase over the empty chart baseline; zero means other releases offset the added
+allocations.
 
 Depth deltas sort their changes and merge only the touched suffix of each side, reusing buffers.
 Small updates near the touch do not copy the whole book and allocate nothing once those buffers
@@ -246,11 +253,13 @@ A change buffer with capacity beyond 10,000 entries is released after the delta.
 
 The sink time is the aggregation of a delta into the live book and, once per period, the book
 into a depth column. A frame includes layout, painting, applying the update and tessellation;
-the chart draws about 1,000 columns of 2,000 rows in those frames. The upload of one frame is at
-most 74 KB once the history is full, and the first frame that draws a loaded history uploads all
-of it (2.4 MB here). A filled history holds 1,687 columns covering 50 minutes, bounded by
-`columns * 8 * rows * 2 * 16` bytes, 61 MB for this configuration. A history of individual orders
-also records each row's largest order: 24 bytes a row instead of 16.
+the chart draws about 1,000 columns of 2,000 rows in those frames. On the logarithmic scale it draws
+the same quads, one per tile of 256 rows, since the scale bends by far less than half a point across
+a tile at these prices. The upload of one frame is at most 74 KB once the history is full, and the
+first frame that draws a loaded history uploads all of it (2.4 MB here). A filled history holds
+1,687 columns covering 50 minutes, bounded by `columns * 8 * rows * 2 * 16` bytes, 61 MB for this
+configuration. A history of individual orders also records each row's largest order: 24 bytes a row
+instead of 16.
 
 The supported budget is this configuration on a machine of that class: a frame under 5 ms and
 under 60 MB of heap for 1,000 levels at 50 ms. The library degrades by dropping resolution, never
