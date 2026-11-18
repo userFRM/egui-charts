@@ -146,8 +146,8 @@ impl LiquidityHeatmap {
     /// view sets none; its filter and profile do not apply, since
     /// the history sampled the orders of its own
     /// [`DepthHistoryConfig::orders`](crate::data::DepthHistoryConfig::orders). `colors` are the
-    /// bullish and bearish colours of the 2 point best bid and best ask lines; call with the same
-    /// colours as the price series.
+    /// bullish and bearish colours of the 2 point best bid and best ask lines, drawn through the
+    /// middle of each side's best row; call with the same colours as the price series.
     pub fn render(
         &mut self,
         painter: &Painter,
@@ -372,7 +372,7 @@ impl LiquidityHeatmap {
             {
                 let y = levels
                     .first()
-                    .map(|&(level, _)| mapping.price_to_y(level as f64 * step - half_tick))
+                    .map(|&(level, _)| mapping.price_to_y((level as f64 + 0.5) * step - half_tick))
                     .filter(|y| y.is_finite());
                 if !adjacent || y.is_none() {
                     finish(&mut paths[side], colors[side]);
@@ -855,52 +855,67 @@ mod tests {
         assert_eq!(scale_color(stops, 1.0), Color32::WHITE);
     }
 
-    /// Guards the best bid and ask: 2 point paths in the bullish and bearish colours, unbroken
-    /// across adjacent columns, whichever row the best price is in, and broken over a missing
-    /// period.
+    /// Guards the best bid and ask: 2 point paths in the bullish and bearish colours through the
+    /// middle of the best rows, on the best prices with one tick per row, unbroken across adjacent
+    /// columns, whichever row the best price is in, and broken over a missing period.
     #[test]
     fn best_bid_and_ask_are_two_point_paths() {
         let ctx = egui::Context::default();
-        let mut history = DepthHistory::new(Default::default()).unwrap();
         let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
-        for (second, bid, ask) in [(0, 99, 101), (1, 98, 100), (2, 99, 101), (4, 99, 101)] {
-            history.push(DepthColumn {
-                time: start + TimeDelta::seconds(second),
-                span: TimeDelta::seconds(1),
-                bids: vec![(bid, 5.0)],
-                asks: vec![(ask, 5.0)],
+        // Rows of one price unit: one tick of 1, or four ticks of 0.25 whose middle is 0.375
+        // above the first.
+        for (ticks_per_row, middle) in [(1, 0.0), (4, 0.375)] {
+            let mut history = DepthHistory::new(crate::data::DepthHistoryConfig {
+                ticks_per_row,
                 ..Default::default()
-            });
-        }
-        let (_, shapes) = draw(
-            &ctx,
-            &mut LiquidityHeatmap::default(),
-            &history,
-            1.0,
-            &OrderBookView::default(),
-        );
-        let paths: Vec<_> = shapes
-            .iter()
-            .filter_map(|shape| match shape {
-                egui::Shape::Path(path) => {
-                    let egui::epaint::ColorMode::Solid(color) = path.stroke.color else {
-                        panic!("a solid stroke");
-                    };
-                    Some((path.stroke.width, color, path.points.len()))
-                }
-                _ => None,
             })
-            .collect();
-        // Three columns, two risers: 6 points each, then the column after the gap on its own.
-        assert_eq!(
-            paths,
-            [
-                (2.0, Color32::GREEN, 6),
-                (2.0, Color32::RED, 6),
-                (2.0, Color32::GREEN, 2),
-                (2.0, Color32::RED, 2),
-            ]
-        );
+            .unwrap();
+            for (second, bid, ask) in [(0, 99, 101), (1, 98, 100), (2, 99, 101), (4, 99, 101)] {
+                history.push(DepthColumn {
+                    time: start + TimeDelta::seconds(second),
+                    span: TimeDelta::seconds(1),
+                    bids: vec![(bid, 5.0)],
+                    asks: vec![(ask, 5.0)],
+                    ..Default::default()
+                });
+            }
+            let (_, shapes) = draw(
+                &ctx,
+                &mut LiquidityHeatmap::default(),
+                &history,
+                1.0,
+                &OrderBookView::default(),
+            );
+            let paths: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Path(path) => {
+                        let egui::epaint::ColorMode::Solid(color) = path.stroke.color else {
+                            panic!("a solid stroke");
+                        };
+                        let ys: Vec<_> = path.points.iter().map(|point| point.y).collect();
+                        Some((path.stroke.width, color, ys))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let at = |rows: &[i64]| -> Vec<f32> {
+                rows.iter()
+                    .map(|&row| mapping().price_to_y(row as f64 + middle))
+                    .collect()
+            };
+            // Three columns, two risers: 6 points each, then the column after the gap on its own.
+            assert_eq!(
+                paths,
+                [
+                    (2.0, Color32::GREEN, at(&[99, 99, 98, 98, 99, 99])),
+                    (2.0, Color32::RED, at(&[101, 101, 100, 100, 101, 101])),
+                    (2.0, Color32::GREEN, at(&[99, 99])),
+                    (2.0, Color32::RED, at(&[101, 101])),
+                ],
+                "{ticks_per_row} ticks per row"
+            );
+        }
     }
 
     /// Guards the marks: a cell takes the colour of the tier its largest recorded order reaches,

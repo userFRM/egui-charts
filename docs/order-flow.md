@@ -125,7 +125,8 @@ and asks, at `ln(1 + size) / ln(1 + cut_off)`; its contrast against the chart ba
 with size and sizes near zero fade away. The cut-off is by default the size that 96% of the held
 rows do not exceed, shared by every column; the held columns redraw only when it moves by more
 than 10%. Bid and ask size at a crossed price are summed. Best bid and ask are 2 point lines in
-the chart's bullish and bearish colours. Linear scales draw a quad per tile and column.
+the chart's bullish and bearish colours through the middle of each side's best row. With one tick
+per row each line is on the best price itself. Linear scales draw a quad per tile and column.
 Logarithmic scales map each row edge individually to preserve price geometry. Expired history
 releases texture slots. No tile side exceeds the backend limit. The current book appears as a size
 profile at the right of the pane; a key and the row's exact price, side and size appear while the
