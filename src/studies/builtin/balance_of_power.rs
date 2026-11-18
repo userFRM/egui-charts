@@ -6,8 +6,8 @@ use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
 /// Balance of Power (BoP): the strength of buyers against sellers,
-/// `(close - open) / (high - low)` per bar, smoothed with a simple average of
-/// `smooth_period` bars.
+/// `(close - open) / (high - low)` per bar, optionally smoothed with a simple average of
+/// `smooth_period` bars. The default does not smooth.
 ///
 /// - A bar without range (`high == low`) counts as 0.
 /// - With smoothing of length `n`, bars 0 to `n - 2` have no value, and a series shorter
@@ -29,7 +29,7 @@ impl BalanceOfPower {
         Self {
             smooth_period: smooth_period.max(1),
             values: IndicatorValues::new(),
-            color: palette::RED, // Teal
+            color: palette::RED,
             visible: true,
         }
     }
@@ -64,10 +64,10 @@ impl BalanceOfPower {
     }
 }
 
-/// Construct with the conventional default parameters.
+/// The unsmoothed ratio of every bar, as the study is conventionally drawn.
 impl Default for BalanceOfPower {
     fn default() -> Self {
-        Self::new(14)
+        Self::new(1)
     }
 }
 

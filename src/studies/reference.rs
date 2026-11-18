@@ -632,7 +632,8 @@ fn staple_studies_match_published_definitions() {
         ("Stoch(14,3,3)", Box::new(Stochastic::default())),
         ("Stoch(14,1,3)", Box::new(Stochastic::new(14, 1, 3))),
         ("WilliamsR(14)", Box::new(WilliamsR::default())),
-        ("BoP(14)", Box::new(BalanceOfPower::default())),
+        ("BoP(14)", Box::new(BalanceOfPower::new(14))),
+        ("BoP", Box::new(BalanceOfPower::default())),
         ("PPO(12,26,9)", Box::new(PriceOscillator::default())),
         (
             "PVO(12,26,9)",
