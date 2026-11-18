@@ -399,7 +399,7 @@ updates the study from the first bar that changed.
 Profile studies use the shared reader for painting, extended levels and autoscale. Frozen chart
 exports call
 [`Indicator::clone_for_export`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.clone_for_export);
-profile studies use
+profile studies and built-in `OrderFlowStudy` indicators such as Trade Rate use
 [`OrderFlowInput::frozen`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowInput.html#method.frozen)
 there, so even a first query after later live updates sees the saved state. Ordinary study clones still
 share their live input. Other indicators keep their existing clone behavior unless they override

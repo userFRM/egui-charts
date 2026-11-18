@@ -375,6 +375,11 @@ impl Indicator for OrderFlowStudy {
     fn clone_box(&self) -> Box<dyn Indicator> {
         Box::new(self.clone())
     }
+    fn clone_for_export(&self) -> Box<dyn Indicator> {
+        let mut frozen = self.clone();
+        frozen.input = self.input.frozen();
+        Box::new(frozen)
+    }
     fn line_count(&self) -> usize {
         if self.delta.is_some() {
             return if self.markers.enabled() { 7 } else { 3 };
@@ -806,6 +811,30 @@ mod tests {
 
     fn lines(study: &OrderFlowStudy) -> Vec<Vec<f64>> {
         study.values().columns().to_vec()
+    }
+
+    #[test]
+    fn trade_rate_export_keeps_its_input_while_an_ordinary_clone_follows_trades() {
+        let study = OrderFlowStudy::new(OrderFlowKind::TradeRate {
+            volume: false,
+            seconds: 2,
+            instant: 1,
+        });
+        let fill = Tick::new(start(), 100.0, 7.0, None);
+        study
+            .input
+            .push_trade(&study.clock, &fill.clone().with_id(1));
+        let mut export = study.clone_for_export();
+        let mut live = study.clone_box();
+        study.input.push_trade(&study.clock, &fill.with_id(2));
+
+        let bars = [Bar::new(start(), 100.0, 100.0, 100.0, 100.0, 7.0)];
+        for (copy, executions) in [(&mut export, 1.0), (&mut live, 2.0)] {
+            copy.calculate(&bars);
+            assert_eq!(copy.values().value(0, 0), Some(executions));
+            assert_eq!(copy.values().value(1, 0), Some(executions / 2.0));
+            assert_eq!(copy.values().value(2, 0), Some(executions));
+        }
     }
 
     /// Counts are integral; quantities use the instrument's lot precision, while rates and
