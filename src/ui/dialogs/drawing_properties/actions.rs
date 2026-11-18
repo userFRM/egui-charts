@@ -369,7 +369,7 @@ impl DrawingProps {
                     };
                 }
                 edited_config!(
-                    pitchfork => |d: &Drawing| super::tabs::pitchfork_shown(d),
+                    pitchfork => super::tabs::pitchfork_shown,
                     gann => |d: &Drawing| d.gann_config().clone(),
                     ghost_feed => |d: &Drawing| d.ghost_feed.unwrap_or_default(),
                     bars_pattern => |d: &Drawing| d.bars_pattern.unwrap_or_default(),
@@ -557,8 +557,9 @@ impl DrawingProps {
     }
 }
 
-/// Writes changed members into `own`, descending through matching objects and equal-length
-/// arrays. A changed shape, such as a level list gaining an item, replaces the whole value.
+/// Writes changed members into `own`, descending through objects with the same members and
+/// through arrays edited without a change of length, over the items `own` holds, as Fibonacci
+/// levels are. A changed shape, such as a level list gaining an item, replaces the whole value.
 fn merge_edits(
     own: &mut serde_json::Value,
     original: &serde_json::Value,
@@ -583,7 +584,7 @@ fn merge_edits(
             }
         }
         (Value::Array(own), Value::Array(original), Value::Array(edited))
-            if own.len() == edited.len() && original.len() == edited.len() =>
+            if original.len() == edited.len() =>
         {
             for ((own, original), edited) in own.iter_mut().zip(original).zip(edited) {
                 merge_edits(own, original, edited);
@@ -601,12 +602,13 @@ fn merged<T: serde::Serialize + serde::de::DeserializeOwned + Clone>(
     edited: &T,
 ) -> T {
     let json = |config: &T| serde_json::to_value(config).ok();
-    (|| {
-        let mut value = json(own)?;
-        merge_edits(&mut value, &json(original)?, &json(edited)?);
-        serde_json::from_value(value).ok()
-    })()
-    .unwrap_or_else(|| edited.clone())
+    let (Some(mut value), Some(original), Some(changed)) =
+        (json(own), json(original), json(edited))
+    else {
+        return edited.clone();
+    };
+    merge_edits(&mut value, &original, &changed);
+    serde_json::from_value(value).unwrap_or_else(|_| edited.clone())
 }
 
 #[cfg(test)]
@@ -1404,7 +1406,7 @@ mod tests {
                 |d| d.vwap.as_mut().unwrap().bands[0].upper.visible = false,
             ),
             (
-                "replace edited level list of a different length",
+                "edited level of a list of a different length",
                 DrawingToolType::Pitchfork,
                 |d| d.pitchfork = Some(PitchforkConfig::default()),
                 |d| {
@@ -1414,19 +1416,7 @@ mod tests {
                     d.pitchfork = Some(config);
                 },
                 |d| d.pitchfork.as_mut().unwrap().levels[0].visible = false,
-                |d| {
-                    let config = d.pitchfork.as_mut().unwrap();
-                    config.levels = PitchforkConfig::default().levels;
-                    config.levels[0].visible = false;
-                },
-            ),
-            (
-                "keep unedited level list of a different length",
-                DrawingToolType::Pitchfork,
-                |d| d.pitchfork = Some(PitchforkConfig::default()),
-                |d| d.pitchfork.as_mut().unwrap().levels.truncate(4),
-                |d| d.pitchfork.as_mut().unwrap().background_opacity = 75,
-                |d| d.pitchfork.as_mut().unwrap().background_opacity = 75,
+                |d| d.pitchfork.as_mut().unwrap().levels[0].visible = false,
             ),
         ];
         for &(case, tool, opened, peer, edit, change) in cases {
