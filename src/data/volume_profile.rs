@@ -20,9 +20,12 @@ pub struct StudyProfile {
     /// Colour of the point of control and value-area lines, `Color32::PLACEHOLDER` as bytes
     /// following the theme's foreground.
     pub color: [u8; 4],
-    /// Draw at the right of the viewport instead of beside the first source bar.
+    /// Draw in the right 30% of the plot instead of beside the first source bar. A profile of
+    /// [`VolumeProfile::from_options`] rows, which has no source bars, otherwise takes the left
+    /// 30%.
     pub right_aligned: bool,
-    /// Share of the span, from 0 to 1, that the row with the most volume takes.
+    /// Share of the span, from 0 to 1, that the row with the most volume takes. An options
+    /// exposure overlay's largest bar takes half of it on each side of its centre.
     pub width: f32,
 }
 

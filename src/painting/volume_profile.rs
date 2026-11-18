@@ -86,15 +86,6 @@ pub(crate) fn paint_profile(
     if left >= right {
         return;
     }
-    if profile.exposure.is_some() {
-        paint_exposure(painter, profile, config, span, price_to_y);
-        return;
-    }
-    let Some((poc, (va_low, va_high))) = profile.poc_and_value_area(config.value_area()) else {
-        return;
-    };
-    let y_at_row = |row: usize| (price_to_y)(profile.low + row as f64 * profile.row_height);
-    let color = shown_color(painter, color);
     let options = profile.source() == ProfileSource::Options;
     let (drawing, right_aligned, share, poc_width) = match style {
         ProfileStyle::Study {
@@ -116,6 +107,15 @@ pub(crate) fn paint_profile(
             poc_width,
         } => (true, anchored, 0.3, poc_width),
     };
+    if profile.exposure.is_some() {
+        paint_exposure(painter, profile, config, span, share, price_to_y);
+        return;
+    }
+    let Some((poc, (va_low, va_high))) = profile.poc_and_value_area(config.value_area()) else {
+        return;
+    };
+    let y_at_row = |row: usize| (price_to_y)(profile.low + row as f64 * profile.row_height);
+    let color = shown_color(painter, color);
     let spans_view = !drawing && measures_view(profile, right_aligned);
     let rect = Rect::from_two_pos(
         Pos2::new(left, y_at_row(profile.volume.len())),
@@ -289,6 +289,7 @@ pub(crate) fn exposure_rects(
     profile: &VolumeProfile,
     display: ProfileDisplay,
     span: Range<f32>,
+    share: f32,
     price_to_y: &dyn Fn(f64) -> f32,
 ) -> Vec<(usize, Rect, bool)> {
     let Some(snapshot) = &profile.exposure else {
@@ -309,7 +310,8 @@ pub(crate) fn exposure_rects(
         .map(f64::abs)
         .fold(0.0, f64::max);
     let zero = (span.start + span.end) * 0.5;
-    let width = (span.end - span.start) * 0.45;
+    // The largest bar takes half the share on each side of the centre: 0.45 at the default 0.9.
+    let width = (span.end - span.start) * share * 0.5;
     let mut rects = Vec::new();
     for (index, row) in snapshot.rows.iter().enumerate() {
         let y = price_to_y(row.strike);
@@ -360,6 +362,7 @@ fn paint_exposure(
     profile: &VolumeProfile,
     config: VolumeProfileConfig,
     span: Range<f32>,
+    share: f32,
     price_to_y: &dyn Fn(f64) -> f32,
 ) {
     let snapshot = profile.exposure.as_ref().expect("exposure profile");
@@ -376,7 +379,7 @@ fn paint_exposure(
             && painter.ctx().layer_id_at(*point) == Some(painter.layer_id())
     });
     let mut hovered = None;
-    for (index, rect, down) in exposure_rects(profile, config.display, span, price_to_y) {
+    for (index, rect, down) in exposure_rects(profile, config.display, span, share, price_to_y) {
         let rgba = if down {
             config.down_color
         } else {

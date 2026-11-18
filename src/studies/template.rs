@@ -493,9 +493,10 @@ impl StudyTemplate {
                     fill.visible = false;
                 }
             }
-            // An options profile kept one Sides choice for every measure, and showed its readouts
-            // with their lines unticked in the style tab, before each measure kept its own choice
-            // and the readouts followed a switch and the style tab.
+            // An options profile kept one Sides choice for every measure, coloured its bars with
+            // its first two line colours and showed its readouts with their lines unticked in the
+            // style tab, before each measure kept its own choice, the bars took colours of their
+            // own and the readouts followed a switch and the style tab.
             "Options Volume Profile" if has("expiry") && !has("put_call") => {
                 template.inputs = self
                     .inputs
@@ -510,6 +511,18 @@ impl StudyTemplate {
                 template
                     .inputs
                     .push(("put_call".to_owned(), InputValue::Toggle(true)));
+                if let [calls, puts, _, _, _, _, _, _] = template.settings.plots.as_slice() {
+                    for (id, color) in [
+                        ("call_color", calls.color),
+                        ("put_color", puts.color),
+                        ("net_positive_color", calls.color),
+                        ("net_negative_color", puts.color),
+                    ] {
+                        template
+                            .inputs
+                            .push((id.to_owned(), InputValue::Color(color)));
+                    }
+                }
                 if let [ratio, _, net, _, _, _, _, _] = template.settings.plots.as_mut_slice() {
                     ratio.visible = true;
                     net.visible = true;
