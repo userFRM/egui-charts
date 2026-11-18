@@ -1351,9 +1351,9 @@ impl ChartLayout {
 
     /// Sets independent field memberships. Empty identifiers are treated as unlinked.
     /// Unless `skip_history` is true, records one undo step on the active chart at the next
-    /// [`Self::show`], where the chart also takes the symbol and interval of the groups it
-    /// joined. Undo restores only the fields changed by this call. Restore saved memberships with
-    /// `skip_history` true, which keeps each chart's own symbol and interval.
+    /// [`Self::show`], where the chart in slot `index` also takes the symbol and interval of the
+    /// groups it joined. Undo restores only the fields changed by this call. Restore saved
+    /// memberships with `skip_history` true, which keeps each chart's own symbol and interval.
     pub fn set_link_groups(
         &mut self,
         index: usize,
