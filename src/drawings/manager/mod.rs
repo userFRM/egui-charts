@@ -62,7 +62,7 @@ pub enum DrawingSyncAction {
 /// let mut handles = HandleConfig::default();
 /// handles.size = 10.0;
 /// let mut options = DrawingManagerOptions::default();
-/// options.snap_to_price = true;
+/// options.snap_to_time = false;
 /// options.handle_config = handles;
 /// let mut manager = DrawingManager::new();
 /// manager.options = options;
@@ -97,12 +97,9 @@ pub struct DrawingManagerOptions {
     /// Line colour every new drawing takes instead of its tool's own, as RGBA bytes. `None`
     /// (the default) keeps each tool's colour; a default saved for a tool wins over both.
     pub default_color: Option<[u8; 4]>,
-    /// Enable snap-to-price (Y-axis snapping to OHLC levels).
-    pub snap_to_price: bool,
-    /// Enable snap-to-time (X-axis snapping to candle timestamps).
+    /// Place and move anchors on whole bars (the default). `false` keeps the fractional bar
+    /// under the pointer, as freeform tools do; a magnet target keeps its own bar either way.
     pub snap_to_time: bool,
-    /// Snap distance threshold in screen pixels.
-    pub snap_distance: f32,
     /// Enable magnet mode (snap to existing drawing anchor points).
     pub magnet_mode: bool,
     /// Magnet snap distance threshold in screen pixels.
@@ -120,9 +117,7 @@ impl Default for DrawingManagerOptions {
     fn default() -> Self {
         Self {
             default_color: None,
-            snap_to_price: true,
             snap_to_time: true,
-            snap_distance: DESIGN_TOKENS.spacing.lg + DESIGN_TOKENS.spacing.xs,
             magnet_mode: false,
             magnet_distance: DESIGN_TOKENS.sizing.drawing.magnet_distance,
             strong_magnet: false,
@@ -350,7 +345,7 @@ impl DrawingManager {
 
     /// Creates a new `DrawingManager` with default options and empty drawing list.
     pub fn new() -> Self {
-        Self {
+        let mut manager = Self {
             registry: Default::default(),
             active_custom_tool: None,
             drawings: Vec::new(),
@@ -387,7 +382,9 @@ impl DrawingManager {
             pending_sync: Arc::new(Mutex::new(Vec::new())),
             sync_enabled: true,
             identity: crate::model::next_revision(),
-        }
+        };
+        manager.update_snap_options();
+        manager
     }
 
     /// Apply the host's tool, snapping, color, eraser and selection state. A state with both
@@ -459,8 +456,13 @@ impl DrawingManager {
         }
     }
 
-    /// Apply a style edit to every unlocked selected drawing as one undo step.
-    pub fn edit_selected(&mut self, mut edit: impl FnMut(&mut Drawing)) {
+    /// Apply a style edit to every unlocked selected drawing as one undo step. An edit after which
+    /// saving would refuse one of them, as [`Self::edit_drawing`] describes, changes none of them,
+    /// records no undo step and returns the reason.
+    pub fn edit_selected(
+        &mut self,
+        mut edit: impl FnMut(&mut Drawing),
+    ) -> Result<(), &'static str> {
         let before: Vec<_> = self
             .drawings
             .iter()
@@ -469,10 +471,19 @@ impl DrawingManager {
             .map(|(index, d)| (index, d.clone()))
             .collect();
         if before.is_empty() {
-            return;
+            return Ok(());
         }
         for (index, old) in &before {
-            edit(&mut self.drawings[*index]);
+            let drawing = &mut self.drawings[*index];
+            edit(drawing);
+            if let Err(reason) = crate::drawings::validation::validate_edit(old, drawing) {
+                for (index, old) in &before {
+                    self.drawings[*index] = old.clone();
+                }
+                return Err(reason);
+            }
+        }
+        for (_, old) in &before {
             self.queue_edit(old);
         }
         self.painted
@@ -480,6 +491,7 @@ impl DrawingManager {
             .unwrap_or_else(|e| e.into_inner())
             .retain(|p| !before.iter().any(|(_, d)| d.id == p.id));
         self.history.push_snapshot(before);
+        Ok(())
     }
 
     /// Deselects all drawings.
@@ -615,15 +627,13 @@ impl DrawingManager {
 
     // === Snap delegation ===
 
-    /// Rebuilds the internal [`SnapService`] from the current manager options.
-    /// Call this after changing snap-related options.
+    /// Applies `magnet_mode` and `magnet_distance` to the snapping service. Call this after
+    /// changing `magnet_distance`; the other options take effect on the next frame.
     pub fn update_snap_options(&mut self) {
         self.snap_service = SnapService::with_options(SnapOptions {
-            snap_to_price: self.options.snap_to_price,
-            snap_to_time: self.options.snap_to_time,
-            snap_distance: self.options.snap_distance,
             magnet_mode: self.options.magnet_mode,
             magnet_distance: self.options.magnet_distance,
+            ..SnapOptions::default()
         });
     }
 
@@ -915,9 +925,9 @@ mod tests {
         for bulk in [false, true] {
             let edit = |manager: &mut DrawingManager, change: fn(&mut Drawing)| {
                 if bulk {
-                    manager.edit_drawings(&[3], change);
+                    manager.edit_drawings(&[3], change).unwrap();
                 } else {
-                    manager.edit_drawing(3, change);
+                    manager.edit_drawing(3, change).unwrap();
                 }
             };
             let mut manager = DrawingManager::new();
@@ -937,7 +947,10 @@ mod tests {
             manager.end_drag_handle();
             manager.delete_drawing(3);
             edit(&mut manager, |d| d.font_size = 30.0);
-            manager.drag_edit_drawing(3, |d| d.font_size = 40.0);
+            assert_eq!(
+                manager.drag_edit_drawing(3, |d| d.font_size = 40.0),
+                Err("Drawing is locked")
+            );
             manager.end_drag_handle();
             assert_eq!(manager.drawings[0].font_size, 14.0);
             assert!(!manager.can_undo());
@@ -976,13 +989,15 @@ mod tests {
     #[test]
     fn bulk_edits_preserve_unrelated_host_changes_and_drawing_order() {
         for edit in [
-            (|m: &mut DrawingManager| m.edit_drawings(&[2], |d| d.folder = vec!["Analysis".into()]))
-                as fn(&mut DrawingManager),
-            |m| m.edit_drawings(&[2], |d| d.visible = false),
-            |m| m.edit_drawings(&[2], |d| d.locked = true),
+            (|m: &mut DrawingManager| {
+                m.edit_drawings(&[2], |d| d.folder = vec!["Analysis".into()])
+                    .unwrap();
+            }) as fn(&mut DrawingManager),
+            |m| m.edit_drawings(&[2], |d| d.visible = false).unwrap(),
+            |m| m.edit_drawings(&[2], |d| d.locked = true).unwrap(),
             |m| {
                 m.select(2);
-                m.edit_selected(|d| d.color = [255, 0, 0, 255]);
+                m.edit_selected(|d| d.color = [255, 0, 0, 255]).unwrap();
             },
             |m| m.set_group(&[2], Some("Group".into())),
         ] {
@@ -1131,14 +1146,15 @@ mod tests {
                 &["Save(1)"],
             ),
             (
-                |m| m.edit_drawing(0, |d| d.stroke_width = 3.0),
+                |m| m.edit_drawing(0, |d| d.stroke_width = 3.0).unwrap(),
                 &["Update(0)"],
             ),
             (
                 // A colour picker dragged over 120 frames is one undo step and one update.
                 |m| {
                     for red in 0..120 {
-                        m.drag_edit_drawing(0, |d| d.color = [red, 0, 0, 255]);
+                        m.drag_edit_drawing(0, |d| d.color = [red, 0, 0, 255])
+                            .unwrap();
                     }
                     m.end_drag_handle();
                     m.undo();
@@ -1149,7 +1165,8 @@ mod tests {
             (
                 |m| {
                     for i in 0..10_000 {
-                        m.edit_drawing(0, |d| d.stroke_width = 2.0 + (i % 2) as f32);
+                        m.edit_drawing(0, |d| d.stroke_width = 2.0 + (i % 2) as f32)
+                            .unwrap();
                     }
                     m.toggle_visibility_all();
                     m.toggle_lock_all();
@@ -1158,10 +1175,10 @@ mod tests {
             ),
             (
                 |m| {
-                    m.edit_drawing(0, |d| d.stroke_width = 2.0);
+                    m.edit_drawing(0, |d| d.stroke_width = 2.0).unwrap();
                     m.add_synced_drawing(line(1)).unwrap();
                     m.delete_drawing(1);
-                    m.edit_drawing(0, |d| d.stroke_width = 3.0);
+                    m.edit_drawing(0, |d| d.stroke_width = 3.0).unwrap();
                 },
                 &["Update(0)", "Save(1)", "Delete(1)"],
             ),
@@ -1297,11 +1314,13 @@ mod tests {
         assert!(manager.group_drawings("levels").next().is_none());
         assert!(manager.redo());
         assert_eq!(manager.group_drawings("levels").count(), 2);
-        manager.edit_selected(|drawing| {
-            if drawing.id == 1 {
-                drawing.selectable = false;
-            }
-        });
+        manager
+            .edit_selected(|drawing| {
+                if drawing.id == 1 {
+                    drawing.selectable = false;
+                }
+            })
+            .unwrap();
         assert_eq!(manager.sel_drawing(), Some(2));
         assert_eq!(manager.selected_ids().collect::<Vec<_>>(), [2]);
         assert!(manager.undo());
@@ -1374,19 +1393,20 @@ mod tests {
         assert_eq!(manager.hit_test(click), Some(11));
     }
 
-    /// The magnet snaps to a drawing anchor, excluding members of the group being dragged.
+    /// The magnet snaps to a drawing anchor within the default distance, excluding members of
+    /// the group being dragged.
     #[test]
     fn magnet_snaps_to_anchors_except_the_group_being_dragged() {
         let mut manager = DrawingManager::new();
         manager.options.magnet_mode = true;
-        manager.update_snap_options();
 
         let mut d = Drawing::new(1, DrawingToolType::TrendLine);
         d.points = vec![Pos2::new(100.0, 100.0), Pos2::new(200.0, 200.0)];
         let drawings = vec![d];
 
-        // A pointer near the first anchor snaps to it under magnet mode.
-        let snapped = manager.snap_point(Pos2::new(103.0, 102.0), &drawings);
+        // A pointer just inside the default distance of the first anchor snaps to it.
+        let reach = manager.options.magnet_distance - 1.0;
+        let snapped = manager.snap_point(Pos2::new(100.0 + reach, 100.0), &drawings);
         assert_eq!(snapped, Pos2::new(100.0, 100.0));
 
         // A group being translated cannot magnetize to another member's old position.

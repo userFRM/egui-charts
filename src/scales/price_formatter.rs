@@ -38,7 +38,6 @@ pub(crate) fn to_step(value: f64, step: f64, round: impl Fn(f64) -> f64) -> f64 
 }
 
 /// Decimals needed to write `step`, such as 2 for 0.25.
-#[cfg(feature = "widget")]
 pub(crate) fn decimals(step: f64) -> usize {
     let rounded = format!("{:.14e}", step.abs())
         .parse::<f64>()
@@ -79,18 +78,30 @@ pub(crate) fn group_thousands(text: String, separator: Option<char>) -> String {
     grouped
 }
 
-/// Instrument decimals, falling back to the decimal places needed to write its minimum tick.
-/// Invalid tick sizes are ignored; explicit decimals take precedence.
+/// The most decimals an instrument's precision gives price labels. An `f64` holds 15 to 17
+/// significant digits, so 12 decimals still write prices below 1000 exactly, and a label stays
+/// short enough to leave the plot its room.
+const MAX_PRICE_DECIMALS: usize = 12;
+
+/// Instrument decimals, falling back to the decimal places needed to write its minimum tick in
+/// its shortest form, so a tick computed in floating point, such as `0.1 * 3.0`, has one.
+/// Invalid tick sizes are ignored; explicit decimals take precedence. Both are capped at
+/// 12 decimals.
 pub fn instrument_price_precision(instrument: &Instrument) -> Option<u8> {
-    instrument.price_decimals.or_else(|| {
+    let count = instrument.price_decimals.map(usize::from).or_else(|| {
         let tick = instrument
             .tick_size
             .filter(|tick| tick.is_finite() && *tick > 0.0)?;
-        let text = tick.to_string();
-        Some(text.split_once('.').map_or(0, |(_, decimals)| {
-            decimals.len().min(usize::from(u8::MAX)) as u8
-        }))
-    })
+        Some(match decimals(tick) {
+            // A tick widened from single precision keeps its noise past the cap; its single
+            // precision form is the one the host wrote.
+            wide if wide > MAX_PRICE_DECIMALS && f64::from(tick as f32) == tick => {
+                decimals((tick as f32).to_string().parse().unwrap_or(tick))
+            }
+            exact => exact,
+        })
+    })?;
+    Some(count.min(MAX_PRICE_DECIMALS) as u8)
 }
 
 /// Trait for custom price formatting on the Y axis.
@@ -557,12 +568,28 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(feature = "widget")]
     fn decimals_ignore_binary_noise_and_keep_subnormal_precision() {
         assert_eq!(decimals(0.025 * 3.0), 3);
         assert_eq!(decimals(5e-324), 324);
         assert_eq!(decimals(f64::NAN), 0);
         assert_eq!(decimals(f64::INFINITY), 0);
+        // Instrument ticks count the same digits, capped where an f64 stops writing prices.
+        let tick =
+            |tick: f64| instrument_price_precision(&Instrument::new("T").with_tick_size(tick));
+        for (size, expected) in [
+            (0.1 * 3.0, 1),
+            (0.07 * 3.0, 2),
+            (f64::from(0.01f32), 2),
+            (0.25, 2),
+            (1.0 / 32.0, 5),
+            (5.0, 0),
+            (1e-7, 7),
+            (1e-15, 12),
+        ] {
+            assert_eq!(tick(size), Some(expected), "tick {size}");
+        }
+        let explicit = Instrument::new("T").with_price_decimals(255);
+        assert_eq!(instrument_price_precision(&explicit), Some(12));
     }
 
     #[test]

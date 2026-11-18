@@ -168,6 +168,7 @@ pub struct StudyPane {
 /// let mut table = StudyTable::default();
 /// table.title = "Momentum".into();
 /// table.rows = vec![vec![StudyCell::Text("RSI".into()), StudyCell::Percent(Some(0.42))]];
+/// table.cell_colors = vec![vec![Color32::from_rgb(91, 156, 246)]];
 /// // `fills`
 /// let fill = StudyFill {
 ///     first: FillBoundary::Plot(0),
@@ -287,6 +288,15 @@ pub trait Indicator: Send {
         self.plot_style(line).visible
     }
 
+    /// Whether output `line` is a readout that the legend lists and the chart never draws, such
+    /// as a ratio far from the prices it would share a scale with. Its visibility in the style
+    /// tab, which starts from [`plot_style`](Self::plot_style), then shows or hides the readout
+    /// together with [`legend_visible`](Self::legend_visible). False by default.
+    fn readout_only(&self, line: usize) -> bool {
+        let _ = line;
+        false
+    }
+
     /// The output lines the legend lists, in the order it lists them: all of them in plot order
     /// by default. A study whose leading reading is not its first output lists that one first.
     fn legend_lines(&self) -> Vec<usize> {
@@ -388,7 +398,7 @@ pub trait Indicator: Send {
                 .collect(),
             precision: self.precision(),
             hidden_intervals: Vec::new(),
-            interval_range: Default::default(),
+            timeframe_visibility: crate::model::TimeframeVisibility::all(),
             levels,
             fill_between_levels,
             level_fill_color,
@@ -560,6 +570,16 @@ pub trait Indicator: Send {
     fn update_data(&mut self, data: &[Bar], from: usize, sources: &[super::StudyData<'_>]) {
         let _ = sources;
         self.update(data, from);
+    }
+
+    /// Whether the histories this study requests still apply when it is calculated on another
+    /// interval than the chart's. A [`ConfiguredStudy`](super::ConfiguredStudy) then offers it the
+    /// Interval and Wait for interval close inputs, otherwise offered to source-aware studies and
+    /// studies that request nothing. On another interval it passes every request on with the
+    /// start [`data_start`](Indicator::data_start) states. The default, `false`, keeps a study
+    /// that requests data on the chart's interval.
+    fn requests_allow_other_intervals(&self) -> bool {
+        false
     }
 
     /// The single price series this study reads, or `None` for OHLC or multi-source studies.

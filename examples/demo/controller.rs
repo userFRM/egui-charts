@@ -678,6 +678,8 @@ impl DemoApp {
 
         let alert_live = Arc::new(live.fork());
         alert_live.set_view(SessionType::RTH, false);
+        let indicator_dialog =
+            IndicatorDialog::new().with_factory(study_editor::study_factory(theme.ui.accent));
         // Keep the controller off callers' stacks, including tests that restart it.
         let mut app = Box::new(Self {
             chart,
@@ -720,7 +722,7 @@ impl DemoApp {
             selection_toolbar: FloatingSelectionToolbar::new(),
             timeframe_toolbar,
             widget_bar,
-            indicator_dialog: IndicatorDialog::new(),
+            indicator_dialog,
             indicator_settings: IndicatorSettingsDialog::default(),
             settings_dialog: {
                 let mut dialog = SettingsDialog::new();
@@ -2986,7 +2988,7 @@ impl DemoApp {
                         }
                     }
                 } else {
-                    chart
+                    let _ = chart
                         .drawings_mut()
                         .drag_edit_drawing(id, |d| d.color = color.to_srgba_unmultiplied());
                     self.colour_drag = true;
@@ -3988,8 +3990,12 @@ impl DemoApp {
                 self.object_tree
                     .apply_to_chart(&mut self.chart, &action, &[]);
             }
-            DrawingContextMenuAction::Lock => dm.edit_drawing(id, |d| d.locked = !d.locked),
-            DrawingContextMenuAction::Hide => dm.edit_drawing(id, |d| d.visible = !d.visible),
+            DrawingContextMenuAction::Lock => {
+                let _ = dm.edit_drawing(id, |d| d.locked = !d.locked);
+            }
+            DrawingContextMenuAction::Hide => {
+                let _ = dm.edit_drawing(id, |d| d.visible = !d.visible);
+            }
             DrawingContextMenuAction::BringToFront => dm.bring_to_front(id),
             DrawingContextMenuAction::SendToBack => dm.send_to_back(id),
             DrawingContextMenuAction::MoveTo(pane) => {
@@ -4280,7 +4286,7 @@ impl DemoApp {
         if text.starts_with("egui-charts-study\n") {
             if let Err(error) = self
                 .chart
-                .paste_indicator(text, &egui_charts::studies::IndicatorFactory::new())
+                .paste_indicator(text, self.indicator_dialog.factory())
             {
                 self.toasts
                     .error(format!("Could not paste the study: {error}"));
@@ -9072,7 +9078,8 @@ mod tests {
         assert_eq!(app.chart.drawings().drawings[0].font_size, 24.0);
         app.chart
             .drawings_mut()
-            .edit_drawing(7, |d| d.locked = false);
+            .edit_drawing(7, |d| d.locked = false)
+            .unwrap();
         props.apply_to_chart(DrawingId(7), &mut app.chart).unwrap();
         let mut second = app.chart.drawings().drawings[0].clone();
         second.id = 8;
@@ -9116,7 +9123,8 @@ mod tests {
         app.chart.drawings_mut().end_drag_handle();
         app.chart
             .drawings_mut()
-            .edit_drawing(7, |d| d.locked = true);
+            .edit_drawing(7, |d| d.locked = true)
+            .unwrap();
         ctx.run_ui(egui::RawInput::default(), |ui| {
             app.show_drawing_toolbar(ui, egui::Color32::BLACK)
         })
@@ -9220,7 +9228,8 @@ mod tests {
             assert!(app.chart.redo());
             app.chart
                 .drawings_mut()
-                .edit_drawing(7, |d| d.locked = true);
+                .edit_drawing(7, |d| d.locked = true)
+                .unwrap();
             props.font_size = 18.0;
             props.apply_to_chart(DrawingId(7), &mut app.chart).unwrap();
             assert_eq!(app.chart.drawings().drawings[0].font_size, 14.0);
@@ -9307,7 +9316,8 @@ mod tests {
         let ids: Vec<_> = app.chart.drawings().drawings.iter().map(|d| d.id).collect();
         app.chart
             .drawings_mut()
-            .edit_drawing(ids[2], |drawing| drawing.listed = false);
+            .edit_drawing(ids[2], |drawing| drawing.listed = false)
+            .unwrap();
         assert!(
             !app.build_source_items()
                 .iter()
@@ -9315,7 +9325,8 @@ mod tests {
         );
         app.chart
             .drawings_mut()
-            .edit_drawing(ids[2], |drawing| drawing.listed = true);
+            .edit_drawing(ids[2], |drawing| drawing.listed = true)
+            .unwrap();
         let sources = app.build_source_items();
         assert_eq!(
             sources

@@ -15,7 +15,9 @@ Select **Main** or **Comparison**, then change its mode, invert it or adjust its
 top and bottom margins. **Crop vertically** makes that scale manual;
 **Autoscale** fits it again. Pan to see relative modes choose a new reference.
 The controls and setup below run in the widget-only docs package.
-Create `PriceScale::new(&mut chart)` once, then call its `show(ui, &mut chart)`
+Create
+[`PriceScale::new(&mut chart)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceScale.html#method.new)
+once, then call its `show(ui, &mut chart)`
 before `chart.show(ui)` on each frame.
 
 <Example scene="price-scale" title="Two independent price scales"
@@ -91,7 +93,9 @@ Use `reset` to resume it after manual scaling or an axis drag.
 
 For custom overlays, read
 [`series_price_map`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.series_price_map)
-after `Chart::show`, then use
+after
+[`Chart::show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show),
+then use
 [`price_to_y`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceMap.html#method.price_to_y)
 and [`y_to_price`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceMap.html#method.y_to_price).
 Before the pane is first drawn, its map is `None`. See

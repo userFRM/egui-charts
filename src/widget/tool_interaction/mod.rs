@@ -201,16 +201,23 @@ impl Chart {
         let bar_to_x = |bar_idx: f32| -> f32 {
             timescale.idx_to_coord_precise(bar_idx, rect_min_x, rect_width)
         };
-        // x_to_bar_snapped: ROUNDED to nearest candle center (for line tools)
-        let x_to_bar_snapped = |x: f32| -> f32 {
+        // Full precision for freeform tools and Shift edits, exact on a painted bar centre.
+        let x_to_bar_precise = |x: f32| -> f32 { bar_at(timescale, x, rect_min_x, rect_width) };
+        // The bar whose slot holds x.
+        let x_to_nearest_bar = |x: f32| -> f32 {
             timescale
                 .coord_to_idx_precise(x, rect_min_x, rect_width)
                 .round() as f32
         };
-        // x_to_bar_precise: Full precision for freeform tools (Brush, Highlighter)
-        // Prevents pixelation when zooming - preserves sub-pixel positioning
-        let x_to_bar_precise =
-            |x: f32| -> f32 { timescale.coord_to_idx(x, rect_min_x, rect_width) };
+        // Other tools place and move anchors on whole bars unless `snap_to_time` is off.
+        let snap_to_time = drawing_manager.options.snap_to_time;
+        let x_to_bar_snapped = |x: f32| -> f32 {
+            if snap_to_time {
+                x_to_nearest_bar(x)
+            } else {
+                x_to_bar_precise(x)
+            }
+        };
         let price_to_y = |price: f64| -> f32 { price_map.price_to_y(price) };
         // A strong snap keeps the actual OHLC even beyond a manual price range.
         let strong_magnet =
@@ -244,7 +251,7 @@ impl Chart {
             let distance = drawing_manager.options.magnet_distance;
             let bars = self.state.shown();
             let strong = drawing_manager.options.strong_magnet;
-            let index = x_to_bar_snapped(pointer.x);
+            let index = x_to_nearest_bar(pointer.x);
             let first = if strong {
                 index.max(0.0) as usize
             } else {
@@ -343,7 +350,7 @@ impl Chart {
 
         // Handle drawing interaction
         // Select converter based on tool type: freeform tools (ContinuousDraw) use precise,
-        // constrained tools retain their angles; other tools snap to candle centers
+        // constrained tools retain their angles; other tools follow `snap_to_time`.
         let x_to_bar_edit = |x| {
             if ui.input(|i| i.modifiers.shift) {
                 x_to_bar_precise(x)
@@ -552,6 +559,18 @@ impl Chart {
     }
 }
 
+/// The fractional bar at `x`, or exactly the bar that `idx_to_coord_precise` paints at `x`, so
+/// that a point snapped to a bar centre keeps that bar through the `f32` round trip.
+fn bar_at(timescale: &crate::model::TimeScale, x: f32, rect_min_x: f32, rect_width: f32) -> f32 {
+    let index = timescale.coord_to_idx(x, rect_min_x, rect_width);
+    let bar = index.round();
+    if timescale.idx_to_coord_precise(bar, rect_min_x, rect_width) == x {
+        bar
+    } else {
+        index
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::drawings::{ChartPoint, Drawing, DrawingToolType, TimeframeVisibility};
@@ -559,6 +578,27 @@ mod tests {
     use crate::widget::RightClickTarget;
     use crate::widget::test_frames::{chart, frame, shapes};
     use egui::{Color32, Context, Event, Key, Modifiers, PointerButton, Shape};
+
+    /// A painted bar centre converts back to exactly its bar, where the plain conversion lands
+    /// a few millionths of a bar to either side.
+    #[test]
+    fn painted_bar_centres_convert_back_to_whole_bars() {
+        for (spacing, offset) in [(7.3, 0.0), (7.3, 0.37), (21.7, 3.0), (6.0, 0.37)] {
+            let mut scale = crate::model::TimeScale::new();
+            scale.set_bar_cnt(100);
+            scale.set_width(789.0);
+            scale.set_bar_spacing(spacing);
+            scale.set_right_offset(offset);
+            for bar in 0..100 {
+                let x = scale.idx_to_coord(bar, 13.0, 789.0);
+                assert_eq!(
+                    super::bar_at(&scale, x, 13.0, 789.0),
+                    bar as f32,
+                    "spacing {spacing}, offset {offset}, bar {bar}"
+                );
+            }
+        }
+    }
 
     /// Drawings use raw prices from their pane's series, including changes and level labels.
     #[test]
@@ -851,19 +891,21 @@ mod tests {
             Arrow,
             TrendLine,
         ] {
-            for (cancel, batched, secondary_drag) in [
-                (false, false, false),
-                (true, false, false),
-                (false, true, false),
-                (false, false, true),
+            for (cancel, batched, secondary_drag, snap_to_time) in [
+                (false, false, false, true),
+                (true, false, false, true),
+                (false, true, false, true),
+                (false, false, true, true),
+                (false, false, false, false),
             ] {
                 let ctx = Context::default();
                 let mut chart = chart(&[10.0], &[20.0]);
                 frame(&ctx, &mut chart, 0.0, vec![]);
+                chart.drawings_mut().options.snap_to_time = snap_to_time;
                 chart.drawings_mut().set_active_tool(Some(tool));
                 let map = chart.get_chart_mapping();
-                let a = pos2(map.idx_to_x(30), map.price_to_y(16.0));
-                let b = pos2(map.idx_to_x(50), map.price_to_y(14.0));
+                let a = pos2(map.index_to_x(30.4), map.price_to_y(16.0));
+                let b = pos2(map.index_to_x(49.6), map.price_to_y(14.0));
                 let button = |pos, pressed| Event::PointerButton {
                     pos,
                     button: PointerButton::Primary,
@@ -892,8 +934,19 @@ mod tests {
                     .as_ref()
                     .expect("live preview");
                 assert_eq!(preview.chart_points.len(), 2, "{tool:?}");
-                assert_eq!(preview.chart_points[0].bar_idx, 30.0, "{tool:?}");
-                assert_eq!(preview.chart_points[1].bar_idx, 50.0, "{tool:?}");
+                let (first, last) = if snap_to_time {
+                    (30.0, 50.0)
+                } else {
+                    (30.4, 49.6)
+                };
+                assert!(
+                    (preview.chart_points[0].bar_idx - first).abs() < 1e-3,
+                    "{tool:?}"
+                );
+                assert!(
+                    (preview.chart_points[1].bar_idx - last).abs() < 1e-3,
+                    "{tool:?}"
+                );
                 assert!(chart.drawings().drawings.is_empty());
                 if secondary_drag {
                     for (i, events) in [
@@ -958,10 +1011,16 @@ mod tests {
                         &chart.drawings().drawings[0]
                     };
                     assert_eq!(drawing.chart_points.len(), 2, "{tool:?}");
-                    assert_eq!(drawing.chart_points[0].bar_idx, 30.0, "{tool:?}");
-                    assert_eq!(drawing.chart_points[1].bar_idx, 50.0, "{tool:?}");
+                    assert!(
+                        (drawing.chart_points[0].bar_idx - first).abs() < 1e-3,
+                        "{tool:?}"
+                    );
+                    assert!(
+                        (drawing.chart_points[1].bar_idx - last).abs() < 1e-3,
+                        "{tool:?}"
+                    );
                     if tool == Measure {
-                        // The anchors span 50 - 30 = 20 bars, including after completion.
+                        // The readout rounds the anchors to bars 30 and 50, including after completion.
                         assert!(shapes(&ctx, &mut chart, 0.7, vec![]).iter().any(|shape| {
                             matches!(shape, Shape::Text(text) if text.galley.text().contains("20 bars"))
                         }));
@@ -1118,10 +1177,11 @@ mod tests {
     fn shift_click_on_empty_space_measures_until_the_next_click() {
         use crate::drawings::ToolAvailability;
         use egui::pos2;
-        for enabled in [true, false] {
+        for (enabled, snap_to_time) in [(true, true), (false, true), (true, false)] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
             frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.drawings_mut().options.snap_to_time = snap_to_time;
             chart.drawings_mut().registry.set_availability(
                 DrawingToolType::Measure,
                 ToolAvailability {
@@ -1130,8 +1190,8 @@ mod tests {
                 },
             );
             let map = chart.get_chart_mapping();
-            let a = pos2(map.idx_to_x(30), map.price_to_y(16.0));
-            let b = pos2(map.idx_to_x(50), map.price_to_y(14.0));
+            let a = pos2(map.index_to_x(30.4), map.price_to_y(16.0));
+            let b = pos2(map.index_to_x(49.6), map.price_to_y(14.0));
             let button = |pos, pressed, modifiers| Event::PointerButton {
                 pos,
                 button: PointerButton::Primary,
@@ -1161,18 +1221,22 @@ mod tests {
             assert!(chart.drawings().curr_drawing.is_none());
             assert_eq!(chart.drawings().active_tool, None);
             if enabled {
-                assert_eq!(
-                    chart
-                        .drawings()
-                        .measurement
-                        .as_ref()
-                        .unwrap()
-                        .chart_points
-                        .iter()
-                        .map(|p| p.bar_idx)
-                        .collect::<Vec<_>>(),
+                let expected = if snap_to_time {
                     [30.0, 50.0]
-                );
+                } else {
+                    [30.4, 49.6]
+                };
+                for (point, bar) in chart
+                    .drawings()
+                    .measurement
+                    .as_ref()
+                    .unwrap()
+                    .chart_points
+                    .iter()
+                    .zip(expected)
+                {
+                    assert!((point.bar_idx - bar).abs() < 1e-3, "{point:?}, {bar}");
+                }
                 frame(
                     &ctx,
                     &mut chart,
@@ -1327,6 +1391,7 @@ mod tests {
             ((true, false, 17.0, true, false, 3.0, false), "main", false),
             ((true, false, 20.0, true, true, 3.0, false), "main", false),
             ((true, false, 15.0, true, false, 3.0, false), "pane", false),
+            ((false, false, 15.0, true, false, 3.0, false), "free", true),
         ]) {
             let ctx = Context::default();
             let mut chart = chart(&[0.0, 10.0, 10.0], &[30.0, 20.0, 20.0]);
@@ -1381,6 +1446,7 @@ mod tests {
                 chart.drawings_mut().deselect();
                 chart.set_visible_bars(visible);
                 chart.set_start_idx(start);
+                chart.drawings_mut().options.snap_to_time = kind != "free";
                 chart.drawings_mut().options.magnet_mode = magnet;
                 chart.drawings_mut().options.strong_magnet = strong;
                 chart.drawings_mut().options.snap_to_indicators = snap_to_indicators;
@@ -1531,6 +1597,14 @@ mod tests {
                     (after.price - want).abs() < 1e-5,
                     "drag: {kind}, strong {strong}, magnet {magnet}, price {price}, visible {visible}: {after:?}"
                 );
+                if kind == "free" {
+                    // Without time snapping the anchor keeps the 2 px past the bar's centre.
+                    let want = (bar + 3) as f32 + 2.0 / map.bar_spacing;
+                    assert!(
+                        (after.bar_idx - want).abs() < 1e-3,
+                        "free drag: {after:?}, {want}"
+                    );
+                }
                 assert!(chart.drawings().dragging_handle.is_none());
                 assert!(chart.undo());
                 assert_eq!(chart.drawings().drawings[0].chart_points[0], before);

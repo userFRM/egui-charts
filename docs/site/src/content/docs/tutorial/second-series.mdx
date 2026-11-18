@@ -36,7 +36,8 @@ from your own historical and streaming source.
 Keep the id beside the chart. Send the complete latest scalar with
 [`update(id, bar)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.update):
 the same timestamp replaces a value and a later one appends. Updating
-`SeriesId::MAIN` does not update added series automatically. Preserve missing
+[`SeriesId::MAIN`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/series/selection/struct.SeriesId.html#associatedconstant.MAIN)
+does not update added series automatically. Preserve missing
 observations with [whitespace](../data-model.mdx#bars-and-series).
 
 [`set_series_visible`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_series_visible)

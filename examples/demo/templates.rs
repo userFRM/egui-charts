@@ -28,7 +28,8 @@ impl DemoApp {
             return;
         }
         let applied = self.user_action(|app| {
-            app.chart.apply_chosen_study_template_set(template)?;
+            app.chart
+                .apply_chosen_study_template_set_with(template, app.indicator_dialog.factory())?;
             let captions: Vec<_> = app
                 .chart
                 .indicators()
@@ -81,11 +82,13 @@ impl DemoApp {
             self.notify(error);
             return;
         }
-        self.chart.user_action(|chart| {
+        if let Err(error) = self.chart.user_action(|chart| {
             chart.drawings_mut().edit_drawings(&ids, |drawing| {
                 let _ = template.apply_to(drawing);
             })
-        });
+        }) {
+            self.notify(error);
+        }
     }
 
     pub(super) fn show_templates(&mut self, ctx: &egui::Context) {

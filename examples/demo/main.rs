@@ -20,6 +20,8 @@ fn main() -> eframe::Result {
     #[cfg(target_arch = "wasm32")]
     {
         console_error_panic_hook::set_once();
+        // Earlier page errors mean the module could not be downloaded or compiled.
+        startup_state("starting", None);
         eframe::WebLogger::init(log::LevelFilter::Info).ok();
 
         use wasm_bindgen::JsCast;

@@ -156,10 +156,19 @@ impl Chart {
         &mut self,
         set: &StudyTemplateSet,
     ) -> Result<Vec<SeriesId>, String> {
-        self.user_action(|chart| {
-            chart.place_study_template_set(set, &IndicatorFactory::new(), Keep::ReadOnly)
-        })
-        .map(|ids| ids.into_iter().flatten().collect())
+        self.apply_chosen_study_template_set_with(set, &IndicatorFactory::new())
+    }
+
+    /// Applies `set` as a user's choice through `factory`, which resolves built-in and
+    /// host-registered studies, with the same permissions, study cap and undo behaviour as
+    /// [`apply_chosen_study_template_set`](Self::apply_chosen_study_template_set).
+    pub fn apply_chosen_study_template_set_with(
+        &mut self,
+        set: &StudyTemplateSet,
+        factory: &IndicatorFactory,
+    ) -> Result<Vec<SeriesId>, String> {
+        self.user_action(|chart| chart.place_study_template_set(set, factory, Keep::ReadOnly))
+            .map(|ids| ids.into_iter().flatten().collect())
     }
 
     /// Adds the studies of `set` that `keep` adds in place of the chart's own, but for those
@@ -220,7 +229,7 @@ impl Chart {
         }
         let ids: Vec<_> = studies
             .into_iter()
-            .map(|study| study.map(|study| self.add_indicator(study)))
+            .map(|study| study.map(|study| self.insert_indicator(study)))
             .collect();
         for (id, template) in ids.iter().zip(&set.studies) {
             let Some(id) = *id else {
@@ -254,6 +263,19 @@ impl Chart {
                     self.move_indicator_to_pane(id, first);
                 }
             }
+        }
+        // Studies listed in neither field take their default place after their links resolve.
+        let unlisted: Vec<_> = super::studies::order(self.studies.indicators(), &self.study_ids)
+            .into_iter()
+            .map(|at| self.study_ids[at])
+            .filter(|id| {
+                ids.iter()
+                    .zip(&placed)
+                    .any(|(added, placed)| *added == Some(*id) && !placed)
+            })
+            .collect();
+        for id in unlisted {
+            self.place_on_source(id);
         }
         // Removing the volume study turns the volume setting off; applying one turns it on.
         let volume = self
@@ -540,7 +562,7 @@ mod tests {
             .into_iter()
             .map(|pane| chart.pane_series(pane))
             .collect();
-        assert_eq!(panes, [vec![SeriesId::MAIN, ids[1]], vec![ids[0]]]);
+        assert_eq!(panes, [vec![SeriesId::MAIN], vec![ids[0], ids[1]]]);
     }
 
     /// A template taken after the empty original pane was removed keeps a moving average

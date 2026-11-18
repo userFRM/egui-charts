@@ -12,7 +12,8 @@
 //! The first value is on bar 37, once the slow average and the AO average are complete.
 //!
 //! # Presentation
-//! Columns, green when AC rises above its previous value and red when it falls or holds.
+//! Columns use the plot colour, green by default, when AC rises above its previous value or has
+//! none, and the Decreasing bars colour, red by default, when it falls or holds.
 //!
 //! # Example
 //! ```
@@ -82,7 +83,7 @@ impl Indicator for AcceleratorOscillator {
 
     fn plot_style(&self, _line: usize) -> crate::studies::PlotStyle {
         crate::studies::PlotStyle {
-            color: Color32::from_rgb(0, 0, 128),
+            color: self.rising_color,
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
             plot_type: crate::studies::PlotType::Histogram,
@@ -90,11 +91,23 @@ impl Indicator for AcceleratorOscillator {
         }
     }
 
-    fn plot_color(&self, _line: usize, bar: usize) -> Option<Color32> {
+    fn plot_variants(&self, _line: usize) -> Vec<crate::studies::PlotVariant> {
+        vec![crate::studies::PlotVariant::new(
+            "Decreasing bars",
+            self.falling_color,
+        )]
+    }
+
+    fn plot_variant(&self, _line: usize, bar: usize) -> Option<usize> {
         let value = self.values.value(0, bar)?;
         // Bars without a value, skipped as non-finite, do not count as the previous one.
-        let previous = (0..bar).rev().find_map(|bar| self.values.value(0, bar));
-        Some(if previous.is_some_and(|previous| value <= previous) {
+        let previous = (0..bar).rev().find_map(|bar| self.values.value(0, bar))?;
+        (value <= previous).then_some(0)
+    }
+
+    fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
+        self.values.value(0, bar)?;
+        Some(if self.plot_variant(line, bar).is_some() {
             self.falling_color
         } else {
             self.rising_color
@@ -200,5 +213,7 @@ mod tests {
             colors,
             [Some(up), Some(down), Some(up), Some(down), None, Some(down)]
         );
+        let variants: Vec<_> = (0..6).map(|bar| study.plot_variant(0, bar)).collect();
+        assert_eq!(variants, [None, Some(0), None, Some(0), None, Some(0)]);
     }
 }
