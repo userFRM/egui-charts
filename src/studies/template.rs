@@ -23,6 +23,10 @@ pub struct StudyTemplate {
     /// was kept do.
     #[serde(default)]
     pub scale: Option<StudyScale>,
+    /// A scalar metric's host key, display name, unit and format. Restored without requiring a
+    /// catalogue entry; its history is requested again from the host. Absent in older saves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric: Option<crate::data::MetricSeries>,
 }
 
 /// The studies of a chart, with the links between them and the panes they share, as
@@ -115,12 +119,13 @@ impl<'de> serde::Deserialize<'de> for StudyTemplateSet {
 }
 
 impl StudyTemplate {
-    /// Capture the current calculation inputs, presentation and value scale, without computed
-    /// values. An input that reads another study's plot keeps that study's chart id;
+    /// Capture the factory key, [`Indicator::registered_name`], calculation inputs, presentation
+    /// and value scale, without computed values. A host metric keeps its descriptor too.
+    /// An input that reads another study's plot keeps that study's chart id;
     /// `Chart::study_template_set` saves a chart's studies with the links between them.
     pub fn from_study(study: &dyn Indicator) -> Self {
         Self {
-            name: study.name().into(),
+            name: study.registered_name().into(),
             inputs: study
                 .inputs()
                 .into_iter()
@@ -129,10 +134,12 @@ impl StudyTemplate {
             settings: study.settings(),
             visible: study.user_visible(),
             scale: Some(study.scale()),
+            metric: study.metric().cloned(),
         }
     }
 
-    /// Reconstruct a built-in study. Unknown names or invalid inputs leave the host chart intact.
+    /// Reconstruct a built-in study or a saved host metric. Unknown names or invalid inputs
+    /// leave the host chart intact.
     /// Hosts reconstruct the entire set successfully before replacing their current studies.
     pub fn create(&self) -> Result<Box<dyn Indicator>, crate::studies::StudyError> {
         self.create_with(&IndicatorFactory::new())
@@ -141,17 +148,32 @@ impl StudyTemplate {
     /// Reconstruct a study through `factory`, which resolves [`name`](Self::name) to a built-in
     /// or host-registered study. Uses the saved settings rather than the factory's host defaults.
     /// Fails like [`create`](Self::create).
+    /// A saved metric is reconstructed from its descriptor, even without a catalogue entry.
+    /// The study retains the factory key it was restored under, including a built-in's new key
+    /// when an upgrade replaces an older study.
     pub fn create_with(
         &self,
         factory: &IndicatorFactory,
     ) -> Result<Box<dyn Indicator>, crate::studies::StudyError> {
         // A host study registered under a built-in's name takes its own template as saved,
         // where an upgrade for that built-in would rename or convert its inputs.
-        let own = factory.create_registered(&self.name);
+        let own = self
+            .metric
+            .as_ref()
+            .map(|metric| Box::new(super::MetricStudy::new(metric.clone())) as Box<dyn Indicator>)
+            .or_else(|| factory.create_registered(&self.name));
         let own_inputs = own.as_ref().map_or_else(Vec::new, |study| study.inputs());
-        let upgraded = self.upgraded(&own_inputs);
+        let study_name = own
+            .as_ref()
+            .map_or(self.name.as_str(), |study| study.name());
+        let upgraded = if self.metric.is_none() {
+            self.upgraded(study_name, &own_inputs)
+        } else {
+            None
+        };
         let template = upgraded.as_ref().unwrap_or(self);
-        let (study, declared) = match own {
+        let registered = template.name.as_str();
+        let (mut study, declared) = match own {
             Some(study) if template.name == self.name => (study, own_inputs),
             _ => {
                 let study = factory.create_registered(&template.name).ok_or_else(|| {
@@ -218,21 +240,30 @@ impl StudyTemplate {
         } else {
             &template.settings
         };
-        let mut study = ConfiguredStudy::new(study);
+        // Keep a host's presentation wrapper when it can retain the factory key too.
+        let mut study = if study.has_settings()
+            && (study.registered_name() == registered || study.set_registered_name(registered))
+        {
+            study
+        } else {
+            Box::new(ConfiguredStudy::new(study))
+        };
+        study.set_registered_name(registered);
         study.apply_settings(&inputs, settings.clone())?;
         study.set_visible(template.visible);
         if let Some(scale) = template.scale {
             study.set_scale(scale);
         }
-        Ok(Box::new(study))
+        Ok(study)
     }
 
     /// This template under the current input ids of a built-in study whose inputs changed after
     /// it was saved, with inputs added since set to draw what it drew, or `None` when it needs no
-    /// change. `own` holds the inputs of the study registered under the saved name, or the
+    /// change. `study` names the study being restored, which a host may register under another
+    /// name. `own` holds the inputs of the study registered under the saved name, or the
     /// chart's study a stored pane is matched against; a saved input that study takes as saved
     /// is neither renamed nor converted.
-    pub(crate) fn upgraded(&self, own: &[StudyInput]) -> Option<Self> {
+    pub(crate) fn upgraded(&self, study: &str, own: &[StudyInput]) -> Option<Self> {
         let has = |id: &str| self.inputs.iter().any(|(input, _)| input == id);
         let declares = |id: &str| own.iter().any(|input| input.id == id);
         // Profile endpoints saved in Unix milliseconds that the study does not take as numbers.
@@ -277,7 +308,7 @@ impl StudyTemplate {
             && value("smooth1").is_some()
             && value("smooth1") == value("smooth2");
         let mut template = self.clone();
-        match self.name.as_str() {
+        match study {
             // One multiplier set both bands before each had its own.
             "LinReg Channel" if has("multiplier") => {
                 template.inputs = self
@@ -520,6 +551,16 @@ impl StudyTemplate {
                 for fill in &mut template.settings.fills {
                     fill.visible = false;
                 }
+            }
+            // Chart patterns saved before developing boundaries had their own plot drew them
+            // in its default style.
+            "Continuation Chart Patterns" | "Reversal Chart Patterns"
+                if self.settings.plots.len() == 2 =>
+            {
+                template.settings.plots.push(
+                    crate::studies::ChartPatterns::new(crate::studies::PatternFamily::Reversal)
+                        .plot_style(2),
+                );
             }
             // The unused navy plot colour in older saves still drew rising columns green.
             "Accelerator Oscillator"
@@ -925,6 +966,37 @@ mod tests {
                 }
             }
         }
+        // Literal two-plot saves from before developing boundaries had their own style keep
+        // their input ids and styles, with the third plot in the style they already drew.
+        for saved in [
+            r#"{"name":"Continuation Chart Patterns","inputs":[["strength",{"Length":3}],["min_length",{"Length":8}],["max_length",{"Length":120}],["tolerance",{"Number":1.0}],["touches",{"Length":2}],["pole",{"Number":5.0}],["patterns[0]",{"Toggle":true}],["patterns[1]",{"Toggle":true}],["patterns[2]",{"Toggle":true}],["patterns[3]",{"Toggle":true}],["patterns[4]",{"Toggle":true}],["patterns[5]",{"Toggle":true}],["patterns[6]",{"Toggle":true}],["patterns[7]",{"Toggle":true}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ChartPatterns.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleUp","visible":false},{"color":[200,0,120,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+            r#"{"name":"Reversal Chart Patterns","inputs":[["strength",{"Length":3}],["min_length",{"Length":10}],["max_length",{"Length":200}],["tolerance",{"Number":3.0}],["depth",{"Number":3.0}],["handle",{"Number":50.0}],["patterns[0]",{"Toggle":true}],["patterns[1]",{"Toggle":true}],["patterns[2]",{"Toggle":true}],["patterns[3]",{"Toggle":true}],["patterns[4]",{"Toggle":true}],["patterns[5]",{"Toggle":true}],["patterns[6]",{"Toggle":true}],["patterns[7]",{"Toggle":true}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ChartPatterns.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleUp","visible":false},{"color":[200,0,120,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+        ] {
+            let saved: StudyTemplate = serde_json::from_str(saved).unwrap();
+            let restored = saved.create().unwrap();
+            let mut expected = saved.settings.clone();
+            expected.plots.push(crate::studies::PlotStyle {
+                color: Color32::from_rgb(120, 123, 134),
+                width: 1.0,
+                pattern: crate::model::LineStyle::Dashed,
+                plot_type: crate::studies::PlotType::Line,
+                visible: true,
+            });
+            expected.plot_variants.push(Vec::new());
+            assert_eq!(restored.settings(), expected, "{}", saved.name);
+            let inputs = restored.inputs();
+            for (id, value) in &saved.inputs {
+                assert_eq!(
+                    inputs
+                        .iter()
+                        .find(|input| input.id == *id)
+                        .map(|input| &input.value),
+                    Some(value),
+                    "{} {id}",
+                    saved.name
+                );
+            }
+        }
     }
 
     /// A template restores the inputs it holds whatever the study's default has become, with every
@@ -1128,6 +1200,7 @@ mod tests {
                 settings,
                 visible: true,
                 scale: None,
+                metric: None,
             };
             let study = template.create().unwrap();
             let inputs = study.inputs();
@@ -1935,37 +2008,43 @@ mod tests {
                 [[3.75, 2.5, 1.25], [4.5, 3.0, 1.5], [4.5, 3.0, 1.5]],
             ),
         ];
-        let factory = IndicatorFactory::new();
+        let mut factory = IndicatorFactory::new();
         for (name, inputs, restored_name, expected) in rows {
-            // Saved with the three plot styles of a study drawing the restored lines.
-            let settings = ConfiguredStudy::new(factory.create(restored_name).unwrap()).settings();
-            let template = StudyTemplate {
-                name: name.to_owned(),
-                inputs: inputs
-                    .iter()
-                    .chain(&configured)
-                    .map(|(id, value)| ((*id).to_owned(), value.clone()))
-                    .collect(),
-                settings,
-                visible: true,
-                scale: None,
-            };
-            let mut study = template
-                .create()
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            study.calculate(&bars);
-            assert_eq!(study.name(), restored_name);
-            assert!(
-                matches!(study.values().to_rows()[0], IndicatorValue::None),
-                "{name}"
-            );
-            for (bar, lines) in (1..).zip(expected) {
-                for (line, want) in lines.into_iter().enumerate() {
-                    let got = study.values().value(line, bar).unwrap();
-                    assert!(
-                        (got - want).abs() < 1e-12,
-                        "{name} bar {bar} line {line}: {got}"
-                    );
+            factory.register("Host channel", move || {
+                IndicatorFactory::new().create(name).unwrap()
+            });
+            for saved_as in [name, "Host channel"] {
+                let settings =
+                    ConfiguredStudy::new(factory.create(restored_name).unwrap()).settings();
+                let template = StudyTemplate {
+                    name: saved_as.to_owned(),
+                    inputs: inputs
+                        .iter()
+                        .chain(&configured)
+                        .map(|(id, value)| ((*id).to_owned(), value.clone()))
+                        .collect(),
+                    settings,
+                    visible: true,
+                    scale: None,
+                    metric: None,
+                };
+                let mut study = template
+                    .create_with(&factory)
+                    .unwrap_or_else(|error| panic!("{saved_as} {name}: {error}"));
+                study.calculate(&bars);
+                assert_eq!(study.name(), restored_name, "{saved_as}");
+                assert!(
+                    matches!(study.values().to_rows()[0], IndicatorValue::None),
+                    "{saved_as} {name}"
+                );
+                for (bar, lines) in (1..).zip(expected) {
+                    for (line, want) in lines.into_iter().enumerate() {
+                        let got = study.values().value(line, bar).unwrap();
+                        assert!(
+                            (got - want).abs() < 1e-12,
+                            "{saved_as} {name} bar {bar} line {line}: {got}"
+                        );
+                    }
                 }
             }
         }

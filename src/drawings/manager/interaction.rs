@@ -73,7 +73,7 @@ impl DrawingManager {
             .iter()
             .filter(|drawing| {
                 drawing.selectable
-                    && drawing.is_visible_on_timeframe(&self.curr_timeframe)
+                    && self.shows(drawing)
                     && if self.owns_pane(drawing) {
                         painted
                             .iter()
@@ -109,7 +109,7 @@ impl DrawingManager {
     pub fn hit_test_handle(&self, drawing: &Drawing, point: Pos2) -> Option<HandlePos> {
         if !drawing.selectable
             || drawing.locked
-            || !drawing.is_visible_on_timeframe(&self.curr_timeframe)
+            || !self.shows(drawing)
             || (!self.pane_clips.is_empty()
                 && !self
                     .pane_clips
@@ -128,12 +128,11 @@ impl DrawingManager {
     /// Begins a handle drag operation, saving the drawing's current state for undo. A locked
     /// drawing is not dragged.
     pub fn start_drag_handle(&mut self, drawing_id: usize, handle: HandlePos) {
-        if let Some(drawing) = self.drawings.iter().find(|d| {
-            d.id == drawing_id
-                && d.selectable
-                && !d.locked
-                && d.is_visible_on_timeframe(&self.curr_timeframe)
-        }) {
+        if let Some(drawing) = self
+            .drawings
+            .iter()
+            .find(|d| d.id == drawing_id && d.selectable && !d.locked && self.shows(d))
+        {
             self.dragging_handle = Some((drawing_id, handle));
             self.drag_old_state = Some(drawing.clone());
             self.drag_origin = (handle == HandlePos::Middle)
@@ -163,7 +162,7 @@ impl DrawingManager {
                         && d.selectable
                         && self.selection.is_selected(d.id)
                         && !d.locked
-                        && d.is_visible_on_timeframe(&self.curr_timeframe)
+                        && self.shows(d)
                 })
                 .cloned()
                 .collect();

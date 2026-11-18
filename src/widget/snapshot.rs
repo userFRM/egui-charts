@@ -532,8 +532,9 @@ impl Chart {
             replaced.extend(self.series().map(|(id, _)| id));
         }
         let show_volume = self.config.show_volume;
+        // The snapshot replaces drawings below, or leaves the chart's drawings to storage.
         for id in replaced {
-            self.remove_series(id);
+            self.remove_series_keeping_drawings(id);
         }
         self.config.show_volume = show_volume;
         self.restored_studies.clear();
@@ -1111,12 +1112,40 @@ mod tests {
     use crate::studies::{MACD, RSI, SMA};
     use chrono::{TimeZone, Utc};
 
-    /// A custom study, the study reading its output and an added series with its markers and
-    /// price lines come back through the public API; a document that cannot be rebuilt leaves
-    /// the current chart as it was.
+    /// Restoring a layout that leaves its drawings to storage keeps the chart's drawings, also
+    /// the one in the pane of a study it replaces, and asks storage to delete none.
+    #[test]
+    fn restore_without_drawings_deletes_no_drawing() {
+        use crate::drawings::manager::DrawingSyncAction;
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        let rsi = chart.add_indicator(Box::new(RSI::new(14)));
+        let mut line = Drawing::new(0, DrawingToolType::HorizontalLine);
+        line.chart_points = vec![ChartPoint::new(50.0, 70.0)];
+        line.pane = Some(rsi.0);
+        chart.drawings_mut().add_drawing(line).unwrap();
+        let mut snapshot = chart.snapshot().unwrap();
+        snapshot.drawings = None;
+        chart.drawings().pending_sync.lock().unwrap().clear();
+        chart.restore(&snapshot).unwrap();
+        assert_eq!(chart.drawings().drawings.len(), 1);
+        let queued = chart.drawings().pending_sync.lock().unwrap().clone();
+        assert!(
+            !queued
+                .iter()
+                .any(|action| matches!(action, DrawingSyncAction::Delete(_))),
+            "{queued:?}"
+        );
+    }
+
+    /// Studies created under host names retain edited inputs, styles and source links through
+    /// a layout round trip, including a constructor that already wraps its study. An invalid
+    /// document leaves the current chart intact.
     #[test]
     fn restore_rebuilds_custom_studies_source_links_and_added_series() {
-        use crate::studies::{CustomIndicator, IndicatorFactory, IndicatorValue, StudySource};
+        use crate::studies::{
+            ConfiguredStudy, CustomIndicator, IndicatorFactory, IndicatorValue, InputKind,
+            InputValue, StudyInput, StudySource,
+        };
         let bars: Vec<_> = (0..30)
             .map(|i| {
                 Bar::new(
@@ -1131,16 +1160,36 @@ mod tests {
             .collect();
         let mut factory = IndicatorFactory::new();
         factory.register("Bar range", || {
-            Box::new(CustomIndicator::new("Bar range", |bars| {
-                bars.iter()
-                    .map(|bar| IndicatorValue::Single(bar.high - bar.low))
-                    .collect()
-            }))
+            Box::new(
+                CustomIndicator::new("High minus low", |_| Vec::new())
+                    .with_inputs(
+                        vec![StudyInput::new(
+                            "length",
+                            "Length",
+                            InputValue::Length(1),
+                            InputKind::Length(1, 10),
+                        )],
+                        |bars, _| {
+                            bars.iter()
+                                .map(|bar| IndicatorValue::Single(bar.high - bar.low))
+                                .collect()
+                        },
+                    )
+                    .unwrap(),
+            )
+        });
+        factory.register("Fast RSI", || {
+            Box::new(ConfiguredStudy::new(Box::new(RSI::new(5))))
         });
         let mut chart = Chart::new(BarData::from_bars(bars.clone()));
         chart.set_symbol("A");
         let spread = chart.add_indicator(factory.create("Bar range").unwrap());
-        let rsi = chart.add_indicator(Box::new(RSI::new(5)));
+        let study = chart.indicator_mut(spread).unwrap();
+        study.set_input("length", InputValue::Length(4)).unwrap();
+        let mut settings = study.settings();
+        settings.plots[0].width = 3.0;
+        study.apply_settings(&[], settings).unwrap();
+        let rsi = chart.add_indicator(factory.create("Fast RSI").unwrap());
         chart
             .set_indicator_source(
                 rsi,
@@ -1210,8 +1259,35 @@ mod tests {
             .indicators()
             .map(|(_, study)| study.name().to_owned())
             .collect();
-        assert_eq!(names, ["Bar range", "RSI"]);
+        assert_eq!(names, ["High minus low", "RSI"]);
+        assert_eq!(
+            snapshot
+                .studies
+                .iter()
+                .map(|saved| saved.study.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Bar range", "Fast RSI"]
+        );
+        let input_ids = |chart: &Chart, id| {
+            chart
+                .indicators()
+                .find(|(key, _)| *key == id)
+                .unwrap()
+                .1
+                .inputs()
+                .into_iter()
+                .map(|input| input.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            input_ids(&restored, restored.restored_series_id(rsi.0).unwrap()),
+            input_ids(&chart, rsi)
+        );
         let new_spread = restored.restored_series_id(spread.0).unwrap();
+        let study = restored.indicator_mut(new_spread).unwrap();
+        assert_eq!(study.inputs()[0].value, InputValue::Length(4));
+        assert_eq!(study.plot_style(0).width, 3.0);
+        assert!(restored.snapshot_with(&factory).is_ok());
         assert_eq!(
             restored.pane_layout.main,
             [new_spread, super::super::SeriesId::MAIN]
@@ -1253,6 +1329,201 @@ mod tests {
             restored.pane_layout.main,
             [super::super::SeriesId::MAIN, new_spread]
         );
+
+        // A host can store presentation itself without implementing the optional name setter.
+        #[derive(Clone)]
+        struct NativePresentation(ConfiguredStudy);
+        impl crate::studies::Indicator for NativePresentation {
+            fn has_settings(&self) -> bool {
+                true
+            }
+            fn name(&self) -> &str {
+                self.0.name()
+            }
+            fn calculate(&mut self, bars: &[Bar]) {
+                self.0.calculate(bars);
+            }
+            fn values(&self) -> &crate::studies::IndicatorValues {
+                self.0.values()
+            }
+            fn colors(&self) -> Vec<egui::Color32> {
+                self.0.colors()
+            }
+            fn set_colors(&mut self, colors: Vec<egui::Color32>) {
+                self.0.set_colors(colors);
+            }
+            fn is_visible(&self) -> bool {
+                self.0.is_visible()
+            }
+            fn set_visible(&mut self, visible: bool) {
+                self.0.set_visible(visible);
+            }
+            fn clone_box(&self) -> Box<dyn crate::studies::Indicator> {
+                Box::new(self.clone())
+            }
+            fn inputs(&self) -> Vec<StudyInput> {
+                self.0.inputs()
+            }
+            fn set_input(
+                &mut self,
+                id: &str,
+                value: InputValue,
+            ) -> Result<(), crate::studies::StudyError> {
+                self.0.set_input(id, value)
+            }
+            fn settings(&self) -> crate::studies::StudySettings {
+                self.0.settings()
+            }
+            fn apply_settings(
+                &mut self,
+                inputs: &[(String, InputValue)],
+                settings: crate::studies::StudySettings,
+            ) -> Result<(), crate::studies::StudyError> {
+                self.0.apply_settings(inputs, settings)
+            }
+        }
+        factory.register("Host average", || {
+            Box::new(NativePresentation(ConfiguredStudy::new(Box::new(
+                SMA::new(7),
+            ))))
+        });
+        let native = restored.add_indicator(factory.create("Host average").unwrap());
+        let saved = restored.snapshot_with(&factory).unwrap();
+        let mut copy = Chart::new(BarData::default());
+        copy.restore_with(&saved, &factory).unwrap();
+        assert_eq!(
+            input_ids(&restored, native),
+            input_ids(&copy, copy.restored_series_id(native.0).unwrap())
+        );
+        assert_eq!(
+            copy.snapshot_with(&factory)
+                .unwrap()
+                .studies
+                .last()
+                .unwrap()
+                .study
+                .name,
+            "Host average"
+        );
+    }
+
+    /// A saved metric carries its descriptor without a catalogue, reconnects its history on
+    /// restore, and leaves an empty pane with a notice if the feed no longer supplies it.
+    #[test]
+    fn saved_metrics_restore_without_catalogue_registration() {
+        use crate::data::{
+            Datafeed, FeedError, HistoryPage, HistoryRequest, MetricPage, MetricPoint,
+            MetricRequest, MetricSeries, Reply,
+        };
+        use crate::scales::StudyFormat;
+        use crate::studies::{IndicatorFactory, MetricStudy};
+        use std::sync::{Arc, Mutex};
+        struct Feed {
+            available: bool,
+            requests: Mutex<Vec<MetricRequest>>,
+        }
+        impl Datafeed for Feed {
+            fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+                reply.send(Ok(HistoryPage::new(
+                    vec![Bar::new(
+                        Utc.timestamp_opt(0, 0).unwrap(),
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0,
+                    )],
+                    true,
+                )));
+            }
+            fn metric_history(&self, request: MetricRequest, reply: Reply<MetricPage>) {
+                self.requests.lock().unwrap().push(request);
+                reply.send(if self.available {
+                    Ok(MetricPage::new(
+                        vec![MetricPoint::new(Utc.timestamp_opt(0, 0).unwrap(), 5.0)],
+                        true,
+                    ))
+                } else {
+                    Err(FeedError::NotSupported)
+                });
+            }
+        }
+        for format in [
+            StudyFormat::Price,
+            StudyFormat::Volume,
+            StudyFormat::Percent,
+            StudyFormat::Fixed(4),
+        ] {
+            let mut metric = MetricSeries::new("yield", "Dividend yield", format);
+            metric.unit = "%".into();
+            let mut factory = IndicatorFactory::new();
+            factory.register("Metric: yield", move || {
+                Box::new(MetricStudy::new(metric.clone()))
+            });
+            let mut chart = crate::widget::test_frames::chart(&[1.0], &[1.0]);
+            chart.set_symbol("A");
+            chart.add_indicator(factory.create("Metric: yield").unwrap());
+            let saved = chart.snapshot().unwrap();
+            let json = serde_json::to_string(&saved).unwrap();
+            let saved = serde_json::from_str(&json).unwrap();
+            for available in [true, false] {
+                let feed = Arc::new(Feed {
+                    available,
+                    requests: Mutex::new(Vec::new()),
+                });
+                let mut restored = crate::widget::ChartBuilder::new()
+                    .with_feed(feed.clone())
+                    .with_symbol("A")
+                    .build();
+                restored.restore(&saved).unwrap();
+                let ctx = egui::Context::default();
+                let mut text = Vec::new();
+                for frame in 0..12 {
+                    text = crate::widget::test_frames::shapes(
+                        &ctx,
+                        &mut restored,
+                        frame as f64,
+                        Vec::new(),
+                    )
+                    .into_iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                }
+                let (_, study) = restored.indicators().next().unwrap();
+                assert_eq!(
+                    (study.name(), study.desc(), study.value_format()),
+                    ("Dividend yield", "%", format)
+                );
+                assert_eq!(study.values().value(0, 0), available.then_some(5.0));
+                assert!(!feed.requests.lock().unwrap().is_empty());
+                assert!(
+                    feed.requests
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .all(|r| r.symbol == "A" && r.metric == "yield")
+                );
+                if !available {
+                    assert!(
+                        text.iter()
+                            .any(|line| line.contains("Metric data unavailable")),
+                        "{text:?}"
+                    );
+                }
+                assert!(restored.snapshot().is_ok());
+                let copied = restored
+                    .copy_indicator(restored.indicators().next().unwrap().0)
+                    .unwrap();
+                assert!(
+                    chart
+                        .paste_indicator(&copied, &IndicatorFactory::new())
+                        .is_ok()
+                );
+            }
+        }
     }
 
     /// A custom study saved with another study's output in a Source input its calculation never

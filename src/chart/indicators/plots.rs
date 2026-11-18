@@ -314,18 +314,18 @@ pub(crate) fn mapped_drawings(
     coords: &crate::chart::coords::ChartMapping,
     price_to_y: impl Fn(f64) -> f32,
 ) -> Vec<crate::drawings::Drawing> {
-    let style = study.plot_style(0);
-    let styled = study.drawings_use_plot_style();
-    if styled && !style.visible {
-        return Vec::new();
-    }
     study
         .drawings()
         .iter()
-        .filter(|drawing| drawing.visible)
-        .map(|drawing| {
+        .enumerate()
+        .filter(|(_, drawing)| drawing.visible)
+        .filter_map(|(index, drawing)| {
+            let style = crate::studies::plots::drawing_style(study, index);
+            if style.is_some_and(|style| !style.visible) {
+                return None;
+            }
             let mut drawing = drawing.clone();
-            if styled {
+            if let Some(style) = style {
                 drawing.color = style.color.to_srgba_unmultiplied();
                 drawing.stroke_width = style.width;
                 drawing.line_style = style.pattern;
@@ -334,7 +334,7 @@ pub(crate) fn mapped_drawings(
             // recolour the studies saved before it; they draw the colours their inputs set.
             drawing.theme_shade = false;
             drawing.update_screen_coords(|bar: f32| coords.index_to_x(f64::from(bar)), &price_to_y);
-            drawing
+            Some(drawing)
         })
         .collect()
 }

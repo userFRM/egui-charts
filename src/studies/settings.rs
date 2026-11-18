@@ -622,6 +622,8 @@ impl StudySettingsSnapshot {
 /// of its own bars that share time with the chart bars in view.
 pub struct ConfiguredStudy {
     study: Box<dyn Indicator>,
+    /// The stable factory key, independent of the wrapped study's display name.
+    registered: String,
     settings: StudySettings,
     timeframe: Option<Timeframe>,
     instrument_precision: Option<u8>,
@@ -678,6 +680,7 @@ impl ConfiguredStudy {
     fn clone_with(&self, study: Box<dyn Indicator>) -> Self {
         Self {
             study,
+            registered: self.registered.clone(),
             settings: self.settings.clone(),
             timeframe: self.timeframe,
             instrument_precision: self.instrument_precision,
@@ -721,8 +724,10 @@ impl ConfiguredStudy {
             plot.visible = true;
         }
         match_declared_styles(study.as_ref(), &mut settings);
+        let registered = study.registered_name().to_owned();
         Self {
             study,
+            registered,
             settings,
             timeframe: None,
             instrument_precision: None,
@@ -821,6 +826,16 @@ impl Indicator for ConfiguredStudy {
     }
     fn name(&self) -> &str {
         self.study.name()
+    }
+    fn registered_name(&self) -> &str {
+        &self.registered
+    }
+    fn set_registered_name(&mut self, name: &str) -> bool {
+        self.registered = name.to_owned();
+        true
+    }
+    fn metric(&self) -> Option<&crate::data::MetricSeries> {
+        self.study.metric()
     }
     fn desc(&self) -> &str {
         self.study.desc()
@@ -1224,6 +1239,10 @@ impl Indicator for ConfiguredStudy {
     #[cfg(feature = "drawings")]
     fn drawings_use_plot_style(&self) -> bool {
         self.study.drawings_use_plot_style()
+    }
+    #[cfg(feature = "drawings")]
+    fn drawing_plot(&self, index: usize) -> Option<usize> {
+        self.study.drawing_plot(index)
     }
     fn candles(&self) -> &[super::StudyCandle] {
         self.study.candles()

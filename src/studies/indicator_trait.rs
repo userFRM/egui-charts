@@ -631,6 +631,26 @@ pub trait Indicator: Send {
     /// Return the short display name of this indicator (e.g. `"SMA"`, `"RSI"`, `"MACD"`).
     fn name(&self) -> &str;
 
+    /// The factory key used to recreate this study in saved charts, templates, clipboard copies
+    /// and alerts. `IndicatorFactory::create` retains the key even when it differs from the
+    /// display [`name`](Self::name). A study whose display name changes with its inputs should
+    /// return its stable factory key here.
+    fn registered_name(&self) -> &str {
+        self.name()
+    }
+
+    /// Set the factory key. Returns whether the study supports the change; the chart's
+    /// presentation wrapper does.
+    fn set_registered_name(&mut self, _name: &str) -> bool {
+        false
+    }
+
+    /// The descriptor needed to restore a host metric without its catalogue registration.
+    /// Ordinary studies return `None`; a scalar metric returns its own descriptor.
+    fn metric(&self) -> Option<&crate::data::MetricSeries> {
+        None
+    }
+
     /// Return a human-readable description of what this indicator measures.
     ///
     /// Defaults to an empty string. Override to provide a tooltip-friendly
@@ -757,11 +777,22 @@ pub trait Indicator: Send {
     /// drawing takes plot 0's colour, width, pattern and visibility, and plot 0 is painted and
     /// selected as these drawings instead of as its values, which still scale the study and
     /// fill its readouts. When `false`, each drawing keeps its own style and shows while the
-    /// study does, and plot 0 is painted like the other plots. Only a study with drawings is
-    /// affected.
+    /// study does, unless [`drawing_plot`](Self::drawing_plot) names a plot for it, and plot 0
+    /// is painted like the other plots. Only a study with drawings is affected.
     #[cfg(feature = "drawings")]
     fn drawings_use_plot_style(&self) -> bool {
         true
+    }
+
+    /// The plot whose colour, width, pattern and visibility drawing `index` of
+    /// [`drawings`](Self::drawings) takes while
+    /// [`drawings_use_plot_style`](Self::drawings_use_plot_style) is `false`, so hiding that
+    /// plot hides the drawing. `None`, the default, keeps the drawing's own style and shows it
+    /// while the study does.
+    #[cfg(feature = "drawings")]
+    fn drawing_plot(&self, index: usize) -> Option<usize> {
+        let _ = index;
+        None
     }
 
     /// Market Profile settings of a study whose session profiles the chart builds with

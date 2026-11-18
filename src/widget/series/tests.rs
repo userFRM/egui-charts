@@ -8,7 +8,8 @@ use std::time::Duration;
 
 /// Bars span 100..110 and the overlay reaches 120: 10% of the pane above and below adds an
 /// eighth of the span on each side, 97.5..122.5. Every line of a study counts and non-finite
-/// values do not; without eligible values, or with a volume profile, the bars alone give
+/// values do not; without eligible values, with the study group hidden, or with a volume
+/// profile, the bars alone give
 /// 98.75..111.25. Relative modes use close 110.
 #[test]
 fn autoscale_includes_only_visible_overlay_values() {
@@ -34,6 +35,7 @@ fn autoscale_includes_only_visible_overlay_values() {
             "multiple",
             "excluded",
             "hidden",
+            "group_hidden",
             "plot_hidden",
             "interval_hidden",
             "pane",
@@ -137,6 +139,7 @@ fn autoscale_includes_only_visible_overlay_values() {
                 study.apply_settings(&[], settings).unwrap();
             }
             chart.set_indicator_visible(id, case != "hidden");
+            chart.set_indicators_hidden(case == "group_hidden");
             assert!(
                 chart.set_indicator_autoscale(
                     id,
@@ -230,6 +233,102 @@ fn bar_setters_report_whether_the_series_holds_bars() {
     let mut dropped = bar(120, 12.0);
     dropped.volume = -1.0;
     assert!(chart.update(SeriesId::MAIN, dropped));
+}
+
+/// Guards #3221: a locked line owned by a removed series or study stays drawn in a pane that
+/// stays, owned as a line moved there is: by the pane's first member, by the pane itself once
+/// it is empty, or by none in the price pane. A pane that goes takes the line with it. One undo
+/// gives the line its owner back.
+#[cfg(feature = "drawings")]
+#[test]
+fn removed_pane_members_leave_their_drawings_to_a_pane_that_stays() {
+    use crate::studies::{MACD, RSI};
+    use crate::widget::PaneId;
+    use crate::widget::test_frames::chart;
+    for case in ["shared", "preserved", "price", "own", "last", "original"] {
+        let mut chart = chart(&[100.0], &[110.0]);
+        let removed = if case == "own" {
+            let series = chart.add_series(SeriesOptions::default());
+            chart.set_data(series, chart.bars(SeriesId::MAIN).to_vec());
+            let pane = chart.add_pane();
+            assert!(chart.move_series_to_pane(series, pane));
+            series
+        } else {
+            chart.add_indicator(Box::new(RSI::new(14)))
+        };
+        let pane = chart.series_pane(removed).unwrap();
+        let mut line = Drawing::new(0, DrawingToolType::HorizontalLine);
+        line.chart_points = vec![ChartPoint::new(50.0, 70.0)];
+        line.pane = Some(removed.0);
+        line.locked = true;
+        let line = chart.drawings_mut().add_drawing(line).unwrap();
+        let owner = |chart: &Chart| {
+            let drawing = chart.drawings().drawings.iter().find(|d| d.id == line);
+            drawing.map(|drawing| drawing.pane)
+        };
+        let expected = match case {
+            "shared" => {
+                let macd = chart.add_indicator(Box::new(MACD::new(12, 26, 9)));
+                assert!(chart.move_indicator_to_pane(macd, removed));
+                Some((Some(macd.0), pane))
+            }
+            "preserved" => {
+                assert!(chart.set_preserve_empty_pane(pane, true));
+                Some((Some(pane.0), pane))
+            }
+            "last" => {
+                assert!(chart.remove_pane(PaneId::MAIN));
+                Some((Some(pane.0), pane))
+            }
+            "original" => {
+                assert!(chart.move_series_to_pane(removed, PaneId::MAIN));
+                let other = chart.add_pane();
+                assert!(chart.move_series_to_pane(SeriesId::MAIN, other));
+                Some((Some(PaneId::MAIN.0), PaneId::MAIN))
+            }
+            "price" => {
+                assert!(chart.move_series_to_pane(removed, PaneId::MAIN));
+                Some((None, PaneId::MAIN))
+            }
+            _ => None,
+        };
+        let removed_pane = chart.series_pane(removed).unwrap();
+        let mut pane_line = Drawing::new(0, DrawingToolType::HorizontalLine);
+        pane_line.pane = Some(removed_pane.0);
+        pane_line.chart_points = vec![ChartPoint::new(50.0, 30.0)];
+        pane_line.locked = true;
+        let pane_line = chart.drawings_mut().add_drawing(pane_line).unwrap();
+        assert!(chart.user_action(|chart| chart.remove_series(removed)));
+        assert_eq!(owner(&chart), expected.map(|(owner, _)| owner), "{case}");
+        assert_eq!(
+            chart.drawing_pane(line),
+            expected.map(|(_, pane)| pane),
+            "{case}"
+        );
+        assert_eq!(
+            chart.drawing_pane(pane_line),
+            expected.map(|(_, pane)| pane),
+            "{case}"
+        );
+        if case == "shared" {
+            let saved = chart.save_drawings().unwrap();
+            let pane = saved.drawings()[0].pane.as_ref().unwrap();
+            let studies: Vec<_> = pane.studies.iter().map(|(name, _)| name.as_str()).collect();
+            assert_eq!(studies, ["MACD"]);
+        }
+        assert!(chart.undo(), "{case}");
+        assert_eq!(owner(&chart), Some(Some(removed.0)), "{case}");
+        assert_eq!(chart.drawing_pane(line), Some(removed_pane), "{case}");
+        let restored = chart.drawings().drawings.iter().find(|d| d.id == line);
+        assert!(restored.unwrap().locked, "{case}");
+        assert!(chart.redo(), "{case}");
+        assert_eq!(owner(&chart), expected.map(|(owner, _)| owner), "{case}");
+        assert_eq!(
+            chart.drawing_pane(pane_line),
+            expected.map(|(_, pane)| pane),
+            "{case}"
+        );
+    }
 }
 
 /// Streaming keeps the configured live offset, or the same scrolled-back element.

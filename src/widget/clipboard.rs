@@ -16,6 +16,8 @@ struct CopiedStudy {
     settings: StudySettings,
     overlay: bool,
     scale: StudyScale,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    metric: Option<crate::data::MetricSeries>,
 }
 
 impl Chart {
@@ -82,7 +84,7 @@ impl Chart {
     pub fn copy_indicator(&self, id: SeriesId) -> Option<String> {
         let (_, study) = self.indicators().find(|(study, _)| *study == id)?;
         let copied = CopiedStudy {
-            name: study.name().to_owned(),
+            name: study.registered_name().to_owned(),
             inputs: study
                 .inputs()
                 .into_iter()
@@ -91,6 +93,7 @@ impl Chart {
             settings: study.settings(),
             overlay: study.is_overlay(),
             scale: study.scale(),
+            metric: study.metric().cloned(),
         };
         serde_json::to_string(&copied)
             .ok()
@@ -137,6 +140,7 @@ impl Chart {
             settings: copied.settings,
             visible: true,
             scale: Some(copied.scale),
+            metric: copied.metric,
         }
         .create_with(factory)?;
         study.set_overlay(copied.overlay);

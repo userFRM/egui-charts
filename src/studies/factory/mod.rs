@@ -20,6 +20,10 @@
 //! // Register a custom entry
 //! let mut factory = factory;
 //! factory.register("MySMA", || Box::new(egui_charts::studies::SMA::new(42)));
+//!
+//! // Saved charts keep the factory key apart from the display name.
+//! let study = factory.create("MySMA").unwrap();
+//! assert_eq!((study.name(), study.registered_name()), ("SMA", "MySMA"));
 //! ```
 
 use crate::data::OrderFlowKind;
@@ -433,7 +437,8 @@ impl IndicatorFactory {
     /// Register a named indicator constructor in the [`CUSTOM`](Self::CUSTOM) category.
     ///
     /// A constructor already registered under `name`, a built-in included, is replaced. Returns
-    /// `false`, registering nothing, when `name` is empty or only whitespace.
+    /// `false`, registering nothing, when `name` is empty or only whitespace. Created studies
+    /// are saved under `name`, as [`create`](Self::create) describes.
     ///
     /// # Arguments
     /// * `name` -- The lookup key (e.g. `"MySMA"`).
@@ -450,7 +455,8 @@ impl IndicatorFactory {
     /// [`PROFILES`](Self::PROFILES) or [`ORDER_FLOW`](Self::ORDER_FLOW).
     ///
     /// A constructor already registered under `name`, a built-in included, is replaced. Returns
-    /// `false`, registering nothing, when `name` is empty or only whitespace.
+    /// `false`, registering nothing, when `name` is empty or only whitespace. Created studies
+    /// are saved under `name`, as [`create`](Self::create) describes.
     pub fn register_in<F>(
         &mut self,
         category: &'static str,
@@ -519,12 +525,22 @@ impl IndicatorFactory {
 
     /// Create an indicator by its registered name with the host's defaults, or `None` if not
     /// found or if the constructor no longer accepts those defaults. Without host defaults,
-    /// returns the constructor's study unchanged.
+    /// returns the constructor's study.
+    ///
+    /// The study's [`Indicator::registered_name`] is `name`. Saved charts, study templates,
+    /// clipboard copies and alerts use it to recreate the study through this factory, even
+    /// when its display [`Indicator::name`] differs. A study that cannot retain the key itself
+    /// is returned in a [`ConfiguredStudy`], as a chart holds it.
     pub fn create(&self, name: &str) -> Option<Box<dyn Indicator>> {
         if let Some(template) = self.defaults.get(name) {
             return template.create_with(self).ok();
         }
-        self.create_registered(name)
+        let mut study = self.create_registered(name)?;
+        if study.registered_name() != name && !study.set_registered_name(name) {
+            study = Box::new(ConfiguredStudy::new(study));
+            study.set_registered_name(name);
+        }
+        Some(study)
     }
 
     /// Reconstruct saved state without applying defaults intended for new studies.

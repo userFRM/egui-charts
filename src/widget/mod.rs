@@ -238,6 +238,8 @@ pub struct Chart {
     applied_config_scale_mode: crate::scales::PriceScaleMode,
     /// Whether the main price series and its volume are drawn.
     pub(crate) main_series_visible: bool,
+    /// Whether every study is hidden as a group; see [`Self::set_indicators_hidden`].
+    indicators_hidden: bool,
     main_series_present: bool,
     main_series_scale: crate::model::SeriesScale,
     price_series: Vec<series::PriceSeries>,

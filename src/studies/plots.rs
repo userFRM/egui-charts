@@ -150,6 +150,22 @@ pub struct StudyLabel {
     pub plot: usize,
 }
 
+/// The plot style drawing `index` of `study` takes: plot 0's while the study's drawings use
+/// its style, else that of the plot [`Indicator::drawing_plot`](super::Indicator::drawing_plot)
+/// names, or `None` for a drawing that keeps its own. A hidden style hides the drawing.
+#[cfg(feature = "drawings")]
+pub(crate) fn drawing_style(
+    study: &dyn super::Indicator,
+    index: usize,
+) -> Option<super::PlotStyle> {
+    let plot = if study.drawings_use_plot_style() {
+        Some(0)
+    } else {
+        study.drawing_plot(index)
+    };
+    plot.map(|plot| study.plot_style(plot))
+}
+
 #[cfg(feature = "drawings")]
 pub(crate) fn drawing_prices(
     study: &dyn super::Indicator,
@@ -158,8 +174,9 @@ pub(crate) fn drawing_prices(
     study
         .drawings()
         .iter()
-        .filter_map(move |drawing| {
-            if (study.drawings_use_plot_style() && !study.plot_style(0).visible)
+        .enumerate()
+        .filter_map(move |(index, drawing)| {
+            if drawing_style(study, index).is_some_and(|style| !style.visible)
                 || !drawing.visible
                 || bars.is_empty()
             {
