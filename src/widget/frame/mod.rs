@@ -750,12 +750,15 @@ impl Chart {
                 || self.state.data().is_empty(),
         );
         let touch_readout = super::interaction::touch_crosshair(ui, shown.id);
-        let touch_tracking = touch_readout.tracking(&self.chart_options.tooltip);
+        // A touch that draws or erases follows the finger, as a pointer does.
+        let touch_tracking = touch_readout.tracking(&self.chart_options.tooltip)
+            && !is_drawing_interaction
+            && !eraser_mode;
         if touch_tracking {
             self.host_events.touch_position = Some(None);
         }
         let mut readout_flags = egui::response::Flags::empty();
-        if touch_tracking && !is_drawing_interaction && !eraser_mode {
+        if touch_tracking {
             // A contact that activated the readout owns its release as well as its moves.
             readout_flags |= egui::response::Flags::LONG_TOUCHED;
             if touch_readout.owns_gesture {

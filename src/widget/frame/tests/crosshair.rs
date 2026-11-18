@@ -2207,6 +2207,72 @@ fn hidden_series_markers_allocate_nothing_on_hover() {
     );
 }
 
+/// A touch taken by a drawing tool or the eraser shows the crosshair under the finger at once,
+/// in the main plot and in a pane, since it never starts a long-press readout.
+#[cfg(feature = "drawings")]
+#[test]
+fn drawing_touch_keeps_the_crosshair_under_the_finger() {
+    for panes in [false, true] {
+        for eraser in [false, true] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0], &[110.0, 120.0]);
+            chart.config.show_volume = false;
+            let crosshair = &mut chart.chart_options.crosshair;
+            crosshair.vert_line_color = egui::Color32::MAGENTA;
+            crosshair.horz_line_color = egui::Color32::MAGENTA;
+            crosshair.vert_line_style = crate::model::LineStyle::Solid;
+            crosshair.horz_line_style = crate::model::LineStyle::Solid;
+            let pane_series = panes.then(|| {
+                let id = chart.add_series(Default::default());
+                chart.set_data(id, chart.bars(crate::widget::SeriesId::MAIN).to_vec());
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(id, pane));
+                id
+            });
+            if eraser {
+                chart.drawings_mut().eraser_mode = true;
+            } else {
+                chart
+                    .drawings_mut()
+                    .set_active_tool(Some(crate::config::DrawingToolType::TrendLine));
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.get_chart_mapping();
+            let y = pane_series.map_or(map.rect.center().y, |id| {
+                chart.series_price_map(id).unwrap().price_to_y(115.0)
+            });
+            let pos = Pos2::new(map.idx_to_x(50), y);
+            let painted = shapes(
+                &ctx,
+                &mut chart,
+                1.0,
+                touch_events(egui::TouchPhase::Start, pos),
+            );
+            // The eraser's arrow crosshair keeps only the axis labels.
+            for vertical in [true, false] {
+                assert_eq!(
+                    painted.iter().any(|shape| matches!(shape,
+                        Shape::LineSegment { points, stroke }
+                            if stroke.color == egui::Color32::MAGENTA
+                                && if vertical {
+                                    points[0].x == points[1].x
+                                } else {
+                                    points[0].y == points[1].y
+                                }
+                    )),
+                    !eraser,
+                    "vertical {vertical}, panes {panes}, eraser {eraser}"
+                );
+            }
+            assert_eq!(
+                chart.last_hover_bar_idx,
+                Some(50.0),
+                "panes {panes}, eraser {eraser}"
+            );
+        }
+    }
+}
+
 fn touch_events(phase: egui::TouchPhase, pos: Pos2) -> Vec<Event> {
     use egui::TouchPhase::{Cancel, End, Move, Start};
     let mut events = vec![

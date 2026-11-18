@@ -416,6 +416,8 @@ impl Chart {
             let drawing_tool_active = self.drawings.active_tool.is_some();
             #[cfg(not(feature = "drawings"))]
             let drawing_tool_active = false;
+            // A touch that draws or erases follows the finger, as a pointer does.
+            let touch_tracking = touch_tracking && !drawing_tool_active && !eraser_mode;
 
             let height = panel_rect.height();
             let members = self.pane_series(pane_id);
@@ -978,7 +980,7 @@ impl Chart {
                         .iter()
                         .filter(|(id, _)| *id == pane_id)
                         .fold(pane_response, |pane, (_, plot)| pane.union(plot.clone()));
-                    if touch_tracking && !drawing_tool_active && !eraser_mode {
+                    if touch_tracking {
                         pane_response
                             .flags
                             .remove(egui::response::Flags::LONG_TOUCHED);
