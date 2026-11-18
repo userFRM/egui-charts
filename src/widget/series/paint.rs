@@ -618,7 +618,7 @@ impl Chart {
                 crate::scales::PriceScaleId::Left
             };
             let clipped = painter.with_clip_rect(painter.clip_rect().intersect(axis));
-            let assigned: Vec<_> = self
+            let (ids, assigned): (Vec<_>, Vec<_>) = self
                 .rendered_studies()
                 .indicators()
                 .iter()
@@ -628,8 +628,8 @@ impl Chart {
                         && self.series_pane(**id) == Some(self.main_series_pane())
                         && study.scale() == crate::studies::StudyScale::Shared(key)
                 })
-                .map(|(study, _)| study.as_ref())
-                .collect();
+                .map(|(study, id)| (*id, study.as_ref()))
+                .unzip();
             let Some(item) = self
                 .main_pane_series()
                 .find(|item| item.options.scale == key)
@@ -702,12 +702,21 @@ impl Chart {
             if study_axis.show_study_values {
                 let last_in_view =
                     crate::chart::rendering::axes::last_bar_in_view(&self.get_chart_mapping());
-                for study in &assigned {
+                for (study, id) in assigned.iter().zip(&ids) {
                     let mapping = study
                         .scale_mapping()
                         .unwrap_or(map)
                         .with_bounds(rect.top(), rect.bottom())
                         .with_thousands_sep(map.thousands_sep());
+                    let formatter = if matches!(
+                        mapping.transform().mode,
+                        crate::scales::PriceScaleMode::Percentage
+                            | crate::scales::PriceScaleMode::IndexedTo100
+                    ) {
+                        self.percentage_formatter.clone()
+                    } else {
+                        self.study_formatter(*id, study.value_format())
+                    };
                     crate::chart::rendering::axes::render_study_tags(
                         &clipped,
                         label_rect,
@@ -716,7 +725,7 @@ impl Chart {
                         last_in_view,
                         axis.right(),
                         &mut tags,
-                        None,
+                        formatter.as_deref(),
                         &study_axis,
                     );
                 }

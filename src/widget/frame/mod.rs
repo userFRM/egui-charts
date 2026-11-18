@@ -264,6 +264,8 @@ impl Chart {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
+        // Value-format edits, undo and pasted studies can leave a study another formatter.
+        self.sync_study_formatters();
         self.sync_primitives(ui.ctx());
         let frame = ui.ctx().cumulative_frame_nr();
         let width = ui.available_width();
@@ -2909,12 +2911,16 @@ impl Chart {
         }
         if show_price_axis && study_axis.show_study_values {
             let last_in_view = rendering::axes::last_bar_in_view(&coords);
-            for study in studies
+            let relative = matches!(
+                price_map.transform().mode,
+                crate::scales::PriceScaleMode::Percentage
+                    | crate::scales::PriceScaleMode::IndexedTo100
+            );
+            for (idx, study) in studies
                 .indicators()
                 .iter()
                 .enumerate()
                 .filter(|(idx, _)| study_indices.contains(idx))
-                .map(|(_, study)| study)
             {
                 // A chart type that hides volume tags no volume value.
                 if study.is_volume() && !self.chart_type.supports_volume() {
@@ -2950,6 +2956,10 @@ impl Chart {
                 {
                     continue;
                 }
+                let formatter = self
+                    .study_formatter(self.study_ids[idx], study.value_format())
+                    .filter(|_| !relative)
+                    .or_else(|| price_formatter.clone());
                 rendering::axes::render_study_tags(
                     &painter,
                     price_rect,
@@ -2958,7 +2968,7 @@ impl Chart {
                     last_in_view,
                     axis_edge,
                     &mut tags,
-                    price_formatter.as_deref(),
+                    formatter.as_deref(),
                     &study_axis,
                 );
             }
@@ -3389,8 +3399,15 @@ impl Chart {
                         background: *background,
                     })
                     .collect();
+                let study_formatters: Vec<_> = self
+                    .study_ids
+                    .iter()
+                    .zip(self.rendered_studies().indicators())
+                    .map(|(id, study)| self.study_formatter(*id, study.value_format()))
+                    .collect();
                 let raw_price_formatter = self.series_price_formatter(super::SeriesId::MAIN);
                 legend.formatters = self.value_formatters(raw_price_formatter.as_deref());
+                legend.study_formatters = &study_formatters;
                 legend.thousands_sep = price_map.thousands_sep();
                 legend.price_decimals = self.readout_price_decimals();
                 legend.instrument = self.instrument();

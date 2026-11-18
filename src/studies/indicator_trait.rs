@@ -512,7 +512,9 @@ pub trait Indicator: Send {
     }
 
     /// Replaces value formatting when supported by the presentation. `None` restores the
-    /// declared units and precision. Returns false when this study owns its formatting.
+    /// declared units and precision. Returns false when this study owns its formatting. A chart
+    /// passes each study the formatter from `Chart::set_indicator_formatter` or the chart's
+    /// formatters on every frame.
     fn set_value_formatter(
         &mut self,
         formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,

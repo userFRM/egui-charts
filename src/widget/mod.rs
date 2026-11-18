@@ -404,6 +404,10 @@ pub struct Chart {
     volume_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     series_formatters:
         std::collections::HashMap<SeriesId, std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    /// Host formatters of single studies. Kept after a study's removal, so that undo restores
+    /// it with its formatter; study ids are never reused.
+    study_formatters:
+        std::collections::HashMap<SeriesId, std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     extended_hours: bool,
     conversion: Option<String>,
     pub(crate) measured_axis_width: f32,
