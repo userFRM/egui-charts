@@ -739,6 +739,7 @@ impl Chart {
                 }
                 next.0.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
                 next.0.eraser_mode = self.drawings.eraser_mode;
+                next.0.set_hidden(self.drawings.is_hidden());
                 next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
                 std::mem::swap(&mut self.drawings, &mut next.0);
                 std::mem::swap(&mut self.marks, &mut next.1);

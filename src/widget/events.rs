@@ -271,9 +271,9 @@ pub enum ChartEvent {
     #[cfg(feature = "drawings")]
     #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
     ImageRequested(ImageRequest),
-    /// A delete of the selected drawings, with Delete or Backspace or through
-    /// [`Chart::delete_selected_drawings`], kept this many of them because they are locked; the
-    /// others were deleted. Tell the user, for example in a toast, that a drawing must be unlocked
+    /// A delete of drawings, with Delete or Backspace, through [`Chart::delete_selected_drawings`]
+    /// or from the object tree, kept this many of them because they are locked; the others were
+    /// deleted. Tell the user, for example in a toast, that a drawing must be unlocked
     /// before it can be deleted.
     #[cfg(feature = "drawings")]
     #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
@@ -768,7 +768,7 @@ impl Chart {
                         &self.rendered_studies().indicators()[index],
                     )
                 })
-                .filter(|(_, study)| study.is_visible())
+                .filter(|(_, study)| self.shows_study(study.as_ref()))
                 .flat_map(|(id, study)| {
                     let own = self.series_price_map(id).unwrap_or(map);
                     (0..study.line_count())

@@ -142,10 +142,9 @@ pub struct Legend<'a> {
     /// Whether the series is shown. A hidden series keeps its title and controls, dimmed, so it
     /// can be shown again.
     pub(crate) series_visible: bool,
-    /// Draw the settings button among the title controls. The chart clears it while
-    /// `Control::Settings` is hidden.
-    #[cfg_attr(not(feature = "icons"), allow(dead_code))]
-    pub(crate) show_series_settings: bool,
+    /// Draw the settings buttons: the series' among the title controls and each study row's.
+    /// The chart clears it while `Control::Settings` is hidden.
+    pub(crate) show_settings: bool,
     /// Prefer the host description over the ticker.
     pub title_as_description: bool,
     /// Display OHLC fields, or the close alone in a compact plot.
@@ -232,7 +231,7 @@ impl<'a> Legend<'a> {
             show_volume: true,
             show_title: true,
             series_visible: true,
-            show_series_settings: true,
+            show_settings: true,
             title_as_description: true,
             show_ohlc: true,
             show_change: true,
@@ -505,11 +504,7 @@ impl<'a> Legend<'a> {
         // A first row too narrow for the flag button shows no controls.
         #[cfg(feature = "icons")]
         if self.show_title && title_end - bounds.left() >= 20.0 {
-            let width = if self.show_series_settings {
-                116.0
-            } else {
-                96.0
-            };
+            let width = if self.show_settings { 116.0 } else { 96.0 };
             let size = Vec2::new(width, 20.0);
             // On a full row the controls cover its end instead of opening an empty row. They and
             // the outline keep to the end of the title's first row on every row the title spans.
@@ -657,9 +652,7 @@ impl<'a> Legend<'a> {
                 ]
                 .into_iter()
                 .enumerate()
-                .filter(|(_, (action, ..))| {
-                    self.show_series_settings || *action != SeriesAction::Settings
-                })
+                .filter(|(_, (action, ..))| self.show_settings || *action != SeriesAction::Settings)
                 .enumerate()
                 {
                     let rect = Rect::from_min_size(
@@ -875,7 +868,10 @@ impl<'a> Legend<'a> {
                 // a row of their own.
                 layout.row_end = layout.row_end.min(row_end);
                 let controls = layout
-                    .reserve(Vec2::new(controls_width(study.as_ref()), 20.0))
+                    .reserve(Vec2::new(
+                        controls_width(study.as_ref(), self.show_settings),
+                        20.0,
+                    ))
                     .intersect(bounds);
                 let row_right = if layout.pos.y > row_start.y {
                     row_end
@@ -893,6 +889,7 @@ impl<'a> Legend<'a> {
                     None,
                     id.with(("study", index)),
                     study.as_ref(),
+                    self.show_settings,
                 );
                 for (response, intent) in responses.iter().zip([
                     StudyAction::ToggleVisibility(index),

@@ -800,7 +800,7 @@ impl Chart {
             .study_ids
             .iter()
             .enumerate()
-            .filter(|(_, id)| self.series_pane(**id) == Some(main_pane))
+            .filter(|(_, id)| !self.indicators_hidden && self.series_pane(**id) == Some(main_pane))
             .map(|(idx, _)| idx)
             .collect();
 
@@ -1161,7 +1161,7 @@ impl Chart {
         let (mut primitive_prices, mut primitive_margins) = self.main_primitive_prices();
         for idx in &study_indices {
             let study = &self.rendered_studies().indicators()[*idx];
-            if study.is_visible()
+            if self.shows_study(study.as_ref())
                 && !study.is_overlay()
                 && self.study_autoscale[*idx]
                 && !self.config.scale_price_chart_only
@@ -1920,7 +1920,7 @@ impl Chart {
                         .find(|study| {
                             study.is_volume()
                                 && study.is_overlay()
-                                && study.is_visible()
+                                && self.shows_study(study.as_ref())
                                 && !matches!(study.scale(), crate::studies::StudyScale::Shared(_))
                         })
                         // The painted columns scale by the largest visible volume, also below 1.
@@ -2002,7 +2002,11 @@ impl Chart {
             let hit = hit_test_main_chart(
                 pos,
                 studies,
-                &self.study_ids,
+                if self.indicators_hidden {
+                    &[]
+                } else {
+                    &self.study_ids[..]
+                },
                 &hit_order,
                 &coords,
                 volume_coords.as_ref(),
@@ -2092,7 +2096,7 @@ impl Chart {
                 .iter()
                 .position(|study| study == id)
                 .map(|idx| &studies.indicators()[idx])
-                .filter(|study| study.is_visible())
+                .filter(|study| self.shows_study(study.as_ref()))
             else {
                 return;
             };
@@ -2425,7 +2429,7 @@ impl Chart {
         for study in studies
             .indicators()
             .iter()
-            .filter(|study| study.is_visible() && study.labels_on_price())
+            .filter(|study| self.shows_study(study.as_ref()) && study.labels_on_price())
         {
             crate::chart::indicators::plots::paint_labels(
                 &clipped_painter,
@@ -3318,7 +3322,9 @@ impl Chart {
             .study_ids
             .iter()
             .zip(self.rendered_studies().indicators())
-            .filter(|(id, study)| study.is_visible() && self.series_pane(**id) == Some(main_pane))
+            .filter(|(id, study)| {
+                self.shows_study(study.as_ref()) && self.series_pane(**id) == Some(main_pane)
+            })
         {
             if let Some(table) = study.table() {
                 table_rect.max.y =
@@ -3445,7 +3451,7 @@ impl Chart {
                     }
                 }
                 legend.series_visible = self.main_series_visible;
-                legend.show_series_settings = !self.settings_hidden;
+                legend.show_settings = !self.settings_hidden;
                 legend.title_as_description = self.config.title_as_description;
                 // A whitespace bar has no values to show.
                 let values = self.main_series_visible && !bar.is_whitespace();
