@@ -33,6 +33,17 @@ pub(super) fn validate_stored(drawing: &Drawing) -> Result<(), &'static str> {
     check(drawing, false)
 }
 
+/// Checks an edit that turned `old` into `new`: refuses one after which saving would refuse a
+/// drawing it accepted before, with the reason [`validate_stored`] gives. A drawing that saving
+/// refuses already, such as one a host changed directly through `DrawingManager::drawings`,
+/// takes any edit, so that it can still be hidden, locked, renamed or filed.
+pub(super) fn validate_edit(old: &Drawing, new: &Drawing) -> Result<(), &'static str> {
+    match validate_stored(new) {
+        Err(reason) if validate_stored(old).is_ok() => Err(reason),
+        _ => Ok(()),
+    }
+}
+
 fn check(drawing: &Drawing, exact: bool) -> Result<(), &'static str> {
     let tool = drawing.tool_type;
     if tool.is_cursor() {

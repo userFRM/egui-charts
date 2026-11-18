@@ -387,7 +387,10 @@ mod tests {
                     "selection is not a stored edit"
                 );
                 if !cancel {
-                    chart.drawings_mut().edit_selected(|d| d.stroke_width = 4.0);
+                    chart
+                        .drawings_mut()
+                        .edit_selected(|d| d.stroke_width = 4.0)
+                        .unwrap();
                     for drawing in &chart.drawings().drawings {
                         assert_eq!(drawing.stroke_width == 4.0, [6, 7, 8].contains(&drawing.id));
                     }

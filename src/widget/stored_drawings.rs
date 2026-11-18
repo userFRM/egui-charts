@@ -1294,11 +1294,13 @@ mod tests {
         line.chart_points = vec![ChartPoint::new(0.0, 100.0)];
         let id = chart.user_action(|chart| chart.drawings_mut().add_drawing(line).unwrap());
         for i in 0..10_000 {
-            chart.user_action(|chart| {
-                chart.drawings_mut().edit_drawing(id, |drawing| {
-                    drawing.chart_points[0].price = 100.0 + (i % 2) as f64;
+            chart
+                .user_action(|chart| {
+                    chart.drawings_mut().edit_drawing(id, |drawing| {
+                        drawing.chart_points[0].price = 100.0 + (i % 2) as f64;
+                    })
                 })
-            });
+                .unwrap();
             assert!(chart.drawings().pending_sync.lock().unwrap().is_empty());
             if i % 100 == 0 {
                 chart.sync_stored_drawings(&ctx);
