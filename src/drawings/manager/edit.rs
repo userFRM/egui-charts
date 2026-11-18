@@ -103,6 +103,22 @@ impl DrawingManager {
         self.history.push_snapshot(before);
     }
 
+    /// Gives every drawing that `from` owns the owner `to`, locked ones included, as one undo
+    /// step, and queues each to be saved. See [`Drawing::pane`].
+    pub(crate) fn reassign_owner(&mut self, from: usize, to: Option<usize>) {
+        let mut before = Vec::new();
+        for (index, drawing) in self.drawings.iter_mut().enumerate() {
+            if drawing.pane == Some(from) {
+                before.push((index, drawing.clone()));
+                drawing.pane = to;
+            }
+        }
+        for (_, old) in &before {
+            self.queue_update(old.id);
+        }
+        self.history.push_snapshot(before);
+    }
+
     /// Removes every drawing that is not locked and clears the current drawing and selection.
     ///
     /// Queues a `Delete` for each drawing it removes, so the host deletes their stored records.
