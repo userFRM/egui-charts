@@ -7,12 +7,14 @@ use egui::{Align2, Color32, Pos2, Stroke, vec2};
 
 impl Drawing {
     /// Renders an Elliott wave count: its legs in the drawing's colour, width and line style,
-    /// and the label of each wave in the drawing's degree, above a high and below a low. The
-    /// start point is not labelled.
+    /// unless [`Self::elliott_show_wave`] is off, and the label of each wave in the drawing's
+    /// degree, above a high and below a low. The start point is not labelled.
     pub(crate) fn render_elliott_waves(&self, painter: &egui::Painter) {
         let color = self.color32();
-        for leg in self.points.windows(2) {
-            painter.line_segment([leg[0], leg[1]], self.stroke());
+        if self.elliott_show_wave {
+            for leg in self.points.windows(2) {
+                painter.line_segment([leg[0], leg[1]], self.stroke());
+            }
         }
         // Placement anchors
         if !self.completed {
@@ -93,7 +95,25 @@ mod tests {
         use DrawingToolType::*;
         use ElliottDegree::*;
         let zigzag = &ZIGZAG[..];
-        let cases: [Case; 17] = [
+        let cases: [Case; 25] = [
+            (
+                ElliottImpulse,
+                Supermillennium,
+                zigzag,
+                &["[((I))]", "[((II))]", "[((III))]", "[((IV))]", "[((V))]"],
+            ),
+            (
+                ElliottImpulse,
+                Millennium,
+                zigzag,
+                &["[(I)]", "[(II)]", "[(III)]", "[(IV)]", "[(V)]"],
+            ),
+            (
+                ElliottImpulse,
+                Submillennium,
+                zigzag,
+                &["[I]", "[II]", "[III]", "[IV]", "[V]"],
+            ),
             (
                 ElliottImpulse,
                 GrandSupercycle,
@@ -143,6 +163,30 @@ mod tests {
                 zigzag,
                 &["i", "ii", "iii", "iv", "v"],
             ),
+            (
+                ElliottImpulse,
+                Micro,
+                zigzag,
+                &["[((1))]", "[((2))]", "[((3))]", "[((4))]", "[((5))]"],
+            ),
+            (
+                ElliottImpulse,
+                Submicro,
+                zigzag,
+                &["[(1)]", "[(2)]", "[(3)]", "[(4)]", "[(5)]"],
+            ),
+            (
+                ElliottImpulse,
+                Miniscule,
+                zigzag,
+                &["[1]", "[2]", "[3]", "[4]", "[5]"],
+            ),
+            (
+                ElliottCorrection,
+                Millennium,
+                &zigzag[..4],
+                &["[(A)]", "[(B)]", "[(C)]"],
+            ),
             (ElliottCorrection, Minor, &zigzag[..4], &["A", "B", "C"]),
             (
                 ElliottCorrection,
@@ -163,6 +207,12 @@ mod tests {
                 &["((w))", "((x))", "((y))"],
             ),
             (
+                ElliottDoubleCombo,
+                Micro,
+                &zigzag[..4],
+                &["[((W))]", "[((X))]", "[((Y))]"],
+            ),
+            (
                 ElliottTripleCombo,
                 Cycle,
                 zigzag,
@@ -180,56 +230,72 @@ mod tests {
             (ElliottImpulse, Minor, &zigzag[..2], &["1"]),
         ];
         for (tool, degree, points, labels) in cases {
-            let case = format!("{tool:?} {degree:?} {}", points.len());
-            let mut drawing = Drawing::new(7, tool);
-            assert!(drawing.fill_color.is_none(), "{case}: default fill");
-            drawing.elliott_degree = degree;
-            drawing.fill_color = Some([12, 34, 56, 80]); // as saved by an earlier release
-            drawing.points = points.iter().map(|&(x, y)| Pos2::new(x, y)).collect();
-            let stroke = drawing.stroke();
-            let mut legs = Vec::new();
-            let mut texts = Vec::new();
-            for shape in super::super::tests::paint(&drawing) {
-                match &shape {
-                    Shape::Text(t) => texts.push((
-                        t.galley.text().to_owned(),
-                        egui::Rect::from_min_size(t.pos, t.galley.size()),
-                    )),
-                    Shape::LineSegment { points, stroke: s } => {
-                        assert_eq!(*s, stroke, "{case}");
-                        legs.push(*points);
-                    }
-                    Shape::Path(p) if !p.closed => {
-                        assert_eq!(p.stroke.width, stroke.width, "{case}");
-                        let ColorMode::Solid(color) = &p.stroke.color else {
-                            panic!("{case}: textured leg");
-                        };
-                        assert_eq!(*color, stroke.color, "{case}");
-                        legs.extend(p.points.windows(2).map(|w| [w[0], w[1]]));
-                    }
-                    Shape::Noop => {}
-                    // Placement anchors, as circles or polygons.
-                    other => {
-                        let r = other.visual_bounding_rect();
-                        assert!(
-                            drawing.points.iter().any(|p| r.center().distance(*p) < 1.0)
-                                && r.width() <= 2.0 * DESIGN_TOKENS.rounding.lg + 4.0,
-                            "{case}: {other:?}"
-                        );
+            for show_wave in [true, false] {
+                let case = format!("{tool:?} {degree:?} {} {show_wave}", points.len());
+                let mut drawing = Drawing::new(7, tool);
+                assert!(drawing.fill_color.is_none(), "{case}: default fill");
+                drawing.elliott_degree = degree;
+                drawing.elliott_show_wave = show_wave;
+                drawing.fill_color = Some([12, 34, 56, 80]); // as saved by an earlier release
+                drawing.points = points.iter().map(|&(x, y)| Pos2::new(x, y)).collect();
+                let stroke = drawing.stroke();
+                let mut legs = Vec::new();
+                let mut texts = Vec::new();
+                for shape in super::super::tests::paint(&drawing) {
+                    match &shape {
+                        Shape::Text(t) => texts.push((
+                            t.galley.text().to_owned(),
+                            egui::Rect::from_min_size(t.pos, t.galley.size()),
+                        )),
+                        Shape::LineSegment { points, stroke: s } => {
+                            assert_eq!(*s, stroke, "{case}");
+                            legs.push(*points);
+                        }
+                        Shape::Path(p) if !p.closed => {
+                            assert_eq!(p.stroke.width, stroke.width, "{case}");
+                            let ColorMode::Solid(color) = &p.stroke.color else {
+                                panic!("{case}: textured leg");
+                            };
+                            assert_eq!(*color, stroke.color, "{case}");
+                            legs.extend(p.points.windows(2).map(|w| [w[0], w[1]]));
+                        }
+                        Shape::Noop => {}
+                        // Placement anchors, as circles or polygons.
+                        other => {
+                            let r = other.visual_bounding_rect();
+                            assert!(
+                                drawing.points.iter().any(|p| r.center().distance(*p) < 1.0)
+                                    && r.width() <= 2.0 * DESIGN_TOKENS.rounding.lg + 4.0,
+                                "{case}: {other:?}"
+                            );
+                        }
                     }
                 }
-            }
-            let want: Vec<_> = drawing.points.windows(2).map(|w| [w[0], w[1]]).collect();
-            assert_eq!(legs, want, "{case}");
-            let got: Vec<_> = texts.iter().map(|(text, _)| text.as_str()).collect();
-            assert_eq!(got, *labels, "{case}");
-            for (i, (text, rect)) in texts.iter().enumerate() {
-                let point = drawing.points[i + 1];
-                assert!((rect.center().x - point.x).abs() < 0.5, "{case} {text}");
-                if i % 2 == 0 {
-                    assert!(rect.bottom() < point.y, "{case} {text} above");
+                let want: Vec<_> = if show_wave {
+                    drawing.points.windows(2).map(|w| [w[0], w[1]]).collect()
                 } else {
-                    assert!(rect.top() > point.y, "{case} {text} below");
+                    Vec::new()
+                };
+                assert_eq!(legs, want, "{case}");
+                let got: Vec<_> = texts.iter().map(|(text, _)| text.as_str()).collect();
+                assert_eq!(got, *labels, "{case}");
+                for (i, (text, rect)) in texts.iter().enumerate() {
+                    let point = drawing.points[i + 1];
+                    assert!((rect.center().x - point.x).abs() < 0.5, "{case} {text}");
+                    if i % 2 == 0 {
+                        assert!(rect.bottom() < point.y, "{case} {text} above");
+                    } else {
+                        assert!(rect.top() > point.y, "{case} {text} below");
+                    }
+                }
+                // Hidden legs do not select the drawing.
+                if let [.., a, b] = drawing.points[..] {
+                    let hit = crate::drawings::services::DrawingInteraction::new().hit_test(
+                        a.lerp(b, 0.5),
+                        std::slice::from_ref(&drawing),
+                        "1m",
+                    );
+                    assert_eq!(hit, show_wave.then_some(7), "{case}");
                 }
             }
         }

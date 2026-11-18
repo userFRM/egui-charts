@@ -356,6 +356,7 @@ impl DrawingProps {
                     price_axis_label,
                     time_axis_label,
                     elliott_degree,
+                    elliott_show_wave,
                 );
                 // Each config takes only its edited members, keeping the peer's other settings.
                 macro_rules! edited_config {
