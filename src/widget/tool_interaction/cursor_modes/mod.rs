@@ -236,20 +236,40 @@ mod tests {
     fn marks_follow_presses_through_show() {
         use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
         use crate::widget::test_frames::{chart, frame};
-        use CrosshairStyle::{Demonstration, Full};
+        use CrosshairStyle::{Demonstration, Full, Magic};
         use egui::{Context, Event, Modifiers, PointerButton, pos2};
         // Style, modifiers, gesture, then the trail length, whether the view moved and the
-        // number of selected drawings.
-        for (row, (style, modifiers, gesture, marks, pans, selected)) in [
-            (Demonstration, Modifiers::NONE, "hover", 0, false, 0),
-            (Demonstration, Modifiers::NONE, "click", 1, false, 0),
-            (Demonstration, Modifiers::NONE, "drag", 3, false, 0),
-            (Full, Modifiers::ALT, "hover", 0, false, 0),
-            (Full, Modifiers::ALT, "click", 1, false, 0),
-            (Full, Modifiers::ALT, "drag", 3, false, 0),
-            (Full, Modifiers::NONE, "drag", 0, true, 0),
-            (Full, Modifiers::ALT, "click on line", 1, false, 0),
-            (Full, Modifiers::NONE, "click on line", 0, false, 1),
+        // number of selected drawings and whether a series was selected.
+        for (row, (style, modifiers, gesture, marks, pans, selected, series_selected)) in [
+            (Demonstration, Modifiers::NONE, "hover", 0, false, 0, false),
+            (Demonstration, Modifiers::NONE, "click", 1, false, 0, false),
+            (Demonstration, Modifiers::NONE, "drag", 3, false, 0, false),
+            (Full, Modifiers::ALT, "hover", 0, false, 0, false),
+            (Full, Modifiers::ALT, "click", 1, false, 0, false),
+            (Full, Modifiers::ALT, "drag", 3, false, 0, false),
+            (Full, Modifiers::NONE, "drag", 0, true, 0, false),
+            (Full, Modifiers::ALT, "click on line", 1, false, 0, false),
+            (Full, Modifiers::NONE, "click on line", 0, false, 1, false),
+            (
+                Demonstration,
+                Modifiers::NONE,
+                "click on series",
+                1,
+                false,
+                0,
+                false,
+            ),
+            (
+                Magic,
+                Modifiers::NONE,
+                "click on series",
+                1,
+                false,
+                0,
+                false,
+            ),
+            (Full, Modifiers::ALT, "click on series", 1, false, 0, false),
+            (Full, Modifiers::NONE, "click on series", 0, false, 0, true),
         ]
         .into_iter()
         .enumerate()
@@ -265,14 +285,22 @@ mod tests {
             let (a, b, c) = (pos2(200.0, 350.0), pos2(300.0, 360.0), pos2(400.0, 370.0));
             let points = &chart.drawings().drawings[0].points;
             let on_line = points[0].lerp(points[1], 0.5);
+            let on_series = pos2(
+                chart.index_to_x(50.0).unwrap(),
+                chart.last_price_map.price_to_y(15.0),
+            );
             let plot = chart.last_rendered_price_rect;
             assert!(
-                [a, b, c, on_line].iter().all(|pos| plot.contains(*pos)),
+                [a, b, c, on_line, on_series]
+                    .iter()
+                    .all(|pos| plot.contains(*pos)),
                 "row {}: gesture outside {plot:?}",
                 row + 1
             );
             let at = if gesture == "click on line" {
                 on_line
+            } else if gesture == "click on series" {
+                on_series
             } else {
                 a
             };
@@ -305,8 +333,9 @@ mod tests {
                     chart.cursor_modes.trail.len(),
                     chart.get_time_scale_state() != view,
                     chart.drawings().selected_ids().count(),
+                    chart.selected_element().is_some(),
                 ),
-                (marks, pans, selected),
+                (marks, pans, selected, series_selected),
                 "row {}: {style:?} {modifiers:?} {gesture}",
                 row + 1
             );

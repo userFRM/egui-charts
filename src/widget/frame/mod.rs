@@ -657,7 +657,7 @@ impl Chart {
         #[cfg(not(feature = "drawings"))]
         let drawing_tool_active = false;
         #[cfg(not(feature = "drawings"))]
-        let (is_drawing_interaction, drawing_gesture) = (false, false);
+        let (is_drawing_interaction, drawing_gesture, marking) = (false, false, false);
         #[cfg(feature = "drawings")]
         if self.drawings.selection_area().is_some_and(|area| {
             area.pane
@@ -2482,11 +2482,11 @@ impl Chart {
         // study's pane. Otherwise overlay indicators take priority over the
         // series beneath them; an empty-area click clears the selection. Clicks
         // in a study's pane are resolved where the panes are rendered, outside
-        // this rect. As there, a click with the eraser or a drawing tool keeps
-        // the selection.
+        // this rect. A mark, or a click with the eraser or a drawing tool, keeps the selection.
         if response.clicked()
             && !drawing_tool_active
             && !eraser_mode
+            && !marking
             && let Some(click_pos) = response.interact_pointer_pos()
         {
             #[cfg(feature = "drawings")]
