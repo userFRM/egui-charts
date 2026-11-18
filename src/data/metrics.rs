@@ -6,7 +6,7 @@ use crate::scales::StudyFormat;
 use chrono::{DateTime, Utc};
 
 /// One metric offered for an instrument, identified by a host-owned key.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct MetricSeries {
     /// Key used in metric history and subscription requests.
