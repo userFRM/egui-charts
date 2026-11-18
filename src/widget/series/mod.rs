@@ -800,7 +800,56 @@ impl Chart {
     /// restores it with its markers, price lines, formatter and bar limit, and for the main
     /// series the feed follows [`set_feed_paused`](Self::set_feed_paused) again. Returns `false`
     /// for an unknown or already removed id.
+    ///
+    /// The drawings that an added series or a study owns stay drawn in its pane, which takes
+    /// them over as it takes a drawing moved into it. When the pane goes with the series or
+    /// study, they are deleted with the pane's own drawings, locked ones included, as
+    /// [`remove_pane`](Self::remove_pane) deletes them, and undo of the user action brings them
+    /// back.
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
+        #[cfg(feature = "drawings")]
+        let pane = self.series_pane(id).filter(|_| id != SeriesId::MAIN);
+        let removed = self.remove_series_keeping_drawings(id);
+        #[cfg(feature = "drawings")]
+        if let Some(pane) = pane.filter(|_| removed) {
+            self.release_drawings(id, pane);
+        }
+        removed
+    }
+
+    /// Keeps drawn the drawings that `id`, just removed from `pane`, owned: the pane takes them
+    /// over as it takes a drawing moved into it. When the pane went with `id`, they are deleted
+    /// with the pane's own drawings, locked ones included, as `remove_pane` deletes them.
+    #[cfg(feature = "drawings")]
+    fn release_drawings(&mut self, id: SeriesId, pane: super::PaneId) {
+        let held = |drawing: &crate::drawings::Drawing| {
+            drawing.pane == Some(id.0) || drawing.pane == Some(pane.0)
+        };
+        if !self.drawings.drawings.iter().any(held) {
+            return;
+        }
+        self.sync_panes();
+        if let Some(item) = self.pane_layout.panes.iter().find(|item| item.id == pane) {
+            // As in `move_drawing_to_pane`: no owner in the pane of the main series, else the
+            // pane's first member, or the pane itself while it is empty.
+            let owner = (pane != self.main_series_pane())
+                .then(|| item.members.first().map_or(pane.0, |member| member.0));
+            self.drawings.reassign_owner(id.0, owner);
+        } else {
+            let ids: Vec<_> = self
+                .drawings
+                .drawings
+                .iter()
+                .filter(|drawing| held(drawing))
+                .map(|drawing| drawing.id)
+                .collect();
+            self.drawings.remove_drawings(&ids);
+        }
+    }
+
+    /// Removes a series without touching drawings: restore replaces them from the snapshot,
+    /// or keeps the chart's drawings when the snapshot leaves them to storage.
+    pub(super) fn remove_series_keeping_drawings(&mut self, id: SeriesId) -> bool {
         if id == SeriesId::MAIN {
             if !self.main_series_present {
                 return false;

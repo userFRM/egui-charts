@@ -221,8 +221,8 @@ impl Trades {
 
     /// Time of the newest trade dropped to stay within capacity, evicted or left out of a page.
     #[cfg_attr(
-        not(feature = "widget"),
-        expect(dead_code, reason = "only the chart widget consumes a feed")
+        not(any(feature = "widget", feature = "alert-engine")),
+        expect(dead_code, reason = "only charts and alerts consume a feed")
     )]
     pub(crate) fn lost_until(&self) -> Option<DateTime<Utc>> {
         self.lost_until
