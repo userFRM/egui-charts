@@ -403,6 +403,55 @@ fn older_trades_follow_the_view_without_repeating_a_cursor() {
     assert!(matches!(state.last_error, Some(FeedError::InvalidData(_))));
 }
 
+/// Live executions that fill the trade store leave no room for older ones, so none are asked
+/// for: a feed's empty answer to a request for none would read as the start of trade history.
+#[test]
+fn a_trade_store_filled_live_asks_for_no_older_trades() {
+    let all = bars(1000);
+    let oldest = all[999].time;
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    chart.set_volume_bubbles(Some(VolumeBubblesConfig::default()));
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.page().send(page(all, false));
+    feed.resolve().send(Ok(Instrument::new("A")));
+    frames.run(&mut chart);
+    chart.feed_link.as_mut().unwrap().trades = Trades::new(2);
+    feed.calls();
+    // The latest page leaves room for older trades; the stream fills it in the same drain.
+    feed.trades
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(TradePage::new(
+            vec![Tick::new(oldest, 100.0, 1.0, None)],
+            false,
+        )));
+    for second in 1..3 {
+        feed.sink().push_tick(Tick::new(
+            oldest + TimeDelta::seconds(second),
+            100.0,
+            1.0,
+            None,
+        ));
+    }
+    frames.run(&mut chart);
+    assert_eq!(
+        feed.calls()
+            .into_iter()
+            .filter(|call| matches!(call, Call::Trades(_)))
+            .collect::<Vec<_>>(),
+        []
+    );
+    assert!(
+        chart
+            .feed_state(SeriesId::MAIN)
+            .unwrap()
+            .trade_history_complete
+    );
+}
+
 /// A changed conversion resolves and loads the symbol again with the choice in every request,
 /// and a reply to the previous choice, however late, is not shown.
 #[test]

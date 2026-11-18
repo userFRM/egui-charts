@@ -1044,8 +1044,7 @@ impl Chart {
         link.trade_cursor = continuation;
         link.trades_complete |=
             // The latest page can repeat a retained tape without reaching its oldest execution.
-            end || (continuation.is_none() && !changed && asked.before.is_some())
-                || link.trades.room() == 0;
+            end || (continuation.is_none() && !changed && asked.before.is_some());
     }
 
     /// The start of the range to ask for below `before`: the time `scroll_to_time` is heading
@@ -1060,6 +1059,8 @@ impl Chart {
     /// Asks for trades older than the oldest held once the view reaches it, for the order flow
     /// that consumes them: bubbles, a footprint or a study.
     fn scroll_trades(&mut self, link: &mut FeedLink, executions: bool) {
+        // A page never evicts newer trades, so a full store takes no older ones.
+        link.trades_complete |= link.trades.room() == 0;
         let consumed = link.bubbles.is_some()
             || (executions && link.footprint.is_some())
             || !link.study_inputs.is_empty();
