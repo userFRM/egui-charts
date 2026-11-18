@@ -762,6 +762,14 @@ impl SettingsDialog {
                     .scales_and_lines
                     .price_line_source
                     .or(scales.price_line_source);
+                let line_width = template
+                    .scales_and_lines
+                    .price_line_width
+                    .or(scales.price_line_width);
+                let line_style = template
+                    .scales_and_lines
+                    .price_line_style
+                    .or(scales.price_line_style);
                 let separator = template
                     .scales_and_lines
                     .thousands_sep
@@ -786,6 +794,8 @@ impl SettingsDialog {
                 self.settings.chart_type_params = params;
                 self.settings.price_source = source;
                 self.settings.scales_and_lines.price_line_source = line_source;
+                self.settings.scales_and_lines.price_line_width = line_width;
+                self.settings.scales_and_lines.price_line_style = line_style;
                 self.settings.scales_and_lines.thousands_sep = separator;
                 self.settings.show_session_breaks = session_breaks;
                 self.settings.margins.right_bars = right_bars;
@@ -863,6 +873,9 @@ impl SettingsDialog {
             // What a new chart holds, where the default settings hold no choice.
             self.settings.scales_appearance.font_family = Some(Default::default());
             self.settings.scales_and_lines.price_line_source = Some(Default::default());
+            let style = crate::model::SeriesStyle::default();
+            self.settings.scales_and_lines.price_line_width = Some(style.price_line_width);
+            self.settings.scales_and_lines.price_line_style = Some(style.price_line_style);
             self.settings.scales_and_lines.thousands_sep =
                 Some(crate::widget::settings::ThousandsSeparator::Comma);
             let palette = crate::config::ChartConfig::default().with_theme(theme);
@@ -940,7 +953,12 @@ mod tests {
                 crate::theme::apply_to_egui(&ctx, &app);
                 let mut chart = crate::ChartBuilder::new().with_theme(theme.clone()).build();
                 let expected = ChartSettingsState::from_chart(&chart);
-                let mut settings = expected.clone();
+                // A customised last price line, which Reset returns to a new chart's.
+                if let Some(style) = chart.series_style_mut(crate::widget::SeriesId::MAIN) {
+                    style.price_line_width = 3.0;
+                    style.price_line_style = crate::model::LineStyle::Solid;
+                }
+                let mut settings = ChartSettingsState::from_chart(&chart);
                 settings.scales_appearance.text_color = Color32::RED;
                 settings.grid_lines.horizontal_color = Color32::GREEN;
                 settings.grid_lines.vertical_color = Color32::BLUE;
@@ -1007,6 +1025,14 @@ mod tests {
                 assert_eq!(saved.crosshair.color, Color32::PLACEHOLDER);
                 settings.apply_to_chart(&mut chart).unwrap();
                 let actual = ChartSettingsState::from_chart(&chart);
+                assert_eq!(
+                    (
+                        actual.scales_and_lines.price_line_width,
+                        actual.scales_and_lines.price_line_style
+                    ),
+                    (Some(1.0), Some(crate::model::LineStyle::Dashed)),
+                    "{preset}"
+                );
                 let mismatches: Vec<_> = [
                     (
                         "axis text",
