@@ -176,17 +176,22 @@ pub(super) fn render_item_menu(
     } else {
         "Delete"
     };
-    if (item.source_type != SourceType::DataSource || item.is_added_series())
-        && ui
-            .selectable_label(false, l10n::text(ui.ctx(), delete_label))
-            .clicked()
-    {
-        action = if item.source_type == SourceType::Indicator {
-            ObjectTreeAction::RemoveIndicator(id)
-        } else {
-            ObjectTreeAction::Delete(id)
-        };
-        ui.close();
+    if item.source_type != SourceType::DataSource || item.is_added_series() {
+        let locked = item.is_drawing() && item.locked;
+        let response = ui
+            .add_enabled(
+                !locked,
+                egui::Button::selectable(false, l10n::text(ui.ctx(), delete_label)),
+            )
+            .on_disabled_hover_text(l10n::text(ui.ctx(), "Unlock the drawing to delete it"));
+        if response.clicked() {
+            action = if item.source_type == SourceType::Indicator {
+                ObjectTreeAction::RemoveIndicator(id)
+            } else {
+                ObjectTreeAction::Delete(id)
+            };
+            ui.close();
+        }
     }
 
     action

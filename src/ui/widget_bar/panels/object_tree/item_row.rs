@@ -400,17 +400,26 @@ fn render_row_content(
     if item.source_type != SourceType::DataSource || item.is_added_series() {
         let del_rect =
             Rect::from_center_size(egui::pos2(right_x - 8.0, center_y), vec2(16.0, 16.0));
-        let del_response = ui.allocate_rect(del_rect, Sense::click());
+        let locked = item.is_drawing() && item.locked;
+        let del_response = ui.allocate_rect(
+            del_rect,
+            if locked {
+                Sense::hover()
+            } else {
+                Sense::click()
+            },
+        );
         let translated_label = l10n::text(ui.ctx(), "Remove");
         del_response.widget_info(|| {
-            egui::WidgetInfo::labeled(
-                egui::Role::Button,
-                del_response.enabled(),
-                &translated_label,
-            )
+            egui::WidgetInfo::labeled(egui::Role::Button, !locked, &translated_label)
         });
+        let delete_color = if locked {
+            button_color.gamma_multiply(ui.visuals().disabled_alpha())
+        } else {
+            button_color
+        };
         embedded_icons::TRASH
-            .as_image_tinted(vec2(16.0, 16.0), button_color)
+            .as_image_tinted(vec2(16.0, 16.0), delete_color)
             .paint_at(ui, del_rect);
         crate::styles::focus::draw_focus_ring(ui, &del_response, 0.0);
         if del_response.clicked() {
@@ -420,7 +429,14 @@ fn render_row_content(
                 ObjectTreeAction::Delete(item.id)
             };
         }
-        del_response.on_hover_text(l10n::text(ui.ctx(), "Remove"));
+        del_response.on_hover_text(l10n::text(
+            ui.ctx(),
+            if locked {
+                "Unlock the drawing to delete it"
+            } else {
+                "Remove"
+            },
+        ));
     }
 }
 

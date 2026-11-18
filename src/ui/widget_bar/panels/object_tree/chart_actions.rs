@@ -14,7 +14,9 @@ impl ObjectTreePanel {
     /// removal, renaming non-drawing rows and the layout-wide drawings by symbol. Drawing names are
     /// saved and undone with the drawing.
     /// Bulk actions apply to drawings, studies and added bar series. Visibility includes the main
-    /// series; bar-series ordering stays within its pane.
+    /// series; bar-series ordering stays within its pane. Deleting keeps locked drawings, which
+    /// stay selected, and reports them with
+    /// [`ChartEvent::LockedDrawingsKept`](crate::widget::ChartEvent::LockedDrawingsKept).
     pub fn apply_to_chart(
         &mut self,
         chart: &mut Chart,
@@ -102,7 +104,7 @@ impl ObjectTreePanel {
                     .filter(|s| s.is_drawing() && s.folder.starts_with(path))
                     .map(|s| s.id)
                     .collect();
-                chart.drawings_mut().delete_drawings(&ids);
+                chart.delete_drawings_keeping_locked(&ids);
                 self.state_mut().selected_ids.retain(|id| !ids.contains(id));
                 // A folder kept by its locked drawings stays collapsed.
                 self.state_mut().collapsed_folders.retain(|p| {
@@ -223,12 +225,20 @@ impl ObjectTreePanel {
                 let (drawings, others): (Vec<_>, Vec<_>) =
                     selected.into_iter().partition(|s| s.is_drawing());
                 let ids: Vec<_> = drawings.iter().map(|s| s.id).collect();
-                chart.drawings_mut().delete_drawings(&ids);
+                chart.delete_drawings_keeping_locked(&ids);
                 for source in others {
                     delete(chart, source);
                 }
-                self.state_mut().clear_selection();
-                chart.drawings_mut().deselect();
+                // Locked drawings stay selected, as after Delete on the chart.
+                let kept: Vec<_> = chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .map(|d| d.id)
+                    .filter(|id| ids.contains(id))
+                    .collect();
+                self.state_mut().selected_ids.retain(|id| kept.contains(id));
+                chart.drawings_mut().select_drawings(kept);
             }
             ObjectTreeAction::Duplicate(id) => {
                 let Some(source) = sources.iter().find(|s| s.id == *id) else {
@@ -371,7 +381,7 @@ fn delete(chart: &mut Chart, source: &SourceItem) {
             chart.remove_series(id);
         }
     } else if source.is_drawing() {
-        chart.drawings_mut().delete_drawing(source.id);
+        chart.delete_drawings_keeping_locked(&[source.id]);
     }
 }
 

@@ -137,7 +137,13 @@ impl ObjectTreePanel {
             let can_group = sources
                 .iter()
                 .any(|s| s.is_drawing() && self.state.is_selected(s.id));
-            self.show_header(ui, &mut action, can_group);
+            let mut selected = sources
+                .iter()
+                .filter(|s| self.state.is_selected(s.id))
+                .peekable();
+            let all_locked =
+                selected.peek().is_some() && selected.all(|s| s.is_drawing() && s.locked);
+            self.show_header(ui, &mut action, can_group, all_locked);
 
             ui.separator();
 
@@ -216,7 +222,13 @@ impl ObjectTreePanel {
     }
 
     /// Render header with title and controls
-    fn show_header(&mut self, ui: &mut Ui, action: &mut ObjectTreeAction, can_group: bool) {
+    fn show_header(
+        &mut self,
+        ui: &mut Ui,
+        action: &mut ObjectTreeAction,
+        can_group: bool,
+        all_locked: bool,
+    ) {
         PanelHeader::new("Objects")
             .strong()
             .no_separator()
@@ -305,7 +317,16 @@ impl ObjectTreePanel {
                     }
                     ui.separator();
                     if self.state.selection_count() > 0
-                        && ui.button(l10n::text(ui.ctx(), "Delete selected")).clicked()
+                        && ui
+                            .add_enabled(
+                                !all_locked,
+                                egui::Button::new(l10n::text(ui.ctx(), "Delete selected")),
+                            )
+                            .on_disabled_hover_text(l10n::text(
+                                ui.ctx(),
+                                "Unlock the selected drawings to delete them",
+                            ))
+                            .clicked()
                     {
                         *action = ObjectTreeAction::DeleteSelected;
                         ui.close();
@@ -976,6 +997,148 @@ mod tests {
             assert_eq!(h.state().1.drawings().drawings.len(), 3);
             assert_eq!(folder_of(&h, 1), "All/Levels/Zones/Inner");
             h.get_by_label("All");
+        }
+    }
+
+    #[test]
+    fn locked_drawings_offer_delete_disabled_and_report_what_delete_keeps() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use crate::widget::ChartEvent;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        type App = (ObjectTreePanel, crate::Chart);
+        let mut chart = crate::widget::ChartBuilder::new().build();
+        for (id, name, locked) in [(7, "Held A", true), (8, "Held B", true), (9, "Free", false)] {
+            let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+            drawing.label = Some(name.into());
+            drawing.locked = locked;
+            if locked {
+                drawing.folder = vec!["Held".into()];
+            }
+            drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+            drawing.completed = true;
+            chart.drawings_mut().drawings.push(drawing);
+        }
+        let panel = ObjectTreePanel::with_config(ObjectTreeConfig {
+            show_data_window: false,
+            ..Default::default()
+        });
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(320.0, 600.0))
+            .build_ui_state(
+                |ui, (panel, chart): &mut App| {
+                    let mut sources: Vec<_> = chart
+                        .drawings()
+                        .drawings
+                        .iter()
+                        .map(|d| {
+                            let mut item = SourceItem::drawing(d.id, d.tool_type, d.color32());
+                            item.label = d.label.clone();
+                            item.folder = d.folder.clone();
+                            item.locked = d.locked;
+                            item
+                        })
+                        .collect();
+                    let action = panel.show(ui, None, &mut sources);
+                    assert!(panel.apply_to_chart(chart, &action, &sources));
+                },
+                (panel, chart),
+            );
+        h.run();
+        for (name, disabled) in [("Held A", true), ("Held B", true), ("Free", false)] {
+            let row = h.get_by_label(name).rect();
+            let remove = h
+                .query_all_by_label("Remove")
+                .find(|node| row.contains(node.rect().center()))
+                .unwrap();
+            assert_eq!(
+                remove.accesskit_node().is_disabled(),
+                disabled,
+                "{name} row delete"
+            );
+        }
+        let close_menu = |h: &mut Harness<'_, App>| {
+            h.key_press(egui::Key::Escape);
+            h.run();
+            assert!(!egui::Popup::is_any_open(&h.ctx));
+        };
+        for (name, label, disabled) in [
+            ("Held A", "Delete", true),
+            ("Free", "Delete", false),
+            ("Held", "Delete folder", true),
+        ] {
+            h.get_by_label(name).click_secondary();
+            h.run();
+            assert_eq!(
+                h.get_by_label(label).accesskit_node().is_disabled(),
+                disabled,
+                "{name} menu"
+            );
+            close_menu(&mut h);
+        }
+        for (names, disabled, remaining) in [
+            (vec!["Held A"], true, vec!["Held A", "Held B", "Free"]),
+            (vec!["Held A", "Free"], false, vec!["Held A", "Held B"]),
+        ] {
+            h.state_mut().1.drain_events().for_each(drop);
+            h.get_by_label(names[0]).click();
+            h.run();
+            for name in &names[1..] {
+                h.get_by_label(name).click_modifiers(egui::Modifiers {
+                    ctrl: true,
+                    ..Default::default()
+                });
+                h.run();
+            }
+            h.get_by_label("Object actions").click();
+            h.run();
+            assert_eq!(
+                h.get_by_label("Delete selected")
+                    .accesskit_node()
+                    .is_disabled(),
+                disabled
+            );
+            close_menu(&mut h);
+            h.key_press(egui::Key::Delete);
+            h.run();
+            assert_eq!(
+                h.state()
+                    .1
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .map(|d| d.label.as_deref().unwrap())
+                    .collect::<Vec<_>>(),
+                remaining
+            );
+            let kept: Vec<_> = h
+                .state_mut()
+                .1
+                .drain_events()
+                .filter_map(|event| match event {
+                    ChartEvent::LockedDrawingsKept(n) => Some(n),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(kept, [1]);
+            assert_eq!(
+                h.state()
+                    .0
+                    .state()
+                    .selected_ids
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>(),
+                [7]
+            );
+            assert_eq!(
+                h.state().1.drawings().selected_ids().collect::<Vec<_>>(),
+                [7]
+            );
+            assert_eq!(h.state().1.drawings().can_undo(), !disabled);
         }
     }
 

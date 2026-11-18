@@ -137,16 +137,15 @@ pub(crate) fn draw_dotted_segments(
     stroke: Stroke,
     spacing: f32,
 ) {
-    use egui::emath::GuiRounding;
     let size = stroke.width;
-    let Some(clip) = finite_clip(painter) else {
+    let Some(visible) = finite_clip(painter) else {
         return;
     };
     if !(size > 0.0 && spacing >= size) {
         return;
     }
     // A dot whose centre is just outside the clip still shows its inner half.
-    let clip = clip.expand(size / 2.0);
+    let clip = visible.expand(size / 2.0);
     let pixels_per_point = painter.pixels_per_point();
     // A dot thinner than a device pixel can miss every pixel centre, so it fills one pixel at the
     // opacity egui gives a line that thin, as dashed lines do.
@@ -162,9 +161,12 @@ pub(crate) fn draw_dotted_segments(
     let mut dots = Mesh::default();
     for &[start, end] in segments {
         visible_dashes(start, end, clip, size, spacing - size, 0.0, |a, b| {
-            let rect = Rect::from_center_size(a.lerp(b, 0.5), egui::Vec2::splat(side));
-            let rect = Rect::from_min_size(rect.min.round_to_pixels(pixels_per_point), rect.size());
-            dots.add_colored_rect(rect, color);
+            let centre = a.lerp(b, 0.5);
+            let min = Pos2::new(
+                dot_start(centre.x, side, visible.x_range(), pixels_per_point),
+                dot_start(centre.y, side, visible.y_range(), pixels_per_point),
+            );
+            dots.add_colored_rect(Rect::from_min_size(min, egui::Vec2::splat(side)), color);
         });
     }
     if !dots.is_empty() {
@@ -340,10 +342,10 @@ fn append_dashed_segment(
     gap_len: f32,
     phase: f64,
 ) {
-    let Some(clip) = finite_clip(painter) else {
+    let Some(visible) = finite_clip(painter) else {
         return;
     };
-    let clip = clip.expand(stroke.width * 0.5);
+    let clip = visible.expand(stroke.width * 0.5);
     if dash_len != 1.0 || !stroke.width.is_finite() || (start.x != end.x && start.y != end.y) {
         // One paint list lock for all dashes, not one per dash.
         let mut dashes = Vec::new();
@@ -356,10 +358,10 @@ fn append_dashed_segment(
     // A mesh keeps one-point dots visible; short segments can round to zero length. Callers
     // reserve the mesh for the clipped spans, so adding dots never copies growing buffers.
     let vertical = start.x == end.x;
-    let (across, across_clip) = if vertical {
-        (start.x, clip.x_range())
+    let (across, across_clip, across_visible) = if vertical {
+        (start.x, clip.x_range(), visible.x_range())
     } else {
-        (start.y, clip.y_range())
+        (start.y, clip.y_range(), visible.y_range())
     };
     // Where along the axis the dots fall does not depend on where across the clip the line is.
     if !across_clip.contains(across) {
@@ -394,7 +396,7 @@ fn append_dashed_segment(
     } else {
         (stroke.width, stroke.color)
     };
-    let edge = ((across - width * 0.5) * pixels_per_point).round() / pixels_per_point;
+    let edge = dot_start(across, width, across_visible, pixels_per_point);
     for &(min, len) in &spans.spans {
         let len = if pixels_per_point < 1.0 {
             len.max(pixels_per_point.recip())
@@ -408,6 +410,22 @@ fn append_dashed_segment(
         };
         dots.add_colored_rect(rect, color);
     }
+}
+
+/// Where a dot `size` points thick centred at `centre` starts, snapped to the device pixel grid.
+/// Renderers round the clip to whole device pixels and a quad lights the pixels whose centres it
+/// holds, so a dot centred inside `clip` moves by at most one pixel to light a pixel inside it
+/// rather than the pixel just outside its edge.
+fn dot_start(centre: f32, size: f32, clip: egui::Rangef, pixels_per_point: f32) -> f32 {
+    let start = ((centre - size * 0.5) * pixels_per_point).round();
+    if !clip.contains(centre) {
+        return start / pixels_per_point;
+    }
+    let lo = (clip.min * pixels_per_point).round();
+    let hi = (clip.max * pixels_per_point).round();
+    // The quad lights this many pixels from `start`: those whose centre lies before its far edge.
+    let lit = (size * pixels_per_point - 0.5).ceil();
+    start.max(lo + 1.0 - lit).min(hi - 1.0) / pixels_per_point
 }
 
 /// The dashes of a polyline whose strokes overlap `clip`, with the dash phase carried
@@ -742,13 +760,17 @@ mod tests {
         }
     }
 
-    /// Pixel centres lie at integer + 0.5; the far edge of a quad is excluded by rasterization.
+    /// Pixel centres lie at integer + 0.5, the far edge of a quad is excluded by rasterization,
+    /// and renderers scissor to the clip rounded to whole device pixels. A dot centred on the
+    /// clip's edge must light a pixel inside it.
     #[cfg(feature = "drawings")]
     #[test]
-    fn thin_dotted_guides_cover_a_pixel_centre() {
+    fn dotted_lines_light_a_pixel_inside_the_clip() {
         let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 200.0));
+        let clip = Rect::from_min_max(Pos2::new(19.0, 19.0), Pos2::new(157.0, 157.0));
         let ctx = Context::default();
-        // (pixels per point, width): below one pixel per point, and half a device pixel or less.
+        let mut failures = Vec::new();
+        // (pixels per point, width): thin dots and grid hairlines at fractional display scales.
         for (scale, width) in [
             (0.5, 1.0),
             (0.4, 1.0),
@@ -756,61 +778,72 @@ mod tests {
             (1.0, 0.5),
             (1.0, 0.25),
             (2.0, 0.25),
+            (1.0, 1.0),
+            (1.25, 1.0),
+            (1.5, 1.0),
+            (2.0, 1.0),
         ] {
             ctx.set_pixels_per_point(scale);
-            for vertical in [false, true] {
-                for reverse in [false, true] {
-                    for guides in [false, true] {
-                        let mut points = [Pos2::new(10.0, 40.25), Pos2::new(110.0, 40.25)];
-                        if vertical {
-                            points = points.map(|p| Pos2::new(p.y, p.x));
-                        }
-                        if reverse {
-                            points.reverse();
-                        }
-                        let output = ctx.run_ui(
-                            RawInput {
-                                screen_rect: Some(screen),
-                                ..Default::default()
-                            },
-                            |_| {
-                                let painter =
-                                    Painter::new(ctx.clone(), LayerId::background(), screen);
-                                let stroke = Stroke::new(width, Color32::WHITE);
-                                if guides {
-                                    draw_dotted_segments(&painter, &[points], stroke, 4.0);
-                                } else {
-                                    draw_dashed_line(
-                                        &painter, points[0], points[1], stroke, 1.0, 3.0,
-                                    );
-                                }
-                            },
-                        );
-                        let [shape] = output.shapes.as_slice() else {
-                            panic!("dots must be one shape");
-                        };
-                        let egui::Shape::Mesh(mesh) = &shape.shape else {
-                            panic!("dots must be a mesh");
-                        };
-                        let dots = mesh.vertices.as_chunks::<4>().0;
-                        assert_eq!(dots.len(), 25);
-                        for dot in dots {
-                            let rect = Rect::from_points(&dot.map(|v| v.pos * scale));
-                            for (min, max) in
-                                [(rect.left(), rect.right()), (rect.top(), rect.bottom())]
-                            {
-                                let centre = (min - 0.5).ceil() + 0.5;
-                                assert!(
-                                    min <= centre && centre < max,
-                                    "scale={scale}, width={width}, vertical={vertical}, reverse={reverse}, guides={guides}, rect={rect:?}"
-                                );
+            let lo = (clip.min.x * scale).round();
+            let hi = (clip.max.x * scale).round();
+            for across in [40.25, 19.0, 157.0] {
+                for vertical in [false, true] {
+                    for reverse in [false, true] {
+                        for guides in [false, true] {
+                            let mut points = [Pos2::new(30.0, across), Pos2::new(130.0, across)];
+                            if vertical {
+                                points = points.map(|p| Pos2::new(p.y, p.x));
                             }
+                            if reverse {
+                                points.reverse();
+                            }
+                            let output = ctx.run_ui(
+                                RawInput {
+                                    screen_rect: Some(screen),
+                                    ..Default::default()
+                                },
+                                |_| {
+                                    let painter =
+                                        Painter::new(ctx.clone(), LayerId::background(), clip);
+                                    let stroke = Stroke::new(width, Color32::WHITE);
+                                    if guides {
+                                        draw_dotted_segments(&painter, &[points], stroke, 4.0);
+                                    } else {
+                                        draw_dashed_line(
+                                            &painter, points[0], points[1], stroke, 1.0, 3.0,
+                                        );
+                                    }
+                                },
+                            );
+                            let [shape] = output.shapes.as_slice() else {
+                                panic!("dots must be one shape");
+                            };
+                            let egui::Shape::Mesh(mesh) = &shape.shape else {
+                                panic!("dots must be a mesh");
+                            };
+                            let dots = mesh.vertices.as_chunks::<4>().0;
+                            assert_eq!(dots.len(), 25);
+                            for dot in dots {
+                                let rect = Rect::from_points(&dot.map(|v| v.pos * scale));
+                                for (min, max) in
+                                    [(rect.left(), rect.right()), (rect.top(), rect.bottom())]
+                                {
+                                    // The first pixel centre in the quad that the scissor keeps.
+                                    let centre = ((min - 0.5).ceil() + 0.5).max(lo + 0.5);
+                                    if !(min <= centre && centre < max && centre < hi) {
+                                        failures.push(format!(
+                                            "scale={scale} width={width} across={across} vertical={vertical} reverse={reverse} guides={guides} rect={rect:?}"
+                                        ));
+                                    }
+                                }
+                            }
+                            output.drop_without_applying_deltas();
                         }
-                        output.drop_without_applying_deltas();
                     }
                 }
             }
         }
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 
     #[test]
