@@ -276,7 +276,11 @@ pub(crate) fn paint_labels(
     let last = coords
         .x_to_idx(clip.right() + LABEL_REACH)
         .saturating_add(1);
-    for label in &labels[labels.partition_point(|label| label.bar < first)..] {
+    for (index, label) in labels
+        .iter()
+        .enumerate()
+        .skip(labels.partition_point(|label| label.bar < first))
+    {
         if label.bar > last {
             break;
         }
@@ -287,6 +291,14 @@ pub(crate) fn paint_labels(
         }
         let color = style.color.to_opaque();
         if study.labels_use_plot_background() {
+            // The last visible tag at a shared point owns it, including its full background.
+            if labels[index + 1..]
+                .iter()
+                .take_while(|later| later.bar == label.bar)
+                .any(|later| later.price == label.price && study.plot_style(later.plot).visible)
+            {
+                continue;
+            }
             let galley = painter.layout_no_wrap(
                 label.text.clone(),
                 egui::FontId::proportional(11.0),
