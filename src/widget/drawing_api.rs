@@ -533,23 +533,12 @@ impl Chart {
     /// [`ChartEvent::LockedDrawingsKept`](super::ChartEvent::LockedDrawingsKept) reports how many,
     /// so the host can tell the user why.
     pub fn delete_selected_drawings(&mut self) {
-        let kept = self
-            .drawings
-            .drawings
-            .iter()
-            .filter(|d| d.locked && self.drawings.is_selected(d.id))
-            .count();
-        self.drawings.delete_selected();
-        if kept > 0 {
-            self.host_events
-                .push(super::ChartEvent::LockedDrawingsKept(kept));
-        }
+        let ids: Vec<_> = self.drawings.selected_ids().collect();
+        self.delete_drawings_keeping_locked(&ids);
     }
 
     /// Deletes the drawings in `ids` as one undo step, keeping the locked ones, and reports how
-    /// many it kept with [`ChartEvent::LockedDrawingsKept`](super::ChartEvent::LockedDrawingsKept),
-    /// as [`Self::delete_selected_drawings`] does for the selection.
-    #[cfg(feature = "ui")]
+    /// many it kept with [`ChartEvent::LockedDrawingsKept`](super::ChartEvent::LockedDrawingsKept).
     pub(crate) fn delete_drawings_keeping_locked(&mut self, ids: &[usize]) {
         let kept = self
             .drawings
