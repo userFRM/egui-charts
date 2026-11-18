@@ -429,11 +429,10 @@ fn dot_start(centre: f32, size: f32, clip: egui::Rangef, pixels_per_point: f32) 
 }
 
 /// The dashes of a polyline whose strokes overlap `clip`, with the dash phase carried
-/// across its vertices, for restyling shapes that have no painter.
+/// across its vertices, for shapes stored in a reserved slot or restyled without a painter.
 ///
 /// Only the visible part of each segment is dashed, so the cost is bounded by the visible length
 /// however far off screen the vertices are. The pattern stays anchored at the first point.
-#[cfg(feature = "drawings")]
 pub(crate) fn dashed_polyline_shapes(
     points: &[Pos2],
     stroke: Stroke,

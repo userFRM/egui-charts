@@ -24,6 +24,9 @@ impl Chart {
     /// Show or hide the host's analyst estimates. Hidden by default; hiding retains the answer.
     /// Leave future whitespace in the visible logical range to see the supplied horizon date.
     /// A replay draws them only once its time has passed their publication date in UTC.
+    /// They are drawn as dotted lines from the close on their publication date, in the colours of
+    /// [`ChartConfig::price_target_positive_color`](crate::config::ChartConfig::price_target_positive_color)
+    /// and [`price_target_negative_color`](crate::config::ChartConfig::price_target_negative_color).
     pub fn set_price_targets_visible(&mut self, visible: bool) {
         self.show_price_targets = visible;
     }
@@ -129,13 +132,11 @@ impl Chart {
         let Some(targets) = self.visible_targets() else {
             return;
         };
-        let Some((index, last)) = self
-            .state
-            .shown()
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, bar)| !bar.is_whitespace())
+        let Some(last) = crate::model::last_with_value(self.state.shown()) else {
+            return;
+        };
+        let Some((origin_index, reference)) =
+            publication_bar(self.state.shown(), targets.published)
         else {
             return;
         };
@@ -150,9 +151,23 @@ impl Chart {
         let Some(horizon) = self.time_to_index(time) else {
             return;
         };
-        let origin = Pos2::new(coords.idx_to_x(index), coords.price.price_to_y(last.close));
+        let origin = Pos2::new(
+            coords.idx_to_x(origin_index),
+            coords.price.price_to_y(reference.close),
+        );
         let end_x = coords.index_to_x(horizon);
         let theme = ui.active_theme();
+        let (up_line, up_fill) = crate::config::ChartConfig::price_target_colors(
+            self.config.price_target_positive_color,
+            theme.chart.candle_up,
+        );
+        let (down_line, down_fill) = crate::config::ChartConfig::price_target_colors(
+            self.config.price_target_negative_color,
+            theme.chart.candle_down,
+        );
+        let (dash, gap) = crate::model::LineStyle::Dotted
+            .dash_pattern()
+            .expect("dotted lines have a dash pattern");
         let painter = ui.painter().with_clip_rect(coords.rect);
         let mut levels = [
             ("High", targets.high),
@@ -167,22 +182,50 @@ impl Chart {
         });
         let mut label_bottom = label_top.max(coords.rect.top());
         let mut lines = Vec::new();
+        // The area between the projections on each side of the publication close.
+        let y = |price| coords.price.price_to_y(price);
+        for (fill, top, bottom, drawn) in [
+            (
+                up_fill,
+                targets.high,
+                targets.low.max(reference.close),
+                targets.high > reference.close,
+            ),
+            (
+                down_fill,
+                targets.high.min(reference.close),
+                targets.low,
+                targets.low < reference.close,
+            ),
+        ] {
+            let points = vec![
+                origin,
+                Pos2::new(end_x, y(top)),
+                Pos2::new(end_x, y(bottom)),
+            ];
+            if drawn && fill.a() > 0 && points.iter().all(|point| point.is_finite()) {
+                lines.push(egui::Shape::convex_polygon(points, fill, Stroke::NONE));
+            }
+        }
         let formatter = self.series_label_formatter(super::SeriesId::MAIN, PriceScaleMode::Normal);
         for (position, (name, price)) in levels.into_iter().enumerate() {
             let end = Pos2::new(end_x, coords.price.price_to_y(price));
             if !end.is_finite() || !origin.is_finite() {
                 continue;
             }
-            let color = if price > last.close {
-                theme.chart.candle_up
-            } else if price < last.close {
-                theme.chart.candle_down
+            let color = if price > reference.close {
+                up_line
+            } else if price < reference.close {
+                down_line
             } else {
                 theme.ui.text_secondary
             };
-            lines.push(egui::Shape::line_segment(
-                [origin, end],
+            lines.extend(crate::painting::dashed_line::dashed_polyline_shapes(
+                &[origin, end],
                 Stroke::new(1.5, color),
+                dash,
+                gap,
+                coords.rect,
             ));
             let decimals = self
                 .instrument()
@@ -270,6 +313,26 @@ fn percent_change(close: f64, target: f64) -> Option<f64> {
     change.is_finite().then_some(change)
 }
 
+/// The close of the last bar opening before the publication day's end in UTC, as replay
+/// cutoffs count it, or the first bar with a value when the history starts later.
+fn publication_bar(
+    bars: &[crate::model::Bar],
+    published: chrono::NaiveDate,
+) -> Option<(usize, &crate::model::Bar)> {
+    let end = published.succ_opt()?.and_hms_opt(0, 0, 0)?.and_utc();
+    let before = bars.partition_point(|bar| bar.time < end);
+    bars[..before]
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, bar)| !bar.is_whitespace())
+        .or_else(|| {
+            bars.iter()
+                .enumerate()
+                .find(|(_, bar)| !bar.is_whitespace())
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,6 +369,238 @@ mod tests {
             analysts: 12,
             published,
             horizon: published + chrono::TimeDelta::days(365),
+        }
+    }
+
+    /// Publication colours and dotted projections use the publication close; percentages keep
+    /// using the latest close. Here bar 79 (2024-02-01) closes at 130 and the last at 100.
+    #[test]
+    fn targets_are_drawn_from_their_publication_close_in_their_colours() {
+        use crate::theme::Theme;
+        use egui::Color32;
+
+        let ctx = egui::Context::default();
+        let feed = Arc::new(Feed::default());
+        let mut highs = [100.0; 100];
+        highs[79] = 130.0;
+        let mut chart = crate::widget::ChartBuilder::new()
+            .with_feed(feed.clone())
+            .with_symbol("A")
+            .build();
+        chart.set_data(
+            SeriesId::MAIN,
+            test_frames::chart(&[95.0], &highs)
+                .state
+                .data()
+                .bars
+                .clone(),
+        );
+        chart.set_timeframe(crate::model::Timeframe::Day1);
+        chart.set_feed_paused(true);
+        chart.set_price_targets_visible(true);
+        chart.pump_targets(&ctx);
+        feed.0.lock().unwrap().pop().unwrap().1.send(Ok(targets()));
+        chart.pump_targets(&ctx);
+        test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+        let horizon = chart
+            .time_to_index(targets().horizon.and_hms_opt(0, 0, 0).unwrap().and_utc())
+            .unwrap() as f32;
+        let label = |shapes: &[egui::Shape], prefix: &str| {
+            shapes
+                .iter()
+                .find_map(|shape| match shape {
+                    egui::Shape::Text(text) if text.galley.text().starts_with(prefix) => {
+                        Some(text.galley.job.sections[0].format.color)
+                    }
+                    _ => None,
+                })
+                .expect(prefix)
+        };
+        let dashes = |shapes: &[egui::Shape], color| {
+            shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::LineSegment { points, stroke }
+                        if stroke.width == 1.5 && stroke.color == color =>
+                    {
+                        Some(*points)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let fills = |shapes: &[egui::Shape], x: f32| {
+            shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Path(path)
+                        if path.closed
+                            && path.points.len() == 3
+                            && (path.points[0].x - x).abs() < 0.5 =>
+                    {
+                        Some(path.fill)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        for (time, theme, fill) in [
+            (
+                0.1,
+                Theme::dark(),
+                Color32::from_rgba_premultiplied(48, 11, 14, 51),
+            ),
+            (
+                0.2,
+                Theme::high_contrast(),
+                Color32::from_rgba_premultiplied(51, 19, 19, 51),
+            ),
+        ] {
+            chart.set_theme(&ctx, &theme);
+            chart.set_visible_logical_range(crate::model::LogicalRange::new(0.0, horizon + 200.0));
+            let shapes = test_frames::shapes(&ctx, &mut chart, time, vec![]);
+            let x = chart.index_to_x(79.0).unwrap();
+            for text in [
+                "High 120.00 (+20.00%)",
+                "Average 110.00 (+10.00%)",
+                "Low 80.00 (-20.00%)",
+            ] {
+                assert_eq!(label(&shapes, text), theme.chart.candle_down, "{text}");
+            }
+            let dots = dashes(&shapes, theme.chart.candle_down);
+            assert_eq!(dots.iter().filter(|p| (p[0].x - x).abs() < 0.5).count(), 3);
+            assert!(
+                dots.iter()
+                    .all(|p| p[0].x >= x - 0.5 && p[0].distance(p[1]) <= 2.001)
+            );
+            assert_eq!(fills(&shapes, x), [fill]);
+        }
+        let theme = Theme::dark();
+        chart.set_theme(&ctx, &theme);
+        chart.set_price_targets_visible(false);
+        let shapes = test_frames::shapes(&ctx, &mut chart, 0.3, vec![]);
+        assert!(dashes(&shapes, theme.chart.candle_down).is_empty());
+        assert!(fills(&shapes, chart.index_to_x(79.0).unwrap()).is_empty());
+        chart.set_price_targets_visible(true);
+        chart.reload_price_targets();
+        chart.pump_targets(&ctx);
+        feed.0
+            .lock()
+            .unwrap()
+            .pop()
+            .unwrap()
+            .1
+            .send(Ok(PriceTargets {
+                high: 150.0,
+                average: 140.0,
+                ..targets()
+            }));
+        chart.pump_targets(&ctx);
+        let mut settings = crate::widget::settings::ChartSettingsState::from_chart(&chart);
+        settings.price_target_positive_color = Some(Color32::from_rgba_unmultiplied(0, 0, 255, 51));
+        settings.apply_to_chart(&mut chart).unwrap();
+        chart.set_visible_logical_range(crate::model::LogicalRange::new(0.0, horizon + 200.0));
+        let shapes = test_frames::shapes(&ctx, &mut chart, 0.4, vec![]);
+        let x = chart.index_to_x(79.0).unwrap();
+        for text in ["High 150.00 (+50.00%)", "Average 140.00 (+40.00%)"] {
+            assert_eq!(label(&shapes, text), Color32::BLUE);
+        }
+        assert_eq!(
+            label(&shapes, "Low 80.00 (-20.00%)"),
+            theme.chart.candle_down
+        );
+        assert_eq!(
+            dashes(&shapes, Color32::BLUE)
+                .iter()
+                .filter(|p| (p[0].x - x).abs() < 0.5)
+                .count(),
+            2
+        );
+        assert_eq!(
+            fills(&shapes, x),
+            [
+                Color32::from_rgba_premultiplied(0, 0, 51, 51),
+                Color32::from_rgba_premultiplied(48, 11, 14, 51),
+            ]
+        );
+        let saved = serde_json::to_value(chart.snapshot().unwrap()).unwrap();
+        let mut old = saved.clone();
+        for group in ["config", "settings"] {
+            for key in ["price_target_positive_color", "price_target_negative_color"] {
+                old[group].as_object_mut().unwrap().remove(key).expect(key);
+            }
+        }
+        for (time, document, color, fill) in [
+            (
+                0.5,
+                old,
+                theme.chart.candle_up,
+                Color32::from_rgba_premultiplied(2, 31, 26, 51),
+            ),
+            (
+                0.7,
+                saved,
+                Color32::BLUE,
+                Color32::from_rgba_premultiplied(0, 0, 51, 51),
+            ),
+        ] {
+            chart
+                .restore(&serde_json::from_value(document).unwrap())
+                .unwrap();
+            test_frames::frame(&ctx, &mut chart, time, vec![]);
+            chart.set_visible_logical_range(crate::model::LogicalRange::new(0.0, horizon + 200.0));
+            let shapes = test_frames::shapes(&ctx, &mut chart, time + 0.1, vec![]);
+            assert_eq!(label(&shapes, "High 150"), color);
+            assert_eq!(fills(&shapes, chart.index_to_x(79.0).unwrap())[0], fill);
+        }
+        // A fully transparent choice holds no RGB: only its fill disappears. The other side's
+        // chosen hue and opacity remain independent, including through theme changes.
+        chart.config_mut().price_target_positive_color = Color32::TRANSPARENT;
+        chart.config_mut().price_target_negative_color =
+            Color32::from_rgba_unmultiplied(255, 255, 0, 51);
+        chart.set_theme(&ctx, &Theme::high_contrast());
+        chart.set_visible_logical_range(crate::model::LogicalRange::new(0.0, horizon + 200.0));
+        let shapes = test_frames::shapes(&ctx, &mut chart, 0.9, vec![]);
+        assert_eq!(
+            label(&shapes, "High 150"),
+            Theme::high_contrast().chart.candle_up
+        );
+        assert_eq!(label(&shapes, "Low 80"), Color32::YELLOW);
+        assert_eq!(
+            fills(&shapes, chart.index_to_x(79.0).unwrap()),
+            [Color32::from_rgba_premultiplied(51, 51, 0, 51)]
+        );
+    }
+
+    /// Midnight of the next day is excluded, missing bars are skipped, and short or closed-market
+    /// histories retain the first or last close they actually hold.
+    #[test]
+    fn publication_bar_is_the_last_bar_opening_on_the_publication_day() {
+        use crate::model::Bar;
+        use chrono::{NaiveDate, TimeDelta, TimeZone, Utc};
+        let start = Utc.with_ymd_and_hms(2024, 1, 30, 0, 0, 0).unwrap();
+        for (date, whitespace, expected) in [
+            ((2024, 2, 1), None, Some(2)),
+            ((2024, 2, 1), Some(2), Some(1)),
+            ((2024, 1, 1), None, Some(0)),
+            ((2024, 3, 1), None, Some(4)),
+        ] {
+            let bars: Vec<_> = (0..5)
+                .map(|i| {
+                    let time = start + TimeDelta::days(i);
+                    if Some(i) == whitespace {
+                        Bar::whitespace(time)
+                    } else {
+                        Bar::new(time, 100.0, 105.0, 95.0, 100.0 + i as f64, 1.0)
+                    }
+                })
+                .collect();
+            let published = NaiveDate::from_ymd_opt(date.0, date.1, date.2).unwrap();
+            assert_eq!(
+                publication_bar(&bars, published).map(|(index, _)| index),
+                expected,
+                "{date:?}, whitespace {whitespace:?}"
+            );
         }
     }
 

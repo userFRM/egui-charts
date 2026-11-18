@@ -72,6 +72,11 @@ fn pixel_conflation_threshold() -> Option<f32> {
     Some(1.0)
 }
 
+/// Layouts saved before the analyst target colours existed use the theme's colours.
+fn theme_color() -> Color32 {
+    Color32::PLACEHOLDER
+}
+
 /// Appearance of the price axis: its border, tick marks and which labels it shows. It applies to
 /// the main and series price axes; value tag settings also apply to study panes.
 ///
@@ -455,6 +460,17 @@ pub struct ChartConfig {
     pub show_extended_hours: bool,
     /// Extended-hours fill. `PLACEHOLDER` uses the active theme accent at low opacity.
     pub extended_hours_color: Color32,
+    /// Analyst targets above the close on their publication date: their lines and labels, drawn
+    /// opaque, and the area between those lines and that close, filled at this colour's
+    /// opacity. `PLACEHOLDER` uses the active theme's up candle colour, filled at 20% opacity. A
+    /// fully transparent colour fills nothing and draws the lines in the theme's colour.
+    #[serde(default = "theme_color")]
+    pub price_target_positive_color: Color32,
+    /// Analyst targets below the close on their publication date, as
+    /// [`price_target_positive_color`](Self::price_target_positive_color) with the theme's down
+    /// candle colour.
+    #[serde(default = "theme_color")]
+    pub price_target_negative_color: Color32,
     /// Whether to show the symbol watermark.
     pub show_watermark: bool,
     /// Text of the symbol watermark; `\n` starts another line. `None` shows the symbol and the
@@ -607,6 +623,8 @@ impl Default for ChartConfig {
             session_config: None,
             show_extended_hours: true,
             extended_hours_color: Color32::PLACEHOLDER,
+            price_target_positive_color: Color32::PLACEHOLDER,
+            price_target_negative_color: Color32::PLACEHOLDER,
             // Watermark disabled by default
             show_watermark: false,
             watermark_text: None,
@@ -621,6 +639,19 @@ impl Default for ChartConfig {
 }
 
 impl ChartConfig {
+    /// The line and fill colours on one side of the publication close, using that side's theme
+    /// candle colour until a colour is chosen.
+    pub(crate) fn price_target_colors(color: Color32, themed: Color32) -> (Color32, Color32) {
+        if color == Color32::PLACEHOLDER {
+            (themed, crate::model::HlcAreaStyle::fill_tint(themed, 51))
+        } else if color.a() == 0 {
+            // A fully transparent colour holds no RGB, so it has no opaque form.
+            (themed, Color32::TRANSPARENT)
+        } else {
+            (color.to_opaque(), color)
+        }
+    }
+
     /// Apply the theme's background, grid, axis text, candle, session break and watermark
     /// colours to this configuration.
     ///

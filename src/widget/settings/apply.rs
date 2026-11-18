@@ -193,6 +193,8 @@ impl ChartSettingsState {
                     .unwrap_or_default(),
             },
             show_price_targets: chart.price_targets_visible(),
+            price_target_positive_color: Some(config.price_target_positive_color),
+            price_target_negative_color: Some(config.price_target_negative_color),
             ..Self::default()
         };
         settings.candle_colors.body_up = config.bullish_color;
@@ -630,6 +632,12 @@ impl ChartSettingsState {
         }
         if let Some(show) = self.show_session_breaks {
             config.show_session_breaks = show;
+        }
+        if let Some(color) = self.price_target_positive_color {
+            config.price_target_positive_color = color;
+        }
+        if let Some(color) = self.price_target_negative_color {
+            config.price_target_negative_color = color;
         }
 
         set_unless_resolved(

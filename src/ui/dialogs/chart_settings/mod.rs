@@ -100,6 +100,8 @@ struct ColorPickerStates {
     symbol_value: ColorPickerState,
     study_value: ColorPickerState,
     extended_value: ColorPickerState,
+    price_target_positive: ColorPickerState,
+    price_target_negative: ColorPickerState,
 }
 
 impl Default for SettingsDialog {
@@ -151,6 +153,8 @@ impl SettingsDialog {
                 extended_value: ColorPickerState::new(
                     settings.scales_and_lines.extended_session_price_color,
                 ),
+                price_target_positive: ColorPickerState::default(),
+                price_target_negative: ColorPickerState::default(),
             },
             margin_top_str: format!("{}", settings.margins.top_percent),
             margin_bottom_str: format!("{}", settings.margins.bottom_percent),
@@ -335,6 +339,28 @@ impl SettingsDialog {
                 &mut self.color_picker_states.crosshair,
                 self.settings.crosshair.color,
                 theme.chart.crosshair_line,
+            ),
+            (
+                &mut self.color_picker_states.price_target_positive,
+                self.settings
+                    .price_target_positive_color
+                    .unwrap_or(Color32::PLACEHOLDER),
+                crate::config::ChartConfig::price_target_colors(
+                    Color32::PLACEHOLDER,
+                    theme.chart.candle_up,
+                )
+                .1,
+            ),
+            (
+                &mut self.color_picker_states.price_target_negative,
+                self.settings
+                    .price_target_negative_color
+                    .unwrap_or(Color32::PLACEHOLDER),
+                crate::config::ChartConfig::price_target_colors(
+                    Color32::PLACEHOLDER,
+                    theme.chart.candle_down,
+                )
+                .1,
             ),
         ] {
             picker.sel_color = if color == Color32::PLACEHOLDER {
@@ -769,6 +795,12 @@ impl SettingsDialog {
                 let session_breaks = template
                     .show_session_breaks
                     .or(self.settings.show_session_breaks);
+                let positive = template
+                    .price_target_positive_color
+                    .or(self.settings.price_target_positive_color);
+                let negative = template
+                    .price_target_negative_color
+                    .or(self.settings.price_target_negative_color);
                 // The whole bars of the margin shown, or its pixels, are an unedited margin, which
                 // stays as shown.
                 let shown = &self.settings.margins;
@@ -788,6 +820,8 @@ impl SettingsDialog {
                 self.settings.scales_and_lines.price_line_source = line_source;
                 self.settings.scales_and_lines.thousands_sep = separator;
                 self.settings.show_session_breaks = session_breaks;
+                self.settings.price_target_positive_color = positive;
+                self.settings.price_target_negative_color = negative;
                 self.settings.margins.right_bars = right_bars;
                 // A template saved before volume candles had a style shows what they drew, which
                 // Ok then applies with any edits made before it.
@@ -858,6 +892,8 @@ impl SettingsDialog {
                 chart_type_params: Some(Default::default()),
                 price_source: Some(Default::default()),
                 show_session_breaks: Some(false),
+                price_target_positive_color: Some(Color32::PLACEHOLDER),
+                price_target_negative_color: Some(Color32::PLACEHOLDER),
                 ..Default::default()
             };
             // What a new chart holds, where the default settings hold no choice.
@@ -940,7 +976,11 @@ mod tests {
                 crate::theme::apply_to_egui(&ctx, &app);
                 let mut chart = crate::ChartBuilder::new().with_theme(theme.clone()).build();
                 let expected = ChartSettingsState::from_chart(&chart);
+                chart.config_mut().price_target_positive_color = Color32::RED;
+                chart.config_mut().price_target_negative_color = Color32::GREEN;
                 let mut settings = expected.clone();
+                settings.price_target_positive_color = Some(Color32::RED);
+                settings.price_target_negative_color = Some(Color32::GREEN);
                 settings.scales_appearance.text_color = Color32::RED;
                 settings.grid_lines.horizontal_color = Color32::GREEN;
                 settings.grid_lines.vertical_color = Color32::BLUE;
@@ -1032,6 +1072,36 @@ mod tests {
                         "vertical crosshair",
                         chart.chart_options().crosshair.vert_line_color,
                         Color32::PLACEHOLDER,
+                    ),
+                    (
+                        "analyst target positive",
+                        chart.config().price_target_positive_color,
+                        Color32::PLACEHOLDER,
+                    ),
+                    (
+                        "analyst target negative",
+                        chart.config().price_target_negative_color,
+                        Color32::PLACEHOLDER,
+                    ),
+                    (
+                        "analyst target positive swatch",
+                        dialog.color_picker_states.price_target_positive.sel_color,
+                        Color32::from_rgba_unmultiplied(
+                            theme.chart.candle_up.r(),
+                            theme.chart.candle_up.g(),
+                            theme.chart.candle_up.b(),
+                            51,
+                        ),
+                    ),
+                    (
+                        "analyst target negative swatch",
+                        dialog.color_picker_states.price_target_negative.sel_color,
+                        Color32::from_rgba_unmultiplied(
+                            theme.chart.candle_down.r(),
+                            theme.chart.candle_down.g(),
+                            theme.chart.candle_down.b(),
+                            51,
+                        ),
                     ),
                     (
                         "crosshair swatch",
@@ -1999,7 +2069,11 @@ mod tests {
                                 "tab labels must stay in the sidebar at {size:?}"
                             );
                         }
-                        if *tab == SettingsTab::Symbol && pass == 2 {
+                        // The target colour rows can put the candle heading below the fold.
+                        if *tab == SettingsTab::Symbol
+                            && pass == 2
+                            && (size.y >= TALLEST_TAB_HEIGHT || heading.is_some())
+                        {
                             assert_eq!(heading, Some(theme.text.small));
                         }
                     }
@@ -2305,7 +2379,7 @@ mod tests {
     }
 
     /// A template saved before the right margin could hold part of a bar, and before the font
-    /// family, the thousands separator, session breaks and the bar of the last price could be
+    /// family, the thousands separator, session breaks, analyst target colours and the bar of the last price could be
     /// chosen, holds the whole bars of a margin and none of those choices. Loaded on a chart
     /// with a margin in bars or in pixels, it shows what it can of the chart's and Ok keeps the
     /// chart's margin and choices.
@@ -2314,9 +2388,15 @@ mod tests {
         use crate::model::PriceLineSource;
         use crate::widget::{SeriesId, settings::ThousandsSeparator, test_frames::chart};
         use egui::FontFamily;
+        // Serialized on origin/main d61351c84 with analyst targets enabled, before colour fields.
+        let older = r#"{"chart_type":"Candles","chart_type_params":null,"price_source":null,"candle_colors":{"color_by_previous_close":false,"show_body":true,"show_border":false,"show_wick":true,"body_up":[8,153,129,255],"body_down":[242,54,69,255],"border_up":[8,153,129,255],"border_down":[242,54,69,255],"wick_up":[8,153,129,255],"wick_down":[242,54,69,255]},"precision":"Default","timezone":"UTC","show_price_targets":true,"adjust_for_dividends":false,"order_flow":{"show_heatmap":false,"heatmap":{"brightness":1.0,"lower_cutoff":0.0,"full_intensity_size":null},"show_order_book":false,"order_book":{"filter":{"min_size":0.0,"min_age":null,"max_age":null,"exclude_participants":[]},"profile":"Total","quantity_unit":null,"tiers":null,"tier_colors":null},"show_volume_bubbles":false,"volume_bubbles":{"min_diameter":4.0,"max_diameter":40.0,"opacity":128,"buy_color":[8,153,129,255],"sell_color":[242,54,69,255],"neutral_color":[150,150,150,255],"color_by":"Side","scaling_mode":"Area","clamp_std_devs":null,"show_border":false,"border_color":[100,100,100,100],"min_size_filter":null,"grouping":"Ungrouped","shaded":true}},"status_line":{"show_logo":true,"show_symbol":true,"title_as_description":true,"show_market_status":true,"show_quote_boxes":true,"show_indicator_titles":true,"show_indicator_inputs":true,"show_indicator_values":true,"show_ohlc":true,"show_change":true,"show_change_percent":true,"show_volume":true,"show_last_day_change":false,"indicator_background_opacity":60},"scales_and_lines":{"axis_layout":{"side":null,"hide_unused":true},"show_currency":true,"show_unit":true,"show_scale_mode_buttons":true,"show_plus_button":true,"allow_label_overlap":false,"lock_price_to_bar_ratio":false,"price_to_bar_ratio":1.0,"symbol_price_color":null,"show_study_values":true,"study_value_color":null,"show_symbol_name":false,"show_study_names":false,"show_extended_session_price":true,"extended_session_price_color":[251,142,1,255],"auto_scale":true,"log_scale":false,"percentage_scale":false,"invert_scale":false,"price_scale_left":false,"show_last_price_label":true,"show_prev_close_label":false,"show_price_line":true,"price_line_source":null,"thousands_sep":null,"show_countdown":true,"show_bid_ask":false,"show_high_low":false,"show_prev_close":false},"chart_basic_styles":{"background_type":"Solid","background_color":[64,254,0,128],"background_gradient_top":[64,254,0,128],"background_gradient_bottom":[64,254,0,128]},"grid_lines":{"mode":"Both","horizontal_color":[34,34,34,255],"vertical_color":[34,34,34,255]},"crosshair":{"color":[184,184,184,255],"line_width":1.0,"line_style":"Dashed"},"watermark":{"mode":"ReplayMode","color":[33,33,33,51]},"scales_appearance":{"text_color":[184,184,184,255],"font_size":12,"lines_color":[0,0,0,0]},"btns":{"navigation":"Hidden","pane":"VisibleOnMouseOver"},"margins":{"top_percent":10.0,"bottom_percent":10.0,"right_bars":2.5},"trading":{"instant_orders":false,"bid_ask_labels":false,"play_execution_sound":false,"execution_sound":"","execution_sound_volume":1.0,"notifications":"All","show_positions":true,"position_pnl":true,"position_pnl_unit":"Money","reverse_button":true,"extend_lines":true,"label_alignment":"Right","include_in_image":false,"show_orders":true,"bracket_pnl":true,"bracket_pnl_unit":"Money","show_executions":true,"show_execution_labels":true},"alerts":{"play_sound":false,"sound":"","sound_volume":1.0,"show_alerts":true,"show_alert_labels":true,"alert_color":[255,152,0,255],"show_active_only":true,"notification_seconds":20,"close_toasts":true,"desktop_notifications":false},"events":{"show_dividends":true,"show_splits":true,"show_earnings":false,"show_earnings_breaks":false,"show_economic_events":false,"show_news":true,"show_news_notifications":false,"show_ideas":true}}"#;
         // The margin of a new chart, and 60 pixels at the default bar spacing of 6 points; the
         // margin row after loading the template.
-        for (pixels, row) in [(None, 2.5), (Some(60.0), 2.0)] {
+        for (pixels, row, literal) in [
+            (None, 2.5, None),
+            (Some(60.0), 2.0, None),
+            (None, 2.5, Some(older)),
+        ] {
             let mut saved =
                 serde_json::to_value(ChartSettingsState::from_chart(&chart(&[100.0], &[110.0])))
                     .unwrap();
@@ -2326,6 +2406,8 @@ mod tests {
             .unwrap();
             for (group, choice) in [
                 ("", "show_session_breaks"),
+                ("", "price_target_positive_color"),
+                ("", "price_target_negative_color"),
                 ("/scales_and_lines", "price_line_source"),
                 ("/scales_and_lines", "thousands_sep"),
                 ("/scales_appearance", "font_family"),
@@ -2333,12 +2415,17 @@ mod tests {
                 let group = saved.pointer_mut(group).unwrap().as_object_mut().unwrap();
                 group.remove(choice).expect(choice);
             }
+            if let Some(document) = literal {
+                saved = serde_json::from_str(document).unwrap();
+            }
             let mut options = crate::config::ChartOptions::default();
             options.time_scale.right_offset_pixels = pixels;
             let mut chart = chart(&[100.0], &[110.0]).with_chart_options(options);
             chart.config_mut().axis_font_family = FontFamily::Monospace;
             chart.config_mut().thousands_sep = Some('\'');
             chart.config_mut().show_session_breaks = true;
+            chart.config_mut().price_target_positive_color = Color32::BLUE;
+            chart.config_mut().price_target_negative_color = Color32::YELLOW;
             let style = chart.series_style_mut(SeriesId::MAIN).unwrap();
             style.price_line_source = PriceLineSource::LastVisible;
             let margin = chart.chart_options().time_scale.clone();
@@ -2355,11 +2442,15 @@ mod tests {
             assert_eq!(
                 (
                     shown.show_session_breaks,
+                    shown.price_target_positive_color,
+                    shown.price_target_negative_color,
                     shown.scales_and_lines.price_line_source,
                     shown.scales_and_lines.thousands_sep,
                 ),
                 (
                     Some(true),
+                    Some(Color32::BLUE),
+                    Some(Color32::YELLOW),
                     Some(PriceLineSource::LastVisible),
                     Some(ThousandsSeparator::Apostrophe),
                 ),
@@ -2371,6 +2462,13 @@ mod tests {
             assert_eq!(config.axis_font_family, FontFamily::Monospace);
             assert_eq!(config.thousands_sep, Some('\''));
             assert!(config.show_session_breaks);
+            assert_eq!(
+                (
+                    config.price_target_positive_color,
+                    config.price_target_negative_color
+                ),
+                (Color32::BLUE, Color32::YELLOW)
+            );
             let style = chart.series_style(SeriesId::MAIN).unwrap();
             assert_eq!(style.price_line_source, PriceLineSource::LastVisible);
         }
