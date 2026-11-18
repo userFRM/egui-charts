@@ -1080,7 +1080,7 @@ mod tests {
     }
 
     /// Instrument metadata, and a precision chosen over it, set the decimals of the axis, the
-    /// last price tag and the status line alike.
+    /// last price tag, the status line and the hover tooltip alike.
     #[test]
     fn tick_metadata_controls_axis_and_legend_decimals() {
         use crate::model::Instrument;
@@ -1167,6 +1167,17 @@ mod tests {
                     );
                 }
             }
+            chart.chart_options.tooltip.on_long_press = false;
+            let pointer = Pos2::new(chart.get_chart_mapping().idx_to_x(99), plot.center().y);
+            let hovered = shapes(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(pointer)]);
+            assert!(
+                hovered.iter().any(|shape| matches!(shape,
+                    Shape::Text(text) if text.galley.text() == expected
+                        && text.pos.x < plot.right()
+                        && text.pos.y > plot.top() + 50.0
+                )),
+                "tooltip {expected}"
+            );
         }
     }
 
