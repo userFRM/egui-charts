@@ -1113,7 +1113,8 @@ impl Chart {
         let Some(tick) = self.instrument().and_then(|i| i.tick_size) else {
             return;
         };
-        let mut unavailable = None;
+        // Why the heatmap's history and the book profile cannot filter, each reason said once.
+        let mut unavailable = Vec::new();
         if let (Some(heatmap), Some(history)) = (&link.heatmap, &link.depth_history) {
             let mut heatmap = heatmap.borrow_mut();
             heatmap.config = link.heatmap_config;
@@ -1127,11 +1128,16 @@ impl Chart {
                 &link.book_view,
                 [self.config.bullish_color, self.config.bearish_color],
             );
-            unavailable = (history.config().orders.is_some() && link.order_queue.is_none())
-                .then_some(crate::data::OrderFilterUnavailable::AggregateDepth);
+            if let Some(filter) = &history.config().orders {
+                let applies = link.order_queue.as_ref().map_or(
+                    Err(crate::data::OrderFilterUnavailable::AggregateDepth),
+                    |queue| queue.check_filter(filter),
+                );
+                unavailable.extend(applies.err());
+            }
         }
-        if link.book_visible.unwrap_or(link.heatmap.is_some()) {
-            unavailable = crate::chart::overlays::render_book_profile(
+        if link.book_visible.unwrap_or(link.heatmap.is_some())
+            && let Err(reason) = crate::chart::overlays::render_book_profile(
                 painter,
                 mapping,
                 link.order_book.as_ref(),
@@ -1140,24 +1146,29 @@ impl Chart {
                 &link.book_view,
                 [self.config.bullish_color, self.config.bearish_color],
             )
-            .err()
-            .or(unavailable);
+            && !unavailable.contains(&reason)
+        {
+            unavailable.push(reason);
         }
-        if let Some(reason) = unavailable {
-            painter.text(
-                mapping.rect.right_top() + egui::vec2(-8.0, 8.0),
-                egui::Align2::RIGHT_TOP,
-                crate::localization::format_text(
-                    painter.ctx(),
-                    "Order-level depth unavailable: {0}",
-                    &[(
-                        "0",
-                        crate::localization::text(painter.ctx(), reason.to_string()),
-                    )],
-                ),
-                egui::FontId::proportional(11.0),
-                painter.ctx().active_theme().ui.warning,
-            );
+        // One line per reason, the heatmap's first, each below the last.
+        let mut top = mapping.rect.top() + 8.0;
+        for reason in unavailable {
+            top = painter
+                .text(
+                    egui::pos2(mapping.rect.right() - 8.0, top),
+                    egui::Align2::RIGHT_TOP,
+                    crate::localization::format_text(
+                        painter.ctx(),
+                        "Order-level depth unavailable: {0}",
+                        &[(
+                            "0",
+                            crate::localization::text(painter.ctx(), reason.to_string()),
+                        )],
+                    ),
+                    egui::FontId::proportional(11.0),
+                    painter.ctx().active_theme().ui.warning,
+                )
+                .bottom();
         }
     }
 
