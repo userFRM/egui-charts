@@ -470,10 +470,9 @@ pub trait Indicator: Send {
 
     /// Visible logical slots, including the empty space beyond the last bar. Supplied before
     /// autoscaling, alongside `set_visible_range`, so projected levels can follow the right
-    /// edge. Returns whether calculation must run again. The default ignores the viewport.
-    fn set_visible_logical_range(&mut self, range: crate::model::LogicalRange) -> bool {
+    /// edge without calculating again. The default ignores the viewport.
+    fn set_visible_logical_range(&mut self, range: crate::model::LogicalRange) {
         let _ = range;
-        false
     }
 
     /// The chart's current interval, supplied when added and when the interval changes.

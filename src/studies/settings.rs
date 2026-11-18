@@ -1232,11 +1232,9 @@ impl Indicator for ConfiguredStudy {
             .set_visible_range(source_bars(&self.spans, &range))
             && !self.spans.is_empty()
     }
-    fn set_visible_logical_range(&mut self, range: crate::model::LogicalRange) -> bool {
+    fn set_visible_logical_range(&mut self, range: crate::model::LogicalRange) {
         if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
-            self.study.set_visible_logical_range(range)
-        } else {
-            false
+            self.study.set_visible_logical_range(range);
         }
     }
     fn set_bar_clock(&mut self, clock: &crate::model::BarClock) -> bool {

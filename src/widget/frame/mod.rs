@@ -1022,8 +1022,8 @@ impl Chart {
             .iter_mut()
             .enumerate()
             .filter_map(|(at, study)| {
-                let changed = study.set_visible_range(start_idx..end_idx);
-                (study.set_visible_logical_range(logical) || changed).then_some(at)
+                study.set_visible_logical_range(logical);
+                study.set_visible_range(start_idx..end_idx).then_some(at)
             })
             .collect();
         if !changed.is_empty() {

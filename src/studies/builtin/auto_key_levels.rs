@@ -627,11 +627,16 @@ impl Indicator for AutoKeyLevels {
         self.custom && self.anchor != CustomAnchor::Custom
     }
 
-    fn set_visible_logical_range(&mut self, range: crate::model::LogicalRange) -> bool {
+    fn set_visible_logical_range(&mut self, range: crate::model::LogicalRange) {
         let end = range.to_strict_range().1;
-        let changed = self.right_edge != Some(end);
-        self.right_edge = Some(end);
-        changed
+        if self.right_edge != Some(end) {
+            self.right_edge = Some(end);
+            // Only the right ends follow the viewport; the levels stay as calculated.
+            let end = end.max(self.stepper.state().source);
+            for zone in &mut self.zones {
+                zone.bars.end = end;
+            }
+        }
     }
 
     fn legend_lines(&self) -> Vec<usize> {
@@ -1067,10 +1072,10 @@ mod tests {
         let mut study = AutoKeyLevels::new();
         for start in [0, 1] {
             study.set_input("start", Choice(start)).unwrap();
+            study.calculate(&data);
             for end in [40, 80, 30] {
                 let range = crate::model::LogicalRange::new(0.0, (end - 1) as f32);
-                assert!(study.set_visible_logical_range(range));
-                study.calculate(&data);
+                study.set_visible_logical_range(range);
                 for zone in study.zones() {
                     let first = if start == 1 {
                         5
@@ -1081,7 +1086,6 @@ mod tests {
                     };
                     assert_eq!(zone.bars, first..end);
                 }
-                assert!(!study.set_visible_logical_range(range));
             }
         }
     }
