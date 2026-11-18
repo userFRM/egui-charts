@@ -5804,8 +5804,10 @@ fn heatmap_order_filters_without_their_order_data_say_so() {
     ] {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
-        let mut config = DepthHistoryConfig::default();
-        config.orders = Some(filter.clone());
+        let config = DepthHistoryConfig {
+            orders: Some(filter.clone()),
+            ..Default::default()
+        };
         chart.set_depth_history(Some(DepthHistory::new(config).unwrap()));
         chart.set_liquidity_heatmap(true);
         chart.set_order_book_visible(profile.is_some());
