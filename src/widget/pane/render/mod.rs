@@ -300,6 +300,7 @@ impl Chart {
             )
             .inner;
         let touch_readout = crate::widget::interaction::touch_crosshair(ui, response.id);
+        let touch_tracking = touch_readout.tracking(&self.chart_options.tooltip);
 
         // A key handled by the price frame can remove a pane and shift the ones after it.
         let recorded = panes.len();
@@ -725,10 +726,7 @@ impl Chart {
                     drawn_axes.push(assignment);
                 }
                 let member_map = panel.price_map.expect("member mapping");
-                let pointer = if touch_readout.touch_input
-                    && self.chart_options.tooltip.enabled
-                    && self.chart_options.tooltip.on_long_press
-                {
+                let pointer = if touch_tracking {
                     touch_readout.position
                 } else {
                     self.axis_hover.map(|(pos, _)| pos).or_else(|| {
@@ -980,12 +978,7 @@ impl Chart {
                         .iter()
                         .filter(|(id, _)| *id == pane_id)
                         .fold(pane_response, |pane, (_, plot)| pane.union(plot.clone()));
-                    if self.chart_options.tooltip.enabled
-                        && self.chart_options.tooltip.on_long_press
-                        && touch_readout.touch_input
-                        && !drawing_tool_active
-                        && !eraser_mode
-                    {
+                    if touch_tracking && !drawing_tool_active && !eraser_mode {
                         pane_response
                             .flags
                             .remove(egui::response::Flags::LONG_TOUCHED);

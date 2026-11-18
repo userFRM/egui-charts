@@ -989,38 +989,39 @@ fn crosshair_marker_is_suppressed_for_hidden_and_missing_bars() {
 }
 
 /// Held values appear only for a pressed pointer and disappear on release or disable. A
-/// hidden crosshair keeps them and shows no axis label while the pointer is held.
+/// hidden crosshair keeps them and shows no axis label while the pointer is held. Without its
+/// own long press, a finger holds values as the mouse button does.
 #[test]
 fn held_values_follow_press_release_and_switch() {
-    for (_, theme) in crate::theme::presets() {
-        let ctx = egui::Context::default();
-        crate::theme::apply_to_egui(&ctx, &theme);
-        let mut chart = chart(&[100.0], &[110.0, 120.0]);
-        chart.config.bullish_color = egui::Color32::BLUE;
-        chart.config.show_ohlc_info = true;
-        chart.chart_options.crosshair.style = crate::config::CrosshairStyle::Hidden;
-        chart.chart_options.tooltip.on_long_press = true;
-        chart.chart_options.tooltip.show_time = false;
-        #[cfg(feature = "studies")]
-        chart.add_indicator(Box::new(crate::studies::SMA::new(3)));
-        frame(&ctx, &mut chart, 0.0, vec![]);
-        let map = chart.get_chart_mapping();
-        let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
-        for (step, enabled, pressed, expected, volume_details) in [
-            (1, true, false, false, false),
-            (2, true, true, true, false),
-            (3, true, true, true, true),
-            (4, true, false, false, false),
-            (5, false, true, false, false),
-            (6, false, false, false, false),
-        ] {
-            chart.set_tooltip_enabled(enabled);
-            chart.chart_options.tooltip.show_volume_details = volume_details;
-            let painted = shapes(
-                &ctx,
-                &mut chart,
-                step as f64 * 0.1,
-                vec![
+    for touch in [false, true] {
+        for (_, theme) in crate::theme::presets() {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut chart = chart(&[100.0], &[110.0, 120.0]);
+            chart.config.bullish_color = egui::Color32::BLUE;
+            chart.config.show_ohlc_info = true;
+            chart.chart_options.crosshair.style = crate::config::CrosshairStyle::Hidden;
+            chart.chart_options.tooltip.on_long_press = true;
+            if touch {
+                chart.chart_options.tooltip.touch_long_press = false;
+            }
+            chart.chart_options.tooltip.show_time = false;
+            #[cfg(feature = "studies")]
+            chart.add_indicator(Box::new(crate::studies::SMA::new(3)));
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.get_chart_mapping();
+            let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+            for (step, enabled, pressed, expected, volume_details) in [
+                (1, true, false, false, false),
+                (2, true, true, true, false),
+                (3, true, true, true, true),
+                (4, true, false, false, false),
+                (5, false, true, false, false),
+                (6, false, false, false, false),
+            ] {
+                chart.set_tooltip_enabled(enabled);
+                chart.chart_options.tooltip.show_volume_details = volume_details;
+                let mut events = vec![
                     Event::PointerMoved(pos),
                     Event::PointerButton {
                         pos,
@@ -1028,53 +1029,70 @@ fn held_values_follow_press_release_and_switch() {
                         pressed,
                         modifiers: Default::default(),
                     },
-                ],
-            );
-            let labels: Vec<_> = painted
-                .iter()
-                .filter_map(|shape| match shape {
-                    Shape::Text(text) => Some(text.galley.text()),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(
-                labels.contains(&"Open"),
-                expected,
-                "step {step}: {labels:?}"
-            );
-            assert_eq!(chart.axis_hover, None, "step {step}");
-            assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
-                if text.galley.text() == "O 100.00" && text.galley.job.sections[1].format.color == egui::Color32::BLUE)));
-            if expected {
-                assert_eq!(
-                    labels.iter().any(|label| label.starts_with("Volume:")),
-                    volume_details && cfg!(feature = "studies"),
-                    "volume study details are opt-in"
-                );
-                assert!(labels.contains(&"Time"));
-                assert!(!labels.contains(&"Change"));
-                assert!(labels.contains(&"Vol"));
-                #[cfg(feature = "studies")]
-                {
-                    assert!(labels.contains(&"SMA"), "other study values remain visible");
-                    assert!(
-                        chart
-                            .study_values_at(50)
-                            .iter()
-                            .any(|row| row.study == "Volume")
+                ];
+                if touch {
+                    events.insert(
+                        0,
+                        Event::Touch {
+                            device_id: egui::TouchDeviceId(1),
+                            id: egui::TouchId(1),
+                            phase: if pressed {
+                                egui::TouchPhase::Start
+                            } else {
+                                egui::TouchPhase::End
+                            },
+                            pos,
+                            force: None,
+                        },
                     );
                 }
-                let legend = labels
+                let painted = shapes(&ctx, &mut chart, step as f64 * 0.1, events);
+                let labels: Vec<_> = painted
                     .iter()
-                    .position(|label| *label == "O 100.00")
-                    .unwrap();
-                let tooltip = labels.iter().position(|label| *label == "Open").unwrap();
-                assert!(
-                    tooltip > legend,
-                    "the floating readout must paint above the legend"
+                    .filter_map(|shape| match shape {
+                        Shape::Text(text) => Some(text.galley.text()),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    labels.contains(&"Open"),
+                    expected,
+                    "touch {touch}, step {step}: {labels:?}"
                 );
+                assert_eq!(chart.axis_hover, None, "touch {touch}, step {step}");
                 assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
-                    if text.galley.text() == "110.00" && text.galley.job.sections[0].format.color == egui::Color32::BLUE)));
+                    if text.galley.text() == "O 100.00" && text.galley.job.sections[1].format.color == egui::Color32::BLUE)));
+                if expected {
+                    assert_eq!(
+                        labels.iter().any(|label| label.starts_with("Volume:")),
+                        volume_details && cfg!(feature = "studies"),
+                        "volume study details are opt-in"
+                    );
+                    assert!(labels.contains(&"Time"));
+                    assert!(!labels.contains(&"Change"));
+                    assert!(labels.contains(&"Vol"));
+                    #[cfg(feature = "studies")]
+                    {
+                        assert!(labels.contains(&"SMA"), "other study values remain visible");
+                        assert!(
+                            chart
+                                .study_values_at(50)
+                                .iter()
+                                .any(|row| row.study == "Volume")
+                        );
+                    }
+                    let legend = labels
+                        .iter()
+                        .position(|label| *label == "O 100.00")
+                        .unwrap();
+                    let tooltip = labels.iter().position(|label| *label == "Open").unwrap();
+                    assert!(
+                        tooltip > legend,
+                        "the floating readout must paint above the legend"
+                    );
+                    assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+                        if text.galley.text() == "110.00" && text.galley.job.sections[0].format.color == egui::Color32::BLUE)));
+                }
             }
         }
     }
@@ -1091,7 +1109,6 @@ fn added_series_row_follows_the_held_readout() {
     let ctx = egui::Context::default();
     ctx.options_mut(|options| options.input_options.max_click_duration = 0.3);
     let mut chart = chart(&[100.0], &[110.0, 120.0]);
-    chart.chart_options.tooltip.on_long_press = true;
     chart.chart_options.tooltip.long_press_delay = std::time::Duration::from_millis(800);
     chart.chart_options.tooltip.touch_exit_mode = crate::config::TouchTrackingExitMode::OnNextTap;
     let id = chart.add_series(SeriesOptions {
@@ -1193,25 +1210,27 @@ fn heikin_ashi_readouts_describe_the_drawn_candle() {
     assert_eq!(chart.indicator_value_at(average, 50), Some((0, 149.25)));
 }
 
-/// Touch holds respect their delay, move without panning, and exit by release or a later tap.
-/// Short taps, cancelled contacts and a pan started before the delay cannot latch a readout.
+/// Default options track a touch held for its delay, keep its values until the next tap and
+/// leave mouse hover unchanged; `OnTouchEnd` exits on release. Short taps, cancelled contacts
+/// and a pan started before the delay cannot latch a readout.
 #[test]
 fn touch_readout_tracks_and_exits_without_following_the_live_edge() {
     use crate::config::TouchTrackingExitMode;
     use egui::TouchPhase::{Cancel, End, Move, Start};
 
     for panes in [false, true] {
-        for mode in [
-            TouchTrackingExitMode::OnTouchEnd,
-            TouchTrackingExitMode::OnNextTap,
-        ] {
+        // None keeps the default exit.
+        for mode in [None, Some(TouchTrackingExitMode::OnTouchEnd)] {
             let ctx = egui::Context::default();
             ctx.options_mut(|options| options.input_options.max_click_duration = 0.3);
             let mut chart = chart(&[100.0], &[110.0, 120.0]);
             chart.config.show_volume = false;
-            chart.chart_options.tooltip.on_long_press = true;
+            #[cfg(feature = "studies")]
+            chart.add_indicator(Box::new(crate::studies::SMA::new(2)));
             chart.chart_options.tooltip.long_press_delay = std::time::Duration::from_millis(800);
-            chart.chart_options.tooltip.touch_exit_mode = mode;
+            if let Some(mode) = mode {
+                chart.chart_options.tooltip.touch_exit_mode = mode;
+            }
             chart.chart_options.crosshair.vert_line_color = egui::Color32::MAGENTA;
             let pane_series = panes.then(|| {
                 let id = chart.add_series(Default::default());
@@ -1254,7 +1273,7 @@ fn touch_readout_tracks_and_exits_without_following_the_live_edge() {
                 }
                 events
             };
-            let latched = mode == TouchTrackingExitMode::OnNextTap;
+            let latched = mode.is_none();
             let jitter = point(50) + egui::vec2(2.0, 1.0);
             for (time, events, expected, index) in [
                 (1.0, touch(Start, 50), false, 50),
@@ -1338,12 +1357,36 @@ fn touch_readout_tracks_and_exits_without_following_the_live_edge() {
                     let close = chart.state.shown()[index].close;
                     assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
                         if text.galley.text() == format!("{close:.2}"))));
+                    #[cfg(feature = "studies")]
+                    for label in ["SMA", "115.00"] {
+                        // Alternating closes of 110 and 120 average to 115 at every held bar.
+                        assert!(
+                            painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+                            if text.galley.text() == label)),
+                            "study {label}: {mode:?}, panes {panes}, time {time}"
+                        );
+                    }
+                    // The held layout has no change row; the mouse hover card below has one.
+                    assert!(
+                        !painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+                            if text.galley.text() == "Change")),
+                        "held layout: {mode:?}, panes {panes}, time {time}"
+                    );
                 }
                 assert_eq!(chart.get_time_scale_state(), viewport, "time {time}");
                 assert!(!chart.tracking_mode_active);
                 assert!(
                     chart.take_right_click().is_none(),
                     "a hold belongs to the readout"
+                );
+            }
+            // A mouse shows values on hover, without a held button, while touch holds.
+            let hover = shapes(&ctx, &mut chart, 9.5, vec![Event::PointerMoved(point(60))]);
+            for label in ["Open", "Change"] {
+                assert!(
+                    hover.iter().any(|shape| matches!(shape, Shape::Text(text)
+                        if text.galley.text() == label)),
+                    "mouse hover {label}: {mode:?}, panes {panes}"
                 );
             }
             frame(&ctx, &mut chart, 10.0, touch(Start, 50));
@@ -2204,7 +2247,6 @@ fn touch_hold_released_before_the_click_limit_is_not_a_click() {
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[100.0], &[110.0, 120.0]);
                 chart.config.show_volume = false;
-                chart.chart_options.tooltip.on_long_press = true;
                 chart.chart_options.tooltip.touch_exit_mode = mode;
                 let selected = if pane {
                     let id = chart.add_series(Default::default());
@@ -2262,7 +2304,6 @@ fn moving_a_touch_readout_keeps_live_edge_following() {
             let ctx = egui::Context::default();
             let mut chart = chart(&[100.0], &[110.0, 120.0]);
             chart.config.show_volume = false;
-            chart.chart_options.tooltip.on_long_press = true;
             chart.chart_options.tracking_mode.exit_mode = exit_mode;
             if pane {
                 let id = chart.add_series(Default::default());
@@ -2332,7 +2373,6 @@ fn touch_readout_activates_without_keyboard_focus() {
     for cancel in [false, true] {
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[110.0, 120.0]);
-        chart.chart_options.tooltip.on_long_press = true;
         let size = egui::vec2(800.0, 600.0);
         touch_frame(&ctx, &mut chart, 0.0, vec![], size, false);
         chart.apply_synced_time_scale(6.0, -10.0);
@@ -2365,7 +2405,6 @@ fn latched_touch_readout_left_outside_the_plot_does_not_capture_a_swipe() {
     for (width, held) in [(300.0, false), (780.0, false), (300.0, true), (780.0, true)] {
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[110.0, 120.0]);
-        chart.chart_options.tooltip.on_long_press = true;
         chart.chart_options.tooltip.touch_exit_mode =
             crate::config::TouchTrackingExitMode::OnNextTap;
         frame(&ctx, &mut chart, 0.0, vec![]);
@@ -2413,7 +2452,6 @@ fn tapping_the_price_button_of_a_latched_touch_readout_opens_its_action() {
     for button in [true, false] {
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[110.0, 120.0]);
-        chart.chart_options.tooltip.on_long_press = true;
         chart.chart_options.tooltip.touch_exit_mode =
             crate::config::TouchTrackingExitMode::OnNextTap;
         frame(&ctx, &mut chart, 0.0, vec![]);
@@ -2454,7 +2492,7 @@ fn latched_touch_readout_is_the_reported_crosshair() {
     for enabled in [true, false] {
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[110.0, 120.0]);
-        chart.chart_options.tooltip.on_long_press = enabled;
+        chart.chart_options.tooltip.touch_long_press = enabled;
         chart.chart_options.tooltip.touch_exit_mode =
             crate::config::TouchTrackingExitMode::OnNextTap;
         frame(&ctx, &mut chart, 0.0, vec![]);
@@ -2504,10 +2542,10 @@ fn latched_touch_readout_is_the_reported_crosshair() {
             }
         }
     }
-    for on_long_press in [true, false] {
+    for touch_long_press in [true, false] {
         let ctx = egui::Context::default();
         let mut chart = crate::widget::Chart::new(Default::default());
-        chart.chart_options.tooltip.on_long_press = on_long_press;
+        chart.chart_options.tooltip.touch_long_press = touch_long_press;
         frame(&ctx, &mut chart, 0.0, vec![]);
         let pos = chart.last_rendered_price_rect.center();
         chart.drain_events().for_each(drop);
@@ -2516,7 +2554,7 @@ fn latched_touch_readout_is_the_reported_crosshair() {
             chart
                 .drain_events()
                 .any(|event| matches!(event, ChartEvent::CrosshairMoved(Some(_)))),
-            !on_long_press,
+            !touch_long_press,
             "an empty plot has no held readout"
         );
     }
