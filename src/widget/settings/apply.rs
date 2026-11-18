@@ -282,6 +282,7 @@ impl ChartSettingsState {
         settings.scales_and_lines.price_scale_left = chart.main_axis_on_left();
         settings.scales_and_lines.show_currency = config.show_currency;
         settings.scales_and_lines.show_unit = config.show_unit;
+        settings.scales_and_lines.currency_unit_on_hover = config.currency_unit_on_hover;
         settings.scales_and_lines.show_scale_mode_buttons = config.show_scale_mode_buttons;
         settings.scales_and_lines.show_plus_button = config.show_plus_button;
         settings.scales_and_lines.allow_label_overlap = config.price_axis.allow_label_overlap;
@@ -297,6 +298,8 @@ impl ChartSettingsState {
             main_style.and_then(|style| style.price_line_color);
         settings.scales_and_lines.price_line_source =
             main_style.map(|style| style.price_line_source);
+        settings.scales_and_lines.price_line_width = main_style.map(|style| style.price_line_width);
+        settings.scales_and_lines.price_line_style = main_style.map(|style| style.price_line_style);
         settings.scales_and_lines.thousands_sep = Some(thousands_separator(config.thousands_sep));
         settings.scales_and_lines.lock_price_to_bar_ratio =
             chart.state().price_scale().bar_ratio_locked();
@@ -315,6 +318,7 @@ impl ChartSettingsState {
             .or(view.bar_ratio())
             .unwrap_or(1.0);
         settings.scales_and_lines.show_last_price_label = config.show_symbol_last_val;
+        settings.scales_and_lines.show_last_price_change = config.show_symbol_last_change;
         settings.scales_and_lines.show_price_line = config.show_price_line;
         settings.scales_and_lines.show_prev_close_label = config.show_symbol_prev_close;
         settings.scales_and_lines.show_prev_close = config.show_prev_close_line;
@@ -608,6 +612,7 @@ impl ChartSettingsState {
         }
         config.show_currency = self.scales_and_lines.show_currency;
         config.show_unit = self.scales_and_lines.show_unit;
+        config.currency_unit_on_hover = self.scales_and_lines.currency_unit_on_hover;
         config.show_scale_mode_buttons = self.scales_and_lines.show_scale_mode_buttons;
         config.show_plus_button = self.scales_and_lines.show_plus_button;
         config.price_axis.allow_label_overlap = self.scales_and_lines.allow_label_overlap;
@@ -619,6 +624,7 @@ impl ChartSettingsState {
         config.extended_session_price_color = self.scales_and_lines.extended_session_price_color;
         config.lock_price_to_bar_ratio = self.scales_and_lines.lock_price_to_bar_ratio;
         config.show_symbol_last_val = self.scales_and_lines.show_last_price_label;
+        config.show_symbol_last_change = self.scales_and_lines.show_last_price_change;
         config.show_price_line = self.scales_and_lines.show_price_line;
         config.show_symbol_prev_close = self.scales_and_lines.show_prev_close_label;
         config.show_prev_close_line = self.scales_and_lines.show_prev_close;
@@ -746,6 +752,12 @@ impl ChartSettingsState {
             style.price_line_color = self.scales_and_lines.symbol_price_color;
             if let Some(source) = self.scales_and_lines.price_line_source {
                 style.price_line_source = source;
+            }
+            if let Some(width) = self.scales_and_lines.price_line_width {
+                style.price_line_width = width;
+            }
+            if let Some(line_style) = self.scales_and_lines.price_line_style {
+                style.price_line_style = line_style;
             }
         }
         chart.price_scale_mut().set_bar_ratio(
@@ -2473,6 +2485,152 @@ mod tests {
         }
     }
 
+    /// The last price line's width and pattern and the change on the last price tag reach the
+    /// painted main series on normal, percentage and indexed scales and read back; settings and
+    /// layouts saved without them keep the chart's line and the value alone.
+    #[test]
+    fn last_price_line_and_change_tag_apply_and_read_back() {
+        use crate::model::LineStyle;
+        use crate::widget::test_frames::{chart, frame, shapes};
+        /// The (width, length) of each horizontal stroke of the gold line at 115, the plot
+        /// width and the text of the gold tag.
+        fn painted(ctx: &Context, chart: &mut Chart) -> (Vec<(f32, f32)>, f32, String) {
+            frame(ctx, chart, 0.0, vec![]);
+            frame(ctx, chart, 0.1, vec![]);
+            let painted = shapes(ctx, chart, 0.2, vec![]);
+            let plot = chart.last_rendered_price_rect;
+            let y = chart.last_price_map.price_to_y(115.0);
+            let strokes = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::LineSegment { points, stroke }
+                        if stroke.color == Color32::GOLD
+                            && (points[0].y - y).abs() < 0.001
+                            && (points[1].y - y).abs() < 0.001 =>
+                    {
+                        Some((stroke.width, (points[1].x - points[0].x).abs()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let tag = painted
+                .iter()
+                .find_map(|shape| match shape {
+                    Shape::Rect(r) if r.fill == Color32::GOLD && r.rect.left() >= plot.right() => {
+                        Some(r.rect)
+                    }
+                    _ => None,
+                })
+                .expect("last price tag");
+            let text = painted
+                .iter()
+                .find_map(|shape| match shape {
+                    Shape::Text(t) if tag.contains(t.pos + t.galley.size() / 2.0) => {
+                        Some(t.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .expect("last price tag text");
+            (strokes, plot.width(), text)
+        }
+        // Daily bars: bar 99 closes at 115 and bar 98, the previous session, at 110, so the
+        // change is +5 and 5 / 110 = 4.5454...%.
+        const CHANGE: &str = "+5.00 (+4.55%)";
+        for mode in [
+            PriceScaleMode::Normal,
+            PriceScaleMode::Percentage,
+            PriceScaleMode::IndexedTo100,
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+            if mode == PriceScaleMode::IndexedTo100 {
+                // The settings have no indexed switch; applying keeps an indexed scale.
+                chart.price_scale_mut().options_mut().mode = mode;
+            }
+            let mut settings = ChartSettingsState::from_chart(&chart);
+            settings.scales_and_lines.symbol_price_color = Some(Color32::GOLD);
+            settings.scales_and_lines.percentage_scale = mode == PriceScaleMode::Percentage;
+            settings.apply_to_chart(&mut chart).unwrap();
+            // Today's line and tag: 1 point dashes 4 points long and the value alone.
+            let (strokes, _, value) = painted(&ctx, &mut chart);
+            assert!(
+                strokes.len() > 1 && strokes.iter().all(|&(w, l)| w == 1.0 && l <= 4.001),
+                "{mode:?}: {strokes:?}"
+            );
+            assert!(!value.contains('\n'), "{mode:?}: {value}");
+            if mode == PriceScaleMode::Normal {
+                assert_eq!(value, "115.00");
+            }
+            for (style, width) in [(LineStyle::Solid, 3.0), (LineStyle::LargeDashed, 2.0)] {
+                settings.scales_and_lines.price_line_style = Some(style);
+                settings.scales_and_lines.price_line_width = Some(width);
+                settings.scales_and_lines.show_last_price_change = true;
+                settings.scales_and_lines.currency_unit_on_hover = true;
+                settings.apply_to_chart(&mut chart).unwrap();
+                let choices = |scales: &crate::widget::settings::ScalesAndLinesSettings| {
+                    (
+                        scales.price_line_width,
+                        scales.price_line_style,
+                        scales.show_last_price_change,
+                        scales.currency_unit_on_hover,
+                    )
+                };
+                assert_eq!(
+                    choices(&ChartSettingsState::from_chart(&chart).scales_and_lines),
+                    choices(&settings.scales_and_lines)
+                );
+                let (strokes, plot_width, text) = painted(&ctx, &mut chart);
+                let longest = strokes.iter().map(|s| s.1).fold(0.0, f32::max);
+                assert!(
+                    !strokes.is_empty() && strokes.iter().all(|s| s.0 == width),
+                    "{mode:?} {style:?}: {strokes:?}"
+                );
+                match style {
+                    LineStyle::Solid => assert!(longest > plot_width - 1.0, "{longest}"),
+                    _ => assert!(
+                        strokes.len() > 1 && (longest - 8.0).abs() < 0.001,
+                        "{longest}"
+                    ),
+                }
+                // Percentage and indexed scales keep their label and add the price move.
+                let price = text
+                    .strip_suffix(&format!("\n{CHANGE}"))
+                    .unwrap_or_else(|| panic!("{mode:?}: {text}"));
+                assert!(!price.contains('\n'), "{mode:?}: {text}");
+                if mode == PriceScaleMode::Normal {
+                    assert_eq!(price, "115.00");
+                }
+            }
+            // Settings and templates saved before the fields existed keep the chart's line and
+            // show the value alone.
+            let mut saved = serde_json::to_value(&settings).unwrap();
+            let scales = saved["scales_and_lines"].as_object_mut().unwrap();
+            for key in [
+                "price_line_width",
+                "price_line_style",
+                "show_last_price_change",
+                "currency_unit_on_hover",
+            ] {
+                assert!(scales.remove(key).is_some(), "{key}");
+            }
+            let old: ChartSettingsState = serde_json::from_value(saved).unwrap();
+            old.apply_to_chart(&mut chart).unwrap();
+            let (strokes, _, text) = painted(&ctx, &mut chart);
+            assert!(strokes.iter().all(|s| s.0 == 2.0), "{mode:?}");
+            assert!(!text.contains('\n'), "{mode:?}: {text}");
+            assert!(!chart.config().currency_unit_on_hover);
+        }
+        // Layouts saved before the switches existed load with the value alone and the currency
+        // always shown.
+        let mut saved = serde_json::to_value(ChartConfig::default()).unwrap();
+        let config = saved.as_object_mut().unwrap();
+        for key in ["show_symbol_last_change", "currency_unit_on_hover"] {
+            assert!(config.remove(key).is_some(), "{key}");
+        }
+        let config: ChartConfig = serde_json::from_value(saved).unwrap();
+        assert!(!config.show_symbol_last_change && !config.currency_unit_on_hover);
+    }
+
     #[test]
     fn scale_settings_render_values_and_preserve_the_entered_ratio() {
         for theme in [Theme::light(), Theme::dark()] {
@@ -2540,30 +2698,50 @@ mod tests {
                         ChartSettingsState::from_chart(&chart).scales_and_lines,
                         settings.scales_and_lines
                     );
-                    for (currency, unit, shown) in [
-                        (true, true, true),
-                        (true, false, true),
-                        (false, true, true),
-                        (false, false, false),
+                    // `hover` shows the labels only while the pointer is over the price scale:
+                    // `Some(over)` puts the pointer over it or not.
+                    for (currency, unit, hover, shown) in [
+                        (true, true, None, true),
+                        (true, false, None, true),
+                        (false, true, None, true),
+                        (false, false, None, false),
+                        (true, true, Some(false), true),
+                        (true, true, Some(true), true),
                     ] {
                         settings.scales_and_lines.show_currency = currency;
                         settings.scales_and_lines.show_unit = unit;
+                        settings.scales_and_lines.currency_unit_on_hover = hover.is_some();
                         settings.scales_and_lines.show_study_values = shown;
                         settings.scales_and_lines.show_last_price_label = shown;
                         settings.scales_and_lines.show_extended_session_price = shown;
                         settings.apply_to_chart(&mut chart).unwrap();
                         for frame in 0..3 {
-                            let mut output = ctx.run_ui(Default::default(), |ui| {
+                            let plot = chart.last_rendered_price_rect;
+                            let axis_x = if left {
+                                plot.left() - 10.0
+                            } else {
+                                plot.right() + 10.0
+                            };
+                            let input = egui::RawInput {
+                                events: hover
+                                    .filter(|over| *over)
+                                    .map(|_| egui::Event::PointerMoved(egui::pos2(axis_x, 300.0)))
+                                    .into_iter()
+                                    .collect(),
+                                ..Default::default()
+                            };
+                            let mut output = ctx.run_ui(input, |ui| {
                                 chart.show(ui);
                             });
                             let shapes = std::mem::take(&mut output.shapes);
                             output.drop_without_applying_deltas();
                             if frame == 2 {
                                 let plot = chart.last_rendered_price_rect;
-                                let expected = match (currency, unit) {
-                                    (true, true) => Some("USD · contracts per barrel"),
-                                    (true, false) => Some("USD"),
-                                    (false, true) => Some("contracts per barrel"),
+                                let expected = match (currency, unit, hover) {
+                                    (_, _, Some(false)) => None,
+                                    (true, true, _) => Some("USD · contracts per barrel"),
+                                    (true, false, _) => Some("USD"),
+                                    (false, true, _) => Some("contracts per barrel"),
                                     _ => None,
                                 };
                                 let header = shapes.iter().find_map(|s| match &s.shape {

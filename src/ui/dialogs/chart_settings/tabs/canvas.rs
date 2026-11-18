@@ -362,7 +362,7 @@ impl SettingsDialog {
     }
 }
 
-fn line_style_preview(ls: LineStyle) -> &'static str {
+pub(super) fn line_style_preview(ls: LineStyle) -> &'static str {
     match ls {
         LineStyle::Solid => "Solid",
         LineStyle::Dashed => "\u{2013} \u{2013} \u{2013}",
