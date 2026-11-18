@@ -5765,6 +5765,92 @@ fn heatmap_appearance_survives_visibility_and_frozen_images() {
     }
 }
 
+/// A history filter that needs metadata absent from every held order samples no column, and the
+/// pane says why whatever the book profile shows. Two different failures each get one notice.
+#[test]
+fn heatmap_order_filters_without_their_order_data_say_so() {
+    use crate::chart::overlays::OrderBookView;
+    use crate::data::{DepthHistoryConfig, OrderFilter, RestingOrder};
+    use crate::model::OrderSide::Buy;
+    let time = bars(1)[0].time;
+    let fresh = OrderFilter {
+        max_age: Some(TimeDelta::seconds(10)),
+        ..Default::default()
+    };
+    let others = OrderFilter {
+        exclude_participants: vec![7],
+        ..Default::default()
+    };
+    let all = OrderFilter::default();
+    let bare = RestingOrder::new(1, Buy, 99.0, 5.0);
+    let (placed, named) = (
+        bare.clone().with_placed(time),
+        bare.clone().with_participant(3),
+    );
+    let times = "Order-level depth unavailable: no order has a placement time";
+    let participants = "Order-level depth unavailable: no order names its participant";
+    // History filter, held order, profile filter when shown, notices and sampled columns.
+    for (filter, order, profile, notices, columns) in [
+        (&fresh, &bare, None, vec![times], 0),
+        (&fresh, &bare, Some(&all), vec![times], 0),
+        (&fresh, &placed, None, vec![], 1),
+        (&fresh, &placed, Some(&all), vec![], 1),
+        (&others, &bare, None, vec![participants], 0),
+        (&others, &bare, Some(&all), vec![participants], 0),
+        (&others, &named, None, vec![], 1),
+        (&others, &named, Some(&all), vec![], 1),
+        (&fresh, &bare, Some(&fresh), vec![times], 0),
+        (&fresh, &bare, Some(&others), vec![times, participants], 0),
+    ] {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        let mut config = DepthHistoryConfig::default();
+        config.orders = Some(filter.clone());
+        chart.set_depth_history(Some(DepthHistory::new(config).unwrap()));
+        chart.set_liquidity_heatmap(true);
+        chart.set_order_book_visible(profile.is_some());
+        chart.set_order_book_view(OrderBookView {
+            filter: profile.cloned().unwrap_or_default(),
+            ..Default::default()
+        });
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(0.25)));
+        feed.page().send(page(bars(1), true));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        let sink = feed.sink();
+        sink.set_server_time(time);
+        sink.push_order_snapshot(1, time, vec![order.clone()]);
+        // The next period samples the book as it stood.
+        sink.advance_time(time + TimeDelta::seconds(1));
+        frames.run(&mut chart);
+        let mut output = frames.ctx.run_ui(Default::default(), |ui| {
+            chart.paint_liquidity(ui.painter(), &chart.get_chart_mapping());
+        });
+        output.textures_delta.clear();
+        let texts: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, notices, "{filter:?} {order:?} {profile:?}");
+        assert_eq!(
+            chart
+                .depth_history(SeriesId::MAIN)
+                .unwrap()
+                .columns()
+                .count(),
+            columns,
+            "{filter:?} {order:?}"
+        );
+    }
+}
+
 #[test]
 fn depth_paging_ends_independently_and_drops_old_settings_replies() {
     let feed = Arc::new(Script::default());
