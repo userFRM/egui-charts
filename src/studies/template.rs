@@ -202,10 +202,11 @@ impl StudyTemplate {
                 let declared = declared.iter().find(|input| {
                     input.id == *id && matches!(input.kind, crate::studies::InputKind::Source)
                 });
-                if let Some(input) = declared.filter(|_| output(value)) {
-                    if probe.set_input(id, value.clone()).is_err() {
-                        *value = input.default.clone();
-                    }
+                if let Some(input) = declared
+                    && output(value)
+                    && probe.set_input(id, value.clone()).is_err()
+                {
+                    *value = input.default.clone();
                 }
             }
         }
