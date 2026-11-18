@@ -74,13 +74,18 @@ impl Drawing {
             | T::XABCDPattern
             | T::CypherPattern
             | T::ABCDPattern
-            | T::ThreeDrivesPattern
-            | T::ElliottImpulse
+            | T::ThreeDrivesPattern => {
+                outline.lines = path(false);
+            }
+            // Hidden legs select nothing; the painted labels still do.
+            T::ElliottImpulse
             | T::ElliottCorrection
             | T::ElliottTriangle
             | T::ElliottDoubleCombo
             | T::ElliottTripleCombo => {
-                outline.lines = path(false);
+                if self.elliott_show_wave {
+                    outline.lines = path(false);
+                }
             }
             T::Brush | T::Highlighter => {
                 outline.lines = self
