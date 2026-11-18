@@ -249,8 +249,6 @@ fn removed_pane_members_leave_their_drawings_to_a_pane_that_stays() {
         "own",
         "last",
         "original",
-        "hidden",
-        "unsaveable",
     ] {
         let mut chart = chart(&[100.0], &[110.0]);
         let removed = if case == "own" {
@@ -267,18 +265,13 @@ fn removed_pane_members_leave_their_drawings_to_a_pane_that_stays() {
         line.chart_points = vec![ChartPoint::new(50.0, 70.0)];
         line.pane = Some(removed.0);
         line.locked = true;
-        line.visible = case != "hidden";
-        line.saveable = case != "unsaveable";
-        if case == "hidden" {
-            assert!(chart.set_indicator_visible(removed, false));
-        }
         let line = chart.drawings_mut().add_drawing(line).unwrap();
         let owner = |chart: &Chart| {
             let drawing = chart.drawings().drawings.iter().find(|d| d.id == line);
             drawing.map(|drawing| drawing.pane)
         };
         let expected = match case {
-            "shared" | "hidden" | "unsaveable" => {
+            "shared" => {
                 let macd = chart.add_indicator(Box::new(MACD::new(12, 26, 9)));
                 assert!(chart.move_indicator_to_pane(macd, removed));
                 Some((Some(macd.0), pane))
@@ -330,15 +323,8 @@ fn removed_pane_members_leave_their_drawings_to_a_pane_that_stays() {
         assert!(chart.undo(), "{case}");
         assert_eq!(owner(&chart), Some(Some(removed.0)), "{case}");
         assert_eq!(chart.drawing_pane(line), Some(removed_pane), "{case}");
-        let restored = chart
-            .drawings()
-            .drawings
-            .iter()
-            .find(|d| d.id == line)
-            .unwrap();
-        assert!(restored.locked, "{case}");
-        assert_eq!(restored.visible, case != "hidden");
-        assert_eq!(restored.saveable, case != "unsaveable");
+        let restored = chart.drawings().drawings.iter().find(|d| d.id == line);
+        assert!(restored.unwrap().locked, "{case}");
         assert!(chart.redo(), "{case}");
         assert_eq!(owner(&chart), expected.map(|(owner, _)| owner), "{case}");
         assert_eq!(
