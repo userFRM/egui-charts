@@ -1074,6 +1074,23 @@ impl OrderFlowInput {
         }
     }
 
+    /// Records that a footprint source lacks no execution in `from..end`, as a trade page proved,
+    /// and has the studies on it update from the bar holding `from`.
+    #[cfg(feature = "widget")]
+    pub(crate) fn cover_footprint(&self, from: DateTime<Utc>, end: DateTime<Utc>) {
+        let mut state = self.state();
+        if let Some(flow) = &mut state.footprint {
+            let revision = flow.live.revision();
+            flow.live.cover_missing(from, end);
+            if flow.live.revision() != revision {
+                let open = flow.view().clock().instant_open(from);
+                state.revision = state.revision.wrapping_add(1);
+                let revision = state.revision;
+                state.changes.insert(open, revision);
+            }
+        }
+    }
+
     /// Publish only the admitted prepared span; received live rows outlive the raw tape.
     #[cfg(feature = "widget")]
     pub(crate) fn apply_prepared_span(
