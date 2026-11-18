@@ -3,7 +3,7 @@
 
 use crate::chart::rendering::ChartMapping;
 use crate::model::LineStyle;
-use crate::painting::dashed_line::draw_dashed_segments;
+use crate::painting::dashed_line::draw_grid_dashes;
 use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
@@ -94,7 +94,7 @@ pub(crate) fn render_grid_lines(
 ) {
     let stroke = Stroke::new(DESIGN_TOKENS.stroke.hairline, color);
     match style.hairline_pattern() {
-        Some((dash, gap)) => draw_dashed_segments(
+        Some((dash, gap)) => draw_grid_dashes(
             painter,
             lines.into_iter().map(|[start, end]| (start, end, 0.0)),
             stroke,
