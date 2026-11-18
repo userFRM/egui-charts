@@ -81,8 +81,13 @@ pub(super) struct Ladder {
     /// Instrument ticks per row: a row covers this many ticks from a multiple of them upwards,
     /// as footprint rows do. 0, as in panels saved before rows were grouped, counts as 1.
     ticks_per_row: u32,
-    /// The newest trade at the last reset: later trades accumulate, however often the feed updates.
+    /// The time of the newest trade at the last reset: later trades accumulate, however often
+    /// the feed updates.
     reset_after: Option<DateTime<Utc>>,
+    /// How many trades stamped [`reset_after`](Self::reset_after) the last reset saw: further
+    /// trades with that stamp arrived after it, as executions often share a stamp. `None`, as in
+    /// panels saved before it was kept, leaves out every trade with that stamp.
+    reset_seen: Option<usize>,
 }
 
 /// The volume traded in each of `rows` rows of `step` ticks, from the row `top` down. Sell
@@ -276,9 +281,16 @@ impl Ladder {
             Accumulation::Session => {
                 session_open.map_or(0, |open| trades.partition_point(|trade| trade.ts < open))
             }
-            Accumulation::Manual => self
-                .reset_after
-                .map_or(0, |after| trades.partition_point(|trade| trade.ts <= after)),
+            Accumulation::Manual => self.reset_after.map_or(0, |after| {
+                let through = trades.partition_point(|trade| trade.ts <= after);
+                // The trades with the reset's stamp beyond those it saw arrived after it.
+                self.reset_seen.map_or(through, |seen| {
+                    trades
+                        .partition_point(|trade| trade.ts < after)
+                        .saturating_add(seen)
+                        .min(through)
+                })
+            }),
         };
         &trades[from..]
     }
@@ -736,11 +748,13 @@ impl Ladder {
                         }
                         if ui.button(l10n::text(ui.ctx(), "Reset")).clicked() {
                             self.accumulation = Accumulation::Manual;
-                            self.reset_after = market
-                                .trades
-                                .last()
-                                .map(|trade| trade.ts)
-                                .or(self.reset_after);
+                            if let Some(last) = market.trades.last() {
+                                self.reset_after = Some(last.ts);
+                                self.reset_seen = Some(
+                                    market.trades.len()
+                                        - market.trades.partition_point(|trade| trade.ts < last.ts),
+                                );
+                            }
                         }
                     });
 
@@ -1848,6 +1862,7 @@ mod tests {
         ladder.profile = Profile::Delta;
         ladder.accumulation = Accumulation::Manual;
         ladder.reset_after = Some(now);
+        ladder.reset_seen = Some(2);
         ladder.ticks_per_row = 4;
         let panel = DepthPanel {
             symbol: "ES".into(),
@@ -1861,6 +1876,7 @@ mod tests {
         assert!(restored.ladder.profile == Profile::Delta);
         assert!(restored.ladder.accumulation == Accumulation::Manual);
         assert_eq!(restored.ladder.reset_after, Some(now));
+        assert_eq!(restored.ladder.reset_seen, Some(2));
         assert_eq!(restored.ladder.ticks_per_row, 4);
         let mut chart = crate::widget::ChartBuilder::new()
             .with_symbol("OTHER")
@@ -1936,6 +1952,10 @@ mod tests {
             for width in [300.0, 800.0] {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
+                ctx.all_styles_mut(|style| {
+                    style.interaction.tooltip_delay = 0.0;
+                    style.interaction.show_tooltips_only_when_still = false;
+                });
                 let mut ladder = Ladder {
                     columns: [true; 3],
                     ..Default::default()
@@ -1954,7 +1974,12 @@ mod tests {
                         bids: (0..48)
                             .map(|i| OrderBookLevel {
                                 price: 6107.0 - i as f64 * 0.25,
-                                size: 1018.0 + if changed { 1234.0 } else { 0.0 },
+                                size: match (i, changed) {
+                                    (1, false) => 1.3,
+                                    (1, true) => 1.0,
+                                    (_, false) => 1018.0,
+                                    (_, true) => 1018.0 + 1234.0,
+                                },
                                 order_cnt: Some(1018),
                             })
                             .collect(),
@@ -2069,6 +2094,7 @@ mod tests {
                 }
                 assert!(labels.iter().any(|(text, _)| text == "1,018 | 1,637"));
                 assert!(labels.iter().any(|(text, _)| text == "+1,234 | -"));
+                assert!(labels.iter().any(|(text, _)| text == "-0.3 | -"));
                 assert_eq!(
                     labels
                         .iter()
@@ -2108,6 +2134,32 @@ mod tests {
                         .all(|rect| rect.left() >= 0.0 && rect.right() <= width)
                 );
                 output.drop_without_applying_deltas();
+                // The hover text writes the change as the column does.
+                let row = labels
+                    .iter()
+                    .find(|(text, _)| text == "6,106.75")
+                    .unwrap()
+                    .1
+                    .center();
+                let mut hovered = Vec::new();
+                for events in [vec![egui::Event::PointerMoved(row)], vec![], vec![]] {
+                    let output = frame(true, events);
+                    hovered = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                            _ => None,
+                        })
+                        .collect();
+                    output.drop_without_applying_deltas();
+                }
+                assert!(
+                    hovered.iter().any(|text| text.contains(
+                        "Observed size change, not confirmed execution or cancellation: bid -0.3, ask none observed"
+                    )),
+                    "{hovered:?}"
+                );
 
                 let pointer = pos2(width / 2.0, price.center().y);
                 let wheel = |delta| egui::Event::MouseWheel {
@@ -2193,6 +2245,124 @@ mod tests {
         ladder.reset_after = Some(at(3));
         assert_eq!(minutes(&ladder, 4, None), Vec::<i64>::new());
         assert_eq!(minutes(&ladder, 6, Some(at(1))), [4, 5]);
+        // A reset saved before it counted the trades at its stamp still leaves them all out.
+        let saved = r#"{"centre":null,"locked":false,"columns":[false,false,false],"profile":"Total","accumulation":"Manual","ticks_per_row":0,"reset_after":"2026-01-05T14:03:00Z"}"#;
+        let saved: Ladder = serde_json::from_str(saved).unwrap();
+        assert_eq!(minutes(&saved, 6, None), [4, 5]);
+    }
+
+    /// A Reset counts the executions that arrive after it with the timestamp of the last one before
+    /// it, and only those.
+    #[test]
+    fn a_reset_counts_later_executions_that_share_its_timestamp() {
+        use crate::model::{Capabilities, OrderBook, OrderBookLevel, TradingRules};
+
+        let at: DateTime<Utc> = "2026-01-05T14:03:00Z".parse().unwrap();
+        let before = Tick::new(at, 100.0, 2.0, Some(OrderSide::Sell));
+        let after = Tick::new(at, 100.0, 5.0, Some(OrderSide::Buy));
+        let level = |price| OrderBookLevel {
+            price,
+            size: 1.0,
+            order_cnt: Some(1),
+        };
+        let book = OrderBook {
+            ts: at,
+            symbol: "ES".into(),
+            bids: vec![level(100.0)],
+            asks: vec![level(100.25)],
+        };
+        let rules = TradingRules::new("ES");
+        let ctx = egui::Context::default();
+        let frame = |ladder: &mut Ladder, trades: &[&Tick], events: Vec<egui::Event>| {
+            let market = Market {
+                symbol: "ES",
+                formatter: None,
+                pip_value: None,
+                last: Some(100.0),
+                bid: Some(100.0),
+                ask: Some(100.25),
+                tick: 0.25,
+                decimals: 2,
+                currency: "USD",
+                balance: None,
+                capabilities: Capabilities::default(),
+                rules: &rules,
+                rules_ready: true,
+                offline: None,
+                ladder: Some(std::borrow::Cow::Borrowed(&book)),
+                ladder_unavailable: None,
+                highlights: Vec::new(),
+                orders: &[],
+                positions: &[],
+                trades,
+                session_open: None,
+                last_fill: None,
+                logo: None,
+            };
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(300.0, 700.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    ladder.draw(ui, "ES", &market, None);
+                },
+            );
+            let labels = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_owned(),
+                        text.galley.rect.translate(text.pos.to_vec2()),
+                    )),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            output.drop_without_applying_deltas();
+            labels
+        };
+        let click = |labels: &[(String, Rect)], label: &str| {
+            let pos = labels
+                .iter()
+                .find(|(text, _)| text == label)
+                .unwrap_or_else(|| panic!("missing {label}: {labels:?}"))
+                .1
+                .center();
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        let mut ladder = Ladder {
+            columns: [false, false, true],
+            ..Default::default()
+        };
+        let labels = frame(&mut ladder, &[&before], vec![]);
+        frame(&mut ladder, &[&before], click(&labels, "View"));
+        let labels = frame(&mut ladder, &[&before], vec![]);
+        frame(&mut ladder, &[&before], click(&labels, "Reset"));
+        // A buy aggressor trades at the ask; no volume at the bid reads `-`.
+        let labels = frame(&mut ladder, &[&before, &after], vec![]);
+        assert!(labels.iter().any(|(text, _)| text == "- | 5"), "{labels:?}");
+        assert!(
+            !labels
+                .iter()
+                .any(|(text, _)| text == "2 | 5" || text == "2 | -"),
+            "{labels:?}"
+        );
     }
 
     /// Moving quotes must not move the price under a pressed cell or a dragged order.
