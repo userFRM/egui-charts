@@ -631,8 +631,8 @@ impl VolumeProfile {
 
     /// The row with the most volume (point of control), and the lowest and
     /// highest row of the value area, which holds `share` of the volume;
-    /// `None` when no volume traded. POC ties take the lower row; value-area
-    /// ties add one row on each side.
+    /// `None` when no volume traded. POC ties take the lower row. The value
+    /// area grows as [`FootprintBar::value_area`] describes, whatever the source.
     pub fn poc_and_value_area(&self, share: f64) -> Option<(usize, (usize, usize))> {
         if !share.is_finite() || share <= 0.0 || share > 1.0 {
             return None;
@@ -649,7 +649,8 @@ impl VolumeProfile {
         }
         let poc = (0..volume.len())
             .max_by(|&a, &b| volume[a].total_cmp(&volume[b]).then_with(|| b.cmp(&a)))?;
-        Some((poc, value_area(volume, poc, total * share)))
+        let (low, high) = value_area(volume.len(), |i| (i as i64, volume[i]), poc, total * share);
+        Some((poc, (low as usize, high as usize)))
     }
 }
 
@@ -723,35 +724,76 @@ fn steps_per_row(config: &VolumeProfileConfig, step: f64, first: i64, last: i64)
     i64::try_from(steps).ok()
 }
 
-/// Rows around the POC that hold `target` volume. Market Profile rule: grow
-/// toward whichever of the next two rows above or the next two rows below
-/// holds more volume, one row at a time. Equal sums add one row on each side.
-fn value_area(volume: &[f64], poc: usize, target: f64) -> (usize, usize) {
-    let (mut low, mut high, mut sum) = (poc, poc, volume[poc]);
-    while sum < target && (low > 0 || high + 1 < volume.len()) {
-        let above: f64 = volume[high + 1..].iter().take(2).sum();
-        let below: f64 = volume[..low].iter().rev().take(2).sum();
-        if low > 0 && high + 1 < volume.len() && above == below {
-            low -= 1;
-            high += 1;
-            sum += volume[low] + volume[high];
-            continue;
-        }
-        let up = high + 1 < volume.len() && (low == 0 || above >= below);
-        for _ in 0..2 {
-            if up && high + 1 < volume.len() {
-                high += 1;
-                sum += volume[high];
-            } else if !up && low > 0 {
-                low -= 1;
-                sum += volume[low];
+/// Lowest and highest key of the rows around the point of control that hold `target` volume.
+/// Each step compares the next two rows above with the next two below and adds the heavier pair
+/// one row at a time, stopping once the area holds `target`; equal sums add one row on each
+/// side, and a side with no rows left gives way to the other. `row(i)` is the key and volume of
+/// row `i` of `len`, at least one, in ascending key order, and `poc` the index of the point of
+/// control. Keys between rows are untraded rows of zero volume, crossed in one step.
+pub(super) fn value_area(
+    len: usize,
+    row: impl Fn(usize) -> (i64, f64),
+    poc: usize,
+    target: f64,
+) -> (i64, i64) {
+    let key = |i: usize| i128::from(row(i).0);
+    let (first, last) = (key(0), key(len - 1));
+    // Rows `low..=high` lie inside the area, which spans the keys `bottom..=top`.
+    let (mut low, mut high, mut bottom, mut top) = (poc, poc, key(poc), key(poc));
+    let mut sum = row(poc).1;
+    while sum < target && (bottom > first || top < last) {
+        let (down, up) = (bottom > first, top < last);
+        // Untraded rows hold no volume: until a traded row is within two keys of an edge, both
+        // sides tie at zero and grow a row each, and a side growing alone adds nothing before
+        // its next traded row.
+        match (
+            down.then(|| bottom - key(low - 1)),
+            up.then(|| key(high + 1) - top),
+        ) {
+            (Some(gap_below), Some(gap_above)) => {
+                let skip = (gap_below.min(gap_above) - 2).max(0);
+                bottom -= skip;
+                top += skip;
             }
+            (Some(gap_below), None) => bottom -= gap_below - 1,
+            (None, Some(gap_above)) => top += gap_above - 1,
+            (None, None) => {}
+        }
+        let below: f64 = (low.saturating_sub(2)..low)
+            .filter(|&i| key(i) >= bottom - 2)
+            .map(|i| row(i).1)
+            .sum();
+        let above: f64 = (high + 1..len.min(high + 3))
+            .filter(|&i| key(i) <= top + 2)
+            .map(|i| row(i).1)
+            .sum();
+        let tie = down && up && below == above;
+        let rising = up && (!down || above > below);
+        let steps = if tie { 1 } else { 2 };
+        for _ in 0..steps {
+            // A step's rows join the sum together, so a tie's pair rounds as one addition.
+            let mut added = 0.0;
+            if (tie || !rising) && bottom > first {
+                bottom -= 1;
+                if key(low - 1) == bottom {
+                    low -= 1;
+                    added += row(low).1;
+                }
+            }
+            if (tie || rising) && top < last {
+                top += 1;
+                if key(high + 1) == top {
+                    high += 1;
+                    added += row(high).1;
+                }
+            }
+            sum += added;
             if sum >= target {
                 break;
             }
         }
     }
-    (low, high)
+    (bottom as i64, top as i64)
 }
 
 #[cfg(test)]
@@ -835,34 +877,49 @@ mod tests {
         }
     }
 
-    /// Equal-volume POCs take the lowest row; tied expansion adds a row on each side. Executed
-    /// rows are centred on their price: the trade at 100 with a tick of 1 spans 99.5 to 100.5.
+    /// Equal-volume POCs take the lowest row, and both builders grow the value area by one rule:
+    /// the heavier of the next two rows above and the next two below, one row on each side when
+    /// they tie, with untraded rows at zero. Executed rows are centred on their price: the trade
+    /// at 99 with a tick of 1 spans 98.5 to 99.5.
     #[test]
-    fn estimated_and_executed_profiles_agree_on_ties() {
+    fn estimated_and_executed_profiles_agree_on_poc_and_value_area() {
         use crate::data::Footprint;
         use crate::model::{BarClock, OrderSide, Tick, Timeframe};
         let time = chrono::DateTime::UNIX_EPOCH;
-        // One bar of 24 over 24 rows, and five unit-high bars holding 1, 1, 2, 1 and 1.
-        let single = vec![Bar::new(time, 100.0, 124.0, 100.0, 124.0, 24.0)];
-        let peak_rows = vec![1.0, 1.0, 2.0, 1.0, 1.0];
-        let peak: Vec<_> = peak_rows
-            .iter()
-            .enumerate()
-            .map(|(i, &volume)| {
-                let low = 100.0 + i as f64;
-                Bar::new(time, low, low + 1.0, low, low + 1.0, volume)
-            })
-            .collect();
+        // One bar of 24 over 24 rows from 99, and unit-high bars from 99 holding each row's volume.
+        let single = vec![Bar::new(time, 99.0, 123.0, 99.0, 123.0, 24.0)];
+        let unit_bars = |volumes: &[f64]| -> Vec<Bar> {
+            volumes
+                .iter()
+                .enumerate()
+                .map(|(i, &volume)| {
+                    let low = 99.0 + i as f64;
+                    Bar::new(time, low, low + 1.0, low, low + 1.0, volume)
+                })
+                .collect()
+        };
+        let peak = vec![1.0, 1.0, 2.0, 1.0, 1.0];
+        let pairs = vec![5.0, 5.0, 6.0, 10.0, 4.0, 4.0];
+        let gaps = vec![5.0, 3.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 4.0, 4.0];
         for (bars, volumes, share, expected) in [
+            // 70% of 24 needs 17 unit rows.
             (single, vec![1.0; 24], 0.7, (0, (0, 16))),
-            (peak, peak_rows, 0.6, (2, (1, 3))),
+            // 60% of 6 needs the POC's 2 plus both tied 1s.
+            (unit_bars(&peak), peak, 0.6, (2, (1, 3))),
+            // 70% of 34 is 23.8. Below the POC at 102 the two rows hold 11 against 8 above,
+            // giving 21; then the two above hold 8 against 5 below, and 103 brings 25. The value
+            // area runs from 100 to 103.
+            (unit_bars(&pairs), pairs, 0.7, (3, (1, 4))),
+            // 50% of 26 is 13. The untraded rows on either side of the POC tie at zero and come
+            // in together; then the two rows above hold 4 against 0, and the second brings 14.
+            (unit_bars(&gaps), gaps, 0.5, (5, (4, 8))),
         ] {
             let estimated = VolumeProfile::of(&bars, volumes.len(), None).unwrap();
             let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
             for (i, &volume) in volumes.iter().enumerate() {
                 flow.push(&Tick::new(
                     time,
-                    100.0 + i as f64,
+                    99.0 + i as f64,
                     volume,
                     Some(OrderSide::Buy),
                 ))
@@ -873,9 +930,8 @@ mod tests {
             assert_eq!(estimated.volume(), executed.volume());
             assert_eq!(
                 (executed.low(), executed.high()),
-                (99.5, 99.5 + volumes.len() as f64)
+                (98.5, 98.5 + volumes.len() as f64)
             );
-            // 70% of 24 needs 17 unit rows. 60% of 6 needs the POC's 2 plus both tied 1s.
             assert_eq!(
                 (
                     estimated.poc_and_value_area(share),
