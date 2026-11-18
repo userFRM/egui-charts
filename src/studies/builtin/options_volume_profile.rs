@@ -764,7 +764,8 @@ fn strike_window(
     strikes.dedup();
     let below = strikes.partition_point(|strike| *strike < price);
     let above = strikes.partition_point(|strike| *strike <= price);
-    let kept = &strikes[below.saturating_sub(around)..(above + around).min(strikes.len())];
+    let kept =
+        &strikes[below.saturating_sub(around)..above.saturating_add(around).min(strikes.len())];
     Some(*kept.first()?..=*kept.last()?)
 }
 
@@ -3601,6 +3602,8 @@ mod tests {
                 [105.0, 155.0],
                 &[1.0, 0.0, 0.0, 0.0, 1.0][..],
             ),
+            // A limit past the listed strikes draws every strike.
+            (usize::MAX, Some(100.0), [45.0, 155.0], &every[..]),
             (1, None, [45.0, 155.0], &every[..]),
         ] {
             if study.inputs().iter().any(|input| {
