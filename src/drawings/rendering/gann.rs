@@ -227,7 +227,7 @@ impl Drawing {
     }
 
     /// The stored configuration, or the tool's defaults without building them each frame.
-    pub(super) fn gann_config(&self) -> &GannConfig {
+    pub(crate) fn gann_config(&self) -> &GannConfig {
         static BOX: LazyLock<GannConfig> =
             LazyLock::new(|| GannConfig::for_tool(DrawingToolType::GannBox));
         static SQUARE: LazyLock<GannConfig> =
