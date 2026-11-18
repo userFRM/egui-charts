@@ -111,18 +111,29 @@ and session metadata consistent with the venue. Changing display labels cannot
 reaggregate prebuilt historical OHLC bars. Daily and longer bars identify trading
 dates; follow the [data contract](data-model.mdx) rather than applying an offset
 to every bar. The bars of the chart's own feed read their dates on the bar clock
-of the display zone. Bars given with `Chart::new`, `ChartBuilder` or
-`Chart::set_data` read in UTC when the display zone is behind UTC, unless they
+of the display zone. Bars given with
+[`Chart::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.new),
+`ChartBuilder` or [`Chart::set_data`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_data)
+read in UTC when the display zone is behind UTC, unless they
 sit at its midnight, and in the display zone otherwise, which gives a 00:00 UTC
 stamp the same date. A bar stamped at 00:00 UTC on its trading date therefore
-keeps that date in the crosshair, the tooltip, `Chart::format_time` and the time
-axis marks in every display zone. `Chart::bar_clock` runs on the same dates, so
+keeps that date in the crosshair, the tooltip,
+[`Chart::format_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.format_time)
+and the time axis marks in every display zone.
+[`Chart::bar_clock`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.bar_clock)
+runs on the same dates, so
 bar replay completes such a bar when its date ends and forms the bar of the
 cursor's date there, and studies group the bars into weeks and months by those
-dates; pass it to `ReplayController::cutoff`. When the instrument has a session,
+dates; pass it to
+[`ReplayController::cutoff`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/replay/struct.ReplayController.html#method.cutoff).
+When the instrument has a session,
 bar replay completes such a bar when its last trading window closes, extended
-hours included when `Chart::set_extended_hours` selects them, and the finer bars
-given with `Chart::set_replay_source` form the bar of their trading date
+hours included when
+[`Chart::set_extended_hours`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_extended_hours)
+selects them, and the finer bars
+given with
+[`Chart::set_replay_source`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_replay_source)
+form the bar of their trading date
 instead, as `data::resample_with_session` dates them. The trades and heartbeats
 of the chart's feed join the bar of their trading date too. Intraday bars always
 read in the display zone.

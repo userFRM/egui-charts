@@ -169,7 +169,8 @@ pass. Among custom hits, a later pass wins, then the shorter distance. Equal hit
 ordinary primitives ahead of series renderers, the latest attachment first. When series
 backgrounds group foregrounds in attachment order, equal hits follow reverse attachment
 order across primitives and renderers. The winner is reported as
-`ChartPointer::primitive_hit` in hover, click and double-click events.
+[`ChartPointer::primitive_hit`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartPointer.html#structfield.primitive_hit)
+in hover, click and double-click events.
 Without an override, `hit_test` supplies a cursor-only hit on the series pass.
 
 A normal attachment reports
