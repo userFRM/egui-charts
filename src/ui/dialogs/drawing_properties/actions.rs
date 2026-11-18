@@ -364,6 +364,7 @@ impl DrawingProps {
                     price_axis_label,
                     time_axis_label,
                     elliott_degree,
+                    elliott_show_wave,
                 );
                 if settings.fib_config != target.fib_config {
                     if matches!(

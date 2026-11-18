@@ -653,6 +653,13 @@ impl InputsTab {
                         );
                     });
                     ui.end_row();
+                    let label = ui.label(l10n::text(ui.ctx(), "Wave"));
+                    ui.checkbox(
+                        &mut drawing.elliott_show_wave,
+                        l10n::text(ui.ctx(), "Show wave"),
+                    )
+                    .labelled_by(label.id);
+                    ui.end_row();
                 });
             }
             _ => {}
