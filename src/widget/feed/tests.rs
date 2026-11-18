@@ -4459,6 +4459,104 @@ fn replay_with_or_without_a_trade_store_loss_stops_at_the_cutoff() {
     }
 }
 
+/// On 3t, replay groups all executions the sink allocated, including those left to a page.
+/// The first two rows count buys in threes; the last merges an older live buy before a kept sell
+/// whose page copy has a different timestamp. Each cutoff excludes executions at or after it.
+#[test]
+fn replay_footprint_bars_open_at_chart_bars() {
+    use crate::model::OrderSide::{self, Buy, Sell};
+    const S: i64 = 1_000_000;
+    type Fill = (i64, OrderSide, Option<u64>);
+    // Page, stream, cutoff and replayed (open, bid, ask), with times in microseconds.
+    type Row = (
+        &'static [Fill],
+        &'static [Fill],
+        i64,
+        &'static [(i64, f64, f64)],
+    );
+    let rows: [Row; 3] = [
+        (
+            &[(0, Buy, None), (0, Buy, None)],
+            &[
+                (0, Buy, None),
+                (0, Buy, None),
+                (S, Buy, None),
+                (2 * S, Buy, None),
+                (3 * S, Buy, None),
+                (4 * S, Buy, None),
+            ],
+            5 * S,
+            &[(0, 0.0, 3.0), (2 * S, 0.0, 3.0)],
+        ),
+        (
+            &[(0, Buy, None), (S, Buy, None)],
+            &[
+                (0, Buy, None),
+                (S, Buy, None),
+                (2 * S, Buy, None),
+                (3 * S, Buy, None),
+                (4 * S, Buy, None),
+                (5 * S, Buy, None),
+            ],
+            4 * S,
+            &[(0, 0.0, 3.0), (3 * S, 0.0, 1.0)],
+        ),
+        (
+            &[(400, Sell, Some(2))],
+            &[
+                (-S, Buy, Some(1)),
+                (0, Sell, Some(2)),
+                (S, Buy, Some(3)),
+                (2 * S, Buy, Some(4)),
+            ],
+            3 * S,
+            &[(-S, 1.0, 2.0), (2 * S, 0.0, 1.0)],
+        ),
+    ];
+    let start = bars(1)[0].time;
+    let at = |micros: i64| start + TimeDelta::microseconds(micros);
+    let fill = |&(micros, side, id): &Fill| {
+        let fill = Tick::new(at(micros), 100.0, 1.0, Some(side));
+        match id {
+            Some(id) => fill.with_id(id),
+            None => fill,
+        }
+    };
+    for (copies, stream, cutoff, cells) in rows {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_timeframe("3t".parse().unwrap());
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        feed.page().send(page(Vec::new(), true));
+        frames.run(&mut chart);
+        // History answers are applied before the executions drained in the same frame.
+        let copies = TradePage::new(copies.iter().map(fill).collect(), false);
+        feed.trades.lock().unwrap().remove(0).send(Ok(copies));
+        let sink = feed.sink();
+        stream.iter().for_each(|trade| sink.push_tick(fill(trade)));
+        frames.run(&mut chart);
+        let cells: Vec<_> = (cells.iter())
+            .map(|&(open, bid, ask)| (at(open), bid, ask))
+            .collect();
+        let opens: Vec<_> = (chart.bars(SeriesId::MAIN).iter())
+            .map(|bar| bar.time)
+            .collect();
+        let expected: Vec<_> = cells.iter().map(|cell| cell.0).collect();
+        assert_eq!(opens, expected, "cutoff {cutoff}: chart");
+        let link = chart.feed_link.as_ref().unwrap();
+        let flow = link
+            .footprint(Some(at(cutoff)), chart.bars(SeriesId::MAIN))
+            .unwrap();
+        let replayed: Vec<_> = (flow.bars().iter())
+            .map(|(open, bar)| (*open, bar.bid, bar.ask))
+            .collect();
+        assert_eq!(replayed, cells, "cutoff {cutoff}: replay");
+    }
+}
+
 type PagedCells = Option<Vec<(i64, f64, f64)>>;
 
 /// What the stream sends before the trade page. The history page holds the bars of the tape
