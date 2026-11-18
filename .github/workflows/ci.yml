@@ -462,15 +462,43 @@ jobs:
           ${{ matrix.features == 'all' && '--all-features' || '--no-default-features --features widget' }}
       - name: Run browser widget tests
         if: needs.changes.outputs.rust == 'true'
-        # The tests run in seconds once built: a stalled page or driver fails the step instead of holding the job.
+        # Leave time after the process deadline to print diagnostics before the runner's limit.
         timeout-minutes: 5
         env:
           # The default of 5 seconds for the browser driver to open its port is too short on a busy runner,
           # and the job then fails before any test runs. A longer budget also lets the runner restart a stuck driver.
           WASM_BINDGEN_TEST_DRIVER_TIMEOUT: "60"
-        run: >-
-          wasm-pack test --headless --chrome --lib
-          ${{ matrix.features == 'all' && '--all-features' || '--no-default-features --features widget' }}
+          # Loading and running the all-features page can exceed the runner's 20-second budget.
+          WASM_BINDGEN_TEST_TIMEOUT: "120"
+          WASM_BINDGEN_TEST_WEBDRIVER_JSON: target/browser-tests/webdriver.json
+          CHROMEDRIVER_ARGS: --verbose --log-path=target/browser-tests/chromedriver.log
+        shell: bash
+        run: |
+          mkdir -p target/browser-tests
+          : > target/browser-tests/chromedriver.log
+          # Match the driver's script deadline to the runner instead of its 30-second default.
+          printf '%s\n' '{"timeouts":{"script":120000}}' > target/browser-tests/webdriver.json
+          set +e
+          timeout --verbose --kill-after=10s 240s \
+            wasm-pack test --headless --chrome --lib \
+            ${{ matrix.features == 'all' && '--all-features' || '--no-default-features --features widget' }} \
+            -- --nocapture > target/browser-tests/output.log 2>&1
+          status=$?
+          set -e
+          {
+            echo "Browser test exit status: $status"
+            ps -eo pid,ppid,stat,etime,comm --forest
+          } > target/browser-tests/processes.log
+          cat target/browser-tests/output.log target/browser-tests/processes.log
+          exit "$status"
+      - name: Keep browser test diagnostics
+        if: always() && needs.changes.outputs.rust == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-tests-${{ matrix.features }}
+          path: target/browser-tests/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Build the network feed example for the browser
         if: needs.changes.outputs.rust == 'true' && matrix.features == 'widget'
         run: cargo clippy --target wasm32-unknown-unknown --no-default-features --features widget,http --example network_feed -- -D warnings
