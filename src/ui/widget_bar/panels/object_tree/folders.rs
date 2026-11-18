@@ -234,7 +234,17 @@ pub(super) fn render_folders(
                             }
                         });
                         ui.separator();
-                        if ui.button(l10n::text(ui.ctx(), "Delete folder")).clicked() {
+                        if ui
+                            .add_enabled(
+                                !locked,
+                                egui::Button::new(l10n::text(ui.ctx(), "Delete folder")),
+                            )
+                            .on_disabled_hover_text(l10n::text(
+                                ui.ctx(),
+                                "Unlock the drawings in this folder to delete them",
+                            ))
+                            .clicked()
+                        {
                             action = ObjectTreeAction::DeleteFolder(path.clone());
                             ui.close();
                         }
