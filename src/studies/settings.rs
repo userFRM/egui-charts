@@ -752,13 +752,26 @@ impl ConfiguredStudy {
     }
 
     /// Whether the study can be calculated on another interval: it reads one source, or the bars
-    /// alone, without data of its own to request or order flow it cannot do without.
-    /// An accepted interval stays available if calculating on it changes those requests.
+    /// alone, without order flow it cannot do without and with no data of its own to request
+    /// unless its requests apply on any interval. An accepted interval stays available if
+    /// calculating on it changes those requests.
     fn runs_on_other_bars(&self) -> bool {
         self.calculation_timeframe.is_some()
             || self.study.source().is_some()
-            || (self.study.data_requests().is_empty() && !self.study.needs_order_flow())
+            || ((self.study.data_requests().is_empty()
+                || self.study.requests_allow_other_intervals())
+                && !self.study.needs_order_flow())
     }
+
+    /// The bars the study is calculated on while it runs on another symbol or interval.
+    fn calculation_request(&self) -> super::StudyDataRequest {
+        super::StudyDataRequest {
+            metric: None,
+            symbol: self.calculation_symbol.clone(),
+            timeframe: self.calculation_timeframe,
+        }
+    }
+
     /// The bars evicted since the study was last calculated, by which the bars of its kept values
     /// trail those of the study.
     fn shift(&self) -> usize {
@@ -980,12 +993,8 @@ impl Indicator for ConfiguredStudy {
         if !self.calculation_symbol.is_empty() || self.calculation_timeframe.is_some() {
             // The bars come first: `update_data` reads them from the head. The study's own
             // metric requests (exchange rates) follow, and the candles it reads inside the
-            // Interval's bars, as they are not bars of that interval.
-            let mut requests = vec![super::StudyDataRequest {
-                metric: None,
-                symbol: self.calculation_symbol.clone(),
-                timeframe: self.calculation_timeframe,
-            }];
+            // Interval's bars, or every request of a study whose histories apply on any interval.
+            let mut requests = vec![self.calculation_request()];
             // Bars inside the Interval's bars, on the chart symbol, are the candles a chart of
             // that interval would read (24-hour Volume on 1W reads hourly candles).
             let inside = |timeframe: Timeframe| {
@@ -995,10 +1004,16 @@ impl Indicator for ConfiguredStudy {
                         .calculation_timeframe
                         .is_some_and(|interval| timeframe.duration_ms() < interval.duration_ms())
             };
-            requests.extend(self.study.data_requests().into_iter().filter(|request| {
-                request.metric.is_some()
-                    || (request.symbol.is_empty() && request.timeframe.is_some_and(inside))
-            }));
+            let all = self.study.requests_allow_other_intervals();
+            for request in self.study.data_requests() {
+                if (all
+                    || request.metric.is_some()
+                    || (request.symbol.is_empty() && request.timeframe.is_some_and(inside)))
+                    && !requests.contains(&request)
+                {
+                    requests.push(request);
+                }
+            }
             requests
         } else {
             self.study.data_requests()
@@ -1008,7 +1023,12 @@ impl Indicator for ConfiguredStudy {
         &self,
         request: &super::StudyDataRequest,
     ) -> Option<chrono::DateTime<chrono::Utc>> {
-        if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
+        // The study's own histories keep their stated starts. The calculation bars load
+        // to the chart's first bar, including when a table slot names that same request.
+        if (self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none())
+            || (self.study.requests_allow_other_intervals()
+                && *request != self.calculation_request())
+        {
             self.study.data_start(request)
         } else {
             None
@@ -1108,6 +1128,9 @@ impl Indicator for ConfiguredStudy {
     }
     fn order_flow_inputs(&self) -> &[crate::data::OrderFlowInput] {
         self.study.order_flow_inputs()
+    }
+    fn requests_allow_other_intervals(&self) -> bool {
+        self.study.requests_allow_other_intervals()
     }
     fn needs_order_flow(&self) -> bool {
         self.study.needs_order_flow()
@@ -2425,6 +2448,117 @@ mod tests {
                 study
                     .set_input("calculation_symbol", InputValue::Symbol("X".into()))
                     .is_err()
+            );
+        }
+        let mut study = ConfiguredStudy::new(Box::new(super::super::TechnicalRatings::default()));
+        study.set_timeframe(Timeframe::Min5);
+        let before = study.snapshot_settings();
+        study
+            .set_input("table_intervals", InputValue::Toggle(true))
+            .unwrap();
+        let own = study.study.inputs().len();
+        assert_eq!(
+            &ids(&study)[own..],
+            ["calculation_timeframe", "wait_for_close"]
+        );
+        study
+            .set_input(
+                "calculation_timeframe",
+                InputValue::Timeframe(Some(Timeframe::Hour1)),
+            )
+            .unwrap();
+        let requests = study.data_requests();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.timeframe.unwrap())
+                .collect::<Vec<_>>(),
+            [
+                Timeframe::Hour1,
+                Timeframe::Hour4,
+                Timeframe::Day1,
+                Timeframe::Week1,
+                Timeframe::Month1
+            ]
+        );
+        let hourly = [10., 12.]
+            .into_iter()
+            .enumerate()
+            .map(|(i, close)| {
+                Bar::new(
+                    chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::hours(i as i64),
+                    close,
+                    close,
+                    close,
+                    close,
+                    1.,
+                )
+            })
+            .collect::<Vec<_>>();
+        let chart = (0..12)
+            .map(|i| {
+                Bar::new(
+                    hourly[1].time + chrono::TimeDelta::minutes(i * 5),
+                    12.,
+                    12.,
+                    12.,
+                    12.,
+                    1.,
+                )
+            })
+            .collect::<Vec<_>>();
+        let source = |request: &super::super::StudyDataRequest, bars| super::super::StudyData {
+            request: request.clone(),
+            bars,
+            clock: crate::model::BarClock::new(request.timeframe.unwrap()),
+            instrument: None,
+            timeframe: request.timeframe.unwrap(),
+        };
+        study.update_data(
+            &chart,
+            0,
+            &[
+                source(&requests[0], &hourly[..]),
+                source(&requests[1], &[][..]),
+            ],
+        );
+        let row: Vec<_> = study.table().unwrap().rows[0]
+            .iter()
+            .map(|cell| match cell {
+                super::super::StudyCell::Text(text) => text.as_str(),
+                _ => panic!("text cell"),
+            })
+            .collect();
+        assert_eq!(row, ["1h", "Strong Buy", "N/A", "Strong Buy", "23%"]);
+        // The table rates the forming hour while the confirmed plot holds the previous hour.
+        assert_eq!(study.values().value(2, chart.len() - 1), Some(0.0));
+        study
+            .set_input("wait_for_close", InputValue::Toggle(false))
+            .unwrap();
+        study.update_data(
+            &chart,
+            0,
+            &[
+                source(&requests[0], &hourly[..]),
+                source(&requests[1], &[][..]),
+            ],
+        );
+        assert_eq!(study.values().value(2, chart.len() - 1), Some(1.0));
+        assert_eq!(study.data_start(&requests[0]), None);
+        assert_eq!(
+            study.data_start(&requests[1]),
+            Some(hourly[1].time - chrono::TimeDelta::hours(8000))
+        );
+        study.restore_settings(&before).unwrap();
+        let values = study.inputs();
+        for (id, value) in [
+            ("table_intervals", InputValue::Toggle(false)),
+            ("calculation_timeframe", InputValue::Timeframe(None)),
+            ("wait_for_close", InputValue::Toggle(true)),
+        ] {
+            assert_eq!(
+                values.iter().find(|input| input.id == id).unwrap().value,
+                value
             );
         }
         let breadth = ConfiguredStudy::new(Box::new(super::super::AdvanceDeclineRatio::default()));

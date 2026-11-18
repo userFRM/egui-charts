@@ -569,6 +569,35 @@ impl StudyTemplate {
                     }
                 }
             }
+            // Older ratings saved their configurable component lengths and switches.
+            "Technical Ratings" if has("fast") && !declares("fast") => {
+                const REMOVED: [&str; 17] = [
+                    "fast",
+                    "medium",
+                    "slow",
+                    "simple",
+                    "exponential",
+                    "rsi",
+                    "rsi_period",
+                    "stochastic",
+                    "stochastic_period",
+                    "cci",
+                    "cci_period",
+                    "macd",
+                    "macd_fast",
+                    "macd_slow",
+                    "macd_signal",
+                    "momentum",
+                    "momentum_period",
+                ];
+                template
+                    .inputs
+                    .retain(|(id, _)| !REMOVED.contains(&id.as_str()));
+                // Older panes showed all groups; now they show the rating selected by the basis.
+                for plot in template.settings.plots.iter_mut().take(2) {
+                    plot.visible = false;
+                }
+            }
             _ => return None,
         }
         Some(template)
@@ -1404,21 +1433,45 @@ mod tests {
         assert_eq!(again.fills().len(), 1);
 
         // A Technical Ratings as the release before its table inputs saved it, its fast length
-        // edited to 20 and its summary to orange: it rates every vote, requests no other interval
-        // and draws its table where and as it did.
+        // edited to 20 and its summary to orange: it upgrades its components, requests no other
+        // interval and draws its table where and as it did.
         let saved: StudyTemplate = serde_json::from_str(
             r#"{"name":"Technical Ratings","inputs":[["fast",{"Length":20}],["medium",{"Length":50}],["slow",{"Length":200}],["simple",{"Toggle":true}],["exponential",{"Toggle":true}],["rsi",{"Toggle":true}],["rsi_period",{"Length":14}],["stochastic",{"Toggle":true}],["stochastic_period",{"Length":14}],["cci",{"Toggle":true}],["cci_period",{"Length":20}],["macd",{"Toggle":true}],["macd_fast",{"Length":12}],["macd_slow",{"Length":26}],["macd_signal",{"Length":9}],["momentum",{"Toggle":true}],["momentum_period",{"Length":10}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TechnicalRatings.html","plots":[{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true},{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true},{"color":[230,81,0,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true},{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":false},{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":false},{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":false}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[{"value":null,"color":[46,78,123,128],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,77,77,128],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":false,"level_fill_color":[11,11,12,16],"untagged_plots":[0,1,2,3,4,5],"price_line_plots":[],"plot_variants":[[],[],[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
         )
         .unwrap();
         let mut restored = saved.create().unwrap();
-        assert_eq!(restored.settings().plots, saved.settings.plots);
+        let mut plots = saved.settings.plots.clone();
+        plots[0].visible = false;
+        plots[1].visible = false;
+        assert_eq!(restored.settings().plots, plots);
         assert!(restored.data_requests().is_empty());
         let inputs = restored.inputs();
         let value = |id: &str| inputs.iter().find(|i| i.id == id).unwrap().value.clone();
-        assert_eq!(
-            [value("fast"), value("basis")],
-            [InputValue::Length(20), InputValue::Choice(0)]
-        );
+        assert!(!inputs.iter().any(|input| input.id == "fast"));
+        assert_eq!(value("basis"), InputValue::Choice(0));
+        let bars: Vec<_> = (0..260)
+            .map(|i| {
+                Bar::new(
+                    chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::days(i),
+                    100.0 + i as f64,
+                    100.25 + i as f64,
+                    99.75 + i as f64,
+                    100.0 + i as f64,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut fresh = ConfiguredStudy::new(Box::new(crate::studies::TechnicalRatings::default()));
+        restored.calculate(&bars);
+        fresh.calculate(&bars);
+        for at in 0..bars.len() {
+            for line in 0..6 {
+                assert_eq!(
+                    restored.values().value(line, at),
+                    fresh.values().value(line, at)
+                );
+            }
+        }
         restored.calculate(&[]);
         let table = restored.table().unwrap();
         assert_eq!(
@@ -1435,7 +1488,80 @@ mod tests {
                 Some(Color32::WHITE)
             )
         );
-        assert_eq!(table.rows.len(), 3);
+        assert_eq!(table.rows.len(), 1);
+        assert_eq!(
+            table.columns,
+            [
+                "Interval",
+                "Moving averages",
+                "Oscillators",
+                "Summary",
+                "Coverage"
+            ]
+        );
+        // The same study as saved once it had table inputs, its buy and neutral colours edited,
+        // keeps the colours of its columns: those inputs colour its table alone.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"Technical Ratings","inputs":[["fast",{"Length":10}],["medium",{"Length":50}],["slow",{"Length":200}],["simple",{"Toggle":true}],["exponential",{"Toggle":true}],["rsi",{"Toggle":true}],["rsi_period",{"Length":14}],["stochastic",{"Toggle":true}],["stochastic_period",{"Length":14}],["cci",{"Toggle":true}],["cci_period",{"Length":20}],["macd",{"Toggle":true}],["macd_fast",{"Length":12}],["macd_slow",{"Length":26}],["macd_signal",{"Length":9}],["momentum",{"Toggle":true}],["momentum_period",{"Length":10}],["basis",{"Choice":0}],["table_intervals",{"Toggle":false}],["table_position",{"Choice":8}],["table_size",{"Choice":2}],["table_strong_buy_color",{"Color":[41,98,255,255]}],["table_buy_color",{"Color":[0,255,0,255]}],["table_neutral_color",{"Color":[255,215,0,255]}],["table_sell_color",{"Color":[239,154,154,255]}],["table_strong_sell_color",{"Color":[244,67,54,255]}],["table_header_color",{"Color":[41,91,121,255]}],["table_text_color",{"Color":[255,255,255,255]}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TechnicalRatings.html","plots":[{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true},{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true},{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true},{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":false},{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":false},{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":false}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[{"value":null,"color":[46,78,123,128],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,77,77,128],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":false,"level_fill_color":[11,11,12,16],"untagged_plots":[0,1,2,3,4,5],"price_line_plots":[],"plot_variants":[[],[],[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+        )
+        .unwrap();
+        let mut restored = saved.create().unwrap();
+        restored.calculate(&bars);
+        for at in 0..bars.len() {
+            assert_eq!(
+                restored.plot_color(2, at),
+                fresh.plot_color(2, at),
+                "bar {at}"
+            );
+        }
+        restored.calculate(&[]);
+        assert_eq!(
+            restored.table().unwrap().cell_colors,
+            [vec![
+                Color32::from_rgb(41, 91, 121),
+                Color32::GOLD,
+                Color32::GOLD,
+                Color32::GOLD
+            ]]
+        );
+        for basis in [0, 1, 2] {
+            let mut study =
+                ConfiguredStudy::new(Box::new(crate::studies::TechnicalRatings::default()));
+            study.set_input("basis", InputValue::Choice(basis)).unwrap();
+            assert_eq!(
+                study
+                    .settings()
+                    .plots
+                    .iter()
+                    .map(|plot| plot.visible)
+                    .collect::<Vec<_>>(),
+                [false, false, true, false, false, false]
+            );
+            for (id, value) in [
+                ("table_intervals", InputValue::Toggle(true)),
+                ("table_timeframes [0]", InputValue::Timeframe(None)),
+                (
+                    "table_timeframes [1]",
+                    InputValue::Timeframe(Some(crate::model::Timeframe::Min15)),
+                ),
+                (
+                    "calculation_timeframe",
+                    InputValue::Timeframe(Some(crate::model::Timeframe::Hour1)),
+                ),
+            ] {
+                study.set_input(id, value).unwrap();
+            }
+            let saved = StudyTemplate::from_study(&study);
+            let json = serde_json::to_string(&saved).unwrap();
+            let again = serde_json::from_str::<StudyTemplate>(&json)
+                .unwrap()
+                .create()
+                .unwrap();
+            assert_eq!(
+                serde_json::to_string(&StudyTemplate::from_study(again.as_ref())).unwrap(),
+                json
+            );
+        }
     }
 
     /// A Connors RSI saved with guides at 70, 50 and 30 and a Correlation Coefficient saved with
@@ -1504,6 +1630,12 @@ mod tests {
         let millis = || InputKind::Number(0.0, 1e13);
         let rows = [
             ("RSI", vec![], 1),
+            // Built-in templates with the former component inputs drop them.
+            (
+                "Technical Ratings",
+                vec![("fast", Length(20), InputKind::Length(1, 500))],
+                1,
+            ),
             // Built-in templates with a band and no fill styles restore with hidden fills.
             (
                 "VWAP",
@@ -1558,7 +1690,11 @@ mod tests {
             });
         }
         for (name, inputs, lines) in rows {
-            let saved = StudyTemplate::from_study(factory.create(name).unwrap().as_ref());
+            let mut original = factory.create(name).unwrap();
+            if name == "Technical Ratings" {
+                original.set_input("fast", Length(21)).unwrap();
+            }
+            let saved = StudyTemplate::from_study(original.as_ref());
             let restored = saved
                 .create_with(&factory)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -1567,6 +1703,11 @@ mod tests {
             assert_eq!(fills, saved.settings.fills, "{name}");
             let restored = restored.inputs();
             for (id, value, _) in inputs {
+                let value = if name == "Technical Ratings" && id == "fast" {
+                    Length(21)
+                } else {
+                    value
+                };
                 let input = restored.iter().find(|input| input.id == id);
                 assert_eq!(input.map(|input| &input.value), Some(&value), "{name} {id}");
             }

@@ -101,7 +101,7 @@ impl ArrowStyle {
 pub use crate::config::FontWeight;
 pub use crate::model::TimeframeVisibility;
 
-/// Drawing interaction options
+/// Selection handle settings read by `DrawingInteraction::render_handles`.
 ///
 /// ```
 /// use egui_charts::drawings::DrawingOptions;
@@ -112,16 +112,6 @@ pub use crate::model::TimeframeVisibility;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct DrawingOptions {
-    /// Enable snap to OHLC prices
-    pub snap_to_price: bool,
-    /// Enable snap to candle open/close times
-    pub snap_to_time: bool,
-    /// Snap distance in pixels
-    pub snap_distance: f32,
-    /// Enable magnet mode (snap to nearby points)
-    pub magnet_mode: bool,
-    /// Magnet distance in pixels
-    pub magnet_distance: f32,
     /// Show selection handles
     pub show_handles: bool,
     /// Handle size in pixels
@@ -135,11 +125,6 @@ pub struct DrawingOptions {
 impl Default for DrawingOptions {
     fn default() -> Self {
         Self {
-            snap_to_price: true,
-            snap_to_time: true,
-            snap_distance: 10.0,
-            magnet_mode: false,
-            magnet_distance: 15.0,
             show_handles: true,
             handle_size: 6.0,
             handle_color: [255, 255, 255, 200],

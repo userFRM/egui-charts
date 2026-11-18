@@ -154,6 +154,14 @@ macro_rules! input_spec {
             crate::studies::InputKind::Toggle,
         )
     };
+    ($id:expr, $value:expr, timeframe($label:expr)) => {
+        crate::studies::StudyInput::new(
+            $id,
+            $label,
+            crate::studies::InputValue::Timeframe($value),
+            crate::studies::InputKind::Timeframe,
+        )
+    };
     ($id:expr, $value:expr, color($label:expr)) => {
         crate::studies::StudyInput::new(
             $id,
@@ -196,6 +204,12 @@ macro_rules! input_assign {
     ($value:expr, toggle($label:expr)) => {
         match $value {
             crate::studies::InputValue::Toggle(v) => v,
+            _ => unreachable!(),
+        }
+    };
+    ($value:expr, timeframe($label:expr)) => {
+        match $value {
+            crate::studies::InputValue::Timeframe(v) => v,
             _ => unreachable!(),
         }
     };
