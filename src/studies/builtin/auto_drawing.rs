@@ -881,6 +881,13 @@ mod tests {
                 );
             });
             let painted = output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::LineSegment{points,..} if points[0].distance(a)<0.01 && points[1].distance(b)<0.01));
+            // Anchors scale the study; only the construction, not their plot geometry, is painted.
+            assert!(
+                !output
+                    .shapes
+                    .iter()
+                    .any(|s| matches!(s.shape, egui::Shape::Circle(_) | egui::Shape::Path(_)))
+            );
             output.drop_without_applying_deltas();
             let visible = drawing_visible && plot_visible;
             assert_eq!(painted, visible);

@@ -356,8 +356,6 @@ impl IndicatorRenderer {
                 price_scale,
                 coords,
             );
-            crate::chart::indicators::plots::paint_price_lines(&painter, indicator, price_scale);
-            return;
         }
         if !indicator.candles().is_empty() {
             crate::chart::indicators::plots::paint_candles(context, indicator, price_scale, coords);
@@ -416,6 +414,14 @@ impl IndicatorRenderer {
         let bar_spacing = coords.bar_spacing_for_width();
 
         for line_idx in 0..line_count {
+            // Plot 0 is painted as the drawings it styles.
+            #[cfg(feature = "drawings")]
+            if line_idx == 0
+                && !indicator.drawings().is_empty()
+                && indicator.drawings_use_plot_style()
+            {
+                continue;
+            }
             let mut plot = indicator.plot_style(line_idx);
             if matches!(
                 plot.plot_type,
@@ -1826,6 +1832,103 @@ mod tests {
             }
         }
     }
+    /// A study that draws still paints its plots above its drawings: a chart pattern study marks
+    /// the bar confirming a double top with a triangle and its abbreviation in the Bearish colour
+    /// of its Style tab, draws the neckline in that colour beneath them, and both can be
+    /// selected.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn chart_pattern_confirmations_are_painted_above_their_boundaries() {
+        use crate::chart::indicators::hit_test_indicator;
+        use crate::studies::{ChartPatterns, ConfiguredStudy, PatternFamily};
+        // Legs of five flat bars through 100, 120, 105, 119, 60: tops at bars 5 and 15 over
+        // the valley at 105 on bar 10; bar 18 closes at 83.6 once the second top is known.
+        let anchors = [100.0, 120.0, 105.0, 119.0, 60.0];
+        let mut closes = vec![anchors[0]];
+        for pair in anchors.windows(2) {
+            closes.extend((1..=5).map(|i| pair[0] + (pair[1] - pair[0]) * f64::from(i) / 5.0));
+        }
+        let bars: Vec<Bar> = closes
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| {
+                Bar::new(
+                    Utc.timestamp_opt(i as i64 * 60, 0).unwrap(),
+                    c,
+                    c,
+                    c,
+                    c,
+                    1.0,
+                )
+            })
+            .collect();
+        let bearish = Color32::from_rgb(200, 0, 120);
+        let mut study = ConfiguredStudy::new(Box::new(ChartPatterns::new(PatternFamily::Reversal)));
+        let mut settings = study.settings();
+        settings.plots[1].color = bearish;
+        study.apply_settings(&[], settings).unwrap();
+        study.calculate(&bars);
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 300.0));
+        let price = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(50.0, 130.0),
+            0.0,
+            300.0,
+            false,
+        );
+        let coords = ChartMapping::new(rect, 15.0, 0, 20, 0.0, price);
+        let at = Pos2::new(coords.idx_to_x(18), price.price_to_y(83.6));
+        assert!(rect.contains(at));
+        let output = Context::default().run_ui(RawInput::default(), |ui| {
+            IndicatorRenderer::render_study(
+                &RenderContext::new(ui.painter(), rect),
+                &study,
+                &bars,
+                0,
+                &price,
+                &coords,
+            );
+        });
+        let shapes: Vec<_> = output.shapes.iter().map(|s| s.shape.clone()).collect();
+        output.drop_without_applying_deltas();
+        let triangle = shapes.iter().position(|shape| {
+            matches!(shape, Shape::Path(path)
+            if path.points.len() == 3 && path.fill == bearish
+                && (path.points.iter().map(|p| p.x).sum::<f32>() / 3.0 - at.x).abs() < 0.01)
+        });
+        let neckline = shapes.iter().position(|shape| {
+            matches!(shape, Shape::LineSegment { points, stroke }
+            if stroke.color == bearish && stroke.width == 1.0
+                && points.iter().all(|p| (p.y - price.price_to_y(105.0)).abs() < 0.01))
+        });
+        let label = shapes
+            .iter()
+            .any(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == "DT"));
+        let triangle = triangle.expect("no Bearish triangle on bar 18");
+        assert!(label, "no DT label");
+        assert!(neckline.expect("no neckline in the Bearish colour") < triangle);
+        let to_y = |p| price.price_to_y(p);
+        assert_eq!(
+            hit_test_indicator(at, &study, 0, 0..21, &coords, to_y).map(|hit| hit.bar_idx),
+            Some(18)
+        );
+        let on_neckline = Pos2::new(coords.idx_to_x(8), price.price_to_y(105.0));
+        assert!(hit_test_indicator(on_neckline, &study, 0, 0..21, &coords, to_y).is_some());
+
+        // Independent boundaries remain visible, selectable and scaled with both plots hidden.
+        let mut settings = study.settings();
+        for plot in &mut settings.plots {
+            plot.visible = false;
+        }
+        study.apply_settings(&[], settings).unwrap();
+        assert!(hit_test_indicator(on_neckline, &study, 0, 0..21, &coords, to_y).is_some());
+        assert!(hit_test_indicator(at, &study, 0, 0..21, &coords, to_y).is_none());
+        assert_eq!(
+            crate::studies::plots::drawing_prices(&study, 0..21).collect::<Vec<_>>(),
+            [105.0, 105.0]
+        );
+    }
+
     /// A fit of prices 2, 4, 6 continues by two per bar on every price scale.
     #[test]
     fn regression_extension_projects_prices_before_mapping_to_the_axis() {

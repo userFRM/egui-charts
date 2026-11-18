@@ -1,6 +1,9 @@
 //! Shared validation for host drawing edits, and the sizes drawings are drawn at.
 
 use super::{Drawing, DrawingToolType};
+use crate::model::{Timeframe, TimezoneId};
+use chrono::{DateTime, Utc};
+use std::ops::RangeInclusive;
 
 /// The widest stroke in points a drawing is drawn with; the properties editor offers 1 to 10.
 pub(crate) const MAX_STROKE_WIDTH: f32 = 100.0;
@@ -18,33 +21,79 @@ pub(crate) const MAX_PITCHFORK_LEVEL: f32 = 100.0;
 /// The distance from bar 0 at which no chart with fewer than 2^35 bars maps a bar index to a
 /// time: even one nanosecond shared by every bar puts it more than `i64::MAX` nanoseconds past
 /// the outermost bar, and a calendar interval more than `u32::MAX` months. Saving refuses such
-/// an anchor unless it still holds the time it was restored with.
+/// an anchor unless it still holds the time it was restored with. It is the only bound for a
+/// manager outside a chart and on a chart without bars.
 const UNMAPPABLE_BAR_INDEX: f32 = 1e30;
+
+/// The shown bars' count, revision and edge times, calendar interval and calendar zone from
+/// which a chart worked out its mapped bar indices.
+pub(crate) type MappingKey = (
+    usize,
+    u64,
+    Option<DateTime<Utc>>,
+    Option<DateTime<Utc>>,
+    Option<Timeframe>,
+    Option<TimezoneId>,
+);
+
+/// Finds the outermost `f32` indices that map to a time, on a chart with bars from 0 to `last`.
+/// Outside the bars time is extrapolated monotonically, so each bound lies between a known
+/// mapped index and [`UNMAPPABLE_BAR_INDEX`], which no chart maps.
+pub(crate) fn mapped_bars(last: usize, maps: impl Fn(f64) -> bool) -> RangeInclusive<f32> {
+    let farthest = |from: f32, sign: f32| {
+        // Non-negative `f32` values are ordered as their bits are.
+        let (mut inside, mut outside) = (from.to_bits(), UNMAPPABLE_BAR_INDEX.to_bits());
+        while outside - inside > 1 {
+            let middle = inside + (outside - inside) / 2;
+            if maps(f64::from(sign * f32::from_bits(middle))) {
+                inside = middle;
+            } else {
+                outside = middle;
+            }
+        }
+        sign * f32::from_bits(inside)
+    };
+    farthest(0.0, -1.0)..=farthest(last as f32, 1.0)
+}
 
 /// Checks a drawing created through `add_drawing` or moved through `set_drawing_points`: what
 /// saving needs, with exactly the anchors the tool places.
-pub(super) fn validate(drawing: &Drawing) -> Result<(), &'static str> {
-    check(drawing, true)
+pub(super) fn validate(
+    drawing: &Drawing,
+    mapped: Option<&RangeInclusive<f32>>,
+) -> Result<(), &'static str> {
+    check(drawing, true, mapped)
 }
 
 /// Checks what saving needs: a drawing tool rather than a cursor, at least the anchors the tool
 /// draws with, finite coordinates that can map to a time, and settings in range.
-pub(super) fn validate_stored(drawing: &Drawing) -> Result<(), &'static str> {
-    check(drawing, false)
+pub(super) fn validate_stored(
+    drawing: &Drawing,
+    mapped: Option<&RangeInclusive<f32>>,
+) -> Result<(), &'static str> {
+    check(drawing, false, mapped)
 }
 
 /// Checks an edit that turned `old` into `new`: refuses one after which saving would refuse a
 /// drawing it accepted before, with the reason [`validate_stored`] gives. A drawing that saving
 /// refuses already, such as one a host changed directly through `DrawingManager::drawings`,
 /// takes any edit, so that it can still be hidden, locked, renamed or filed.
-pub(super) fn validate_edit(old: &Drawing, new: &Drawing) -> Result<(), &'static str> {
-    match validate_stored(new) {
-        Err(reason) if validate_stored(old).is_ok() => Err(reason),
+pub(super) fn validate_edit(
+    old: &Drawing,
+    new: &Drawing,
+    mapped: Option<&RangeInclusive<f32>>,
+) -> Result<(), &'static str> {
+    match validate_stored(new, mapped) {
+        Err(reason) if validate_stored(old, mapped).is_ok() => Err(reason),
         _ => Ok(()),
     }
 }
 
-fn check(drawing: &Drawing, exact: bool) -> Result<(), &'static str> {
+fn check(
+    drawing: &Drawing,
+    exact: bool,
+    mapped: Option<&RangeInclusive<f32>>,
+) -> Result<(), &'static str> {
     let tool = drawing.tool_type;
     if tool.is_cursor() {
         return Err("Cursor tools do not create drawings");
@@ -74,10 +123,13 @@ fn check(drawing: &Drawing, exact: bool) -> Result<(), &'static str> {
     {
         return Err("Drawing coordinates must be finite");
     }
-    // An anchor that still holds its restored time needs no mapping, as when saving.
+    // Retained time anchors need no mapping, as when saving. Without chart bars, refuse only
+    // indices that no chart maps.
     if drawing.chart_points.iter().any(|p| {
-        p.bar_idx.abs() >= UNMAPPABLE_BAR_INDEX
-            && p.time_anchor.is_none_or(|(_, index)| index != p.bar_idx)
+        let maps = mapped.map_or(p.bar_idx.abs() < UNMAPPABLE_BAR_INDEX, |range| {
+            range.contains(&p.bar_idx)
+        });
+        !maps && p.time_anchor.is_none_or(|(_, index)| index != p.bar_idx)
     }) {
         return Err("Drawing anchors must map to a time");
     }
