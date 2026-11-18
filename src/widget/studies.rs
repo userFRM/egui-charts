@@ -232,7 +232,7 @@ impl Chart {
     /// as when their studies are hidden individually. New studies join the hidden group;
     /// calculation, data requests and alerts continue. Hiding deselects a selected study.
     /// Inside [`Self::user_action`] this is one undo step. The flag is kept on restore but
-    /// is not saved in [`ChartSnapshot`](super::ChartSnapshot).
+    /// is not saved in a chart snapshot.
     pub fn set_indicators_hidden(&mut self, hidden: bool) {
         self.indicators_hidden = hidden;
         self.readout_revision = crate::model::next_revision();
