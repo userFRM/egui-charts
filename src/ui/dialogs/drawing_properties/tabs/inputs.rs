@@ -115,13 +115,28 @@ impl InputsTab {
                         ui.combo_select(
                             "bars_pattern_mode",
                             &mut config.mode,
-                            [BarsPatternMode::Bars, BarsPatternMode::Line],
+                            [
+                                BarsPatternMode::HighLowBars,
+                                BarsPatternMode::OpenCloseBars,
+                                BarsPatternMode::Bars,
+                                BarsPatternMode::Line,
+                                BarsPatternMode::OpenLine,
+                                BarsPatternMode::HighLine,
+                                BarsPatternMode::LowLine,
+                                BarsPatternMode::MidpointLine,
+                            ],
                             |mode| {
                                 l10n::text(
                                     &ctx,
                                     match mode {
-                                        BarsPatternMode::Line => "Line",
-                                        _ => "Bars",
+                                        BarsPatternMode::Bars => "OHLC bars",
+                                        BarsPatternMode::HighLowBars => "High-low bars",
+                                        BarsPatternMode::OpenCloseBars => "Open-close bars",
+                                        BarsPatternMode::Line => "Close line",
+                                        BarsPatternMode::OpenLine => "Open line",
+                                        BarsPatternMode::HighLine => "High line",
+                                        BarsPatternMode::LowLine => "Low line",
+                                        BarsPatternMode::MidpointLine => "High-low midpoint line",
                                     },
                                 )
                             },

@@ -1522,7 +1522,7 @@ mod tests {
                 });
             }
             drawing.bars_pattern = Some(crate::drawings::BarsPatternConfig {
-                mode: crate::drawings::BarsPatternMode::Line,
+                mode: crate::drawings::BarsPatternMode::MidpointLine,
                 mirrored: true,
                 flipped: true,
             });

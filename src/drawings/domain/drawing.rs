@@ -9,11 +9,11 @@
 //! This keeps the domain layer pure and testable.
 
 use super::{
-    AnnotationMarker, ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree,
-    FibonacciConfig, FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig,
-    LineMeasurements, MiddleLineStyle, NoteTextStyle, PitchforkConfig, PositionReadout,
-    PositionSize, PositionSizing, PositionStyle, RegressionTrendConfig, TimeframeVisibility,
-    VwapConfig,
+    AnnotationMarker, ArrowStyle, BarsPatternConfig, BarsPatternMode, ChartPoint, DrawingToolType,
+    ElliottDegree, FibonacciConfig, FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig,
+    ImageConfig, LineMeasurements, MiddleLineStyle, NoteTextStyle, PitchforkConfig,
+    PositionReadout, PositionSize, PositionSizing, PositionStyle, RegressionTrendConfig,
+    TimeframeVisibility, VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -348,8 +348,8 @@ pub struct Drawing {
     #[serde(default)]
     pub elliott_degree: ElliottDegree,
 
-    /// Draw mode, mirroring and flipping of a bars pattern's copy. `None` uses the defaults,
-    /// as drawings saved before this setting do.
+    /// Draw mode, mirroring and flipping of a bars pattern's copy. New patterns draw high-low
+    /// bars; `None` uses the defaults, OHLC bars, as drawings saved before this setting do.
     #[serde(default)]
     pub bars_pattern: Option<BarsPatternConfig>,
 
@@ -692,7 +692,10 @@ impl Drawing {
             closed: false,
             gann: None,
             ghost_feed: None,
-            bars_pattern: None,
+            bars_pattern: (tool_type == DrawingToolType::BarsPattern).then(|| BarsPatternConfig {
+                mode: BarsPatternMode::HighLowBars,
+                ..Default::default()
+            }),
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
         }
