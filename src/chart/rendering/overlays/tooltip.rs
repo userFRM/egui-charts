@@ -42,8 +42,8 @@ pub struct ValueFormatters<'a> {
     /// The decimals of built-in prices in place of the instrument's; the chart sets it to the
     /// precision chosen for its price scale.
     pub(crate) price_decimals: Option<u8>,
-    /// Groups the thousands of built-in prices and of studies in price units; the chart sets it
-    /// from `ChartConfig::thousands_sep`.
+    /// Groups the thousands of built-in prices; the chart sets it from
+    /// `ChartConfig::thousands_sep`.
     pub(crate) thousands_sep: Option<char>,
 }
 
@@ -65,16 +65,6 @@ impl ValueFormatters<'_> {
             |formatter| formatter.format(price),
         )
     }
-
-    /// Groups built-in study prices as the legend does, retaining preformatted text as supplied.
-    fn study(&self, study: &StudyValue) -> String {
-        let text = study.formatted_value();
-        if study.formatted.is_none() && study.format == crate::scales::StudyFormat::Price {
-            group_thousands(text, self.thousands_sep)
-        } else {
-            text
-        }
-    }
 }
 
 impl std::fmt::Debug for ValueFormatters<'_> {
@@ -87,8 +77,8 @@ impl std::fmt::Debug for ValueFormatters<'_> {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct StudyValue {
-    /// Text already formatted by the chart, retained as supplied. `None` uses the units and
-    /// precision.
+    /// The value as the chart writes it: in the host formatter of its study, else in its units
+    /// with the thousands of a price grouped. `None` uses the units and precision.
     pub formatted: Option<String>,
     /// Study title.
     pub study: String,
@@ -288,7 +278,7 @@ pub fn render_floating_tooltip(
     rows.extend(studies.iter().map(|study| {
         (
             study.translated_label(painter.ctx()),
-            formatters.study(study),
+            study.formatted_value(),
             // A fully transparent colour holds no RGB, so it has no opaque form.
             if study.color.a() == 0 {
                 options.text_color
@@ -521,7 +511,7 @@ pub fn render_tracking_tooltip(
         format!(
             "{}: {}",
             study.translated_label(painter.ctx()),
-            formatters.study(study)
+            study.formatted_value()
         )
     }));
 
@@ -1115,15 +1105,9 @@ mod tests {
         let bar = Bar::new(time, 1000.0, 2300.0, 900.0, 2234.5, 1.0);
         let instrument = Instrument::new("SAMPLE").with_tick_size(0.01);
         let scale = crate::scales::TimeFormatterBuilder::new().build();
-        for (separator, formatted, expected, study) in [
-            (Some(','), None, "+1,234.50 (+123.45%)", "42,569.16"),
-            (None, None, "+1234.50 (+123.45%)", "42569.16"),
-            (
-                Some(','),
-                Some("host 42569.16"),
-                "+1,234.50 (+123.45%)",
-                "host 42569.16",
-            ),
+        for (separator, expected) in [
+            (Some(','), "+1,234.50 (+123.45%)"),
+            (None, "+1234.50 (+123.45%)"),
         ] {
             let ctx = egui::Context::default();
             let output = ctx.run_ui(Default::default(), |ui| {
@@ -1138,15 +1122,7 @@ mod tests {
                     egui::Color32::GREEN,
                     &scale,
                     3600,
-                    &[StudyValue {
-                        formatted: formatted.map(str::to_owned),
-                        study: "MA".into(),
-                        plot: String::new(),
-                        value: Some(42_569.16),
-                        precision: 2,
-                        format: crate::scales::StudyFormat::Price,
-                        color: egui::Color32::RED,
-                    }],
+                    &[],
                     Some(&instrument),
                     ValueFormatters {
                         thousands_sep: separator,
@@ -1164,7 +1140,6 @@ mod tests {
                 .collect();
             output.drop_without_applying_deltas();
             assert!(texts.iter().any(|text| text == expected), "{texts:?}");
-            assert!(texts.iter().any(|text| text == study), "{texts:?}");
         }
     }
 

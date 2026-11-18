@@ -160,6 +160,7 @@ impl Chart {
                 let row = StudyValue {
                     formatted: study.plot_value(line, index).map(|value| {
                         let text = study.format_plot_value(line, value);
+                        // Built-in prices group as in the legend; formatter text stays as written.
                         if study.value_format() == crate::scales::StudyFormat::Price
                             && self.study_formatter(id, study.value_format()).is_none()
                         {
