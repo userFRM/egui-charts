@@ -1178,6 +1178,11 @@ impl Indicator for ChartPatterns {
         vec!["Bullish".into(), "Bearish".into(), "Developing".into()]
     }
 
+    /// Developing styles boundaries only and has no value to read.
+    fn legend_lines(&self) -> Vec<usize> {
+        vec![0, 1]
+    }
+
     fn is_visible(&self) -> bool {
         self.visible
     }
