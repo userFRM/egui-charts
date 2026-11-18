@@ -412,6 +412,12 @@ impl IndicatorRenderer {
         // Handle multi-line indicators
         let line_count = indicator.line_count();
         let bar_spacing = coords.bar_spacing_for_width();
+        let ctx = context.painter.ctx();
+        // Only the layer under the pointer shows a tooltip, as for host markers.
+        let hover = ctx.pointer_hover_pos().filter(|&pos| {
+            context.rect.contains(pos) && ctx.layer_id_at(pos) == Some(context.painter.layer_id())
+        });
+        let mut tooltip_shown = false;
 
         for line_idx in 0..line_count {
             // Plot 0 is painted as the drawings it styles.
@@ -714,32 +720,62 @@ impl IndicatorRenderer {
                     else {
                         continue;
                     };
-                    let Some(text) = indicator.plot_text(line_idx, i) else {
-                        continue;
-                    };
                     let at = Pos2::new(coords.idx_to_x(display_bar), price_scale.price_to_y(value));
                     if !at.is_finite() {
                         continue;
                     }
-                    // Clear of the shape, whose half-size is the stroke width plus 2.
-                    let (gap, anchor) = if plot.plot_type == PlotType::TriangleUp {
-                        (plot.width + 4.0, egui::Align2::CENTER_TOP)
-                    } else {
-                        (-(plot.width + 4.0), egui::Align2::CENTER_BOTTOM)
-                    };
-                    let color = indicator.plot_color(line_idx, i).unwrap_or(plot.color);
-                    let (background, foreground) = indicator
-                        .plot_label_colors(line_idx)
-                        .map_or((None, color), |(background, foreground)| {
-                            (Some(background), foreground)
-                        });
-                    let galley =
-                        painter.layout_no_wrap(text, egui::FontId::proportional(11.0), foreground);
-                    let bounds = anchor.anchor_size(at + egui::vec2(0.0, gap), galley.size());
-                    if let Some(background) = background {
-                        painter.rect_filled(bounds.expand(2.0), 0.0, background);
+                    // Covers the shape, whose half-size is the stroke width plus 2.
+                    let mut target = egui::Rect::from_center_size(
+                        at,
+                        egui::Vec2::splat(2.0 * (plot.width + 2.0)),
+                    );
+                    if let Some(text) = indicator.plot_text(line_idx, i) {
+                        // Clear of the shape.
+                        let (gap, anchor) = if plot.plot_type == PlotType::TriangleUp {
+                            (plot.width + 4.0, egui::Align2::CENTER_TOP)
+                        } else {
+                            (-(plot.width + 4.0), egui::Align2::CENTER_BOTTOM)
+                        };
+                        let color = indicator.plot_color(line_idx, i).unwrap_or(plot.color);
+                        let (background, foreground) = indicator
+                            .plot_label_colors(line_idx)
+                            .map_or((None, color), |(background, foreground)| {
+                                (Some(background), foreground)
+                            });
+                        let galley = painter.layout_no_wrap(
+                            text,
+                            egui::FontId::proportional(11.0),
+                            foreground,
+                        );
+                        let bounds = anchor.anchor_size(at + egui::vec2(0.0, gap), galley.size());
+                        if let Some(background) = background {
+                            painter.rect_filled(bounds.expand(2.0), 0.0, background);
+                        }
+                        painter.galley(bounds.min, galley, foreground);
+                        target = target.union(bounds.expand(2.0));
                     }
-                    painter.galley(bounds.min, galley, foreground);
+                    if !tooltip_shown
+                        && hover.is_some_and(|pos| target.contains(pos))
+                        && let Some(tooltip) = indicator.plot_tooltip(line_idx, i)
+                    {
+                        egui::Tooltip::always_open(
+                            ctx.clone(),
+                            context.painter.layer_id(),
+                            egui::Id::unique((
+                                "study-mark",
+                                context.rect.min.x.to_bits(),
+                                context.rect.min.y.to_bits(),
+                                indicator.name(),
+                                line_idx,
+                                i,
+                            )),
+                            target,
+                        )
+                        .show(|ui| {
+                            ui.label(tooltip);
+                        });
+                        tooltip_shown = true;
+                    }
                 }
             }
         }
