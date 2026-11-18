@@ -3,21 +3,33 @@ use crate::theme::ThemeExt;
 use egui::FontId;
 use egui::{Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 
-/// Width of the study's buttons: read-only studies keep hide and, with an article, help.
-pub(crate) fn controls_width(study: &dyn crate::studies::Indicator) -> f32 {
-    let help = study.help_url().is_some();
-    match (study.user_edit_enabled(), help) {
-        (true, true) => 100.0,
-        (true, false) => 80.0,
-        (false, true) => 40.0,
-        (false, false) => 20.0,
-    }
+/// Which of the hide, settings, remove, more-actions and help buttons a study row shows.
+/// Read-only studies keep hide and, with an article, help; `settings` false drops the settings
+/// button while the host hides `Control::Settings`.
+fn shown_buttons(study: &dyn crate::studies::Indicator, settings: bool) -> [bool; 5] {
+    let editable = study.user_edit_enabled();
+    [
+        true,
+        editable && settings,
+        editable,
+        editable,
+        study.help_url().is_some(),
+    ]
+}
+
+/// Width of the study's buttons, 20 px each.
+pub(crate) fn controls_width(study: &dyn crate::studies::Indicator, settings: bool) -> f32 {
+    20.0 * shown_buttons(study, settings)
+        .into_iter()
+        .filter(|shown| *shown)
+        .count() as f32
 }
 
 /// The row outline and its hide, settings, remove, more-actions and help buttons. Returns the first
 /// three buttons and, when the more-actions button is clicked or the row secondary-clicked, the
 /// corner of the study menu. `backdrop`, the chart background behind the controls, fills them
-/// when they are revealed, for a caller that paints nothing under them.
+/// when they are revealed, for a caller that paints nothing under them. `settings` false leaves
+/// the settings button out of paint, layout and keyboard focus; its response is then never clicked.
 pub(crate) fn study_controls(
     ui: &mut Ui,
     row: Rect,
@@ -25,17 +37,12 @@ pub(crate) fn study_controls(
     backdrop: Option<egui::Color32>,
     id: egui::Id,
     study: &dyn crate::studies::Indicator,
+    settings: bool,
 ) -> ([Response; 3], Option<Pos2>) {
     let theme = ui.active_theme();
     let visible = study.is_visible();
-    let editable = study.user_edit_enabled();
     let help = study.help_url();
-    // The help button follows the hide button when editing is off.
-    let shown = |index: usize| match index {
-        0 => true,
-        4 => help.is_some(),
-        _ => editable,
-    };
+    let shown = shown_buttons(study, settings);
     let touch_id = egui::Id::unique("legend_touch_input");
     let input_touch = ui.input(|input| {
         if input.any_touches()
@@ -84,7 +91,7 @@ pub(crate) fn study_controls(
     let focused = row_response.has_focus()
         || row_response.lost_focus()
         || (0..5_usize)
-            .any(|index| shown(index) && ui.memory(|memory| memory.has_focus(id.with(index))));
+            .any(|index| shown[index] && ui.memory(|memory| memory.has_focus(id.with(index))));
     let hovered = !touch
         && ui.input(|input| input.pointer.hover_pos().is_some())
         && ui.rect_contains_pointer(row);
@@ -102,12 +109,16 @@ pub(crate) fn study_controls(
         );
     }
     let buttons: [Response; 5] = std::array::from_fn(|index| {
-        let slot = if index == 4 && !editable { 1 } else { index };
-        let rect = Rect::from_min_size(
-            controls.min + Vec2::new(slot as f32 * 20.0, 0.0),
-            Vec2::splat(20.0),
-        )
-        .intersect(controls);
+        let slot = shown[..index].iter().filter(|shown| **shown).count();
+        let rect = if shown[index] {
+            Rect::from_min_size(
+                controls.min + Vec2::new(slot as f32 * 20.0, 0.0),
+                Vec2::splat(20.0),
+            )
+            .intersect(controls)
+        } else {
+            Rect::NOTHING
+        };
         let label = l10n::text(
             ui.ctx(),
             match index {
@@ -119,7 +130,7 @@ pub(crate) fn study_controls(
                 _ => "Study help",
             },
         );
-        let shown = shown(index);
+        let shown = shown[index];
         let response = ui.interact(
             rect,
             id.with(index),
@@ -216,6 +227,7 @@ mod tests {
                             Some(theme.chart.bg),
                             egui::Id::unique("study"),
                             &crate::studies::CustomIndicator::new("Plain", |_| Vec::new()),
+                            true,
                         );
                         clicked = buttons.map(|response| response.clicked());
                         menu = opened;
@@ -369,6 +381,7 @@ mod tests {
                             Some(theme.chart.bg),
                             egui::Id::unique("locked"),
                             &study,
+                            true,
                         );
                         clicks = buttons.map(|button| button.clicked());
                     },
@@ -448,6 +461,7 @@ mod tests {
                             Some(theme.chart.bg),
                             egui::Id::unique("locked"),
                             &study,
+                            true,
                         );
                     },
                 );
