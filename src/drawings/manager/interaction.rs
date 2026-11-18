@@ -315,7 +315,8 @@ impl DrawingManager {
         H: Fn(f64, f32, f32) -> f64,
     {
         if let Some((id, handle)) = self.dragging_handle {
-            // A derived handle can be rounded, clamped or shifted away from its stored anchor.
+            // A derived handle can be rounded, clamped or shifted away from its stored anchor,
+            // so a drag that stays within the handle's bar leaves the drawing as it is.
             if let Some(drawing) = self.drawings.iter().find(|d| d.id == id)
                 && matches!(
                     drawing.tool_type,
@@ -323,7 +324,7 @@ impl DrawingManager {
                 )
                 && self.get_handles(drawing).into_iter().any(|(h, point)| {
                     h == handle
-                        && x_to_bar(new_pos.x) == x_to_bar(point.x)
+                        && x_to_bar(new_pos.x).round() == x_to_bar(point.x).round()
                         && (drawing.tool_type == DrawingToolType::RegressionTrend
                             || drawing.points.first().is_some_and(|p| p.x != point.x))
                 })
@@ -365,8 +366,11 @@ impl DrawingManager {
                     }
                 }
             }
-            // Shift edits receive precise bars for the angle; other Shift edits keep whole bars.
-            let whole_bars = self.interaction_modifiers.shift && constrained_price.is_none();
+            // Shift edits receive precise bars for the angle; other Shift edits keep whole bars
+            // while anchors snap to bars in time.
+            let whole_bars = self.interaction_modifiers.shift
+                && constrained_price.is_none()
+                && self.options.snap_to_time;
             let x_to_bar = |x| {
                 let bar = x_to_bar(x);
                 if whole_bars { bar.round() } else { bar }
