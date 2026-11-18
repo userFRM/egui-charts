@@ -228,6 +228,10 @@ pub struct TopToolbar {
     host_hidden: HashSet<Control>,
     /// Host-supplied saved indicator sets as (id, name), in display order.
     pub indicator_templates: Vec<(String, String)>,
+    /// Host-supplied built-in indicator sets as (id, name), in display order, listed under a
+    /// heading of their own after the saved ones, such as the sets of
+    /// [`StudyTemplateSet::builtin`](crate::studies::StudyTemplateSet::builtin).
+    pub builtin_indicator_templates: Vec<(String, String)>,
     /// Host-supplied favourite studies as (factory name, display name), in display order,
     /// such as the starred studies of an
     /// [`IndicatorDialog`](super::components::IndicatorDialog).
@@ -251,6 +255,7 @@ impl Default for TopToolbar {
             chart_grid_selector: ChartGridSelector::default(),
             host_hidden: HashSet::new(),
             indicator_templates: Vec::new(),
+            builtin_indicator_templates: Vec::new(),
             favorite_indicators: Vec::new(),
             templates_page: TemplatesPage::default(),
             host_entries: Vec::new(),
@@ -824,15 +829,16 @@ impl TopToolbar {
         }
     }
 
-    /// Favourite studies to add and saved templates to apply, on two pages.
+    /// Favourite studies to add and saved and built-in templates to apply, on two pages.
     fn show_indicator_templates(&mut self, ui: &mut Ui, action: &mut TopToolbarAction) {
         use crate::ui_kit::{EmptyState, list_item::LabelContent};
         ui.set_width(292.0);
         self.show_templates_tabs(ui);
         ui.style_mut().override_font_id = Some(egui::FontId::proportional(14.0));
-        let (entries, empty) = match self.templates_page {
+        let (entries, builtin, empty) = match self.templates_page {
             TemplatesPage::Indicators => (
                 &self.favorite_indicators,
+                &[][..],
                 "No favorite indicators added yet",
             ),
             TemplatesPage::Templates => {
@@ -844,10 +850,14 @@ impl TopToolbar {
                     *action = TopToolbarAction::SaveIndicatorTemplate;
                     ui.close();
                 }
-                (&self.indicator_templates, "No templates saved yet")
+                (
+                    &self.indicator_templates,
+                    &self.builtin_indicator_templates[..],
+                    "No templates saved yet",
+                )
             }
         };
-        if entries.is_empty() {
+        if entries.is_empty() && builtin.is_empty() {
             // Keep room for a few rows, with the sentence centred in it.
             let height = (203.0 - (ui.cursor().top() - ui.min_rect().top())).max(0.0);
             ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
@@ -871,6 +881,28 @@ impl TopToolbar {
                                 TopToolbarAction::ApplyIndicatorTemplate(id.clone())
                             }
                         };
+                        ui.close();
+                    }
+                }
+                if builtin.is_empty() {
+                    return;
+                }
+                if !entries.is_empty() {
+                    ui.separator();
+                }
+                let theme = ui.active_theme();
+                ui.label(
+                    egui::RichText::new(l10n::text(ui.ctx(), "BUILT-IN"))
+                        .size(11.0)
+                        .color(crate::ui_kit::section::menu_heading_color(&theme)),
+                );
+                for (id, name) in builtin {
+                    if ListItem::new()
+                        .height(32.0)
+                        .show(ui, LabelContent::new(name))
+                        .clicked()
+                    {
+                        *action = TopToolbarAction::ApplyBuiltinIndicatorTemplate(id.clone());
                         ui.close();
                     }
                 }
@@ -1623,6 +1655,11 @@ mod tests {
                     "My studies",
                     TopToolbarAction::ApplyIndicatorTemplate("custom-id".into()),
                 ),
+                (
+                    S::Templates,
+                    "Swing trading",
+                    TopToolbarAction::ApplyBuiltinIndicatorTemplate("swing".into()),
+                ),
                 (S::Undo, "Undo", TopToolbarAction::Undo),
                 (S::Undo, "Undo", TopToolbarAction::None),
                 (S::Redo, "Redo", TopToolbarAction::Redo),
@@ -1637,9 +1674,15 @@ mod tests {
                 toolbar.state.can_publish_image = publishing;
                 toolbar.state.can_undo = expected != TopToolbarAction::None;
                 toolbar.state.can_redo = expected != TopToolbarAction::None;
+                // A built-in set is listed also when none is saved.
+                if !matches!(expected, TopToolbarAction::ApplyBuiltinIndicatorTemplate(_)) {
+                    toolbar
+                        .indicator_templates
+                        .push(("custom-id".into(), "My studies".into()));
+                }
                 toolbar
-                    .indicator_templates
-                    .push(("custom-id".into(), "My studies".into()));
+                    .builtin_indicator_templates
+                    .push(("swing".into(), "Swing trading".into()));
                 toolbar
                     .favorite_indicators
                     .push(("SMA".into(), "Simple Moving Average".into()));
@@ -1647,6 +1690,7 @@ mod tests {
                     expected,
                     TopToolbarAction::SaveIndicatorTemplate
                         | TopToolbarAction::ApplyIndicatorTemplate(_)
+                        | TopToolbarAction::ApplyBuiltinIndicatorTemplate(_)
                 ) {
                     toolbar.templates_page = TemplatesPage::Templates;
                 }
