@@ -602,36 +602,45 @@ mod tests {
             (crate::theme::Theme::light(), 760.0),
             (crate::theme::Theme::dark(), 320.0),
         ] {
+            // Without a display format (`None`), the chart writes the same text.
             for (kind, separator, host, close, change) in [
                 (
-                    SeriesFormat::Price,
+                    Some(SeriesFormat::Price),
                     Some(','),
                     false,
                     "1,234,568.14",
                     "+0.25",
                 ),
                 (
-                    SeriesFormat::Price,
+                    Some(SeriesFormat::Price),
                     Some(' '),
                     false,
                     "1 234 568.14",
                     "+0.25",
                 ),
-                (SeriesFormat::Price, None, false, "1234568.14", "+0.25"),
                 (
-                    SeriesFormat::Percentage,
+                    Some(SeriesFormat::Price),
+                    None,
+                    false,
+                    "1234568.14",
+                    "+0.25",
+                ),
+                (
+                    Some(SeriesFormat::Percentage),
                     Some(','),
                     false,
                     "1,234,568.14%",
                     "+0.25%",
                 ),
                 (
-                    SeriesFormat::Price,
+                    Some(SeriesFormat::Price),
                     Some(','),
                     true,
                     "host 1234568.14",
                     "host 0.25",
                 ),
+                (None, Some(','), false, "1,234,568.14", "+0.25"),
+                (None, None, false, "1234568.14", "+0.25"),
             ] {
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[1_234_500.0], &[1_234_567.89, 1_234_568.14]);
@@ -643,7 +652,7 @@ mod tests {
                 chart
                     .series_style_mut(SeriesId::MAIN)
                     .unwrap()
-                    .display_format = Some(SeriesDisplayFormat {
+                    .display_format = kind.map(|kind| SeriesDisplayFormat {
                     kind,
                     ..Default::default()
                 });
@@ -700,6 +709,14 @@ mod tests {
                     &mut chart,
                     0.2,
                     vec![egui::Event::PointerMoved(pointer)],
+                );
+                assert!(
+                    hovered.iter().any(|shape| matches!(shape,
+                        egui::Shape::Text(text) if text.galley.text() == close
+                            && text.pos.x < plot.right()
+                            && text.pos.y > plot.top() + 50.0
+                    )),
+                    "tooltip close {kind:?} {separator:?}"
                 );
                 assert!(
                 hovered.iter().any(|shape| matches!(shape,
@@ -1062,16 +1079,19 @@ mod tests {
         }
     }
 
+    /// Instrument metadata, and a precision chosen over it, set the decimals of the axis, the
+    /// last price tag, the status line and the hover tooltip alike.
     #[test]
     fn tick_metadata_controls_axis_and_legend_decimals() {
         use crate::model::Instrument;
-        for (tick, price, decimals, explicit) in [
-            (0.25, 125.25, 2, None),
-            (0.00001, 1.23456, 5, None),
-            (1e-18, 3e-18, 18, None),
-            (1.0, 100.0, 0, None),
-            (0.01, 0.0, 2, None),
-            (0.25, 125.25, 4, Some(4)),
+        for (tick, price, decimals, explicit, chosen) in [
+            (0.25, 125.25, 2, None, None),
+            (0.00001, 1.23456, 5, None, None),
+            (1e-12, 3e-12, 12, None, None),
+            (1.0, 100.0, 0, None, None),
+            (0.01, 0.0, 2, None, None),
+            (0.25, 125.25, 4, Some(4), None),
+            (0.01, 100.0, 4, None, Some(4)),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[price], &[price]);
@@ -1083,6 +1103,9 @@ mod tests {
             let mut instrument = Instrument::new("SAMPLE").with_tick_size(tick);
             instrument.price_decimals = explicit;
             chart.set_instrument(Some(instrument));
+            if chosen.is_some() {
+                chart.price_scale_mut().set_price_precision(chosen);
+            }
             frame(&ctx, &mut chart, 0.0, vec![]);
             let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
             let text: Vec<_> = painted
@@ -1127,8 +1150,10 @@ mod tests {
             }
             let plot = chart.get_rendered_price_rect();
             for shape in &painted {
+                // Study panes keep the instrument's decimals under a chosen precision.
                 if let Shape::Text(text) = shape
                     && text.pos.x > plot.right()
+                    && (chosen.is_none() || text.pos.y < plot.bottom())
                     && text.galley.text().parse::<f64>().is_ok()
                 {
                     assert_eq!(
@@ -1136,10 +1161,23 @@ mod tests {
                             .text()
                             .split_once('.')
                             .map_or(0, |(_, fraction)| fraction.len()),
-                        decimals
+                        decimals,
+                        "{}",
+                        text.galley.text()
                     );
                 }
             }
+            chart.chart_options.tooltip.on_long_press = false;
+            let pointer = Pos2::new(chart.get_chart_mapping().idx_to_x(99), plot.center().y);
+            let hovered = shapes(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(pointer)]);
+            assert!(
+                hovered.iter().any(|shape| matches!(shape,
+                    Shape::Text(text) if text.galley.text() == expected
+                        && text.pos.x < plot.right()
+                        && text.pos.y > plot.top() + 50.0
+                )),
+                "tooltip {expected}"
+            );
         }
     }
 
