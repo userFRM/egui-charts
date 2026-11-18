@@ -1828,6 +1828,10 @@ impl Indicator for ConfiguredStudy {
             self.study.labels()
         }
     }
+    fn labels_use_plot_background(&self) -> bool {
+        self.study.labels_use_plot_background()
+    }
+
     fn labels_on_price(&self) -> bool {
         self.study.labels_on_price()
     }

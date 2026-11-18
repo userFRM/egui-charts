@@ -17,9 +17,10 @@
 //! set to earnings, split or dividends the bars since the last such chart event
 //! ([`Indicator::set_time_scale_events`]) at or before the last bar; without one it is not drawn.
 //!
-//! Each level runs from the first bar of its period to the last bar, or with Levels start from
-//! set to the current bar from the last bar on into the space to its right. It is labelled at its
-//! right end with its short name: `dPOC`, `wVAH` or `mO` for the current day, week or month,
+//! Each level runs from the first bar of its period, or with Levels start from set to the
+//! current bar from the last bar, to the visible right edge. Without a viewport, period lines
+//! stop at the last bar and current-bar lines project 20 bars right. A coloured tag at its
+//! start carries its short name: `dPOC`, `wVAH` or `mO` for the current day, week or month,
 //! `pdPOC`, `pwL` or `pmC` for the previous one and `Custom POC` for the custom period. Levels
 //! take the colour, width and visibility of their period's plot.
 //! Monthly levels are drawn over weekly ones and weekly over daily ones. A bar without a finite
@@ -496,7 +497,7 @@ impl Indicator for AutoKeyLevels {
             };
             self.cache.push((bars.clone(), levels));
             let span = match self.start {
-                LevelsStart::Period => bars.start..source,
+                LevelsStart::Period => bars.start..self.right_edge.unwrap_or(source).max(source),
                 LevelsStart::CurrentBar => {
                     source - 1
                         ..self
@@ -516,7 +517,7 @@ impl Indicator for AutoKeyLevels {
                     plot,
                 });
                 self.labels.push(StudyLabel {
-                    bar: span.end - 1,
+                    bar: span.start,
                     price,
                     text: format!("{prefix}{}", LEVELS[k]),
                     placement: LabelPlacement::AboveLeft,
@@ -524,6 +525,8 @@ impl Indicator for AutoKeyLevels {
                 });
             }
         }
+        // The renderer clips by bar; stable ties retain the monthly-over-weekly draw order.
+        self.labels.sort_by_key(|label| label.bar);
     }
 
     fn is_incremental(&self) -> bool {
@@ -599,7 +602,7 @@ impl Indicator for AutoKeyLevels {
         let end = range.to_strict_range().1;
         let changed = self.right_edge != Some(end);
         self.right_edge = Some(end);
-        changed && self.start == LevelsStart::CurrentBar
+        changed
     }
 
     fn legend_lines(&self) -> Vec<usize> {
@@ -612,6 +615,10 @@ impl Indicator for AutoKeyLevels {
 
     fn zones(&self) -> &[StudyZone] {
         &self.zones
+    }
+
+    fn labels_use_plot_background(&self) -> bool {
+        true
     }
 
     fn labels(&self) -> &[StudyLabel] {
@@ -963,6 +970,7 @@ mod tests {
         for (name, seen, in_tokyo, inputs, want) in rows {
             let mut study = AutoKeyLevels::new();
             assert!(study.legend_lines().is_empty());
+            assert!(study.labels_use_plot_background());
             for id in ["current [0]", "current [1]"] {
                 study.set_input(id, Toggle(false)).unwrap();
             }
@@ -988,26 +996,33 @@ mod tests {
             }
             let drawn = run(&mut study, seen, in_tokyo);
             assert_eq!(study.zones().len(), study.labels().len(), "{name}");
-            let got: Vec<Level> = study
+            let got: Vec<_> = study
                 .zones()
                 .iter()
-                .zip(study.labels())
-                .map(|(zone, label)| {
+                .map(|zone| {
                     assert_eq!(zone.top, zone.bottom, "{name}");
-                    assert_eq!(
-                        (label.bar, label.price, label.plot, label.placement),
-                        (
-                            zone.bars.end - 1,
-                            zone.top,
-                            zone.plot,
-                            LabelPlacement::AboveLeft
-                        ),
-                        "{name}"
-                    );
-                    (label.text.clone(), zone.bars.clone(), zone.top, zone.plot)
+                    (zone.bars.clone(), zone.top, zone.plot)
                 })
                 .collect();
-            assert_eq!(got, want, "{name}");
+            let expected: Vec<_> = want
+                .iter()
+                .map(|(_, bars, price, plot)| (bars.clone(), *price, *plot))
+                .collect();
+            assert_eq!(got, expected, "{name}");
+            let tags: Vec<_> = study
+                .labels()
+                .iter()
+                .map(|label| {
+                    assert_eq!(label.placement, LabelPlacement::AboveLeft, "{name}");
+                    (label.text.clone(), label.bar, label.price, label.plot)
+                })
+                .collect();
+            let mut expected: Vec<_> = want
+                .iter()
+                .map(|(text, bars, price, plot)| (text.clone(), bars.start, *price, *plot))
+                .collect();
+            expected.sort_by_key(|tag| tag.1);
+            assert_eq!(tags, expected, "{name} tags");
             let json = serde_json::to_string(&StudyTemplate::from_study(&study)).unwrap();
             let mut restored = serde_json::from_str::<StudyTemplate>(&json)
                 .unwrap()
@@ -1020,23 +1035,24 @@ mod tests {
             );
         }
         let mut study = AutoKeyLevels::new();
-        study.set_input("start", Choice(1)).unwrap();
-        for end in [40, 80, 30] {
-            assert!(
-                study.set_visible_logical_range(crate::model::LogicalRange::new(
-                    0.0,
-                    (end - 1) as f32
-                ))
-            );
-            study.calculate(&data);
-            assert!(study.zones().iter().all(|zone| zone.bars == (5..end)));
-            assert!(study.labels().iter().all(|label| label.bar == end - 1));
-            assert!(
-                !study.set_visible_logical_range(crate::model::LogicalRange::new(
-                    0.0,
-                    (end - 1) as f32
-                ))
-            );
+        for start in [0, 1] {
+            study.set_input("start", Choice(start)).unwrap();
+            for end in [40, 80, 30] {
+                let range = crate::model::LogicalRange::new(0.0, (end - 1) as f32);
+                assert!(study.set_visible_logical_range(range));
+                study.calculate(&data);
+                for zone in study.zones() {
+                    let first = if start == 1 {
+                        5
+                    } else if zone.plot == 0 {
+                        4
+                    } else {
+                        2
+                    };
+                    assert_eq!(zone.bars, first..end);
+                }
+                assert!(!study.set_visible_logical_range(range));
+            }
         }
     }
 

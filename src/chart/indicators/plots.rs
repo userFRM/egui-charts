@@ -286,6 +286,27 @@ pub(crate) fn paint_labels(
             continue;
         }
         let color = style.color.to_opaque();
+        if study.labels_use_plot_background() {
+            let galley = painter.layout_no_wrap(
+                label.text.clone(),
+                egui::FontId::proportional(11.0),
+                egui::Color32::WHITE,
+            );
+            let size = galley.size() + vec2(8.0, 4.0);
+            let rect = egui::Rect::from_min_size(point - vec2(size.x + 5.0, size.y * 0.5), size);
+            painter.rect_filled(rect, 2.0, color);
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    egui::pos2(rect.right() - 1.0, point.y - 4.0),
+                    point,
+                    egui::pos2(rect.right() - 1.0, point.y + 4.0),
+                ],
+                color,
+                egui::Stroke::NONE,
+            ));
+            painter.galley(rect.min + vec2(4.0, 2.0), galley, egui::Color32::WHITE);
+            continue;
+        }
         let galley =
             painter.layout_no_wrap(label.text.clone(), egui::FontId::proportional(11.0), color);
         let (anchor, offset) = match label.placement {

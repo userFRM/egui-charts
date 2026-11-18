@@ -841,6 +841,12 @@ pub trait Indicator: Send {
         &[]
     }
 
+    /// Paint labels as tags at their price, with a plot-coloured background and white text.
+    /// False keeps the ordinary text and its placement. Tag pointers face right.
+    fn labels_use_plot_background(&self) -> bool {
+        false
+    }
+
     /// Draw [`labels`](Self::labels) on the main price chart, even when the study has its
     /// own pane. Label prices use the main series' scale. Off by default.
     fn labels_on_price(&self) -> bool {
