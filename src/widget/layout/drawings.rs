@@ -650,7 +650,9 @@ impl DrawingLinks {
                                 charts[slot].history.drawing_edits += 1;
                             }
                         }
-                        charts[slot]
+                        // A copy that saving would refuse leaves the target as it was, so this
+                        // chart keeps saving.
+                        let _ = charts[slot]
                             .drawings_mut()
                             .drag_edit_drawing(id, |target| *target = copy);
                     } else {
@@ -1485,7 +1487,7 @@ fn unlock(chart: &mut Chart, id: usize) {
         .iter()
         .any(|d| d.id == id && d.locked)
     {
-        chart.drawings_mut().edit_drawing(id, |d| d.locked = false);
+        let _ = chart.drawings_mut().edit_drawing(id, |d| d.locked = false);
     }
 }
 
@@ -2293,12 +2295,14 @@ mod tests {
         );
         refs[1]
             .drawings_mut()
-            .edit_drawing(id, |d| d.chart_points[0].bar_idx = 1.5);
+            .edit_drawing(id, |d| d.chart_points[0].bar_idx = 1.5)
+            .unwrap();
         links.sync(&mut refs, 4, &groups, false, true);
         assert_eq!(refs[0].drawings().drawings[0].chart_points[0].bar_idx, 3.0);
         refs[1]
             .drawings_mut()
-            .edit_drawing(id, |d| d.notes = Some("shared note".into()));
+            .edit_drawing(id, |d| d.notes = Some("shared note".into()))
+            .unwrap();
         links.sync(&mut refs, 4, &groups, false, true);
         assert_eq!(
             refs[0].drawings().drawings[0].notes.as_deref(),
@@ -2316,7 +2320,8 @@ mod tests {
         for index in [4.0, 5.0] {
             refs[0]
                 .drawings_mut()
-                .edit_drawing(source_id, |d| d.chart_points[0].bar_idx = index);
+                .edit_drawing(source_id, |d| d.chart_points[0].bar_idx = index)
+                .unwrap();
             links.sync(&mut refs, 4, &groups, true, true);
         }
         assert_eq!(
@@ -2466,23 +2471,32 @@ mod tests {
             vec![ChartPoint::new(1.0, 40.0), ChartPoint::new(2.0, 60.0)]
         );
         let copy = |b: &Chart| b.drawings().drawings.iter().find(|d| d.id == id).cloned();
-        a.drawings_mut().edit_drawing(source, |d| d.locked = true);
+        a.drawings_mut()
+            .edit_drawing(source, |d| d.locked = true)
+            .unwrap();
         sync(&mut a, &mut b);
         assert!(copy(&b).unwrap().locked);
-        a.drawings_mut().edit_drawing(source, |d| {
-            d.locked = false;
-            d.chart_points[0].bar_idx = 3.0;
-        });
+        a.drawings_mut()
+            .edit_drawing(source, |d| {
+                d.locked = false;
+                d.chart_points[0].bar_idx = 3.0;
+            })
+            .unwrap();
         sync(&mut a, &mut b);
         let moved = copy(&b).unwrap();
         assert!(!moved.locked, "an unlock reaches a locked copy");
         assert_eq!(moved.chart_points[0].bar_idx, 1.5);
-        a.drawings_mut().edit_drawing(source, |d| d.locked = true);
+        a.drawings_mut()
+            .edit_drawing(source, |d| d.locked = true)
+            .unwrap();
         sync(&mut a, &mut b);
         b.drawings_mut()
-            .edit_drawing(id, |d| d.chart_points[0].bar_idx = 0.0);
+            .edit_drawing(id, |d| d.chart_points[0].bar_idx = 0.0)
+            .unwrap();
         assert_eq!(copy(&b).unwrap().chart_points[0].bar_idx, 1.5);
-        a.drawings_mut().edit_drawing(source, |d| d.locked = false);
+        a.drawings_mut()
+            .edit_drawing(source, |d| d.locked = false)
+            .unwrap();
         a.drawings_mut().delete_drawing(source);
         sync(&mut a, &mut b);
         assert!(copy(&b).is_none(), "a deletion reaches a locked copy");
@@ -2629,10 +2643,13 @@ mod tests {
         let edit = |chart: &mut Chart, price: f64| {
             let id = first(chart);
             chart.user_action(|chart| {
-                chart.drawings_mut().edit_drawing(id, |drawing| {
-                    drawing.chart_points[0].price = price;
-                    drawing.chart_points[1].price = price + 2.0;
-                });
+                chart
+                    .drawings_mut()
+                    .edit_drawing(id, |drawing| {
+                        drawing.chart_points[0].price = price;
+                        drawing.chart_points[1].price = price + 2.0;
+                    })
+                    .unwrap();
             });
         };
         let (a_side, b_side) = (0, 1);
@@ -2964,10 +2981,13 @@ mod tests {
 
     fn move_first(chart: &mut Chart, price: f64) {
         let id = chart.drawings().drawings[0].id;
-        chart.drawings_mut().edit_drawing(id, |drawing| {
-            drawing.chart_points[0].price = price;
-            drawing.chart_points[1].price = price;
-        });
+        chart
+            .drawings_mut()
+            .edit_drawing(id, |drawing| {
+                drawing.chart_points[0].price = price;
+                drawing.chart_points[1].price = price;
+            })
+            .unwrap();
     }
 
     /// Puts the first drawing of `chart` in a folder synchronized as `sync`.
@@ -4114,10 +4134,13 @@ mod tests {
             let copy = shown[1].drawings().drawings[0].id;
             shown[1].user_action(|chart| {
                 if edit {
-                    chart.drawings_mut().edit_drawing(copy, |drawing| {
-                        drawing.chart_points[0].price = 50.0;
-                        drawing.chart_points[1].price = 52.0;
-                    });
+                    chart
+                        .drawings_mut()
+                        .edit_drawing(copy, |drawing| {
+                            drawing.chart_points[0].price = 50.0;
+                            drawing.chart_points[1].price = 52.0;
+                        })
+                        .unwrap();
                 } else {
                     assert!(
                         chart
