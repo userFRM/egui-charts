@@ -530,7 +530,8 @@ impl Chart {
                 .collect();
             for (id, locked) in drawings {
                 if locked {
-                    self.drawings
+                    let _ = self
+                        .drawings
                         .edit_drawing(id, |drawing| drawing.locked = false);
                 }
                 self.drawings.delete_drawing(id);

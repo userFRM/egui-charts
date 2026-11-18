@@ -448,7 +448,7 @@ impl DrawingContextMenuAction {
                 .iter()
                 .any(|d| d.id == id && d.timeframe_visibility != filter)
         {
-            chart.user_action(|chart| {
+            let _ = chart.user_action(|chart| {
                 chart
                     .drawings_mut()
                     .edit_drawing(id, |d| d.timeframe_visibility = filter)
@@ -692,9 +692,9 @@ mod tests {
                 d.chart_points[0].price = 999.0;
             };
             if bulk {
-                manager.edit_drawings(&[7], edit);
+                manager.edit_drawings(&[7], edit).unwrap();
             } else {
-                manager.edit_drawing(7, edit);
+                manager.edit_drawing(7, edit).unwrap();
             }
             assert_eq!(manager.drawings[0].timeframe_visibility, filter);
             assert_eq!(manager.drawings[0].stroke_width, drawing.stroke_width);

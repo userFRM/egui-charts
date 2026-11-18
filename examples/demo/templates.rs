@@ -81,11 +81,13 @@ impl DemoApp {
             self.notify(error);
             return;
         }
-        self.chart.user_action(|chart| {
+        if let Err(error) = self.chart.user_action(|chart| {
             chart.drawings_mut().edit_drawings(&ids, |drawing| {
                 let _ = template.apply_to(drawing);
             })
-        });
+        }) {
+            self.notify(error);
+        }
     }
 
     pub(super) fn show_templates(&mut self, ctx: &egui::Context) {
