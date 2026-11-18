@@ -797,6 +797,137 @@ mod tests {
         }
     }
 
+    /// Choosing a gradient line in the Symbol tab reaches the painter only after Ok, in both
+    /// themes: the leftmost segment takes the start colour, the rightmost the end colour and the
+    /// two between them the blends a third and two thirds of the way. Undo, saved layouts and
+    /// switching chart type keep the colour type and both colours, and documents saved without
+    /// them draw a solid line.
+    #[test]
+    fn line_gradient_dialog_edits_reach_the_painter_and_survive_undo_and_saves() {
+        use crate::widget::ChartSnapshot;
+        use egui::Color32;
+        use egui::epaint::ColorMode;
+
+        let start = Color32::from_rgb(210, 0, 0);
+        let end = Color32::from_rgba_premultiplied(0, 0, 120, 120);
+        // (1 - t) * start + t * end per premultiplied channel, at t = 1/3 and t = 2/3.
+        let gradient = vec![
+            start,
+            Color32::from_rgba_premultiplied(140, 0, 40, 210),
+            Color32::from_rgba_premultiplied(70, 0, 80, 165),
+            end,
+        ];
+        // The colours of the line's strokes, from left to right.
+        let line_colors = |ctx: &Context, chart: &mut Chart| {
+            let mut strokes: Vec<(f32, Color32)> =
+                crate::widget::test_frames::shapes(ctx, chart, 1.0, vec![])
+                    .into_iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Path(path) if path.stroke.width == 3.25 => match path.stroke.color {
+                            ColorMode::Solid(color) => Some((path.points[0].x, color)),
+                            ColorMode::UV(_) => None,
+                        },
+                        _ => None,
+                    })
+                    .collect();
+            strokes.sort_by(|a, b| a.0.total_cmp(&b.0));
+            strokes
+                .into_iter()
+                .map(|(_, color)| color)
+                .collect::<Vec<_>>()
+        };
+        let kept = |chart: &Chart| {
+            let styles = &chart.chart_type_params().styles;
+            (
+                styles.line_gradient,
+                styles.line_gradient_start,
+                styles.line_gradient_end,
+            )
+        };
+        // Saved without the setting: removes its keys wherever a document holds the styles.
+        fn forget(value: &mut serde_json::Value) -> usize {
+            match value {
+                serde_json::Value::Object(map) => {
+                    let removed = usize::from(map.remove("line_gradient").is_some());
+                    map.remove("line_gradient_start");
+                    map.remove("line_gradient_end");
+                    removed + map.values_mut().map(forget).sum::<usize>()
+                }
+                serde_json::Value::Array(items) => items.iter_mut().map(forget).sum(),
+                _ => 0,
+            }
+        }
+        for theme in [Theme::light(), Theme::dark()] {
+            for accept in [false, true] {
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                // Five rising closes: four segments.
+                let mut chart = Chart::new(BarData::from_bars(
+                    (0..5)
+                        .map(|i| {
+                            Bar::new(
+                                chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(i),
+                                10.0,
+                                20.0,
+                                5.0,
+                                10.0 + i as f64,
+                                0.0,
+                            )
+                        })
+                        .collect(),
+                ));
+                chart.set_chart_type(ChartType::Line);
+                chart.config_mut().show_volume = false;
+                let mut params = chart.chart_type_params().clone();
+                params.styles.line.width = 3.25;
+                params.styles.line_gradient_start = start;
+                params.styles.line_gradient_end = end;
+                chart.set_chart_type_params(params);
+                let solid = vec![chart.chart_type_params().styles.line.color];
+                let mut dialog = SettingsDialog::new();
+                dialog.set_control_visible(crate::ui::Control::Templates, false);
+                dialog.open(ChartSettingsState::from_chart(&chart));
+                for _ in 0..3 {
+                    frame(&ctx, &mut chart, &mut dialog, &theme, vec![], &[]);
+                }
+                // The colour type's "Solid" is painted before the line style's.
+                for control in ["Solid", "Gradient", if accept { "Ok" } else { "Cancel" }] {
+                    click(&ctx, &mut chart, &mut dialog, &theme, control);
+                }
+                assert!(!dialog.is_open);
+                assert_eq!(kept(&chart), (accept, start, end));
+                assert_eq!(
+                    line_colors(&ctx, &mut chart),
+                    if accept {
+                        gradient.clone()
+                    } else {
+                        solid.clone()
+                    }
+                );
+                if accept {
+                    let saved = serde_json::to_value(chart.snapshot().unwrap()).unwrap();
+                    assert!(chart.undo());
+                    assert_eq!(kept(&chart), (false, start, end));
+                    assert_eq!(line_colors(&ctx, &mut chart), solid);
+                    // Restored over a solid line, then switched to candles and back.
+                    let restored: ChartSnapshot = serde_json::from_value(saved.clone()).unwrap();
+                    chart.restore(&restored).unwrap();
+                    chart.set_chart_type(ChartType::Candles);
+                    chart.set_chart_type(ChartType::Line);
+                    assert_eq!(kept(&chart), (true, start, end));
+                    assert_eq!(line_colors(&ctx, &mut chart), gradient);
+                    // The snapshot's own styles and those of its chart settings.
+                    let mut legacy = saved;
+                    assert!(forget(&mut legacy) >= 2);
+                    let legacy: ChartSnapshot = serde_json::from_value(legacy).unwrap();
+                    chart.restore(&legacy).unwrap();
+                    assert!(!chart.chart_type_params().styles.line_gradient);
+                    assert_eq!(line_colors(&ctx, &mut chart), solid);
+                }
+            }
+        }
+    }
+
     /// Bars colour by their own open or the previous close, and columns reach the selected price
     /// while their colour still compares closes, through the dialog and the painter after
     /// acceptance only, in both themes. Undo and saved charts keep these values apart from the
