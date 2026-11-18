@@ -388,6 +388,7 @@ impl TextTab {
                     | DrawingToolType::ParallelChannel
                     | DrawingToolType::FlatTopBottom
                     | DrawingToolType::DisjointChannel
+                    | DrawingToolType::RegressionTrend
             );
             if writes && (line_text || settings.tool_type.supports_line_measurements()) {
                 use LineTextHorizontalAlign as H;
@@ -668,6 +669,7 @@ mod tests {
             (DrawingToolType::ParallelChannel, true),
             (DrawingToolType::FlatTopBottom, true),
             (DrawingToolType::DisjointChannel, true),
+            (DrawingToolType::RegressionTrend, true),
             (DrawingToolType::ArrowMarker, false),
             (DrawingToolType::ArrowMarkUp, false),
             (DrawingToolType::ArrowMarkDown, false),
