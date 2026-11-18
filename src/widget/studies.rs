@@ -49,9 +49,7 @@ impl Chart {
         if let Some(timeframe) = self.timeframe() {
             indicator.set_timeframe(timeframe);
         }
-        if indicator.value_format() == crate::scales::StudyFormat::Volume {
-            indicator.set_value_formatter(self.volume_formatter.clone());
-        }
+        indicator.set_value_formatter(self.inherited_study_formatter(indicator.value_format()));
         indicator.set_instrument(self.instrument());
         indicator.set_time_scale_events(held_events(
             &self.time_scale_events,
