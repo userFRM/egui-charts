@@ -101,7 +101,6 @@ impl ArrowStyle {
 pub use crate::config::FontWeight;
 pub use crate::model::TimeframeVisibility;
 
-
 /// Drawing interaction options
 ///
 /// ```
@@ -1693,7 +1692,6 @@ mod tests {
             assert!(serde_json::from_str::<RegressionTrendConfig>(saved).is_err());
         }
     }
-
 
     /// Anchors 100 then 200: level v sits at 200 - 100 * v, or at 100 + 100 * v when reversed.
     #[test]

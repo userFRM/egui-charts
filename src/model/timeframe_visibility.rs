@@ -5,22 +5,25 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::ops::RangeInclusive;
 
-/// The intervals a drawing shows on.
+/// The intervals a drawing or a study is drawn on.
 ///
-/// While [`show_on_all`](Self::show_on_all) is set, a drawing shows on every interval. Otherwise it
-/// shows on the intervals named in [`visible_timeframes`](Self::visible_timeframes) and on those
+/// While [`show_on_all`](Self::show_on_all) is set, it is drawn on every interval. Otherwise it is
+/// drawn on the intervals named in [`visible_timeframes`](Self::visible_timeframes) and on those
 /// whose unit has a range in [`ranges`](Self::ranges) holding their value. An interval's unit and
 /// value are those of its label, as [`Timeframe::as_str`](crate::model::Timeframe::as_str) writes
 /// it: `90min` is 90 minutes, and a 24 hour interval, labelled `1D`, is 1 day.
+///
+/// The default names no interval and holds no range, so it is drawn on none; [`all`](Self::all)
+/// draws on every interval.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct TimeframeVisibility {
     /// Show on every interval.
     pub show_on_all: bool,
-    /// Interval labels the drawing shows on, matched exactly.
+    /// Interval labels drawn on, matched exactly.
     #[serde(serialize_with = "serialize_sorted")]
     pub visible_timeframes: HashSet<String>,
-    /// Values of each unit the drawing shows on, both ends included, such as 1 to 4 hours for
+    /// Values of each unit drawn on, both ends included, such as 1 to 4 hours for
     /// 1h, 2h, 3h and 4h. A range whose start is after its end holds no value.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ranges: BTreeMap<TimeframeUnit, RangeInclusive<u64>>,
@@ -55,7 +58,7 @@ fn interval_parts(label: &str) -> Option<(u64, TimeframeUnit)> {
 }
 
 impl TimeframeVisibility {
-    /// Create visibility for all timeframes (default)
+    /// Visibility on every interval, which drawings and studies start with.
     pub fn all() -> Self {
         Self {
             show_on_all: true,

@@ -7,7 +7,7 @@ use crate::chart::series::SeriesId;
 use crate::config::KeyboardAction;
 use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
-use crate::model::{Alert, AlertCondition, AlertSource, Timeframe};
+use crate::model::{Alert, AlertCondition, AlertSource};
 use crate::studies::StudyScale;
 use crate::ui::Control;
 use crate::ui::context_menu::{MenuEntry, MenuItem, trim_separators};
@@ -69,23 +69,6 @@ pub enum IntervalRange {
     Only,
     /// Every interval.
     All,
-}
-
-impl IntervalRange {
-    /// The preset intervals and `current` on which the range hides a study, by duration.
-    pub fn hidden_intervals(self, current: Timeframe) -> Vec<Timeframe> {
-        let mut intervals = Timeframe::all();
-        if !intervals.contains(&current) {
-            intervals.push(current);
-        }
-        intervals.retain(|interval| match self {
-            Self::AndAbove => interval.duration_ms() < current.duration_ms(),
-            Self::AndBelow => interval.duration_ms() > current.duration_ms(),
-            Self::Only => *interval != current,
-            Self::All => false,
-        });
-        intervals
-    }
 }
 
 /// Where the study context menu moves a study.
@@ -467,21 +450,13 @@ pub(crate) fn apply(chart: &mut Chart, id: SeriesId, action: &StudyContextMenuAc
             chart.reorder_indicator(id, *order);
         }
         A::Intervals(range) => {
-            if let Some(current) = chart.timeframe()
+            if let Some(visibility) = super::drawing::interval_filter(*range, chart.timeframe())
                 && let Some(study) = chart.indicator_mut(id)
             {
                 let mut settings = study.settings();
-                settings.hidden_intervals = range.hidden_intervals(current);
-                settings.interval_range = match range {
-                    IntervalRange::All => crate::studies::StudyIntervalRange::All,
-                    IntervalRange::Only => crate::studies::StudyIntervalRange::Only(current),
-                    IntervalRange::AndAbove => {
-                        crate::studies::StudyIntervalRange::AndAbove(current)
-                    }
-                    IntervalRange::AndBelow => {
-                        crate::studies::StudyIntervalRange::AndBelow(current)
-                    }
-                };
+                // A choice replaces the exact intervals hidden by settings saved before ranges.
+                settings.hidden_intervals.clear();
+                settings.timeframe_visibility = visibility;
                 // A study without editable presentation keeps showing on every interval.
                 let _ = study.apply_settings(&[], settings);
             }
@@ -540,6 +515,7 @@ pub(crate) fn apply(chart: &mut Chart, id: SeriesId, action: &StudyContextMenuAc
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Timeframe;
 
     /// A menu opened before permission is revoked must refuse every study mutation.
     #[test]

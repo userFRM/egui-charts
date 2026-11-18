@@ -43,6 +43,9 @@ pub struct IndicatorSettingsDialog {
     gradient_names: Vec<&'static str>,
     tab: Tab,
     current_interval: Option<Timeframe>,
+    /// Exact intervals the opened settings hide in addition to their interval ranges, listed
+    /// with a checkbox each until the dialog closes.
+    exact_hidden: Vec<Timeframe>,
     sources: Vec<(crate::studies::StudySource, String)>,
     overlay: bool,
     price_scale: bool,
@@ -84,6 +87,7 @@ fn width_picker(ui: &mut egui::Ui, width: &mut f32) {
 
 impl IndicatorSettingsDialog {
     /// Open on the current values of the study identified by `id`.
+    /// The edit leaves out exact hidden intervals that the study's interval ranges already hide.
     pub fn open(&mut self, id: SeriesId, study: &dyn Indicator, interval: Option<Timeframe>) {
         if !study.user_edit_enabled() {
             self.edit = None;
@@ -91,10 +95,17 @@ impl IndicatorSettingsDialog {
         }
         self.original = Some(study.snapshot_settings());
         self.previewed = None;
+        let mut settings = study.settings();
+        // Exact intervals the ranges already hide would hide part of a range widened later.
+        let ranges = &settings.timeframe_visibility;
+        settings
+            .hidden_intervals
+            .retain(|interval| ranges.is_visible_on(&interval.as_str()));
+        self.exact_hidden = settings.hidden_intervals.clone();
         self.edit = Some(StudyEdit {
             id,
             inputs: Vec::new(),
-            settings: study.settings(),
+            settings,
         });
         self.inputs = study.inputs();
         self.study = study.name().to_owned();
@@ -587,35 +598,37 @@ impl IndicatorSettingsDialog {
                             });
                         }
                         Tab::Visibility => {
-                            ui.label(l10n::text(ui.ctx(), "Show this study on these intervals:"));
-                            let mut intervals = Timeframe::all();
-                            for interval in self
-                                .current_interval
-                                .iter()
-                                .chain(&edit.settings.hidden_intervals)
-                            {
-                                if !intervals.contains(interval) {
-                                    intervals.push(*interval);
-                                }
-                            }
-                            ui.horizontal_wrapped(|ui| {
-                                for interval in intervals {
-                                    let mut visible =
-                                        !edit.settings.hidden_intervals.contains(&interval);
-                                    if ui
-                                        .checkbox(
-                                            &mut visible,
-                                            l10n::text(ui.ctx(), interval.to_string()),
-                                        )
-                                        .changed()
-                                    {
-                                        edit.settings.hidden_intervals.retain(|tf| *tf != interval);
-                                        if !visible {
-                                            edit.settings.hidden_intervals.push(interval);
+                            let settings = &mut edit.settings;
+                            crate::ui::dialogs::drawing_properties::VisibilityTab::show(
+                                ui,
+                                &mut settings.timeframe_visibility,
+                            );
+                            // Exact intervals hidden by settings saved before ranges or by the host.
+                            if !self.exact_hidden.is_empty() {
+                                ui.separator();
+                                ui.label(l10n::text(
+                                    ui.ctx(),
+                                    "Show this study on these intervals:",
+                                ));
+                                ui.horizontal_wrapped(|ui| {
+                                    for interval in &self.exact_hidden {
+                                        let mut visible =
+                                            !settings.hidden_intervals.contains(interval);
+                                        if ui
+                                            .checkbox(
+                                                &mut visible,
+                                                l10n::text(ui.ctx(), interval.to_string()),
+                                            )
+                                            .changed()
+                                        {
+                                            settings.hidden_intervals.retain(|tf| tf != interval);
+                                            if !visible {
+                                                settings.hidden_intervals.push(*interval);
+                                            }
                                         }
                                     }
-                                }
-                            });
+                                });
+                            }
                         }
                     });
                 let valid = self.inputs.iter().all(|input| input.accepts(&input.value))
@@ -2424,5 +2437,94 @@ mod tests {
         assert!(!dialog.open_for_chart(&chart, id));
         assert!(chart.set_indicator_user_edit_enabled(id, true));
         assert!(dialog.open_for_chart(&chart, id));
+    }
+
+    /// The Visibility tab shows a study menu choice as unit rows and edits them, custom
+    /// intervals included: after Current interval only on 1h, ticking the minutes shows the
+    /// study on 5min, also when settings saved before ranges hid 5min exactly; after Current
+    /// interval and below, unticking the minutes hides it on a custom 7min. An interval saved
+    /// hidden exactly is listed and shown again when ticked.
+    #[test]
+    fn visibility_tab_shows_menu_choices_and_edits_unit_ranges() {
+        use crate::ui::context_menu::study::{IntervalRange, StudyContextMenuAction, apply};
+        use egui::accesskit::Toggled;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let custom_7min = Timeframe::Custom(std::num::NonZeroU64::new(420).unwrap());
+        for (range, saved_hidden, control, ticked, interval, shown) in [
+            (
+                IntervalRange::Only,
+                &[Timeframe::Min5][..],
+                "Minutes",
+                false,
+                Timeframe::Min5,
+                true,
+            ),
+            (
+                IntervalRange::AndBelow,
+                &[][..],
+                "Minutes",
+                true,
+                custom_7min,
+                false,
+            ),
+            (
+                IntervalRange::All,
+                &[Timeframe::Min5][..],
+                "5min",
+                false,
+                Timeframe::Min5,
+                true,
+            ),
+        ] {
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            chart.set_timeframe(Timeframe::Hour1);
+            let id = chart.add_indicator(Box::new(SMA::new(2)));
+            apply(&mut chart, id, &StudyContextMenuAction::Intervals(range));
+            // Exact intervals as settings saved before interval ranges restore them.
+            let study = chart.indicator_mut(id).unwrap();
+            let mut settings = study.settings();
+            settings.hidden_intervals = saved_hidden.to_vec();
+            study.apply_settings(&[], settings).unwrap();
+
+            let mut dialog = IndicatorSettingsDialog::default();
+            assert!(dialog.open_for_chart(&chart, id));
+            dialog.tab = Tab::Visibility;
+            let mut applied = None;
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::Vec2::new(1440.0, 900.0))
+                .build_ui(|ui| {
+                    if let Some(edit) = dialog.show(ui.ctx(), &Theme::dark()) {
+                        applied = Some(edit);
+                    }
+                });
+            harness.run();
+            let state = harness
+                .get_by_label(control)
+                .accesskit_node()
+                .data()
+                .toggled();
+            let want = if ticked {
+                Toggled::True
+            } else {
+                Toggled::False
+            };
+            assert_eq!(state, Some(want), "{range:?}: {control}");
+            harness.get_by_label(control).click();
+            harness.run();
+            harness.get_by_label("Apply").click();
+            harness.run();
+            drop(harness);
+
+            let edit = applied.unwrap();
+            let study = chart.indicator_mut(id).unwrap();
+            study.apply_settings(&edit.inputs, edit.settings).unwrap();
+            for (at, visible) in [(Timeframe::Hour1, true), (interval, shown)] {
+                chart.set_timeframe(at);
+                let study = chart.indicators().find(|(i, _)| *i == id).unwrap().1;
+                assert_eq!(study.is_visible(), visible, "{range:?} on {at}");
+            }
+        }
     }
 }

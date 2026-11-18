@@ -539,7 +539,9 @@ impl DrawingPropertiesDialog {
                     }
                 }
                 PropertiesTab::Coordinates => CoordinatesTab::show(ui, &mut self.coordinates),
-                PropertiesTab::Visibility => VisibilityTab::show(ui, &mut self.props),
+                PropertiesTab::Visibility => {
+                    VisibilityTab::show(ui, &mut self.props.timeframe_visibility)
+                }
                 PropertiesTab::Text => TextTab::show(ui, &mut self.props, &mut state.text_pickers),
             });
 

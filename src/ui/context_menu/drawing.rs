@@ -421,7 +421,8 @@ impl DrawingContextMenu {
     }
 }
 
-fn interval_filter(
+/// The filter of an interval menu choice. The study menu stores the same filter for a study.
+pub(super) fn interval_filter(
     range: IntervalRange,
     current: Option<Timeframe>,
 ) -> Option<TimeframeVisibility> {
