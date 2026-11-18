@@ -374,7 +374,8 @@ pub(crate) fn study_tag_bar(
 }
 
 /// Values of visible study lines at the bar [`study_tag_bar`] gives for `last_in_view`, in the
-/// same units and colours as their plot.
+/// same units and colours as their plot. `formatter` writes raw prices in normal and logarithmic
+/// modes and, through the scale, percentages and index values in relative modes.
 pub(crate) fn render_study_tags(
     painter: &Painter,
     plot: Rect,
@@ -396,6 +397,10 @@ pub(crate) fn render_study_tags(
         return;
     };
     let transform = map.transform();
+    let relative = matches!(
+        transform.mode,
+        crate::scales::PriceScaleMode::Percentage | crate::scales::PriceScaleMode::IndexedTo100
+    );
     let mut tags = Vec::new();
     for line in 0..study.line_count() {
         let plot_style = study.plot_style(line);
@@ -413,7 +418,11 @@ pub(crate) fn render_study_tags(
         {
             continue;
         }
-        let label = if study.value_format() == crate::scales::StudyFormat::Price {
+        let label = if study.value_format() != crate::scales::StudyFormat::Price {
+            study.format_plot_value(line, value)
+        } else if let Some(formatter) = formatter.filter(|_| !relative) {
+            formatter.format(value)
+        } else {
             map.label(
                 transform.to_scale(value),
                 study
@@ -421,8 +430,6 @@ pub(crate) fn render_study_tags(
                     .unwrap_or_else(|| tag_decimals(map, map.price_to_y(value))),
                 formatter,
             )
-        } else {
-            study.format_plot_value(line, value)
         };
         let color = axis.study_value_color.unwrap_or(plot_style.color);
         tags.push((

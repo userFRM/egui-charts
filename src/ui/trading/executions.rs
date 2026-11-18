@@ -196,7 +196,6 @@ pub(super) fn show(
             // Written only while it shows: a mark can hold every fill of the list.
             .on_hover_ui(|ui| {
                 let time = chart.time_formatter_in(chart.display_timezone());
-                let decimals = numbers.decimals;
                 let mut lines: Vec<_> = run
                     .iter()
                     .take(MAX_HOVER_FILLS)
@@ -207,7 +206,7 @@ pub(super) fn show(
                             &[
                                 ("side", l10n::text(ui.ctx(), side_name(fill.side)).as_str()),
                                 ("quantity", fill.quantity.to_string().as_str()),
-                                ("price", format!("{:.decimals$}", fill.price).as_str()),
+                                ("price", numbers.price(fill.price).as_str()),
                                 // With seconds, also on charts of daily bars.
                                 ("time", time.format_crosshair(fill.time, 1).as_str()),
                             ],
@@ -232,5 +231,78 @@ pub(super) fn show(
         // The chart's background keeps the text readable over the bars beside its own.
         painter.rect_filled(rect.expand(1.0), 2.0, theme.chart.bg);
         painter.galley(rect.min, line, chart.config().text_color);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::TradingFormatter;
+    use super::*;
+    use crate::model::OrderId;
+    use crate::widget::test_frames;
+
+    /// Execution tooltips use the symbol's host price text and retain the decimal fallback.
+    #[test]
+    fn execution_hover_uses_symbol_price_formatter() {
+        struct Host;
+        impl TradingFormatter for Host {
+            fn price(&self, symbol: &str, price: f64) -> Option<String> {
+                (symbol == "BOND").then(|| format!("{price:.3} u"))
+            }
+        }
+        for (symbol, formatter, expected) in [
+            ("BOND", Some(&Host as &dyn TradingFormatter), "1001.125 u"),
+            ("BOND", None, "1,001.12"),
+            ("OTHER", Some(&Host as &dyn TradingFormatter), "1,001.12"),
+        ] {
+            let ctx = egui::Context::default();
+            let mut chart = test_frames::chart(&[990.0], &[1010.0]);
+            let fill = Execution::new(
+                OrderId("fill".into()),
+                chart.bars(crate::widget::SeriesId::MAIN)[95].time,
+                OrderSide::Buy,
+                1001.125,
+                2.0,
+            );
+            let mut hovered = false;
+            for frame in 0..4 {
+                let mapping = chart.get_chart_mapping();
+                let events = chart
+                    .index_to_x(95.0)
+                    .filter(|_| frame == 1)
+                    .map(|x| egui::Event::PointerMoved(pos2(x, mapping.price_to_y(990.0) + 10.0)));
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        time: Some(frame as f64),
+                        events: events.into_iter().collect(),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        chart.show(ui);
+                        show(
+                            ui,
+                            &chart,
+                            &[&fill],
+                            false,
+                            Numbers {
+                                symbol,
+                                decimals: 2,
+                                formatter,
+                            },
+                        );
+                    },
+                );
+                hovered |= output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, Shape::Text(text)
+                        if text.galley.text().starts_with(&format!("Buy 2 at {expected}, ")))
+                });
+                output.drop_without_applying_deltas();
+            }
+            assert!(hovered, "execution hover price: {symbol} {expected}");
+        }
     }
 }

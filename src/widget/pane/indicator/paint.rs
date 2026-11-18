@@ -406,7 +406,7 @@ impl IndicatorPane {
                     last_in_view,
                     axis_edge,
                     &mut tags,
-                    None,
+                    self.price_formatter.as_deref(),
                     &self.axis_options,
                 );
             }

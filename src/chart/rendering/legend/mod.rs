@@ -130,6 +130,9 @@ pub struct Legend<'a> {
     pub studies: &'a [Box<dyn Indicator>],
     /// Display inputs supplied by the host, in `studies` order. Missing entries are omitted.
     pub study_inputs: &'a [&'a str],
+    /// Host formatters for the price values of `studies`, in their order. A missing or `None`
+    /// entry keeps the built-in decimals and thousands grouping.
+    pub study_formatters: &'a [Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>],
     /// Global index of `bar` in each study's values.
     pub bar_index: usize,
     /// Whether this series has volume.
@@ -192,6 +195,21 @@ impl std::fmt::Debug for Legend<'_> {
 
 impl<'a> Legend<'a> {
     /// A series readout with volume and no optional host metadata or quotes.
+    ///
+    /// ```
+    /// use egui_charts::model::Bar;
+    /// use egui_charts::scales::{CustomPriceFormatter, PriceFormatter};
+    /// use egui_charts::widget::Legend;
+    /// use std::sync::Arc;
+    ///
+    /// let time = chrono::DateTime::from_timestamp(0, 0).unwrap();
+    /// let bar = Bar::new(time, 100.0, 102.0, 99.0, 101.0, 1.0);
+    /// let units: Arc<dyn PriceFormatter> =
+    ///     Arc::new(CustomPriceFormatter::new(|value| format!("{value:.3} u")));
+    /// let formatters = [Some(units)];
+    /// let mut legend = Legend::new("ABC", "1D", &bar);
+    /// legend.study_formatters = &formatters;
+    /// ```
     pub fn new(symbol: &'a str, timeframe: &'a str, bar: &'a Bar) -> Self {
         Self {
             formatters: Default::default(),
@@ -209,6 +227,7 @@ impl<'a> Legend<'a> {
             statuses: &[],
             studies: &[],
             study_inputs: &[],
+            study_formatters: &[],
             bar_index: 0,
             show_volume: true,
             show_title: true,
@@ -692,6 +711,7 @@ impl<'a> Legend<'a> {
                 ask,
                 precision,
                 self.thousands_sep,
+                self.formatters.price,
                 self.quantity,
                 id,
             );
@@ -818,23 +838,24 @@ impl<'a> Legend<'a> {
                         (study.value_format() == crate::scales::StudyFormat::Price)
                             .then_some(precision)
                     });
+                    let formatter = self.study_formatters.get(index).and_then(Option::as_deref);
                     for index in study.legend_lines().into_iter().filter(|index| {
                         self.show_indicator_values
                             && study.is_visible()
                             && study.legend_visible(*index)
                     }) {
                         let value = study.plot_value(index, self.bar_index).unwrap_or(f64::NAN);
-                        let text = if value.is_finite() {
-                            if study.value_format() == crate::scales::StudyFormat::Price {
-                                crate::scales::group_thousands(
-                                    study.value_format().format(value, precision),
-                                    self.thousands_sep,
-                                )
-                            } else {
-                                study.format_plot_value(index, value)
-                            }
-                        } else {
+                        let text = if !value.is_finite() {
                             "∅".to_owned()
+                        } else if study.value_format() != crate::scales::StudyFormat::Price {
+                            study.format_plot_value(index, value)
+                        } else if let Some(formatter) = formatter {
+                            formatter.format(value)
+                        } else {
+                            crate::scales::group_thousands(
+                                study.value_format().format(value, precision),
+                                self.thousands_sep,
+                            )
                         };
                         // A fully transparent plot colour holds no RGB, so it has no opaque form.
                         let color = crate::chart::indicators::plots::plot_value_color(

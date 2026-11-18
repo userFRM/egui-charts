@@ -142,15 +142,16 @@ Choose the formatter for the values being displayed:
 
 | Setter | Values and labels |
 | --- | --- |
-| [`set_price_formatter`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_price_formatter) | Raw prices on normal and logarithmic axes, price tags and drawing prices; replaces instrument decimals. |
+| [`set_price_formatter`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_price_formatter) | Raw prices on normal and logarithmic axes, price tags, drawing prices and studies in price units; replaces instrument decimals. |
 | [`set_series_formatter`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_series_formatter) | Raw prices of one series; overrides the chart formatter. A shared axis uses its first visible series. |
 | [`set_percentage_formatter`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_percentage_formatter) | Already transformed percentage or indexed-to-100 values. |
 | [`set_volume_formatter`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_volume_formatter) | Volume readouts and volume-formatted studies, in volume units. |
+| [`set_indicator_formatter`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_indicator_formatter) | Values of one study, in its own units; overrides the chart formatters for that study. |
 
 Pass `None` to remove a host formatter. A series falls back to the chart price
 formatter, then its saved
 [`SeriesStyle::display_format`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.SeriesStyle.html#structfield.display_format)
-declaration, then built-in formatting. Other studies retain their own value formats.
+declaration, then built-in formatting. A study in price units falls back to the main series' host formatter, then the chart price formatter, a volume study to the volume formatter, then its own value format.
 Formatters change text, never stored prices, volumes or calculations. See the
 [price scale guide](price-scale.mdx#choose-the-transform) for relative units and
 the [accessibility guide](accessibility.mdx#screen-reader-output) for the separate
