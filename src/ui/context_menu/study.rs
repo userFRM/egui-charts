@@ -171,7 +171,7 @@ impl StudyContextMenu {
         self.is_open = true;
         self.volume = study.is_volume();
         self.name = if self.volume { "Vol" } else { study.name() }.to_owned();
-        self.catalogue_name = study.name().to_owned();
+        self.catalogue_name = study.registered_name().to_owned();
         self.alert = chart
             .indicator_value_at(id, bar)
             .filter(|_| !chart.symbol.is_empty())

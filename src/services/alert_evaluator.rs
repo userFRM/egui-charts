@@ -134,6 +134,7 @@ impl Evaluation {
                     settings: study.settings(),
                     visible: study.is_visible(),
                     scale: None,
+                    metric: None,
                 }
                 .create_with(factory)
                 .map_err(|error| error.to_string())?;
