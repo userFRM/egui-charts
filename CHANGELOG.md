@@ -511,6 +511,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- A detached chart export keeps Trade Rate and other `OrderFlowStudy` values at the captured position when new live events arrive. Ordinary study clones still follow the stream. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
+
 - The Terminal's Time and Sales panel removes trades at or after the replay cutoff on rewind and shows the live tape again on exit. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
 
 - `SettingsStore` saves settings that hold fractional drawing defaults once instead of on every poll, and `flush` returns `true` again: serde_json's `float_roundtrip` feature is now enabled, so numbers read back exactly as written. Cargo enables the feature for every crate in the build that uses serde_json. ([#2953](https://github.com/userFRM/egui-charts/issues/2953))
