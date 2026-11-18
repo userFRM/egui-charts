@@ -2609,4 +2609,109 @@ pub(super) mod tests {
         assert_eq!(extended_shapes, plain_shapes + 2);
         assert_eq!(extended_many_shapes, extended_shapes);
     }
+    /// A custom study reads the hourly bars of the symbol its input names, and the chart
+    /// replaces the request when the input changes.
+    #[test]
+    fn custom_study_requests_follow_its_symbol_input() {
+        use crate::studies::{CustomIndicator, IndicatorValue, InputKind, StudyInput};
+        let hourly = |symbol: &str| StudyDataRequest {
+            symbol: symbol.into(),
+            timeframe: Some(Timeframe::Hour1),
+            metric: None,
+        };
+        let requests = move |inputs: &[StudyInput]| match &inputs[0].value {
+            InputValue::Symbol(symbol) => vec![hourly(symbol)],
+            _ => Vec::new(),
+        };
+        let study = CustomIndicator::new("Other close", |_| Vec::new())
+            .with_inputs(
+                vec![StudyInput::new(
+                    "symbol",
+                    "Symbol",
+                    InputValue::Symbol("OTHER".into()),
+                    InputKind::Symbol,
+                )],
+                move |bars, inputs, _, histories| {
+                    let wanted = requests(inputs);
+                    let history = histories
+                        .iter()
+                        .find(|history| wanted.contains(&history.request));
+                    bars.iter()
+                        .map(|bar| {
+                            history
+                                .and_then(|history| {
+                                    Some(history.bars[history.bar_at(bar.time)?].close)
+                                })
+                                .map_or(IndicatorValue::None, IndicatorValue::Single)
+                        })
+                        .collect()
+                },
+            )
+            .unwrap()
+            .with_data_requests(requests);
+        let mut chart = Chart::new(crate::model::BarData::from_bars(bars(&[1.0; 6], 30)));
+        chart.set_symbol("MAIN");
+        chart.set_timeframe(Timeframe::Min30);
+        let id = chart.add_indicator(Box::new(study));
+        assert_eq!(chart.study_data_requests(), [hourly("OTHER")]);
+        chart.set_study_data(hourly("OTHER"), bars(&[10.0, 20.0, 30.0], 60), None);
+        let ctx = egui::Context::default();
+        for frame in 0..10 {
+            shapes(&ctx, &mut chart, frame as f64, Vec::new());
+        }
+        let (_, study) = chart
+            .indicators()
+            .find(|(candidate, _)| *candidate == id)
+            .unwrap();
+        assert_eq!(
+            (0..6)
+                .map(|bar| study.values().value(0, bar))
+                .collect::<Vec<_>>(),
+            [
+                Some(10.0),
+                Some(10.0),
+                Some(20.0),
+                Some(20.0),
+                Some(30.0),
+                Some(30.0)
+            ]
+        );
+        chart
+            .indicator_mut(id)
+            .unwrap()
+            .set_input("symbol", InputValue::Symbol("THIRD".into()))
+            .unwrap();
+        assert_eq!(chart.study_data_requests(), [hourly("THIRD")]);
+        for (history, expected) in [
+            (None, [None; 6]),
+            (
+                Some([7.0, 8.0, 9.0]),
+                [
+                    Some(7.0),
+                    Some(7.0),
+                    Some(8.0),
+                    Some(8.0),
+                    Some(9.0),
+                    Some(9.0),
+                ],
+            ),
+        ] {
+            if let Some(history) = history {
+                chart.set_study_data(hourly("THIRD"), bars(&history, 60), None);
+            }
+            for frame in 0..10 {
+                shapes(&ctx, &mut chart, frame as f64, Vec::new());
+            }
+            let (_, study) = chart
+                .indicators()
+                .find(|(candidate, _)| *candidate == id)
+                .unwrap();
+            assert_eq!(
+                (0..6)
+                    .map(|bar| study.values().value(0, bar))
+                    .collect::<Vec<_>>(),
+                expected,
+            );
+        }
+    }
 }

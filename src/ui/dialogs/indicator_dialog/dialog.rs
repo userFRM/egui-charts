@@ -1000,11 +1000,7 @@ impl IndicatorDialog {
         }
         let mut study = self.factory.create(id)?;
         if let Some(source) = self.source {
-            if !study
-                .inputs()
-                .iter()
-                .any(|input| input.id == "source" && matches!(input.kind, InputKind::Source))
-            {
+            if !study.has_settings() {
                 study = Box::new(ConfiguredStudy::new(study));
             }
             if let Err(error) = study.set_input("source", InputValue::Source(source)) {
@@ -1441,6 +1437,21 @@ mod tests {
         assert!(!dialog.is_open());
 
         let mut factory = IndicatorFactory::new();
+        factory.register("Custom source", || {
+            Box::new(
+                CustomIndicator::new("Custom source", |_| Vec::new())
+                    .with_inputs(
+                        vec![StudyInput::new(
+                            "source",
+                            "Source",
+                            InputValue::Source(StudySource::Price(PriceSource::Close)),
+                            InputKind::Source,
+                        )],
+                        |bars, _, _, _| vec![IndicatorValue::None; bars.len()],
+                    )
+                    .unwrap(),
+            )
+        });
         factory.register("Host source", || {
             let mut study = ConfiguredStudy::new(Box::new(SMA::new(3)));
             study
@@ -1497,6 +1508,12 @@ mod tests {
                 .value,
             InputValue::Timeframe(Some(crate::model::Timeframe::Hour1))
         );
+        let output = StudySource::Study { id: id.0, plot: 0 };
+        assert!(dialog.open_for_chart(&chart, Some(output)));
+        let Some(IndicatorDialogAction::AddIndicator(study)) = dialog.add("Custom source") else {
+            panic!("a custom study with a source reads another study's output");
+        };
+        assert_eq!(study.source(), Some(output));
     }
 
     #[test]
