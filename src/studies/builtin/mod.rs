@@ -608,6 +608,12 @@ pub(super) fn assert_replay_matches_batch(study: &dyn crate::studies::Indicator,
                 }
             }
         }
+        assert_eq!(
+            stepped.price_segments(),
+            prefix.price_segments(),
+            "{} segments of {end}",
+            batch.name()
+        );
     }
 }
 
