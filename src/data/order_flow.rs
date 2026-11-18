@@ -936,8 +936,7 @@ impl OrderFlowInput {
     /// after the open of the chart bar that holds the oldest live execution. After a loss, a
     /// footprint source whose held executions do not rebuild the chart's bars holds none of them
     /// and takes the sink's allocations, of the executions still queued too. Without a loss, a
-    /// source whose executions do not match the chart's bars groups them
-    /// from the oldest live one.
+    /// source whose executions do not match the chart's bars groups them from the oldest live one.
     #[cfg(feature = "widget")]
     pub(crate) fn replace_trades(
         &self,
@@ -2677,11 +2676,11 @@ mod tests {
     /// 10:00:01 one at a time into a store of 100, 2 or 1: it kept them all, lost the 09:59:57
     /// bar, or lost the 10:00:00 buy too, which leaves no bar to rebuild along. The buys of :02
     /// to :06 wait in a queue of 100, of 3, which drops those of :02 and :03, or of zero, which
-    /// drops them all; in the last row
-    /// the host pushes a bar at :03 before the :03 buy, which restarts the stream's grouping. A
-    /// volume and delta source and a footprint source connected then, and given the buys of :07
-    /// to :09, hold three buys in each chart bar from the oldest whose executions they all hold,
-    /// and one at :09; after a lost or regrouped queue only the :09 bar.
+    /// drops them all; in the last row the host pushes a bar at :03 before the :03 buy, which
+    /// restarts the stream's grouping. A volume and delta source and a footprint source connected
+    /// then, and given the buys of :07 to :09, hold three buys in each chart bar from the oldest
+    /// whose executions they all hold, and one at :09; after a lost or regrouped queue only the
+    /// :09 bar.
     #[cfg(feature = "widget")]
     #[test]
     fn sources_connected_while_executions_wait_hold_the_charts_bars() {
@@ -2721,14 +2720,8 @@ mod tests {
             }
             for second in 2..=6 {
                 if pushed && second == 3 {
-                    sink.push_bar(crate::model::Bar::new(
-                        at(3),
-                        100.0,
-                        100.0,
-                        100.0,
-                        100.0,
-                        3.0,
-                    ));
+                    let bar = crate::model::Bar::new(at(3), 100.0, 100.0, 100.0, 100.0, 3.0);
+                    sink.push_bar(bar);
                 }
                 sink.push_tick(buy(second));
             }
@@ -2736,12 +2729,10 @@ mod tests {
             for second in 7..=9 {
                 sink.push_tick(buy(second));
             }
-            let got = (footprint
-                .footprints_from(DateTime::<Utc>::MIN_UTC)
-                .bars
-                .values())
-            .map(|bar| (bar.time, bar.volume()))
-            .collect::<Vec<_>>();
+            let got: Vec<_> = (footprint.footprints_from(DateTime::<Utc>::MIN_UTC).bars)
+                .values()
+                .map(|bar| (bar.time, bar.volume()))
+                .collect();
             let want_flow = (whole.iter().map(|s| (at(*s), [3.0, 3.0, 0.0])))
                 .chain([(at(9), [1.0, 1.0, 0.0])])
                 .collect::<BTreeMap<_, _>>();
