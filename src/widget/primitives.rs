@@ -832,7 +832,7 @@ impl Chart {
         } else {
             let idx = self.study_ids.iter().position(|id| *id == series)?;
             let study = self.rendered_studies().indicators().get(idx)?;
-            (study.is_visible()
+            (self.shows_study(study.as_ref())
                 && (!study.is_volume()
                     || matches!(study.scale(), crate::studies::StudyScale::Shared(_))))
             .then(|| crate::chart::rendering::study_mapping(study.as_ref(), coords))?
@@ -942,7 +942,8 @@ impl Chart {
         for (idx, id) in self.study_ids.iter().enumerate() {
             if self.series_pane(*id) == Some(self.main_series_pane())
                 && studies.get(idx).is_some_and(|study| {
-                    study.is_visible() && study.scale() == crate::studies::StudyScale::Main
+                    self.shows_study(study.as_ref())
+                        && study.scale() == crate::studies::StudyScale::Main
                 })
                 && self.study_autoscale[idx]
                 && !self.config.scale_price_chart_only
@@ -1023,7 +1024,7 @@ impl Chart {
                 }
                 let mut view = self.primitive_view(item.series, coords.clone());
                 let study = view.study?;
-                if !study.is_visible() {
+                if !self.shows_study(study) {
                     return None;
                 }
                 view.mapping = crate::chart::rendering::study_mapping(study, coords);

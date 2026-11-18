@@ -90,7 +90,7 @@ impl Chart {
                 else {
                     return;
                 };
-                if !indicator.is_visible()
+                if !self.shows_study(indicator)
                     || self.series_pane(id) != Some(self.main_series_pane())
                     || (indicator.is_volume() && !self.shows_volume())
                 {

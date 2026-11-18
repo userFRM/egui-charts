@@ -137,6 +137,7 @@ impl Chart {
             #[cfg(feature = "studies")]
             volume_study: None,
             main_series_visible: true,
+            indicators_hidden: false,
             main_series_present: true,
             main_series_scale: Default::default(),
             price_series: Vec::new(),
@@ -1243,6 +1244,7 @@ mod tests {
         chart.drawings_mut().stay_in_drawing_mode = true;
         chart.drawings_mut().eraser_mode = true;
         chart.drawings_mut().start_drag_body(7, egui::Pos2::ZERO);
+        chart.drawings_mut().set_hidden(true);
         chart.drawings_mut().registry.set_availability(
             DrawingToolType::TrendLine,
             crate::drawings::ToolAvailability {
@@ -1262,6 +1264,7 @@ mod tests {
         assert!(chart.marks.is_empty());
         assert!(chart.drawings().stay_in_drawing_mode);
         assert!(chart.drawings().eraser_mode);
+        assert!(chart.drawings().is_hidden());
         chart.set_data(SeriesId::MAIN, bars(&[0, 120, 240]));
         chart.set_symbol("A");
         assert!(chart.drawings().dragging_handle.is_none());

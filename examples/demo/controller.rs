@@ -2434,16 +2434,9 @@ impl DemoApp {
                     )
                     .color,
             });
-        if self.chart.indicators().next().is_some() {
-            self.drawing_toolbar.state.hide_indicators = self
-                .chart
-                .indicators()
-                .all(|(_, study)| !study.is_visible());
-        }
+        self.drawing_toolbar.state.hide_indicators = self.chart.indicators_hidden();
+        self.drawing_toolbar.state.hide_drawings = self.chart.drawings().is_hidden();
         let drawings = &self.chart.drawings().drawings;
-        if !drawings.is_empty() {
-            self.drawing_toolbar.state.hide_drawings = drawings.iter().all(|d| !d.visible);
-        }
         self.drawing_toolbar.state.lock_all =
             !drawings.is_empty() && drawings.iter().all(|d| d.locked);
         if self.drawing_toolbar.state.preferences.hidden {
@@ -2548,20 +2541,16 @@ impl DemoApp {
                 return;
             }
             DrawingToolbarAction::HideAllIndicators => {
-                let chart = &mut self.chart;
-                let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
-                for id in ids {
-                    chart.set_indicator_visible(id, !self.drawing_toolbar.state.hide_indicators);
-                }
+                self.chart
+                    .set_indicators_hidden(self.drawing_toolbar.state.hide_indicators);
                 return;
             }
             DrawingToolbarAction::HideAll => {
-                let visible = !self.drawing_toolbar.state.hide_drawings;
-                self.chart.drawings_mut().set_visibility_all(visible);
-                let ids: Vec<SeriesId> = self.chart.indicators().map(|(id, _)| id).collect();
-                for id in ids {
-                    self.chart.set_indicator_visible(id, visible);
-                }
+                self.chart
+                    .drawings_mut()
+                    .set_hidden(self.drawing_toolbar.state.hide_drawings);
+                self.chart
+                    .set_indicators_hidden(self.drawing_toolbar.state.hide_indicators);
                 return;
             }
             DrawingToolbarAction::RemoveDrawings {
@@ -2644,7 +2633,7 @@ impl DemoApp {
                 dm.clear_all()
             }
             DrawingToolbarAction::HideAllDrawings => {
-                dm.set_visibility_all(!self.drawing_toolbar.state.hide_drawings);
+                dm.set_hidden(self.drawing_toolbar.state.hide_drawings);
             }
             DrawingToolbarAction::LockAllDrawings => dm.toggle_lock_all(),
             DrawingToolbarAction::InsertGlyph { icon_name, size } => {
@@ -4873,12 +4862,15 @@ mod tests {
     #[test]
     fn hide_indicator_menu_restores_studies_and_follows_undo() {
         let is_visible = |chart: &Chart, id| {
-            chart
-                .indicators()
-                .find(|(study, _)| *study == id)
-                .unwrap()
-                .1
-                .is_visible()
+            assert!(
+                chart
+                    .indicators()
+                    .find(|(study, _)| *study == id)
+                    .unwrap()
+                    .1
+                    .is_visible()
+            );
+            chart.is_series_visible(id)
         };
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
@@ -4927,10 +4919,7 @@ mod tests {
         assert!(is_visible(&app.chart, id));
         app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
         app.activate_chart_slot(1);
-        let others: Vec<_> = app.chart.indicators().map(|(id, _)| id).collect();
-        for other in others {
-            app.chart.set_indicator_visible(other, false);
-        }
+        app.chart.set_indicators_hidden(true);
         ui_frame(&ctx, size, vec![], |ui| {
             app.show_drawing_toolbar(ui, app.theme.chart.bg)
         });
@@ -4951,7 +4940,7 @@ mod tests {
         app.poll_storage(&ctx);
         let restored = app.chart.indicators().next().unwrap().0;
         choose(&mut app, "Hide indicators");
-        assert!(is_visible(&app.chart, restored));
+        assert!(!is_visible(&app.chart, restored));
     }
 
     /// Menu picks read settings, restored charts and history instead of host-side flags.

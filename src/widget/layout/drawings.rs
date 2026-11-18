@@ -2150,15 +2150,12 @@ mod tests {
         copied.sort();
         assert_eq!(copied, [Some(1_000), Some(2_000)]);
 
-        // Bulk edits are edits.
-        for bulk in [
-            |chart: &mut Chart| chart.drawings_mut().set_visibility_all(false),
-            |chart: &mut Chart| chart.drawings_mut().toggle_lock_all(),
-        ] {
+        // A bulk edit is an edit.
+        {
             let mut chart = bars(60);
             chart.set_symbol("AAA");
             chart.load_drawings_remapped(&json, true).unwrap();
-            bulk(&mut chart);
+            chart.drawings_mut().toggle_lock_all();
             assert!(times(&chart).iter().all(|(_, time)| *time > 2_000));
         }
     }
