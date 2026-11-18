@@ -1771,21 +1771,6 @@ impl ChartLayout {
         {
             self.active = index;
         }
-        // Keys go to the active chart, also when the wheel activated it and left the focus on
-        // another chart.
-        if !self.detached[self.active]
-            && let Some(id) = charts[self.active].keyboard.chart_id
-            && ui.memory(|memory| {
-                memory.focused().is_some_and(|focused| {
-                    focused != id
-                        && charts
-                            .iter()
-                            .any(|chart| chart.keyboard.chart_id == Some(focused))
-                })
-            })
-        {
-            ui.memory_mut(|memory| memory.request_focus(id));
-        }
         for (index, chart) in charts.iter().enumerate() {
             if !self.sync.sync_time_axis || total == 1 {
                 self.pending_ranges[index] = None;
@@ -2009,6 +1994,22 @@ impl ChartLayout {
         self.join_groups(charts);
         self.record_links(charts[self.active]);
         self.focus_active = false;
+        // Keys go to the active chart, also when the wheel activated it and left the focus on
+        // another chart. After the charts are shown, so a Tab the host turned into a new active
+        // chart cannot move the focus on from it, and before a host dispatches the next frame.
+        if !self.detached[self.active]
+            && let Some(id) = charts[self.active].keyboard.chart_id
+            && ui.memory(|memory| {
+                memory.focused().is_some_and(|focused| {
+                    focused != id
+                        && charts
+                            .iter()
+                            .any(|chart| chart.keyboard.chart_id == Some(focused))
+                })
+            })
+        {
+            ui.memory_mut(|memory| memory.request_focus(id));
+        }
         // Alt+Enter toggles the focused tile in a grid; a lone chart leaves it to the host.
         if self.mode != ChartLayoutMode::Tabs && count > 1 {
             for (index, chart) in charts.iter_mut().take(count).enumerate() {
