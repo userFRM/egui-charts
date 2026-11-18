@@ -369,16 +369,8 @@ impl ChartSettingsState {
         settings.crosshair.color = crosshair.horz_line_color;
         settings.crosshair.line_width = crosshair.horz_line_width;
         settings.crosshair.line_style = crosshair.horz_line_style;
-        let decimals = chart
-            .state()
-            .price_scale()
-            .map(Default::default(), 0.0, 1.0)
-            .price_precision();
-        settings.precision = PrecisionMode::all()
-            .iter()
-            .copied()
-            .find(|mode| mode.decimals() == decimals)
-            .unwrap_or_default();
+        settings.precision =
+            PrecisionMode::from_decimals(chart.state().price_scale().chosen_precision());
         settings.watermark.mode = if !config.show_watermark {
             WatermarkMode::ReplayMode
         } else if config.watermark_text.is_some() {
@@ -746,16 +738,10 @@ impl ChartSettingsState {
         let options = chart.state.price_scale_mut().options_mut();
         options.mode = mode;
         options.invert_scale = self.scales_and_lines.invert_scale;
-        let precision = self
-            .precision
-            .decimals()
-            .map(|value| value as u8)
-            .or_else(|| {
-                chart
-                    .instrument()
-                    .and_then(crate::scales::instrument_price_precision)
-            });
-        chart.state.price_scale_mut().set_price_precision(precision);
+        chart
+            .state
+            .price_scale_mut()
+            .set_price_precision(self.precision.decimals().map(|value| value as u8));
         if let Some(style) = chart.series_style_mut(crate::widget::SeriesId::MAIN) {
             style.price_line_color = self.scales_and_lines.symbol_price_color;
             if let Some(source) = self.scales_and_lines.price_line_source {

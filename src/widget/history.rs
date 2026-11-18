@@ -420,6 +420,7 @@ impl Study {
 fn same_scale(a: &crate::scales::PriceScale, b: &crate::scales::PriceScale) -> bool {
     a.options() == b.options()
         && a.price_precision() == b.price_precision()
+        && a.chosen_precision() == b.chosen_precision()
         && a.bar_ratio() == b.bar_ratio()
         && a.is_manual() == b.is_manual()
         && (!a.is_manual() || a.range() == b.range())

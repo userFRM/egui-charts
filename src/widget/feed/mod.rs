@@ -487,7 +487,7 @@ impl Chart {
         self.set_quote(None);
         self.quote_action = None;
         self.session_quote = None;
-        self.state.price_scale_mut().set_price_precision(None);
+        self.state.price_scale_mut().set_instrument_precision(None);
         self.state.price_scale_mut().set_tick_size(None);
         let initial_bars = previous.as_ref().map_or(1000, |link| link.initial_bars);
         self.attach_feed(feed, initial_bars);
@@ -753,7 +753,7 @@ impl Chart {
             self.time_scale_events = Default::default();
             self.event_click = None;
             self.axis_hover = None;
-            self.state.price_scale_mut().set_price_precision(None);
+            self.state.price_scale_mut().set_instrument_precision(None);
             self.state.price_scale_mut().set_tick_size(None);
         }
         self.symbol = symbol;

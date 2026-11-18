@@ -183,6 +183,15 @@ impl PrecisionMode {
         }
     }
 
+    /// The mode of a chosen precision of `decimals`, `Default` when none is chosen.
+    pub(crate) fn from_decimals(decimals: Option<u8>) -> Self {
+        Self::all()
+            .iter()
+            .copied()
+            .find(|mode| mode.decimals() == decimals.map(usize::from))
+            .unwrap_or_default()
+    }
+
     /// Explicit precision, or None to follow the instrument.
     pub fn decimals(&self) -> Option<usize> {
         match self {

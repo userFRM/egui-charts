@@ -543,6 +543,97 @@ fn inactive_symbol_state_can_be_forgotten() {
     assert!(chart.markers(SeriesId::MAIN).is_empty());
 }
 
+/// A precision chosen in the chart settings outlasts an interval change, a reload, a pause and
+/// resume, a symbol change and a save and restore, while each instrument's decimals arrive
+/// beneath it, and "Default" follows the instrument again. A layout saved before a precision
+/// could be chosen held the precision shown, which restores as none chosen and gives way to the
+/// next instrument's, as it did.
+#[test]
+fn chosen_precision_survives_interval_symbol_and_reload() {
+    use crate::widget::settings::{ChartSettingsState, PrecisionMode};
+    let answer = |feed: &Script, symbol: &str, decimals: u8| {
+        while !feed.resolves.lock().unwrap().is_empty() {
+            let instrument = Instrument::new(symbol).with_price_decimals(decimals);
+            feed.resolve().send(Ok(instrument));
+        }
+    };
+    let shown = |chart: &Chart| {
+        let precision = ChartSettingsState::from_chart(chart).precision;
+        (chart.state.price_scale().price_precision(), precision)
+    };
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    answer(&feed, "A", 2);
+    frames.run(&mut chart);
+    assert_eq!(
+        shown(&chart),
+        (Some(2), PrecisionMode::Default),
+        "never chosen"
+    );
+    let mut settings = ChartSettingsState::from_chart(&chart);
+    settings.precision = PrecisionMode::Decimals5;
+    settings.apply_to_chart(&mut chart).unwrap();
+    let chosen = (Some(5), PrecisionMode::Decimals5);
+    type Step<'a> = (&'a str, &'a dyn Fn(&mut Chart));
+    let steps: [Step; 4] = [
+        ("interval", &|chart| chart.set_timeframe(Timeframe::Hour1)),
+        ("reload", &|chart| chart.reload_feed()),
+        ("pause", &|chart| chart.set_feed_paused(true)),
+        ("resume", &|chart| chart.set_feed_paused(false)),
+    ];
+    for (step, change) in steps {
+        change(&mut chart);
+        frames.run(&mut chart);
+        answer(&feed, "A", 2);
+        frames.run(&mut chart);
+        assert_eq!(shown(&chart), chosen, "{step}");
+    }
+    chart.set_symbol("B");
+    frames.run(&mut chart);
+    answer(&feed, "B", 3);
+    frames.run(&mut chart);
+    assert_eq!(shown(&chart), chosen, "symbol");
+
+    let saved = chart.snapshot().unwrap();
+    let restored_feed = Arc::new(Script::default());
+    let mut restored = fed(&restored_feed, Some("B"));
+    restored.restore(&saved).unwrap();
+    frames.run(&mut restored);
+    answer(&restored_feed, "B", 3);
+    frames.run(&mut restored);
+    assert_eq!(shown(&restored), chosen, "restored");
+
+    let mut settings = ChartSettingsState::from_chart(&chart);
+    settings.precision = PrecisionMode::Default;
+    settings.apply_to_chart(&mut chart).unwrap();
+    assert_eq!(shown(&chart), (Some(3), PrecisionMode::Default), "default");
+
+    // Before, the saved scale held the five decimals shown and no choice.
+    let mut older = serde_json::to_value(&saved).unwrap();
+    let scale = older["price_scale"].as_object_mut().unwrap();
+    assert!(scale.remove("chosen_precision").is_some());
+    scale["price_precision"] = 5.into();
+    let older: crate::widget::ChartSnapshot = serde_json::from_value(older).unwrap();
+    let older_feed = Arc::new(Script::default());
+    let mut restored = fed(&older_feed, Some("B"));
+    restored.restore(&older).unwrap();
+    assert_eq!(
+        shown(&restored),
+        (Some(5), PrecisionMode::Default),
+        "older save"
+    );
+    frames.run(&mut restored);
+    answer(&older_feed, "B", 3);
+    frames.run(&mut restored);
+    assert_eq!(
+        shown(&restored),
+        (Some(3), PrecisionMode::Default),
+        "older save, fed"
+    );
+}
+
 /// `count` one-minute bars from 00:00 on 15 March 2024, closing at 100 plus their index.
 fn bars(count: usize) -> Vec<Bar> {
     let start = "2024-03-15T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
