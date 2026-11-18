@@ -596,42 +596,45 @@ fn chosen_precision_survives_interval_symbol_and_reload() {
     frames.run(&mut chart);
     assert_eq!(shown(&chart), chosen, "symbol");
 
-    let saved = chart.snapshot().unwrap();
-    let restored_feed = Arc::new(Script::default());
-    let mut restored = fed(&restored_feed, Some("B"));
-    restored.restore(&saved).unwrap();
-    frames.run(&mut restored);
-    answer(&restored_feed, "B", 3);
-    frames.run(&mut restored);
-    assert_eq!(shown(&restored), chosen, "restored");
+    #[cfg(feature = "ui")]
+    {
+        let saved = chart.snapshot().unwrap();
+        let restored_feed = Arc::new(Script::default());
+        let mut restored = fed(&restored_feed, Some("B"));
+        restored.restore(&saved).unwrap();
+        frames.run(&mut restored);
+        answer(&restored_feed, "B", 3);
+        frames.run(&mut restored);
+        assert_eq!(shown(&restored), chosen, "restored");
+
+        // Before, the saved scale held the five decimals shown and no choice.
+        let mut older = serde_json::to_value(&saved).unwrap();
+        let scale = older["price_scale"].as_object_mut().unwrap();
+        assert!(scale.remove("chosen_precision").is_some());
+        scale["price_precision"] = 5.into();
+        let older: crate::widget::ChartSnapshot = serde_json::from_value(older).unwrap();
+        let older_feed = Arc::new(Script::default());
+        let mut restored = fed(&older_feed, Some("B"));
+        restored.restore(&older).unwrap();
+        assert_eq!(
+            shown(&restored),
+            (Some(5), PrecisionMode::Default),
+            "older save"
+        );
+        frames.run(&mut restored);
+        answer(&older_feed, "B", 3);
+        frames.run(&mut restored);
+        assert_eq!(
+            shown(&restored),
+            (Some(3), PrecisionMode::Default),
+            "older save, fed"
+        );
+    }
 
     let mut settings = ChartSettingsState::from_chart(&chart);
     settings.precision = PrecisionMode::Default;
     settings.apply_to_chart(&mut chart).unwrap();
     assert_eq!(shown(&chart), (Some(3), PrecisionMode::Default), "default");
-
-    // Before, the saved scale held the five decimals shown and no choice.
-    let mut older = serde_json::to_value(&saved).unwrap();
-    let scale = older["price_scale"].as_object_mut().unwrap();
-    assert!(scale.remove("chosen_precision").is_some());
-    scale["price_precision"] = 5.into();
-    let older: crate::widget::ChartSnapshot = serde_json::from_value(older).unwrap();
-    let older_feed = Arc::new(Script::default());
-    let mut restored = fed(&older_feed, Some("B"));
-    restored.restore(&older).unwrap();
-    assert_eq!(
-        shown(&restored),
-        (Some(5), PrecisionMode::Default),
-        "older save"
-    );
-    frames.run(&mut restored);
-    answer(&older_feed, "B", 3);
-    frames.run(&mut restored);
-    assert_eq!(
-        shown(&restored),
-        (Some(3), PrecisionMode::Default),
-        "older save, fed"
-    );
 }
 
 /// `count` one-minute bars from 00:00 on 15 March 2024, closing at 100 plus their index.

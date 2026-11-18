@@ -78,10 +78,10 @@ pub(crate) fn group_thousands(text: String, separator: Option<char>) -> String {
     grouped
 }
 
-/// The most decimals a price label writes. An `f64` holds 15 to 17 significant digits, so 12
-/// decimals still write prices below 1000 exactly, and a label stays short enough to leave the
-/// plot its room.
-pub(crate) const MAX_PRICE_DECIMALS: usize = 12;
+/// The most decimals an instrument's precision gives price labels. An `f64` holds 15 to 17
+/// significant digits, so 12 decimals still write prices below 1000 exactly, and a label stays
+/// short enough to leave the plot its room.
+const MAX_PRICE_DECIMALS: usize = 12;
 
 /// Instrument decimals, falling back to the decimal places needed to write its minimum tick in
 /// its shortest form, so a tick computed in floating point, such as `0.1 * 3.0`, has one.
