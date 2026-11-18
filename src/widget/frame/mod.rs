@@ -2778,8 +2778,7 @@ impl Chart {
             }
             let change = tag_change.map(|(reference, close)| {
                 let precision = self
-                    .instrument()
-                    .and_then(crate::scales::instrument_price_precision)
+                    .readout_price_decimals()
                     .map_or_else(|| crate::scales::price_decimals(close), usize::from);
                 let formatter = self.series_price_formatter(super::SeriesId::MAIN);
                 let (_, absolute, percent) = rendering::price_change_text(

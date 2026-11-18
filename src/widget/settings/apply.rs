@@ -2601,6 +2601,11 @@ mod tests {
                     assert_eq!(price, "115.00");
                 }
             }
+            // The change follows the chosen precision, as in the legend: +5 becomes +5.000.
+            settings.precision = PrecisionMode::Decimals3;
+            settings.apply_to_chart(&mut chart).unwrap();
+            let (_, _, text) = painted(&ctx, &mut chart);
+            assert!(text.ends_with("\n+5.000 (+4.55%)"), "{mode:?}: {text}");
             // Settings and templates saved before the fields existed keep the chart's line and
             // show the value alone.
             let mut saved = serde_json::to_value(&settings).unwrap();
