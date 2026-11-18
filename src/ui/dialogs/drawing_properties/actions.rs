@@ -163,7 +163,7 @@ impl DrawingProps {
                 if let Some(edited) = edits.iter().find(|edited| edited.id == drawing.id) {
                     *drawing = edited.clone();
                 }
-            });
+            })?;
             if self.save_as_default
                 && let Some(drawing) = manager.drawings.iter().find(|d| d.id == id.0)
                 && drawing.custom_tool.is_none()
@@ -172,8 +172,8 @@ impl DrawingProps {
                 defaults.settings.visible = true;
                 manager.tool_defaults.insert(drawing.tool_type, defaults);
             }
-        });
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Prepare validated edits without history or persistence side effects, for live preview.
@@ -581,7 +581,10 @@ mod tests {
             .is_err()
         );
         assert_eq!(chart.drawings().drawings[0].font_size, 24.0);
-        chart.drawings_mut().edit_drawing(7, |d| d.locked = false);
+        chart
+            .drawings_mut()
+            .edit_drawing(7, |d| d.locked = false)
+            .unwrap();
         // A size the drawings file would refuse cannot be applied.
         assert!(
             DrawingProps {
@@ -877,7 +880,10 @@ mod tests {
                 format!("{:?}", Drawing::new(7, tool).fib_config)
             );
             assert!(chart.redo());
-            chart.drawings_mut().edit_drawing(7, |d| d.locked = true);
+            chart
+                .drawings_mut()
+                .edit_drawing(7, |d| d.locked = true)
+                .unwrap();
             props.font_size = 18.0;
             props.apply_to_chart(DrawingId(7), &mut chart).unwrap();
             assert_eq!(
