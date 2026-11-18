@@ -4,24 +4,32 @@
 //! oscillator score and a summary score between -1 (all sell) and +1 (all buy), each with the
 //! share of its components that had a vote.
 //!
-//! # Rule
+//! # Rules
 //!
-//! Every enabled component votes +1 (buy), -1 (sell) or 0 (neutral) on a bar:
+//! The moving averages are SMA and EMA at 10, 20, 30, 50, 100 and 200 bars, HMA 9,
+//! VWMA 20 and Ichimoku (9, 26, 52). The oscillators are RSI 14, Stochastic (14, 3, 3),
+//! CCI 20, ADX (14, 14), Awesome Oscillator (5, 34), Momentum 10, MACD (12, 26, 9),
+//! Stochastic RSI (14, 14, 3, 3), Williams %R 14, Bull Bear Power 13 and Ultimate (7, 14, 28).
 //!
-//! ```text
-//! Moving average (SMA and EMA of three lengths):  sign(close - average)
-//! RSI:                  +1 below 30, -1 above 70
-//! Stochastic %K:        +1 below 20, -1 above 80
-//! CCI:                  +1 below -100, -1 above 100
-//! MACD:                 sign(MACD line - signal line)
-//! Momentum:             sign(momentum)
-//! ```
+//! Averages buy below the close and sell above it. Ichimoku buys when close, conversion,
+//! base, span A and span B strictly descend, and sells when they ascend. The spans are those
+//! drawn at the bar, computed 25 bars earlier. RSI, CCI and Williams %R buy below 30, -100
+//! and -80 respectively while rising, and sell above 70, 100 and -20 while falling.
+//! Stochastic needs both lines below 20 with K above D to buy, or above 80 with K below D
+//! to sell. ADX buys with +DI above -DI, ADX above 20 and rising; it sells with -DI above
+//! +DI, ADX above 20 and falling. Awesome buys a positive zero cross or positive upturn
+//! and sells a negative cross or negative downturn. Momentum votes by its change, MACD
+//! by its line against its signal. Stochastic RSI uses Stochastic's conditions in a downtrend
+//! to buy and an uptrend to sell. Bull Bear Power buys negative, rising Bear Power in an
+//! uptrend and sells positive, falling Bull Power in a downtrend. Both take trend from the
+//! direction of Elder Ray's 13-bar EMA. Ultimate buys above 70 and sells below 30.
+//! All other conditions are neutral; comparisons are strict.
 //!
-//! Each component counts once, whatever its group. A group's score is the mean of the votes it
-//! has, the summary is the mean of all votes, and a score without a single vote has no value.
-//! A component without a value, in its warm-up (for the MACD the first max(slow, signal) bars)
-//! or on a bar with a non-finite high, low or close, has no vote: it leaves the mean and lowers
-//! the coverage, the votes it has over the components enabled. A rating is derived from a score:
+//! A group's score is its mean vote. The summary averages the chosen groups' scores,
+//! ignoring groups without a vote. A component missing any value its rule reads has no
+//! vote; MACD votes from bar 25. A bar without finite high, low and close has no values.
+//! Coverage is votes divided by components, across the chosen groups for the summary.
+//! A score without a vote has no value. Categories use these thresholds:
 //!
 //! ```text
 //! Strong Buy   score >= 0.5
@@ -44,10 +52,17 @@
 use crate::model::{Bar, Timeframe};
 use crate::studies::palette;
 use crate::studies::{
-    CCI, EMA, Indicator, IndicatorValue, IndicatorValues, MACD, Momentum, RSI, SMA, Stochastic,
-    StudyCell, StudyData, StudyDataRequest, StudyTable, TablePosition, TableTextSize,
+    ADX, AwesomeOscillator, CCI, EMA, ElderRay, HMA, IchimokuCloud, Indicator, IndicatorValue,
+    IndicatorValues, MACD, Momentum, RSI, SMA, Stochastic, StochasticRSI, StudyCell, StudyData,
+    StudyDataRequest, StudyTable, TablePosition, TableTextSize, UltimateOscillator, VWMA,
+    WilliamsR,
 };
 use egui::Color32;
+use std::cmp::Ordering;
+
+/// Bars by which `IchimokuCloud::new(9, 26, 52)` draws its spans ahead: 26 periods, counting the
+/// bar itself.
+const CLOUD_SHIFT: usize = 25;
 
 /// The intervals rated in the table with higher intervals shown, where longer than the chart's.
 const INTERVALS: [Timeframe; 9] = [
@@ -62,16 +77,16 @@ const INTERVALS: [Timeframe; 9] = [
     Timeframe::Month1,
 ];
 
-/// The groups whose votes the summary score averages. The `Debug` names are the choices its
+/// The groups whose ratings the summary averages. The `Debug` names are the choices its
 /// input lists.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub enum RatingBasis {
-    /// Every vote of the moving averages and the oscillators.
+    /// The mean of the moving-average and oscillator ratings.
     #[default]
     All,
-    /// The moving averages' votes only.
+    /// The moving-average rating alone.
     MovingAverages,
-    /// The oscillators' votes only.
+    /// The oscillator rating alone.
     Oscillators,
 }
 
@@ -106,42 +121,114 @@ enum Group {
 #[derive(Clone, Copy, Debug)]
 enum Rule {
     Average,
+    Ichimoku,
     Rsi,
     Stochastic,
     Cci,
-    Macd,
+    Adx,
+    Awesome,
     Momentum,
+    Macd,
+    StochasticRsi,
+    WilliamsR,
+    BullBearPower,
+    Ultimate,
 }
 
 impl Rule {
-    /// The vote of a component with `values` at clean bar `at`, or `None` without one.
-    fn vote(self, values: &IndicatorValues, at: usize, close: f64) -> Option<f64> {
-        let signed = |difference: f64| {
-            if difference > 0.0 {
+    /// The vote of a component with `values` at clean bar `at` with close `close`, the market's
+    /// direction being `trend`, or `None` without every value the rule reads.
+    fn vote(
+        self,
+        values: &IndicatorValues,
+        at: usize,
+        close: f64,
+        trend: Option<Ordering>,
+    ) -> Option<f64> {
+        let now = |line| values.value(line, at);
+        let back = |line, bars| values.value(line, at.checked_sub(bars)?);
+        // The buy and sell conditions never both hold.
+        let side = |buy: bool, sell: bool| {
+            if buy {
                 1.0
-            } else if difference < 0.0 {
+            } else if sell {
                 -1.0
             } else {
                 0.0
             }
         };
-        let level = |low: f64, high: f64| {
-            let value = values.value(0, at)?;
-            Some(if value < low {
-                1.0
-            } else if value > high {
-                -1.0
-            } else {
-                0.0
-            })
+        // Oversold and rising buys, overbought and falling sells.
+        let zone = |low: f64, high: f64| {
+            let (value, previous) = (now(0)?, back(0, 1)?);
+            Some(side(
+                value < low && value > previous,
+                value > high && value < previous,
+            ))
         };
         match self {
-            Self::Average => Some(signed(close - values.value(0, at)?)),
-            Self::Rsi => level(30.0, 70.0),
-            Self::Stochastic => level(20.0, 80.0),
-            Self::Cci => level(-100.0, 100.0),
-            Self::Macd => Some(signed(values.value(0, at)? - values.value(1, at)?)),
-            Self::Momentum => Some(signed(values.value(0, at)?)),
+            Self::Average => {
+                let average = now(0)?;
+                Some(side(close > average, close < average))
+            }
+            Self::Ichimoku => {
+                let (tenkan, kijun) = (now(0)?, now(1)?);
+                let (a, b) = (back(2, CLOUD_SHIFT)?, back(3, CLOUD_SHIFT)?);
+                Some(side(
+                    close > tenkan && tenkan > kijun && kijun > a && a > b,
+                    close < tenkan && tenkan < kijun && kijun < a && a < b,
+                ))
+            }
+            Self::Rsi => zone(30.0, 70.0),
+            Self::Cci => zone(-100.0, 100.0),
+            Self::WilliamsR => zone(-80.0, -20.0),
+            Self::Stochastic => {
+                let (k, d) = (now(0)?, now(1)?);
+                Some(side(
+                    k < 20.0 && d < 20.0 && k > d,
+                    k > 80.0 && d > 80.0 && k < d,
+                ))
+            }
+            Self::StochasticRsi => {
+                let (k, d, trend) = (now(0)?, now(1)?, trend?);
+                Some(side(
+                    trend == Ordering::Less && k < 20.0 && d < 20.0 && k > d,
+                    trend == Ordering::Greater && k > 80.0 && d > 80.0 && k < d,
+                ))
+            }
+            Self::Adx => {
+                let (adx, plus, minus, previous) = (now(0)?, now(1)?, now(2)?, back(0, 1)?);
+                Some(side(
+                    plus > minus && adx > 20.0 && adx > previous,
+                    plus < minus && adx > 20.0 && adx < previous,
+                ))
+            }
+            Self::Awesome => {
+                let (value, previous, earlier) = (now(0)?, back(0, 1)?, back(0, 2)?);
+                Some(side(
+                    value > 0.0 && (previous <= 0.0 || (value > previous && previous < earlier)),
+                    value < 0.0 && (previous >= 0.0 || (value < previous && previous > earlier)),
+                ))
+            }
+            Self::Momentum => {
+                let (value, previous) = (now(0)?, back(0, 1)?);
+                Some(side(value > previous, value < previous))
+            }
+            Self::Macd => {
+                let (macd, signal) = (now(0)?, now(1)?);
+                Some(side(macd > signal, macd < signal))
+            }
+            Self::BullBearPower => {
+                let (bull, bear) = (now(0)?, now(1)?);
+                let (bull_before, bear_before, trend) = (back(0, 1)?, back(1, 1)?, trend?);
+                Some(side(
+                    trend == Ordering::Greater && bear < 0.0 && bear > bear_before,
+                    trend == Ordering::Less && bull > 0.0 && bull < bull_before,
+                ))
+            }
+            Self::Ultimate => {
+                let value = now(0)?;
+                Some(side(value > 70.0, value < 30.0))
+            }
         }
     }
 }
@@ -168,23 +255,6 @@ impl std::fmt::Debug for Component {
 /// Moving-average, oscillator and summary ratings from the votes of their components.
 #[derive(Clone, Debug)]
 pub struct TechnicalRatings {
-    fast: usize,
-    medium: usize,
-    slow: usize,
-    simple: bool,
-    exponential: bool,
-    rsi: bool,
-    rsi_period: usize,
-    stochastic: bool,
-    stochastic_period: usize,
-    cci: bool,
-    cci_period: usize,
-    macd: bool,
-    macd_fast: usize,
-    macd_slow: usize,
-    macd_signal: usize,
-    momentum: bool,
-    momentum_period: usize,
     basis: RatingBasis,
     table_intervals: bool,
     table_position: TablePosition,
@@ -212,27 +282,17 @@ pub struct TechnicalRatings {
 }
 
 impl TechnicalRatings {
-    /// Moving averages of the three lengths, each raised to at least 1, and the conventional
-    /// oscillators.
-    pub fn new(fast: usize, medium: usize, slow: usize) -> Self {
+    /// Ratings of the fixed components, with the table showing the rating's interval alone.
+    ///
+    /// ```
+    /// use egui_charts::studies::{Indicator, RatingBasis, TechnicalRatings};
+    ///
+    /// let mut ratings = TechnicalRatings::new().with_basis(RatingBasis::Oscillators);
+    /// ratings.calculate(&[]);
+    /// assert_eq!(ratings.line_names()[2], "Summary");
+    /// ```
+    pub fn new() -> Self {
         Self {
-            fast: fast.max(1),
-            medium: medium.max(1),
-            slow: slow.max(1),
-            simple: true,
-            exponential: true,
-            rsi: true,
-            rsi_period: 14,
-            stochastic: true,
-            stochastic_period: 14,
-            cci: true,
-            cci_period: 20,
-            macd: true,
-            macd_fast: 12,
-            macd_slow: 26,
-            macd_signal: 9,
-            momentum: true,
-            momentum_period: 10,
             basis: RatingBasis::All,
             table_intervals: false,
             table_position: TablePosition::BottomRight,
@@ -272,95 +332,138 @@ impl TechnicalRatings {
         }
     }
 
-    /// The summary score averages the votes of the groups `basis` chooses.
+    /// The summary averages the ratings of the groups `basis` chooses.
     pub fn with_basis(mut self, basis: RatingBasis) -> Self {
         self.basis = basis;
         self.components = None;
         self
     }
 
-    fn build(&self) -> Vec<Component> {
-        let mut components = Vec::new();
-        let mut add = |group, rule, warmup, study: Box<dyn Indicator>| {
-            components.push(Component {
-                group,
-                rule,
-                warmup,
-                study,
-            });
+    /// The components in rating order: the moving averages, then the oscillators.
+    fn build() -> Vec<Component> {
+        let component = |group, rule, warmup, study: Box<dyn Indicator>| Component {
+            group,
+            rule,
+            warmup,
+            study,
         };
-        for length in [self.fast, self.medium, self.slow] {
-            if self.simple {
-                add(
-                    Group::MovingAverage,
-                    Rule::Average,
-                    0,
-                    Box::new(SMA::new(length)),
-                );
-            }
-            if self.exponential {
-                add(
-                    Group::MovingAverage,
-                    Rule::Average,
-                    0,
-                    Box::new(EMA::new(length)),
-                );
-            }
+        let (average, oscillator) = (Group::MovingAverage, Group::Oscillator);
+        let mut components = Vec::with_capacity(26);
+        for length in [10, 20, 30, 50, 100, 200] {
+            components.push(component(
+                average,
+                Rule::Average,
+                0,
+                Box::new(SMA::new(length)),
+            ));
+            components.push(component(
+                average,
+                Rule::Average,
+                0,
+                Box::new(EMA::new(length)),
+            ));
         }
-        let oscillators: [(bool, Rule, usize, Box<dyn Indicator>); 5] = [
-            (self.rsi, Rule::Rsi, 0, Box::new(RSI::new(self.rsi_period))),
-            (
-                self.stochastic,
+        components.extend([
+            component(average, Rule::Average, 0, Box::new(HMA::new(9))),
+            component(average, Rule::Average, 0, Box::new(VWMA::new(20))),
+            component(
+                average,
+                Rule::Ichimoku,
+                0,
+                Box::new(IchimokuCloud::new(9, 26, 52)),
+            ),
+            component(oscillator, Rule::Rsi, 0, Box::new(RSI::new(14))),
+            component(
+                oscillator,
                 Rule::Stochastic,
                 0,
-                Box::new(Stochastic::new(self.stochastic_period, 3, 3)),
+                Box::new(Stochastic::new(14, 3, 3)),
             ),
-            (self.cci, Rule::Cci, 0, Box::new(CCI::new(self.cci_period))),
-            // The MACD shows no value before its slow and signal averages are seeded, then
-            // shows all of its history; the vote starts at that bar so that it never changes.
-            (
-                self.macd,
-                Rule::Macd,
-                self.macd_slow.max(self.macd_signal) - 1,
-                Box::new(MACD::new(self.macd_fast, self.macd_slow, self.macd_signal)),
-            ),
-            (
-                self.momentum,
-                Rule::Momentum,
+            component(oscillator, Rule::Cci, 0, Box::new(CCI::new(20))),
+            component(oscillator, Rule::Adx, 0, Box::new(ADX::new(14))),
+            component(
+                oscillator,
+                Rule::Awesome,
                 0,
-                Box::new(Momentum::new(self.momentum_period)),
+                Box::new(AwesomeOscillator::new(5, 34)),
             ),
-        ];
-        for (enabled, rule, warmup, study) in oscillators {
-            if enabled {
-                add(Group::Oscillator, rule, warmup, study);
-            }
-        }
+            component(oscillator, Rule::Momentum, 0, Box::new(Momentum::new(10))),
+            // The MACD shows no value before its slow and signal averages are seeded, then shows
+            // all of its history; the vote starts at that bar so that it never changes.
+            component(oscillator, Rule::Macd, 25, Box::new(MACD::new(12, 26, 9))),
+            component(
+                oscillator,
+                Rule::StochasticRsi,
+                0,
+                Box::new(StochasticRSI::new(14, 14, 3, 3)),
+            ),
+            component(oscillator, Rule::WilliamsR, 0, Box::new(WilliamsR::new(14))),
+            component(
+                oscillator,
+                Rule::BullBearPower,
+                0,
+                Box::new(ElderRay::new(13)),
+            ),
+            component(
+                oscillator,
+                Rule::Ultimate,
+                0,
+                Box::new(UltimateOscillator::new(7, 14, 28)),
+            ),
+        ]);
         components
     }
 
-    /// The scores and coverages on clean bar `at`, the summary of the groups `basis` chooses.
-    fn row(components: &[Component], at: usize, close: f64, basis: RatingBasis) -> [f64; 6] {
-        // Votes and enabled components of the moving averages, the oscillators and in total.
-        let mut sum = [0.0; 2];
-        let mut votes = [0usize; 2];
-        let mut enabled = [0usize; 2];
-        for component in components {
-            let group = usize::from(component.group == Group::Oscillator);
+    /// Each component's group and vote on clean bar `at` of `bars`, in build order.
+    fn votes<'a>(
+        components: &'a [Component],
+        bars: &'a [Bar],
+        at: usize,
+    ) -> impl Iterator<Item = (Group, Option<f64>)> + 'a {
+        let trend = components
+            .iter()
+            .find(|component| matches!(component.rule, Rule::BullBearPower))
+            .and_then(|component| trend(component.study.values(), bars, at));
+        components.iter().map(move |component| {
+            let vote = (at >= component.warmup)
+                .then(|| {
+                    component
+                        .rule
+                        .vote(component.study.values(), at, bars[at].close, trend)
+                })
+                .flatten();
+            (component.group, vote)
+        })
+    }
+
+    /// The scores and coverages on clean bar `at` of `bars`, the summary of the groups `basis`
+    /// chooses.
+    fn row(components: &[Component], bars: &[Bar], at: usize, basis: RatingBasis) -> [f64; 6] {
+        let (mut sum, mut votes, mut enabled) = ([0.0; 2], [0usize; 2], [0usize; 2]);
+        for (group, vote) in Self::votes(components, bars, at) {
+            let group = usize::from(group == Group::Oscillator);
             enabled[group] += 1;
-            if let Some(vote) = (at >= component.warmup)
-                .then(|| component.rule.vote(component.study.values(), at, close))
-                .flatten()
-            {
+            if let Some(vote) = vote {
                 sum[group] += vote;
                 votes[group] += 1;
             }
         }
-        let score = |sum: f64, votes: usize| {
-            if votes == 0 {
+        Self::scores(sum, votes, enabled, basis)
+    }
+
+    /// The two group ratings, their mean over the groups `basis` chooses that have one, and the
+    /// coverages, from each group's vote sum, votes and components.
+    fn scores(
+        sum: [f64; 2],
+        votes: [usize; 2],
+        enabled: [usize; 2],
+        basis: RatingBasis,
+    ) -> [f64; 6] {
+        let score = |group: usize| {
+            if votes[group] == 0 {
                 f64::NAN
             } else {
-                sum / votes as f64
+                sum[group] / votes[group] as f64
             }
         };
         let coverage = |votes: usize, enabled: usize| {
@@ -370,14 +473,21 @@ impl TechnicalRatings {
                 votes as f64 / enabled as f64
             }
         };
+        let rated: Vec<f64> = basis
+            .groups()
+            .map(score)
+            .filter(|score| !score.is_nan())
+            .collect();
+        let summary = if rated.is_empty() {
+            f64::NAN
+        } else {
+            rated.iter().sum::<f64>() / rated.len() as f64
+        };
         let chosen = basis.groups();
         [
-            score(sum[0], votes[0]),
-            score(sum[1], votes[1]),
-            score(
-                sum[chosen.clone()].iter().sum(),
-                votes[chosen.clone()].iter().sum(),
-            ),
+            score(0),
+            score(1),
+            summary,
             coverage(votes[0], enabled[0]),
             coverage(votes[1], enabled[1]),
             coverage(
@@ -390,13 +500,14 @@ impl TechnicalRatings {
     /// The scores and coverages of the latest of `bars`, or `None` when it has no finite high,
     /// low and close.
     fn latest(&self, bars: &[Bar]) -> Option<[f64; 6]> {
+        bars.last().filter(|bar| usable(bar))?;
         let bars: Vec<_> = bars.iter().filter(|bar| usable(bar)).cloned().collect();
         let at = bars.len().checked_sub(1)?;
-        let mut components = self.build();
+        let mut components = Self::build();
         for component in &mut components {
             component.study.calculate(&bars);
         }
-        Some(Self::row(&components, at, bars[at].close, self.basis))
+        Some(Self::row(&components, &bars, at, self.basis))
     }
 
     /// The table rows of the latest bar and of the requested intervals, on their ratings'
@@ -455,15 +566,22 @@ impl TechnicalRatings {
     }
 }
 
+/// Whether the market rises, falls or is flat on clean bar `at` of `bars`: the direction of the
+/// EMA under the Elder Ray's `power`, given back as the high less Bull Power.
+fn trend(power: &IndicatorValues, bars: &[Bar], at: usize) -> Option<Ordering> {
+    let average = |at: usize| Some(bars[at].high - power.value(0, at)?);
+    average(at)?.partial_cmp(&average(at.checked_sub(1)?)?)
+}
+
 /// Whether every component can read `bar`.
 fn usable(bar: &Bar) -> bool {
     bar.high.is_finite() && bar.low.is_finite() && bar.close.is_finite()
 }
 
-/// Construct with the conventional default parameters.
+/// The same as [`new`](Self::new).
 impl Default for TechnicalRatings {
     fn default() -> Self {
-        Self::new(10, 50, 200)
+        Self::new()
     }
 }
 
@@ -484,23 +602,6 @@ fn rating(score: f64) -> &'static str {
 
 impl Indicator for TechnicalRatings {
     crate::studies::inputs::study_inputs!(self;
-        fast: length("Fast moving average", 1, usize::MAX),
-        medium: length("Medium moving average", 1, usize::MAX),
-        slow: length("Slow moving average", 1, usize::MAX),
-        simple: toggle("Simple moving averages"),
-        exponential: toggle("Exponential moving averages"),
-        rsi: toggle("RSI"),
-        rsi_period: length("RSI period", 1, usize::MAX),
-        stochastic: toggle("Stochastic"),
-        stochastic_period: length("Stochastic period", 1, usize::MAX),
-        cci: toggle("CCI"),
-        cci_period: length("CCI period", 1, usize::MAX),
-        macd: toggle("MACD"),
-        macd_fast: length("MACD fast period", 1, usize::MAX),
-        macd_slow: length("MACD slow period", 1, usize::MAX),
-        macd_signal: length("MACD signal period", 1, usize::MAX),
-        momentum: toggle("Momentum"),
-        momentum_period: length("Momentum period", 1, usize::MAX),
         basis: choice("Rating basis", [RatingBasis::All, RatingBasis::MovingAverages, RatingBasis::Oscillators]),
         table_intervals: toggle("Table shows higher intervals"),
         table_position: choice("Table position", TablePosition::ALL),
@@ -571,7 +672,7 @@ impl Indicator for TechnicalRatings {
     fn update(&mut self, data: &[Bar], from: usize) {
         let mut from = from.min(self.values.len()).min(data.len());
         if self.components.is_none() {
-            self.components = Some(self.build());
+            self.components = Some(Self::build());
             from = 0;
         }
         let components = self.components.as_mut().expect("components built");
@@ -592,7 +693,7 @@ impl Indicator for TechnicalRatings {
         for bar in &data[from..] {
             if usable(bar) {
                 self.values
-                    .push_lines(&Self::row(components, at, bar.close, self.basis));
+                    .push_lines(&Self::row(components, &self.bars, at, self.basis));
                 at += 1;
             } else {
                 self.values.push(IndicatorValue::None);
@@ -749,26 +850,6 @@ mod tests {
             .collect()
     }
 
-    /// Ratings of three SMA(2), three EMA(2) and Momentum(1), the other oscillators off.
-    fn study(basis: usize) -> TechnicalRatings {
-        let mut study = TechnicalRatings::default();
-        for (id, value) in [
-            ("fast", InputValue::Length(2)),
-            ("medium", InputValue::Length(2)),
-            ("slow", InputValue::Length(2)),
-            ("momentum_period", InputValue::Length(1)),
-            ("rsi", InputValue::Toggle(false)),
-            ("stochastic", InputValue::Toggle(false)),
-            ("cci", InputValue::Toggle(false)),
-            ("macd", InputValue::Toggle(false)),
-            ("basis", InputValue::Choice(basis)),
-            ("table_strong_sell_color", InputValue::Color(Color32::GOLD)),
-        ] {
-            study.set_input(id, value).unwrap();
-        }
-        study
-    }
-
     /// The label, score, rating and coverage of each table row, with its background.
     fn table(study: &TechnicalRatings) -> Vec<([String; 4], Color32)> {
         let table = study.table().unwrap();
@@ -787,110 +868,453 @@ mod tests {
             .collect()
     }
 
-    /// Scores, coverages, ratings and row backgrounds of each rating basis, by hand.
-    ///
-    /// Closes 10, 12, a bar without a close and 11.4. Every component skips the bar without a
-    /// close, which has no value. SMA(2) is 11 and 11.7 on the last two rated bars; EMA(2) seeds
-    /// with 10 and moves 2/3 of the way: 34/3 and 34/9 + 22.8/3 = 11.3778. Momentum(1) is +2 and
-    /// -0.6. The first bar has no SMA or momentum vote, which lowers its coverage, and the
-    /// three EMAs equal the close there and vote neutral. On the second bar all seven components
-    /// buy. On the last the SMAs sell and the EMAs buy, a tie, and momentum sells.
+    /// Every rule's strict thresholds, direction, signal line, history and trend requirements.
     #[test]
-    fn scores_coverage_and_ratings_follow_the_votes() {
-        let bars = bars(&[10.0, 12.0, f64::NAN, 11.4]);
-        let nan = f64::NAN;
-        let row = |label: &str, score: &str, rating: &str, fill| {
-            ([label, score, rating, "100%"].map(String::from), fill)
-        };
-        let sell = Color32::from_rgb(239, 154, 154);
-        for (basis, expected, rows) in [
+    fn votes_follow_the_documented_rules() {
+        use Ordering::{Equal, Greater, Less};
+        use Rule::*;
+        let n = f64::NAN;
+        let rows = [
+            (Average, vec![vec![10.0]], 11.0, None, Some(1.0)),
+            (Average, vec![vec![10.0]], 9.0, None, Some(-1.0)),
+            (Average, vec![vec![10.0]], 10.0, None, Some(0.0)),
+            (Average, vec![vec![n]], 11.0, None, None),
+            (Rsi, vec![vec![20.0], vec![25.0]], n, None, Some(1.0)),
+            (Rsi, vec![vec![80.0], vec![75.0]], n, None, Some(-1.0)),
+            (Rsi, vec![vec![25.0], vec![20.0]], n, None, Some(0.0)),
+            (Rsi, vec![vec![75.0], vec![80.0]], n, None, Some(0.0)),
+            (Rsi, vec![vec![29.0], vec![30.0]], n, None, Some(0.0)),
+            (Rsi, vec![vec![25.0]], n, None, None),
+            (Stochastic, vec![vec![15.0, 10.0]], n, None, Some(1.0)),
+            (Stochastic, vec![vec![85.0, 90.0]], n, None, Some(-1.0)),
+            (Stochastic, vec![vec![10.0, 15.0]], n, None, Some(0.0)),
+            (Stochastic, vec![vec![90.0, 85.0]], n, None, Some(0.0)),
+            (Stochastic, vec![vec![15.0, 25.0]], n, None, Some(0.0)),
+            (Cci, vec![vec![-120.0], vec![-110.0]], n, None, Some(1.0)),
+            (Cci, vec![vec![120.0], vec![110.0]], n, None, Some(-1.0)),
+            (Cci, vec![vec![-110.0], vec![-120.0]], n, None, Some(0.0)),
+            (Cci, vec![vec![110.0], vec![120.0]], n, None, Some(0.0)),
             (
-                RatingBasis::All,
-                [
-                    [0.0, nan, 0.0, 0.5, 0.0, 3.0 / 7.0],
-                    [1.0; 6],
-                    [nan; 6],
-                    [0.0, -1.0, -1.0 / 7.0, 1.0, 1.0, 1.0],
-                ],
-                vec![
-                    row("Moving averages", "+0.00", "Neutral", palette::DISABLED),
-                    row("Oscillators", "-1.00", "Strong Sell", Color32::GOLD),
-                    row("Summary", "-0.14", "Sell", sell),
-                ],
+                Adx,
+                vec![vec![25.0, n, n], vec![26.0, 30.0, 20.0]],
+                n,
+                None,
+                Some(1.0),
             ),
             (
-                RatingBasis::MovingAverages,
-                [
-                    [0.0, nan, 0.0, 0.5, 0.0, 0.5],
-                    [1.0; 6],
-                    [nan; 6],
-                    [0.0, -1.0, 0.0, 1.0, 1.0, 1.0],
-                ],
-                vec![row(
-                    "Moving averages",
-                    "+0.00",
-                    "Neutral",
-                    palette::DISABLED,
-                )],
+                Adx,
+                vec![vec![26.0, n, n], vec![25.0, 20.0, 30.0]],
+                n,
+                None,
+                Some(-1.0),
             ),
             (
-                RatingBasis::Oscillators,
-                [
-                    [0.0, nan, nan, 0.5, 0.0, 0.0],
-                    [1.0; 6],
-                    [nan; 6],
-                    [0.0, -1.0, -1.0, 1.0, 1.0, 1.0],
-                ],
-                vec![row("Oscillators", "-1.00", "Strong Sell", Color32::GOLD)],
+                Adx,
+                vec![vec![26.0, n, n], vec![25.0, 30.0, 20.0]],
+                n,
+                None,
+                Some(0.0),
             ),
-        ] {
-            let mut study = study(basis as usize);
-            study.calculate(&bars);
-            for (bar, row) in expected.iter().enumerate() {
-                for (line, want) in row.iter().enumerate() {
-                    match study.values().value(line, bar) {
-                        Some(got) => {
-                            assert!(
-                                (got - want).abs() < 1e-12,
-                                "{basis:?} line {line} bar {bar}"
-                            )
-                        }
-                        None => assert!(want.is_nan(), "{basis:?} line {line} bar {bar}"),
-                    }
-                }
+            (
+                Adx,
+                vec![vec![25.0, n, n], vec![26.0, 20.0, 30.0]],
+                n,
+                None,
+                Some(0.0),
+            ),
+            (
+                Adx,
+                vec![vec![19.0, n, n], vec![19.5, 30.0, 20.0]],
+                n,
+                None,
+                Some(0.0),
+            ),
+            (
+                Awesome,
+                vec![vec![1.0], vec![-1.0], vec![2.0]],
+                n,
+                None,
+                Some(1.0),
+            ),
+            (
+                Awesome,
+                vec![vec![3.0], vec![1.0], vec![2.0]],
+                n,
+                None,
+                Some(1.0),
+            ),
+            (
+                Awesome,
+                vec![vec![-1.0], vec![1.0], vec![-2.0]],
+                n,
+                None,
+                Some(-1.0),
+            ),
+            (
+                Awesome,
+                vec![vec![-3.0], vec![-1.0], vec![-2.0]],
+                n,
+                None,
+                Some(-1.0),
+            ),
+            (
+                Awesome,
+                vec![vec![1.0], vec![2.0], vec![3.0]],
+                n,
+                None,
+                Some(0.0),
+            ),
+            (
+                Awesome,
+                vec![vec![0.0], vec![0.0], vec![0.0]],
+                n,
+                None,
+                Some(0.0),
+            ),
+            (Awesome, vec![vec![-1.0], vec![2.0]], n, None, None),
+            (Momentum, vec![vec![5.0], vec![6.0]], n, None, Some(1.0)),
+            (Momentum, vec![vec![5.0], vec![4.0]], n, None, Some(-1.0)),
+            (Momentum, vec![vec![5.0], vec![5.0]], n, None, Some(0.0)),
+            (Macd, vec![vec![2.0, 1.0]], n, None, Some(1.0)),
+            (Macd, vec![vec![1.0, 2.0]], n, None, Some(-1.0)),
+            (Macd, vec![vec![1.0, 1.0]], n, None, Some(0.0)),
+            (
+                StochasticRsi,
+                vec![vec![15.0, 10.0]],
+                n,
+                Some(Less),
+                Some(1.0),
+            ),
+            (
+                StochasticRsi,
+                vec![vec![85.0, 90.0]],
+                n,
+                Some(Greater),
+                Some(-1.0),
+            ),
+            (
+                StochasticRsi,
+                vec![vec![15.0, 10.0]],
+                n,
+                Some(Greater),
+                Some(0.0),
+            ),
+            (
+                StochasticRsi,
+                vec![vec![85.0, 90.0]],
+                n,
+                Some(Less),
+                Some(0.0),
+            ),
+            (
+                StochasticRsi,
+                vec![vec![15.0, 10.0]],
+                n,
+                Some(Equal),
+                Some(0.0),
+            ),
+            (StochasticRsi, vec![vec![15.0, 10.0]], n, None, None),
+            (
+                WilliamsR,
+                vec![vec![-85.0], vec![-82.0]],
+                n,
+                None,
+                Some(1.0),
+            ),
+            (
+                WilliamsR,
+                vec![vec![-15.0], vec![-18.0]],
+                n,
+                None,
+                Some(-1.0),
+            ),
+            (
+                WilliamsR,
+                vec![vec![-82.0], vec![-85.0]],
+                n,
+                None,
+                Some(0.0),
+            ),
+            (
+                WilliamsR,
+                vec![vec![-18.0], vec![-15.0]],
+                n,
+                None,
+                Some(0.0),
+            ),
+            (
+                BullBearPower,
+                vec![vec![1.0, -3.0], vec![1.0, -2.0]],
+                n,
+                Some(Greater),
+                Some(1.0),
+            ),
+            (
+                BullBearPower,
+                vec![vec![3.0, 1.0], vec![2.0, 1.0]],
+                n,
+                Some(Less),
+                Some(-1.0),
+            ),
+            (
+                BullBearPower,
+                vec![vec![1.0, -2.0], vec![1.0, -3.0]],
+                n,
+                Some(Greater),
+                Some(0.0),
+            ),
+            (
+                BullBearPower,
+                vec![vec![1.0, -3.0], vec![1.0, -2.0]],
+                n,
+                Some(Less),
+                Some(0.0),
+            ),
+            (
+                BullBearPower,
+                vec![vec![1.0, -3.0], vec![1.0, -2.0]],
+                n,
+                None,
+                None,
+            ),
+            (
+                BullBearPower,
+                vec![vec![n, -3.0], vec![n, -2.0]],
+                n,
+                Some(Greater),
+                None,
+            ),
+            (Ultimate, vec![vec![75.0]], n, None, Some(1.0)),
+            (Ultimate, vec![vec![25.0]], n, None, Some(-1.0)),
+            (Ultimate, vec![vec![70.0]], n, None, Some(0.0)),
+        ];
+        for (rule, rows, close, trend, expected) in rows {
+            let mut values = IndicatorValues::new();
+            for row in &rows {
+                values.push_lines(row);
             }
-            assert_eq!(table(&study), rows, "{basis:?}");
-            let header = study.table().unwrap();
             assert_eq!(
-                (header.header_color, header.text_color),
-                (Some(Color32::from_rgb(41, 91, 121)), Some(Color32::WHITE))
+                rule.vote(&values, rows.len() - 1, close, trend),
+                expected,
+                "{rule:?}: {rows:?}, {trend:?}"
             );
         }
-        // A correction of the latest close to 9: SMA(2) 10.5 and EMA(2) 34/3 - 2/3 * 7/3 =
-        // 9.7778 are above it and momentum is -3, so every component sells.
-        let mut corrected = study(0);
-        corrected.calculate(&bars);
-        let mut bars = bars;
-        bars[3].close = 9.0;
-        corrected.update(&bars, 3);
-        for line in 0..6 {
-            let want = if line < 3 { -1.0 } else { 1.0 };
-            assert_eq!(corrected.values().value(line, 3), Some(want), "line {line}");
+        // The cloud drawn at bar 25 comes from bar 0, never from bar 25.
+        for (spans, lines, close, expected) in [
+            ([3.0, 2.0], [6.0, 5.0, n, n, n], 7.0, Some(1.0)),
+            ([5.0, 6.0], [3.0, 4.0, n, n, n], 2.0, Some(-1.0)),
+            ([3.0, 4.0], [6.0, 5.0, 4.0, 3.0, n], 7.0, Some(0.0)),
+        ] {
+            let mut values = IndicatorValues::new();
+            values.push_lines(&[n, n, spans[0], spans[1], n]);
+            for _ in 1..25 {
+                values.push_lines(&[n; 5]);
+            }
+            values.push_lines(&lines);
+            assert_eq!(Rule::Ichimoku.vote(&values, 25, close, None), expected);
+            assert_eq!(Rule::Ichimoku.vote(&values, 24, close, None), None);
         }
-        assert_eq!(
-            table(&corrected)[2],
-            row("Summary", "-1.00", "Strong Sell", Color32::GOLD)
-        );
+        let bars = bars(&[10.0, 11.0]);
+        for (power, expected) in [(1.5, Greater), (2.0, Equal), (3.0, Less)] {
+            let mut values = IndicatorValues::new();
+            values.push_lines(&[1.0]);
+            values.push_lines(&[power]);
+            assert_eq!(trend(&values, &bars, 1), Some(expected));
+            assert_eq!(trend(&values, &bars, 0), None);
+        }
+    }
+
+    /// Hand fixtures: a flat start, 199 unit steps, then a three-unit step. At the last bar,
+    /// HMA is 300.6 below close 302, the drawn cloud is 297 > 288.5 > 266.75 > 249.5,
+    /// Momentum rises 10 to 12, MACD is 7.1595 > 7.0319 and UO is 82.87. ADX rises
+    /// above 20 on both trends, so it buys the rise but does not sell the fall.
+    #[test]
+    fn scores_coverage_and_ratings_follow_the_votes() {
+        let fixture = |direction: f64| {
+            let closes: Vec<_> = (0..260)
+                .map(|i| {
+                    let step = if i < 60 {
+                        0.0
+                    } else if i == 259 {
+                        202.0
+                    } else {
+                        (i - 59) as f64
+                    };
+                    if direction < 0.0 {
+                        400.0 - step
+                    } else {
+                        100.0 + direction * step
+                    }
+                })
+                .collect();
+            bars(&closes)
+                .into_iter()
+                .map(|mut bar| {
+                    bar.high += 0.25;
+                    bar.low -= 0.25;
+                    bar
+                })
+                .collect::<Vec<_>>()
+        };
+        for (direction, oscillator, last_votes) in [
+            (
+                1.0,
+                4.0 / 11.0,
+                [0., 0., 0., 1., 0., 1., 1., 0., 0., 0., 1.],
+            ),
+            (
+                -1.0,
+                -3.0 / 11.0,
+                [0., 0., 0., 0., 0., -1., -1., 0., 0., 0., -1.],
+            ),
+            (0.0, 0.0, [0.; 11]),
+        ] {
+            let bars = fixture(direction);
+            for basis in [
+                RatingBasis::All,
+                RatingBasis::MovingAverages,
+                RatingBasis::Oscillators,
+            ] {
+                let mut study = TechnicalRatings::new().with_basis(basis);
+                study.calculate(&bars);
+                let expected: Vec<_> = [direction; 15]
+                    .into_iter()
+                    .chain(last_votes)
+                    .map(Some)
+                    .collect();
+                let got: Vec<_> =
+                    TechnicalRatings::votes(study.components.as_ref().unwrap(), &study.bars, 259)
+                        .map(|(_, vote)| vote)
+                        .collect();
+                assert_eq!(got, expected, "direction {direction}, {basis:?}");
+                let summary = match basis {
+                    RatingBasis::All => (direction + oscillator) / 2.0,
+                    RatingBasis::MovingAverages => direction,
+                    RatingBasis::Oscillators => oscillator,
+                };
+                for (line, expected) in [direction, oscillator, summary, 1., 1., 1.]
+                    .into_iter()
+                    .enumerate()
+                {
+                    assert!(
+                        (study.values.value(line, 259).unwrap() - expected).abs() < 1e-12,
+                        "direction {direction}, {basis:?}, line {line}"
+                    );
+                }
+                if basis == RatingBasis::Oscillators && direction != 0.0 {
+                    let (score, label, fill) = if direction > 0.0 {
+                        ("+0.36", "Buy", Color32::from_rgb(91, 156, 246))
+                    } else {
+                        ("-0.27", "Sell", Color32::from_rgb(239, 154, 154))
+                    };
+                    assert_eq!(
+                        table(&study),
+                        vec![(
+                            ["Oscillators", score, label, "100%"].map(String::from),
+                            fill
+                        )]
+                    );
+                    let table = study.table().unwrap();
+                    assert_eq!(
+                        (table.header_color, table.text_color),
+                        (Some(Color32::from_rgb(41, 91, 121)), Some(Color32::WHITE))
+                    );
+                }
+            }
+        }
+        let bars = fixture(1.0);
+        let mut full = TechnicalRatings::new();
+        full.calculate(&bars);
+        for (at, expected) in [
+            (0, [6. / 15., 0., 6. / 26.]),
+            (34, [11. / 15., 10. / 11., 21. / 26.]),
+            (35, [11. / 15., 1., 22. / 26.]),
+            (75, [12. / 15., 1., 23. / 26.]),
+            (76, [13. / 15., 1., 24. / 26.]),
+            (198, [14. / 15., 1., 25. / 26.]),
+            (199, [1.; 3]),
+        ] {
+            for (i, value) in expected.into_iter().enumerate() {
+                assert_eq!(
+                    full.values.value(i + 3, at),
+                    Some(value),
+                    "bar {at}, coverage {i}"
+                );
+            }
+        }
+        assert_eq!(full.values.value(1, 0), None);
+        assert_eq!(full.values.value(2, 0), Some(0.0));
+        let mut stream = TechnicalRatings::new();
+        stream.calculate(&bars[..1]);
+        for n in 2..=bars.len() {
+            stream.update(&bars[..n], n - 1);
+        }
+        let mut missing = bars.clone();
+        let mut bad = bars[100].clone();
+        bad.close = f64::NAN;
+        missing.insert(101, bad);
+        let mut skipped = TechnicalRatings::new();
+        skipped.calculate(&missing);
+        for line in 0..6 {
+            for at in 0..bars.len() {
+                assert_eq!(
+                    stream.values.value(line, at),
+                    full.values.value(line, at),
+                    "stream line {line}, bar {at}"
+                );
+            }
+            assert_eq!(skipped.values.value(line, 101), None);
+            assert_eq!(
+                skipped.values.value(line, 260),
+                full.values.value(line, 259)
+            );
+        }
+        let n = f64::NAN;
+        for (sum, votes, basis, expected) in [
+            (
+                [0., 1.],
+                [3, 1],
+                RatingBasis::All,
+                [0., 1., 0.5, 0.2, 1. / 11., 4. / 26.],
+            ),
+            (
+                [0., 1.],
+                [3, 1],
+                RatingBasis::MovingAverages,
+                [0., 1., 0., 0.2, 1. / 11., 0.2],
+            ),
+            (
+                [0., 1.],
+                [3, 1],
+                RatingBasis::Oscillators,
+                [0., 1., 1., 0.2, 1. / 11., 1. / 11.],
+            ),
+            (
+                [0., -2.],
+                [0, 4],
+                RatingBasis::All,
+                [n, -0.5, -0.5, 0., 4. / 11., 4. / 26.],
+            ),
+            ([0., 0.], [0, 0], RatingBasis::All, [n, n, n, 0., 0., 0.]),
+        ] {
+            for (got, want) in TechnicalRatings::scores(sum, votes, [15, 11], basis)
+                .into_iter()
+                .zip(expected)
+            {
+                assert!(
+                    got == want || (got.is_nan() && want.is_nan()),
+                    "{basis:?}: {got} != {want}"
+                );
+            }
+        }
         for (score, label) in [
             (0.5, "Strong Buy"),
             (0.1, "Buy"),
-            (0.09, "Neutral"),
-            (-0.09, "Neutral"),
             (-0.1, "Sell"),
-            (-0.49, "Sell"),
             (-0.5, "Strong Sell"),
+            (0., "Neutral"),
         ] {
-            assert_eq!(rating(score), label, "{score}");
+            assert_eq!(rating(score), label);
         }
     }
 
@@ -898,7 +1322,7 @@ mod tests {
     /// interval. Closes 10 and 12 make every component buy; 10, 12 and 11.4 rate as above.
     #[test]
     fn higher_intervals_add_rated_rows() {
-        let mut study = study(0);
+        let mut study = TechnicalRatings::default();
         study.set_timeframe(Timeframe::Hour1);
         assert!(study.data_requests().is_empty());
         study
@@ -941,12 +1365,12 @@ mod tests {
             table(&study)[3..],
             [
                 (
-                    ["4h", "+1.00", "Strong Buy", "100%"].map(String::from),
+                    ["4h", "+1.00", "Strong Buy", "23%"].map(String::from),
                     palette::BLUE
                 ),
                 (
-                    ["1D", "-0.14", "Sell", "100%"].map(String::from),
-                    Color32::from_rgb(239, 154, 154)
+                    ["1D", "+1.00", "Strong Buy", "23%"].map(String::from),
+                    palette::BLUE
                 ),
                 missing("1W"),
                 missing("1M"),

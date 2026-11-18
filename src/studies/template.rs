@@ -505,6 +505,31 @@ impl StudyTemplate {
                     }
                 }
             }
+            // Older ratings saved their configurable component lengths and switches.
+            "Technical Ratings" if has("fast") && !declares("fast") => {
+                const REMOVED: [&str; 17] = [
+                    "fast",
+                    "medium",
+                    "slow",
+                    "simple",
+                    "exponential",
+                    "rsi",
+                    "rsi_period",
+                    "stochastic",
+                    "stochastic_period",
+                    "cci",
+                    "cci_period",
+                    "macd",
+                    "macd_fast",
+                    "macd_slow",
+                    "macd_signal",
+                    "momentum",
+                    "momentum_period",
+                ];
+                template
+                    .inputs
+                    .retain(|(id, _)| !REMOVED.contains(&id.as_str()));
+            }
             _ => return None,
         }
         Some(template)
@@ -1247,7 +1272,7 @@ mod tests {
         assert_eq!(again.fills().len(), 1);
 
         // A Technical Ratings as the release before its table inputs saved it, its fast length
-        // edited to 20 and its summary to orange: it rates every vote, requests no other interval
+        // edited to 20 and its summary to orange: it upgrades its components, requests no other interval
         // and draws its table where and as it did.
         let saved: StudyTemplate = serde_json::from_str(
             r#"{"name":"Technical Ratings","inputs":[["fast",{"Length":20}],["medium",{"Length":50}],["slow",{"Length":200}],["simple",{"Toggle":true}],["exponential",{"Toggle":true}],["rsi",{"Toggle":true}],["rsi_period",{"Length":14}],["stochastic",{"Toggle":true}],["stochastic_period",{"Length":14}],["cci",{"Toggle":true}],["cci_period",{"Length":20}],["macd",{"Toggle":true}],["macd_fast",{"Length":12}],["macd_slow",{"Length":26}],["macd_signal",{"Length":9}],["momentum",{"Toggle":true}],["momentum_period",{"Length":10}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TechnicalRatings.html","plots":[{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true},{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true},{"color":[230,81,0,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true},{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":false},{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":false},{"color":[168,173,188,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":false}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[{"value":null,"color":[46,78,123,128],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,77,77,128],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":false,"level_fill_color":[11,11,12,16],"untagged_plots":[0,1,2,3,4,5],"price_line_plots":[],"plot_variants":[[],[],[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
@@ -1258,10 +1283,31 @@ mod tests {
         assert!(restored.data_requests().is_empty());
         let inputs = restored.inputs();
         let value = |id: &str| inputs.iter().find(|i| i.id == id).unwrap().value.clone();
-        assert_eq!(
-            [value("fast"), value("basis")],
-            [InputValue::Length(20), InputValue::Choice(0)]
-        );
+        assert!(!inputs.iter().any(|input| input.id == "fast"));
+        assert_eq!(value("basis"), InputValue::Choice(0));
+        let bars: Vec<_> = (0..260)
+            .map(|i| {
+                Bar::new(
+                    chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::days(i),
+                    100.0 + i as f64,
+                    100.25 + i as f64,
+                    99.75 + i as f64,
+                    100.0 + i as f64,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut fresh = ConfiguredStudy::new(Box::new(crate::studies::TechnicalRatings::default()));
+        restored.calculate(&bars);
+        fresh.calculate(&bars);
+        for at in 0..bars.len() {
+            for line in 0..6 {
+                assert_eq!(
+                    restored.values().value(line, at),
+                    fresh.values().value(line, at)
+                );
+            }
+        }
         restored.calculate(&[]);
         let table = restored.table().unwrap();
         assert_eq!(
@@ -1347,6 +1393,12 @@ mod tests {
         let millis = || InputKind::Number(0.0, 1e13);
         let rows = [
             ("RSI", vec![], 1),
+            // Built-in templates with the former component inputs drop them.
+            (
+                "Technical Ratings",
+                vec![("fast", Length(20), InputKind::Length(1, 500))],
+                1,
+            ),
             // Built-in templates with a band and no fill styles restore with hidden fills.
             (
                 "VWAP",

@@ -106,6 +106,8 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 ## Technical Indicators
 
+- [x] Technical Ratings averages its 15 moving-average votes and 11 oscillator votes within each group, then averages the group ratings for its summary. Each component uses its directional or signal rule, and older saved studies recompute with the fixed components.
+
 ### Calculations and Rendering
 
 - [x] `IndicatorFactory` registers 206 indicators with default features and accepts downstream registrations; the study picker groups its built-in results on Indicators, Profiles, Patterns and Order flow pages, each offered only while it has an accepted study. A search finds each built-in study by its conventional full name, its usual alternative names and those names with the qualifier last. Hosts can restrict Order flow entries, including search and favourites, to the feed services each study's inputs read; requirements are cached when feed metadata or the factory changes. Other categories keep their existing availability. The chooser has a 200-point sidebar, a fixed name header and favourite stars on hovered, focused or starred rows whose focus follows the study through reordering and whose labels and tooltips name the translated study; its light preset uses separate muted inks for section labels, the header and search hints.

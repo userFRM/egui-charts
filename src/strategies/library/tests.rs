@@ -535,21 +535,11 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             inputs: vec![("atr_period", Length(1)), ("multiplier", Number(1.))],
             expected: vec![(3, Sell, 14.), (4, Buy, 7.), (5, Sell, 15.), (6, Buy, 15.)],
         },
-        // Only SMA lengths 1,2,2 vote: scores 0,-2/3,+2/3,+2/3,-2/3,-2/3,+2/3,0.
+        // Only the six EMAs vote: scores 0, -1, +1, +1, -1, -1, +1, +1.
         Case {
             name: "Technical Ratings",
             prices: closes(),
-            inputs: vec![
-                ("fast", Length(1)),
-                ("medium", Length(2)),
-                ("slow", Length(2)),
-                ("exponential", Toggle(false)),
-                ("rsi", Toggle(false)),
-                ("stochastic", Toggle(false)),
-                ("cci", Toggle(false)),
-                ("macd", Toggle(false)),
-                ("momentum", Toggle(false)),
-            ],
+            inputs: vec![],
             expected: vec![(2, Sell, 10.), (3, Buy, 12.), (5, Sell, 8.), (7, Buy, 10.)],
         },
     ];
