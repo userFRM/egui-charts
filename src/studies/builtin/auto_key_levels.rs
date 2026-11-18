@@ -24,8 +24,22 @@
 //! `pdPOC`, `pwL` or `pmC` for the previous one and `Custom POC` for the custom period. Levels
 //! take the colour, width and visibility of their period's plot.
 //! Monthly levels are drawn over weekly ones and weekly over daily ones. A bar without a finite
-//! open, high, low and close takes no part. The defaults show POC, VAL and VAH of the current day and week from the start of each period. Overlay indicator without per-bar
-//! values.
+//! open, high, low and close takes no part. The defaults show POC, VAL and VAH of the current
+//! day and week from the start of each period. Overlay indicator without per-bar values.
+//!
+//! # Example
+//!
+//! ```rust
+//! use chrono::{TimeZone, Utc};
+//! use egui_charts::model::Bar;
+//! use egui_charts::studies::{AutoKeyLevels, Indicator};
+//!
+//! let time = Utc.with_ymd_and_hms(2026, 2, 2, 9, 0, 0).unwrap();
+//! let mut levels = AutoKeyLevels::new();
+//! levels.calculate(&[Bar::new(time, 10.0, 12.0, 8.0, 11.0, 100.0)]);
+//! let tags: Vec<_> = levels.labels().iter().map(|tag| tag.text.as_str()).collect();
+//! assert_eq!(tags, ["dPOC", "dVAL", "dVAH", "wPOC", "wVAL", "wVAH"]);
+//! ```
 
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
 use super::lower_interval;

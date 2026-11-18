@@ -28,7 +28,7 @@
 //! ```rust
 //! use chrono::{TimeZone, Utc};
 //! use egui_charts::model::Bar;
-//! use egui_charts::studies::{Indicator, MissedPivots};
+//! use egui_charts::studies::{Indicator, MissedPivotPeriod, MissedPivots};
 //!
 //! // A peak at 10, then a fall that never returns to it.
 //! let bars: Vec<Bar> = [5.0, 8.0, 10.0, 8.0, 5.0, 6.0]
@@ -41,6 +41,11 @@
 //! // The pivot high at bar 2 is confirmed at bar 4 and is still missed.
 //! assert_eq!(missed.zones().len(), 1);
 //! assert_eq!((missed.zones()[0].bars.clone(), missed.zones()[0].top), (2..6, 10.0));
+//!
+//! // The six bars fall on one day, so no daily pivot has completed yet.
+//! let mut daily = MissedPivots::new(2, 2, 0.1, 20).with_period(MissedPivotPeriod::Daily);
+//! daily.calculate(&bars);
+//! assert!(daily.zones().is_empty());
 //! ```
 
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
@@ -140,7 +145,6 @@ impl MissedPivots {
     /// Takes swing levels or the pivot of each completed day, week or month.
     pub fn with_period(mut self, period: MissedPivotPeriod) -> Self {
         self.period = period;
-        self.calculate(&[]);
         self
     }
 }
