@@ -166,8 +166,8 @@ impl Indicator for AdvanceDeclineRatioBars {
 mod tests {
     use super::*;
 
-    /// Unchanged bars count as up; a window without down bars gives its up count, in batch
-    /// and bar by bar.
+    /// Unchanged bars count as up; a window without down bars gives its up count, calculated
+    /// at once and bar by bar.
     #[test]
     fn unchanged_bars_count_as_up_and_a_window_without_down_bars_gives_the_up_count() {
         // Up, down, unchanged, up, up, up, unchanged, down.

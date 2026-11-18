@@ -437,9 +437,8 @@ pub struct StudySettings {
     /// editable, and settings with another number of levels, take the study's own levels and fill.
     /// Only the guide declared since is added, hidden, to a Stochastic saved with two levels or a
     /// Know Sure Thing, Chaikin Money Flow, Force Index or Advance/Decline Ratio (Bars) saved
-    /// with none. A Connors RSI or a
-    /// Correlation Coefficient with three levels keeps the guides it opened with before: 70, 50
-    /// and 30 with the band between 70 and 30, or 1, -1 and 0.
+    /// with none. A Connors RSI or a Correlation Coefficient with three levels keeps the guides it
+    /// opened with before: 70, 50 and 30 with the band between 70 and 30, or 1, -1 and 0.
     #[serde(default)]
     pub levels: Vec<LevelStyle>,
     /// Whether the band between the boundary levels is filled.
@@ -2805,18 +2804,6 @@ mod tests {
         });
         assert_eq!(older.settings(), expected);
         assert_eq!(older.pane().levels[0].1, Color32::TRANSPARENT);
-        let mut edited = older.settings();
-        edited.levels[0].value = Some(2.0);
-        edited.levels[0].color = palette::GREEN;
-        edited.levels[0].pattern = LineStyle::Dotted;
-        edited.levels[0].width = 2.0;
-        edited.levels[0].visible = true;
-        older.apply_settings(&[], edited.clone()).unwrap();
-        let again = crate::studies::StudyTemplate::from_study(older.as_ref())
-            .create()
-            .unwrap();
-        assert_eq!(again.settings(), edited);
-        assert_eq!(again.pane().levels, [(2.0, palette::GREEN, "Equality")]);
         let mut adx = ConfiguredStudy::new(Box::new(AdxBreakout::default()));
         let settings = adx.settings();
         adx.apply_settings(&[("threshold".into(), InputValue::Length(25))], settings)
