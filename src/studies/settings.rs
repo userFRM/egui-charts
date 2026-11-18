@@ -1584,19 +1584,6 @@ impl Indicator for ConfiguredStudy {
             .retain(|&line| line < settings.plots.len());
         settings.price_line_plots.sort_unstable();
         settings.price_line_plots.dedup();
-        // An input may recolour a plot. An unchanged Style colour follows that input;
-        // a colour edited in Style wins over it.
-        for (line, plot) in settings.plots.iter_mut().enumerate() {
-            if self
-                .settings
-                .plots
-                .get(line)
-                .is_some_and(|old| old.color == plot.color)
-                && self.study.plot_style(line).color != edited.study.plot_style(line).color
-            {
-                plot.color = edited.study.plot_style(line).color;
-            }
-        }
         // Unchanged plot colours must retain any per-bar palette stored by the study.
         for (line, plot) in settings.plots.iter().enumerate() {
             if plot.color != edited.study.plot_style(line).color {

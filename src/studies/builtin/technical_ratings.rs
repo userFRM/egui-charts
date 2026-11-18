@@ -643,17 +643,7 @@ impl Indicator for TechnicalRatings {
         table_strong_sell_color: color("Table strong sell colour"),
         table_header_color: color("Table header colour"),
         table_text_color: color("Table text colour")
-    ; changed, previous => {
-        // Reapplying unchanged inputs must preserve a palette edited in the Style tab.
-        for (id, slots, color) in [
-            ("table_neutral_color", 0..3, self.table_neutral_color),
-            ("table_buy_color", 3..6, self.table_buy_color),
-            ("table_sell_color", 6..9, self.table_sell_color),
-        ] {
-            if changed == id && previous != crate::studies::InputValue::Color(color) {
-                self.colors[slots].fill(color);
-            }
-        }
+    ; {
         self.components = None;
     });
 
@@ -703,9 +693,9 @@ impl Indicator for TechnicalRatings {
         requests
     }
 
-    /// Each table interval from `TABLE_HISTORY` of its periods before the latest bar rated: a bounded
-    /// history for intervals shorter than the chart's, enough bars for the 200-bar averages on longer
-    /// ones.
+    /// Each table interval from `TABLE_HISTORY` of its periods before the latest bar rated: a
+    /// bounded history for intervals shorter than the chart's, enough bars for the 200-bar
+    /// averages on longer ones.
     fn data_start(&self, request: &StudyDataRequest) -> Option<DateTime<Utc>> {
         // shortcut: assumes the market trades a tenth of the time; a 1-minute row just after a
         // weekend rates fewer than 200 bars and shows a lower coverage. Upgrade when a request can
@@ -1556,19 +1546,6 @@ mod tests {
         assert!(study.data_requests().is_empty());
         study.calculate(&rising);
         assert_eq!(table(&study), vec![row(&["1h", "N/A", "0%"], &[h, n])]);
-        // The three category colours also colour columns; repeating a value keeps plot edits.
-        study.set_input("basis", Choice(0)).unwrap();
-        for id in ["table_buy_color", "table_neutral_color", "table_sell_color"] {
-            study.set_input(id, Color(Color32::GOLD)).unwrap();
-        }
-        study.calculate(&rising);
-        assert_eq!(study.plot_color(2, 1), Some(Color32::GOLD));
-        study.set_color(2, Color32::GREEN);
-        study
-            .set_input("table_buy_color", Color(Color32::GOLD))
-            .unwrap();
-        study.calculate(&rising);
-        assert_eq!(study.plot_color(2, 1), Some(Color32::GREEN));
         // A trailing unusable bar has no latest rating, even if an earlier bar is usable.
         let mut missing = rising.clone();
         missing[1].close = f64::NAN;
