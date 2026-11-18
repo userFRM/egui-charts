@@ -86,15 +86,6 @@ pub(crate) fn paint_profile(
     if left >= right {
         return;
     }
-    if profile.exposure.is_some() {
-        paint_exposure(painter, profile, config, span, price_to_y);
-        return;
-    }
-    let Some((poc, (va_low, va_high))) = profile.poc_and_value_area(config.value_area()) else {
-        return;
-    };
-    let y_at_row = |row: usize| (price_to_y)(profile.low + row as f64 * profile.row_height);
-    let color = shown_color(painter, color);
     let options = profile.source() == ProfileSource::Options;
     let (drawing, right_aligned, share, poc_width) = match style {
         ProfileStyle::Study {
@@ -116,6 +107,15 @@ pub(crate) fn paint_profile(
             poc_width,
         } => (true, anchored, 0.3, poc_width),
     };
+    if profile.exposure.is_some() {
+        paint_exposure(painter, profile, config, span, share, price_to_y);
+        return;
+    }
+    let Some((poc, (va_low, va_high))) = profile.poc_and_value_area(config.value_area()) else {
+        return;
+    };
+    let y_at_row = |row: usize| (price_to_y)(profile.low + row as f64 * profile.row_height);
+    let color = shown_color(painter, color);
     let spans_view = !drawing && measures_view(profile, right_aligned);
     let rect = Rect::from_two_pos(
         Pos2::new(left, y_at_row(profile.volume.len())),
@@ -225,17 +225,32 @@ pub(crate) fn paint_profile(
         };
         match config.display {
             ProfileDisplay::Total => {
-                paint(
-                    left,
-                    width,
-                    if options {
-                        bar_color
-                    } else if drawing {
-                        rgba([color[0], color[1], color[2], 191])
-                    } else {
-                        rgba(up)
-                    },
-                );
+                if let Some(parts) = &profile.expiry_parts {
+                    // Each expiry's part of the row, from its base in date order.
+                    let mut start = left;
+                    for (part, (_, rgb)) in parts.rows.iter().zip(&parts.labels) {
+                        let width = (part[row] / max_volume) as f32 * max_width;
+                        let alpha = if in_value_area { 180 } else { 80 };
+                        paint(
+                            start,
+                            width,
+                            Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], alpha),
+                        );
+                        start += width;
+                    }
+                } else {
+                    paint(
+                        left,
+                        width,
+                        if options {
+                            bar_color
+                        } else if drawing {
+                            rgba([color[0], color[1], color[2], 191])
+                        } else {
+                            rgba(up)
+                        },
+                    );
+                }
             }
             ProfileDisplay::UpDown => {
                 let up_width = (profile.up[row] / max_volume) as f32 * max_width;
@@ -272,6 +287,9 @@ pub(crate) fn paint_profile(
     if !drawing {
         draw_lines();
     }
+    if let Some(parts) = &profile.expiry_parts {
+        paint_expiry_key(painter, &parts.labels, rect, !right_aligned);
+    }
     // A study's span often starts at the pane's left edge, under the chart legend, so a study whose
     // rows start at the left notes its source at the right.
     let note_right = !drawing && !right_aligned;
@@ -289,6 +307,7 @@ pub(crate) fn exposure_rects(
     profile: &VolumeProfile,
     display: ProfileDisplay,
     span: Range<f32>,
+    share: f32,
     price_to_y: &dyn Fn(f64) -> f32,
 ) -> Vec<(usize, Rect, bool)> {
     let Some(snapshot) = &profile.exposure else {
@@ -309,7 +328,8 @@ pub(crate) fn exposure_rects(
         .map(f64::abs)
         .fold(0.0, f64::max);
     let zero = (span.start + span.end) * 0.5;
-    let width = (span.end - span.start) * 0.45;
+    // The largest bar takes half the share on each side of the centre: 0.45 at the default 0.9.
+    let width = (span.end - span.start) * share * 0.5;
     let mut rects = Vec::new();
     for (index, row) in snapshot.rows.iter().enumerate() {
         let y = price_to_y(row.strike);
@@ -360,6 +380,7 @@ fn paint_exposure(
     profile: &VolumeProfile,
     config: VolumeProfileConfig,
     span: Range<f32>,
+    share: f32,
     price_to_y: &dyn Fn(f64) -> f32,
 ) {
     let snapshot = profile.exposure.as_ref().expect("exposure profile");
@@ -376,7 +397,7 @@ fn paint_exposure(
             && painter.ctx().layer_id_at(*point) == Some(painter.layer_id())
     });
     let mut hovered = None;
-    for (index, rect, down) in exposure_rects(profile, config.display, span, price_to_y) {
+    for (index, rect, down) in exposure_rects(profile, config.display, span, share, price_to_y) {
         let rgba = if down {
             config.down_color
         } else {
@@ -463,6 +484,52 @@ fn paint_source_note(
             left
         };
         painter.galley(Pos2::new(x, rect.top()), galley, color);
+    }
+}
+
+/// Names each expiry of a profile drawn by expiry beside a swatch of its colour, one line each
+/// from the top of the part of `rect` the painter shows, while lines fit. It takes the far end
+/// of the rows: the left of a right-aligned profile and, for one at the left, the room left of
+/// the value area labels, clear of the chart legend.
+fn paint_expiry_key(
+    painter: &egui::Painter,
+    labels: &[(String, [u8; 4])],
+    rect: Rect,
+    rows_from_left: bool,
+) {
+    if !rect.is_finite() {
+        return;
+    }
+    let rect = rect.intersect(painter.clip_rect());
+    // As for the source note, a narrower profile has no room for text.
+    if rect.width() < 60.0 {
+        return;
+    }
+    let text = painter.ctx().active_theme().ui.text;
+    let mut top = rect.top() + 3.0;
+    for (label, rgb) in labels {
+        let galley = painter.layout_no_wrap(
+            label.clone(),
+            egui::FontId::proportional(typography::XS),
+            text,
+        );
+        let size = galley.size();
+        let width = size.y + 4.0 + size.x;
+        if top + size.y > rect.bottom() || width + 6.0 > rect.width() {
+            break;
+        }
+        let x = if rows_from_left {
+            (rect.right() - 50.0 - width).max(rect.left() + 3.0)
+        } else {
+            rect.left() + 3.0
+        };
+        painter.rect_filled(
+            Rect::from_min_size(Pos2::new(x, top), egui::vec2(size.y, size.y)).shrink(2.0),
+            0.0,
+            Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
+        );
+        painter.galley(Pos2::new(x + size.y + 4.0, top), galley, text);
+        top += size.y + 2.0;
     }
 }
 

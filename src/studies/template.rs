@@ -183,8 +183,9 @@ impl StudyTemplate {
             .chain(template.inputs.iter().cloned())
             .collect();
         // A host study registered under a built-in's name never had the presentation an upgrade
-        // gives that built-in's older templates either.
-        let settings = if factory.is_host(&self.name) {
+        // gives that built-in's older templates either. The options profile reads the host's
+        // option chain, so only a host registers it, and its own older templates are upgraded.
+        let settings = if factory.is_host(&self.name) && self.name != "Options Volume Profile" {
             &self.settings
         } else {
             &template.settings
@@ -490,6 +491,41 @@ impl StudyTemplate {
                 template.settings.fills = declared.fills;
                 for fill in &mut template.settings.fills {
                     fill.visible = false;
+                }
+            }
+            // An options profile kept one Sides choice for every measure, coloured its bars with
+            // its first two line colours and showed its readouts with their lines unticked in the
+            // style tab, before each measure kept its own choice, the bars took colours of their
+            // own and the readouts followed a switch and the style tab.
+            "Options Volume Profile" if has("expiry") && !has("put_call") => {
+                template.inputs = self
+                    .inputs
+                    .iter()
+                    .flat_map(|(id, value)| match id.as_str() {
+                        "sides" => ["volume_sides", "interest_sides", "gamma_sides"]
+                            .map(|id| (id.to_owned(), value.clone()))
+                            .to_vec(),
+                        _ => vec![(id.clone(), value.clone())],
+                    })
+                    .collect();
+                template
+                    .inputs
+                    .push(("put_call".to_owned(), InputValue::Toggle(true)));
+                if let [calls, puts, _, _, _, _, _, _] = template.settings.plots.as_slice() {
+                    for (id, color) in [
+                        ("call_color", calls.color),
+                        ("put_color", puts.color),
+                        ("net_positive_color", calls.color),
+                        ("net_negative_color", puts.color),
+                    ] {
+                        template
+                            .inputs
+                            .push((id.to_owned(), InputValue::Color(color)));
+                    }
+                }
+                if let [ratio, _, net, _, _, _, _, _] = template.settings.plots.as_mut_slice() {
+                    ratio.visible = true;
+                    net.visible = true;
                 }
             }
             // Profile endpoints were Unix milliseconds before they read as UTC dates and times.
