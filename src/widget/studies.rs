@@ -749,7 +749,12 @@ mod tests {
         };
         let painted = |chart: &mut Chart, time| {
             let output = shapes(&ctx, chart, time, vec![]);
-            colors.map(|color| output.iter().any(|shape| matches!(shape, Shape::Path(path) if path.stroke.color == ColorMode::Solid(color))))
+            colors.map(|color| {
+                output.iter().any(|shape| match shape {
+                    Shape::Path(path) => path.stroke.color == ColorMode::Solid(color),
+                    _ => false,
+                })
+            })
         };
         frame(&ctx, &mut chart, 0.0, vec![]);
         assert_eq!(painted(&mut chart, 1.0), [false, true, true]);
