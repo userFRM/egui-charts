@@ -20,6 +20,7 @@ mod tabs;
 pub use actions::{DrawingId, DrawingPropertiesAction, DrawingProps};
 pub use config::DrawingPropertiesConfig;
 pub use dialog::DrawingPropertiesDialog;
+pub(crate) use tabs::VisibilityTab;
 pub use tabs::{CoordinatePoint, CoordinatesState, PropertiesTab};
 
 #[cfg(test)]

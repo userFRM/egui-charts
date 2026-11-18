@@ -2,7 +2,7 @@
 
 use super::{Indicator, IndicatorLineStyle, IndicatorValues, InputValue};
 use crate::model::LineStyle;
-use crate::model::{Bar, Instrument, Timeframe};
+use crate::model::{Bar, Instrument, Timeframe, TimeframeVisibility};
 use egui::Color32;
 
 /// Geometry for one output line.
@@ -365,46 +365,39 @@ fn former_guides(study: &dyn Indicator, saved: usize) -> Option<(Guides, Option<
     (study.pane().levels == current).then_some((former, fill))
 }
 
-/// Interval visibility evaluated for every interval, including custom and trade-based ones.
-/// Ordered ranges compare nominal duration for time bars and thresholds within the same
-/// trade-based family. Other families are outside the range. `Only` matches the exact interval.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum StudyIntervalRange {
-    /// Every interval.
-    #[default]
-    All,
-    /// The chosen interval and longer durations or larger thresholds in its family.
-    AndAbove(Timeframe),
-    /// The chosen interval and shorter durations or smaller thresholds in its family.
-    AndBelow(Timeframe),
-    /// The exact chosen interval.
-    Only(Timeframe),
-}
-
-impl StudyIntervalRange {
-    /// Whether `interval` belongs to this visibility range.
-    pub fn contains(self, interval: Timeframe) -> bool {
-        let current = match self {
-            Self::All => return true,
-            Self::Only(current) => return interval == current,
-            Self::AndAbove(current) | Self::AndBelow(current) => current,
-        };
-        let order = match (interval, current) {
-            (Timeframe::Ticks(a), Timeframe::Ticks(b))
-            | (Timeframe::Volume(a), Timeframe::Volume(b))
-            | (Timeframe::Range(a), Timeframe::Range(b))
-            | (Timeframe::Delta(a), Timeframe::Delta(b)) => Some(a.cmp(&b)),
-            (a, b) if !a.is_trade_based() && !b.is_trade_based() => {
-                Some(a.duration_ms().cmp(&b.duration_ms()))
-            }
-            _ => None,
-        };
-        order.is_some_and(|order| match self {
-            Self::AndAbove(_) => !order.is_lt(),
-            Self::AndBelow(_) => !order.is_gt(),
-            _ => false,
-        })
+/// Reads [`StudySettings::timeframe_visibility`], or the interval range that settings saved
+/// before it hold: every interval, the saved interval only, or also those above or below it.
+fn saved_timeframe_visibility<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<TimeframeVisibility, D::Error> {
+    #[derive(serde::Deserialize)]
+    enum SavedIntervalRange {
+        All,
+        AndAbove(Timeframe),
+        AndBelow(Timeframe),
+        Only(Timeframe),
     }
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum SavedVisibility {
+        Range(SavedIntervalRange),
+        Filter(TimeframeVisibility),
+    }
+    Ok(
+        match <SavedVisibility as serde::Deserialize>::deserialize(deserializer)? {
+            SavedVisibility::Range(SavedIntervalRange::All) => TimeframeVisibility::all(),
+            SavedVisibility::Range(SavedIntervalRange::AndAbove(interval)) => {
+                TimeframeVisibility::higher_intervals(interval)
+            }
+            SavedVisibility::Range(SavedIntervalRange::AndBelow(interval)) => {
+                TimeframeVisibility::lower_intervals(interval)
+            }
+            SavedVisibility::Range(SavedIntervalRange::Only(interval)) => {
+                TimeframeVisibility::current_interval(interval)
+            }
+            SavedVisibility::Filter(filter) => filter,
+        },
+    )
 }
 
 /// Host-serializable presentation settings of an applied study.
@@ -426,12 +419,20 @@ pub struct StudySettings {
     pub plots: Vec<PlotStyle>,
     /// Decimal places, or the chart's default precision.
     pub precision: Option<usize>,
-    /// Exact intervals on which the study is hidden, including custom intervals.
+    /// Exact intervals on which the study is also hidden, such as those of settings saved
+    /// before [`timeframe_visibility`](Self::timeframe_visibility). The study menu's visibility
+    /// choices clear them.
     pub hidden_intervals: Vec<Timeframe>,
-    /// A range applied in addition to the exact hidden intervals. Older saved settings show
-    /// every interval except those in `hidden_intervals`.
-    #[serde(default)]
-    pub interval_range: StudyIntervalRange,
+    /// The intervals the study is drawn on, as for a drawing: every interval, or exact interval
+    /// labels and a range of values per unit. The study menu's visibility choices and the
+    /// Visibility tab write it. Settings saved before it restore their interval range as the
+    /// matching ranges, or every interval.
+    #[serde(
+        default = "TimeframeVisibility::all",
+        alias = "interval_range",
+        deserialize_with = "saved_timeframe_visibility"
+    )]
+    pub timeframe_visibility: TimeframeVisibility,
     /// One style per level of the study's pane, in the order of
     /// [`StudyPane::levels`](super::StudyPane::levels). Settings saved before levels were
     /// editable, and settings with another number of levels, take the study's own levels and fill.
@@ -493,7 +494,7 @@ impl Default for StudySettings {
             plots: Vec::new(),
             precision: None,
             hidden_intervals: Vec::new(),
-            interval_range: StudyIntervalRange::default(),
+            timeframe_visibility: TimeframeVisibility::all(),
             levels: Vec::new(),
             fill_between_levels: false,
             level_fill_color: Color32::TRANSPARENT,
@@ -756,13 +757,26 @@ impl ConfiguredStudy {
     }
 
     /// Whether the study can be calculated on another interval: it reads one source, or the bars
-    /// alone, without data of its own to request or order flow it cannot do without.
-    /// An accepted interval stays available if calculating on it changes those requests.
+    /// alone, without order flow it cannot do without and with no data of its own to request
+    /// unless its requests apply on any interval. An accepted interval stays available if
+    /// calculating on it changes those requests.
     fn runs_on_other_bars(&self) -> bool {
         self.calculation_timeframe.is_some()
             || self.study.source().is_some()
-            || (self.study.data_requests().is_empty() && !self.study.needs_order_flow())
+            || ((self.study.data_requests().is_empty()
+                || self.study.requests_allow_other_intervals())
+                && !self.study.needs_order_flow())
     }
+
+    /// The bars the study is calculated on while it runs on another symbol or interval.
+    fn calculation_request(&self) -> super::StudyDataRequest {
+        super::StudyDataRequest {
+            metric: None,
+            symbol: self.calculation_symbol.clone(),
+            timeframe: self.calculation_timeframe,
+        }
+    }
+
     /// The bars evicted since the study was last calculated, by which the bars of its kept values
     /// trail those of the study.
     fn shift(&self) -> usize {
@@ -994,12 +1008,8 @@ impl Indicator for ConfiguredStudy {
         if !self.calculation_symbol.is_empty() || self.calculation_timeframe.is_some() {
             // The bars come first: `update_data` reads them from the head. The study's own
             // metric requests (exchange rates) follow, and the candles it reads inside the
-            // Interval's bars, as they are not bars of that interval.
-            let mut requests = vec![super::StudyDataRequest {
-                metric: None,
-                symbol: self.calculation_symbol.clone(),
-                timeframe: self.calculation_timeframe,
-            }];
+            // Interval's bars, or every request of a study whose histories apply on any interval.
+            let mut requests = vec![self.calculation_request()];
             // Bars inside the Interval's bars, on the chart symbol, are the candles a chart of
             // that interval would read (24-hour Volume on 1W reads hourly candles).
             let inside = |timeframe: Timeframe| {
@@ -1009,10 +1019,16 @@ impl Indicator for ConfiguredStudy {
                         .calculation_timeframe
                         .is_some_and(|interval| timeframe.duration_ms() < interval.duration_ms())
             };
-            requests.extend(self.study.data_requests().into_iter().filter(|request| {
-                request.metric.is_some()
-                    || (request.symbol.is_empty() && request.timeframe.is_some_and(inside))
-            }));
+            let all = self.study.requests_allow_other_intervals();
+            for request in self.study.data_requests() {
+                if (all
+                    || request.metric.is_some()
+                    || (request.symbol.is_empty() && request.timeframe.is_some_and(inside)))
+                    && !requests.contains(&request)
+                {
+                    requests.push(request);
+                }
+            }
             requests
         } else {
             self.study.data_requests()
@@ -1022,7 +1038,12 @@ impl Indicator for ConfiguredStudy {
         &self,
         request: &super::StudyDataRequest,
     ) -> Option<chrono::DateTime<chrono::Utc>> {
-        if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
+        // The study's own histories keep their stated starts. The calculation bars load
+        // to the chart's first bar, including when a table slot names that same request.
+        if (self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none())
+            || (self.study.requests_allow_other_intervals()
+                && *request != self.calculation_request())
+        {
             self.study.data_start(request)
         } else {
             None
@@ -1122,6 +1143,9 @@ impl Indicator for ConfiguredStudy {
     }
     fn order_flow_inputs(&self) -> &[crate::data::OrderFlowInput] {
         self.study.order_flow_inputs()
+    }
+    fn requests_allow_other_intervals(&self) -> bool {
+        self.study.requests_allow_other_intervals()
     }
     fn needs_order_flow(&self) -> bool {
         self.study.needs_order_flow()
@@ -1879,10 +1903,12 @@ impl Indicator for ConfiguredStudy {
         true
     }
     fn is_visible(&self) -> bool {
+        let intervals = &self.settings.timeframe_visibility;
         self.study.is_visible()
             && self.timeframe.is_none_or(|tf| {
                 !self.settings.hidden_intervals.contains(&tf)
-                    && self.settings.interval_range.contains(tf)
+                    // The label is only built for a study limited to some intervals.
+                    && (intervals.show_on_all || intervals.is_visible_on(&tf.as_str()))
             })
     }
     fn set_visible(&mut self, visible: bool) {
@@ -2439,6 +2465,117 @@ mod tests {
                     .is_err()
             );
         }
+        let mut study = ConfiguredStudy::new(Box::new(super::super::TechnicalRatings::default()));
+        study.set_timeframe(Timeframe::Min5);
+        let before = study.snapshot_settings();
+        study
+            .set_input("table_intervals", InputValue::Toggle(true))
+            .unwrap();
+        let own = study.study.inputs().len();
+        assert_eq!(
+            &ids(&study)[own..],
+            ["calculation_timeframe", "wait_for_close"]
+        );
+        study
+            .set_input(
+                "calculation_timeframe",
+                InputValue::Timeframe(Some(Timeframe::Hour1)),
+            )
+            .unwrap();
+        let requests = study.data_requests();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.timeframe.unwrap())
+                .collect::<Vec<_>>(),
+            [
+                Timeframe::Hour1,
+                Timeframe::Hour4,
+                Timeframe::Day1,
+                Timeframe::Week1,
+                Timeframe::Month1
+            ]
+        );
+        let hourly = [10., 12.]
+            .into_iter()
+            .enumerate()
+            .map(|(i, close)| {
+                Bar::new(
+                    chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::hours(i as i64),
+                    close,
+                    close,
+                    close,
+                    close,
+                    1.,
+                )
+            })
+            .collect::<Vec<_>>();
+        let chart = (0..12)
+            .map(|i| {
+                Bar::new(
+                    hourly[1].time + chrono::TimeDelta::minutes(i * 5),
+                    12.,
+                    12.,
+                    12.,
+                    12.,
+                    1.,
+                )
+            })
+            .collect::<Vec<_>>();
+        let source = |request: &super::super::StudyDataRequest, bars| super::super::StudyData {
+            request: request.clone(),
+            bars,
+            clock: crate::model::BarClock::new(request.timeframe.unwrap()),
+            instrument: None,
+            timeframe: request.timeframe.unwrap(),
+        };
+        study.update_data(
+            &chart,
+            0,
+            &[
+                source(&requests[0], &hourly[..]),
+                source(&requests[1], &[][..]),
+            ],
+        );
+        let row: Vec<_> = study.table().unwrap().rows[0]
+            .iter()
+            .map(|cell| match cell {
+                super::super::StudyCell::Text(text) => text.as_str(),
+                _ => panic!("text cell"),
+            })
+            .collect();
+        assert_eq!(row, ["1h", "Strong Buy", "N/A", "Strong Buy", "23%"]);
+        // The table rates the forming hour while the confirmed plot holds the previous hour.
+        assert_eq!(study.values().value(2, chart.len() - 1), Some(0.0));
+        study
+            .set_input("wait_for_close", InputValue::Toggle(false))
+            .unwrap();
+        study.update_data(
+            &chart,
+            0,
+            &[
+                source(&requests[0], &hourly[..]),
+                source(&requests[1], &[][..]),
+            ],
+        );
+        assert_eq!(study.values().value(2, chart.len() - 1), Some(1.0));
+        assert_eq!(study.data_start(&requests[0]), None);
+        assert_eq!(
+            study.data_start(&requests[1]),
+            Some(hourly[1].time - chrono::TimeDelta::hours(8000))
+        );
+        study.restore_settings(&before).unwrap();
+        let values = study.inputs();
+        for (id, value) in [
+            ("table_intervals", InputValue::Toggle(false)),
+            ("calculation_timeframe", InputValue::Timeframe(None)),
+            ("wait_for_close", InputValue::Toggle(true)),
+        ] {
+            assert_eq!(
+                values.iter().find(|input| input.id == id).unwrap().value,
+                value
+            );
+        }
         let breadth = ConfiguredStudy::new(Box::new(super::super::AdvanceDeclineRatio::default()));
         assert!(!ids(&breadth).contains(&"calculation_timeframe".to_owned()));
     }
@@ -2645,38 +2782,51 @@ mod tests {
         study.set_visible(false);
         study.set_timeframe(Timeframe::Day1);
         assert!(!study.is_visible());
+        // Settings saved with an interval range show on the intervals they showed.
+        let n = |value| std::num::NonZeroU64::new(value).unwrap();
         for (range, interval, visible) in [
+            (serde_json::json!({"Only": "Hour1"}), Timeframe::Hour1, true),
             (
-                StudyIntervalRange::AndAbove(Timeframe::Min5),
-                Timeframe::Custom(std::num::NonZeroU64::new(120).unwrap()),
+                serde_json::json!({"Only": "Hour1"}),
+                Timeframe::Custom(n(7200)),
                 false,
             ),
             (
-                StudyIntervalRange::AndAbove(Timeframe::Min5),
-                Timeframe::Custom(std::num::NonZeroU64::new(420).unwrap()),
+                serde_json::json!({"Only": "Hour1"}),
+                Timeframe::Min30,
+                false,
+            ),
+            (
+                serde_json::json!({"AndAbove": "Min5"}),
+                Timeframe::Custom(n(120)),
+                false,
+            ),
+            (
+                serde_json::json!({"AndAbove": "Min5"}),
+                Timeframe::Custom(n(420)),
                 true,
             ),
             (
-                StudyIntervalRange::AndBelow(Timeframe::Ticks(
-                    std::num::NonZeroU64::new(100).unwrap(),
-                )),
-                Timeframe::Ticks(std::num::NonZeroU64::new(50).unwrap()),
+                serde_json::json!({"AndBelow": {"Ticks": 100}}),
+                Timeframe::Ticks(n(50)),
                 true,
             ),
             (
-                StudyIntervalRange::AndBelow(Timeframe::Ticks(
-                    std::num::NonZeroU64::new(100).unwrap(),
-                )),
-                Timeframe::Volume(std::num::NonZeroU64::new(50).unwrap()),
+                serde_json::json!({"AndBelow": {"Ticks": 100}}),
+                Timeframe::Volume(n(50)),
                 false,
             ),
         ] {
-            let mut settings = study.settings();
-            settings.interval_range = range;
-            study.apply_settings(&[], settings).unwrap();
+            let mut saved = serde_json::to_value(study.settings()).unwrap();
+            let fields = saved.as_object_mut().unwrap();
+            fields.remove("timeframe_visibility");
+            fields.insert("interval_range".into(), range);
+            study
+                .apply_settings(&[], serde_json::from_value(saved).unwrap())
+                .unwrap();
             study.set_visible(true);
             study.set_timeframe(interval);
-            assert_eq!(study.is_visible(), visible);
+            assert_eq!(study.is_visible(), visible, "{interval}");
             study.set_visible(false);
             assert!(!study.is_visible());
         }
@@ -2684,6 +2834,14 @@ mod tests {
         let restored: StudySettings = serde_json::from_str(&saved).unwrap();
         assert!(!restored.plots[0].visible);
         assert_eq!(restored.hidden_intervals, [Timeframe::Min1]);
+        assert_eq!(
+            restored.timeframe_visibility,
+            TimeframeVisibility {
+                show_on_all: false,
+                visible_timeframes: Default::default(),
+                ranges: [(crate::model::TimeframeUnit::Tick, 1..=100)].into(),
+            }
+        );
     }
 
     #[test]
@@ -2804,6 +2962,10 @@ mod tests {
             .unwrap()
             .create()
             .unwrap();
+        assert_eq!(
+            older.settings().timeframe_visibility,
+            TimeframeVisibility::all()
+        );
         assert_eq!(
             older.settings().levels,
             [LevelStyle {

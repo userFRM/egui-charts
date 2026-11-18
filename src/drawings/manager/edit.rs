@@ -284,21 +284,25 @@ impl DrawingManager {
     ///
     /// Refuses an edit after which saving would refuse the drawing, as
     /// [`Self::add_synced_drawing`] refuses such a drawing: a cursor tool, fewer anchors than the
-    /// tool draws with, a non-finite coordinate, an anchor too far out to map to a time or a
-    /// setting out of range, such as a line width of 0 or a NaN font size. A refused edit, like
-    /// an unknown id, changes nothing, records no undo step and returns the reason. A drawing
-    /// that saving refuses already, such as one changed directly through [`Self::drawings`],
-    /// accepts any edit.
+    /// tool draws with, a non-finite coordinate, an anchor the chart cannot map to a time or a
+    /// setting out of range, such as a line width of 0 or a NaN font size. It also refuses a
+    /// change of `id`, which the manager assigns, and a `stored_id` another saved drawing is
+    /// stored under. A manager outside a chart, or on a chart without bars, refuses only anchors
+    /// 1e30 bars or more from the first bar. A refused edit, like an unknown id, changes nothing,
+    /// records no undo step and returns the reason. A drawing that saving refuses already, such
+    /// as one changed directly through [`Self::drawings`], accepts edits to its anchors and
+    /// settings even if they remain invalid.
     pub fn edit_drawing(
         &mut self,
         id: usize,
         edit: impl FnOnce(&mut Drawing),
     ) -> Result<(), &'static str> {
-        let drawing = self
+        let index = self
             .drawings
-            .iter_mut()
-            .find(|d| d.id == id)
+            .iter()
+            .position(|d| d.id == id)
             .ok_or("Unknown drawing")?;
+        let drawing = &mut self.drawings[index];
         let old = drawing.clone();
         edit(drawing);
         if old.locked && drawing.locked {
@@ -322,10 +326,13 @@ impl DrawingManager {
             drawing.folder = folder;
             drawing.folder_sync = folder_sync;
         }
-        if let Err(reason) = crate::drawings::validation::validate_edit(&old, drawing) {
-            *drawing = old;
+        let checked =
+            crate::drawings::validation::validate_edit(&old, drawing, self.mapped_bars.as_ref());
+        if let Err(reason) = checked.and_then(|()| self.check_identity(index, &old)) {
+            self.drawings[index] = old;
             return Err(reason);
         }
+        let drawing = &self.drawings[index];
         if !drawing.selectable || (old.visible && !drawing.visible) {
             self.selection.deselect(id);
         }
@@ -410,13 +417,20 @@ impl DrawingManager {
                 drawing.folder = folder;
                 drawing.folder_sync = folder_sync;
             }
-            if let Err(reason) = crate::drawings::validation::validate_edit(&old, drawing) {
+            if let Err(reason) =
+                crate::drawings::validation::validate_edit(&old, drawing, self.mapped_bars.as_ref())
+            {
                 *drawing = old;
                 refused = Some(reason);
                 break;
             }
             before.push((index, old));
         }
+        let refused = refused.or_else(|| {
+            before
+                .iter()
+                .find_map(|(index, old)| self.check_identity(*index, old).err())
+        });
         if let Some(reason) = refused {
             for (index, old) in before {
                 self.drawings[index] = old;
@@ -455,18 +469,21 @@ impl DrawingManager {
         if self.drag_old_state.as_ref().is_some_and(|d| d.id != id) {
             self.end_drag_handle();
         }
-        let drawing = self
+        let index = self
             .drawings
-            .iter_mut()
-            .find(|d| d.id == id)
+            .iter()
+            .position(|d| d.id == id)
             .ok_or("Unknown drawing")?;
+        let drawing = &mut self.drawings[index];
         if drawing.locked {
             return Err("Drawing is locked");
         }
         let old = drawing.clone();
         edit(drawing);
-        if let Err(reason) = crate::drawings::validation::validate_edit(&old, drawing) {
-            *drawing = old;
+        let checked =
+            crate::drawings::validation::validate_edit(&old, drawing, self.mapped_bars.as_ref());
+        if let Err(reason) = checked.and_then(|()| self.check_identity(index, &old)) {
+            self.drawings[index] = old;
             return Err(reason);
         }
         // Only an applied frame starts the gesture, so a refused first frame leaves nothing for
@@ -692,7 +709,7 @@ impl DrawingManager {
     }
 
     pub(crate) fn validate_drawing(&self, drawing: &Drawing) -> Result<(), &'static str> {
-        crate::drawings::validation::validate(drawing)?;
+        crate::drawings::validation::validate(drawing, self.mapped_bars.as_ref())?;
         self.validate_custom_tool(drawing)
     }
 
@@ -714,10 +731,32 @@ impl DrawingManager {
     /// `add_drawing` does. A drawing finished with fewer anchors than the toolbar collects
     /// passes when its tool draws with them.
     pub(super) fn validate_created(&self, drawing: &Drawing) -> Result<(), &'static str> {
-        crate::drawings::validation::validate_stored(drawing)?;
+        crate::drawings::validation::validate_stored(drawing, self.mapped_bars.as_ref())?;
         self.validate_custom_tool(drawing)?;
         if drawing.custom_tool.is_none() && !self.registry.availability(drawing.tool_type).enabled {
             return Err("Drawing tool is disabled");
+        }
+        Ok(())
+    }
+
+    /// Keeps the manager's handle and refuses a newly claimed stored identity already in use.
+    pub(super) fn check_identity(&self, index: usize, old: &Drawing) -> Result<(), &'static str> {
+        let drawing = &self.drawings[index];
+        if drawing.id != old.id {
+            return Err("Drawing ids cannot change");
+        }
+        // With the handle unchanged, only these edits can introduce a stored id collision.
+        let moved = drawing.stored_id != old.stored_id || (drawing.saveable && !old.saveable);
+        if moved && drawing.saveable {
+            let stored = sync_id(drawing);
+            if self
+                .drawings
+                .iter()
+                .enumerate()
+                .any(|(at, other)| at != index && other.saveable && sync_id(other) == stored)
+            {
+                return Err("Another drawing is stored under this id");
+            }
         }
         Ok(())
     }
@@ -843,25 +882,25 @@ impl DrawingManager {
     /// Add a drawing from another source (for multi-chart sync, or restored from storage)
     /// under a new id, and return the id. A drawing restored from storage keeps its stored
     /// identity (`stored_id`, `created_at`, `notes`) and its z-order. A drawing that was never
-    /// stored goes on top, and so does a copy, one stored under the id of a drawing already
-    /// here, which is saved as a new drawing.
+    /// stored goes on top, and so does a copy, one stored under the id a drawing already here
+    /// is saved under, which is saved as a new drawing.
     ///
     /// Refuses, and adds nothing, a drawing that saving would refuse: a cursor tool, fewer
-    /// anchors than the tool draws with, a non-finite coordinate, an anchor too far out to map
+    /// anchors than the tool draws with, a non-finite coordinate, an anchor the chart cannot map
     /// to a time or a setting out of range. Tool availability does not apply: drawings of a
     /// disabled tool are restored and synced.
     pub fn add_synced_drawing(&mut self, drawing: Drawing) -> Result<usize, &'static str> {
-        crate::drawings::validation::validate_stored(&drawing)?;
+        crate::drawings::validation::validate_stored(&drawing, self.mapped_bars.as_ref())?;
         Ok(self.push_synced(drawing))
     }
 
     /// Adds a checked drawing under a new id, as [`Self::add_synced_drawing`] describes.
     fn push_synced(&mut self, mut drawing: Drawing) -> usize {
-        if drawing.stored_id.is_some()
-            && self
-                .drawings
-                .iter()
-                .any(|d| d.stored_id == drawing.stored_id)
+        if let Some(stored) = &drawing.stored_id
+            && self.drawings.iter().any(|d| {
+                d.stored_id.as_ref() == Some(stored)
+                    || (d.saveable && d.stored_id.is_none() && d.id.to_string() == *stored)
+            })
         {
             (drawing.stored_id, drawing.created_at, drawing.modified_at) = (None, None, None);
         }
@@ -938,22 +977,64 @@ mod tests {
         }
     }
 
-    /// An edit after which saving would refuse a drawing it accepted, such as a line width of 0
-    /// or a NaN font size, changes no drawing, records no undo step, queues nothing and returns
-    /// the reason through every edit path, and the chart still saves both drawings.
+    /// An edit after which saving would refuse a drawing it accepted, including an anchor the
+    /// chart cannot date or a changed identity, changes no drawing, records no undo step, queues
+    /// nothing and returns the reason through every edit path. The chart still saves both drawings.
     #[test]
     fn edits_that_saving_refuses_change_nothing() {
         type Setting = fn(&mut Drawing);
         type Edit = fn(&mut DrawingManager, Setting) -> Result<(), &'static str>;
         // The labelled drawing gets the bad value. The other one, which the bulk paths edit
         // first, gets a valid value that a refused bulk edit must undo too.
-        let settings: [(&str, Setting); 2] = [
-            ("a zero line width", |d| {
-                d.stroke_width = if d.label.is_some() { 0.0 } else { 3.0 };
-            }),
-            ("a NaN font size", |d| {
-                d.font_size = if d.label.is_some() { f32::NAN } else { 20.0 };
-            }),
+        let settings: [(&str, Setting, &str); 5] = [
+            (
+                "a zero line width",
+                |d| {
+                    d.stroke_width = if d.label.is_some() { 0.0 } else { 3.0 };
+                },
+                "Drawing settings must be finite and in range",
+            ),
+            (
+                "a NaN font size",
+                |d| {
+                    d.font_size = if d.label.is_some() { f32::NAN } else { 20.0 };
+                },
+                "Drawing settings must be finite and in range",
+            ),
+            (
+                "an anchor off the chart",
+                |d| {
+                    if d.label.is_some() {
+                        d.chart_points[0].bar_idx = 1e9;
+                    } else {
+                        d.stroke_width = 3.0;
+                    }
+                },
+                "Drawing anchors must map to a time",
+            ),
+            (
+                "a new id",
+                |d| {
+                    if d.label.is_some() {
+                        d.id += 10;
+                    } else {
+                        d.stroke_width = 3.0;
+                    }
+                },
+                "Drawing ids cannot change",
+            ),
+            (
+                "another drawing's stored id",
+                |d| {
+                    if d.label.is_some() {
+                        // The first drawing has no stored id, so it is saved under its live id.
+                        d.stored_id = Some("0".into());
+                    } else {
+                        d.stroke_width = 3.0;
+                    }
+                },
+                "Another drawing is stored under this id",
+            ),
         ];
         let paths: [(&str, Edit); 4] = [
             ("edit_drawing", |m, setting| {
@@ -973,7 +1054,7 @@ mod tests {
             }),
         ];
         for (path, edit) in paths {
-            for (name, setting) in settings {
+            for (name, setting, reason) in settings {
                 let case = format!("{path}, {name}");
                 let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
                 let manager = chart.drawings_mut();
@@ -986,22 +1067,36 @@ mod tests {
                     manager.add_drawing(drawing).unwrap();
                 }
                 let ids: Vec<_> = manager.drawings.iter().map(|d| d.id).collect();
+                assert_eq!(ids, [0, 1], "{case}");
                 manager.select_drawings(ids);
                 manager.history.clear();
                 manager.pending_sync.lock().unwrap().clear();
                 let before = format!("{:?}", manager.drawings);
                 let result = edit(manager, setting);
+                assert_eq!(result, Err(reason), "{case}");
                 assert_eq!(format!("{:?}", manager.drawings), before, "{case}");
                 assert!(!manager.can_undo(), "{case}");
                 assert!(manager.pending_sync.lock().unwrap().is_empty(), "{case}");
-                assert_eq!(
-                    result,
-                    Err("Drawing settings must be finite and in range"),
-                    "{case}"
-                );
                 assert_eq!(chart.save_drawings().unwrap().drawings.len(), 2, "{case}");
             }
         }
+    }
+
+    /// A restored id already used by a drawing that has not been stored makes a new drawing,
+    /// so that saving does not find that id twice.
+    #[test]
+    fn a_synced_drawing_under_a_live_id_is_saved_as_new() {
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        let manager = chart.drawings_mut();
+        let mut line = Drawing::new(0, DrawingToolType::TrendLine);
+        line.chart_points = vec![ChartPoint::new(1.0, 105.0), ChartPoint::new(2.0, 106.0)];
+        line.completed = true;
+        let live = manager.add_drawing(line.clone()).unwrap();
+        line.stored_id = Some(live.to_string());
+        let added = manager.add_synced_drawing(line).unwrap();
+        let copy = manager.drawings.iter().find(|d| d.id == added).unwrap();
+        assert_eq!(copy.stored_id, None);
+        assert!(chart.save_drawings().is_ok());
     }
 
     /// A nested folder follows its top-level folder. Back at the root it has the mode set on it,

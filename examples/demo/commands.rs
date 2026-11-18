@@ -132,10 +132,12 @@ const ROW_KEYS: &[(&str, KeyboardAction)] = &[
 ];
 
 /// The quick search rows. A row whose action has a key shows the first one bound in `shortcuts`,
-/// and each saved indicator template of `templates` (id and name) has a row of its own.
+/// and each saved indicator template of `templates` (id and name) has a row of its own,
+/// as does each study `factory` lists.
 pub(super) fn quick_search_commands(
     shortcuts: &ShortcutMap,
     templates: &[(String, String)],
+    factory: &IndicatorFactory,
 ) -> Vec<Command> {
     let keyed = |command: Command, action: Option<KeyboardAction>| match action
         .and_then(|action| shortcuts.shortcut(action))
@@ -224,7 +226,6 @@ pub(super) fn quick_search_commands(
             }
         }
     }
-    let factory = IndicatorFactory::new();
     let mut names = factory.list();
     names.sort();
     commands.extend(names.into_iter().map(|name| {
@@ -281,6 +282,7 @@ impl DemoApp {
         self.quick_search = CommandPaletteHandler::new(quick_search_commands(
             self.chart.shortcuts(),
             &self.top_toolbar.indicator_templates,
+            self.indicator_dialog.factory(),
         ));
         self.quick_search.open();
     }
@@ -327,7 +329,7 @@ impl DemoApp {
             return;
         }
         if let Some(name) = id.strip_prefix("study:") {
-            if let Some(study) = IndicatorFactory::new().create(name) {
+            if let Some(study) = self.indicator_dialog.factory().create(name) {
                 let inputs = super::study_input_summary(study.as_ref());
                 let id = self.chart.add_indicator(study);
                 self.chart.set_indicator_inputs(id, inputs);
@@ -1299,7 +1301,7 @@ mod tests {
         shortcuts
             .bindings
             .retain(|(_, action)| *action != KeyboardAction::Snapshot);
-        let commands = quick_search_commands(&shortcuts, &[]);
+        let commands = quick_search_commands(&shortcuts, &[], &IndicatorFactory::new());
         let shortcut = |id: &str| commands.iter().find(|row| row.id == id).unwrap().shortcut;
         assert_eq!(shortcut("undo"), Some(edited));
         assert_eq!(shortcut("snapshot"), None);
