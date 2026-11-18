@@ -27,6 +27,18 @@ impl Chart {
     /// They are drawn as dotted lines from the close on their publication date, in the colours of
     /// [`ChartConfig::price_target_positive_color`](crate::config::ChartConfig::price_target_positive_color)
     /// and [`price_target_negative_color`](crate::config::ChartConfig::price_target_negative_color).
+    ///
+    /// ```rust
+    /// use egui::Color32;
+    /// use egui_charts::config::ChartConfig;
+    /// use egui_charts::widget::ChartBuilder;
+    ///
+    /// let mut config = ChartConfig::default();
+    /// // Blue lines and labels above the publication close, with a fill at 20% opacity.
+    /// config.price_target_positive_color = Color32::from_rgba_unmultiplied(0, 0, 255, 51);
+    /// let mut chart = ChartBuilder::new().with_config(config).build();
+    /// chart.set_price_targets_visible(true);
+    /// ```
     pub fn set_price_targets_visible(&mut self, visible: bool) {
         self.show_price_targets = visible;
     }

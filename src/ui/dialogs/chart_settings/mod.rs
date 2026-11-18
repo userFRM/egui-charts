@@ -2403,10 +2403,10 @@ mod tests {
     }
 
     /// A template saved before the right margin could hold part of a bar, and before the font
-    /// family, the thousands separator, session breaks, analyst target colours and the bar of the last price could be
-    /// chosen, holds the whole bars of a margin and none of those choices. Loaded on a chart
-    /// with a margin in bars or in pixels, it shows what it can of the chart's and Ok keeps the
-    /// chart's margin and choices.
+    /// family, the thousands separator, session breaks, analyst target colours and the bar of the
+    /// last price could be chosen, holds the whole bars of a margin and none of those choices.
+    /// Loaded on a chart with a margin in bars or in pixels, it shows what it can of the chart's
+    /// and Ok keeps the chart's margin and choices.
     #[test]
     fn old_templates_keep_the_right_margin_and_the_choices_they_lack() {
         use crate::model::PriceLineSource;
