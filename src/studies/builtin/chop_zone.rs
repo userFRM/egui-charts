@@ -16,14 +16,15 @@
 //! | 5 or more | turquoise |
 //! | 3.57 to 5 | dark green |
 //! | 2.14 to 3.57 | pale green |
-//! | 0.71 to 2.14 | lime |
+//! | 0.71 to 2.14 | teal |
 //! | between -0.71 and 0.71 | yellow |
 //! | -2.14 to -0.71 | light orange |
 //! | -3.57 to -2.14 | orange |
-//! | -5 to -3.57 | red |
+//! | -5 to -3.57 | pink |
 //! | -5 or less | dark red |
 //!
-//! A bar whose 30-bar range is zero has no value.
+//! The plot colour draws the steepest rise; each other band is a state of the plot with its own
+//! colour in the Style tab. A bar whose 30-bar range is zero has no value.
 //!
 //! # Example
 //! ```
@@ -44,6 +45,18 @@ use egui::Color32;
 
 const EMA_LENGTH: usize = 34;
 const RANGE_LENGTH: usize = 30;
+
+/// Style tab names of the bands after the first, which takes the plot colour.
+const BAND_NAMES: [&str; 8] = [
+    "Rising 3.57° to 5°",
+    "Rising 2.14° to 3.57°",
+    "Rising 0.71° to 2.14°",
+    "Flat, under 0.71°",
+    "Falling 0.71° to 2.14°",
+    "Falling 2.14° to 3.57°",
+    "Falling 3.57° to 5°",
+    "Falling 5° or more",
+];
 
 /// Chop Zone: unit columns coloured by the angle of the 34-bar EMA.
 #[derive(Clone, Debug)]
@@ -86,6 +99,22 @@ impl ChopZone {
             visible: true,
         }
     }
+
+    /// The colour band of the angle at `bar`, from the steepest rise to the steepest fall.
+    fn band(&self, bar: usize) -> Option<usize> {
+        let angle = self.angles.value(0, bar)?;
+        Some(match angle {
+            a if a >= 5.0 => 0,
+            a if a >= 3.57 => 1,
+            a if a >= 2.14 => 2,
+            a if a >= 0.71 => 3,
+            a if a <= -5.0 => 8,
+            a if a <= -3.57 => 7,
+            a if a <= -2.14 => 6,
+            a if a <= -0.71 => 5,
+            _ => 4,
+        })
+    }
 }
 
 /// Construct with the conventional definition.
@@ -107,19 +136,19 @@ impl Indicator for ChopZone {
     }
 
     fn plot_color(&self, _line: usize, bar: usize) -> Option<Color32> {
-        let angle = self.angles.value(0, bar)?;
-        let band = match angle {
-            a if a >= 5.0 => 0,
-            a if a >= 3.57 => 1,
-            a if a >= 2.14 => 2,
-            a if a >= 0.71 => 3,
-            a if a <= -5.0 => 8,
-            a if a <= -3.57 => 7,
-            a if a <= -2.14 => 6,
-            a if a <= -0.71 => 5,
-            _ => 4,
-        };
-        Some(self.colors[band])
+        Some(self.colors[self.band(bar)?])
+    }
+
+    fn plot_variants(&self, _line: usize) -> Vec<crate::studies::PlotVariant> {
+        BAND_NAMES
+            .iter()
+            .zip(&self.colors[1..])
+            .map(|(name, &color)| crate::studies::PlotVariant::new(*name, color))
+            .collect()
+    }
+
+    fn plot_variant(&self, _line: usize, bar: usize) -> Option<usize> {
+        self.band(bar)?.checked_sub(1)
     }
 
     fn value_format(&self) -> crate::scales::StudyFormat {
