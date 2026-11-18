@@ -292,21 +292,21 @@ impl FloatingSelectionToolbar {
                             drawing.fill_color = Some(color.to_srgba_unmultiplied());
                         }
                     };
-                    if down {
-                        chart.drawings_mut().drag_edit_drawing(id, edit);
+                    let _ = if down {
+                        chart.drawings_mut().drag_edit_drawing(id, edit)
                     } else {
-                        chart.drawings_mut().edit_drawing(id, edit);
-                    }
+                        chart.drawings_mut().edit_drawing(id, edit)
+                    };
                 });
                 self.colour_drag = down;
             }
             FloatingToolbarAction::ChangeWidth(width) => chart.user_action(|chart| {
-                chart
+                let _ = chart
                     .drawings_mut()
                     .edit_drawing(id, |d| d.stroke_width = width);
             }),
             FloatingToolbarAction::ChangeStyle(style) => chart.user_action(|chart| {
-                chart
+                let _ = chart
                     .drawings_mut()
                     .edit_drawing(id, |d| d.line_style = style);
             }),

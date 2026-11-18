@@ -1207,7 +1207,8 @@ mod tests {
             chart.drawings_mut().drawings.push(drawing);
             chart
                 .drawings_mut()
-                .edit_drawing(7, |d| d.color = [1, 2, 3, 255]);
+                .edit_drawing(7, |d| d.color = [1, 2, 3, 255])
+                .unwrap();
         });
         chart.set_markers(
             SeriesId::MAIN,

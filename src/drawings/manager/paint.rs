@@ -766,7 +766,9 @@ mod tests {
                 "{tool:?}"
             );
             if tool == DrawingToolType::TextLabel {
-                manager.edit_drawing(7, |d| d.text = Some("x".into()));
+                manager
+                    .edit_drawing(7, |d| d.text = Some("x".into()))
+                    .unwrap();
                 assert_eq!(manager.hit_test(Pos2::new(hit.0, hit.1)), None);
             }
             manager.drawings[0].visible = false;

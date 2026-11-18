@@ -91,11 +91,14 @@ and an older snapshot without a unit, use the loaded mean gap.
 
 ## Categorical and structured keys
 
-[`CustomHorizontalScale::new(keys, format)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.CustomHorizontalScale.html)
+[`CustomHorizontalScale::new(keys, format)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.CustomHorizontalScale.html#method.new)
 takes any `Ord` key, such as an enum whose declaration order is the category
 order, and a formatter shared by the axis and the crosshair. Hosts need not
 encode keys or manufacture dates: `value` and `marker` build a bar and an
-annotation from a key, `Chart::bar_at_key` finds a bar and `Chart::key_to_x`
+annotation from a key,
+[`Chart::bar_at_key`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.bar_at_key)
+finds a bar and
+[`Chart::key_to_x`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.key_to_x)
 gives the screen position of a key. Categories are equally spaced by rank, so a
 category without a bar keeps its space.
 
