@@ -53,7 +53,19 @@ pub(crate) fn draw_dashed_polyline(
     dash_len: f32,
     gap_len: f32,
 ) {
-    let mut phase = 0.0;
+    draw_dashed_polyline_from(painter, points, stroke, dash_len, gap_len, 0.0);
+}
+
+/// [`draw_dashed_polyline`] with the pattern starting `phase` into its period. Returns the phase
+/// it ends at, so that a line drawn in pieces keeps one pattern.
+pub(crate) fn draw_dashed_polyline_from(
+    painter: &egui::Painter,
+    points: &[Pos2],
+    stroke: Stroke,
+    dash_len: f32,
+    gap_len: f32,
+    mut phase: f64,
+) -> f64 {
     let period = f64::from(dash_len) + f64::from(gap_len);
     for pair in points.windows(2) {
         draw_dashed_segment(painter, pair[0], pair[1], stroke, dash_len, gap_len, phase);
@@ -61,6 +73,7 @@ pub(crate) fn draw_dashed_polyline(
         let dy = f64::from(pair[1].y) - f64::from(pair[0].y);
         phase = (phase + dx.hypot(dy)).rem_euclid(period);
     }
+    phase
 }
 
 /// Draw equally spaced round dots, clipping before placement and carrying the phase across vertices.

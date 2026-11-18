@@ -1,10 +1,12 @@
 //! Scales and lines tab of the chart settings dialog.
 
 use super::super::SettingsDialog;
+use super::canvas::line_style_preview;
 use super::{pick_color, price_line_dropdown, styled_checkbox, styled_dropdown, trading_option};
 use crate::localization as l10n;
-use crate::model::PriceLineSource;
+use crate::model::{LineStyle, PriceLineSource};
 use crate::theme::Theme;
+use crate::tokens::DESIGN_TOKENS;
 use crate::widget::settings::ThousandsSeparator;
 use egui::Ui;
 
@@ -108,6 +110,34 @@ impl SettingsDialog {
                     theme.ui.text,
                 );
                 ui.add_space(theme.spacing.xxxl);
+                self.draw_setting_row_with_controls(
+                    ui,
+                    "Currency and unit",
+                    theme,
+                    |ui, dialog| {
+                        let on_hover = &mut dialog.settings.scales_and_lines.currency_unit_on_hover;
+                        let name = |on_hover| {
+                            if on_hover {
+                                "Visible on mouse over"
+                            } else {
+                                "Always visible"
+                            }
+                        };
+                        styled_dropdown(
+                            ui,
+                            "currency_unit_visibility",
+                            180.0,
+                            theme.ui.text,
+                            name(*on_hover),
+                            |ui| {
+                                for option in [false, true] {
+                                    let label = l10n::text(ui.ctx(), name(option));
+                                    ui.selectable_value(on_hover, option, label);
+                                }
+                            },
+                        );
+                    },
+                );
                 for (value, label) in [
                     (
                         &mut self.settings.scales_and_lines.show_currency,
@@ -205,6 +235,61 @@ impl SettingsDialog {
                         dialog.settings.scales_and_lines.symbol_price_color = None;
                     }
                 });
+                self.draw_setting_row_with_controls(ui, "Last price line", theme, |ui, dialog| {
+                    let scales = &mut dialog.settings.scales_and_lines;
+                    let default = crate::model::SeriesStyle::default();
+                    let current = scales.price_line_style.unwrap_or(default.price_line_style);
+                    styled_dropdown(
+                        ui,
+                        "last_price_line_style",
+                        DESIGN_TOKENS.sizing.settings_dialog.small_dropdown_width,
+                        theme.ui.text,
+                        line_style_preview(current),
+                        |ui| {
+                            for style in LineStyle::all() {
+                                let label = l10n::text(ui.ctx(), line_style_preview(*style));
+                                if ui.selectable_label(current == *style, label).clicked() {
+                                    scales.price_line_style = Some(*style);
+                                }
+                            }
+                        },
+                    );
+                    ui.add_space(theme.spacing.lg);
+                    // A width the host set outside the offered range stays until it is dragged.
+                    let mut width = scales.price_line_width.unwrap_or(default.price_line_width);
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut width)
+                                .range(1.0..=4.0)
+                                .clamp_existing_to_range(false)
+                                .speed(0.5)
+                                .suffix(l10n::text(ui.ctx(), " px")),
+                        )
+                        .accessible_name(l10n::text(ui.ctx(), "Last price line width"))
+                        .changed()
+                    {
+                        scales.price_line_width = Some(width);
+                    }
+                });
+                self.draw_setting_row_with_controls(ui, "Last price tag", theme, |ui, dialog| {
+                    let change = &mut dialog.settings.scales_and_lines.show_last_price_change;
+                    let name = |change| {
+                        if change { "Value and change" } else { "Value" }
+                    };
+                    styled_dropdown(
+                        ui,
+                        "last_price_tag",
+                        180.0,
+                        theme.ui.text,
+                        name(*change),
+                        |ui| {
+                            for option in [false, true] {
+                                let label = l10n::text(ui.ctx(), name(option));
+                                ui.selectable_value(change, option, label);
+                            }
+                        },
+                    );
+                });
                 styled_checkbox(
                     ui,
                     &mut self.settings.scales_and_lines.show_symbol_name,
@@ -264,6 +349,12 @@ impl SettingsDialog {
                         &mut dialog.settings.scales_and_lines.show_prev_close,
                     );
                 });
+                styled_checkbox(
+                    ui,
+                    &mut self.settings.scales_and_lines.show_high_low,
+                    "High and low price labels",
+                    theme.ui.text,
+                );
                 ui.add_space(theme.spacing.xxxl);
                 self.draw_section_header(ui, "SCALE MODES", theme);
                 if styled_checkbox(
