@@ -20,13 +20,13 @@ pub struct StudyTable {
     pub columns: Vec<String>,
     /// Cells in each row, in column order.
     pub rows: Vec<Vec<StudyCell>>,
-    /// Background of every cell of each row, in row order. Rows past its end, and every row
-    /// when it is empty, keep the default cell background.
-    pub cell_colors: Vec<egui::Color32>,
+    /// Background of each cell, row by row and in column order within a row. Cells past the end
+    /// of their row's fills, and rows past the end of the list, keep the default cell background.
+    pub cell_colors: Vec<Vec<egui::Color32>>,
     /// Background of the column headings, which also frames the table in white, or `None` for
     /// the default.
     pub header_color: Option<egui::Color32>,
-    /// Text of the column headings and of rows with a background, or `None` for the default.
+    /// Text of the column headings and of cells with a background, or `None` for the default.
     /// Text over a background it does not contrast with turns towards black.
     pub text_color: Option<egui::Color32>,
     /// Where the table sits in the pane.
@@ -266,11 +266,15 @@ pub(crate) fn paint(
             .enumerate()
             {
                 let mut x = content.left();
-                for (cell, width) in row.iter().zip(&widths) {
+                for (column, (cell, width)) in row.iter().zip(&widths).enumerate() {
                     let cell_rect = Rect::from_min_size(pos2(x, y), vec2(*width, row_height));
                     let fill = match row_index {
                         0 => table.header_color,
-                        row => table.cell_colors.get(row - 1).copied(),
+                        row => table
+                            .cell_colors
+                            .get(row - 1)
+                            .and_then(|fills| fills.get(column))
+                            .copied(),
                     };
                     let color = if let Some(fill) = fill {
                         painter.rect_filled(cell_rect, 0.0, fill);
@@ -377,6 +381,10 @@ mod tests {
         let upper_left = StudyTable {
             position: TablePosition::TopLeft,
             text_size: TableTextSize::Large,
+            cell_colors: vec![vec![
+                egui::Color32::from_rgb(1, 2, 3),
+                egui::Color32::from_rgb(4, 5, 6),
+            ]],
             ..lower_right.clone()
         };
         for ((_, theme), table) in crate::theme::presets()
@@ -421,6 +429,23 @@ mod tests {
                             }
                         },
                     );
+                    if frame == 0 && top {
+                        for fill in &table.cell_colors[0] {
+                            let cells = output
+                                .shapes
+                                .iter()
+                                .filter(|clipped| {
+                                    matches!(
+                                        &clipped.shape, Shape::Rect(rect) if rect.fill == *fill
+                                    )
+                                })
+                                .count();
+                            assert_eq!(
+                                cells, 1,
+                                "each column must paint its own fill at width {width}"
+                            );
+                        }
+                    }
                     let title = output
                         .shapes
                         .iter()

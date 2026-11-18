@@ -1,13 +1,12 @@
-//! Visibility tab - the intervals a drawing shows on.
+//! Visibility tab - the intervals a drawing or a study is drawn on.
 
 use std::ops::RangeInclusive;
 
 use crate::localization as l10n;
-use crate::model::TimeframeUnit;
+use crate::model::{TimeframeUnit, TimeframeVisibility};
 use crate::theme::ThemeExt;
 use egui::Ui;
 
-use crate::ui::dialogs::drawing_properties::actions::DrawingProps;
 use crate::ui_kit::FormGrid;
 use crate::ui_kit::ext::UiExt;
 
@@ -31,9 +30,8 @@ const UNITS: [(TimeframeUnit, &str, RangeInclusive<u64>); 11] = [
 pub struct VisibilityTab;
 
 impl VisibilityTab {
-    pub fn show(ui: &mut Ui, props: &mut DrawingProps) {
+    pub fn show(ui: &mut Ui, visibility: &mut TimeframeVisibility) {
         ui.space_md();
-        let visibility = &mut props.timeframe_visibility;
         ui.checkbox(
             &mut visibility.show_on_all,
             l10n::text(ui.ctx(), "Show on all timeframes"),

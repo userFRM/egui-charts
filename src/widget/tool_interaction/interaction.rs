@@ -84,6 +84,7 @@ pub fn handle_active_tool<F1, F2>(
             let starting = drawing_manager.curr_drawing.is_none()
                 && (response.clicked() || (pressed && response.is_pointer_button_down_on()));
             if starting {
+                let snap_to_time = drawing_manager.options.snap_to_time;
                 if let Some(pos) = primary_press_pos(ui)
                     .or(pointer_pos)
                     .filter(|p| price_rect.contains(*p))
@@ -91,7 +92,13 @@ pub fn handle_active_tool<F1, F2>(
                     drawing_manager.start_drawing_with_coords(
                         active_tool,
                         pos,
-                        |x| x_to_bar(x).round(),
+                        |x| {
+                            if snap_to_time {
+                                x_to_bar(x).round()
+                            } else {
+                                x_to_bar(x)
+                            }
+                        },
                         y_to_price,
                     );
                     ui.ctx().data_mut(|d| d.insert_temp(first_press, true));
