@@ -24,8 +24,9 @@ fn display_choice(mode: TPODisplayMode) -> InputValue {
 ///
 /// The chart builds the profiles of the whole sessions it shows from its bars and calendar with
 /// [`to_tpo_profiles`](crate::model::to_tpo_profiles), through the same code and cache as the
-/// TPO chart type, so the study's profile of a session equals the chart type's under the same
-/// settings. [`Indicator::tpo`] exposes those settings; the study has no plotted values.
+/// TPO chart type, so on the unsplit trading day the study's profile of a session equals the chart
+/// type's under the same settings. [`Indicator::tpo`] exposes those settings; the study has no
+/// plotted values.
 ///
 /// Its Hours input keeps each profile to the trading day, the regular hours, custom hours, or the
 /// pre-market or post-market alone, counting only the bars of those hours, and Split extended
