@@ -102,7 +102,14 @@ impl Drawing {
         }
         let theme = ctx.active_theme();
         let [chart, panel] = backgrounds(&theme);
-        let key = (self.tool_type, [theme.ui.text, chart, panel]);
+        // Projections saved without settings used the same blue palette as a trend line.
+        let tool = if self.tool_type == DrawingToolType::ProjectionTool && self.projection.is_none()
+        {
+            DrawingToolType::TrendLine
+        } else {
+            self.tool_type
+        };
+        let key = (tool, [theme.ui.text, chart, panel]);
         // Nothing below reads the context, which `memory_mut` holds locked.
         ctx.memory_mut(|memory| {
             let shades = memory
@@ -299,6 +306,8 @@ impl Drawing {
                 | DrawingToolType::Pitchfan
         );
         let custom_fork = fork && self.pitchfork.is_some();
+        let custom_projection =
+            self.tool_type == DrawingToolType::ProjectionTool && self.projection.is_some();
         // Keep body fills of annotations and legacy forks; analysis labels keep their own fill.
         let fill = |color: &mut Color32| {
             if color.a() > 0
@@ -329,7 +338,8 @@ impl Drawing {
                 *color = configured;
             }
         };
-        let dash = if custom_fork
+        let dash = if custom_projection
+            || custom_fork
             || matches!(
                 self.tool_type,
                 DrawingToolType::RegressionTrend

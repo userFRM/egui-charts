@@ -12,8 +12,8 @@ use super::{
     AnnotationMarker, ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree,
     FibonacciConfig, FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig,
     LineMeasurements, MiddleLineStyle, NoteTextStyle, PitchforkConfig, PositionReadout,
-    PositionSize, PositionSizing, PositionStyle, RegressionTrendConfig, TimeframeVisibility,
-    VwapConfig,
+    PositionSize, PositionSizing, PositionStyle, ProjectionConfig, RegressionTrendConfig,
+    TimeframeVisibility, VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -352,6 +352,12 @@ pub struct Drawing {
     /// as drawings saved before this setting do.
     #[serde(default)]
     pub bars_pattern: Option<BarsPatternConfig>,
+    /// Levels, target zone backgrounds, coefficient labels and leg style of the projection
+    /// tool. New projections start from [`ProjectionConfig::default`]; `None`, as on projections
+    /// saved before these settings, draws one dashed level at the whole move in the drawing
+    /// colour with a zone in the fill colour and no coefficients. Other tools ignore it.
+    #[serde(default)]
+    pub projection: Option<ProjectionConfig>,
 
     // === Z-Order (rendering layer) ===
     /// Z-order for rendering priority (higher = drawn on top)
@@ -508,6 +514,7 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
         | T::ElliottTriangle
         | T::ElliottDoubleCombo
         | T::ElliottTripleCombo => colored([61, 133, 198, 255]),
+        T::ProjectionTool => colored([156, 156, 156, 255]),
         T::CyclicLines => colored([144, 202, 249, 255]),
         T::TimeCycles => DefaultStyle {
             color: [21, 153, 128, 255],
@@ -693,6 +700,8 @@ impl Drawing {
             gann: None,
             ghost_feed: None,
             bars_pattern: None,
+            projection: (tool_type == DrawingToolType::ProjectionTool)
+                .then(ProjectionConfig::default),
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
         }
@@ -706,16 +715,16 @@ impl Drawing {
         drawing
     }
 
-    /// Create a new drawing with a specific line colour; fills, borders and pitchfork levels
-    /// sharing the tool's line colour take the new RGB at their own opacity.
+    /// Create a new drawing with a specific line colour; fills, borders, pitchfork levels and
+    /// projection levels sharing the tool's line colour take the new RGB at their own opacity.
     pub fn with_color(id: usize, tool_type: DrawingToolType, color: [u8; 4]) -> Self {
         let mut drawing = Self::new(id, tool_type);
         drawing.set_line_color(color);
         drawing
     }
 
-    /// Set the line colour and retint fills, borders and pitchfork levels sharing its current
-    /// RGB, keeping each one's opacity. Independently coloured fills, borders and levels keep
+    /// Set the line colour and retint fills, borders, pitchfork levels and projection levels
+    /// sharing its current RGB, keeping each one's opacity. Independently coloured levels keep
     /// their colours.
     pub fn set_line_color(&mut self, color: [u8; 4]) {
         for shared in [&mut self.fill_color, &mut self.border_color] {
@@ -732,7 +741,23 @@ impl Drawing {
                 }
             }
         }
+        if let Some(config) = &mut self.projection {
+            for level in &mut config.levels {
+                if level.color[..3] == self.color[..3] {
+                    level.color[..3].copy_from_slice(&color[..3]);
+                }
+            }
+        }
         self.color = color;
+    }
+
+    /// The projection settings this drawing is drawn with: its own, or for one saved without
+    /// them, the settings that draw it as it was drawn.
+    pub(crate) fn projection_config(&self) -> std::borrow::Cow<'_, ProjectionConfig> {
+        match &self.projection {
+            Some(config) => std::borrow::Cow::Borrowed(config),
+            None => std::borrow::Cow::Owned(ProjectionConfig::legacy(self)),
+        }
     }
 
     /// Set the colour picked in a colour control. A price label's badge stays one colour, so its
