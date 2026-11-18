@@ -549,6 +549,7 @@ fn dialogs_expose_titles_and_label_their_fields() {
             },
             &[
                 (Role::ComboBox, "Price source"),
+                (Role::ComboBox, "Colour type"),
                 (Role::ComboBox, "Line style"),
                 (Role::SpinButton, "Line width"),
             ],

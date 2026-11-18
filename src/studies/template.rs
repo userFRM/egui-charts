@@ -558,6 +558,21 @@ impl StudyTemplate {
                     fill.visible = false;
                 }
             }
+            // An Elliott Wave saved before its swings could be sized by price counted bars, showed
+            // the developing wave and drew no projections or impulse drawings.
+            "Elliott Wave" if !has("swing_mode") => {
+                for (id, value) in [
+                    ("swing_mode", InputValue::Choice(0)),
+                    ("swing_move", InputValue::Number(5.0)),
+                    ("show_developing", InputValue::Toggle(true)),
+                    ("projections", InputValue::Toggle(false)),
+                    ("as_drawings", InputValue::Toggle(false)),
+                ] {
+                    if !has(id) {
+                        template.inputs.push((id.to_owned(), value));
+                    }
+                }
+            }
             // Chart patterns saved before developing boundaries had their own plot drew them
             // in its default style.
             "Continuation Chart Patterns" | "Reversal Chart Patterns"
@@ -1197,6 +1212,44 @@ mod tests {
                 vec![],
                 vec![("periods [0]", Length(3)), ("periods [11]", Length(60))],
             ),
+            // Saved before swings could be sized by price and the constructions drawn.
+            (
+                "Elliott Wave",
+                vec![
+                    ("left", Length(2)),
+                    ("right", Length(3)),
+                    ("history", Length(7)),
+                ],
+                vec![
+                    ("left", Length(2)),
+                    ("right", Length(3)),
+                    ("history", Length(7)),
+                    ("swing_mode", Choice(0)),
+                    ("swing_move", Number(5.0)),
+                    ("show_developing", Toggle(true)),
+                    ("projections", Toggle(false)),
+                    ("as_drawings", Toggle(false)),
+                ],
+            ),
+            (
+                "Elliott Wave",
+                vec![
+                    ("swing_mode", Choice(2)),
+                    ("swing_move", Number(2.5)),
+                    ("history", Length(7)),
+                    ("show_developing", Toggle(false)),
+                    ("projections", Toggle(true)),
+                    ("as_drawings", Toggle(true)),
+                ],
+                vec![
+                    ("swing_mode", Choice(2)),
+                    ("swing_move", Number(2.5)),
+                    ("history", Length(7)),
+                    ("show_developing", Toggle(false)),
+                    ("projections", Toggle(true)),
+                    ("as_drawings", Toggle(true)),
+                ],
+            ),
         ];
         let factory = IndicatorFactory::new();
         let periods = (0..7).map(|period| {
@@ -1266,6 +1319,12 @@ mod tests {
                 r#"{"name":"Missed Pivot Levels","inputs":[["left",{"Length":10}],["right",{"Length":10}],["tolerance",{"Number":0.1}],["max_levels",{"Length":20}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MissedPivots.html","plots":[{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[15,3,4,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
                 "left",
                 "Pivot left bars",
+            ),
+            // Saved before Elliott Wave gained its swing and display inputs.
+            (
+                r#"{"name":"Elliott Wave","inputs":[["left",{"Length":2}],["right",{"Length":3}],["history",{"Length":7}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ElliottWave.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Circles","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleUp","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                "left",
+                "Pivot bars left",
             ),
             (
                 r#"{"name":"LSMA","inputs":[["period",{"Length":25}],["offset",{"Integer":0}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.LSMA.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,

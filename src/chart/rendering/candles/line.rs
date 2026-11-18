@@ -15,7 +15,7 @@ use crate::model::{Bar, ChartTypeStyles, LinePlotStyle, LineType, PriceSource};
 
 /// `bars`, the first at `start_idx`, are the bars in view at `in_view` and the bar beyond each
 /// edge where there is one: the line runs through all of them, volume columns stand under the
-/// bars in view.
+/// bars in view. `gradient` holds the start and end colours of a line drawn in a gradient.
 pub(super) fn render_line(
     painter: &Painter,
     volume_ctx: &RenderContext,
@@ -30,6 +30,7 @@ pub(super) fn render_line(
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
     style: &LinePlotStyle,
+    gradient: Option<[Color32; 2]>,
     price_source: PriceSource,
 ) {
     let points: Vec<Pos2> = bars
@@ -43,7 +44,7 @@ pub(super) fn render_line(
         })
         .collect();
 
-    draw_bar_line(painter, bars, &points, style, false);
+    draw_bar_line(painter, bars, &points, style, gradient, false);
 
     if show_volume {
         render_volume_bars(
@@ -88,7 +89,7 @@ pub(super) fn render_line_with_markers(
         })
         .collect();
 
-    draw_bar_line(painter, bars, &points, style, false);
+    draw_bar_line(painter, bars, &points, style, None, false);
 
     for (point, bar) in points[in_view.clone()].iter().zip(&bars[in_view.clone()]) {
         if !bar.is_whitespace() {
@@ -140,7 +141,7 @@ pub(super) fn render_step_line(
             Pos2::new(x, price_scale.price_to_y(value))
         })
         .collect();
-    draw_bar_line(painter, bars, &points, style, true);
+    draw_bar_line(painter, bars, &points, style, None, true);
 
     if show_volume {
         render_volume_bars(
@@ -180,16 +181,52 @@ pub(super) fn draw_point_marker(painter: &Painter, point: Pos2, radius: f32, col
     );
 }
 
+/// The x of the first and the last bar of `bars` that a segment of their line starts at, `x`
+/// giving a bar's x from its index in `bars`: where a gradient's start and end colours lie.
+/// `None` when the line has no segment.
+pub(crate) fn gradient_span(bars: &[Bar], x: impl Fn(usize) -> f32) -> Option<(f32, f32)> {
+    let mut starts = valued_runs(bars).flat_map(|run| run.start..run.end - 1);
+    let first = starts.next()?;
+    Some((x(first), x(starts.last().unwrap_or(first))))
+}
+
+/// How far `x` lies from the start to the end of a gradient spanning `span`, from 0 to 1: 0 when
+/// the line has one segment or none, or when `x` is not a number.
+pub(crate) fn gradient_share(span: Option<(f32, f32)>, x: f32) -> f32 {
+    match span {
+        Some((first, last)) if last > first => {
+            let share = (x - first) / (last - first);
+            if share.is_nan() {
+                0.0
+            } else {
+                share.clamp(0.0, 1.0)
+            }
+        }
+        _ => 0.0,
+    }
+}
+
 /// Paint the line through `points`, one per bar of `bars`, with the chart type's own style: broken
-/// at whitespace bars, each segment in the [`line_color`] of the bar it starts at, and with
-/// `step`, across to the next bar first and then up or down to it.
+/// at whitespace bars, each segment in the [`line_color`] of the bar it starts at, or with
+/// `gradient`, a bar without a colour of its own taking the blend of its start and end colours at
+/// the bar's place between the first and the last segment, and with `step`, across to the next bar
+/// first and then up or down to it. One solid path per colour, which SVG export can write; dashes
+/// keep their phase from one colour to the next.
 pub(super) fn draw_bar_line(
     painter: &Painter,
     bars: &[Bar],
     points: &[Pos2],
     style: &LinePlotStyle,
+    gradient: Option<[Color32; 2]>,
     step: bool,
 ) {
+    let span = gradient.and_then(|_| gradient_span(bars, |at| points[at].x));
+    let color_at = |at: usize| match gradient {
+        Some([start, end]) if bars[at].colors.as_ref().and_then(|own| own.color).is_none() => {
+            start.lerp_to_gamma(end, gradient_share(span, points[at].x))
+        }
+        _ => line_color(&bars[at], style),
+    };
     for run in valued_runs(bars) {
         let path = if step {
             let mut path = vec![points[run.start]];
@@ -203,10 +240,11 @@ pub(super) fn draw_bar_line(
         };
         let mut path_from = 0;
         let mut from = run.start;
+        let mut phase = 0.0;
         while from + 1 < run.end {
-            let color = line_color(&bars[from], style);
+            let color = color_at(from);
             let to = (from + 1..run.end - 1)
-                .find(|&at| line_color(&bars[at], style) != color)
+                .find(|&at| color_at(at) != color)
                 .unwrap_or(run.end - 1);
             let path_to = path[path_from..]
                 .iter()
@@ -216,7 +254,7 @@ pub(super) fn draw_bar_line(
                 color,
                 ..style.clone()
             };
-            draw_styled_line(painter, path[path_from..=path_to].to_vec(), &style);
+            phase = draw_styled_line(painter, path[path_from..=path_to].to_vec(), &style, phase);
             path_from = path_to;
             from = to;
         }
@@ -309,16 +347,26 @@ pub(crate) fn render_last_price_pulse(painter: &Painter, point: Pos2, color: Col
     painter.circle_filled(point, dot, color);
 }
 
-/// Paint a line with the chart type's own style; dashes keep their phase through corners.
-pub(super) fn draw_styled_line(painter: &Painter, points: Vec<Pos2>, style: &LinePlotStyle) {
+/// Paint a line with the chart type's own style, its dashes starting `phase` into their pattern
+/// and keeping it through corners. Returns the phase they end at, so that a line painted in
+/// pieces keeps one pattern.
+pub(super) fn draw_styled_line(
+    painter: &Painter,
+    points: Vec<Pos2>,
+    style: &LinePlotStyle,
+    phase: f64,
+) -> f64 {
     if !style.width.is_finite() || style.width <= 0.0 {
-        return;
+        return phase;
     }
     let stroke = Stroke::new(style.width, style.color);
     if let Some((dash, gap)) = style.style.dash_pattern() {
-        crate::painting::dashed_line::draw_dashed_polyline(painter, &points, stroke, dash, gap);
+        crate::painting::dashed_line::draw_dashed_polyline_from(
+            painter, &points, stroke, dash, gap, phase,
+        )
     } else {
         painter.add(Shape::line(points, stroke));
+        phase
     }
 }
 
@@ -373,7 +421,7 @@ mod tests {
             ..Default::default()
         };
         let output = egui::Context::default().run_ui(Default::default(), |ui| {
-            draw_bar_line(ui.painter(), &bars, &all_points, &style, false);
+            draw_bar_line(ui.painter(), &bars, &all_points, &style, None, false);
         });
         let paths: Vec<_> = output
             .shapes

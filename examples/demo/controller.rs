@@ -9946,6 +9946,72 @@ mod tests {
         }
     }
 
+    /// A touch held on the plot shows its values after the hold delay, keeps them after the
+    /// finger lifts and clears them at the next tap.
+    #[test]
+    fn touch_hold_values_stay_after_release_until_the_next_tap() {
+        use eframe::App;
+        use egui::TouchPhase::{End, Start};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        settle(&mut app, &ctx);
+        let plot = app.chart.get_rendered_price_rect();
+        let pos = plot.center();
+        let touch = |phase| {
+            let mut events = vec![
+                egui::Event::Touch {
+                    device_id: egui::TouchDeviceId(1),
+                    id: egui::TouchId(1),
+                    phase,
+                    pos,
+                    force: None,
+                },
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: phase == Start,
+                    modifiers: Default::default(),
+                },
+            ];
+            if phase == End {
+                events.push(egui::Event::PointerGone);
+            }
+            events
+        };
+        // The demo keeps the default 500 ms hold delay.
+        for (time, events, shown) in [
+            (10.1, touch(Start), false),
+            (10.4, vec![], false),
+            (10.7, vec![], true),
+            (10.8, touch(End), true),
+            (10.9, vec![], true),
+            (11.4, touch(Start), true),
+            (11.5, touch(End), false),
+        ] {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            );
+            // Only the readout card paints an "Open" row; the status line writes "O 1.23".
+            let painted = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text)
+                    if text.galley.text() == "Open" && plot.contains(text.pos))
+            });
+            output.drop_without_applying_deltas();
+            assert_eq!(painted, shown, "time {time}");
+        }
+    }
+
     /// A day picked in the dialog is a day on the chart's clock. New York is five hours behind
     /// UTC in November, so its 10 November starts at 05:00 UTC, and the days 9 and 10 November
     /// run from 05:00 UTC on the 9th to 05:00 UTC on the 11th.
