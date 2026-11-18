@@ -114,8 +114,8 @@ impl Default for PaneLayout {
 }
 
 /// A change of a study's or drawing's place in the draw order of its pane. Each item is drawn
-/// over the ones before it. In the main pane the price series is one of the items. The set is closed: an
-/// item moves one step or all the way, to the front or to the back.
+/// over the ones before it. In the main pane the price series is one of the items. The set is
+/// closed: an item moves one step or all the way, to the front or to the back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VisualOrder {
     /// Draw over every other item of the pane.
