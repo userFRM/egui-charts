@@ -454,8 +454,13 @@ impl DrawingManager {
         }
     }
 
-    /// Apply a style edit to every unlocked selected drawing as one undo step.
-    pub fn edit_selected(&mut self, mut edit: impl FnMut(&mut Drawing)) {
+    /// Apply a style edit to every unlocked selected drawing as one undo step. An edit after which
+    /// saving would refuse one of them, as [`Self::edit_drawing`] describes, changes none of them,
+    /// records no undo step and returns the reason.
+    pub fn edit_selected(
+        &mut self,
+        mut edit: impl FnMut(&mut Drawing),
+    ) -> Result<(), &'static str> {
         let before: Vec<_> = self
             .drawings
             .iter()
@@ -464,10 +469,19 @@ impl DrawingManager {
             .map(|(index, d)| (index, d.clone()))
             .collect();
         if before.is_empty() {
-            return;
+            return Ok(());
         }
         for (index, old) in &before {
-            edit(&mut self.drawings[*index]);
+            let drawing = &mut self.drawings[*index];
+            edit(drawing);
+            if let Err(reason) = crate::drawings::validation::validate_edit(old, drawing) {
+                for (index, old) in &before {
+                    self.drawings[*index] = old.clone();
+                }
+                return Err(reason);
+            }
+        }
+        for (_, old) in &before {
             self.queue_edit(old);
         }
         self.painted
@@ -475,6 +489,7 @@ impl DrawingManager {
             .unwrap_or_else(|e| e.into_inner())
             .retain(|p| !before.iter().any(|(_, d)| d.id == p.id));
         self.history.push_snapshot(before);
+        Ok(())
     }
 
     /// Deselects all drawings.
@@ -908,9 +923,9 @@ mod tests {
         for bulk in [false, true] {
             let edit = |manager: &mut DrawingManager, change: fn(&mut Drawing)| {
                 if bulk {
-                    manager.edit_drawings(&[3], change);
+                    manager.edit_drawings(&[3], change).unwrap();
                 } else {
-                    manager.edit_drawing(3, change);
+                    manager.edit_drawing(3, change).unwrap();
                 }
             };
             let mut manager = DrawingManager::new();
@@ -930,7 +945,10 @@ mod tests {
             manager.end_drag_handle();
             manager.delete_drawing(3);
             edit(&mut manager, |d| d.font_size = 30.0);
-            manager.drag_edit_drawing(3, |d| d.font_size = 40.0);
+            assert_eq!(
+                manager.drag_edit_drawing(3, |d| d.font_size = 40.0),
+                Err("Drawing is locked")
+            );
             manager.end_drag_handle();
             assert_eq!(manager.drawings[0].font_size, 14.0);
             assert!(!manager.can_undo());
@@ -969,13 +987,15 @@ mod tests {
     #[test]
     fn bulk_edits_preserve_unrelated_host_changes_and_drawing_order() {
         for edit in [
-            (|m: &mut DrawingManager| m.edit_drawings(&[2], |d| d.folder = vec!["Analysis".into()]))
-                as fn(&mut DrawingManager),
-            |m| m.edit_drawings(&[2], |d| d.visible = false),
-            |m| m.edit_drawings(&[2], |d| d.locked = true),
+            (|m: &mut DrawingManager| {
+                m.edit_drawings(&[2], |d| d.folder = vec!["Analysis".into()])
+                    .unwrap();
+            }) as fn(&mut DrawingManager),
+            |m| m.edit_drawings(&[2], |d| d.visible = false).unwrap(),
+            |m| m.edit_drawings(&[2], |d| d.locked = true).unwrap(),
             |m| {
                 m.select(2);
-                m.edit_selected(|d| d.color = [255, 0, 0, 255]);
+                m.edit_selected(|d| d.color = [255, 0, 0, 255]).unwrap();
             },
             |m| m.set_group(&[2], Some("Group".into())),
         ] {
@@ -1124,14 +1144,15 @@ mod tests {
                 &["Save(1)"],
             ),
             (
-                |m| m.edit_drawing(0, |d| d.stroke_width = 3.0),
+                |m| m.edit_drawing(0, |d| d.stroke_width = 3.0).unwrap(),
                 &["Update(0)"],
             ),
             (
                 // A colour picker dragged over 120 frames is one undo step and one update.
                 |m| {
                     for red in 0..120 {
-                        m.drag_edit_drawing(0, |d| d.color = [red, 0, 0, 255]);
+                        m.drag_edit_drawing(0, |d| d.color = [red, 0, 0, 255])
+                            .unwrap();
                     }
                     m.end_drag_handle();
                     m.undo();
@@ -1142,7 +1163,8 @@ mod tests {
             (
                 |m| {
                     for i in 0..10_000 {
-                        m.edit_drawing(0, |d| d.stroke_width = 2.0 + (i % 2) as f32);
+                        m.edit_drawing(0, |d| d.stroke_width = 2.0 + (i % 2) as f32)
+                            .unwrap();
                     }
                     m.toggle_visibility_all();
                     m.toggle_lock_all();
@@ -1151,10 +1173,10 @@ mod tests {
             ),
             (
                 |m| {
-                    m.edit_drawing(0, |d| d.stroke_width = 2.0);
+                    m.edit_drawing(0, |d| d.stroke_width = 2.0).unwrap();
                     m.add_synced_drawing(line(1)).unwrap();
                     m.delete_drawing(1);
-                    m.edit_drawing(0, |d| d.stroke_width = 3.0);
+                    m.edit_drawing(0, |d| d.stroke_width = 3.0).unwrap();
                 },
                 &["Update(0)", "Save(1)", "Delete(1)"],
             ),
@@ -1290,11 +1312,13 @@ mod tests {
         assert!(manager.group_drawings("levels").next().is_none());
         assert!(manager.redo());
         assert_eq!(manager.group_drawings("levels").count(), 2);
-        manager.edit_selected(|drawing| {
-            if drawing.id == 1 {
-                drawing.selectable = false;
-            }
-        });
+        manager
+            .edit_selected(|drawing| {
+                if drawing.id == 1 {
+                    drawing.selectable = false;
+                }
+            })
+            .unwrap();
         assert_eq!(manager.sel_drawing(), Some(2));
         assert_eq!(manager.selected_ids().collect::<Vec<_>>(), [2]);
         assert!(manager.undo());

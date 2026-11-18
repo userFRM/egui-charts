@@ -135,7 +135,7 @@ impl ObjectTreePanel {
                     })
                     .map(|d| d.id)
                     .collect();
-                chart.drawings_mut().edit_drawings(&ids, |d| match action {
+                let _ = chart.drawings_mut().edit_drawings(&ids, |d| match action {
                     ObjectTreeAction::SetFolderVisible(_, _) => d.visible = *value,
                     _ => d.locked = *value,
                 });
@@ -145,7 +145,7 @@ impl ObjectTreePanel {
                     return false;
                 }
                 if !name.trim().is_empty() {
-                    chart
+                    let _ = chart
                         .drawings_mut()
                         .edit_drawing(*id, |d| d.label = Some(name.clone()));
                 }
@@ -193,7 +193,7 @@ impl ObjectTreePanel {
                 }
             }
             ObjectTreeAction::ToggleLock(id) => {
-                chart
+                let _ = chart
                     .drawings_mut()
                     .edit_drawing(*id, |d| d.locked = !d.locked);
             }
@@ -207,7 +207,7 @@ impl ObjectTreePanel {
                     .map(|d| d.id)
                     .collect();
                 for id in ids {
-                    chart.drawings_mut().edit_drawing(id, |d| d.locked = locked);
+                    let _ = chart.drawings_mut().edit_drawing(id, |d| d.locked = locked);
                 }
             }
             ObjectTreeAction::Delete(id) | ObjectTreeAction::RemoveIndicator(id) => {
@@ -356,8 +356,8 @@ fn set_visible(chart: &mut Chart, source: &SourceItem, visible: bool) -> bool {
     } else if source.is_drawing() {
         chart
             .drawings_mut()
-            .edit_drawing(source.id, |d| d.visible = visible);
-        true
+            .edit_drawing(source.id, |d| d.visible = visible)
+            .is_ok()
     } else {
         false
     }

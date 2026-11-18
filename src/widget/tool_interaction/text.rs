@@ -359,7 +359,7 @@ pub(super) fn show_editor(
                     _ => {}
                 }
             } else if !cancel && text != old {
-                manager.edit_drawing(editor.id, |d| {
+                let _ = manager.edit_drawing(editor.id, |d| {
                     if let Some(index) = editor.fib_level {
                         let mut config = d.fibonacci_config().into_owned();
                         if let Some(level) = config.levels.get_mut(index) {
@@ -473,7 +473,7 @@ pub(super) fn show_editor(
                 )
                 && is_address(address))
             .then(|| PostLink::new(address));
-            manager.edit_drawing(editor.id, |drawing| {
+            let _ = manager.edit_drawing(editor.id, |drawing| {
                 drawing.text = post.is_none().then_some(editor.draft);
                 drawing.post = post;
             });
@@ -1090,7 +1090,8 @@ mod tests {
             assert_eq!(chart.drawings().sel_drawing(), Some(id), "{tool:?}");
             chart
                 .drawings_mut()
-                .edit_drawing(id, |drawing| drawing.locked = true);
+                .edit_drawing(id, |drawing| drawing.locked = true)
+                .unwrap();
             for _ in 0..2 {
                 step(
                     &mut chart,
@@ -1107,10 +1108,13 @@ mod tests {
             );
             assert_eq!(chart.drawings().drawings[0].text.as_deref(), Some(expected));
             if tool == DrawingToolType::AnchoredNote {
-                chart.drawings_mut().edit_drawing(id, |drawing| {
-                    drawing.locked = false;
-                    drawing.marker.show_text = false;
-                });
+                chart
+                    .drawings_mut()
+                    .edit_drawing(id, |drawing| {
+                        drawing.locked = false;
+                        drawing.marker.show_text = false;
+                    })
+                    .unwrap();
                 // Long enough for the next click to start a new double click.
                 for _ in 0..5 {
                     step(&mut chart, vec![]);
