@@ -43,7 +43,7 @@ fn fixed_categories(options: &ChartOptions) -> Vec<(&'static str, Vec<Entry>)> {
     };
     let key = |key, modifiers| Keys::Shortcut(KeyboardShortcut::new(modifiers, key));
     let none = Modifiers::NONE;
-    let pointer = |modifiers, action| Keys::Pointer(modifiers, action);
+    let pointer = Keys::Pointer;
     let (command, shift) = (Modifiers::COMMAND, Modifiers::SHIFT);
     let scroll = options.handle_scroll;
     vec![
