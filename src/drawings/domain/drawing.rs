@@ -330,8 +330,9 @@ pub struct Drawing {
     pub middle_line: MiddleLineStyle,
     /// Whether the tool's default line, level and text colours are drawn in the nearest shade
     /// that keeps 4:1 contrast on the active theme's chart and panel. New drawings start with
-    /// it on; drawings and saved defaults stored without it load with it off and draw in their
-    /// stored colours.
+    /// it on, except projections, which keep their specified greys until shading is enabled.
+    /// Drawings and saved defaults stored without it load with it off and draw in their stored
+    /// colours.
     #[serde(default)]
     pub theme_shade: bool,
     /// Frame size and opacity of the image tool; `None` uses the defaults.
@@ -398,7 +399,7 @@ pub(crate) enum ColorSlot {
     Text,
     /// A level by list and value: Fibonacci levels (0) and time levels (1), pitchfork levels
     /// (2), Gann price levels (3), time levels (4), fan lines (5) and arcs (6), and the upper (7)
-    /// and lower (8) lines of the anchored VWAP bands by index.
+    /// and lower (8) lines of the anchored VWAP bands by index, and projection levels (9).
     Level(u8, f32),
 }
 
@@ -694,7 +695,7 @@ impl Drawing {
             channel_midline: tool_type == DrawingToolType::ParallelChannel,
             anchor_price_style: None,
             middle_line: MiddleLineStyle::default(),
-            theme_shade: true,
+            theme_shade: tool_type != DrawingToolType::ProjectionTool,
             image: None,
             closed: false,
             gann: None,
@@ -829,6 +830,11 @@ impl Drawing {
             }
             for level in config.time_levels.iter_mut().flatten() {
                 visit(ColorSlot::Level(1, level.value), &mut level.color);
+            }
+        }
+        if let Some(config) = &mut self.projection {
+            for level in &mut config.levels {
+                visit(ColorSlot::Level(9, level.coefficient), &mut level.color);
             }
         }
         if let Some(config) = &mut self.pitchfork {

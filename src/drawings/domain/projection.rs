@@ -110,6 +110,10 @@ mod tests {
     fn projection_settings_reach_templates_and_tool_defaults() {
         let mut drawing = Drawing::new(0, DrawingToolType::ProjectionTool);
         assert_eq!(drawing.color, [156, 156, 156, 255]);
+        assert!(
+            !drawing.theme_shade,
+            "new projections paint their specified greys"
+        );
         let config = drawing.projection.as_mut().unwrap();
         assert_eq!(config.levels[0].color, [128, 128, 128, 255]);
         assert_eq!(config.levels[0].line_style, LineStyle::Solid);

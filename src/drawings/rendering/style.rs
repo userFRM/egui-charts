@@ -1216,7 +1216,16 @@ mod tests {
         let mut chosen = Drawing::new(1, FlatTopBottom);
         chosen.set_line_color([255, 200, 0, 255]);
         let flat = Some(Color32::from_rgba_unmultiplied(255, 152, 0, 51));
+        let mut projection = Drawing::new(1, ProjectionTool);
+        projection.theme_shade = true;
         let cases = [
+            (
+                Theme::light(),
+                projection,
+                vec![rgb(127, 127, 127)],
+                Some(rgb(128, 128, 128)),
+                Some(Color32::from_rgba_unmultiplied(41, 98, 255, 51)),
+            ),
             (
                 Theme::light(),
                 Drawing::new(1, FlatTopBottom),
