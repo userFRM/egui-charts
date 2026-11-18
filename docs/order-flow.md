@@ -125,9 +125,9 @@ shared row owners; exported images preserve the recorded values and partial mark
 A shared owner can serve several charts. Admission validates its clock, grid, rows, totals and
 exclusive execution cutoff when each page is accepted. Of the shared page's bars, only an
 unfinished boundary is copied into mutable rows; subsequent live trades use the existing accumulator.
-The owner must remain unchanged, and reading it must not allocate or perform I/O. Footprint
-cells, statistics and annotations use the same complete bars,
-including valid history before a missing join.
+The owner must remain unchanged, and reading it must not allocate or perform I/O.
+Complete-only statistics and annotations use the same complete bars, including valid history
+before a missing join. Only the cell painter additionally displays explicitly partial rows.
 [`Footprint::bars()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Footprint.html#method.bars)
 keeps its existing owned
 store API. Fixed range and anchored volume profile drawings also read these shared rows through

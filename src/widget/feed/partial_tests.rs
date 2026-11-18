@@ -579,7 +579,8 @@ fn partial_marker_replaces_poc_value_area_and_imbalance_highlights() {
     use egui::{Color32, Shape};
     let mut trades = Vec::new();
     for minute in 0..2 {
-        // POC 102, value-area edges 100.5/104.5, with both diagonal imbalances at 102.
+        // POC 102; the two-row value area spans 102–104 (edges 101.5/104.5).
+        // Both diagonal imbalances are at 102.
         for (price, sell, buy) in [
             (104.0, 10.0, 50.0),
             (103.0, 10.0, 10.0),
@@ -702,7 +703,7 @@ fn partial_marker_replaces_poc_value_area_and_imbalance_highlights() {
                             output.shapes.iter().any(|s| matches!(
                             &s.shape, Shape::LineSegment { points, stroke }
                                 if stroke.color == config.text_color
-                                    && (points[0].y - mapping.price_to_y(100.5)).abs() <= 1.0
+                                    && (points[0].y - mapping.price_to_y(101.5)).abs() <= 1.0
                         ))
                         } else {
                             mesh_has(config.neutral_color.gamma_multiply(0.12))
