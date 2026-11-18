@@ -637,6 +637,8 @@ impl Chart {
                         | crate::scales::PriceScaleMode::IndexedTo100
                 ) {
                     panel.price_formatter = self.percentage_formatter.clone();
+                } else if let Some(id) = id {
+                    panel.price_formatter = self.study_formatter(id, indicator.value_format());
                 }
                 panel.axis_rect = axes
                     .iter()

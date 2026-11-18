@@ -7,7 +7,8 @@
 //!
 //! [`Indicator::candles`] holds two candles per bar: first a block from the high to the low on
 //! plot 0 ("Wicks"), then the body from the open to the close on plot 1 ("Up") or 2 ("Down"),
-//! painted over the block. The output columns hold each bar's close in the up or down column.
+//! painted over the block; both are solid, in their plot colours, with no outline and no wick
+//! line. The output columns hold each bar's close in the up or down column.
 //!
 //! # Example
 //! ```
@@ -118,6 +119,10 @@ impl Indicator for BollingerBars {
         &self.candles
     }
 
+    fn solid_candles(&self) -> bool {
+        true
+    }
+
     fn colors(&self) -> Vec<Color32> {
         self.colors.to_vec()
     }
@@ -187,5 +192,95 @@ mod tests {
                 (3..4, 1, [10.0, 10.0, 10.0, 10.0]),
             ]
         );
+    }
+
+    /// The widget paints solid blocks followed by solid bodies, in default or edited colours,
+    /// without an outline or a wick line through either rectangle.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn widget_paints_solid_blocks_and_bodies_in_plot_colours() {
+        use crate::model::BarData;
+        use crate::widget::{Chart, SeriesId, test_frames::shapes};
+        use egui::Shape;
+
+        for (edit, colors) in [
+            (
+                false,
+                [Color32::from_rgb(13, 52, 158), palette::UP, palette::DOWN],
+            ),
+            (
+                true,
+                [
+                    Color32::from_rgb(200, 100, 0),
+                    Color32::from_rgb(0, 200, 100),
+                    Color32::from_rgb(100, 0, 200),
+                ],
+            ),
+        ] {
+            let data = [[10.0, 12.0, 9.0, 11.0], [11.0, 11.5, 8.0, 9.0]]
+                .into_iter()
+                .enumerate()
+                .map(|(day, [o, h, l, c])| {
+                    let time = Utc
+                        .timestamp_opt(1_700_000_000 + day as i64 * 86_400, 0)
+                        .unwrap();
+                    Bar::new(time, o, h, l, c, 1.0)
+                })
+                .collect();
+            let mut chart = Chart::new(BarData::from_bars(data));
+            // The chart's own candles draw wick lines in the up and down colours.
+            assert!(chart.set_series_visible(SeriesId::MAIN, false));
+            let id = chart.add_indicator(Box::new(BollingerBars::new()));
+            if edit {
+                let study = chart.indicator_mut(id).unwrap();
+                let mut settings = study.settings();
+                for (plot, color) in settings.plots.iter_mut().zip(colors) {
+                    plot.color = color;
+                }
+                study.apply_settings(&[], settings).unwrap();
+            }
+            let painted = shapes(&egui::Context::default(), &mut chart, 0.0, Vec::new());
+            let mut blocks: Vec<_> = painted
+                .iter()
+                .enumerate()
+                .filter_map(|(index, shape)| match shape {
+                    Shape::Rect(rect) if rect.fill == colors[0] => Some((index, rect)),
+                    _ => None,
+                })
+                .collect();
+            blocks.sort_by(|(_, a), (_, b)| a.rect.left().total_cmp(&b.rect.left()));
+            assert_eq!(blocks.len(), 2, "edit {edit}: one block per bar");
+            let mut bodies = Vec::new();
+            for &(block_index, block) in &blocks {
+                for (index, shape) in painted.iter().enumerate() {
+                    if let Shape::Rect(body) = shape
+                        && colors[1..].contains(&body.fill)
+                        && body.rect.x_range() == block.rect.x_range()
+                        && block.rect.y_range().contains(body.rect.top())
+                    {
+                        assert!(
+                            index > block_index,
+                            "edit {edit}: body must cover its block"
+                        );
+                        bodies.push(body);
+                    }
+                    if let Shape::LineSegment { points, stroke } = shape {
+                        assert!(
+                            !colors.contains(&stroke.color)
+                                || !points.iter().all(|p| block.rect.x_range().contains(p.x)),
+                            "edit {edit}: line crossing a block"
+                        );
+                    }
+                }
+            }
+            assert_eq!(
+                bodies.iter().map(|body| body.fill).collect::<Vec<_>>(),
+                colors[1..],
+                "edit {edit}: up then down bodies"
+            );
+            for rect in blocks.into_iter().map(|(_, rect)| rect).chain(bodies) {
+                assert!(rect.stroke.is_empty(), "edit {edit}: outlined rectangle");
+            }
+        }
     }
 }
