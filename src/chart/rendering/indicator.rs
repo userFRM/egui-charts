@@ -461,9 +461,7 @@ impl IndicatorRenderer {
                 let after = (source_end..values.len()).find(|&i| defined(i));
                 // A value beyond one edge joins the path through a value in view or beyond the
                 // other edge; alone it would carry the plot's label into a view it is not in.
-                if before.is_some() == after.is_some()
-                    || (source_start..source_end).any(|i| defined(i))
-                {
+                if before.is_some() == after.is_some() || (source_start..source_end).any(defined) {
                     before.unwrap_or(source_start)..after.map_or(source_end, |i| i + 1)
                 } else {
                     source_start..source_end
@@ -1323,8 +1321,8 @@ mod tests {
     fn fit_label_stays_hidden_while_the_channel_is_out_of_view() {
         let bars: Vec<_> = (0..12)
             .map(|i| {
-                let close = 10.0 + i as f64;
-                Bar::new(Utc.timestamp_opt(i, 0).unwrap(), close, close, close, close, 1.0)
+                let c = 10.0 + i as f64;
+                Bar::new(Utc.timestamp_opt(i, 0).unwrap(), c, c, c, c, 1.0)
             })
             .collect();
         let mut study = LinearRegressionChannel::new(3, 0.0);
