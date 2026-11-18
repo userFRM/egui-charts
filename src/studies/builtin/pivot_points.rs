@@ -785,6 +785,18 @@ impl Indicator for PivotPoints {
         self.colors.clone()
     }
 
+    fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
+        crate::studies::PlotStyle {
+            color: self.colors().get(line).copied().unwrap_or(Color32::WHITE),
+            width: self.line_style(line).width,
+            pattern: crate::model::LineStyle::Solid,
+            // A level's change at a new period is not drawn, so the line breaks at a gap rather
+            // than join two levels.
+            plot_type: crate::studies::PlotType::LineWithBreaks,
+            visible: true,
+        }
+    }
+
     /// Sets the colors line by line; lines without a color keep theirs.
     fn set_colors(&mut self, colors: Vec<Color32>) {
         for (line, color) in self.colors.iter_mut().zip(colors) {

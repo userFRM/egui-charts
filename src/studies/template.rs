@@ -1095,17 +1095,21 @@ mod tests {
         let filled = StudyTemplate::from_study(&bands).create().unwrap();
         assert_eq!(filled.fills().len(), 2);
 
-        // A Correlation Coefficient opens as an area. Saved as a line, it restores as that line.
+        // A Correlation Coefficient opens as an area with breaks. Saved as a line, which then
+        // broke at every gap, it restores as that line with breaks.
         let fresh =
             ConfiguredStudy::new(Box::new(crate::studies::Correlation::default())).settings();
-        assert_eq!(fresh.plots[0].plot_type, crate::studies::PlotType::Area);
+        assert_eq!(
+            fresh.plots[0].plot_type,
+            crate::studies::PlotType::AreaWithBreaks
+        );
         let restored = serde_json::from_str::<StudyTemplate>(CORRELATION_ZERO_GUIDE)
             .unwrap()
             .create()
             .unwrap();
         assert_eq!(
             restored.settings().plots[0].plot_type,
-            crate::studies::PlotType::Line
+            crate::studies::PlotType::LineWithBreaks
         );
 
         // An auto anchored VWAP as a chart saved it before the study had bands, its line edited

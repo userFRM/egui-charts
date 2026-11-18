@@ -6,24 +6,50 @@ use crate::model::{Bar, Instrument, Timeframe};
 use egui::Color32;
 
 /// Geometry for one output line.
+///
+/// Line, step line, step line with diamonds and area join the defined values on either side of
+/// missing ones; the types with breaks leave a gap there instead.
+///
+/// Saved settings name the joined line, step line and area `JoinedLine`, `JoinedStepLine` and
+/// `JoinedArea`. `Line`, `StepLine` and `Area` name the types with breaks, the drawing every
+/// line, step line and area had before joined types existed, so earlier saves draw as they did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum PlotType {
-    /// Connected values, broken at missing bars.
+    /// Connected values, joined across missing bars.
     #[default]
+    #[serde(rename = "JoinedLine")]
     Line,
+    /// Connected values, broken at missing bars.
+    #[serde(rename = "Line")]
+    LineWithBreaks,
     /// Bars from zero to the output value.
     Histogram,
     /// A circle at each defined value.
     Circles,
-    /// Horizontal segments followed by a vertical change at the next bar.
+    /// Horizontal segments followed by a vertical change at the next defined value, joined
+    /// across missing bars.
+    #[serde(rename = "JoinedStepLine")]
     StepLine,
+    /// Horizontal segments followed by a vertical change at the next bar, broken at missing
+    /// bars.
+    #[serde(rename = "StepLine")]
+    StepLineWithBreaks,
+    /// A step line joined across missing bars, with a diamond at its first value and at each
+    /// change of value.
+    StepLineWithDiamonds,
     /// Columns from zero, at 80% of the bar pitch.
     Columns,
     /// A plus at each defined value.
     Crosses,
-    /// A line along the values over a fill of its colour at 20% of its opacity down to zero.
+    /// A line along the values over a fill of its colour at 20% of its opacity down to zero,
+    /// joined across missing bars.
+    #[serde(rename = "JoinedArea")]
     Area,
+    /// A line along the values over a fill of its colour at 20% of its opacity down to zero,
+    /// broken at missing bars.
+    #[serde(rename = "Area")]
+    AreaWithBreaks,
     /// An upward triangle centred on each defined value.
     TriangleUp,
     /// A downward triangle centred on each defined value.
@@ -36,12 +62,16 @@ pub enum PlotType {
 
 impl PlotType {
     /// Every plot type, in the order a style editor lists them.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 15] = [
         Self::Line,
+        Self::LineWithBreaks,
         Self::StepLine,
+        Self::StepLineWithBreaks,
+        Self::StepLineWithDiamonds,
         Self::Histogram,
         Self::Columns,
         Self::Area,
+        Self::AreaWithBreaks,
         Self::Circles,
         Self::Crosses,
         Self::TriangleUp,
@@ -54,10 +84,14 @@ impl PlotType {
     pub fn name(self) -> &'static str {
         match self {
             Self::Line => "Line",
+            Self::LineWithBreaks => "Line with breaks",
             Self::StepLine => "Step line",
+            Self::StepLineWithBreaks => "Step line with breaks",
+            Self::StepLineWithDiamonds => "Step line with diamonds",
             Self::Histogram => "Histogram",
             Self::Columns => "Columns",
             Self::Area => "Area",
+            Self::AreaWithBreaks => "Area with breaks",
             Self::Circles => "Circles",
             Self::Crosses => "Crosses",
             Self::TriangleUp => "Triangle up",
@@ -75,12 +109,25 @@ impl PlotType {
             Self::BarColor if !overlay => {
                 Some("Bar colour repaints the price bars, so the study must be on the price chart.")
             }
-            Self::Histogram | Self::Columns | Self::Area if overlay && price_scale => Some(
-                "This type draws from zero, which is far from the prices on the price scale. \
-                 Give the study its own scale first.",
-            ),
+            Self::Histogram | Self::Columns | Self::Area | Self::AreaWithBreaks
+                if overlay && price_scale =>
+            {
+                Some(
+                    "This type draws from zero, which is far from the prices on the price scale. \
+                     Give the study its own scale first.",
+                )
+            }
             _ => None,
         }
+    }
+
+    /// Whether the plot joins the defined values on either side of missing ones.
+    #[cfg(feature = "widget")]
+    pub(crate) fn joins_gaps(self) -> bool {
+        matches!(
+            self,
+            Self::Line | Self::StepLine | Self::StepLineWithDiamonds | Self::Area
+        )
     }
 }
 
@@ -2295,6 +2342,30 @@ mod tests {
             settings.plots[0].plot_type = PlotType::Area;
             study.apply_settings(&[], settings).unwrap();
             assert_eq!(study.plot_style(0).plot_type, PlotType::Area, "{name}");
+        }
+    }
+
+    /// Settings saved before joined types existed name the types with breaks `Line`, `StepLine`
+    /// and `Area`, so they restore with the gaps they were drawn with; the joined types save
+    /// under names of their own.
+    #[test]
+    fn plot_types_keep_their_saved_names() {
+        for (saved, plot_type) in [
+            ("Line", PlotType::LineWithBreaks),
+            ("StepLine", PlotType::StepLineWithBreaks),
+            ("Area", PlotType::AreaWithBreaks),
+            ("JoinedLine", PlotType::Line),
+            ("JoinedStepLine", PlotType::StepLine),
+            ("JoinedArea", PlotType::Area),
+            ("StepLineWithDiamonds", PlotType::StepLineWithDiamonds),
+        ] {
+            let json = format!("\"{saved}\"");
+            assert_eq!(
+                serde_json::from_str::<PlotType>(&json).unwrap(),
+                plot_type,
+                "{saved}"
+            );
+            assert_eq!(serde_json::to_string(&plot_type).unwrap(), json, "{saved}");
         }
     }
 
