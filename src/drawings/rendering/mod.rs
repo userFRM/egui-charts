@@ -104,8 +104,8 @@ pub struct ChartView<'a> {
     /// flow.push(&Tick::new(time, 100.0, 2.0, None))?;
     /// let bars = [Bar::new(time, 100.0, 100.0, 100.0, 100.0, 2.0)];
     /// let view = ChartView {
-    ///     price_formatter: None, thousands_sep: None, time_formatter: None, instrument: None, bar_seconds: 60,
-    ///     bars: &bars, revision: 0, bar_to_x: &|x| x, bar_spacing: 1.0,
+    ///     price_formatter: None, thousands_sep: None, time_formatter: None, instrument: None,
+    ///     bar_seconds: 60, bars: &bars, revision: 0, bar_to_x: &|x| x, bar_spacing: 1.0,
     ///     price_to_y: &|price| price as f32, y_to_price: &f64::from, time_axis: true,
     ///     executions: Some((&flow).into()), timeframe: Some(Timeframe::Min1), finer: &[],
     /// };

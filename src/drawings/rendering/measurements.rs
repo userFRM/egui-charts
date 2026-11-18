@@ -373,9 +373,9 @@ impl Drawing {
 
     /// Label of the measuring tools: the price change from the first anchor to the second in
     /// `price_formatter`'s text, else the instrument's price decimals (by magnitude without them)
-    /// with thousands grouped by `thousands_sep`,
-    /// its percentage and its whole number of pips, or else ticks, the bars between them and,
-    /// on a `time_axis`, the time they span, and the volume traded over them.
+    /// with thousands grouped by `thousands_sep`, its percentage and its whole number of pips, or
+    /// else ticks, the bars between them and, on a `time_axis`, the time they span, and the volume
+    /// traded over them.
     /// Volume drops trailing zeros. Each anchor counts at its nearest bar: anchors N bars apart
     /// span N bars of time and the volume of the N + 1 bars from one to the other, both included.
     pub(crate) fn measurement_label(
