@@ -761,11 +761,10 @@ mod tests {
                         segments.push((vertical, across, a.distance(*b), stroke.width));
                     }
                     Shape::Mesh(mesh) => {
-                        for quad in mesh.vertices.chunks_exact(4) {
+                        for quad in mesh.vertices.as_chunks::<4>().0 {
                             if quad.iter().all(|vertex| vertex.color == color) {
-                                let corners: Vec<Pos2> =
-                                    quad.iter().map(|vertex| vertex.pos).collect();
-                                let centre = Rect::from_points(&corners).center();
+                                let centre =
+                                    Rect::from_points(&quad.map(|vertex| vertex.pos)).center();
                                 if rect.contains(centre) {
                                     dots.push(centre);
                                 }
