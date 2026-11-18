@@ -738,12 +738,13 @@ impl PriceMap {
         })
     }
 
-    /// Supplied price decimals, or `None` to derive them from the tick step.
+    /// Supplied price decimals, at most 12, or `None` to derive them from the tick step.
     /// Percentage and indexed axes keep their own precision.
     pub fn price_precision(&self) -> Option<usize> {
         match self.transform.mode {
             PriceScaleMode::Normal | PriceScaleMode::Logarithmic => {
-                self.price_precision.map(usize::from)
+                let cap = super::price_formatter::MAX_PRICE_DECIMALS;
+                self.price_precision.map(|decimals| usize::from(decimals).min(cap))
             }
             _ => None,
         }
