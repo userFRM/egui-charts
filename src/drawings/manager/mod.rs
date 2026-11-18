@@ -345,7 +345,7 @@ impl DrawingManager {
 
     /// Creates a new `DrawingManager` with default options and empty drawing list.
     pub fn new() -> Self {
-        Self {
+        let mut manager = Self {
             registry: Default::default(),
             active_custom_tool: None,
             drawings: Vec::new(),
@@ -382,7 +382,9 @@ impl DrawingManager {
             pending_sync: Arc::new(Mutex::new(Vec::new())),
             sync_enabled: true,
             identity: crate::model::next_revision(),
-        }
+        };
+        manager.update_snap_options();
+        manager
     }
 
     /// Apply the host's tool, snapping, color, eraser and selection state. A state with both
@@ -1391,19 +1393,20 @@ mod tests {
         assert_eq!(manager.hit_test(click), Some(11));
     }
 
-    /// The magnet snaps to a drawing anchor, excluding members of the group being dragged.
+    /// The magnet snaps to a drawing anchor within the default distance, excluding members of
+    /// the group being dragged.
     #[test]
     fn magnet_snaps_to_anchors_except_the_group_being_dragged() {
         let mut manager = DrawingManager::new();
         manager.options.magnet_mode = true;
-        manager.update_snap_options();
 
         let mut d = Drawing::new(1, DrawingToolType::TrendLine);
         d.points = vec![Pos2::new(100.0, 100.0), Pos2::new(200.0, 200.0)];
         let drawings = vec![d];
 
-        // A pointer near the first anchor snaps to it under magnet mode.
-        let snapped = manager.snap_point(Pos2::new(103.0, 102.0), &drawings);
+        // A pointer just inside the default distance of the first anchor snaps to it.
+        let reach = manager.options.magnet_distance - 1.0;
+        let snapped = manager.snap_point(Pos2::new(100.0 + reach, 100.0), &drawings);
         assert_eq!(snapped, Pos2::new(100.0, 100.0));
 
         // A group being translated cannot magnetize to another member's old position.
