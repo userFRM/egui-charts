@@ -310,7 +310,8 @@ pub(crate) fn mapped_drawings(
     price_to_y: impl Fn(f64) -> f32,
 ) -> Vec<crate::drawings::Drawing> {
     let style = study.plot_style(0);
-    if !style.visible {
+    let styled = study.drawings_use_plot_style();
+    if styled && !style.visible {
         return Vec::new();
     }
     study
@@ -319,9 +320,11 @@ pub(crate) fn mapped_drawings(
         .filter(|drawing| drawing.visible)
         .map(|drawing| {
             let mut drawing = drawing.clone();
-            drawing.color = style.color.to_srgba_unmultiplied();
-            drawing.stroke_width = style.width;
-            drawing.line_style = style.pattern;
+            if styled {
+                drawing.color = style.color.to_srgba_unmultiplied();
+                drawing.stroke_width = style.width;
+                drawing.line_style = style.pattern;
+            }
             // A study builds its drawings again on every calculation, so a theme shade would
             // recolour the studies saved before it; they draw the colours their inputs set.
             drawing.theme_shade = false;
