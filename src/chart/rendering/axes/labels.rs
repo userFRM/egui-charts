@@ -505,11 +505,6 @@ pub fn render_time_labels(
 ) {
     let font = axis_font(context.painter.ctx());
     let theme = context.painter.ctx().active_theme();
-    let text_color = if colors.text == theme.chart.axis_text {
-        theme.chart.axis_text_secondary
-    } else {
-        colors.text
-    };
 
     // Track last rendered label position to prevent overlap
     let min_label_spacing = min_time_label_spacing(options); // Min pixels between label centers
@@ -548,12 +543,12 @@ pub fn render_time_labels(
                 .painter
                 .layout_job(egui::text::LayoutJob::single_section(
                     mark.label,
-                    semibold(font.clone(), text_color),
+                    semibold(font.clone(), colors.text),
                 ))
         } else {
             context
                 .painter
-                .layout_no_wrap(mark.label, font.clone(), text_color)
+                .layout_no_wrap(mark.label, font.clone(), colors.text)
         };
         let rect = egui::Align2::CENTER_CENTER.anchor_size(Pos2::new(x, y), galley.size());
         if rect.left() >= context.rect.left()
@@ -567,10 +562,10 @@ pub fn render_time_labels(
                         Pos2::new(x, context.rect.bottom()),
                         Pos2::new(x, context.rect.bottom() + AXIS_TICK_LENGTH),
                     ],
-                    egui::Stroke::new(1.0, text_color),
+                    egui::Stroke::new(1.0, colors.text),
                 ));
             }
-            labels.push(Shape::galley(rect.min, galley, text_color));
+            labels.push(Shape::galley(rect.min, galley, colors.text));
         }
 
         last_label_x = Some(x);
@@ -1544,7 +1539,11 @@ mod tests {
         use egui::Color32;
 
         for (name, theme) in presets() {
-            for custom in [None, Some(Color32::from_rgb(170, 40, 190))] {
+            for custom in [
+                None,
+                Some(Color32::from_rgb(170, 40, 190)),
+                Some(theme.chart.axis_text),
+            ] {
                 let ctx = Context::default();
                 apply_to_egui(&ctx, &theme);
                 let mut chart = chart(&[100.0], &[200.0]);
@@ -1595,7 +1594,7 @@ mod tests {
                         text.galley.text()
                     );
                 }
-                let expected = custom.unwrap_or(theme.chart.axis_text_secondary);
+                let expected = custom.unwrap_or(theme.chart.axis_text);
                 assert!(
                     ticks.iter().all(|text| text.fallback_color == expected),
                     "{name}: {custom:?}"

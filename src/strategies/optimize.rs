@@ -27,8 +27,10 @@ pub struct StrategyTrial {
 ///
 /// Values run in the supplied order, with the last input varying fastest. No inputs means
 /// one unmodified trial; any input with no values means no trials. Duplicate ids yield
-/// `Err("duplicate strategy input")`. A rejected assignment yields the strategy's exact
-/// [`Strategy::set_input`] error without running that trial. Either error ends the iterator.
+/// `Err("duplicate strategy input")`, and an assignment [`Strategy::set_input`] rejects yields
+/// its exact error; either ends the iterator without running that trial. A combination
+/// [`Strategy::validate_inputs`] refuses yields its error in place of that trial, which does
+/// not run, and iteration continues with the next combination.
 /// `lower` has the same meaning as in [`Backtest::run`]; pass `&[]` for chart bars alone.
 ///
 /// # Panics
@@ -82,7 +84,11 @@ pub fn optimise<'a>(
             }
             values.push((id.clone(), value));
         }
-        let performance = backtest.run(strategy.as_mut(), bars, lower).performance();
+        // A combination refused as a whole is skipped without a run; the next one follows.
+        let trial = strategy.validate_inputs().map(|()| StrategyTrial {
+            inputs: values,
+            performance: backtest.run(strategy.as_mut(), bars, lower).performance(),
+        });
         finished = true;
         for i in (0..indices.len()).rev() {
             indices[i] += 1;
@@ -92,10 +98,7 @@ pub fn optimise<'a>(
             }
             indices[i] = 0;
         }
-        Some(Ok(StrategyTrial {
-            inputs: values,
-            performance,
-        }))
+        Some(trial)
     })
 }
 
@@ -131,6 +134,14 @@ mod tests {
                 return Err("hold must be positive");
             }
             *target = value;
+            Ok(())
+        }
+
+        // A rule joining two inputs, as zone levels have.
+        fn validate_inputs(&self) -> Result<(), &'static str> {
+            if self.entry > self.hold {
+                return Err("entry must not exceed hold");
+            }
             Ok(())
         }
 
@@ -254,39 +265,38 @@ mod tests {
     fn empty_grids_and_rejected_inputs_end_iteration_without_extra_runs() {
         let bars = source();
         let backtest = Backtest::new("Grid", "TEST", Timeframe::Min1, 1_000.0);
-        for (grid, expected_runs, error) in [
-            (vec![], 1, None),
-            (vec![axis("entry", &[])], 0, None),
-            (vec![axis("entry", &[0, 1, 2]), axis("hold", &[])], 0, None),
+        for (grid, items) in [
+            (vec![], vec![Ok(())]),
+            (vec![axis("entry", &[])], vec![]),
+            (vec![axis("entry", &[0, 1, 2]), axis("hold", &[])], vec![]),
             (
                 vec![axis("unknown", &[0]), axis("hold", &[1])],
-                0,
-                Some("unknown timed input"),
+                vec![Err("unknown timed input")],
             ),
             (
                 vec![axis("entry", &[0, 1]), axis("unknown", &[1])],
-                0,
-                Some("unknown timed input"),
+                vec![Err("unknown timed input")],
             ),
             (
                 vec![("hold".into(), vec![InputValue::Toggle(true)])],
-                0,
-                Some("expected a length"),
+                vec![Err("expected a length")],
             ),
             (
                 vec![axis("hold", &[0, 1])],
-                0,
-                Some("hold must be positive"),
+                vec![Err("hold must be positive")],
             ),
             (
                 vec![axis("hold", &[1, 0, 2])],
-                1,
-                Some("hold must be positive"),
+                vec![Ok(()), Err("hold must be positive")],
             ),
             (
                 vec![axis("hold", &[1, 2]), axis("hold", &[2])],
-                0,
-                Some("duplicate strategy input"),
+                vec![Err("duplicate strategy input")],
+            ),
+            // A combination refused as a whole is skipped, and the next one still runs.
+            (
+                vec![axis("entry", &[20, 40]), axis("hold", &[30, 70])],
+                vec![Ok(()), Ok(()), Err("entry must not exceed hold"), Ok(())],
             ),
         ] {
             let runs = AtomicUsize::new(0);
@@ -298,14 +308,10 @@ mod tests {
             };
             let mut trials = optimise(|| Box::new(base.clone()), &backtest, &bars, &[], &grid);
             assert_eq!(base.runs.load(Ordering::SeqCst), 0);
-            for _ in 0..expected_runs {
-                trials.next().unwrap().unwrap();
-            }
-            if let Some(error) = error {
-                assert_eq!(trials.next().unwrap().unwrap_err(), error);
-            }
+            let actual: Vec<_> = trials.by_ref().map(|item| item.map(|_| ())).collect();
+            assert_eq!(actual, items, "{grid:?}");
             assert!(trials.next().is_none(), "{grid:?}");
-            assert!(trials.next().is_none(), "{grid:?}");
+            let expected_runs = items.iter().filter(|item| item.is_ok()).count();
             assert_eq!(base.runs.load(Ordering::SeqCst), expected_runs, "{grid:?}");
             assert_eq!((base.entry, base.hold, base.entered), (0, 1, false));
         }

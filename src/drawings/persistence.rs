@@ -203,6 +203,12 @@ impl StoredDrawing {
         if d.note_text_style.is_some_and(|style| !style.is_valid()) {
             return Some("note_text_style.font_size".into());
         }
+        if d.anchor_price_style.is_some_and(|style| !style.is_valid()) {
+            return Some("anchor_price_style.font_size".into());
+        }
+        if !(d.middle_line.width > 0.0 && d.middle_line.width <= MAX_STROKE_WIDTH) {
+            return Some("middle_line.width".into());
+        }
         if let Some(i) = self.points.iter().position(|p| bad(p.price)) {
             return Some(format!("points[{i}].price"));
         }
@@ -373,10 +379,13 @@ impl Default for StorageMetadata {
 impl DrawingStorage {
     /// Current storage format version. Version 10 draws a price label without a border colour
     /// with a border in its own colour; those saved before that change load with the border off,
-    /// as drawn. Version 9 draws a callout's border at its stored width; those saved before that
-    /// change load with the 1 px border they were drawn with. Version 8
-    /// extends a trend line past the anchor its Left or Right names; those saved before that
-    /// change load with the reach they were drawn with.
+    /// as drawn. It also reads a long or short position's target and stop colour alpha as the
+    /// opacity of its zone; earlier versions load at the 20% their zones were drawn at on a dark
+    /// theme. Version 9 draws a callout's border at its stored width; those saved before that
+    /// change load with the fixed width they were drawn with: 1.5 px in version 1 and 1 px, the
+    /// width just before version 9, in versions 2 to 8. Version 8 extends a trend line past the
+    /// anchor its Left or Right names; those saved before that change load with the reach they
+    /// were drawn with.
     /// Version 7 does the same for rays, extended lines, info lines and trend angles.
     /// Version 6 draws arrow marks in their own colour; earlier versions load in the colour they
     /// were drawn in. Version 5 gives Elliott double and triple combinations an unlabelled start
@@ -385,7 +394,8 @@ impl DrawingStorage {
     /// Version 4 draws brushes and highlighters at their stored width and opacity; earlier
     /// versions load at the width and opacity their strokes were drawn at. Version 3 preserves
     /// editable ray and extended-line extensions; versions 1 and 2 migrate to their former
-    /// rendered reach when loaded.
+    /// rendered reach when loaded. A version 1 ray drawn right to left, which ran from its first
+    /// anchor to the right edge, loads with Left instead of Right.
     pub const CURRENT_VERSION: u32 = 10;
 
     /// Create new storage for a symbol
@@ -585,8 +595,19 @@ impl DrawingStorage {
                             // and pitchforks.
                             match tool {
                                 DrawingToolType::Ray => {
-                                    drawing.drawing.extend_left = false;
-                                    drawing.drawing.extend_right = true;
+                                    // Version 1 builds ran a ray from its first anchor to the
+                                    // right edge, which Left alone reaches when the second
+                                    // anchor is earlier, and a vertical one towards its second
+                                    // anchor, as Right does. Version 2 files keep the later
+                                    // reach past the second anchor.
+                                    let right_to_left = match drawing.points.as_slice() {
+                                        [a, b, ..] if version == 1 => {
+                                            (a.ts_ms, a.subms_ns) > (b.ts_ms, b.subms_ns)
+                                        }
+                                        _ => false,
+                                    };
+                                    drawing.drawing.extend_left = right_to_left;
+                                    drawing.drawing.extend_right = !right_to_left;
                                 }
                                 DrawingToolType::ExtendedLine => {
                                     drawing.drawing.extend_left = true;
@@ -664,9 +685,10 @@ impl DrawingStorage {
                             }
                         }
                         if version < 9 && tool == T::Callout {
-                            // Earlier renderers drew a callout's border 1 px wide whatever its
-                            // width.
-                            drawing.drawing.stroke_width = 1.0;
+                            // Earlier renderers drew a callout's border at a fixed width whatever
+                            // its own: 1.5 px in version 1 and 1 px just before version 9. The
+                            // width check above still skips an invalid saved width.
+                            drawing.drawing.stroke_width = if version == 1 { 1.5 } else { 1.0 };
                         }
                         if version < 10
                             && tool == T::PriceLabel
@@ -675,6 +697,20 @@ impl DrawingStorage {
                             // Earlier renderers drew no border on a price label without a border
                             // colour, which now follows the label's colour.
                             drawing.drawing.border = false;
+                        }
+                        if version < 10 && matches!(tool, T::LongPos | T::ShortPos) {
+                            // Earlier renderers filled each zone with its colour at 20% on a dark
+                            // theme; the alpha now is the zone's opacity.
+                            let settings = &mut drawing.drawing;
+                            for color in [
+                                &mut settings.position_target_color,
+                                &mut settings.position_stop_color,
+                            ]
+                            .into_iter()
+                            .flatten()
+                            {
+                                color[3] = (f32::from(color[3]) * 0.2).round() as u8;
+                            }
                         }
                         if ((version < 7
                             && matches!(tool, T::InfoLine | T::TrendAngle)
@@ -1164,8 +1200,10 @@ mod v1 {
             LineMeasurements::default()
         };
         drawing.position_readout.persistent = true;
-        // Rays and extended lines get their former reach from the version 3 step. Arrow and
-        // path heads keep their geometry; the other creation fields are unset or tool-neutral.
+        // Rays and extended lines get their former reach from the version 3 step, where a ray
+        // drawn right to left runs to the right edge as it did, and callouts their 1.5 px border
+        // from the version 9 step. Arrow and path heads keep their geometry; the other creation
+        // fields are unset or tool-neutral.
         drawing.stroke_width = stored.line_width;
         if tool_type == DrawingToolType::Measure
             && let [a, b, ..] = stored.points.as_slice()
@@ -1419,6 +1457,10 @@ mod tests {
             bold: true,
             italic: true,
         });
+        d.anchor_price_style = Some(crate::drawings::NoteTextStyle::new([25, 26, 27, 28], 16.0));
+        d.middle_line.color = Some([29, 30, 31, 32]);
+        d.middle_line.width = 2.5;
+        d.middle_line.line_style = crate::model::LineStyle::Dotted;
         d.marker = crate::drawings::AnnotationMarker {
             show_text: false,
             glyph: "🚀".into(),
@@ -1497,7 +1539,10 @@ mod tests {
             drawing.listed = false;
             drawing.group = Some("levels".into());
             drawing.folder = vec!["Analysis".into(), "Support / resistance".into()];
-            drawing.folder_sync = vec![None, Some(crate::drawings::FolderSync::Layout)];
+            drawing.folder_sync = vec![
+                Some(crate::drawings::FolderSync::AllLayouts),
+                Some(crate::drawings::FolderSync::Layout),
+            ];
             if matches!(
                 tool,
                 DrawingToolType::AnchoredText | DrawingToolType::AnchoredNote
@@ -1557,7 +1602,9 @@ mod tests {
         };
 
         let before = chrono::Utc::now().timestamp_millis();
-        manager.edit_drawing(id, |d| d.color = [1, 2, 3, 255]);
+        manager
+            .edit_drawing(id, |d| d.color = [1, 2, 3, 255])
+            .unwrap();
         let edited = drawing(&manager).modified_at;
         assert!(
             edited.is_some_and(|time| time >= before),
@@ -1571,7 +1618,7 @@ mod tests {
         let saved = drawing_to_stored(&drawing(&manager), bar_to_time);
         assert_eq!(Some(saved.modified_at), edited);
 
-        manager.edit_drawing(id, |d| d.stroke_width = 3.0);
+        manager.edit_drawing(id, |d| d.stroke_width = 3.0).unwrap();
         assert!(manager.undo());
         let undone = drawing(&manager);
         assert_eq!(
@@ -1730,6 +1777,9 @@ mod tests {
             want.text_follows_zoom = false;
             want.text_zoom_spacing = None;
             want.note_text_style = None;
+            // Earlier files draw no channel prices and the default middle line.
+            want.anchor_price_style = None;
+            want.middle_line = crate::drawings::MiddleLineStyle::default();
             // Earlier files show a pin's text and carry no glyph on a signpost.
             want.marker = crate::drawings::AnnotationMarker {
                 show_text: true,
@@ -1799,13 +1849,15 @@ mod tests {
             (DrawingToolType::Ray, "Ray"),
             (DrawingToolType::ExtendedLine, "Extended Line"),
         ] {
-            for (fixture, tool_path, tool_name) in [
+            for (version, fixture, tool_path, tool_name) in [
                 (
+                    1,
                     include_str!("fixtures/storage_v1.json"),
                     "/tool_type",
                     name.to_owned(),
                 ),
                 (
+                    2,
                     include_str!("fixtures/storage_v2.json"),
                     "/drawing/tool_type",
                     serde_json::to_value(tool)
@@ -1832,8 +1884,15 @@ mod tests {
                         DrawingStorage::from_json(&saved.to_string()).unwrap();
                     assert!(skipped.is_empty(), "{skipped:?}");
                     let drawing = &mut loaded.drawings[0].drawing;
-                    assert_eq!(drawing.extend_left, tool == DrawingToolType::ExtendedLine);
-                    assert!(drawing.extend_right);
+                    // Version 1 builds ran a ray drawn right to left from its first anchor to the
+                    // right edge, the side Left alone reaches.
+                    let left_only = tool == DrawingToolType::Ray && version == 1 && reversed;
+                    let extended_line = tool == DrawingToolType::ExtendedLine;
+                    assert_eq!(
+                        (drawing.extend_left, drawing.extend_right),
+                        (extended_line || left_only, !left_only),
+                        "{tool:?} v{version} reversed: {reversed}"
+                    );
                     drawing.extend_left = false;
                     drawing.extend_right = false;
                     let (again, skipped) =
@@ -2288,7 +2347,9 @@ mod tests {
 
     /// Version 1 held no fill or tool configuration. Fills follow the v0.2.0 renderers: the
     /// area tools in this table tinted in the drawing colour at a fixed alpha, and the measure a
-    /// negative price change red, zero or a rise blue, at alpha 30 and 150.
+    /// negative price change red, zero or a rise blue, at alpha 30 and 150. Those renderers drew
+    /// the measure and a callout's border 1.5 px wide whatever the saved width, which loading
+    /// still checks.
     #[test]
     fn version_1_profile_drawings_restore_without_a_config() {
         use DrawingToolType as T;
@@ -2346,13 +2407,13 @@ mod tests {
                 {"ts_ms": T0 + 60_000, "price": prices[1]},
                 {"ts_ms": T0 + 120_000, "price": prices[0]}
             ]);
-            if tool == T::Measure {
+            if matches!(tool, T::Measure | T::Callout) {
                 let mut invalid = saved.clone();
                 invalid["drawings"][0]["line_width"] = (-1.0).into();
                 let (loaded, skipped) = DrawingStorage::from_json(&invalid.to_string()).unwrap();
                 assert!(
                     loaded.drawings.is_empty(),
-                    "invalid stored width must still be rejected"
+                    "{tool:?}: invalid stored width must still be rejected"
                 );
                 assert_eq!(skipped.len(), 1);
             }
@@ -2391,7 +2452,9 @@ mod tests {
                 assert!(!drawing.channel_midline, "{tool:?}");
                 if tool == T::Measure {
                     assert_eq!(drawing.color, [tint[0], tint[1], tint[2], 150]);
-                    assert_eq!(drawing.stroke_width, 1.5);
+                }
+                if matches!(tool, T::Measure | T::Callout) {
+                    assert_eq!(drawing.stroke_width, 1.5, "{tool:?}");
                 }
                 if matches!(
                     tool,
@@ -2627,6 +2690,66 @@ mod tests {
         assert_eq!((colors.text, colors.fill), (Color32::WHITE, blue));
     }
 
+    /// The fixture is a parallel channel and a flat top/bottom as the release before their middle
+    /// line and price settings saved them. They restore with the default middle line, a dashed
+    /// hairline in the line colour, and no price style, as they were drawn.
+    #[test]
+    fn channels_saved_before_their_middle_line_and_price_settings_keep_their_look() {
+        let saved = include_str!("fixtures/storage_v10_channels.json");
+        let (storage, skipped) = DrawingStorage::from_json(saved).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let tools = [
+            DrawingToolType::ParallelChannel,
+            DrawingToolType::FlatTopBottom,
+        ];
+        for (i, tool) in tools.into_iter().enumerate() {
+            let drawing = restore(&storage.drawings[i], i + 1);
+            assert_eq!(drawing.tool_type, tool);
+            assert_eq!(drawing.middle_line, MiddleLineStyle::default(), "{tool:?}");
+            assert_eq!(drawing.anchor_price_style, None, "{tool:?}");
+            assert_eq!(
+                drawing.channel_midline,
+                tool == DrawingToolType::ParallelChannel
+            );
+        }
+    }
+
+    /// Before version 10 a position filled its zones with the target and stop colours at 20% on a
+    /// dark theme, and a palette pick saved alpha 255: such a zone loads at alpha 51, and 128 at
+    /// 25.6, rounded to 26, also once saved again. Version 10 alphas are the zone opacity.
+    #[test]
+    fn position_colours_saved_before_zone_opacity_keep_their_zones() {
+        for (version, tool, saved, want) in [
+            (9, DrawingToolType::LongPos, [255, 255], [51, 51]),
+            (9, DrawingToolType::ShortPos, [255, 255], [51, 51]),
+            (3, DrawingToolType::ShortPos, [255, 128], [51, 26]),
+            (10, DrawingToolType::LongPos, [255, 128], [255, 128]),
+        ] {
+            let mut file: serde_json::Value =
+                serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
+            file["version"] = version.into();
+            let records = file["drawings"].as_array_mut().unwrap();
+            // The fixture's second drawing is its long position.
+            records.remove(0);
+            records.truncate(1);
+            let settings = &mut records[0]["drawing"];
+            settings["tool_type"] = serde_json::to_value(tool).unwrap();
+            settings["position_target_color"] = serde_json::json!([40, 100, 220, saved[0]]);
+            settings["position_stop_color"] = serde_json::json!([220, 140, 40, saved[1]]);
+            let (loaded, skipped) = DrawingStorage::from_json(&file.to_string()).unwrap();
+            assert!(skipped.is_empty(), "{tool:?} v{version}: {skipped:?}");
+            let (again, _) = DrawingStorage::from_json(&loaded.to_json().unwrap()).unwrap();
+            for storage in [&loaded, &again] {
+                let drawing = &storage.drawings[0].drawing;
+                assert_eq!(
+                    (drawing.position_target_color, drawing.position_stop_color),
+                    (Some([40, 100, 220, want[0]]), Some([220, 140, 40, want[1]])),
+                    "{tool:?} v{version}"
+                );
+            }
+        }
+    }
+
     /// Builds that wrote versions 3 to 6 carried a sloping ray's Left and Right towards the
     /// pane's sides: Right from its right-hand anchor to the right edge, Left from its left-hand
     /// anchor to the left edge. Anchors at bar 10, price 100 and bar 3, price 110 paint at
@@ -2661,6 +2784,50 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// Every build that wrote version 1 ran a ray from its first anchor to the right edge,
+    /// whichever side its second anchor was on, and a vertical one towards its second anchor.
+    /// Anchors at bar 10, price 100 and bar 3, price 110 paint at (180, 300) and (124, 280), so
+    /// that ray ran to x = 1000 at y = 300 + 820 / 56 * 20 = 592.857 and never reached x = 0. No
+    /// Extend setting leaves out the segment between the anchors, so Left alone, from (124, 280)
+    /// to (1000, 592.857), is the nearest. The vertical ray from (140, 300) through (140, 280)
+    /// ran up to (140, 0), as Right paints it.
+    #[test]
+    fn version_1_ray_drawn_right_to_left_keeps_its_released_reach() {
+        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1000.0, 1000.0));
+        let near = |p: egui::Pos2, (x, y): (f32, f32)| (p - egui::pos2(x, y)).length() < 1e-2;
+        for (anchors, painted) in [
+            (
+                [(10.0, 100.0), (3.0, 110.0)],
+                [(124.0, 280.0), (1000.0, 592.857)],
+            ),
+            ([(5.0, 100.0), (5.0, 110.0)], [(140.0, 300.0), (140.0, 0.0)]),
+        ] {
+            let mut saved: serde_json::Value =
+                serde_json::from_str(include_str!("fixtures/storage_v1.json")).unwrap();
+            let records = saved["drawings"].as_array_mut().unwrap();
+            records.truncate(1);
+            records[0]["tool_type"] = DrawingToolType::Ray.to_string().into();
+            let [(bar_a, price_a), (bar_b, price_b)] = anchors;
+            records[0]["points"] = serde_json::json!([
+                {"ts_ms": bar_to_time(bar_a), "price": price_a},
+                {"ts_ms": bar_to_time(bar_b), "price": price_b}
+            ]);
+            let (once, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+            assert!(skipped.is_empty(), "{skipped:?}");
+            let (twice, skipped) = DrawingStorage::from_json(&once.to_json().unwrap()).unwrap();
+            assert!(skipped.is_empty(), "{skipped:?}");
+            for (load, storage) in [(1, &once), (2, &twice)] {
+                let (a, b) = restore(&storage.drawings[0], 1)
+                    .trend_line_ends(rect)
+                    .unwrap();
+                assert!(
+                    near(a, painted[0]) && near(b, painted[1]),
+                    "{anchors:?} load {load}: painted {a:?}..{b:?}"
+                );
+            }
+        }
     }
 
     /// Builds that wrote versions 3 to 6 drew a sloping extended line with one side extended by
@@ -2721,7 +2888,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 39] = [
+        let cases: [(Spoil, &str); 41] = [
             (
                 |s| {
                     first(s)
@@ -2820,6 +2987,17 @@ mod tests {
                     style.font_size = 0.0;
                 },
                 "invalid note_text_style.font_size",
+            ),
+            (
+                |s| {
+                    first(s).drawing.anchor_price_style =
+                        Some(crate::drawings::NoteTextStyle::new([0; 4], 0.0));
+                },
+                "invalid anchor_price_style.font_size",
+            ),
+            (
+                |s| first(s).drawing.middle_line.width = f32::NAN,
+                "invalid middle_line.width",
             ),
             (
                 |s| first(s).points[1].price = f64::NAN,

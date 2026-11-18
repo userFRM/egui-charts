@@ -240,10 +240,15 @@ impl Chart {
             } else {
                 *height
             };
-            let rect = Rect::from_min_size(
-                Pos2::new(available.left(), top),
-                egui::vec2(available.width(), height),
-            );
+            let rect = if *id == main_pane && maximized.is_some_and(|pane| pane != main_pane) {
+                // Hidden by the maximized pane: away from the time axis, which its clip shows.
+                Rect::from_min_size(available.min, egui::vec2(available.width(), 0.0))
+            } else {
+                Rect::from_min_size(
+                    Pos2::new(available.left(), top),
+                    egui::vec2(available.width(), height),
+                )
+            };
             top += height;
             self.pane_layout.panes[*idx].rect = rect;
             rects.push(rect);
@@ -448,7 +453,7 @@ impl Chart {
                 .iter()
                 .map(|at| {
                     let item = &self.price_series[*at];
-                    let close = match hovered {
+                    let close = match self.readout_index {
                         Some(bar) => self.series_close_at(item, bar),
                         None => crate::model::last_with_value(&item.bars).map(|bar| bar.close),
                     };
@@ -625,7 +630,9 @@ impl Chart {
                 panel.legend_offset = legend_offset;
                 panel.pane_controls = true;
                 // A series legend reports its value at any bar, the last close without a crosshair.
-                panel.bar_index = hovered.or(id.filter(|_| study.is_none()).map(|_| 0));
+                panel.bar_index = self
+                    .readout_index
+                    .or(id.filter(|_| study.is_none()).map(|_| 0));
                 let legend_row_height = panel
                     .legend_galley(
                         ui.painter(),
@@ -1435,6 +1442,21 @@ impl Chart {
                 if pane_response.clicked() || pane_response.secondary_clicked() {
                     host_clicks.push(pane_response.clone());
                 }
+                // Read before the pane's drawing input, which can finish the drawing and clear its
+                // tool, so a double click that places a drawing does not also maximize the pane.
+                #[cfg(feature = "drawings")]
+                let (mut drawing_gesture, selected) = (
+                    drawing_tool_active
+                        || eraser_mode
+                        || self.chart_options.crosshair.style
+                            == crate::config::CrosshairStyle::Magic
+                        || self.drawings.curr_drawing.is_some()
+                        || self.drawings.dragging_handle.is_some()
+                        || self.drawings.text_editor.is_some(),
+                    self.drawings.selected_ids().collect::<Vec<_>>(),
+                );
+                #[cfg(not(feature = "drawings"))]
+                let drawing_gesture = false;
                 #[cfg(feature = "drawings")]
                 let drawing_hit = {
                     let history = self.history.start_drawing_action(&mut self.drawings);
@@ -1461,6 +1483,13 @@ impl Chart {
                     let drawing_hit = pane_response
                         .interact_pointer_pos()
                         .and_then(|pos| drawings.hit_test(pos));
+                    // The click that finishes a drawing selects it, so the second click of that
+                    // double click lands on the handle its first click placed.
+                    drawing_gesture |= pane_response.interact_pointer_pos().is_some_and(|pos| {
+                        selected
+                            .iter()
+                            .any(|id| drawings.hit_test_handle_by_id(pos, *id).is_some())
+                    });
                     crate::widget::tool_interaction::render_pane_eraser_highlight(
                         &ui.painter().with_clip_rect(chart_rect),
                         &drawings,
@@ -1490,8 +1519,9 @@ impl Chart {
                     &members,
                     crate::model::MarkerZOrder::Top,
                 );
-                // Study settings stay on the legend button and the context menu.
-                if pane_response.double_clicked() && drawing_hit.is_none() {
+                // Study settings stay on the legend button and the context menu, and a double
+                // click that places, finishes or erases a drawing only does that, as on the price pane.
+                if pane_response.double_clicked() && drawing_hit.is_none() && !drawing_gesture {
                     pending_pane_maximize = Some(pane_id);
                 }
                 if pane_response.clicked() && drawing_hit.is_some() {

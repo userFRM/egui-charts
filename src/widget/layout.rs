@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 /// Narrowest span from the plot's left edge to the chart's right edge that shows the field
 /// selectors in the header. The title controls need 8 points of status line inset, 116 of their
 /// own and 228 from the chart's right edge to the end of the first row; a narrower chart leaves
-/// the selectors to its corner menu.
+/// the selectors to its corner menu and shows its group markers alone.
 const LINK_CONTROLS_MIN_WIDTH: f32 = 352.0;
 /// Distance of the selectors from the chart's right edge, which ends the status line's first row.
 pub(super) const LINK_CONTROLS_INSET: f32 = 220.0;
@@ -851,6 +851,7 @@ pub enum ChartLink {
     /// Exclude this field from synchronization, including the layout-wide switch.
     Unlinked,
     /// Link this field to charts carrying the same identifier, independently of the switch.
+    /// A chart that joins the group takes its symbol or interval, as [`ChartLayout`] describes.
     Group(String),
 }
 
@@ -979,7 +980,13 @@ impl Default for ChartSyncOptions {
 /// Each chart keeps its own feed, settings, scales, studies and drawings. Legacy view groups
 /// isolate scrolling, crosshairs and drawings; unnamed view groups synchronize together.
 /// Symbol and interval memberships are independent through [`ChartLinkGroups`]. Save these and the
-/// charts through host storage as needed. Synchronization includes supplied slots hidden by a
+/// charts through host storage as needed. A symbol or interval changed in any chart reaches the
+/// charts linked to it, whichever chart is active; when several of them changed it in one frame,
+/// the active chart's change wins, then the lowest slot's. A chart that joins a group through
+/// its link controls or [`Self::set_link_groups`] with history takes the group's symbol or
+/// interval: the active chart's when it is a member, otherwise the lowest other slot's. Charts
+/// supplied or restored into linked slots, and memberships set without history, keep their own
+/// until the next change. Synchronization includes supplied slots hidden by a
 /// grid preset. The container does not acquire data or persist it. Charts that keep their
 /// drawings in the same storage (`Chart::set_storage`) read the drawings of their symbol again
 /// after another of them wrote them, in any group.
@@ -1344,7 +1351,9 @@ impl ChartLayout {
 
     /// Sets independent field memberships. Empty identifiers are treated as unlinked.
     /// Unless `skip_history` is true, records one undo step on the active chart at the next
-    /// [`Self::show`]. Undo restores only the fields changed by this call.
+    /// [`Self::show`], where the chart in slot `index` also takes the symbol and interval of the
+    /// groups it joined. Undo restores only the fields changed by this call. Restore saved
+    /// memberships with `skip_history` true, which keeps each chart's own symbol and interval.
     pub fn set_link_groups(
         &mut self,
         index: usize,
@@ -1532,6 +1541,29 @@ impl ChartLayout {
         changed
     }
 
+    /// Paints the symbol and interval group markers of a slot too narrow for the selectors,
+    /// without captions, in a row that ends at `end`. A field outside a group paints none.
+    fn paint_link_markers(&self, ui: &Ui, index: usize, end: egui::Pos2) {
+        let groups = &self.links.groups[index];
+        for (field, offset) in [(&groups.symbol, 27.0), (&groups.interval, 9.0)] {
+            let ChartLink::Group(name) = field else {
+                continue;
+            };
+            let rect = Rect::from_center_size(end - Vec2::new(offset, 0.0), Vec2::splat(14.0));
+            if LINK_MARKERS.iter().any(|(emoji, _)| emoji == name) {
+                paint_link_marker(ui, rect, name);
+            } else {
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    name.chars().take(2).collect::<String>(),
+                    egui::FontId::proportional(11.0),
+                    ui.visuals().text_color(),
+                );
+            }
+        }
+    }
+
     fn linked(&self, a: usize, b: usize, interval: bool) -> bool {
         let groups = &self.links.groups;
         let field = |index: usize| {
@@ -1571,12 +1603,14 @@ impl ChartLayout {
     /// Fits an explicit date selection to the active chart. With `sync_time_axis` on, the other
     /// charts of its synchronization group then show the active chart's new span, as after a
     /// scroll or zoom; otherwise they fit the selection itself when `sync_date_range` is on, and
-    /// keep their view with both off. Call after the charts have rendered at their sizes.
+    /// keep their view with both off. Each chart it fits ends the scrolls and animations pending
+    /// on it, as [`Chart::set_visible_time_range`] does. Call after the charts have rendered at
+    /// their sizes.
     pub fn apply_date_range(&self, charts: &mut [&mut Chart], range: super::VisibleTimeRange) {
         let Some(active) = charts.get_mut(self.active) else {
             return;
         };
-        let fitted = active.fit_time_range(range, f64::INFINITY);
+        let fitted = active.set_visible_time_range(range);
         let source = fitted.then(|| active.sync_source()).flatten();
         let span = active
             .visible_time_range()
@@ -1585,8 +1619,11 @@ impl ChartLayout {
             return;
         };
         for (index, chart) in charts.iter_mut().take(16).enumerate() {
-            if index != self.active && self.same_group(index, self.active) {
-                chart.apply_synced_time_range_from(range, source);
+            if index != self.active
+                && self.same_group(index, self.active)
+                && chart.apply_synced_time_range_from(range, source)
+            {
+                chart.cancel_view_motion();
             }
         }
     }
@@ -1595,7 +1632,9 @@ impl ChartLayout {
         self.groups[a] == self.groups[b]
     }
 
-    /// Shows the preset and synchronizes its charts. Click or scroll a panel to activate it.
+    /// Shows the preset and synchronizes its charts. Click or scroll a panel to activate it;
+    /// chart shortcuts and typed entry go to the active chart, while a focused text field or
+    /// dialog keeps its keys.
     /// Its header and corner menu offer independent symbol and interval groups; the corner menu
     /// also offers detachment and the synchronization group. The active border is painted
     /// inside the chart; stacked charts have a two-point gap and side-by-side charts meet at their
@@ -1682,6 +1721,7 @@ impl ChartLayout {
         }
         // After a released drag queues its step, so an undo in this frame reaches it.
         self.record_sizes(charts[self.active]);
+        self.join_groups(charts);
         self.record_links(charts[self.active]);
         // Divider hit regions stay above the charts, but their input is known before painting.
         let starting_resize = self.sizing.drag.is_none()
@@ -1857,6 +1897,21 @@ impl ChartLayout {
                                 });
                             },
                         );
+                    } else if total > 1 {
+                        // The markers alone end the first row, past the status line, which stops
+                        // 48 points short of the plot's right edge and 100 short of the slot's,
+                        // and before the corner menu button.
+                        let plot = charts[index].last_rendered_price_rect;
+                        let right = if plot.is_positive() {
+                            plot.right()
+                        } else {
+                            rect.right()
+                        };
+                        self.paint_link_markers(
+                            ui,
+                            index,
+                            egui::pos2(right.min(rect.right() - 24.0), rect.top() + 13.0),
+                        );
                     }
                     if self.corner_menu == Some(index)
                         || index == self.active
@@ -1936,8 +1991,25 @@ impl ChartLayout {
             ui.ctx().request_repaint();
         }
         self.record_sizes(charts[self.active]);
+        self.join_groups(charts);
         self.record_links(charts[self.active]);
         self.focus_active = false;
+        // Keys go to the active chart, also when the wheel activated it and left the focus on
+        // another chart. After the charts are shown, so a Tab the host turned into a new active
+        // chart cannot move the focus on from it, and before a host dispatches the next frame.
+        if !self.detached[self.active]
+            && let Some(id) = charts[self.active].keyboard.chart_id
+            && ui.memory(|memory| {
+                memory.focused().is_some_and(|focused| {
+                    focused != id
+                        && charts
+                            .iter()
+                            .any(|chart| chart.keyboard.chart_id == Some(focused))
+                })
+            })
+        {
+            ui.memory_mut(|memory| memory.request_focus(id));
+        }
         // Alt+Enter toggles the focused tile in a grid; a lone chart leaves it to the host.
         if self.mode != ChartLayoutMode::Tabs && count > 1 {
             for (index, chart) in charts.iter_mut().take(count).enumerate() {
@@ -2003,11 +2075,9 @@ impl ChartLayout {
             ui.ctx().request_repaint();
         }
         for (index, chart) in charts.iter().enumerate() {
-            // A change the active chart made while rendering, such as keyboard undo, stays
-            // unrecorded, so the next frame sends it like one made between frames.
-            if index != self.active {
-                self.record_state(index, chart);
-            } else if !self.state_recorded(index, chart) {
+            // A change a chart made while rendering, such as keyboard undo, stays unrecorded, so
+            // the next frame sends it like one made between frames.
+            if !self.state_recorded(index, chart) {
                 ui.ctx().request_repaint();
             }
             self.previous_bars[index] = bars_key(chart);
@@ -2051,8 +2121,42 @@ impl ChartLayout {
         }
     }
 
+    /// Sends the changes made in any chart since the last frame. The active chart's goes first,
+    /// then the lowest slot's, so it wins over a change another member made in the same frame.
     fn sync_state(&mut self, charts: &mut [&mut Chart], count: usize) {
-        self.send_state(charts, count, self.active);
+        let active = self.active;
+        for from in std::iter::once(active).chain((0..count).filter(|&index| index != active)) {
+            self.send_state(charts, count, from);
+        }
+    }
+
+    /// Gives each chart that joined a symbol or interval group through a recorded membership
+    /// change the symbol or interval of the group: the active chart's when it is a member,
+    /// otherwise that of the lowest other slot in it.
+    fn join_groups(&self, charts: &mut [&mut Chart]) {
+        let count = charts.len();
+        for change in &self.links.pending {
+            let index = change.index;
+            for (interval, joined) in [(false, &change.symbol), (true, &change.interval)] {
+                if joined.is_none() || index >= count {
+                    continue;
+                }
+                let Some(from) = std::iter::once(self.active)
+                    .chain(0..count)
+                    .find(|&from| from != index && self.linked(index, from, interval))
+                else {
+                    continue;
+                };
+                if interval {
+                    if let Some(timeframe) = charts[from].timeframe() {
+                        charts[index].set_timeframe(timeframe);
+                    }
+                } else {
+                    let symbol = charts[from].symbol().to_owned();
+                    charts[index].change_symbol(symbol, true);
+                }
+            }
+        }
     }
 
     /// Sends the symbol and interval of chart `from`, where they differ from its recorded state,
@@ -2069,12 +2173,15 @@ impl ChartLayout {
         }
         let symbol = source.symbol().to_owned();
         let timeframe = source.timeframe();
+        // A linked chart keeps its history as the source did; a host change outside a user
+        // action, which cleared the source's, clears it too.
+        let keep_history = source.can_undo() || source.can_redo();
         for (index, chart) in charts.iter_mut().take(count).enumerate() {
             if index == from {
                 continue;
             }
             if self.linked(index, from, false) && symbol_changed {
-                chart.set_symbol(&symbol);
+                chart.change_symbol(symbol.clone(), keep_history);
             }
             if self.linked(index, from, true)
                 && timeframe_changed
@@ -3435,6 +3542,7 @@ mod tests {
                             .map(|chart| chart.snapshot().unwrap())
                             .collect(),
                         sizing: None,
+                        link_groups: None,
                     };
                     let restored =
                         super::super::SavedLayout::from_json(&saved.to_json().unwrap()).unwrap();
@@ -3926,6 +4034,76 @@ mod tests {
         }
     }
 
+    /// A chart reads its status line at a crosshair it receives, from a linked chart or the host,
+    /// and at its latest bar once that crosshair is gone.
+    #[test]
+    fn status_line_reads_a_received_crosshair() {
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        for linked in [true, false] {
+            let ctx = egui::Context::default();
+            let mut layout = ChartLayout {
+                mode: ChartLayoutMode::TwoHorizontal,
+                ..Default::default()
+            };
+            // Bar `i` of the second chart opens at 700 + i.
+            let second = Chart::new(BarData::from_bars(
+                (0..100)
+                    .map(|i| {
+                        let open = 700.0 + i as f64;
+                        Bar::new(
+                            start + Duration::minutes(i),
+                            open,
+                            open + 3.0,
+                            open - 2.0,
+                            open - 1.0,
+                            1.0,
+                        )
+                    })
+                    .collect(),
+            ));
+            let mut charts = [chart(60), second];
+            let mut time = 0.0;
+            let mut opens = |layout: &mut ChartLayout, charts: &mut [Chart], mut events| {
+                let mut texts = Vec::new();
+                for _ in 0..2 {
+                    time += 0.1;
+                    texts = frame_texts(&ctx, layout, charts, vec2(1440.0, 900.0), time, events);
+                    events = vec![];
+                }
+                texts
+                    .into_iter()
+                    .map(|(text, ..)| text)
+                    .filter(|text| text.starts_with("O 7"))
+                    .collect::<Vec<_>>()
+            };
+            opens(&mut layout, &mut charts, vec![]);
+            let events = if linked {
+                vec![Event::PointerMoved(pos2(
+                    charts[0].index_to_x(50.0).unwrap(),
+                    charts[0].last_rendered_price_rect.center().y,
+                ))]
+            } else {
+                charts[1].set_synced_crosshair_time(Some(start + Duration::minutes(50)));
+                vec![]
+            };
+            assert_eq!(opens(&mut layout, &mut charts, events), ["O 750.00"]);
+            #[cfg(feature = "ui")]
+            assert_eq!(
+                crate::ui::widget_bar::panels::object_tree::DataWindowInfo::from_chart(&charts[1])
+                    .close,
+                749.0
+            );
+            if !linked {
+                charts[1].set_synced_crosshair_time(None);
+            }
+            assert_eq!(
+                opens(&mut layout, &mut charts, vec![Event::PointerGone]),
+                ["O 799.00"],
+                "linked {linked}"
+            );
+        }
+    }
+
     /// Linked charts mark a time the pointer reaches after the last bar at the slot holding it:
     /// eight one-minute slots after bar 99, opened 22:13:20 on Tuesday 14 November 2023, open
     /// at 00:00:20 the next day. One-minute bars from 22:13:00 hold it in their slot 107, opened
@@ -4043,6 +4221,44 @@ mod tests {
                 axis(&idle, &charts[1]),
                 "{mode:?}"
             );
+        }
+    }
+
+    /// A range chosen after scrolls were requested, as after Go to date, ends them on the active
+    /// chart and on the chart that takes its span, so the next frame still shows the range.
+    #[test]
+    fn chosen_date_range_ends_pending_scrolls() {
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::TwoHorizontal,
+            ..Default::default()
+        };
+        let mut charts = [chart(60), chart(60)];
+        let frame = |layout: &mut ChartLayout, charts: &mut [Chart; 2]| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        frame(&mut layout, &mut charts);
+        let shown = charts[0].state.shown();
+        let range = super::super::VisibleTimeRange::new(shown[10].time, shown[30].time);
+        for chart in &mut charts {
+            chart.scroll_to_time(chart.state.shown()[80].time);
+        }
+        layout.apply_date_range(&mut charts.iter_mut().collect::<Vec<_>>(), range);
+        frame(&mut layout, &mut charts);
+        for chart in &charts {
+            let actual = chart.visible_time_range().unwrap();
+            for error in [actual.from - range.from, actual.to - range.to] {
+                assert!(error.num_milliseconds().abs() < 1, "{actual:?}");
+            }
         }
     }
 
@@ -4892,6 +5108,101 @@ mod tests {
         );
     }
 
+    /// Keys reach the active chart however it became active: a letter typed after a wheel turn
+    /// over the second chart while a click left the first focused, and the keys after Escape,
+    /// which leaves no chart focused.
+    #[test]
+    fn chart_keys_reach_the_active_chart() {
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::TwoHorizontal,
+            ..Default::default()
+        };
+        let mut charts = [chart(60), chart(60)];
+        let mut time = 0.0;
+        let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart; 2], events| {
+            time += 0.1;
+            frame_texts(&ctx, layout, charts, vec2(1440.0, 900.0), time, events);
+        };
+        let pressed = |key, modifiers| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        let command = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        };
+        frame(&mut layout, &mut charts, vec![]);
+        for chart in &mut charts {
+            chart.user_action(|chart| chart.set_chart_type(crate::model::ChartType::Line));
+        }
+        let (left, right) = (pos2(300.0, 400.0), pos2(1000.0, 400.0));
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(left)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(left, true)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(left, false)]);
+        frame(
+            &mut layout,
+            &mut charts,
+            vec![
+                Event::PointerMoved(right),
+                Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: vec2(0.0, -40.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                    source: egui::MouseWheelSource::Wheel,
+                },
+            ],
+        );
+        assert_eq!(layout.active(), 1);
+        frame(&mut layout, &mut charts, vec![Event::Text("B".into())]);
+        frame(&mut layout, &mut charts, vec![key(egui::Key::Escape)]);
+        frame(
+            &mut layout,
+            &mut charts,
+            vec![
+                Event::ModifiersChanged(command),
+                pressed(egui::Key::Z, command),
+            ],
+        );
+        frame(
+            &mut layout,
+            &mut charts,
+            vec![
+                Event::ModifiersChanged(egui::Modifiers::NONE),
+                pressed(egui::Key::L, egui::Modifiers::ALT),
+            ],
+        );
+        frame(&mut layout, &mut charts, vec![Event::Text("A".into())]);
+        let state = |chart: &mut Chart| {
+            (
+                chart.chart_type(),
+                chart.state.price_scale().options().mode,
+                chart.take_shortcut_requests(),
+            )
+        };
+        use crate::scales::PriceScaleMode;
+        let line = crate::model::ChartType::Line;
+        assert_eq!(
+            charts.each_mut().map(state),
+            [
+                (line, PriceScaleMode::Normal, vec![]),
+                (
+                    crate::model::ChartType::Candles,
+                    PriceScaleMode::Logarithmic,
+                    vec![
+                        ShortcutRequest::SymbolSearch("B".into()),
+                        ShortcutRequest::SymbolSearch("A".into())
+                    ]
+                ),
+            ]
+        );
+    }
+
     /// A host exchanges two charts with `swap_slots`, as the demo does when a smaller preset
     /// would hide the active chart, between a group change of the moved chart and its undo. The
     /// undo and the redo reach the chart in its new slot and leave the chart now in its old slot
@@ -4947,6 +5258,97 @@ mod tests {
                 "recorded before the exchange: {recorded}"
             );
         }
+    }
+
+    /// Four charts, the second and the fourth in one symbol group. The fourth keeps its own
+    /// undo step through the symbol the active second sends it; a host change outside a user
+    /// action clears the history of both, as it clears the source's.
+    #[test]
+    fn a_linked_symbol_change_keeps_the_history_of_the_chart_it_reaches() {
+        let show = |layout: &mut ChartLayout, charts: &mut [Chart; 4]| {
+            egui::Context::default()
+                .run_ui(RawInput::default(), |ui| {
+                    layout.show(ui, &mut charts.each_mut());
+                })
+                .drop_without_applying_deltas();
+        };
+        let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::Four,
+            ..Default::default()
+        };
+        let group = ChartLinkGroups {
+            symbol: ChartLink::Group("🔶".into()),
+            ..Default::default()
+        };
+        layout.set_link_groups(1, group.clone(), true);
+        layout.set_link_groups(3, group, true);
+        layout.set_active(1);
+        show(&mut layout, &mut charts);
+        charts[3].user_action(|chart| chart.set_chart_type(crate::model::ChartType::Line));
+        charts[1].user_action(|chart| chart.set_symbol("OTHER"));
+        show(&mut layout, &mut charts);
+        assert_eq!(charts[3].symbol(), "OTHER");
+        assert!(charts[3].undo(), "the linked chart keeps its step");
+        show(&mut layout, &mut charts);
+        assert_eq!(
+            (
+                charts[1].symbol(),
+                charts[3].symbol(),
+                charts[3].chart_type()
+            ),
+            ("OTHER", "OTHER", crate::model::ChartType::Candles)
+        );
+        charts[1].set_symbol("HOST");
+        show(&mut layout, &mut charts);
+        assert_eq!(charts[3].symbol(), "HOST");
+        assert!(!charts[3].can_undo() && !charts[3].can_redo());
+    }
+
+    /// The third and fourth of four charts share a symbol and an interval group while the first
+    /// is active. A symbol the host sets on the third and an interval it sets on the fourth reach
+    /// the other; the second, joining both groups, then takes them.
+    #[test]
+    fn joining_a_group_adopts_its_symbol_and_interval() {
+        let show = |layout: &mut ChartLayout, charts: &mut [Chart; 4]| {
+            egui::Context::default()
+                .run_ui(RawInput::default(), |ui| {
+                    layout.show(ui, &mut charts.each_mut());
+                })
+                .drop_without_applying_deltas();
+        };
+        let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+        for (slot, chart) in charts.iter_mut().enumerate() {
+            chart.set_symbol(format!("SLOT_{slot}"));
+        }
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::Four,
+            ..Default::default()
+        };
+        let link = ChartLinkGroups {
+            symbol: ChartLink::Group("🔶".into()),
+            interval: ChartLink::Group("💧".into()),
+        };
+        layout.set_link_groups(2, link.clone(), true);
+        layout.set_link_groups(3, link.clone(), true);
+        show(&mut layout, &mut charts);
+        charts[2].set_symbol("HOST");
+        charts[3].set_timeframe(Timeframe::Hour1);
+        show(&mut layout, &mut charts);
+        let state = |chart: &Chart| (chart.symbol().to_owned(), chart.timeframe());
+        let group = ("HOST".to_owned(), Some(Timeframe::Hour1));
+        assert_eq!(
+            [state(&charts[2]), state(&charts[3])],
+            [group.clone(), group.clone()],
+            "a change in a member that is not active"
+        );
+        layout.set_link_groups(1, link, false);
+        show(&mut layout, &mut charts);
+        assert_eq!(state(&charts[1]), group, "the joining chart");
+        assert_eq!(
+            state(&charts[0]),
+            ("SLOT_0".to_owned(), Some(Timeframe::Min1))
+        );
     }
 
     /// A host opens a saved layout by supplying its charts in the same slots or restoring
@@ -5228,5 +5630,103 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Four charts in two by two 320 point slots, too narrow for the selectors. Each grouped
+    /// chart, active or not, paints the markers of its groups past its status line and axis
+    /// labels, and an ungrouped chart paints none.
+    #[test]
+    fn narrow_slots_show_their_group_markers() {
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::Four,
+            ..Default::default()
+        };
+        let symbol = ChartLink::Group("🔶".into());
+        let interval = ChartLink::Group("💧".into());
+        layout.set_link_groups(
+            0,
+            ChartLinkGroups {
+                symbol: symbol.clone(),
+                interval: interval.clone(),
+            },
+            true,
+        );
+        layout.set_link_groups(
+            1,
+            ChartLinkGroups {
+                interval,
+                ..Default::default()
+            },
+            true,
+        );
+        layout.set_link_groups(
+            2,
+            ChartLinkGroups {
+                symbol,
+                interval: ChartLink::Unlinked,
+            },
+            true,
+        );
+        let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+        let size = vec2(640.0, 600.0);
+        let slots = layout.rects(Rect::from_min_size(Pos2::ZERO, size), 4);
+        let colors = [LINK_MARKERS[0].1, LINK_MARKERS[2].1];
+        let mut markers = vec![Vec::new(); 4];
+        for frame in 0..3 {
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                    time: Some(frame as f64 * 0.1),
+                    ..Default::default()
+                },
+                |ui| {
+                    layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                },
+            );
+            markers = vec![Vec::new(); 4];
+            let mut texts = Vec::new();
+            for shape in &output.shapes {
+                match &shape.shape {
+                    egui::Shape::Path(path) if colors.contains(&path.fill) => {
+                        let rect = path.visual_bounding_rect();
+                        let slot = slots.iter().position(|slot| slot.contains_rect(rect));
+                        markers[slot.expect("a marker inside a slot")].push((path.fill, rect));
+                    }
+                    egui::Shape::Text(text) => texts.push(
+                        text.galley
+                            .rect
+                            .translate(text.pos.to_vec2())
+                            .intersect(shape.clip_rect),
+                    ),
+                    _ => {}
+                }
+            }
+            output.drop_without_applying_deltas();
+            for (marker, text) in markers.iter().flatten().flat_map(|marker| {
+                texts
+                    .iter()
+                    .filter(|text| text.is_positive())
+                    .map(move |text| (marker, text))
+            }) {
+                assert!(
+                    !marker.1.intersects(*text),
+                    "frame {frame}: marker {marker:?} covers text at {text:?}"
+                );
+            }
+        }
+        let fills: Vec<Vec<_>> = markers
+            .iter()
+            .map(|slot| slot.iter().map(|(fill, _)| *fill).collect())
+            .collect();
+        assert_eq!(
+            fills,
+            [
+                vec![colors[0], colors[1]],
+                vec![colors[1]],
+                vec![colors[0]],
+                vec![]
+            ]
+        );
     }
 }

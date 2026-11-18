@@ -202,6 +202,60 @@ impl DrawingManager {
             .find_map(|s| find(&s.shape, text))
     }
 
+    /// The rectangle of the text a text annotation, price label, price note, comment or signpost
+    /// last painted at its current anchors, with the badge, box or popup holding it, as clipped
+    /// to its pane: what the selection toolbar keeps clear of. `None` for other tools, and when
+    /// none of its text is on screen.
+    #[cfg(feature = "ui")]
+    pub(crate) fn painted_label_rect(&self, drawing: &Drawing) -> Option<Rect> {
+        use DrawingToolType as T;
+        if !(drawing.tool_type.is_text_annotation()
+            || matches!(
+                drawing.tool_type,
+                T::PriceLabel | T::PriceNote | T::Comment | T::Signpost
+            ))
+        {
+            return None;
+        }
+        fn flatten<'a>(shape: &'a Shape, clip: Rect, out: &mut Vec<(&'a Shape, Rect)>) {
+            match shape {
+                Shape::Vec(shapes) => shapes.iter().for_each(|s| flatten(s, clip, out)),
+                shape => out.push((shape, clip)),
+            }
+        }
+        let painted = self.painted.lock().unwrap_or_else(|e| e.into_inner());
+        let paint = painted
+            .iter()
+            .find(|p| p.id == drawing.id && p.points == drawing.points)?;
+        let mut shapes = Vec::new();
+        for clipped in &paint.shapes {
+            flatten(&clipped.shape, clipped.clip_rect, &mut shapes);
+        }
+        let text = |shape: &Shape| match shape {
+            Shape::Text(t) if !t.galley.is_empty() => Some(t.visual_bounding_rect()),
+            _ => None,
+        };
+        let centres: Vec<Pos2> = shapes
+            .iter()
+            .filter_map(|(shape, _)| text(shape).map(|rect| rect.center()))
+            .collect();
+        // The text, and each box around it: a badge or callout with its pointer, a card, a popup.
+        shapes
+            .iter()
+            .filter_map(|&(shape, clip)| {
+                let rect = text(shape).or_else(|| {
+                    match shape {
+                        Shape::Rect(r) => Some(r.visual_bounding_rect()),
+                        Shape::Path(p) if p.closed => Some(p.visual_bounding_rect()),
+                        _ => None,
+                    }
+                    .filter(|rect| centres.iter().any(|c| rect.contains(*c)))
+                })?;
+                Some(rect.intersect(clip)).filter(|rect| rect.is_positive())
+            })
+            .reduce(|a, b| a.union(b))
+    }
+
     fn render_drawing(
         &self,
         drawing: &Drawing,
@@ -712,7 +766,9 @@ mod tests {
                 "{tool:?}"
             );
             if tool == DrawingToolType::TextLabel {
-                manager.edit_drawing(7, |d| d.text = Some("x".into()));
+                manager
+                    .edit_drawing(7, |d| d.text = Some("x".into()))
+                    .unwrap();
                 assert_eq!(manager.hit_test(Pos2::new(hit.0, hit.1)), None);
             }
             manager.drawings[0].visible = false;

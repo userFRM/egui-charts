@@ -134,7 +134,7 @@ impl Indicator for ALMA {
     }
 
     fn desc(&self) -> &str {
-        "Arnaud Legoux Moving Avg - Gaussian weighted moving avg"
+        "Arnaud Legoux Moving Average - Gaussian weighted moving avg"
     }
 
     fn calculate(&mut self, data: &[Bar]) {

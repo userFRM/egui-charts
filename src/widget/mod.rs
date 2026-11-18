@@ -310,6 +310,9 @@ pub struct Chart {
     #[cfg(feature = "drawings")]
     data_table_identity: u64,
     study_data: studies_data::StudyDataCache,
+    /// Whether the footprint statistics of the last frame had an open interest row, so that the
+    /// study data requests the open interest they read.
+    footprint_open_interest: bool,
     pub(crate) element_studies: crate::chart::rendering::candles::price_based::ElementStudies,
     /// Range bars built from the held trades, while the chart type is Range.
     execution_ranges: crate::chart::rendering::candles::price_based::ExecutionRanges,
@@ -457,6 +460,9 @@ pub struct Chart {
     pub(crate) layout_inactive: bool,
     /// The layout's field selectors occupy the right end of the status line's first row this frame.
     pub(crate) layout_link_controls: bool,
+    /// `Control::Settings` is hidden: the legend's series settings button and the price axis
+    /// corner's scale settings button are not drawn.
+    pub(crate) settings_hidden: bool,
     /// Tells `ChartLayout` this is another chart: new for each chart and each restored snapshot,
     /// whose symbol and interval are no change for the layout to send to linked charts.
     pub(crate) layout_identity: u64,
@@ -479,6 +485,10 @@ pub struct Chart {
     pub(crate) last_hover_bar_idx: Option<f64>,
     /// Time of the hovered whitespace slot after the last bar, sent to linked charts.
     pub(crate) last_hover_whitespace: Option<DateTime<Utc>>,
+    /// Shown bar the status line, legends and data window read this frame: the one under the
+    /// local pointer, else under a crosshair from a linked chart or the host; `None` reads the
+    /// latest bar.
+    pub(crate) readout_index: Option<usize>,
 
     // =========================================================================
     // Marks (Widget API)
@@ -751,6 +761,14 @@ impl Chart {
         self.chart_options.tooltip.enabled = enabled;
     }
 
+    /// Shows or hides the chart's own settings buttons: the series settings button among the
+    /// legend's title controls and the scale settings button in the price axis corner. Hidden,
+    /// they are not drawn and take no keyboard focus, while the legend's other controls stay.
+    /// Hosts call it with the visibility they give `Control::Settings`. Both start visible.
+    pub fn set_settings_buttons_visible(&mut self, visible: bool) {
+        self.settings_hidden = !visible;
+    }
+
     /// The rising and falling body, border and wick colors of a chart type that series settings
     /// offer from its own style, in that order; `None` for a type they keep in the chart
     /// configuration.
@@ -796,12 +814,22 @@ impl Chart {
         }
     }
 
+    /// The price the main series draws on its chart type: the own source of a Line, Step line,
+    /// Line with markers, Area or Baseline chart, or the chart's shared one.
+    fn main_price_source(&self) -> crate::model::PriceSource {
+        self.chart_type_params
+            .styles
+            .line_source(self.chart_type, self.config.price_source)
+    }
+
     /// Apply series settings to chart colors, price source and price scale.
     ///
-    /// Copies candlestick colors (bullish/bearish fill, border, wick) and the
-    /// price source field from the given [`SeriesSettings`] into the chart's
-    /// [`ChartConfig`], and its scale mode and inversion into the main price
-    /// scale. Settings of a Heikin-Ashi, hollow candles or volume candles chart keep their
+    /// Copies candlestick colors (bullish/bearish fill, border, wick) from the given
+    /// [`SeriesSettings`] into the chart's [`ChartConfig`], and its scale mode and inversion into
+    /// the main price scale. Its price source becomes the own source of its chart type when that
+    /// is a Line, Step line, Line with markers, Area or Baseline chart drawing another price;
+    /// other chart types ignore it, and [`ChartConfig::price_source`] is left as it is.
+    /// Settings of a Heikin-Ashi, hollow candles or volume candles chart keep their
     /// candle colors in that chart type's style instead, a `None` border or wick meaning the
     /// body color, and these colors win over the same colors in `chart_type_params`. A new
     /// scale mode returns the scale to auto-scaling and clears the zoom history, whose ranges
@@ -835,7 +863,11 @@ impl Chart {
             self.config.bullish_wick_color = settings.bullish_wick_color;
             self.config.bearish_wick_color = settings.bearish_wick_color;
         }
-        self.config.price_source = settings.price_source;
+        params.styles.set_line_source(
+            settings.chart_type,
+            settings.price_source,
+            self.config.price_source,
+        );
         self.config.show_price_line = settings.show_price_line;
         self.config.show_prev_close_line = settings.show_prev_close_line;
         self.main_series_style.alerts = settings.alerts;
@@ -853,6 +885,7 @@ impl Chart {
     /// Pass the result to `SeriesSettingsDialog::open`, then apply its accepted settings with
     /// [`Self::apply_series_settings`]. The active chart type selects the dialog's controls and
     /// where the candle colors are read from and written to; applying keeps the chart's type.
+    /// Its price source is the one the active chart type draws.
     pub fn series_settings(&self) -> SeriesSettings {
         let mut settings = SeriesSettings {
             chart_type: self.chart_type,
@@ -863,7 +896,7 @@ impl Chart {
             bearish_border_color: self.config.bearish_border_color,
             bullish_wick_color: self.config.bullish_wick_color,
             bearish_wick_color: self.config.bearish_wick_color,
-            price_source: self.config.price_source,
+            price_source: self.main_price_source(),
             show_price_line: self.config.show_price_line,
             show_prev_close_line: self.config.show_prev_close_line,
             alerts: self.main_series_style.alerts,
@@ -978,7 +1011,8 @@ impl Chart {
     /// the new spacing bounds exclude it, and the chart scrolls only when `time_scale.right_offset`
     /// or `right_offset_pixels` changes. A non-finite `bar_spacing`, `right_offset` or
     /// `right_offset_pixels` keeps its previous value, and a `kinetic_scroll.damping_coeff`
-    /// outside `0.0..1.0` is replaced by the default.
+    /// outside `0.0..1.0`, a `min_scroll_speed` that is not a finite number above zero and a
+    /// `max_scroll_speed` that is NaN or negative are replaced by their defaults.
     pub fn set_chart_options(&mut self, options: ChartOptions) {
         let options = self.normalize_chart_options(options);
         let (old, new) = (&self.chart_options.time_scale, &options.time_scale);
@@ -1026,9 +1060,18 @@ impl Chart {
 
     /// Normalize numeric options before storing or comparing them, since NaN never equals itself.
     fn normalize_chart_options(&self, mut options: ChartOptions) -> ChartOptions {
-        if !(0.0..1.0).contains(&options.kinetic_scroll.damping_coeff) {
-            options.kinetic_scroll.damping_coeff =
-                crate::config::KineticScrollOptions::default().damping_coeff;
+        let defaults = crate::config::KineticScrollOptions::default();
+        let kinetic = &mut options.kinetic_scroll;
+        if !(0.0..1.0).contains(&kinetic.damping_coeff) {
+            kinetic.damping_coeff = defaults.damping_coeff;
+        }
+        // A coast ends only below a positive speed, and a release clamps to a limit that is a
+        // number not below zero.
+        if !kinetic.min_scroll_speed.is_finite() || kinetic.min_scroll_speed <= 0.0 {
+            kinetic.min_scroll_speed = defaults.min_scroll_speed;
+        }
+        if kinetic.max_scroll_speed.is_nan() || kinetic.max_scroll_speed < 0.0 {
+            kinetic.max_scroll_speed = defaults.max_scroll_speed;
         }
         let (old, new) = (&self.chart_options.time_scale, &mut options.time_scale);
         if !new.bar_spacing.is_finite() {

@@ -13,7 +13,8 @@ use egui::{Color32, Pos2, Stroke};
 /// Renders indicator lines overlay on the chart
 pub struct IndicatorRenderer;
 
-/// Paint one uninterrupted study segment; callers split at missing values.
+/// Paint one study plot through `points`: one uninterrupted run for a type with breaks, the
+/// defined values across gaps for a joined type.
 pub(crate) fn paint_study_plot(
     painter: &egui::Painter,
     points: &[Pos2],
@@ -29,7 +30,7 @@ pub(crate) fn paint_study_plot(
         painter.clip_rect().bottom()
     };
     match plot.plot_type {
-        PlotType::StepLine => {
+        PlotType::StepLine | PlotType::StepLineWithBreaks | PlotType::StepLineWithDiamonds => {
             let mut steps = Vec::new();
             for (i, point) in points.iter().enumerate() {
                 if i > 0 {
@@ -46,8 +47,19 @@ pub(crate) fn paint_study_plot(
                 },
                 baseline,
             );
+            if plot.plot_type == PlotType::StepLineWithDiamonds {
+                // A diamond marks the first value and each change of value.
+                for (i, &point) in points.iter().enumerate() {
+                    if i == 0 || point.y != points[i - 1].y {
+                        paint_diamond(painter, point, plot.width + 2.0, plot.color);
+                    }
+                }
+            }
         }
-        PlotType::Area => {
+        PlotType::Area | PlotType::AreaWithBreaks => {
+            // The fill lies under the line at a fifth of its opacity, so the guides and grid
+            // beneath stay visible.
+            let fill = plot.color.gamma_multiply(0.2);
             for pair in points.windows(2) {
                 paint_band(
                     painter,
@@ -55,10 +67,19 @@ pub(crate) fn paint_study_plot(
                     pair[1],
                     Pos2::new(pair[0].x, baseline),
                     Pos2::new(pair[1].x, baseline),
-                    plot.color,
+                    fill,
                     None,
                 );
             }
+            paint_study_plot(
+                painter,
+                points,
+                PlotStyle {
+                    plot_type: PlotType::Line,
+                    ..plot
+                },
+                baseline,
+            );
         }
         PlotType::Crosses => {
             for &point in points {
@@ -103,7 +124,7 @@ pub(crate) fn paint_study_plot(
             }
         }
         PlotType::BarColor => {}
-        PlotType::Line => match plot.pattern {
+        PlotType::Line | PlotType::LineWithBreaks => match plot.pattern {
             LineStyle::Solid => {
                 painter.add(egui::Shape::line(
                     points.to_vec(),
@@ -151,6 +172,20 @@ pub(crate) fn paint_study_plot(
             }
         }
     }
+}
+
+/// A filled diamond centred on `at`, `half` from the centre to each corner.
+fn paint_diamond(painter: &egui::Painter, at: Pos2, half: f32, color: Color32) {
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            at - egui::vec2(0.0, half),
+            at + egui::vec2(half, 0.0),
+            at + egui::vec2(0.0, half),
+            at - egui::vec2(half, 0.0),
+        ],
+        color,
+        Stroke::NONE,
+    ));
 }
 
 /// Split crossing boundaries at their intersection, so neither triangle crosses the band.
@@ -397,6 +432,13 @@ impl IndicatorRenderer {
             if !plot.visible {
                 continue;
             }
+            // A step line with diamonds walks as a step line; its diamonds are painted per bar
+            // below, each in its own bar's colour.
+            let diamonds = plot.plot_type == PlotType::StepLineWithDiamonds;
+            if diamonds {
+                plot.plot_type = PlotType::StepLine;
+            }
+            let joins = plot.plot_type.joins_gaps();
             let mut color = plot.color;
             let offset = indicator.plot_offset(line_idx);
             let source_start = display_start
@@ -406,6 +448,28 @@ impl IndicatorRenderer {
                 .checked_add_signed(offset.saturating_neg())
                 .unwrap_or(0)
                 .min(values.len());
+            // A joined plot also walks from the defined value before the view to the one after
+            // it, so a gap across either edge is bridged.
+            // shortcut: scans a gap across an edge on every frame, O(gap length); keep the
+            // nearest defined bars per line if long gaps show in frame profiles.
+            let defined = |i: usize| {
+                i.checked_add_signed(offset)
+                    .is_some_and(|bar| indicator.plot_value(line_idx, bar).is_some())
+            };
+            let walk = if joins {
+                let before = (0..source_start).rev().find(|&i| defined(i));
+                let after = (source_end..values.len()).find(|&i| defined(i));
+                // A value beyond one edge joins the path through a value in view or beyond the
+                // other edge; alone it would carry the plot's label into a view it is not in.
+                if before.is_some() == after.is_some() || (source_start..source_end).any(defined) {
+                    before.unwrap_or(source_start)..after.map_or(source_end, |i| i + 1)
+                } else {
+                    source_start..source_end
+                }
+            } else {
+                source_start..source_end
+            };
+            let walk_start = walk.start;
 
             let mut style = indicator.line_style(line_idx);
             let mut points = Vec::new();
@@ -415,15 +479,23 @@ impl IndicatorRenderer {
             // values[i] belongs to bar i of the full series and `bars` are the
             // visible ones from coords.start_idx, so only that slice is walked.
             let visible_end = source_end;
-            for i in source_start..source_end {
+            for i in walk {
                 let Some(display_bar) = i.checked_add_signed(offset) else {
                     continue;
                 };
+                let price = indicator.plot_value(line_idx, display_bar);
+                // A joined plot passes over a missing value: the path neither ends nor changes
+                // colour or width there.
+                if joins && price.is_none() {
+                    continue;
+                }
                 let x = coords.idx_to_x(display_bar);
                 if !dashed && provisional.is_some_and(|after| i > after) {
                     dashed = true;
                     // The dashes start at the value on `after`, the last final one.
-                    if plot.plot_type == PlotType::Line && plot.pattern == LineStyle::Solid {
+                    if matches!(plot.plot_type, PlotType::Line | PlotType::LineWithBreaks)
+                        && plot.pattern == LineStyle::Solid
+                    {
                         if !points.is_empty() {
                             Self::draw_line(
                                 context,
@@ -464,7 +536,12 @@ impl IndicatorRenderer {
                     points.clear();
                     if matches!(
                         plot.plot_type,
-                        PlotType::Line | PlotType::StepLine | PlotType::Area
+                        PlotType::Line
+                            | PlotType::LineWithBreaks
+                            | PlotType::StepLine
+                            | PlotType::StepLineWithBreaks
+                            | PlotType::Area
+                            | PlotType::AreaWithBreaks
                     ) {
                         points.extend(last);
                     }
@@ -502,7 +579,6 @@ impl IndicatorRenderer {
                     }
                     continue;
                 }
-                let price = indicator.plot_value(line_idx, display_bar);
 
                 if let Some(price) = price {
                     // Convert price to screen Y coord
@@ -532,7 +608,7 @@ impl IndicatorRenderer {
                 }
             }
 
-            if plot.plot_type == PlotType::Line
+            if matches!(plot.plot_type, PlotType::Line | PlotType::LineWithBreaks)
                 && indicator.extend_right()
                 && visible_end == values.len()
                 && points.len() >= 2
@@ -594,6 +670,30 @@ impl IndicatorRenderer {
                     plot,
                     price_scale.price_to_y(0.0),
                 );
+            }
+            if diamonds {
+                // A diamond marks the first value and each change of value, so the first value in
+                // view is compared with the defined value the walk starts at before it.
+                let mut previous = None;
+                for i in walk_start..source_end {
+                    let Some(display_bar) = i.checked_add_signed(offset) else {
+                        continue;
+                    };
+                    let Some(price) = indicator.plot_value(line_idx, display_bar) else {
+                        continue;
+                    };
+                    let changed = previous != Some(price);
+                    previous = Some(price);
+                    let at = Pos2::new(coords.idx_to_x(display_bar), price_scale.price_to_y(price));
+                    if changed && i >= source_start && at.is_finite() {
+                        paint_diamond(
+                            &painter,
+                            at,
+                            indicator.plot_width(line_idx, i) + 2.0,
+                            indicator.plot_color(line_idx, i).unwrap_or(plot.color),
+                        );
+                    }
+                }
             }
             if matches!(
                 plot.plot_type,
@@ -694,7 +794,9 @@ impl IndicatorRenderer {
     ) {
         let painter = context.painter.with_clip_rect(context.rect);
         let plot = PlotStyle { color, ..plot };
-        if plot.plot_type != PlotType::Line || plot.pattern != LineStyle::Solid {
+        if !matches!(plot.plot_type, PlotType::Line | PlotType::LineWithBreaks)
+            || plot.pattern != LineStyle::Solid
+        {
             let positions: Vec<_> = points.iter().map(|(point, _)| *point).collect();
             paint_study_plot(&painter, &positions, plot, baseline);
             return;
@@ -932,18 +1034,22 @@ mod tests {
     fn plot_geometry_uses_the_selected_stroke_and_zero_baseline() {
         let color = Color32::from_rgb(17, 71, 191);
         let points = [Pos2::new(10.0, 15.0), Pos2::new(20.0, 5.0)];
-        for (plot_type, pattern) in [
-            (PlotType::Histogram, LineStyle::Solid),
-            (PlotType::Columns, LineStyle::Solid),
-            (PlotType::StepLine, LineStyle::Solid),
-            (PlotType::Crosses, LineStyle::Solid),
-            (PlotType::TriangleUp, LineStyle::Solid),
-            (PlotType::TriangleDown, LineStyle::Solid),
-            (PlotType::Area, LineStyle::Solid),
-            (PlotType::BackgroundColor, LineStyle::Solid),
-            (PlotType::Circles, LineStyle::Solid),
-            (PlotType::Line, LineStyle::Dashed),
-            (PlotType::Line, LineStyle::Dotted),
+        for (plot_type, pattern, width) in [
+            (PlotType::Histogram, LineStyle::Solid, 4.0),
+            (PlotType::Columns, LineStyle::Solid, 4.0),
+            (PlotType::StepLine, LineStyle::Solid, 4.0),
+            (PlotType::Crosses, LineStyle::Solid, 4.0),
+            (PlotType::TriangleUp, LineStyle::Solid, 4.0),
+            (PlotType::TriangleDown, LineStyle::Solid, 4.0),
+            (PlotType::Area, LineStyle::Solid, 1.0),
+            (PlotType::Area, LineStyle::Solid, 6.0),
+            (PlotType::Area, LineStyle::Dashed, 6.0),
+            (PlotType::AreaWithBreaks, LineStyle::Solid, 6.0),
+            (PlotType::StepLineWithDiamonds, LineStyle::Solid, 4.0),
+            (PlotType::BackgroundColor, LineStyle::Solid, 4.0),
+            (PlotType::Circles, LineStyle::Solid, 4.0),
+            (PlotType::Line, LineStyle::Dashed, 4.0),
+            (PlotType::Line, LineStyle::Dotted, 4.0),
         ] {
             let mut output = Context::default().run_ui(RawInput::default(), |ui| {
                 paint_study_plot(
@@ -952,7 +1058,7 @@ mod tests {
                     &points,
                     PlotStyle {
                         color,
-                        width: 4.0,
+                        width,
                         pattern,
                         plot_type,
                         visible: true,
@@ -997,15 +1103,68 @@ mod tests {
                     assert!(painted.iter().any(|shape| matches!(shape, Shape::Path(path)
                         if path.points == [points[0], Pos2::new(20.0, 15.0), points[1]])));
                 }
+                // The steps, and a diamond at the first value and at the change, 4 + 2 px from its
+                // centre to each corner.
+                PlotType::StepLineWithDiamonds => {
+                    assert!(painted.iter().any(|shape| matches!(shape, Shape::Path(path)
+                        if !path.closed && path.points == [points[0], Pos2::new(20.0, 15.0), points[1]])));
+                    let diamonds: Vec<_> = painted
+                        .iter()
+                        .filter_map(|shape| match shape {
+                            Shape::Path(path) if path.closed && path.fill == color => {
+                                Some(path.points.clone())
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(
+                        diamonds,
+                        [
+                            [(10.0, 9.0), (16.0, 15.0), (10.0, 21.0), (4.0, 15.0)],
+                            [(20.0, -1.0), (26.0, 5.0), (20.0, 11.0), (14.0, 5.0)],
+                        ]
+                        .map(|corners| corners.map(|(x, y)| Pos2::new(x, y)))
+                    );
+                }
                 PlotType::Crosses => {
                     assert_eq!(painted.iter().filter(|shape| matches!(shape, Shape::LineSegment { stroke, .. } if stroke.color == color)).count(), 4);
                 }
                 PlotType::TriangleUp | PlotType::TriangleDown => {
                     assert_eq!(painted.iter().filter(|shape| matches!(shape, Shape::Path(path) if path.points.len() == 3 && path.fill == color)).count(), 2);
                 }
-                PlotType::Area => {
-                    assert!(painted.iter().any(|shape| matches!(shape, Shape::Mesh(mesh)
-                        if mesh.vertices.iter().map(|vertex| vertex.pos).collect::<Vec<_>>() == [points[0], points[1], Pos2::new(20.0, 20.0), Pos2::new(10.0, 20.0)] && mesh.vertices.iter().all(|vertex| vertex.color == color))));
+                // The line in the plot's width, colour and pattern over a fill of its colour at
+                // 20% of its opacity: 17, 71, 191 and 255 times 0.2, rounded.
+                PlotType::Area | PlotType::AreaWithBreaks => {
+                    let fill = Color32::from_rgba_premultiplied(3, 14, 38, 51);
+                    let meshes: Vec<_> = painted
+                        .iter()
+                        .filter_map(|shape| match shape {
+                            Shape::Mesh(mesh) => Some(mesh),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(meshes.len(), 1, "{width} {pattern:?}");
+                    assert_eq!(
+                        meshes[0]
+                            .vertices
+                            .iter()
+                            .map(|vertex| vertex.pos)
+                            .collect::<Vec<_>>(),
+                        [
+                            points[0],
+                            points[1],
+                            Pos2::new(20.0, 20.0),
+                            Pos2::new(10.0, 20.0)
+                        ]
+                    );
+                    assert!(meshes[0].vertices.iter().all(|vertex| vertex.color == fill));
+                    let stroke = Stroke::new(width, color);
+                    if pattern == LineStyle::Solid {
+                        assert!(painted.iter().any(|shape| matches!(shape, Shape::Path(path)
+                            if path.points == points && !path.closed && path.stroke == stroke.into())), "{width}");
+                    } else {
+                        assert!(painted.iter().any(|shape| matches!(shape, Shape::LineSegment { stroke: dash, .. } if *dash == stroke)));
+                    }
                 }
                 PlotType::BackgroundColor => {
                     assert_eq!(painted.iter().filter(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == color && rect.rect.height() == 100.0)).count(), 2);
@@ -1017,6 +1176,184 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Line, step line and area join the values on either side of a missing one, in the view and
+    /// across its edges, and their types with breaks leave the gap. A step line with diamonds
+    /// marks its first value and each change of value.
+    #[test]
+    fn plots_join_a_missing_value_unless_drawn_with_breaks() {
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        let color = Color32::from_rgb(17, 71, 191);
+        let fill = Color32::from_rgba_premultiplied(3, 14, 38, 51);
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(200.0, 100.0));
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 100.0),
+            0.0,
+            100.0,
+            false,
+        );
+        // The open paths, the fills and the diamonds painted for `values` as `kind`.
+        let paint = |values: Vec<Option<f64>>, coords: &ChartMapping, kind: PlotType| {
+            let mut study = CustomIndicator::new("Gap", move |_| {
+                values
+                    .iter()
+                    .map(|value| value.map_or(IndicatorValue::None, IndicatorValue::Single))
+                    .collect()
+            })
+            .with_color(color)
+            .with_plot_types(vec![kind]);
+            study.calculate(&[]);
+            let mut output = Context::default().run_ui(RawInput::default(), |ui| {
+                IndicatorRenderer::render_study(
+                    &RenderContext::new(ui.painter(), rect),
+                    &study,
+                    &[],
+                    0,
+                    &map,
+                    coords,
+                );
+            });
+            let shapes: Vec<_> = std::mem::take(&mut output.shapes)
+                .into_iter()
+                .map(|shape| shape.shape)
+                .collect();
+            output.drop_without_applying_deltas();
+            let paths: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Path(path) if !path.closed => {
+                        assert_eq!(path.stroke, Stroke::new(1.0, color).into(), "{kind:?}");
+                        Some(path.points.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let fills = shapes
+                .iter()
+                .filter(|shape| matches!(shape, Shape::Mesh(mesh) if mesh.vertices.iter().all(|vertex| vertex.color == fill)))
+                .count();
+            let diamonds: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Path(path) if path.closed && path.fill == color => Some(path.points[0]),
+                    _ => None,
+                })
+                .collect();
+            (paths, fills, diamonds)
+        };
+        let pos = |points: &[(f32, f32)]| -> Vec<Pos2> {
+            points.iter().map(|&(x, y)| Pos2::new(x, y)).collect()
+        };
+        // Values 25, 50, none, 75 and 87.5 at x 19, 59, 99, 139 and 179; y is 100 minus the
+        // value.
+        let coords = ChartMapping::new(rect, 40.0, 0, 4, 0.0, map);
+        let (a, b, d, e) = ((19.0, 75.0), (59.0, 50.0), (139.0, 25.0), (179.0, 12.5));
+        let steps = [a, (59.0, 75.0), b, (139.0, 50.0), d, (179.0, 25.0), e];
+        let line = vec![pos(&[a, b, d, e])];
+        let broken = vec![pos(&[a, b]), pos(&[d, e])];
+        for (kind, paths, fills, diamonds) in [
+            (PlotType::Line, line.clone(), 0, vec![]),
+            (PlotType::LineWithBreaks, broken.clone(), 0, vec![]),
+            (PlotType::StepLine, vec![pos(&steps)], 0, vec![]),
+            (
+                PlotType::StepLineWithBreaks,
+                vec![pos(&steps[..3]), pos(&steps[4..])],
+                0,
+                vec![],
+            ),
+            // Diamond tops 1 + 2 px above the values.
+            (
+                PlotType::StepLineWithDiamonds,
+                vec![pos(&steps)],
+                0,
+                pos(&[(19.0, 72.0), (59.0, 47.0), (139.0, 22.0), (179.0, 9.5)]),
+            ),
+            (PlotType::Area, line, 3, vec![]),
+            (PlotType::AreaWithBreaks, broken, 2, vec![]),
+        ] {
+            let values = vec![Some(25.0), Some(50.0), None, Some(75.0), Some(87.5)];
+            assert_eq!(
+                paint(values, &coords, kind),
+                (paths, fills, diamonds),
+                "{kind:?}"
+            );
+        }
+        // Diamonds mark the first value and each change of value: 25, 25, none, 25 and 75 mark
+        // bars 0 and 4 only, a repeat being unmarked on the next bar and across the gap alike.
+        let diamonds = |values: Vec<Option<f64>>, coords: &ChartMapping| {
+            paint(values, coords, PlotType::StepLineWithDiamonds).2
+        };
+        assert_eq!(
+            diamonds(
+                vec![Some(25.0), Some(25.0), None, Some(25.0), Some(75.0)],
+                &coords
+            ),
+            pos(&[(19.0, 72.0), (179.0, 22.0)])
+        );
+        // Only the first and last of twelve values are defined, at x -61 and 379, outside the
+        // view of bars 1 to 8: the joined line crosses it, the line with breaks draws nothing.
+        let coords = ChartMapping::new(rect, 40.0, 2, 6, 0.0, map);
+        let mut values = vec![None; 12];
+        values[0] = Some(25.0);
+        values[11] = Some(75.0);
+        for (kind, paths) in [
+            (PlotType::Line, vec![pos(&[(-61.0, 75.0), (379.0, 25.0)])]),
+            (PlotType::LineWithBreaks, vec![]),
+        ] {
+            assert_eq!(
+                paint(values.clone(), &coords, kind),
+                (paths, 0, vec![]),
+                "{kind:?} across the view"
+            );
+        }
+        // The first value in view is compared with the one before the view: the 25 on bar 3
+        // repeats bar 0's and stays unmarked, the 75 on bar 5 at x 139 is marked.
+        values[3] = Some(25.0);
+        values[5] = Some(75.0);
+        assert_eq!(diamonds(values, &coords), pos(&[(139.0, 22.0)]));
+    }
+
+    /// A joined line reaches past the view only to join a value in it or beyond its other edge,
+    /// so a regression channel fitted to bars 9 to 11 draws no fit label over bars 0 to 4.
+    #[test]
+    fn fit_label_stays_hidden_while_the_channel_is_out_of_view() {
+        let bars: Vec<_> = (0..12)
+            .map(|i| {
+                let c = 10.0 + i as f64;
+                Bar::new(Utc.timestamp_opt(i, 0).unwrap(), c, c, c, c, 1.0)
+            })
+            .collect();
+        let mut study = LinearRegressionChannel::new(3, 0.0);
+        study.calculate(&bars);
+        assert!(study.plot_label().is_some());
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(200.0, 100.0));
+        let price = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 30.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let coords = ChartMapping::new(rect, 40.0, 0, 4, 0.0, price);
+        let mut output = Context::default().run_ui(RawInput::default(), |ui| {
+            IndicatorRenderer::render_study(
+                &RenderContext::new(ui.painter(), rect),
+                &study,
+                &bars,
+                0,
+                &price,
+                &coords,
+            );
+        });
+        let shapes = std::mem::take(&mut output.shapes);
+        output.drop_without_applying_deltas();
+        assert!(
+            !shapes
+                .iter()
+                .any(|clipped| matches!(clipped.shape, Shape::Text(_)))
+        );
     }
 
     #[test]
@@ -1172,13 +1509,17 @@ mod tests {
         };
         let blue = Color32::from_rgba_unmultiplied(41, 98, 255, 51);
         let red = Color32::from_rgba_unmultiplied(255, 0, 0, 51);
-        for (inverted, visible, boundary_visible) in [
-            (false, true, true),
-            (true, true, true),
-            (false, false, true),
-            (true, false, true),
-            (false, true, false),
-            (true, true, false),
+        // (inverted scale, fill switch, boundary plot shown, fill saved since the switch alone
+        // decided that the band is drawn)
+        for (inverted, visible, boundary_visible, independent) in [
+            (false, true, true, true),
+            (true, true, true, true),
+            (false, false, true, true),
+            (true, false, true, true),
+            (false, true, false, true),
+            (true, true, false, true),
+            // Saved before then, a hidden boundary plot also hid the band.
+            (false, true, false, false),
         ] {
             let mut study = CustomIndicator::new("Band", |_| {
                 vec![
@@ -1205,6 +1546,9 @@ mod tests {
             settings["fills"] = serde_json::json!([{
                 "color": blue.to_array(), "inverted_color": red.to_array(), "visible": visible
             }]);
+            if independent {
+                settings["fills"][0]["independent"] = true.into();
+            }
             study
                 .apply_settings(&[], serde_json::from_value(settings).unwrap())
                 .unwrap();
@@ -1241,8 +1585,9 @@ mod tests {
                 })
                 .collect();
             // Values cross halfway from displayed bar 2 to 3, at price 1.
-            assert_eq!(bands.len(), if visible { 2 } else { 0 });
-            if !visible {
+            let drawn = visible && (boundary_visible || independent);
+            assert_eq!(bands.len(), if drawn { 2 } else { 0 });
+            if !drawn {
                 continue;
             }
             let crossing = Pos2::new(209.0, 60.0);
@@ -1368,7 +1713,8 @@ mod tests {
                             .collect()
                     })
                     .with_color(custom)
-                    .with_overlay(true),
+                    .with_overlay(true)
+                    .with_plot_types(vec![PlotType::LineWithBreaks]),
                 ),
                 vec![custom],
             ),

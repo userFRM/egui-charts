@@ -153,6 +153,17 @@ impl Chart {
         let now = ctx.input(|input| input.time);
         self.scroll_footprints(&mut link);
         let drained = link.inbox.drain();
+        // A reset in this drain invalidates earlier footprint answers before admission.
+        if drained
+            .updates
+            .iter()
+            .any(|(id, updates)| link.subscription == Some(*id) && updates.reset)
+        {
+            link.pending
+                .retain(|(_, request, _)| !matches!(request, Request::Footprints(_)));
+            link.retries
+                .retain(|(_, request, _)| !matches!(request, Request::Footprints(_)));
+        }
         for (key, answer) in drained.answers {
             let Some(at) = link
                 .pending
@@ -229,7 +240,7 @@ impl Chart {
                 },
                 Request::Footprints(asked) => match result::<crate::data::FootprintPage>(answer) {
                     Ok(page) => self.apply_footprints(&mut link, &asked, page),
-                    Err(FeedError::NotSupported) => link.footprints_complete = true,
+                    Err(FeedError::NotSupported) => link.footprints_stopped = true,
                     Err(error) => self.request_failed(&mut link, request, failures, error, now),
                 },
                 Request::Trades(asked) => match result::<TradePage>(answer) {
@@ -265,7 +276,8 @@ impl Chart {
                 link.trades = Trades::new(TRADE_CAPACITY);
                 link.trades_from_start = false;
                 link.footprints_complete = false;
-                link.footprint_cursor = None;
+                link.footprints_stopped = false;
+                link.footprint_unavailable.clear();
                 link.pending
                     .retain(|(_, request, _)| !matches!(request, Request::Footprints(_)));
                 link.retries
@@ -542,6 +554,18 @@ impl Chart {
             && !link.reload_pending
             && !clock.timeframe().is_some_and(|tf| tf.is_trade_based());
         link.reload_pending = false;
+        let mut retain_prepared = resumed
+            && link.clock == clock
+            && link.extended_hours == self.extended_hours
+            && link.conversion == self.conversion
+            && link
+                .instrument
+                .as_ref()
+                .is_some_and(|instrument| instrument.symbol == self.symbol)
+            && link
+                .footprint
+                .as_ref()
+                .is_some_and(|flow| flow.live.prepared_before().is_some());
         let mut retain_trades = (resumed || link.clock != clock)
             && link.extended_hours == self.extended_hours
             && link.conversion == self.conversion
@@ -553,6 +577,7 @@ impl Chart {
                 retain_trades &= symbol == self.symbol;
                 if retain_trades {
                     if reset {
+                        retain_prepared = false;
                         link.trades = Trades::new(TRADE_CAPACITY);
                         link.trades_from_start = false;
                     }
@@ -569,6 +594,7 @@ impl Chart {
                 .is_some_and(|i| i.symbol == self.symbol);
         }
         let resume = resumed && retain_trades;
+        retain_prepared &= resume;
         // The feed-wide answer does not depend on the symbol or interval.
         let feed_wide = |request: &Request| matches!(request, Request::Capabilities);
         link.pending.retain(|(_, request, _)| feed_wide(request));
@@ -588,10 +614,13 @@ impl Chart {
         link.conversion = self.conversion.clone();
         for study in self.studies.indicators() {
             for input in study.order_flow_inputs() {
-                input.clear();
+                if !retain_prepared || !input.is_footprint() {
+                    input.clear();
+                }
             }
         }
-        link.study_inputs.clear();
+        link.study_inputs
+            .retain(|(input, _)| retain_prepared && input.is_footprint());
         link.footprint_input = None;
         link.time = None;
         link.pushed_from = None;
@@ -601,9 +630,10 @@ impl Chart {
             link.depth_history.iter_mut().for_each(DepthHistory::clear);
         }
         link.depth_complete = false;
+        link.footprints_stopped = false;
+        link.footprint_unavailable.clear();
         if !resume {
             link.footprints_complete = false;
-            link.footprint_cursor = None;
             link.footprint = link
                 .footprint(None, &[])
                 .map(crate::data::FootprintState::new);
@@ -698,7 +728,8 @@ impl Chart {
                 .footprint(None, &self.state.data().bars)
                 .map(crate::data::FootprintState::new);
             link.footprints_complete = false;
-            link.footprint_cursor = None;
+            link.footprints_stopped = false;
+            link.footprint_unavailable.clear();
         }
         link.rebuild_bubbles(&self.state.data().bars);
         if !supports(link.instrument.as_ref(), timeframe) {
@@ -867,7 +898,7 @@ impl Chart {
                 failures.saturating_add(1),
             ));
         } else if matches!(request, Request::Footprints(_)) {
-            link.footprints_complete = true;
+            link.footprints_stopped = true;
         } else if matches!(request, Request::Depth(_)) {
             link.depth_complete = true;
             if error == FeedError::NotSupported {
@@ -901,7 +932,7 @@ impl Chart {
             .footprint
             .as_ref()
             .and_then(|flow| flow.live.prepared_before());
-        let coverage = prepared_before.and_then(|_| {
+        let coverage = prepared_before.and_then(|prepared| {
             let from = if end {
                 Some(chrono::DateTime::<chrono::Utc>::MIN_UTC)
             } else {
@@ -925,7 +956,9 @@ impl Chart {
                 })
             };
             valid_range.then_some((
-                from.max(asked.since.unwrap_or(from)),
+                // Raw replies rebuild only the suffix after the prepared cutoff. They cannot
+                // certify internal prepared gaps whose executions are not accumulated here.
+                from.max(prepared).max(asked.since.unwrap_or(from)),
                 asked
                     .before
                     .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC),
@@ -977,20 +1010,41 @@ impl Chart {
                 .map(crate::data::FootprintState::new);
         }
         for (input, _) in &link.study_inputs {
-            if changed || (prepared_before.is_some() && input.is_footprint()) {
+            // A prepared footprint input keeps the executions it received: only a page that
+            // changes executions from the cutoff on rebuilds it, as it does the chart's footprint.
+            let prepared = prepared_before.is_some() && input.is_footprint();
+            let rebuild = if prepared { tail_changed } else { changed };
+            if rebuild {
                 input.replace_trades(
                     &link.clock,
                     &link.trades,
                     &self.state.data().bars,
                     link.footprint.as_ref(),
                 );
+            } else if prepared {
+                if rejected == 0
+                    && let Some((from, end, oldest, live)) = coverage
+                {
+                    // The store's losses can include executions the input never received, so the
+                    // page proves its coverage only after the newest of them.
+                    let from = link.trades.lost_until().map_or(from, |lost| {
+                        from.max(
+                            lost.checked_add_signed(chrono::TimeDelta::nanoseconds(1))
+                                .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC),
+                        )
+                    });
+                    input.cover_footprint(from, end.min(oldest.unwrap_or(end)));
+                    if let Some(retained) = unproven.1 {
+                        input.cover_footprint(from.max(retained), end.min(live.unwrap_or(end)));
+                    }
+                }
+                input.refresh_footprint_coverage(&link.trades, None, None);
             }
         }
         link.trade_cursor = continuation;
         link.trades_complete |=
             // The latest page can repeat a retained tape without reaching its oldest execution.
-            end || (continuation.is_none() && !changed && asked.before.is_some())
-                || link.trades.room() == 0;
+            end || (continuation.is_none() && !changed && asked.before.is_some());
     }
 
     /// The start of the range to ask for below `before`: the time `scroll_to_time` is heading
@@ -1005,6 +1059,8 @@ impl Chart {
     /// Asks for trades older than the oldest held once the view reaches it, for the order flow
     /// that consumes them: bubbles, a footprint or a study.
     fn scroll_trades(&mut self, link: &mut FeedLink, executions: bool) {
+        // A page never evicts newer trades, so a full store takes no older ones.
+        link.trades_complete |= link.trades.room() == 0;
         let consumed = link.bubbles.is_some()
             || (executions && link.footprint.is_some())
             || !link.study_inputs.is_empty();

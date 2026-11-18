@@ -16,7 +16,8 @@ pub struct StudyTemplate {
     pub inputs: Vec<(String, InputValue)>,
     /// Plot styles, precision and interval visibility.
     pub settings: StudySettings,
-    /// Whether the study is visible.
+    /// Whether the user has the study shown. Its interval visibility in
+    /// [`settings`](Self::settings) still hides it on the intervals it leaves out.
     pub visible: bool,
     /// The value scale, or `None` to keep the study's own, as templates saved before the scale
     /// was kept do.
@@ -126,7 +127,7 @@ impl StudyTemplate {
                 .map(|input| (input.id, input.value))
                 .collect(),
             settings: study.settings(),
-            visible: study.is_visible(),
+            visible: study.user_visible(),
             scale: Some(study.scale()),
         }
     }
@@ -181,8 +182,15 @@ impl StudyTemplate {
             .into_iter()
             .chain(template.inputs.iter().cloned())
             .collect();
+        // A host study registered under a built-in's name never had the presentation an upgrade
+        // gives that built-in's older templates either.
+        let settings = if factory.is_host(&self.name) {
+            &self.settings
+        } else {
+            &template.settings
+        };
         let mut study = ConfiguredStudy::new(study);
-        study.apply_settings(&inputs, template.settings.clone())?;
+        study.apply_settings(&inputs, settings.clone())?;
         study.set_visible(template.visible);
         if let Some(scale) = template.scale {
             study.set_scale(scale);
@@ -217,6 +225,28 @@ impl StudyTemplate {
                 _ => None,
             })
             .unwrap_or(0);
+        // Guides a study drew none of before it declared them stay hidden, and their band
+        // unfilled; both keep the styles they take once shown.
+        let hidden_levels = |settings: &mut StudySettings, declared: &dyn Indicator| {
+            let (levels, _, color) = super::settings::declared_levels(declared);
+            settings.levels = levels
+                .into_iter()
+                .map(|level| crate::studies::LevelStyle {
+                    visible: false,
+                    ..level
+                })
+                .collect();
+            settings.fill_between_levels = false;
+            settings.level_fill_color = color;
+        };
+        let value = |id: &str| {
+            self.inputs
+                .iter()
+                .find_map(|(input, value)| (input == id).then_some(value))
+        };
+        let shared_smoothing = declares("smoothing")
+            && value("smooth1").is_some()
+            && value("smooth1") == value("smooth2");
         let mut template = self.clone();
         match self.name.as_str() {
             // One multiplier set both bands before each had its own.
@@ -333,6 +363,70 @@ impl StudyTemplate {
                     });
                 }
             }
+            // An SMI drew no guides and no shading before it declared them. It listed its two
+            // smoothing lengths under ids of their own before an equal pair shared one input.
+            "SMI"
+                if self.settings.levels.is_empty()
+                    || self.settings.gradients.is_empty()
+                    || shared_smoothing =>
+            {
+                if shared_smoothing {
+                    template.inputs.retain(|(id, _)| id != "smooth2");
+                    for (id, _) in &mut template.inputs {
+                        if id == "smooth1" {
+                            *id = "smoothing".to_owned();
+                        }
+                    }
+                }
+                let declared = crate::studies::StochasticMomentumIndex::default();
+                if self.settings.levels.is_empty() {
+                    hidden_levels(&mut template.settings, &declared);
+                }
+                if self.settings.gradients.is_empty() {
+                    template.settings.gradients = declared
+                        .gradients()
+                        .iter()
+                        .map(|fill| crate::studies::GradientStyle {
+                            colors: fill.colors,
+                            visible: false,
+                        })
+                        .collect();
+                }
+            }
+            // A Stochastic RSI and a Connors RSI drew no guides before they declared them.
+            "StochRSI" if self.settings.levels.is_empty() => {
+                hidden_levels(
+                    &mut template.settings,
+                    &crate::studies::StochasticRSI::default(),
+                );
+            }
+            "Connors RSI" if self.settings.levels.is_empty() => {
+                hidden_levels(
+                    &mut template.settings,
+                    &crate::studies::ConnorsRSI::default(),
+                );
+            }
+            // A Stochastic saved before its guides had styles drew the two it declared then,
+            // without a band; the middle guide is added hidden as for one saved with those two.
+            "Stochastic" if self.settings.levels.is_empty() => {
+                let declared = crate::studies::Stochastic::default();
+                let (levels, _, color) = super::settings::declared_levels(&declared);
+                template.settings.levels = levels.into_iter().take(2).collect();
+                template.settings.fill_between_levels = false;
+                template.settings.level_fill_color = color;
+            }
+            // A Donchian channel filled no band before it declared one; hidden, the band keeps the
+            // colour it is filled in once shown.
+            "Donchian" if self.settings.fills.is_empty() => {
+                template.settings.fills = crate::studies::DonchianChannels::default()
+                    .fills()
+                    .iter()
+                    .map(|fill| crate::studies::FillStyle {
+                        visible: false,
+                        ..crate::studies::FillStyle::new(fill.color)
+                    })
+                    .collect();
+            }
             // A VWAP opened without bands, and no band was filled, before it opened with a filled
             // one.
             "VWAP" if !has("band_count") || (self.settings.fills.is_empty() && bands > 0) => {
@@ -345,35 +439,17 @@ impl StudyTemplate {
                 // draws two of the saved lines, so their number also bounds a corrupt band count.
                 template.settings.fills = (0..bands.min(self.settings.plots.len()))
                     .map(|band| crate::studies::FillStyle {
-                        color: self
-                            .settings
-                            .plots
-                            .get(1 + 2 * band)
-                            .map_or(egui::Color32::TRANSPARENT, |plot| {
-                                plot.color.gamma_multiply_u8(13)
-                            }),
-                        inverted_color: None,
                         visible: false,
+                        ..crate::studies::FillStyle::new(
+                            self.settings
+                                .plots
+                                .get(1 + 2 * band)
+                                .map_or(egui::Color32::TRANSPARENT, |plot| {
+                                    plot.color.gamma_multiply_u8(13)
+                                }),
+                        )
                     })
                     .collect();
-            }
-            // A Correlation Coefficient drew its zero guide alone before it opened with guides at
-            // its bounds; hidden, they leave the pane as it was saved. One guide bounded no band,
-            // so a fill saved on draws none between them either. A host study under the name,
-            // which has no log returns, keeps its own guides.
-            "Correlation Coefficient"
-                if self.settings.levels.len() < 2 && declares("log_returns") =>
-            {
-                let (mut levels, ..) =
-                    super::settings::declared_levels(&crate::studies::Correlation::default());
-                for bound in &mut levels[..2] {
-                    bound.visible = false;
-                }
-                if let Some(zero) = self.settings.levels.first() {
-                    levels[2] = *zero;
-                }
-                template.settings.levels = levels;
-                template.settings.fill_between_levels = false;
             }
             // A Rank Correlation had no average, and drew no levels, before it opened with an
             // average, three levels and the band between them filled.
@@ -499,6 +575,39 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A study the chart wraps saves the switch its own `user_visible` reports, not whether its
+    /// other rule hides it.
+    #[test]
+    fn templates_save_the_user_switch_of_a_wrapped_study() {
+        #[derive(Clone, Default)]
+        struct Muted(crate::studies::IndicatorValues);
+        impl Indicator for Muted {
+            fn name(&self) -> &str {
+                "Muted"
+            }
+            fn calculate(&mut self, _: &[Bar]) {}
+            fn values(&self) -> &crate::studies::IndicatorValues {
+                &self.0
+            }
+            fn colors(&self) -> Vec<Color32> {
+                vec![Color32::RED]
+            }
+            fn set_colors(&mut self, _: Vec<Color32>) {}
+            fn is_visible(&self) -> bool {
+                false
+            }
+            fn set_visible(&mut self, _: bool) {}
+            fn user_visible(&self) -> bool {
+                true
+            }
+            fn clone_box(&self) -> Box<dyn Indicator> {
+                Box::new(self.clone())
+            }
+        }
+        let study = ConfiguredStudy::new(Box::new(Muted::default()));
+        assert!(StudyTemplate::from_study(&study).visible);
     }
 
     /// What a chart shows of a calculated study: its name, values, line names, crossing
@@ -900,10 +1009,17 @@ mod tests {
         }
     }
 
+    /// A Correlation Coefficient as a chart saved it before it opened as an area: a line with its
+    /// zero guide alone, here dotted, 3 px wide and orange with its value line.
+    const CORRELATION_ZERO_GUIDE: &str = r#"{"name":"Correlation Coefficient","inputs":[["symbol_0",{"Symbol":""}],["source_0",{"Choice":3}],["symbol_1",{"Symbol":""}],["source_1",{"Choice":3}],["length",{"Length":20}],["log_returns",{"Toggle":false}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/type.Correlation.html","plots":[{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[{"value":null,"color":[255,152,0,255],"pattern":"Dotted","width":3.0,"visible":true,"price_line":true}],"fill_between_levels":false,"level_fill_color":[2,9,15,16],"untagged_plots":[],"price_line_plots":[0],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+
     /// An RSI, a VWAP, an auto anchored VWAP and a Correlation Coefficient saved before their
-    /// defaults gained an average, bands, and an area with guides at its bounds restore with the
-    /// plots and guides they had, and a Rank Correlation saved before it had an average, levels
-    /// and a filled band, and a Majority Rule saved before its guide at 50, restore without them.
+    /// defaults gained an average, bands, and an area restore with the plots and guides they had,
+    /// and a Rank Correlation saved before it had an average, levels and a filled band, and a
+    /// Majority Rule saved before its guide at 50, restore without them. So do an SMI, a
+    /// Stochastic RSI and a Connors RSI saved before their guides, a Stochastic saved before its
+    /// guides had styles, a Donchian channel saved before its band and a band saved with its
+    /// boundary plots hidden before it could be drawn without them.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
         let mut rsi = ConfiguredStudy::new(Box::new(RSI::new(9)));
@@ -979,49 +1095,19 @@ mod tests {
         let filled = StudyTemplate::from_study(&bands).create().unwrap();
         assert_eq!(filled.fills().len(), 2);
 
-        // A Correlation Coefficient opens as an area with guides at its bounds and at zero. Saved
-        // as a line with the zero guide alone, here dotted, 3 px wide and orange with its value
-        // line, it restores as that line with the bounds hidden, and a bound shown since stays
-        // shown through a template.
+        // A Correlation Coefficient opens as an area. Saved as a line, which then broke at every
+        // gap, it restores as that line with breaks.
         let fresh =
             ConfiguredStudy::new(Box::new(crate::studies::Correlation::default())).settings();
         assert_eq!(fresh.plots[0].plot_type, crate::studies::PlotType::Area);
-        assert!(fresh.levels.iter().all(|level| level.visible));
-        let saved = r#"{"name":"Correlation Coefficient","inputs":[["symbol_0",{"Symbol":""}],["source_0",{"Choice":3}],["symbol_1",{"Symbol":""}],["source_1",{"Choice":3}],["length",{"Length":20}],["log_returns",{"Toggle":false}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/type.Correlation.html","plots":[{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[{"value":null,"color":[255,152,0,255],"pattern":"Dotted","width":3.0,"visible":true,"price_line":true}],"fill_between_levels":false,"level_fill_color":[2,9,15,16],"untagged_plots":[],"price_line_plots":[0],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
-        let mut restored = serde_json::from_str::<StudyTemplate>(saved)
+        let restored = serde_json::from_str::<StudyTemplate>(CORRELATION_ZERO_GUIDE)
             .unwrap()
             .create()
             .unwrap();
-        let settings = restored.settings();
-        assert_eq!(settings.plots[0].plot_type, crate::studies::PlotType::Line);
-        let values: Vec<_> = restored.pane().levels.iter().map(|l| l.0).collect();
-        assert_eq!(values, [1.0, -1.0, 0.0]);
-        let [upper, lower, zero] = settings.levels[..] else {
-            panic!("three guides");
-        };
-        assert!(!upper.visible && !lower.visible);
         assert_eq!(
-            zero,
-            crate::studies::LevelStyle {
-                value: None,
-                color: Color32::from_rgb(255, 152, 0),
-                pattern: crate::model::LineStyle::Dotted,
-                width: 3.0,
-                visible: true,
-                price_line: true,
-            }
+            restored.settings().plots[0].plot_type,
+            crate::studies::PlotType::LineWithBreaks
         );
-        let mut shown = settings.clone();
-        shown.levels[0].visible = true;
-        restored.apply_settings(&[], shown.clone()).unwrap();
-        let again = StudyTemplate::from_study(restored.as_ref())
-            .create()
-            .unwrap();
-        assert_eq!(again.settings().levels, shown.levels);
-        // A host could switch the fill on while the one guide bounded no band.
-        let mut filled: StudyTemplate = serde_json::from_str(saved).unwrap();
-        filled.settings.fill_between_levels = true;
-        assert!(!filled.create().unwrap().pane().fill_between_levels);
 
         // An auto anchored VWAP as a chart saved it before the study had bands, its line edited
         // to orange at two pixels and its length to 30: it draws that line alone, and the hidden
@@ -1079,6 +1165,87 @@ mod tests {
             drawn(&StudyTemplate::from_study(&direction)),
             (1, (0, 0), false)
         );
+        // An SMI, a Stochastic RSI and a Connors RSI as releases before their guides saved them
+        // draw none and fill no band, and the SMI none of its shading either; a Stochastic saved
+        // before its guides had styles draws its 80 and 20 guides without a band. Shown, each
+        // guide, band and shaded zone takes the style of a study added now.
+        let smi = r#"{"name":"SMI","inputs":[["period",{"Length":10}],["smooth1",{"Length":3}],["smooth2",{"Length":3}],["signal_period",{"Length":10}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.StochasticMomentumIndex.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[255,152,0,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[]},"visible":true,"scale":"Independent"}"#;
+        let stoch_rsi = r#"{"name":"StochRSI","inputs":[["rsi_period",{"Length":14}],["stoch_period",{"Length":14}],["smooth_k",{"Length":3}],["smooth_d",{"Length":3}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.StochasticRSI.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[]},"visible":true,"scale":"Independent"}"#;
+        let crsi = r#"{"name":"Connors RSI","inputs":[["rsi_period",{"Length":3}],["streak_period",{"Length":2}],["rank_period",{"Length":100}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ConnorsRSI.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[]},"visible":true,"scale":"Independent"}"#;
+        let stochastic = r#"{"name":"Stochastic","inputs":[["k_period",{"Length":14}],["k_smooth",{"Length":3}],["d_period",{"Length":3}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":null,"plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":2,"hidden_intervals":[]},"visible":true,"scale":"Independent"}"#;
+        for (saved, declared, guides, lines) in [
+            (smi, 3, 0, 2),
+            (stoch_rsi, 3, 0, 2),
+            (crsi, 2, 0, 1),
+            (stochastic, 3, 2, 2),
+        ] {
+            let older: StudyTemplate = serde_json::from_str(saved).unwrap();
+            assert_eq!(
+                drawn(&older),
+                (lines, (declared, guides), false),
+                "{}",
+                older.name
+            );
+            let fresh = ConfiguredStudy::new(IndicatorFactory::new().create(&older.name).unwrap())
+                .settings();
+            let mut shown = older.create().unwrap().settings();
+            for level in &mut shown.levels {
+                level.visible = true;
+            }
+            for fill in &mut shown.gradients {
+                fill.visible = true;
+            }
+            assert_eq!(
+                (shown.levels, shown.level_fill_color, shown.gradients),
+                (fresh.levels, fresh.level_fill_color, fresh.gradients),
+                "{}",
+                older.name
+            );
+        }
+        // Its pre-shading save restored, an SMI draws neither shaded zone.
+        let older: StudyTemplate = serde_json::from_str(smi).unwrap();
+        assert!(
+            older
+                .create()
+                .unwrap()
+                .gradients()
+                .iter()
+                .all(|fill| fill.colors == [Color32::TRANSPARENT; 2])
+        );
+
+        // A Donchian channel as the release before its band saved it fills none, and the hidden
+        // band keeps its declared colour.
+        let saved = r#"{"name":"Donchian","inputs":[["period",{"Length":20}],["offset",{"Integer":0}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.DonchianChannels.html","plots":[{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[16,7,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#;
+        let restored = serde_json::from_str::<StudyTemplate>(saved)
+            .unwrap()
+            .create()
+            .unwrap();
+        assert!(restored.fills().is_empty());
+        let fresh = ConfiguredStudy::new(IndicatorFactory::new().create("Donchian").unwrap());
+        let mut band = restored.settings().fills;
+        band[0].visible = true;
+        assert_eq!(band, fresh.settings().fills);
+
+        // Bollinger Bands as a release before bands ignored their boundary plots saved them, the
+        // upper and lower lines hidden and the band switch on: no band is drawn, and its switch
+        // is off. Saved since with the same lines hidden, the band stays drawn.
+        let saved = r#"{"name":"BB","inputs":[["period",{"Length":20}],["basis",{"Choice":0}],["std_dev",{"Number":2.0}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.BollingerBands.html","plots":[{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":false},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[8,153,129,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":false}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[15,3,4,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[2,8,12,13],"inverted_color":null,"visible":true}],"gradients":[]},"visible":true,"scale":"Main"}"#;
+        let restored = serde_json::from_str::<StudyTemplate>(saved)
+            .unwrap()
+            .create()
+            .unwrap();
+        assert!(restored.fills().is_empty());
+        assert!(!restored.settings().fills[0].visible);
+        let mut since = ConfiguredStudy::new(IndicatorFactory::new().create("BB").unwrap());
+        let mut settings = since.settings();
+        settings.plots[0].visible = false;
+        settings.plots[2].visible = false;
+        since.apply_settings(&[], settings).unwrap();
+        let again = StudyTemplate::from_study(&since).create().unwrap();
+        assert_eq!(again.fills().len(), 1);
+        let again = StudyTemplate::from_study(again.as_ref()).create().unwrap();
+        assert_eq!(again.fills().len(), 1);
+
         // A Technical Ratings as the release before its table inputs saved it, its fast length
         // edited to 20 and its summary to orange: it rates every vote, requests no other interval
         // and draws its table where and as it did.
@@ -1114,10 +1281,65 @@ mod tests {
         assert_eq!(table.rows.len(), 3);
     }
 
+    /// A Connors RSI saved with guides at 70, 50 and 30 and a Correlation Coefficient saved with
+    /// guides at 1, -1 and 0, as they opened before they dropped the middle guide and the bounds,
+    /// restore those guides with their saved styles and band and keep them when saved again. A
+    /// Correlation Coefficient saved with its zero guide alone keeps that guide; one added now has
+    /// only that guide.
+    #[test]
+    fn studies_saved_with_guides_they_no_longer_open_with_keep_them() {
+        let gray = crate::studies::palette::GRAY;
+        let orange = Color32::from_rgb(255, 152, 0);
+        assert_eq!(
+            ConfiguredStudy::new(Box::new(crate::studies::Correlation::default()))
+                .pane()
+                .levels,
+            [(0.0, gray.gamma_multiply_u8(128), "Zero")]
+        );
+        let crsi = r#"{"name":"Connors RSI","inputs":[["rsi_period",{"Length":3}],["streak_period",{"Length":2}],["rank_period",{"Length":100}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ConnorsRSI.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":55.0,"color":[255,152,0,255],"pattern":"Dotted","width":3.0,"visible":true,"price_line":true},{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":false,"price_line":false}],"fill_between_levels":true,"level_fill_color":[3,15,24,26],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let correlation = r#"{"name":"Correlation Coefficient","inputs":[["symbol_0",{"Symbol":""}],["source_0",{"Choice":3}],["symbol_1",{"Symbol":""}],["source_1",{"Choice":3}],["length",{"Length":20}],["log_returns",{"Toggle":false}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/type.Correlation.html","plots":[{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"Area","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":false,"price_line":false},{"value":-0.5,"color":[120,123,134,255],"pattern":"Dashed","width":2.0,"visible":true,"price_line":false},{"value":null,"color":[255,152,0,255],"pattern":"Dotted","width":3.0,"visible":true,"price_line":true}],"fill_between_levels":true,"level_fill_color":[2,9,15,16],"untagged_plots":[],"price_line_plots":[0],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        for (saved, levels, fill) in [
+            (
+                crsi,
+                vec![
+                    (70.0, gray, "Upper guide"),
+                    (55.0, orange, "Middle guide"),
+                    (30.0, Color32::TRANSPARENT, "Lower guide"),
+                ],
+                Some([0, 2]),
+            ),
+            (
+                correlation,
+                vec![
+                    (1.0, Color32::TRANSPARENT, "Upper guide"),
+                    (-0.5, gray, "Lower guide"),
+                    (0.0, orange, "Zero"),
+                ],
+                None,
+            ),
+            (CORRELATION_ZERO_GUIDE, vec![(0.0, orange, "Zero")], None),
+        ] {
+            let saved: StudyTemplate = serde_json::from_str(saved).unwrap();
+            let restored = saved.create().unwrap();
+            assert_eq!(
+                restored.settings().levels,
+                saved.settings.levels,
+                "{}",
+                saved.name
+            );
+            assert_eq!(restored.pane().levels, levels, "{}", saved.name);
+            assert_eq!(restored.level_fill_indices(), fill, "{}", saved.name);
+            let again = StudyTemplate::from_study(restored.as_ref())
+                .create()
+                .unwrap();
+            assert_eq!(again.pane().levels, levels, "{}", saved.name);
+        }
+    }
+
     /// A host study registered under a built-in's name replaces it (`IndicatorFactory::register`),
     /// so its own template restores through that factory as that study, with the inputs and plots
-    /// it was saved with, also where an upgrade of the built-in's templates adds, renames or
-    /// converts an input.
+    /// and fill styles it was saved with, also where an upgrade of the built-in's templates adds,
+    /// renames or converts an input or adds fill styles.
     #[test]
     fn host_studies_named_like_upgraded_builtins_restore_from_their_templates() {
         use crate::studies::{CustomIndicator, IndicatorValue, InputKind};
@@ -1125,7 +1347,12 @@ mod tests {
         let millis = || InputKind::Number(0.0, 1e13);
         let rows = [
             ("RSI", vec![], 1),
-            ("VWAP", vec![], 1),
+            // Built-in templates with a band and no fill styles restore with hidden fills.
+            (
+                "VWAP",
+                vec![("band_count", Length(1), InputKind::Length(0, 3))],
+                3,
+            ),
             ("VWAP Auto Anchored", vec![], 1),
             ("Trading Sessions", vec![], 1),
             // Built-in templates with `offset_percent` restore as Envelopes, which draws three
@@ -1179,6 +1406,8 @@ mod tests {
                 .create_with(&factory)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!((restored.name(), restored.line_count()), (name, lines));
+            let fills = StudyTemplate::from_study(restored.as_ref()).settings.fills;
+            assert_eq!(fills, saved.settings.fills, "{name}");
             let restored = restored.inputs();
             for (id, value, _) in inputs {
                 let input = restored.iter().find(|input| input.id == id);

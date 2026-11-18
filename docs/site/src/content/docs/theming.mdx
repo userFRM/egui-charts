@@ -100,8 +100,10 @@ Keys include punctuation and case. Preserve placeholder names such as
 in host controls to translate a template and insert already-formatted values.
 Call [`clear_translator`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/localization/fn.clear_translator.html)
 to restore English. The lookup is scoped to the context and must be `Send + Sync`
-and `'static`. Some application UI labels still use direct English text; this
-hook does not guarantee a fully translated application.
+and `'static`. Study and plot names go through it under the English names the
+studies report, on the chart, in tooltips, the data window and axis tags; saved
+layouts and templates keep those English names. Text the host supplies, such as
+symbols, series names and legend input captions, is shown as given.
 
 Calendar language and UI translation are separate. `set_locale(Some("de-DE".into()))`
 names months and weekdays in German when `locales` is enabled (on by default).

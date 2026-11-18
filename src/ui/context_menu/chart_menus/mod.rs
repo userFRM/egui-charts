@@ -194,6 +194,7 @@ impl ChartMenus {
         set_control_visible(&mut self.series.hidden, control, visible);
         set_control_visible(&mut self.study.hidden, control, visible);
         set_control_visible(&mut self.axes.hidden, control, visible);
+        set_control_visible(&mut self.drawing.hidden, control, visible);
     }
 
     /// Sets the quantity of the chart menu's order entries and the order types the account

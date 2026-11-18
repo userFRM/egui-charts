@@ -544,6 +544,36 @@ pub struct HistoryRequest {
     pub conversion: Option<String>,
 }
 
+impl HistoryRequest {
+    /// The latest `count` bars of `symbol` at `timeframe`: regular hours, unadjusted and in the
+    /// instrument's own currency, on the UTC calendar of [`BarClock::new`]. Assign
+    /// [`before`](Self::before) and [`since`](Self::since) to bound the range, and
+    /// [`clock`](Self::clock) and the other fields to match a chart.
+    ///
+    /// ```
+    /// use egui_charts::data::HistoryRequest;
+    /// use egui_charts::model::Timeframe;
+    ///
+    /// let mut request = HistoryRequest::new("AAPL", Timeframe::Min5, 500);
+    /// request.before = Some("2026-01-05T15:00:00Z".parse()?);
+    /// assert_eq!(request.since, None);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn new(symbol: impl Into<String>, timeframe: Timeframe, count: usize) -> Self {
+        Self {
+            symbol: symbol.into(),
+            timeframe,
+            clock: BarClock::new(timeframe),
+            before: None,
+            since: None,
+            count,
+            extended_hours: false,
+            adjusted: false,
+            conversion: None,
+        }
+    }
+}
+
 /// One page of history. A page without bars ends scroll-back like `end_of_history` does, unless it
 /// names where older bars continue with [`continue_before`](Self::continue_before), so a feed that
 /// pages by time window can answer an empty window such as a weekend.
@@ -606,7 +636,8 @@ pub struct FootprintRequest {
     pub ticks_per_row: u32,
     /// Only bars opening strictly before this instant; `None` requests the latest page.
     pub before: Option<DateTime<Utc>>,
-    /// Only bars opening at or after this instant; see [`HistoryRequest::since`].
+    /// Inclusive start of the required span. A reply may answer only its newest suffix;
+    /// earlier unanswered history remains requestable.
     pub since: Option<DateTime<Utc>>,
     /// Maximum bars wanted, the newest ones in the requested range. A page exceeding this
     /// count is rejected as [`FeedError::InvalidData`], not truncated.
@@ -619,10 +650,51 @@ pub struct FootprintRequest {
     pub conversion: Option<String>,
 }
 
+impl FootprintRequest {
+    /// The latest `count` bars of `symbol` at `timeframe`, in rows of one tick of `tick_size`,
+    /// with the other fields as [`HistoryRequest::new`] sets them. Assign
+    /// [`before`](Self::before) and [`since`](Self::since) to bound the range.
+    ///
+    /// ```
+    /// use egui_charts::data::FootprintRequest;
+    /// use egui_charts::model::Timeframe;
+    ///
+    /// let request = FootprintRequest::new("ES", Timeframe::Min1, 300, 0.25);
+    /// assert_eq!(request.ticks_per_row, 1);
+    /// ```
+    pub fn new(
+        symbol: impl Into<String>,
+        timeframe: Timeframe,
+        count: usize,
+        tick_size: f64,
+    ) -> Self {
+        Self {
+            symbol: symbol.into(),
+            timeframe,
+            clock: BarClock::new(timeframe),
+            tick_size,
+            ticks_per_row: 1,
+            before: None,
+            since: None,
+            count,
+            extended_hours: false,
+            adjusted: false,
+            conversion: None,
+        }
+    }
+}
+
 /// Prepared footprint history, validated as [`Footprint::from_bars`] before it is displayed.
 ///
-/// The page covers every execution from its first bar's open to `complete_before`, exclusive.
-/// Missing bars in that range had no executions. Do not span a gap in the host's recording.
+/// An available page covers every execution from its first bar's first instant (or an empty
+/// page's `continue_before`) to `complete_before`, exclusive: the bar's open, or on a daily or
+/// longer clock with a session the open of its first trading date, which can come before it, as
+/// `data::resample_with_session` dates history. Missing bars in that range had no executions.
+/// Use [`unavailable`](Self::unavailable) for a gap in the host's recording; do not describe
+/// missing data as empty history. A bounded answer ends at the requested `before`, with the
+/// executions of the bars that open before it, and may leave an earlier suffix request to
+/// finish the range.
+///
 /// Supply matching OHLC through [`Datafeed::history`]. Individual trades remain available
 /// through [`Datafeed::trades`] for consumers such as the tape and volume bubbles.
 #[derive(Clone, Debug, PartialEq)]
@@ -632,19 +704,23 @@ pub struct FootprintPage {
     /// range. Owned bars may arrive in any order; shared bars must be strictly chronological.
     /// Unknown-side volume stays separate from bid and ask.
     pub bars: FootprintBars,
-    /// Exclusive execution cutoff, later than every supplied bar's open. Every eligible trade
-    /// before this instant is included, and none at this instant is. Held or live trades at
-    /// or after it continue the page; trade IDs do not order or define this boundary.
+    /// Exclusive end of the answered span, later than every supplied bar's first instant.
+    /// On an available page, every eligible trade before this instant is included, and
+    /// none at this instant is. Held or live trades at or after it continue the initial
+    /// page; trade IDs do not order or define this boundary.
     /// If a snapshot ends partway through one timestamp, exclude that entire instant.
-    /// An older page with bars or a continuation must end at [`FootprintRequest::before`].
-    /// An empty continuation certifies that nothing traded from `continue_before` to that
-    /// boundary, so the next page can end at its own requested boundary without a gap.
+    /// A bounded answer must end at [`FootprintRequest::before`], and leaves out the trades of
+    /// the bar opening there. Internal fills must be clock-aligned and do not move the initial
+    /// prepared/live boundary.
     pub complete_before: DateTime<Utc>,
-    /// Nothing exists before the oldest returned bar, or the requested boundary for an empty page.
+    /// Nothing exists before the oldest returned bar, or the requested boundary for an empty
+    /// terminal page. This does not certify or suppress internal recording gaps.
     pub end_of_history: bool,
-    /// An empty page may continue before this instant instead of ending history, as in
-    /// [`HistoryPage::continue_before`]. Ignored when the page has bars.
+    /// Start of an empty answered span. An available page certifies no executions between
+    /// this instant and `complete_before`; an unavailable page makes no such claim.
+    /// Ignored when the page has bars.
     pub continue_before: Option<DateTime<Utc>>,
+    available: bool,
 }
 
 impl FootprintPage {
@@ -673,6 +749,7 @@ impl FootprintPage {
             complete_before,
             end_of_history,
             continue_before: None,
+            available: true,
         }
     }
 
@@ -719,7 +796,40 @@ impl FootprintPage {
             complete_before,
             end_of_history,
             continue_before: None,
+            available: true,
         }
+    }
+
+    /// A contiguous span the host cannot supply, without claiming that no executions occurred.
+    ///
+    /// The answer covers `[from, before)` and a bounded request requires `before` to equal
+    /// its exclusive boundary. It carries no bars. Loading can continue before `from`;
+    /// this span is not retried automatically until the feed is refreshed or reconnected.
+    /// Invalid boundaries or a subsequently added bar are rejected during admission.
+    ///
+    /// ```
+    /// use egui_charts::data::FootprintPage;
+    /// let from = "2026-01-05T10:00:00Z".parse()?;
+    /// let before = "2026-01-05T11:00:00Z".parse()?;
+    /// let page = FootprintPage::unavailable(from, before);
+    /// assert!(!page.is_available());
+    /// assert!(page.bars.is_empty());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn unavailable(from: DateTime<Utc>, before: DateTime<Utc>) -> Self {
+        Self {
+            bars: FootprintBars::Owned(Vec::new()),
+            complete_before: before,
+            end_of_history: false,
+            continue_before: Some(from),
+            available: false,
+        }
+    }
+
+    /// Whether the page certifies complete executions, including a confirmed-empty span.
+    /// `false` describes unavailable history, not pending work or a transport error.
+    pub fn is_available(&self) -> bool {
+        self.available
     }
 
     /// Sets [`continue_before`](Self::continue_before) for an empty page.
@@ -746,6 +856,27 @@ pub struct TradeRequest {
     /// The currency or unit the host chose, in which the prices are wanted; see
     /// [`HistoryRequest::conversion`].
     pub conversion: Option<String>,
+}
+
+impl TradeRequest {
+    /// The latest `count` trades of `symbol`, priced in the instrument's own currency. Assign
+    /// [`before`](Self::before) and [`since`](Self::since) to bound the range.
+    ///
+    /// ```
+    /// use egui_charts::data::TradeRequest;
+    ///
+    /// let request = TradeRequest::new("ES", 10_000);
+    /// assert_eq!(request.before, None);
+    /// ```
+    pub fn new(symbol: impl Into<String>, count: usize) -> Self {
+        Self {
+            symbol: symbol.into(),
+            before: None,
+            since: None,
+            count,
+            conversion: None,
+        }
+    }
 }
 
 /// One page of trades. A page without trades ends scroll-back like `end_of_history` does, unless

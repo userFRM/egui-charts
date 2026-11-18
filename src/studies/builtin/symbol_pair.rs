@@ -29,8 +29,8 @@
 //!
 //! # Presentation
 //!
-//! The correlation opens as an area from zero with dashed guides at its bounds, 1 and -1, and at
-//! zero. The ratio and the spread open as lines without guides.
+//! The correlation opens as an area from zero, its line over a translucent fill, with a dashed
+//! guide at zero. The ratio and the spread open as lines without guides.
 
 use crate::model::{Bar, PriceSource};
 use crate::studies::palette;
@@ -345,13 +345,9 @@ impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO,
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             range: CORRELATION.then_some((-1.1, 1.1)),
-            // The bounds of a correlation, then zero.
+            // Zero for a correlation; the ratio and the spread have no guide.
             levels: if CORRELATION {
-                vec![
-                    (1.0, palette::GRAY, "Upper guide"),
-                    (-1.0, palette::GRAY, "Lower guide"),
-                    (0.0, palette::GRAY.gamma_multiply_u8(128), "Zero"),
-                ]
+                vec![(0.0, palette::GRAY.gamma_multiply_u8(128), "Zero")]
             } else {
                 Vec::new()
             },

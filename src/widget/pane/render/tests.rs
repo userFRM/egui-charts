@@ -501,24 +501,48 @@ fn pane_separators_resize_neighbors_and_maximize_restores_the_layout() {
         assert!(chart.undo());
         assert_eq!(chart.pane_layout.maximized, Some(chart.main_series_pane()));
         assert!(chart.redo());
-        // A double-click that finishes a drawing only finishes it.
+        // A double-click that places or finishes a drawing only does that, in the price and a study
+        // pane: a path double-clicked with no earlier point, and a sector whose finishing click
+        // selects it, so the second click lands on its handle.
         #[cfg(feature = "drawings")]
-        {
-            use crate::drawings::DrawingToolType;
-            chart
-                .drawings_mut()
-                .set_active_tool(Some(DrawingToolType::Path));
-            click(&ctx, &mut chart, empty - egui::vec2(0.0, 40.0));
-            for pressed in [None, Some(true), Some(false), Some(true), Some(false), None] {
-                pointer(&ctx, &mut chart, empty, pressed);
+        use crate::drawings::DrawingToolType;
+        #[cfg(feature = "drawings")]
+        for (tool, points, last, completed) in [
+            (
+                DrawingToolType::Path,
+                &[empty - egui::vec2(0.0, 40.0)][..],
+                empty,
+                1,
+            ),
+            (DrawingToolType::Path, &[], inside, 1),
+            (
+                DrawingToolType::Sector,
+                &[
+                    inside + egui::vec2(40.0, 0.0),
+                    inside + egui::vec2(60.0, 0.0),
+                ],
+                inside + egui::vec2(80.0, 0.0),
+                2,
+            ),
+        ] {
+            chart.drawings_mut().set_active_tool(Some(tool));
+            for at in points {
+                click(&ctx, &mut chart, *at);
             }
-            assert_eq!(chart.get_rendered_indicator_panes().len(), 2);
-            assert!(
+            for pressed in [None, Some(true), Some(false), Some(true), Some(false), None] {
+                pointer(&ctx, &mut chart, last, pressed);
+            }
+            assert_eq!(chart.pane_layout.maximized, None, "{tool:?} {last:?}");
+            assert_eq!(chart.get_rendered_indicator_panes().len(), 2, "{tool:?}");
+            assert_eq!(
                 chart
                     .drawings_mut()
                     .drawings
                     .iter()
-                    .any(|drawing| drawing.completed)
+                    .filter(|drawing| drawing.completed)
+                    .count(),
+                completed,
+                "{tool:?}"
             );
             chart.drawings_mut().set_active_tool(None);
         }
@@ -626,6 +650,81 @@ fn study_added_while_a_pane_is_maximized_is_drawn() {
             assert_eq!(chart.panes(), [PaneId::MAIN]);
             assert_eq!(chart.pane_layout.maximized, None);
         }
+    }
+}
+
+/// A study pane maximized above the price pane paints what it paints maximized below it: no
+/// price pane content on its bottom edge and the time axis labels kept. Restoring brings back
+/// the earlier layout.
+#[test]
+fn maximized_pane_above_the_price_pane_paints_as_below_it() {
+    use crate::model::{Marker, MarkerPos, PriceLine};
+    use crate::widget::SeriesId;
+    use crate::widget::test_frames::{frame, shapes};
+
+    let mut below = None;
+    for top in [false, true] {
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+        // The buttons of the top pane sit a row lower, so they stay out of the comparison.
+        chart.config.pane_buttons = crate::config::NavigationButtons::Never;
+        let times: Vec<_> = chart
+            .bars(SeriesId::MAIN)
+            .iter()
+            .map(|bar| bar.time)
+            .collect();
+        let markers = times
+            .iter()
+            .step_by(3)
+            .map(|time| {
+                Marker::new(*time)
+                    .with_text("Buy")
+                    .at_price(100.0, MarkerPos::BelowBar)
+            })
+            .collect();
+        chart.set_markers(SeriesId::MAIN, markers);
+        chart.add_price_line(
+            SeriesId::MAIN,
+            PriceLine::new(107.0, egui::Color32::RED).with_title("Level"),
+        );
+        let study = chart.add_indicator(Box::new(RSI::new(14)));
+        let pane = chart.series_pane(study).unwrap();
+        if top {
+            assert!(chart.move_pane(pane, 0));
+        }
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        frame(&ctx, &mut chart, 0.05, Vec::new());
+        let rects = |chart: &crate::widget::Chart| -> Vec<_> {
+            let panes = &chart.pane_layout.panes;
+            panes.iter().map(|pane| (pane.id, pane.rect)).collect()
+        };
+        let layout = rects(&chart);
+        chart.pane_layout.maximized = Some(pane);
+        frame(&ctx, &mut chart, 0.1, Vec::new());
+        let hover = vec![Event::PointerMoved(Pos2::new(300.0, 300.0))];
+        frame(&ctx, &mut chart, 0.15, hover.clone());
+        let painted = shapes(&ctx, &mut chart, 0.2, hover);
+        let plot = chart.get_rendered_indicator_panes()[0].panel_rect;
+        let labels: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Text(text) if text.pos.y > plot.bottom() => Some(text.galley.text()),
+                _ => None,
+            })
+            .collect();
+        // Daily bars from 14 November 2023 to 21 February 2024; January shows its year.
+        for label in ["Nov", "Dec", "2024", "Feb"] {
+            assert!(labels.contains(&label), "top={top}: {labels:?}");
+        }
+        if let Some(below) = &below {
+            assert!(painted == *below, "maximized above the price pane");
+        } else {
+            below = Some(painted.clone());
+        }
+        chart.pane_layout.maximized = None;
+        frame(&ctx, &mut chart, 0.3, Vec::new());
+        frame(&ctx, &mut chart, 0.4, Vec::new());
+        assert_eq!(rects(&chart), layout, "top={top}");
     }
 }
 

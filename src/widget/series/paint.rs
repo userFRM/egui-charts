@@ -377,8 +377,58 @@ impl Chart {
         }
     }
 
-    /// Paints a legend row for each of `items`, the first at `top`. The values follow a pointer
-    /// over `rect`. Returns the bottom of the last row, or `top` without rows, and the
+    /// The value the status row of `item` shows: its close at `time`, or its last close without
+    /// one; `None` when it has no bar there.
+    pub(in crate::widget) fn series_status_value(
+        &self,
+        item: &PriceSeries,
+        time: Option<chrono::DateTime<chrono::Utc>>,
+        rect: Rect,
+    ) -> Option<String> {
+        let bar = match time {
+            Some(time) => item
+                .bars
+                .binary_search_by_key(&time, |bar| bar.time)
+                .ok()
+                .map(|at| &item.bars[at])
+                .filter(|bar| !bar.is_whitespace()),
+            None => crate::model::last_with_value(&item.bars),
+        }?;
+        Some(
+            match self.series_label_formatter(item.id, PriceScaleMode::Normal) {
+                Some(formatter) => formatter.format(bar.close),
+                None => {
+                    let map = self.series_map(item, rect);
+                    crate::scales::group_thousands(
+                        format!("{:.*}", map.price_precision().unwrap_or(2), bar.close),
+                        map.thousands_sep(),
+                    )
+                }
+            },
+        )
+    }
+
+    /// Each visible added series in status line order, with its name, colour and the value its
+    /// status row shows at `time`, or at its last bar without one.
+    #[cfg(feature = "ui")]
+    pub(crate) fn series_readouts(
+        &self,
+        time: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> impl Iterator<Item = (&str, egui::Color32, Option<String>)> {
+        self.price_series
+            .iter()
+            .filter(|item| item.visible)
+            .map(move |item| {
+                (
+                    item.options.name.as_str(),
+                    item.options.color,
+                    self.series_status_value(item, time, self.last_rendered_price_rect),
+                )
+            })
+    }
+
+    /// Paints a legend row for each of `items`, the first at `top`, with its value at the bar the
+    /// status line reads. Returns the bottom of the last row, or `top` without rows, and the
     /// handle of the series whose remove control was activated.
     pub(in crate::widget) fn paint_secondary_legend<'a>(
         &self,
@@ -402,44 +452,13 @@ impl Chart {
         let mut remove = None;
         for (row, item) in items.enumerate() {
             if self.config.show_indicator_labels || self.config.show_indicator_last_val {
-                let selected_time = ui
-                    .input(|input| input.pointer.hover_pos())
-                    .filter(|point| rect.contains(*point))
-                    .and_then(|point| {
-                        main.get(
-                            self.state
-                                .time_scale()
-                                .coord_to_idx_precise(point.x, rect.left(), rect.width())
-                                .round()
-                                .max(0.0) as usize,
-                        )
-                    })
+                let time = self
+                    .readout_index
+                    .and_then(|index| main.get(index))
                     .map(|bar| bar.time);
-                let bar = match selected_time {
-                    Some(time) => item
-                        .bars
-                        .binary_search_by_key(&time, |bar| bar.time)
-                        .ok()
-                        .map(|at| &item.bars[at])
-                        .filter(|bar| !bar.is_whitespace()),
-                    None => crate::model::last_with_value(&item.bars),
-                };
-                let formatter = self.series_label_formatter(item.id, PriceScaleMode::Normal);
-                let value = bar.map_or_else(
-                    || "∅".into(),
-                    |bar| {
-                        formatter.as_ref().map_or_else(
-                            || {
-                                let map = self.series_map(item, rect);
-                                crate::scales::group_thousands(
-                                    format!("{:.*}", map.price_precision().unwrap_or(2), bar.close),
-                                    map.thousands_sep(),
-                                )
-                            },
-                            |formatter| formatter.format(bar.close),
-                        )
-                    },
-                );
+                let value = self
+                    .series_status_value(item, time, rect)
+                    .unwrap_or_else(|| "∅".into());
                 let mut job = egui::text::LayoutJob::simple_singleline(
                     format!(
                         "{}  {}",
@@ -579,9 +598,10 @@ impl Chart {
         ui: &egui::Ui,
         painter: &egui::Painter,
         widget: Rect,
-        rect: Rect,
+        coords: &crate::chart::rendering::ChartMapping,
         colors: &StyleColors,
     ) -> f32 {
+        let rect = coords.rect;
         let study_axis = crate::config::PriceAxisOptions {
             show_study_values: self.config.price_axis.show_study_values,
             ..self.config.price_axis
@@ -636,6 +656,16 @@ impl Chart {
             let map = self.series_map(item, rect);
             let label_rect = super::axis_label_rect(rect, axis);
             let ctx = RenderContext::new(&clipped, label_rect);
+            // As on the main axis: drawing behind the labels, automatic tags after the series'
+            // own and before the studies', pinned tags above every other tag.
+            let primitives: Vec<_> = self.axis_primitives(coords, key).collect();
+            let column = Rect::from_x_y_ranges(axis.x_range(), rect.y_range());
+            let column_painter = painter.with_clip_rect(painter.clip_rect().intersect(column));
+            for (primitive, view) in &primitives {
+                primitive
+                    .get()
+                    .draw_price_axis(&column_painter, column, view);
+            }
             let slot = clipped.add(egui::Shape::Noop);
             let mut tags = Vec::new();
             for (value, colors, mapping, label) in self.secondary_axis_values(key, rect) {
@@ -650,6 +680,25 @@ impl Chart {
                     self.config.price_axis.allow_label_overlap,
                 ));
             }
+            let (fixed, automatic): (Vec<_>, Vec<_>) = primitives
+                .iter()
+                .flat_map(|(primitive, view)| {
+                    let map = view.mapping.price;
+                    primitive
+                        .get()
+                        .price_axis_labels(view)
+                        .into_iter()
+                        .map(move |label| (label, map))
+                })
+                .partition(|(label, _)| label.fixed_coordinate.is_some());
+            crate::chart::rendering::axes::render_primitive_price_labels(
+                &clipped,
+                label_rect,
+                axis.right(),
+                automatic,
+                &mut tags,
+                self.config.price_axis.allow_label_overlap,
+            );
             if study_axis.show_study_values {
                 let last_in_view =
                     crate::chart::rendering::axes::last_bar_in_view(&self.get_chart_mapping());
@@ -672,6 +721,14 @@ impl Chart {
                     );
                 }
             }
+            crate::chart::rendering::axes::render_primitive_price_labels(
+                &clipped,
+                label_rect,
+                axis.right(),
+                fixed,
+                &mut tags,
+                self.config.price_axis.allow_label_overlap,
+            );
             let formatter = self.series_label_formatter(item.id, map.transform().mode);
             crate::chart::rendering::render_price_labels_at_pos(
                 &ctx,

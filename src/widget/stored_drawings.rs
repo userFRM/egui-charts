@@ -3,7 +3,10 @@
 use super::Chart;
 use crate::data::FeedError;
 use crate::data::inbox::Inbox;
-use crate::drawings::persistence::{DrawingStorage, LoadError, StorageError, StoredPane};
+use crate::drawings::persistence::{
+    DrawingStorage, LoadError, SkipReason, SkippedDrawing, StorageError, StoredPane,
+};
+use crate::drawings::{Drawing, FolderSync};
 use crate::localization::format_text_or_english as message;
 use crate::services::document::{Received, StoredDocument, copy_number};
 use crate::services::{ConflictChoice, Revision, Storage, StoreKind};
@@ -76,8 +79,12 @@ pub(super) struct DrawingStore {
     loaded: HashMap<String, String>,
     /// The chart's drawing edit count last captured in a document, which may still be dirty.
     captured: u64,
-    /// Edits made before a read finishes. The flag distinguishes edits from a restored layout.
+    /// Edits made before a read finishes, merged into the drawings it reads, or with the flag
+    /// `false`, drawings written for a symbol not shown, which replace them.
     pending: HashMap<String, (DrawingStorage, bool)>,
+    /// Per symbol, the drawings of a restored layout until the stored ones are read and shown
+    /// with them.
+    restored: HashMap<String, Restored>,
     error: Option<StorageError>,
     /// The last drawing context, retained for storage operations between frames.
     ctx: Option<egui::Context>,
@@ -95,9 +102,31 @@ pub(super) struct DrawingStore {
     symbols: Option<HashMap<String, DrawingStorage>>,
 }
 
+/// The drawings a restored layout showed of a symbol, until the stored ones are read again and
+/// shown with them.
+#[cfg_attr(not(feature = "ui"), allow(dead_code))]
+struct Restored {
+    /// Each drawing the layout showed, by stored id, with its edit time then.
+    shown: HashMap<String, Option<i64>>,
+    /// Whether the document is to be opened again, once no write of it is unsettled.
+    reread: bool,
+    /// The stored document read since, with edits made before it was read merged in, and
+    /// whether storage held the document.
+    read: Option<(String, bool)>,
+}
+
+/// Whether the top-level folder of `drawing` keeps it on one chart or in one layout.
+fn confined(drawing: &Drawing) -> bool {
+    matches!(
+        drawing.folder_sync_mode(),
+        Some(FolderSync::Chart | FolderSync::Layout)
+    )
+}
+
 impl DrawingStore {
     pub(super) fn forget(&mut self, symbol: &str) -> bool {
         if self.pending.contains_key(symbol)
+            || self.restored.contains_key(symbol)
             || self
                 .documents
                 .get(symbol)
@@ -328,7 +357,8 @@ impl DrawingStore {
 #[cfg(feature = "ui")]
 impl DrawingStore {
     pub(super) fn ready(&self, symbol: &str) -> bool {
-        self.pending.get(symbol).is_some_and(|(_, merge)| !merge)
+        self.restored.contains_key(symbol)
+            || self.pending.get(symbol).is_some_and(|(_, merge)| !merge)
             || self
                 .documents
                 .get(symbol)
@@ -391,6 +421,7 @@ impl Chart {
             loaded: HashMap::new(),
             captured: self.history.drawing_edits,
             pending: HashMap::new(),
+            restored: HashMap::new(),
             error: None,
             ctx: None,
             changed: HashMap::new(),
@@ -405,7 +436,9 @@ impl Chart {
     /// once all captured edits are acknowledged. Keep rendering or call again to finish delayed
     /// reads and writes; inspect [`Self::take_storage_error`] for failures. A write refused
     /// because the drawings changed elsewhere stays unacknowledged until
-    /// [`Self::resolve_storage_conflict`] settles it.
+    /// [`Self::resolve_storage_conflict`] settles it. After a layout is restored on this chart,
+    /// returns `false` until the stored drawings are read again and shown with the layout's;
+    /// for a symbol no longer shown by then, until that symbol is shown again.
     pub fn flush_stored_drawings(&mut self) -> bool {
         if let Some(sync) = self.drawing_store.as_ref().map(|store| store.sync) {
             sync(self, None);
@@ -414,6 +447,7 @@ impl Chart {
         }
         self.drawing_store.as_ref().is_none_or(|store| {
             store.pending.is_empty()
+                && store.restored.is_empty()
                 && store.captured == self.history.drawing_edits
                 && store.documents.values().all(StoredDocument::flushed)
         })
@@ -653,7 +687,13 @@ impl Chart {
             return;
         }
         match drawings.to_json() {
-            Ok(json) => document.save(&*store.storage, json),
+            Ok(json) => {
+                document.save(&*store.storage, json);
+                // A layout restored on the symbol shows what storage holds after this write.
+                if let Some(restored) = store.restored.get_mut(symbol) {
+                    (restored.read, restored.reread) = (None, true);
+                }
+            }
             Err(error) => {
                 store.error = Some(StorageError::Save {
                     symbol: symbol.to_owned(),
@@ -738,6 +778,20 @@ impl Chart {
         let Some(store) = &mut self.drawing_store else {
             return;
         };
+        for (name, restored) in &mut store.restored {
+            // A fresh read, once what this chart wrote of the document is settled.
+            if restored.reread
+                && store
+                    .documents
+                    .get(name)
+                    .is_none_or(|document| !document.saving() && !document.conflicted())
+            {
+                store
+                    .documents
+                    .insert(name.clone(), open_drawings(&*store.storage, name));
+                restored.reread = false;
+            }
+        }
         if !symbol.is_empty() && !store.documents.contains_key(&symbol) {
             let document = open_drawings(&*store.storage, &symbol);
             store.documents.insert(symbol.clone(), document);
@@ -763,9 +817,12 @@ impl Chart {
                                 .flatten()
                         });
                         let read = json.as_deref().map(DrawingStorage::from_json).transpose();
+                        // A restored layout keeps its drawings over a document that cannot be
+                        // written.
                         match read {
                             Ok(Some((drawings, _))) if drawings.symbol != *name => {
                                 document.refuse_writes();
+                                store.restored.remove(name);
                                 store.error = Some(StorageError::Read {
                                     symbol: name.clone(),
                                     error: LoadError::OtherSymbol,
@@ -773,6 +830,7 @@ impl Chart {
                             }
                             Ok(Some((_, skipped))) if !skipped.is_empty() => {
                                 document.refuse_writes();
+                                store.restored.remove(name);
                                 store.error = Some(StorageError::Read {
                                     symbol: name.clone(),
                                     error: LoadError::Skipped(skipped),
@@ -780,12 +838,14 @@ impl Chart {
                             }
                             Err(error) => {
                                 document.refuse_writes();
+                                store.restored.remove(name);
                                 store.error = Some(StorageError::Read {
                                     symbol: name.clone(),
                                     error,
                                 });
                             }
                             Ok(loaded) => {
+                                let existed = loaded.is_some();
                                 if let Some(symbols) = &mut store.symbols {
                                     match &loaded {
                                         Some((drawings, _)) => {
@@ -817,8 +877,11 @@ impl Chart {
                                     match pending.to_json() {
                                         Ok(json) => {
                                             document.save(&*store.storage, json.clone());
-                                            // Only a real merge needs to replace local drawings and history.
-                                            if merged {
+                                            if let Some(restored) = store.restored.get_mut(name) {
+                                                restored.read = Some((json, existed));
+                                                restored.reread = false;
+                                            } else if merged {
+                                                // Only a real merge needs to replace local drawings and history.
                                                 store.loaded.insert(name.clone(), json);
                                             }
                                         }
@@ -829,6 +892,14 @@ impl Chart {
                                             })
                                         }
                                     }
+                                } else if let Some(restored) = store.restored.get_mut(name) {
+                                    let json = json.unwrap_or_else(|| {
+                                        DrawingStorage::new(name.clone())
+                                            .to_json()
+                                            .expect("an empty drawings document")
+                                    });
+                                    restored.read = Some((json, existed));
+                                    restored.reread = false;
                                 } else if let Some(json) = json
                                     && (name == &symbol
                                         || self.symbol_drawings.contains_key(name)
@@ -841,7 +912,13 @@ impl Chart {
                             }
                         }
                     }
-                    Received::Failed(error) => store.error = Some(StorageError::Storage(error)),
+                    Received::Failed(error) => {
+                        // A first read that failed refuses writes: nothing more arrives.
+                        if first && !document.reading() {
+                            store.restored.remove(name);
+                        }
+                        store.error = Some(StorageError::Storage(error));
+                    }
                     // `storage_conflict` reports it until `resolve_storage_conflict` settles it.
                     Received::Conflict => {}
                     Received::Saved(_) => {
@@ -857,9 +934,18 @@ impl Chart {
                 || self.symbol_drawings.contains_key(name)
                 || store.loaded.contains_key(name)
                 || store.pending.contains_key(name)
+                || store.restored.contains_key(name)
                 || document.saving()
         });
-        if let Some(json) = store.loaded.remove(&symbol) {
+        if !busy
+            && store
+                .restored
+                .get(&symbol)
+                .is_some_and(|restored| restored.read.is_some())
+        {
+            let restored = store.restored.remove(&symbol).expect("restored drawings");
+            self.show_restored(restored);
+        } else if let Some(json) = store.loaded.remove(&symbol) {
             self.restore_stored_drawings(&json);
         }
         self.poll_local_copies(ctx, busy);
@@ -893,7 +979,122 @@ impl Chart {
             Ok(skipped) => Some(LoadError::Skipped(skipped)),
             Err(error) => Some(error),
         };
-        // Drawings whose study this chart does not show, shown in the price pane.
+        self.keep_unshown_panes(stored.as_ref());
+        let store = self.drawing_store.as_mut().expect("drawing storage");
+        if let Some(error) = refused {
+            if let Some(document) = store.documents.get_mut(&self.symbol) {
+                document.refuse_writes();
+            }
+            store.error = Some(StorageError::Read {
+                symbol: self.symbol.clone(),
+                error,
+            });
+        }
+    }
+
+    /// Shows the stored drawings read after a layout was restored, with what
+    /// [`Chart::restore`](super::Chart::restore) keeps of the chart's own.
+    fn show_restored(&mut self, restored: Restored) {
+        let Restored { shown, read, .. } = restored;
+        let Some((json, existed)) = read else {
+            return;
+        };
+        // Checked when it was read, or written from what was read.
+        let Ok((stored, _)) = DrawingStorage::from_json(&json) else {
+            return;
+        };
+        let remap = self.written_by_restored_chart(&stored);
+        let previous = self.drawings.before_read();
+        // Drawings that are never stored come back through `keep_across_read`.
+        let mut own: Vec<Option<Drawing>> = self
+            .drawings
+            .drawings
+            .iter()
+            .filter(|drawing| drawing.saveable)
+            .cloned()
+            .map(Some)
+            .collect();
+        let position: HashMap<String, usize> = own
+            .iter()
+            .enumerate()
+            .filter_map(|(at, drawing)| Some((drawing.as_ref()?.stored_id.clone()?, at)))
+            .collect();
+        let mut drawings = Vec::new();
+        // The record behind each drawing taken from storage, by its place in `drawings`.
+        let mut records = HashMap::new();
+        let mut changed = false;
+        for (index, record) in stored.drawings().iter().enumerate() {
+            let mine = position.get(&record.id).and_then(|&at| own[at].take());
+            match (shown.get(&record.id), mine) {
+                (Some(edited_at), Some(drawing))
+                    if drawing.modified_at != *edited_at
+                        || (confined(&drawing) && confined(&record.drawing)) =>
+                {
+                    drawings.push(drawing);
+                    changed = true;
+                }
+                // Deleted on this chart since the restore.
+                (Some(_), None) => changed = true,
+                // As stored; a copy here that the layout did not show arrived since.
+                _ => {
+                    records.insert(drawings.len(), index);
+                    drawings.push(self.restored_drawing(record, remap));
+                }
+            }
+        }
+        for mut drawing in own.into_iter().flatten() {
+            let unedited = drawing
+                .stored_id
+                .as_ref()
+                .and_then(|id| shown.get(id))
+                .is_some_and(|edited_at| *edited_at == drawing.modified_at);
+            // Shown by the layout and deleted elsewhere since: it stays deleted.
+            if existed && unedited && !confined(&drawing) {
+                continue;
+            }
+            if drawing.stored_id.is_none() {
+                // New since the restore: kept under its id, as edits before a first read are.
+                let mut id = drawing.id.to_string();
+                while stored.get_drawing(&id).is_some() {
+                    id.push_str("-local");
+                }
+                drawing.stored_id = Some(id);
+            }
+            drawings.push(drawing);
+            changed = true;
+        }
+        let refused = self.replace_drawings(drawings);
+        self.drawings.keep_across_read(previous);
+        self.keep_unshown_panes(Some(&stored));
+        // The chart's own drawings passed the same check when they were added.
+        let skipped: Vec<SkippedDrawing> = refused
+            .into_iter()
+            .filter_map(|(at, error)| {
+                let index = *records.get(&at)?;
+                Some(SkippedDrawing {
+                    index,
+                    id: Some(stored.drawings()[index].id.clone()),
+                    error: SkipReason::Invalid(serde::de::Error::custom(error)),
+                })
+            })
+            .collect();
+        let store = self.drawing_store.as_mut().expect("drawing storage");
+        if !skipped.is_empty() {
+            if let Some(document) = store.documents.get_mut(&self.symbol) {
+                document.refuse_writes();
+            }
+            store.error = Some(StorageError::Read {
+                symbol: self.symbol.clone(),
+                error: LoadError::Skipped(skipped),
+            });
+        } else if changed {
+            self.history.drawing_edits += 1;
+        }
+    }
+
+    /// Keeps the stored pane of each drawing in `stored` whose study this chart does not show,
+    /// which it shows in the price pane, so that it is written back in that pane.
+    fn keep_unshown_panes(&mut self, stored: Option<&DrawingStorage>) {
         let unshown: HashMap<_, _> = stored
             .map(|stored| {
                 self.drawings
@@ -914,15 +1115,6 @@ impl Chart {
         } else {
             store.unshown_panes.insert(self.symbol.clone(), unshown);
         }
-        if let Some(error) = refused {
-            if let Some(document) = store.documents.get_mut(&self.symbol) {
-                document.refuse_writes();
-            }
-            store.error = Some(StorageError::Read {
-                symbol: self.symbol.clone(),
-                error,
-            });
-        }
     }
 
     /// Writes the shown symbol's drawings if they changed since they were last written.
@@ -934,11 +1126,11 @@ impl Chart {
 
     fn write_stored_drawings(&mut self) {
         let edits = self.history.drawing_edits;
+        // A restored layout writes once the stored drawings are shown with its own.
         if self.symbol.is_empty()
-            || self
-                .drawing_store
-                .as_ref()
-                .is_none_or(|store| store.captured == edits)
+            || self.drawing_store.as_ref().is_none_or(|store| {
+                store.captured == edits || store.restored.contains_key(&self.symbol)
+            })
         {
             return;
         }
@@ -994,15 +1186,38 @@ impl Chart {
         }
     }
 
+    /// Shows the drawings of a restored layout until the stored ones are read again and shown
+    /// with them, as [`Chart::restore`](super::Chart::restore) describes.
     #[cfg(feature = "ui")]
-    pub(super) fn save_restored_drawings(&mut self) {
-        self.save_stored_drawings();
-        if let Some(store) = &mut self.drawing_store {
+    pub(super) fn restore_layout_drawings(
+        &mut self,
+        json: &str,
+    ) -> Result<Vec<SkippedDrawing>, LoadError> {
+        let skipped = self.load_drawings_remapped(json, true)?;
+        if let Some(store) = &mut self.drawing_store
+            && !self.symbol.is_empty()
+        {
+            let shown = self
+                .drawings
+                .drawings
+                .iter()
+                .filter(|drawing| drawing.saveable)
+                .filter_map(|drawing| Some((drawing.stored_id.clone()?, drawing.modified_at)))
+                .collect();
             store.loaded.remove(&self.symbol);
-            if let Some((_, merge)) = store.pending.get_mut(&self.symbol) {
-                *merge = false;
-            }
+            // A first read still to come needs no second one: nothing is written meanwhile.
+            let reread = !store
+                .documents
+                .get(&self.symbol)
+                .is_some_and(StoredDocument::reading);
+            let restored = Restored {
+                shown,
+                reread,
+                read: None,
+            };
+            store.restored.insert(self.symbol.clone(), restored);
         }
+        Ok(skipped)
     }
 }
 
@@ -1079,11 +1294,13 @@ mod tests {
         line.chart_points = vec![ChartPoint::new(0.0, 100.0)];
         let id = chart.user_action(|chart| chart.drawings_mut().add_drawing(line).unwrap());
         for i in 0..10_000 {
-            chart.user_action(|chart| {
-                chart.drawings_mut().edit_drawing(id, |drawing| {
-                    drawing.chart_points[0].price = 100.0 + (i % 2) as f64;
+            chart
+                .user_action(|chart| {
+                    chart.drawings_mut().edit_drawing(id, |drawing| {
+                        drawing.chart_points[0].price = 100.0 + (i % 2) as f64;
+                    })
                 })
-            });
+                .unwrap();
             assert!(chart.drawings().pending_sync.lock().unwrap().is_empty());
             if i % 100 == 0 {
                 chart.sync_stored_drawings(&ctx);

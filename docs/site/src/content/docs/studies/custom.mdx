@@ -29,7 +29,10 @@ of the subtraction is unavailable. Slot numbers start at zero.
 Return [`IndicatorValue::None`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/enum.IndicatorValue.html#variant.None)
 for a missing result. Removing it from the vector would shift every later value
 to the wrong time. Returning `Single(0.0)` would draw a real zero and affect the
-pane's scale. A missing value breaks the line.
+pane's scale. The scene draws its output as a
+[line with breaks](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/enum.PlotType.html#variant.LineWithBreaks),
+so each missing value leaves a gap; a plain line, the default, joins the values
+on either side.
 
 Only the two endpoints matter for this definition. A missing intermediate slot
 does not suppress an otherwise valid subtraction. For example, the sample's

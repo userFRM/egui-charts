@@ -31,7 +31,7 @@ pub fn custom() -> Chart {
     use eframe::egui::Color32;
     use egui_charts::{
         model::Bar,
-        studies::{CustomIndicator, IndicatorValue},
+        studies::{CustomIndicator, IndicatorValue, PlotType},
         widget::SeriesId,
     };
 
@@ -57,6 +57,7 @@ pub fn custom() -> Chart {
                 .collect()
         })
         .with_overlay(false)
+        .with_plot_types(vec![PlotType::LineWithBreaks])
         .with_color(Color32::from_rgb(126, 87, 194))
         .with_description("Close minus the close ten slots earlier; gaps stay missing"),
     ));

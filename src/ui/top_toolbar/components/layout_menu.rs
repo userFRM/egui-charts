@@ -5,7 +5,8 @@ use crate::data::FeedError;
 use crate::data::inbox::Inbox;
 use crate::icons::{Icon, icons};
 use crate::localization as l10n;
-use crate::services::{ShareKind, Sharing, Storage, StoreKind};
+use crate::services::revisions::{Revisions, Settled, Written};
+use crate::services::{ConflictChoice, ShareKind, Sharing, Storage, StoreKind};
 use crate::theme::ThemeExt;
 use crate::ui::dialogs::keyboard_shortcuts::shortcut_key_labels;
 use crate::ui::share_controls::ShareControls;
@@ -14,7 +15,7 @@ use crate::ui_kit::buttons::{ButtonSize, IconButton};
 use crate::ui_kit::list_item::{ContentContext, ListItem, ListItemContent};
 use crate::widget::SavedLayout;
 use egui::{Rect, Role, Ui, WidgetInfo, pos2, vec2};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -63,9 +64,10 @@ pub enum LayoutAction {
 enum Request {
     List,
     Open(String),
-    Save(String, String),
-    /// Saving under the second name, then deleting the first.
-    Rename(String, String, String),
+    /// The name, the document and the edit count it holds.
+    Save(String, String, u64),
+    /// Saving under the second name, then deleting the first; the document and its edit count.
+    Rename(String, String, String, u64),
     Delete(String),
 }
 
@@ -73,7 +75,8 @@ enum Request {
 /// each save. With [`set_storage`](Self::set_storage) the menu lists the layouts of
 /// [`StoreKind::Layouts`] and [`save`](Self::save), [`open`](Self::open),
 /// [`rename`](Self::rename) and [`delete`](Self::delete) keep them there; without it the host
-/// supplies `layouts` and keeps them itself.
+/// supplies `layouts` and keeps them itself. With a host that keeps revisions each layout is
+/// written over the version read; see [`storage_conflict`](Self::storage_conflict).
 pub struct LayoutMenu {
     /// Name of the current layout.
     pub curr_layout: Option<String>,
@@ -95,10 +98,17 @@ pub struct LayoutMenu {
     inbox: Arc<Inbox>,
     pending: Option<Request>,
     requests: VecDeque<Request>,
+    /// The revisions the layouts were read or written at, and the writes the host refused.
+    revisions: Revisions,
+    /// The edit count of the unsaved layout of each refused write.
+    refused_edits: HashMap<String, u64>,
     failing: bool,
     /// The edit count given to `autosave_due` last, and the one saved or opened.
     edits: u64,
     saved_edits: Option<u64>,
+    /// The input time from which `autosave_due` asks for the current layout again, after its
+    /// write failed.
+    retry_at: Option<f64>,
     observed_layout: Option<String>,
     /// A changed edit count with the input time it was first seen.
     changed: Option<(u64, f64)>,
@@ -122,6 +132,7 @@ impl std::fmt::Debug for LayoutMenu {
             .field("failing", &self.failing)
             .field("edits", &self.edits)
             .field("saved_edits", &self.saved_edits)
+            .field("retry_at", &self.retry_at)
             .field("observed_layout", &self.observed_layout)
             .field("changed", &self.changed)
             .field("error", &self.error)
@@ -152,9 +163,12 @@ impl LayoutMenu {
             inbox: Arc::default(),
             pending: None,
             requests: VecDeque::new(),
+            revisions: Revisions::new(StoreKind::Layouts),
+            refused_edits: HashMap::new(),
             failing: false,
             edits: 0,
             saved_edits: None,
+            retry_at: None,
             observed_layout: None,
             changed: None,
             error: None,
@@ -172,8 +186,11 @@ impl LayoutMenu {
         self.inbox = Arc::default();
         self.requests.clear();
         self.pending = None;
+        self.revisions = Revisions::new(StoreKind::Layouts);
+        self.refused_edits.clear();
         self.layouts.clear();
         self.saved_edits = None;
+        self.retry_at = None;
         self.changed = None;
         self.storage = Some(storage);
         self.request(Request::List);
@@ -192,40 +209,48 @@ impl LayoutMenu {
     }
 
     fn send_next(&mut self) {
-        let Some(storage) = &self.storage else { return };
-        if self.pending.is_some() {
-            return;
-        }
-        let Some(request) = self.requests.pop_front() else {
+        let Some(storage) = self.storage.clone() else {
             return;
         };
-        match &request {
-            Request::List => storage.list(StoreKind::Layouts, self.inbox.reply(0)),
-            Request::Open(name) => storage.load(StoreKind::Layouts, name, self.inbox.reply(0)),
-            Request::Save(name, document) | Request::Rename(_, name, document) => {
-                storage.save(
-                    StoreKind::Layouts,
-                    name,
-                    document.clone(),
-                    self.inbox.reply(0),
-                );
+        while self.pending.is_none() {
+            let Some(request) = self.requests.pop_front() else {
+                return;
+            };
+            match &request {
+                Request::List => storage.list(StoreKind::Layouts, self.inbox.reply(0)),
+                Request::Open(name) => self.revisions.load(&*storage, name, &self.inbox, 0),
+                Request::Save(name, document, edits) => {
+                    // A newer layout of a refused name waits with it for the user's choice.
+                    if self.revisions.hold(name, document) {
+                        self.refused_edits.insert(name.clone(), *edits);
+                        continue;
+                    }
+                    self.revisions
+                        .save(&*storage, name, document.clone(), &self.inbox, 0);
+                }
+                Request::Rename(_, name, document, _) => {
+                    self.revisions
+                        .save(&*storage, name, document.clone(), &self.inbox, 0);
+                }
+                Request::Delete(name) => {
+                    storage.delete(StoreKind::Layouts, name, self.inbox.reply(0));
+                }
             }
-            Request::Delete(name) => storage.delete(StoreKind::Layouts, name, self.inbox.reply(0)),
+            self.pending = Some(request);
         }
-        self.pending = Some(request);
     }
 
     /// Saves `layout` as `name`, which becomes the current layout. With a layout of that name,
-    /// replaces it.
+    /// replaces it, over the version read when the host keeps revisions. The layout counts as
+    /// saved for [`autosave_due`](Self::autosave_due) once the host has kept it.
     pub fn save(&mut self, name: &str, layout: &SavedLayout) {
         if name.trim().is_empty() {
             self.error = Some("Enter a layout name".into());
             return;
         }
         self.curr_layout = Some(name.to_owned());
-        self.saved_edits = Some(self.edits);
         match layout.to_json() {
-            Ok(document) => self.request(Request::Save(name.to_owned(), document)),
+            Ok(document) => self.request(Request::Save(name.to_owned(), document, self.edits)),
             Err(error) => {
                 self.error = Some(l10n::format_text_or_english(
                     self.ctx.as_ref(),
@@ -249,9 +274,10 @@ impl LayoutMenu {
             return;
         }
         let old = self.curr_layout.clone().unwrap_or_default();
-        self.saved_edits = Some(self.edits);
         match layout.to_json() {
-            Ok(document) => self.request(Request::Rename(old, name.to_owned(), document)),
+            Ok(document) => {
+                self.request(Request::Rename(old, name.to_owned(), document, self.edits));
+            }
             Err(error) => {
                 self.error = Some(l10n::format_text_or_english(
                     self.ctx.as_ref(),
@@ -268,15 +294,23 @@ impl LayoutMenu {
     }
 
     /// Receives storage's answers, updating the list, and wakes the UI on the next answer.
-    /// Returns a layout [`open`](Self::open) read, now the current layout, for the host to
-    /// restore before its next [`autosave_due`](Self::autosave_due).
+    /// Returns a layout [`open`](Self::open) read, now the current layout, or the stored version
+    /// of the current layout after [`resolve_storage_conflict`](Self::resolve_storage_conflict)
+    /// reloaded it, for the host to restore before its next [`autosave_due`](Self::autosave_due).
     pub fn poll(&mut self, ctx: &egui::Context) -> Option<(String, SavedLayout)> {
         self.ctx = Some(ctx.clone());
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
-        let mut opened = None;
+        let now = ctx.input(|input| input.time);
         if self.share.poll(ctx).is_some() {
             self.request(Request::List);
+        }
+        let storage = self.storage.clone()?;
+        let mut opened = None;
+        for (name, settled) in self.revisions.poll(&*storage, ctx) {
+            if let Some(reloaded) = self.settle(ctx, name, settled) {
+                opened = Some(reloaded);
+            }
         }
         loop {
             let answers = self.inbox.drain().answers;
@@ -307,17 +341,25 @@ impl LayoutMenu {
                         }
                     }
                     Request::Open(name) => {
-                        let answer = *answer
-                            .downcast::<Result<Option<String>, FeedError>>()
-                            .expect("layout load");
+                        let Some(answer) =
+                            self.revisions
+                                .loaded(&*storage, &name, answer, &self.inbox, 0)
+                        else {
+                            self.pending = Some(Request::Open(name));
+                            continue;
+                        };
                         match answer {
                             Ok(Some(document)) => match SavedLayout::from_json(&document) {
                                 Ok(layout) => {
                                     self.curr_layout = Some(name.clone());
                                     self.saved_edits = None;
+                                    self.retry_at = None;
                                     opened = Some((name, layout));
                                 }
                                 Err(error) => {
+                                    // A write of it is refused rather than replacing a layout
+                                    // this release cannot read.
+                                    self.revisions.forget(&name);
                                     self.error = Some(l10n::format_text(
                                         ctx,
                                         "Could not open {name}: {error}",
@@ -349,15 +391,64 @@ impl LayoutMenu {
                             }
                         }
                     }
-                    request => {
-                        let answer = *answer
-                            .downcast::<Result<(), FeedError>>()
-                            .expect("layout write");
-                        let report = answer.is_err() && !self.failing;
-                        self.failing = answer.is_err();
-                        match (request, answer) {
-                            (Request::Save(name, _), Ok(())) => self.insert(name),
-                            (Request::Rename(old, name, _), Ok(())) => {
+                    Request::Save(name, document, edits) => {
+                        let Some(written) = self.revisions.saved(
+                            &*storage,
+                            &name,
+                            &document,
+                            answer,
+                            &self.inbox,
+                            0,
+                        ) else {
+                            self.pending = Some(Request::Save(name, document, edits));
+                            continue;
+                        };
+                        match written {
+                            Written::Saved => {
+                                self.failing = false;
+                                self.kept(&name, edits);
+                                self.insert(name);
+                            }
+                            Written::Refused(stored) => {
+                                // The host answered, so a later failure starts a new run.
+                                self.failing = false;
+                                if self.curr_layout.as_ref() == Some(&name) {
+                                    self.retry_at = None;
+                                }
+                                self.refused_edits.insert(name.clone(), edits);
+                                self.revisions.refuse(&name, document, stored);
+                            }
+                            Written::Failed(error) => {
+                                self.failed(&name, now);
+                                if !self.failing {
+                                    self.error = Some(l10n::format_text(
+                                        ctx,
+                                        "Could not save {name}: {error}",
+                                        &[
+                                            ("name", name.as_str()),
+                                            ("error", error.to_string().as_str()),
+                                        ],
+                                    ));
+                                }
+                                self.failing = true;
+                            }
+                        }
+                    }
+                    Request::Rename(old, name, document, edits) => {
+                        let Some(written) = self.revisions.saved(
+                            &*storage,
+                            &name,
+                            &document,
+                            answer,
+                            &self.inbox,
+                            0,
+                        ) else {
+                            self.pending = Some(Request::Rename(old, name, document, edits));
+                            continue;
+                        };
+                        match written {
+                            Written::Saved => {
+                                self.failing = false;
                                 if self.curr_layout.as_ref() == Some(&old) {
                                     self.curr_layout = Some(name.clone());
                                 }
@@ -370,28 +461,28 @@ impl LayoutMenu {
                                 if old != name {
                                     self.requests.push_front(Request::Delete(old));
                                 }
+                                self.kept(&name, edits);
                                 self.insert(name);
                             }
-                            (Request::Delete(name), Ok(())) => {
-                                self.layouts.retain(|layout| *layout != name);
-                                self.favorites.retain(|layout| *layout != name);
-                            }
-                            (Request::Save(name, _), Err(error)) => {
-                                if report {
-                                    self.error = Some(l10n::format_text(
-                                        ctx,
-                                        "Could not save {name}: {error}",
-                                        &[
-                                            ("name", name.as_str()),
-                                            ("error", error.to_string().as_str()),
-                                        ],
-                                    ));
-                                }
-                            }
-                            (Request::Rename(old, name, _), Err(error)) => {
+                            Written::Refused(_) => {
+                                // Another client wrote a layout of the new name, which the
+                                // rename would replace unread: the layout keeps its name.
+                                self.failing = false;
                                 if self.curr_layout.as_ref() == Some(&name) {
                                     self.curr_layout = Some(old);
                                 }
+                                self.error = Some(l10n::format_text(
+                                    ctx,
+                                    "Could not rename to {name}: a layout of that name exists",
+                                    &[("name", name.as_str())],
+                                ));
+                            }
+                            Written::Failed(error) => {
+                                self.failing = true;
+                                if self.curr_layout.as_ref() == Some(&name) {
+                                    self.curr_layout = Some(old.clone());
+                                }
+                                self.failed(&old, now);
                                 self.error = Some(l10n::format_text(
                                     ctx,
                                     "Could not rename to {name}: {error}",
@@ -401,7 +492,20 @@ impl LayoutMenu {
                                     ],
                                 ));
                             }
-                            (Request::Delete(name), Err(error)) => {
+                        }
+                    }
+                    Request::Delete(name) => {
+                        let answer = *answer
+                            .downcast::<Result<(), FeedError>>()
+                            .expect("layout delete");
+                        self.failing = answer.is_err();
+                        match answer {
+                            Ok(()) => {
+                                self.revisions.forget(&name);
+                                self.layouts.retain(|layout| *layout != name);
+                                self.favorites.retain(|layout| *layout != name);
+                            }
+                            Err(error) => {
                                 self.error = Some(l10n::format_text(
                                     ctx,
                                     "Could not delete {name}: {error}",
@@ -411,7 +515,6 @@ impl LayoutMenu {
                                     ],
                                 ));
                             }
-                            (Request::List | Request::Open(_), _) => unreachable!("not a write"),
                         }
                     }
                 }
@@ -427,27 +530,143 @@ impl LayoutMenu {
         }
     }
 
+    /// Finishes the user's choice for the refused write of `name`. Returns the stored layout to
+    /// restore when `name`, the current layout, was reloaded.
+    fn settle(
+        &mut self,
+        ctx: &egui::Context,
+        name: String,
+        settled: Settled,
+    ) -> Option<(String, SavedLayout)> {
+        match settled {
+            Settled::Overwrite(document) => {
+                let edits = self.refused_edits.remove(&name).unwrap_or_default();
+                self.request(Request::Save(name, document, edits));
+            }
+            Settled::Copied(copy) => self.insert(copy),
+            Settled::Reload(Some(document)) => {
+                self.refused_edits.remove(&name);
+                match SavedLayout::from_json(&document) {
+                    Ok(layout) if self.curr_layout.as_ref() == Some(&name) => {
+                        self.saved_edits = None;
+                        self.retry_at = None;
+                        return Some((name, layout));
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        self.revisions.forget(&name);
+                        self.error = Some(l10n::format_text(
+                            ctx,
+                            "Could not open {name}: {error}",
+                            &[
+                                ("name", name.as_str()),
+                                ("error", error.to_string().as_str()),
+                            ],
+                        ));
+                    }
+                }
+            }
+            Settled::Reload(None) => {
+                self.refused_edits.remove(&name);
+                self.layouts.retain(|layout| *layout != name);
+                self.favorites.retain(|layout| *layout != name);
+                self.error = Some(l10n::format_text(
+                    ctx,
+                    "{name} no longer exists",
+                    &[("name", name.as_str())],
+                ));
+            }
+            Settled::CopyFailed(reason) => {
+                self.error = Some(l10n::format_text(
+                    ctx,
+                    "Could not keep a copy of {name}: {reason}",
+                    &[("name", name.as_str()), ("reason", reason.as_str())],
+                ));
+            }
+        }
+        None
+    }
+
+    /// The host kept a write of `name` holding the layout at `edits`: if it is the current
+    /// layout, it is saved up to them.
+    fn kept(&mut self, name: &str, edits: u64) {
+        if self.curr_layout.as_deref() == Some(name) {
+            self.saved_edits = Some(edits);
+            self.retry_at = None;
+        }
+    }
+
+    /// A write of `name` failed: if it is the current layout, `autosave_due` asks for it again a
+    /// second of input time later.
+    fn failed(&mut self, name: &str, now: f64) {
+        if self.curr_layout.as_deref() == Some(name) {
+            // A layout saved under another name became current with this write: `autosave_due`
+            // must not take it for a layout opened as stored.
+            self.observed_layout = Some(name.to_owned());
+            self.retry_at = Some(now + 1.0);
+        }
+    }
+
+    /// Whether a write of the current layout is queued, in flight or refused. A rename away from
+    /// it counts: a write of the old name behind it would bring the old name back after the
+    /// rename deletes it.
+    fn writing_current(&self) -> bool {
+        let Some(current) = &self.curr_layout else {
+            return false;
+        };
+        self.revisions.refused(current)
+            || self
+                .pending
+                .iter()
+                .chain(&self.requests)
+                .any(|request| match request {
+                    Request::Save(name, ..) => name == current,
+                    Request::Rename(old, name, ..) => old == current || name == current,
+                    Request::List | Request::Open(_) | Request::Delete(_) => false,
+                })
+    }
+
     /// Call every frame with a count that changes whenever the layout does, such as the sum of
     /// [`Chart::edit_count`](crate::widget::Chart::edit_count) over its charts. Returns `true`
-    /// when the host should save the current layout: autosave is on, the layout is stored, and
-    /// the count changed and then stayed the same for [`AUTOSAVE_DELAY`](Self::AUTOSAVE_DELAY).
+    /// when the host should save the current layout: autosave is on, the layout is stored, no
+    /// write of it is under way or waits for
+    /// [`resolve_storage_conflict`](Self::resolve_storage_conflict), and the count changed and
+    /// then stayed the same for
+    /// [`AUTOSAVE_DELAY`](Self::AUTOSAVE_DELAY). The layout counts as saved only once the host
+    /// has kept it: after a failed write this returns `true` again a second of input time later,
+    /// without waiting for the delay, until a write succeeds or another layout becomes current.
     pub fn autosave_due(&mut self, ctx: &egui::Context, edits: u64) -> bool {
         self.edits = edits;
         if self.observed_layout != self.curr_layout {
             self.observed_layout = self.curr_layout.clone();
             self.saved_edits = None;
             self.changed = None;
+            self.retry_at = None;
         }
         let saved = *self.saved_edits.get_or_insert(edits);
         let stored = self
             .curr_layout
             .as_ref()
             .is_some_and(|name| self.layouts.contains(name));
-        if !self.autosave || !stored || self.storage.is_none() || edits == saved {
+        if !self.autosave || !stored || self.storage.is_none() || self.writing_current() {
             self.changed = None;
             return false;
         }
         let now = ctx.input(|i| i.time);
+        // A failed write is tried again even without a new edit, such as a save under another name.
+        if let Some(at) = self.retry_at {
+            if now < at {
+                ctx.request_repaint_after(Duration::from_secs_f64(at - now));
+                return false;
+            }
+            self.retry_at = None;
+            self.changed = None;
+            return true;
+        }
+        if edits == saved {
+            self.changed = None;
+            return false;
+        }
         let since = match self.changed {
             Some((changed, since)) if changed == edits => since,
             _ => {
@@ -467,6 +686,32 @@ impl LayoutMenu {
     /// The error of a failed storage request since the last call, to show to the user.
     pub fn take_error(&mut self) -> Option<String> {
         self.error.take()
+    }
+
+    /// The layout whose write the host refused because another client changed or created it
+    /// since it was read: the current layout first, then the others by name. `None` while no
+    /// write waits, and while the choice to keep a local copy takes effect. The unsaved layout
+    /// stays in memory, newer saves of it replace it, and autosave waits; show a
+    /// [`StorageConflictDialog`](crate::ui::dialogs::StorageConflictDialog) and pass the choice
+    /// to [`resolve_storage_conflict`](Self::resolve_storage_conflict).
+    pub fn storage_conflict(&self) -> Option<&str> {
+        let current = self.curr_layout.as_deref();
+        self.revisions
+            .conflicts()
+            .find(|name| Some(*name) == current)
+            .or_else(|| self.revisions.conflicts().next())
+    }
+
+    /// Settles the refused write of the layout `name`, taking effect at the next
+    /// [`poll`](Self::poll). [`ConflictChoice::ReloadRemote`] drops the unsaved layout, and
+    /// `poll` returns the stored one to restore if `name` is the current layout;
+    /// [`ConflictChoice::KeepLocalCopy`] first saves the unsaved layout as `<name> (local copy)`,
+    /// which joins `layouts`; [`ConflictChoice::Retry`] writes it over the stored one. Does
+    /// nothing if no write of `name` waits.
+    pub fn resolve_storage_conflict(&mut self, name: &str, choice: ConflictChoice) {
+        if let Some(storage) = self.storage.clone() {
+            self.revisions.resolve(&*storage, name, choice);
+        }
     }
 
     /// Width of the named trigger.
@@ -820,9 +1065,16 @@ mod tests {
     use crate::data::Reply;
     use std::collections::BTreeMap;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
+    /// Holds the reply to a write of `Delayed`, and fails writes without keeping them while the
+    /// flag is set.
     #[derive(Default)]
-    struct Host(Mutex<BTreeMap<String, String>>, Mutex<Option<Reply<()>>>);
+    struct Host(
+        Mutex<BTreeMap<String, String>>,
+        Mutex<Option<Reply<()>>>,
+        AtomicBool,
+    );
 
     impl Storage for Host {
         fn list(&self, _: StoreKind, reply: Reply<Vec<String>>) {
@@ -832,6 +1084,9 @@ mod tests {
             reply.send(Ok(self.0.lock().unwrap().get(name).cloned()));
         }
         fn save(&self, _: StoreKind, name: &str, document: String, reply: Reply<()>) {
+            if self.2.load(Ordering::Relaxed) {
+                return reply.send(Err(FeedError::Network("offline".into())));
+            }
             self.0.lock().unwrap().insert(name.into(), document);
             if name == "Delayed" {
                 assert!(
@@ -863,6 +1118,7 @@ mod tests {
             mode: crate::widget::ChartLayoutMode::TwoHorizontal,
             charts: Vec::new(),
             sizing: None,
+            link_groups: None,
         };
         let host = Arc::new(Host::default());
         host.0
@@ -932,6 +1188,203 @@ mod tests {
         menu.curr_layout = Some("A".into());
         at(10.0, &mut |ctx| assert!(!menu.autosave_due(ctx, 99)));
         at(20.0, &mut |ctx| assert!(!menu.autosave_due(ctx, 99)));
+    }
+
+    #[test]
+    fn failed_layout_saves_stay_unsaved_and_autosave_retries_them_once_a_second() {
+        let ctx = egui::Context::default();
+        let at = |time: f64, run: &mut dyn FnMut(&egui::Context)| {
+            let input = egui::RawInput {
+                time: Some(time),
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| run(ui.ctx()))
+                .drop_without_applying_deltas();
+        };
+        let layout = SavedLayout {
+            mode: crate::widget::ChartLayoutMode::TwoHorizontal,
+            charts: Vec::new(),
+            sizing: None,
+            link_groups: None,
+        };
+        let mut latest = layout.clone();
+        latest.mode = crate::widget::ChartLayoutMode::Single;
+        let opened = |host: &Arc<Host>| {
+            host.0
+                .lock()
+                .unwrap()
+                .insert("A".into(), layout.to_json().unwrap());
+            let mut menu = LayoutMenu::new();
+            menu.set_storage(host.clone());
+            at(0.0, &mut |ctx| assert!(menu.poll(ctx).is_none()));
+            menu.open("A");
+            at(0.0, &mut |ctx| assert!(menu.poll(ctx).is_some()));
+            menu.autosave = true;
+            menu
+        };
+        // The storage fails before 6 s and from 7.5 s, and the layout changes at 1 s and 7 s.
+        // Whether the user also saves it at 1 s, and when autosave asks for it and an error is
+        // reported.
+        for (manual, due, errors) in [
+            (false, [3.0, 4.25, 5.5, 6.75, 9.0], [3.25, 9.25]),
+            (true, [2.25, 3.5, 4.75, 6.0, 9.0], [1.25, 9.25]),
+        ] {
+            let host = Arc::new(Host::default());
+            let mut menu = opened(&host);
+            let (mut saves, mut reports) = (Vec::new(), Vec::new());
+            for time in (0..=37).map(|k| f64::from(k) * 0.25) {
+                host.2.store(!(6.0..7.5).contains(&time), Ordering::Relaxed);
+                let edits = if time < 1.0 {
+                    5
+                } else if time < 7.0 {
+                    6
+                } else {
+                    7
+                };
+                at(time, &mut |ctx| {
+                    menu.poll(ctx);
+                    if menu.take_error().is_some() {
+                        reports.push(time);
+                    }
+                    if menu.autosave_due(ctx, edits) {
+                        saves.push(time);
+                        menu.save("A", &latest);
+                    }
+                });
+                if manual && time == 1.0 {
+                    menu.save("A", &latest);
+                }
+            }
+            assert_eq!(
+                (saves.as_slice(), reports.as_slice()),
+                (&due[..], &errors[..])
+            );
+            let stored = host.0.lock().unwrap()["A"].clone();
+            assert_eq!(SavedLayout::from_json(&stored).unwrap().mode, latest.mode);
+        }
+        // An autosave behind a rename in flight would bring the old name back after the rename
+        // deletes it.
+        let host = Arc::new(Host::default());
+        let mut menu = opened(&host);
+        at(0.0, &mut |ctx| assert!(!menu.autosave_due(ctx, 5)));
+        menu.rename("Delayed", &layout);
+        for time in [1.0, 3.5] {
+            at(time, &mut |ctx| {
+                if menu.autosave_due(ctx, 6) {
+                    menu.save("A", &layout);
+                }
+            });
+        }
+        host.1.lock().unwrap().take().unwrap().send(Ok(()));
+        menu.poll(&ctx);
+        menu.poll(&ctx);
+        assert_eq!(
+            host.0.lock().unwrap().keys().collect::<Vec<_>>(),
+            ["Delayed"]
+        );
+        assert_eq!(menu.layouts, ["Delayed"]);
+        // A save that fails under the name of another stored layout is tried again too, with no
+        // edit since the layout was opened.
+        let host = Arc::new(Host::default());
+        host.0
+            .lock()
+            .unwrap()
+            .insert("B".into(), layout.to_json().unwrap());
+        let mut menu = opened(&host);
+        at(0.0, &mut |ctx| assert!(!menu.autosave_due(ctx, 5)));
+        host.2.store(true, Ordering::Relaxed);
+        menu.save("B", &latest);
+        at(0.25, &mut |ctx| {
+            menu.poll(ctx);
+            assert!(!menu.autosave_due(ctx, 5));
+        });
+        host.2.store(false, Ordering::Relaxed);
+        at(1.25, &mut |ctx| assert!(menu.autosave_due(ctx, 5)));
+    }
+
+    #[test]
+    fn a_layout_changed_elsewhere_is_not_overwritten_and_waits_for_the_users_choice() {
+        use crate::services::document::tests::Revised;
+        use crate::widget::ChartLayoutMode::{Four, Single, TwoHorizontal};
+        let ctx = egui::Context::default();
+        let at = |time: f64, run: &mut dyn FnMut(&egui::Context)| {
+            let input = egui::RawInput {
+                time: Some(time),
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| run(ui.ctx()))
+                .drop_without_applying_deltas();
+        };
+        let layout = |mode| SavedLayout {
+            mode,
+            charts: Vec::new(),
+            sizing: None,
+            link_groups: None,
+        };
+        let document = |mode| layout(mode).to_json().unwrap();
+        let stored = |host: &Revised, name: &str| {
+            host.get(name)
+                .map(|document| SavedLayout::from_json(&document).unwrap().mode)
+        };
+        // The choice, the layout `poll` returns to restore, and the layouts kept, with the
+        // modes stored under `A`, `A (local copy)` and `A (local copy 2)`.
+        for (choice, reloaded, layouts, modes) in [
+            (
+                ConflictChoice::ReloadRemote,
+                Some(Four),
+                &["A"][..],
+                [Some(Four), None, None],
+            ),
+            (
+                ConflictChoice::KeepLocalCopy,
+                Some(Four),
+                &["A", "A (local copy 2)", "A (local copy)"][..],
+                [Some(Four), Some(TwoHorizontal), Some(Single)],
+            ),
+            (
+                ConflictChoice::Retry,
+                None,
+                &["A"][..],
+                [Some(Single), None, None],
+            ),
+        ] {
+            let host = Arc::new(Revised::default());
+            host.put("A", &document(TwoHorizontal));
+            if choice == ConflictChoice::KeepLocalCopy {
+                // A copy kept earlier is never replaced.
+                host.put("A (local copy)", &document(TwoHorizontal));
+            }
+            let mut menu = LayoutMenu::new();
+            menu.set_storage(host.clone());
+            menu.poll(&ctx);
+            menu.open("A");
+            assert!(menu.poll(&ctx).is_some());
+            // Another client changes the layout after it was read.
+            host.put("A", &document(Four));
+            menu.save("A", &layout(Single));
+            menu.poll(&ctx);
+            assert_eq!(menu.storage_conflict(), Some("A"));
+            assert_eq!(stored(&host, "A"), Some(Four));
+            // Autosave waits for the choice: it would save at 12.5 s otherwise.
+            menu.autosave = true;
+            at(10.0, &mut |ctx| assert!(!menu.autosave_due(ctx, 5)));
+            for time in [10.5, 13.0] {
+                at(time, &mut |ctx| assert!(!menu.autosave_due(ctx, 6)));
+            }
+            menu.resolve_storage_conflict("A", choice);
+            let restored = menu.poll(&ctx).map(|(name, layout)| (name, layout.mode));
+            assert_eq!(restored, reloaded.map(|mode| ("A".to_owned(), mode)));
+            assert_eq!(menu.storage_conflict(), None);
+            assert_eq!(menu.layouts, layouts);
+            let names = ["A", "A (local copy)", "A (local copy 2)"];
+            assert_eq!(names.map(|name| stored(&host, name)), modes);
+            if choice == ConflictChoice::ReloadRemote {
+                // The next save is made over the version reloaded.
+                menu.save("A", &layout(Single));
+                menu.poll(&ctx);
+                assert_eq!(stored(&host, "A"), Some(Single));
+            }
+        }
     }
 
     #[test]

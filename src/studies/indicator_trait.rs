@@ -415,9 +415,8 @@ pub trait Indicator: Send {
                 .fills()
                 .iter()
                 .map(|fill| super::FillStyle {
-                    color: fill.color,
                     inverted_color: fill.inverted_color,
-                    visible: true,
+                    ..super::FillStyle::new(fill.color)
                 })
                 .collect(),
         }
@@ -885,6 +884,17 @@ pub trait Indicator: Send {
 
     /// Show or hide this indicator.
     fn set_visible(&mut self, visible: bool);
+
+    /// Whether the user has this indicator shown: the switch that
+    /// [`set_visible`](Indicator::set_visible) sets, whatever its interval settings hide on the
+    /// current interval. Study templates save this switch, so that a copy on another interval is
+    /// drawn wherever its settings allow.
+    ///
+    /// Defaults to [`is_visible`](Indicator::is_visible); override it when `is_visible` also
+    /// hides the indicator by another rule.
+    fn user_visible(&self) -> bool {
+        self.is_visible()
+    }
 
     /// Clone this indicator into a new `Box<dyn Indicator>`.
     ///

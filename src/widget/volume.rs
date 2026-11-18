@@ -132,7 +132,11 @@ pub(super) fn paint(
                     );
                 }
             }
-            if points.len() == start && !points.is_empty() {
+            // shortcut: a joined plot is bridged across gaps inside the visible bars only, and a
+            // step line with diamonds marks its first visible value as a change; walk to the
+            // nearest defined bars outside them, as render_study does, if a volume plot shows
+            // gaps or stray diamonds at the view's edges.
+            if points.len() == start && !points.is_empty() && !plot.plot_type.joins_gaps() {
                 paint_study_plot(&painter, &points, plot, y(0.0));
                 points.clear();
             }
@@ -179,7 +183,8 @@ pub(super) fn tags(
             && study.plot_tagged(line)
             && map.range().contains(value)
         {
-            let label = crate::chart::rendering::axes::named_label(
+            let label = crate::chart::rendering::axes::study_named_label(
+                painter.ctx(),
                 axis.show_study_names,
                 study.name(),
                 study.format_value(value),
@@ -318,6 +323,47 @@ mod tests {
             }
             if rows != shown {
                 failures.push(format!("{kind:?}: volume rows in the tooltip: {rows}"));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// A volume study pinned to a scale draws no columns on a chart type that hides volume, as
+    /// an unpinned one does; a candle chart still draws them.
+    #[test]
+    fn pinned_volume_draws_no_columns_on_charts_that_hide_volume() {
+        use crate::model::ChartType;
+        let mut failures = Vec::new();
+        for (kind, shown) in [(ChartType::Candles, true), (ChartType::Range, false)] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[100.0, 103.0, 106.0, 109.0]);
+            chart.set_chart_type(kind);
+            shapes(&ctx, &mut chart, 0.0, vec![]);
+            let id = chart
+                .indicators()
+                .find(|(_, study)| study.name() == "Volume")
+                .unwrap()
+                .0;
+            assert!(chart.set_indicator_scale(
+                id,
+                crate::studies::StudyScale::Shared(crate::model::SeriesScale::Right)
+            ));
+            let rects = |chart: &mut crate::widget::Chart, time| {
+                shapes(&ctx, chart, time, vec![]);
+                let painted = shapes(&ctx, chart, time + 0.1, vec![]);
+                let area = chart.last_rendered_price_rect;
+                painted
+                    .iter()
+                    .filter(|shape| {
+                        matches!(shape, egui::Shape::Rect(rect) if area.contains_rect(rect.rect))
+                    })
+                    .count()
+            };
+            let with = rects(&mut chart, 0.2);
+            assert!(chart.set_indicator_visible(id, false));
+            let without = rects(&mut chart, 0.6);
+            if (with != without) != shown {
+                failures.push(format!("{kind:?}: {with} rects pinned, {without} hidden"));
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
@@ -482,5 +528,61 @@ mod tests {
                 .indicators()
                 .any(|(_, study)| study.name() == "Volume")
         );
+    }
+
+    /// A line in the volume overlay joins the values on either side of a missing one, as in the
+    /// panes, and a line with breaks leaves the gap.
+    #[test]
+    fn volume_overlay_lines_join_gaps_unless_drawn_with_breaks() {
+        use crate::studies::{CustomIndicator, Indicator, IndicatorValue, PlotType};
+        use egui::{Pos2, Rect};
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(200.0, 100.0));
+        let map = crate::scales::PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(0.0, 100.0),
+            0.0,
+            100.0,
+            false,
+        );
+        // Values 25, 50, none, 75 and 87.5 at x 19, 59, 99, 139 and 179; y is 100 minus the
+        // value.
+        let coords = super::ChartMapping::new(rect, 40.0, 0, 4, 0.0, map);
+        let pos = |points: &[(f32, f32)]| -> Vec<Pos2> {
+            points.iter().map(|&(x, y)| Pos2::new(x, y)).collect()
+        };
+        let (a, b, d, e) = ((19.0, 75.0), (59.0, 50.0), (139.0, 25.0), (179.0, 12.5));
+        for (kind, expected) in [
+            (PlotType::Line, vec![pos(&[a, b, d, e])]),
+            (PlotType::LineWithBreaks, vec![pos(&[a, b]), pos(&[d, e])]),
+        ] {
+            let mut study = CustomIndicator::new("Gap", |_| {
+                [Some(25.0), Some(50.0), None, Some(75.0), Some(87.5)]
+                    .map(|value| value.map_or(IndicatorValue::None, IndicatorValue::Single))
+                    .to_vec()
+            })
+            .with_plot_types(vec![kind]);
+            study.calculate(&[]);
+            let mut output = Context::default().run_ui(egui::RawInput::default(), |ui| {
+                super::paint(
+                    ui.painter(),
+                    rect,
+                    &study,
+                    &(0..5),
+                    &coords,
+                    0.0,
+                    100.0,
+                    None,
+                );
+            });
+            let paths: Vec<_> = std::mem::take(&mut output.shapes)
+                .into_iter()
+                .filter_map(|shape| match shape.shape {
+                    egui::Shape::Path(path) => Some(path.points),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            assert_eq!(paths, expected, "{kind:?}");
+        }
     }
 }

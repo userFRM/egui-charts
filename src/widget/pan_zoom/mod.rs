@@ -569,10 +569,11 @@ impl Chart {
 
     /// Advance the kinetic scrolling animation by one frame.
     ///
-    /// Applies the current velocity to the right-offset, then damps the velocity
-    /// using the configured damping coefficient. Stops when velocity drops below
-    /// the minimum threshold or motion becomes non-finite. Requests a repaint
-    /// while the animation is running.
+    /// The speed decays continuously by the configured damping coefficient every 60th of a
+    /// second, and the frame moves the right offset by the distance that speed covers over the
+    /// frame's length, so a coast travels as far at any frame rate and across pauses. It stops
+    /// where the speed falls below the minimum, or when the motion is not finite. Requests a
+    /// repaint while the animation is running.
     pub(crate) fn apply_kinetic_scroll(&mut self, ui: &Ui) {
         if !self.chart_options.handle_scroll.enabled {
             self.kinetic_scroll = state::KineticScrollState::new();
@@ -595,9 +596,23 @@ impl Chart {
         self.kinetic_scroll.anim_last_time = Some(now);
 
         if dt > 0.0 {
-            let velocity_in_bars_per_s =
-                self.kinetic_scroll.velocity / self.state.time_scale().bar_spacing();
-            let delta_offset = velocity_in_bars_per_s * dt;
+            let velocity = self.kinetic_scroll.velocity;
+            // The speed decays continuously by `damping_coeff` every 60th of a second, and a
+            // frame moves by the distance it covers over the frame, whatever the frame rate.
+            let rate = -60.0 * options.damping_coeff.ln();
+            let kept = (-rate * dt).exp();
+            let min_v_px_s = options.min_scroll_speed * 60.0;
+            let ends = (velocity * kept).abs() < min_v_px_s;
+            // Seconds at the starting speed that cover the frame's distance. A coast that ends
+            // in this frame stops where its speed reaches the minimum.
+            let covered = if ends {
+                (1.0 - (min_v_px_s / velocity.abs()).min(1.0)) / rate
+            } else {
+                -(-rate * dt).exp_m1() / rate
+            };
+            // Bars per second first: a speed too fast to scroll overflows and stops below.
+            let velocity_in_bars_per_s = velocity / self.state.time_scale().bar_spacing();
+            let delta_offset = velocity_in_bars_per_s * covered;
             let curr_offset = self.state.time_scale().right_offset_precise();
             let new_offset = curr_offset - f64::from(delta_offset);
 
@@ -607,15 +622,11 @@ impl Chart {
             }
             self.state.time_scale_mut().set_right_offset(new_offset);
 
-            let frames = (dt * 60.0).max(0.0);
-            let damping = self.chart_options.kinetic_scroll.damping_coeff.powf(frames);
-            self.kinetic_scroll.velocity *= damping;
-
-            let min_v_px_s = self.chart_options.kinetic_scroll.min_scroll_speed * 60.0;
-            if self.kinetic_scroll.velocity.abs() < min_v_px_s {
+            if ends {
                 self.kinetic_scroll = state::KineticScrollState::new();
                 return;
             }
+            self.kinetic_scroll.velocity = velocity * kept;
         }
 
         ui.ctx().request_repaint();
@@ -844,27 +855,33 @@ mod tests {
     use crate::widget::test_frames::{chart, frame};
     use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
 
-    /// Invalid damping falls back at both option entry points and the animation still ends;
-    /// under the defaults a flick keeps its speed and settles in under two seconds.
+    /// Invalid damping and scroll speeds fall back at both option entry points and the animation
+    /// still ends; under the defaults a flick keeps its speed and settles in under two seconds,
+    /// and a coast travels as far at any frame rate and after a pause in painting.
     #[test]
     fn kinetic_damping_options_decay_to_a_stop() {
         for runtime in [false, true] {
-            for (coefficient, expected) in [
-                (f32::NAN, 0.95),
-                (f32::INFINITY, 0.95),
-                (f32::NEG_INFINITY, 0.95),
-                (-0.5, 0.95),
-                (1.0, 0.95),
-                (1.5, 0.95),
-                (0.0, 0.0),
-                (0.5, 0.5),
-                (0.997, 0.997),
+            for (coefficient, min_speed, expected, expected_min) in [
+                (f32::NAN, 0.2, 0.95, 0.2),
+                (f32::INFINITY, 0.2, 0.95, 0.2),
+                (f32::NEG_INFINITY, 0.2, 0.95, 0.2),
+                (-0.5, 0.2, 0.95, 0.2),
+                (1.0, 0.2, 0.95, 0.2),
+                (1.5, 0.2, 0.95, 0.2),
+                (0.0, 0.2, 0.0, 0.2),
+                (0.5, 0.2, 0.5, 0.2),
+                (0.997, 0.2, 0.997, 0.2),
+                (0.95, 0.0, 0.95, 0.2),
+                (0.95, -1.0, 0.95, 0.2),
+                (0.95, f32::NAN, 0.95, 0.2),
+                (0.95, f32::INFINITY, 0.95, 0.2),
             ] {
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[95.0], &[105.0]);
                 let mut options = chart.chart_options().clone();
                 options.kinetic_scroll.enabled = true;
                 options.kinetic_scroll.damping_coeff = coefficient;
+                options.kinetic_scroll.min_scroll_speed = min_speed;
                 if runtime {
                     chart.set_chart_options(options);
                 } else {
@@ -881,44 +898,88 @@ mod tests {
                 }
                 assert!(
                     !chart.kinetic_scroll.is_active,
-                    "runtime={runtime}, damping={coefficient}"
+                    "runtime={runtime}, damping={coefficient}, minimum={min_speed}"
                 );
                 assert_eq!(chart.kinetic_scroll.velocity, 0.0);
                 assert_eq!(chart.chart_options().kinetic_scroll.damping_coeff, expected);
+                assert_eq!(
+                    chart.chart_options().kinetic_scroll.min_scroll_speed,
+                    expected_min
+                );
             }
+        }
+
+        // A flick at 2000 points per second toward the future decays to the minimum of 12 points
+        // per second over the same distance whatever the frames: at 60, 10 and 2 frames per
+        // second, and with one frame 2 seconds after the release,
+        // (2000 - 12) / (60 ln(1 / 0.95)) = 645.96 points.
+        for (first, step) in [
+            (1.0 / 60.0, 1.0 / 60.0),
+            (0.1, 0.1),
+            (0.5, 0.5),
+            (2.0, 1.0 / 60.0),
+        ] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[95.0], &[105.0]);
+            chart.chart_options.kinetic_scroll.enabled = true;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let start = chart.state.time_scale().right_offset_precise();
+            chart.kinetic_scroll.is_active = true;
+            chart.kinetic_scroll.velocity = -2000.0;
+            chart.kinetic_scroll.anim_last_time = Some(0.0);
+            for i in 0..200 {
+                frame(&ctx, &mut chart, first + f64::from(i) * step, vec![]);
+            }
+            assert!(
+                !chart.kinetic_scroll.is_active,
+                "first={first}, step={step}"
+            );
+            let spacing = f64::from(chart.state.time_scale().bar_spacing());
+            let travel = (chart.state.time_scale().right_offset_precise() - start) * spacing;
+            assert!(
+                (travel - 645.96).abs() < 1.0,
+                "first={first}, step={step}: {travel}"
+            );
         }
 
         // A drag of 20 points every 10 ms is released at 2000 points per second, under the
         // default limit of 3000. At 60 frames per second each frame keeps 0.95 of the speed,
         // and 2000 * 0.95^100 = 11.8 is the first below the minimum of 12 points per second.
-        let ctx = egui::Context::default();
-        let mut chart = chart(&[95.0], &[105.0]);
-        chart.chart_options.kinetic_scroll.mouse = true;
-        frame(&ctx, &mut chart, 0.0, vec![]);
-        let start = chart.last_rendered_price_rect.center();
-        let button = |pos, pressed| Event::PointerButton {
-            pos,
-            button: PointerButton::Primary,
-            pressed,
-            modifiers: Modifiers::NONE,
-        };
-        frame(&ctx, &mut chart, 0.01, vec![Event::PointerMoved(start)]);
-        frame(&ctx, &mut chart, 0.02, vec![button(start, true)]);
-        let mut end = start;
-        for i in 1..=4 {
-            end.x = start.x + 20.0 * i as f32;
-            let time = 0.02 + f64::from(i) * 0.01;
-            frame(&ctx, &mut chart, time, vec![Event::PointerMoved(end)]);
+        // A limit that is NaN or negative falls back to the default.
+        for max_speed in [50.0, f32::NAN, -1.0] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[95.0], &[105.0]);
+            let mut options = chart.chart_options().clone();
+            options.kinetic_scroll.mouse = true;
+            options.kinetic_scroll.max_scroll_speed = max_speed;
+            chart.set_chart_options(options);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let start = chart.last_rendered_price_rect.center();
+            let button = |pos, pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            frame(&ctx, &mut chart, 0.01, vec![Event::PointerMoved(start)]);
+            frame(&ctx, &mut chart, 0.02, vec![button(start, true)]);
+            let mut end = start;
+            for i in 1..=4 {
+                end.x = start.x + 20.0 * i as f32;
+                let time = 0.02 + f64::from(i) * 0.01;
+                frame(&ctx, &mut chart, time, vec![Event::PointerMoved(end)]);
+            }
+            frame(&ctx, &mut chart, 0.07, vec![button(end, false)]);
+            assert!(chart.kinetic_scroll.is_active);
+            let speed = chart.kinetic_scroll.velocity;
+            assert!((speed - 2000.0).abs() < 1.0, "released at {speed}");
+            let frames = (1..=1200).find(|&i| {
+                frame(&ctx, &mut chart, 0.07 + f64::from(i) / 60.0, vec![]);
+                !chart.kinetic_scroll.is_active
+            });
+            assert_eq!(frames, Some(100));
+            assert_eq!(chart.chart_options().kinetic_scroll.max_scroll_speed, 50.0);
         }
-        frame(&ctx, &mut chart, 0.07, vec![button(end, false)]);
-        assert!(chart.kinetic_scroll.is_active);
-        let speed = chart.kinetic_scroll.velocity;
-        assert!((speed - 2000.0).abs() < 1.0, "released at {speed}");
-        let frames = (1..=1200).find(|&i| {
-            frame(&ctx, &mut chart, 0.07 + f64::from(i) / 60.0, vec![]);
-            !chart.kinetic_scroll.is_active
-        });
-        assert_eq!(frames, Some(100));
     }
 
     /// Invalid motion and a disabled scroll group stop momentum without changing the viewport.

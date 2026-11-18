@@ -354,25 +354,28 @@ impl Drawing {
             left..right,
             ProfileStyle::Drawing {
                 anchored: self.tool_type == DrawingToolType::AnchoredVolumeProfile,
+                poc_width: self.stroke_width,
             },
             view.price_to_y,
         );
     }
 
-    /// The profile of `bars`, the span that starts at bar `first`: the executed volume at each
-    /// price when the view holds complete executions in the span, else the finer bars where they
-    /// cover chart bars, else estimated from the chart bars.
+    /// The profile of `bars`, the span that starts at bar `first`: the executed volume in the
+    /// drawing's rows when the view holds complete executions in the span, else the finer bars
+    /// where they cover chart bars, else estimated from the chart bars.
     fn span_profile(
         &self,
         view: &ChartView,
         first: usize,
         bars: &[Bar],
     ) -> Rc<Option<VolumeProfile>> {
+        let config = self.volume_profile.unwrap_or_default();
         if let (Some(flow), Some(start), Some(end)) = (view.executions, bars.first(), bars.last()) {
             let executed = flow.profile(start.time, end.time);
             let complete = flow.span_is_complete(start.time, end.time);
-            if let Some(profile) = VolumeProfile::from_executions(
+            if let Some(profile) = VolumeProfile::of_executions(
                 &executed,
+                &config,
                 flow.price_step(),
                 flow.tick_size(),
                 complete,
@@ -380,7 +383,6 @@ impl Drawing {
                 return Rc::new(Some(profile));
             }
         }
-        let config = self.volume_profile.unwrap_or_default();
         if let Some(profile) = finer_profile(view, config.rows(), config.row_size(), first, bars) {
             return profile;
         }
@@ -388,10 +390,10 @@ impl Drawing {
     }
 
     /// The profile that a fixed range or anchored volume profile shows over the view's bars,
-    /// with its [source](VolumeProfile::source): executed volume when
-    /// [`ChartView::executions`] holds complete bars in the selected span, including prepared
-    /// bars before a missing join, else the finer bars
-    /// of [`ChartView::finer`], else the bar estimate.
+    /// with its [source](VolumeProfile::source): executed volume, in the drawing's rows as the
+    /// volume profile studies group executions, when [`ChartView::executions`] holds complete
+    /// bars in the selected span, including prepared bars before a missing join, else the finer
+    /// bars of [`ChartView::finer`], else the bar estimate.
     /// `None` for other tools, a drawing without its anchors, or an empty selection.
     pub fn volume_profile_of(&self, view: &ChartView) -> Option<VolumeProfile> {
         let (first, bars) = self.profile_span(view.bars)?;
@@ -486,9 +488,9 @@ fn anchored_vwap<'a>(
     })
 }
 
-/// Draws a line of an anchored VWAP at `points` as `plot` in `stroke`, the line and step line
-/// in `style`, the plots that start from price zero from `zero`, at bars `pitch` apart. The area
-/// fills in the stroke's colour, as a study's area does.
+/// Draws a line of an anchored VWAP at `points` as `plot` in `stroke`, the line, step line and
+/// area line in `style`, the plots that start from price zero from `zero`, at bars `pitch` apart.
+/// An area is its line over a fill of its colour at 20% of its opacity, as a study's area is.
 fn paint_vwap_line(
     painter: &egui::Painter,
     points: Vec<Pos2>,
@@ -545,7 +547,9 @@ fn paint_vwap_line(
         }
         VwapPlotType::Area => {
             let base: Vec<_> = points.iter().map(|p| Pos2::new(p.x, zero)).collect();
-            super::super::fibonacci::paint_band(painter, &points, &base, color);
+            let fill = color.gamma_multiply(0.2);
+            super::super::fibonacci::paint_band(painter, &points, &base, fill);
+            path(points);
         }
         VwapPlotType::Circles => {
             for point in points {
@@ -902,6 +906,25 @@ mod tests {
             })
             .collect();
         assert_eq!(columns, [(110.0, 100.0), (120.0, 90.0), (130.0, 90.0)]);
+        // Area: the VWAP's line over a fill of its colour at 20% of its opacity down to zero.
+        let shapes = edited(|c| c.plot_type = crate::drawings::VwapPlotType::Area);
+        assert_eq!(strokes(&shapes), [green, green, blue]);
+        let Shape::Mesh(area) = &shapes[3] else {
+            panic!("area fill")
+        };
+        assert!(
+            area.vertices
+                .iter()
+                .all(|v| v.color == Color32::from_rgba_premultiplied(8, 20, 51, 51))
+        );
+        assert_eq!(
+            area.vertices
+                .iter()
+                .step_by(2)
+                .map(|v| v.pos)
+                .collect::<Vec<_>>(),
+            [(110.0, 100.0), (120.0, 90.0), (130.0, 90.0)].map(|(x, y)| Pos2::new(x, y))
+        );
         // Fill off: no mesh under the band.
         let shapes = edited(|c| c.band_fill.visible = false);
         assert_eq!(strokes(&shapes), [green, green, blue]);
@@ -1810,6 +1833,119 @@ mod tests {
                 .volume_profile_of(&view(Some((&gap).into())))
                 .unwrap();
             assert_eq!(profile.source(), ProfileSource::Executions { complete });
+        }
+    }
+
+    /// Executed rows follow the drawing's row layout as the fixed range volume profile study
+    /// groups the same executions: Rows 2 gives two rows of six ticks, since rows of three
+    /// counted from multiples of three would need three, and Price height 5 gives rows of five
+    /// ticks. The point of control and value area come from those rows, and every layout keeps
+    /// the 21 executed, split by side. A host footprint of two ticks to a row keeps whole rows of
+    /// it.
+    #[test]
+    fn executed_rows_follow_the_row_layout() {
+        use crate::data::{Footprint, ProfileSource, VolumeProfileConfig};
+        use crate::drawings::ChartPoint;
+        use crate::model::{BarClock, OrderSide, Tick};
+        let bars = sample_bars();
+        // Bar 1 trades 10 (1 sold), 11 (2 bought) and 12 (3 bought); bar 2 trades 13 (4 sold),
+        // 14 (5 unknown) and 15 (6 bought).
+        let trades: Vec<_> = [
+            (1, 10.0, 1.0, Some(OrderSide::Sell)),
+            (1, 11.0, 2.0, Some(OrderSide::Buy)),
+            (1, 12.0, 3.0, Some(OrderSide::Buy)),
+            (2, 13.0, 4.0, Some(OrderSide::Sell)),
+            (2, 14.0, 5.0, None),
+            (2, 15.0, 6.0, Some(OrderSide::Buy)),
+        ]
+        .into_iter()
+        .map(|(bar, price, size, side)| Tick::new(bars[bar].time, price, size, side))
+        .collect();
+        let height = |price| {
+            VolumeProfileConfig::default()
+                .with_row_size(Some(price))
+                .unwrap()
+        };
+        // Ticks per footprint row, the layout, then the rows: bottom edge, height, volume, buys,
+        // sells, and the row of the point of control, which alone holds the 70% value area (14.7
+        // of 21).
+        for (label, ticks, config, low, row_height, volume, up, down, poc) in [
+            (
+                "rows 2",
+                1,
+                VolumeProfileConfig::new(2, 0.7).unwrap(),
+                5.5,
+                6.0,
+                [3.0, 18.0],
+                [2.0, 9.0],
+                [1.0, 4.0],
+                1,
+            ),
+            (
+                "price height 5",
+                1,
+                height(5.0),
+                9.5,
+                5.0,
+                [15.0, 6.0],
+                [5.0, 6.0],
+                [5.0, 0.0],
+                0,
+            ),
+            (
+                "price height 4, two ticks a row",
+                2,
+                height(4.0),
+                7.5,
+                4.0,
+                [3.0, 18.0],
+                [2.0, 9.0],
+                [1.0, 4.0],
+                1,
+            ),
+        ] {
+            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, ticks).unwrap();
+            for trade in &trades {
+                flow.push(trade).unwrap();
+            }
+            let view = ChartView {
+                price_formatter: None,
+                time_formatter: None,
+                bar_seconds: 0,
+                instrument: None,
+                bars: &bars,
+                revision: 0,
+                bar_to_x: &|x| x,
+                bar_spacing: 1.0,
+                price_to_y: &|price| price as f32,
+                y_to_price: &f64::from,
+                time_axis: true,
+                executions: Some((&flow).into()),
+                timeframe: None,
+                finer: &[],
+            };
+            let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
+            drawing.chart_points = vec![ChartPoint::new(1.0, 10.0), ChartPoint::new(2.0, 10.0)];
+            drawing.volume_profile = Some(config);
+            let profile = drawing.volume_profile_of(&view).unwrap();
+            assert_eq!(
+                profile.source(),
+                ProfileSource::Executions { complete: true },
+                "{label}"
+            );
+            assert_eq!(
+                (profile.low(), profile.row_height()),
+                (low, row_height),
+                "{label}"
+            );
+            assert_eq!(profile.volume(), volume, "{label}");
+            assert_eq!(profile.up(), up, "{label}");
+            assert_eq!(profile.down(), down, "{label}");
+            assert_eq!(
+                profile.poc_and_value_area(0.7),
+                Some((poc, (poc, poc))),
+                "{label}"
+            );
         }
     }
 

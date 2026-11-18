@@ -98,7 +98,8 @@ fn navigation_buttons(visibility: ButtonVisibility) -> NavigationButtons {
 pub enum ChartSettingsError {
     /// `timezone` names no time zone this build knows.
     Timezone(crate::model::ParseError),
-    /// The margins are not finite, are negative or leave no room for prices.
+    /// A margin is not finite, is negative or is above 100 percent. Margins that together leave
+    /// no room for prices are accepted, and ignored by the fit.
     Margins {
         /// The top margin in percent.
         top: f32,
@@ -331,6 +332,8 @@ impl ChartSettingsState {
         settings.scales_and_lines.log_scale = scale.options().mode == PriceScaleMode::Logarithmic;
         settings.scales_and_lines.percentage_scale =
             scale.options().mode == PriceScaleMode::Percentage;
+        settings.scales_and_lines.indexed_to_100 =
+            Some(scale.options().mode == PriceScaleMode::IndexedTo100);
         settings.scales_and_lines.invert_scale = scale.options().invert_scale;
 
         settings.set_timezone_mode(&chart.chart_options().time_scale.timezone);
@@ -425,12 +428,7 @@ impl ChartSettingsState {
         let timezone = self.timezone_mode()?;
         let top = self.margins.top_percent;
         let bottom = self.margins.bottom_percent;
-        if !top.is_finite()
-            || !bottom.is_finite()
-            || top < 0.0
-            || bottom < 0.0
-            || top + bottom >= 100.0
-        {
+        if !(0.0..=100.0).contains(&top) || !(0.0..=100.0).contains(&bottom) {
             return Err(ChartSettingsError::Margins { top, bottom });
         }
         let right = self.margins.right_bars;
@@ -714,7 +712,11 @@ impl ChartSettingsState {
             PriceScaleMode::Logarithmic
         } else if self.scales_and_lines.percentage_scale {
             PriceScaleMode::Percentage
-        } else if chart.state.price_scale().options().mode == PriceScaleMode::IndexedTo100 {
+        } else if self
+            .scales_and_lines
+            .indexed_to_100
+            .unwrap_or(chart.state.price_scale().options().mode == PriceScaleMode::IndexedTo100)
+        {
             PriceScaleMode::IndexedTo100
         } else {
             PriceScaleMode::Normal
@@ -1382,6 +1384,19 @@ mod tests {
         assert_eq!(config.grid_color, grid);
         assert_eq!(config.vertical_grid_color, Some(old_grid));
         assert!(chart.can_undo());
+
+        // Margins leaving no room for prices, which the fit ignores, are kept.
+        let mut chart = Chart::new(bars());
+        chart.price_scale_mut().options_mut().scale_margins = crate::scales::PriceScaleMargins {
+            top: 0.6,
+            bottom: 0.4,
+        };
+        chart.user_action(|chart| {
+            ChartSettingsState::from_chart(chart)
+                .apply_to_chart(chart)
+                .unwrap();
+        });
+        assert!(!chart.can_undo());
 
         // Hidden and doubled price axes read as a right placement, which keeps them as they are.
         for (left, right) in [(false, false), (true, true)] {

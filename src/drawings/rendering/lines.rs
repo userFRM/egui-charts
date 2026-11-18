@@ -189,6 +189,14 @@ impl Drawing {
         ])
     }
 
+    /// Paints the drawing's text along the segment from `a` to `b`, placed by its alignment
+    /// settings as a trend line's is. Nothing without text or with a non-finite end.
+    pub(super) fn render_placed_line_text(&self, painter: &egui::Painter, a: Pos2, b: Pos2) {
+        if let Some(galley) = self.text_galley(painter) {
+            self.render_aligned_line_text(painter, a, b, self.line_text_anchor(), galley);
+        }
+    }
+
     /// Render trend line - a line between two points, extended to the left or right edge of
     /// `rect` when the drawing asks for it
     pub(crate) fn render_trend_line(
@@ -200,10 +208,8 @@ impl Drawing {
     ) {
         if let Some((left, right)) = self.trend_line_ends(rect) {
             self.styled_segment(painter, left, right, stroke);
-            if let &[a, b, ..] = self.points.as_slice()
-                && let Some(galley) = self.text_galley(painter)
-            {
-                self.render_aligned_line_text(painter, a, b, self.line_text_anchor(), galley);
+            if let &[a, b, ..] = self.points.as_slice() {
+                self.render_placed_line_text(painter, a, b);
             }
         } else if self.points.len() == 1 {
             painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.sm, color);
@@ -333,32 +339,31 @@ impl Drawing {
     }
 
     /// Paints a vertical line that reaches this pane from another: the line alone, as its text,
-    /// ends and handle stay in its own pane.
+    /// ends and handle stay in its own pane. It takes the colours of its own pane, with the
+    /// shade [`Drawing::theme_shaded`] gives.
     pub(crate) fn render_line_from_other_pane(&self, painter: &egui::Painter, rect: Rect) {
         if let Some(point) = self.points.first() {
             let (top, bottom) = (
                 Pos2::new(point.x, rect.min.y),
                 Pos2::new(point.x, rect.max.y),
             );
-            self.styled_segment(painter, top, bottom, self.stroke());
+            let shaded = self.theme_shaded(painter.ctx());
+            let stroke = shaded.as_ref().unwrap_or(self).stroke();
+            self.styled_segment(painter, top, bottom, stroke);
         }
     }
 
-    /// Render cross line - horizontal and vertical lines intersecting
+    /// Render cross line: a level across the pane, placed and interrupted by its text as a
+    /// horizontal line's, and a line down the pane.
     pub(crate) fn render_cross_line(&self, painter: &egui::Painter, rect: Rect, stroke: Stroke) {
-        if !self.points.is_empty() {
-            let point = self.points[0];
-            let (left, right) = (
-                Pos2::new(rect.min.x, point.y),
-                Pos2::new(rect.max.x, point.y),
-            );
+        if let Some(&point) = self.points.first() {
             let (top, bottom) = (
                 Pos2::new(point.x, rect.min.y),
                 Pos2::new(point.x, rect.max.y),
             );
-            self.styled_segment(painter, left, right, stroke);
+            // The level goes last, so that its text stays on top of the line down the pane.
             self.styled_segment(painter, top, bottom, stroke);
-            self.render_line_text(painter, left, right, true);
+            self.render_level(painter, rect, Pos2::new(rect.min.x, point.y), stroke);
         }
     }
 
@@ -731,7 +736,7 @@ impl Drawing {
             let end = self.points[1];
 
             painter.line_segment([start, end], stroke);
-            self.render_line_text(painter, start, end, true);
+            self.render_placed_line_text(painter, start, end);
         } else if self.points.len() == 1 {
             painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.sm, color);
         }
@@ -891,6 +896,8 @@ mod tests {
     /// (100, 390) and (300, 370): midpoint (200, 380), angle atan(-0.1), up = (-0.0995, -0.9950).
     /// The marker clears its head by another 20% of its length: (-40, -40) along the normal.
     /// Every mark has its base 14 pt from the anchor, with text 4 pt beyond it.
+    /// Each row's alignment settings name the point of the text it expects; tools without
+    /// alignment settings ignore them.
     #[test]
     fn line_and_shape_text_sits_on_its_drawing_and_reads_upright() {
         use crate::drawings::{ChartPoint, DrawingToolType as T};
@@ -949,7 +956,7 @@ mod tests {
         const MARK: &[(f32, f32)] = &[(200., 200.)];
         type Case = (T, &'static [(f32, f32)], f32, A, (f32, f32));
         #[rustfmt::skip]
-        let cases: [Case; 20] = [
+        let cases: [Case; 25] = [
             (T::TrendLine, RISING, -FRAC_PI_4, A::CENTER_BOTTOM, (196.4645, 196.4645)),
             (T::TrendLine, &[(300., 300.), (100., 100.)], FRAC_PI_4, A::CENTER_BOTTOM, (203.5355, 196.4645)),
             (T::Ray, &[(100., 200.), (200., 200.)], 0.0, A::CENTER_BOTTOM, (150., 195.)),
@@ -970,6 +977,11 @@ mod tests {
             (T::ArrowMarkDown, MARK, 0.0, A::CENTER_BOTTOM, (200., 182.)),
             (T::ArrowMarkLeft, MARK, 0.0, A::LEFT_CENTER, (218., 200.)),
             (T::ArrowMarkRight, MARK, 0.0, A::RIGHT_CENTER, (182., 200.)),
+            (T::ParallelChannel, CHANNEL, -FRAC_PI_4, A::LEFT_TOP, (103.5355, 303.5355)),
+            (T::FlatTopBottom, CHANNEL, -FRAC_PI_4, A::RIGHT_CENTER, (300., 100.)),
+            (T::DisjointChannel, CHANNEL, -FRAC_PI_4, A::CENTER_TOP, (203.5355, 203.5355)),
+            (T::Arrow, RISING, -FRAC_PI_4, A::LEFT_BOTTOM, (96.4645, 296.4645)),
+            (T::CrossLine, &[(150., 120.)], 0.0, A::RIGHT_TOP, (496., 125.)),
         ];
         for (tool, points, angle, anchor, expected) in cases {
             let mut drawing = Drawing::new(1, tool);
@@ -980,6 +992,20 @@ mod tests {
             drawing.text_color = None;
             // Synthetic bold paints the text twice.
             drawing.font_weight = crate::drawings::FontWeight::Normal;
+            {
+                use crate::drawings::{LineTextHorizontalAlign as H, LineTextVerticalAlign as V};
+                let settings = &mut drawing.line_measurements;
+                settings.text_horizontal_align = match anchor.x() {
+                    egui::Align::Min => H::Left,
+                    egui::Align::Center => H::Center,
+                    egui::Align::Max => H::Right,
+                };
+                settings.text_vertical_align = match anchor.y() {
+                    egui::Align::Min => V::Top,
+                    egui::Align::Center => V::Middle,
+                    egui::Align::Max => V::Bottom,
+                };
+            }
             let place = |drawing: &mut Drawing, points: &[Pos2]| {
                 drawing.points = points.to_vec();
                 drawing.chart_points = points

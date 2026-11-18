@@ -705,7 +705,11 @@ impl IndicatorDialog {
         }
         let searched = [&ind.name, &ind.desc, &ind.id, &ind.category]
             .iter()
-            .any(|text| self.search.matches(text) || self.search.matches(&l10n::text(ctx, text)));
+            .any(|text| self.search.matches(text) || self.search.matches(&l10n::text(ctx, text)))
+            || ind
+                .search_names()
+                .iter()
+                .any(|name| self.search.matches(name));
         if !searched {
             return false;
         }
@@ -1903,6 +1907,129 @@ mod tests {
             };
             assert_eq!(study.name(), "SMA", "{name}");
         }
+    }
+
+    /// The browser finds a study by its conventional full name, also with the qualifier last,
+    /// without catching its neighbours.
+    #[test]
+    fn search_finds_studies_by_their_full_names() {
+        // (search, studies listed, studies not listed)
+        type Row = (
+            &'static str,
+            &'static [&'static str],
+            &'static [&'static str],
+        );
+        let cases: &[Row] = &[
+            ("52 Week High/Low", &["52W High/Low"], &[]),
+            ("Accumulative Swing Index", &["ASI"], &[]),
+            ("Arnaud Legoux Moving Average", &["ALMA"], &[]),
+            (
+                "Auto Fib Retracement",
+                &["Auto Fibonacci Retracement"],
+                &["Auto Fibonacci Extension"],
+            ),
+            (
+                "Auto Fib Extension",
+                &["Auto Fibonacci Extension"],
+                &["Auto Fibonacci Retracement"],
+            ),
+            (
+                "Anchored Volume Profile",
+                &["Vol Profile Anchored", "Vol Profile Auto Anchored"],
+                &["Vol Profile Session"],
+            ),
+            (
+                "Auto Anchored Volume Profile",
+                &["Vol Profile Auto Anchored"],
+                &["Vol Profile Anchored"],
+            ),
+            ("Average Price", &["OHLC4"], &[]),
+            (
+                "Volume Profile",
+                &[
+                    "Vol Profile VR",
+                    "Vol Profile FR",
+                    "Vol Profile Session",
+                    "Vol Profile Periodic",
+                    "Vol Profile Anchored",
+                    "Vol Profile Auto Anchored",
+                ],
+                &["Time Price Opportunity"],
+            ),
+            (
+                "Weighted Moving Average",
+                &["WMA", "VWMA", "SWMA", "Hamming MA"],
+                &[],
+            ),
+            ("Hull Moving Average", &["HMA"], &[]),
+            (
+                "Exponential Moving Average",
+                &["EMA", "DEMA", "TEMA"],
+                &["SMA"],
+            ),
+            ("Simple Moving Average", &["SMA", "Triple MA"], &["EMA"]),
+            ("Least Squares Moving Average", &["LSMA"], &[]),
+            ("Kaufman Adaptive Moving Average", &["KAMA"], &[]),
+            ("Kaufman's Adaptive Moving Average", &["KAMA"], &[]),
+            ("Moving Average Adaptive", &["KAMA"], &[]),
+            ("Hamming Moving Average", &["Hamming MA"], &[]),
+            ("Moving Average Hamming", &["Hamming MA"], &[]),
+            ("Triple Moving Average", &["Triple MA"], &["TEMA"]),
+            ("Moving Average Triple", &["Triple MA"], &[]),
+            ("Moving Average Ribbon", &["MA Ribbon"], &[]),
+            ("Moving Average Multiple", &["Multi MA"], &[]),
+            (
+                "Double Moving Average",
+                &["MA Cross", "EMA Cross", "SMA/EMA Cross"],
+                &["DEMA"],
+            ),
+            (
+                "Moving Average Double",
+                &["MA Cross", "EMA Cross", "SMA/EMA Cross"],
+                &[],
+            ),
+            (
+                "MA with EMA Cross",
+                &["SMA/EMA Cross"],
+                &["MA Cross", "EMA Cross"],
+            ),
+            ("Klinger Oscillator", &["Klinger"], &[]),
+            ("Linear Regression Curve", &["LinReg"], &["LinReg Slope"]),
+            ("Moon Phases", &["Lunar Phases"], &[]),
+            ("Visible Range Volume Profile", &["Vol Profile VR"], &[]),
+            ("Volume Profile Visible Range", &["Vol Profile VR"], &[]),
+            ("Visible Range", &["Vol Profile VR"], &[]),
+            (
+                "Volatility Close-to-Close",
+                &["C2C Vol"],
+                &["Zero-Trend Vol"],
+            ),
+            (
+                "Volatility Zero Trend Close-to-Close",
+                &["Zero-Trend Vol"],
+                &["C2C Vol"],
+            ),
+            ("Volatility O-H-L-C", &["GK Vol"], &[]),
+        ];
+        let ctx = egui::Context::default();
+        let mut dialog = IndicatorDialog::new();
+        let mut misses = Vec::new();
+        for (query, listed, unlisted) in cases {
+            *dialog.search.query_mut() = (*query).into();
+            for (ids, expected) in [(listed, true), (unlisted, false)] {
+                for id in ids.iter() {
+                    let ind = dialog
+                        .indicators
+                        .iter()
+                        .find(|ind| ind.id == *id)
+                        .unwrap_or_else(|| panic!("{id} is registered"));
+                    if dialog.matches(&ctx, ind) != expected {
+                        misses.push(format!("{query:?} / {id}"));
+                    }
+                }
+            }
+        }
+        assert!(misses.is_empty(), "{misses:?}");
     }
 
     /// Each study is added with the parameters the factory creates it with until the user

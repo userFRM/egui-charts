@@ -29,7 +29,7 @@ struct Snapshot {
 fn mirrored(sync: Option<FolderSync>, layout_wide: bool) -> bool {
     match sync {
         Some(FolderSync::Chart) => false,
-        Some(FolderSync::Layout) => true,
+        Some(FolderSync::Layout | FolderSync::AllLayouts) => true,
         None => layout_wide,
     }
 }
@@ -650,7 +650,9 @@ impl DrawingLinks {
                                 charts[slot].history.drawing_edits += 1;
                             }
                         }
-                        charts[slot]
+                        // A copy that saving would refuse leaves the target as it was, so this
+                        // chart keeps saving.
+                        let _ = charts[slot]
                             .drawings_mut()
                             .drag_edit_drawing(id, |target| *target = copy);
                     } else {
@@ -1485,7 +1487,7 @@ fn unlock(chart: &mut Chart, id: usize) {
         .iter()
         .any(|d| d.id == id && d.locked)
     {
-        chart.drawings_mut().edit_drawing(id, |d| d.locked = false);
+        let _ = chart.drawings_mut().edit_drawing(id, |d| d.locked = false);
     }
 }
 
@@ -1960,6 +1962,92 @@ mod tests {
         }
     }
 
+    /// Guards #3286: opening a layout shows the symbol's stored drawings. One moved or deleted
+    /// elsewhere since the layout was saved stays so, one drawn elsewhere shows, and one the
+    /// layout keeps on a chart or in a layout comes back as the layout holds it. The opening
+    /// chart's own drawing is kept whether it was stored before the layout opened, unsaved then,
+    /// or drawn before the stored drawings were read again.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn opening_a_layout_keeps_the_drawings_stored_since_it_was_saved() {
+        use crate::services::document::tests::Revised;
+        use FolderSync::{AllLayouts, Chart as Local, Layout};
+        #[derive(Debug)]
+        enum Drawn {
+            Before,
+            Unsaved,
+            After,
+        }
+        // (folder of the layout's drawing, deleted elsewhere, when the opening chart draws its
+        // own, prices shown and stored)
+        type Row = (Option<FolderSync>, bool, Drawn, &'static [f64]);
+        let rows: [Row; 8] = [
+            (None, false, Drawn::Before, &[105.0, 108.0]),
+            (Some(AllLayouts), false, Drawn::Before, &[105.0, 108.0]),
+            (Some(Layout), false, Drawn::Before, &[104.0, 108.0]),
+            (Some(Local), false, Drawn::Before, &[104.0, 108.0]),
+            (None, true, Drawn::Before, &[108.0]),
+            (Some(Layout), true, Drawn::Before, &[104.0, 108.0]),
+            (None, false, Drawn::Unsaved, &[105.0, 108.0]),
+            (None, false, Drawn::After, &[105.0, 108.0]),
+        ];
+        for (folder, deleted, drawn, expected) in rows {
+            let host = Arc::new(Revised::default());
+            let chart = || {
+                let mut chart = bars(60);
+                chart.set_symbol("SAMPLE");
+                chart.set_storage(host.clone());
+                assert!(chart.flush_stored_drawings());
+                chart
+            };
+            let mut saved = chart();
+            saved.user_action(|chart| {
+                draw(chart, 104.0);
+                if let Some(folder) = folder {
+                    into_folder(chart, folder);
+                }
+            });
+            assert!(saved.flush_stored_drawings());
+            let layout = saved.snapshot().unwrap();
+            // Another layout of the symbol moves or deletes that drawing and draws one at 108.
+            let mut other = chart();
+            other.user_action(|chart| {
+                if deleted {
+                    let id = chart.drawings().drawings[0].id;
+                    chart.drawings_mut().delete_drawing(id);
+                } else {
+                    move_first(chart, 105.0);
+                }
+            });
+            assert!(other.flush_stored_drawings());
+            if !matches!(drawn, Drawn::After) {
+                other.user_action(|chart| draw(chart, 108.0));
+            }
+            if matches!(drawn, Drawn::Before) {
+                assert!(other.flush_stored_drawings());
+            }
+            other.restore(&layout).unwrap();
+            if matches!(drawn, Drawn::After) {
+                other.user_action(|chart| draw(chart, 108.0));
+            }
+            // A write the restore started is settled before the stored drawings are read again.
+            assert!((0..3).any(|_| other.flush_stored_drawings()));
+            let [shown] = prices(std::array::from_ref(&other));
+            let (document, _) = DrawingStorage::from_json(&host.get("SAMPLE").unwrap()).unwrap();
+            let mut stored: Vec<f64> = document
+                .drawings()
+                .iter()
+                .map(|d| d.points[0].price)
+                .collect();
+            stored.sort_by(f64::total_cmp);
+            assert_eq!(
+                (shown, stored),
+                (expected.to_vec(), expected.to_vec()),
+                "{folder:?}, deleted {deleted}, drawn {drawn:?}"
+            );
+        }
+    }
+
     /// The order by name ignores case and the order by edit time starts at the latest; equal
     /// keys fall back to the stored id, which is the same after a layout is restored. An edit
     /// time comes with the edit alone: live bars, saving and reading leave it, and an undo puts
@@ -2099,9 +2187,10 @@ mod tests {
         };
         let groups = std::array::from_fn(|_| None);
         let top = ["Top".to_owned()];
-        use FolderSync::{Chart as Local, Layout};
+        use FolderSync::{AllLayouts, Chart as Local, Layout};
         for (mode, layout_wide, copies) in [
             (Some(Layout), false, 1),
+            (Some(AllLayouts), false, 1),
             (Some(Local), true, 0),
             (None, true, 1),
             (None, false, 0),
@@ -2206,12 +2295,14 @@ mod tests {
         );
         refs[1]
             .drawings_mut()
-            .edit_drawing(id, |d| d.chart_points[0].bar_idx = 1.5);
+            .edit_drawing(id, |d| d.chart_points[0].bar_idx = 1.5)
+            .unwrap();
         links.sync(&mut refs, 4, &groups, false, true);
         assert_eq!(refs[0].drawings().drawings[0].chart_points[0].bar_idx, 3.0);
         refs[1]
             .drawings_mut()
-            .edit_drawing(id, |d| d.notes = Some("shared note".into()));
+            .edit_drawing(id, |d| d.notes = Some("shared note".into()))
+            .unwrap();
         links.sync(&mut refs, 4, &groups, false, true);
         assert_eq!(
             refs[0].drawings().drawings[0].notes.as_deref(),
@@ -2229,7 +2320,8 @@ mod tests {
         for index in [4.0, 5.0] {
             refs[0]
                 .drawings_mut()
-                .edit_drawing(source_id, |d| d.chart_points[0].bar_idx = index);
+                .edit_drawing(source_id, |d| d.chart_points[0].bar_idx = index)
+                .unwrap();
             links.sync(&mut refs, 4, &groups, true, true);
         }
         assert_eq!(
@@ -2379,23 +2471,32 @@ mod tests {
             vec![ChartPoint::new(1.0, 40.0), ChartPoint::new(2.0, 60.0)]
         );
         let copy = |b: &Chart| b.drawings().drawings.iter().find(|d| d.id == id).cloned();
-        a.drawings_mut().edit_drawing(source, |d| d.locked = true);
+        a.drawings_mut()
+            .edit_drawing(source, |d| d.locked = true)
+            .unwrap();
         sync(&mut a, &mut b);
         assert!(copy(&b).unwrap().locked);
-        a.drawings_mut().edit_drawing(source, |d| {
-            d.locked = false;
-            d.chart_points[0].bar_idx = 3.0;
-        });
+        a.drawings_mut()
+            .edit_drawing(source, |d| {
+                d.locked = false;
+                d.chart_points[0].bar_idx = 3.0;
+            })
+            .unwrap();
         sync(&mut a, &mut b);
         let moved = copy(&b).unwrap();
         assert!(!moved.locked, "an unlock reaches a locked copy");
         assert_eq!(moved.chart_points[0].bar_idx, 1.5);
-        a.drawings_mut().edit_drawing(source, |d| d.locked = true);
+        a.drawings_mut()
+            .edit_drawing(source, |d| d.locked = true)
+            .unwrap();
         sync(&mut a, &mut b);
         b.drawings_mut()
-            .edit_drawing(id, |d| d.chart_points[0].bar_idx = 0.0);
+            .edit_drawing(id, |d| d.chart_points[0].bar_idx = 0.0)
+            .unwrap();
         assert_eq!(copy(&b).unwrap().chart_points[0].bar_idx, 1.5);
-        a.drawings_mut().edit_drawing(source, |d| d.locked = false);
+        a.drawings_mut()
+            .edit_drawing(source, |d| d.locked = false)
+            .unwrap();
         a.drawings_mut().delete_drawing(source);
         sync(&mut a, &mut b);
         assert!(copy(&b).is_none(), "a deletion reaches a locked copy");
@@ -2542,10 +2643,13 @@ mod tests {
         let edit = |chart: &mut Chart, price: f64| {
             let id = first(chart);
             chart.user_action(|chart| {
-                chart.drawings_mut().edit_drawing(id, |drawing| {
-                    drawing.chart_points[0].price = price;
-                    drawing.chart_points[1].price = price + 2.0;
-                });
+                chart
+                    .drawings_mut()
+                    .edit_drawing(id, |drawing| {
+                        drawing.chart_points[0].price = price;
+                        drawing.chart_points[1].price = price + 2.0;
+                    })
+                    .unwrap();
             });
         };
         let (a_side, b_side) = (0, 1);
@@ -2877,10 +2981,13 @@ mod tests {
 
     fn move_first(chart: &mut Chart, price: f64) {
         let id = chart.drawings().drawings[0].id;
-        chart.drawings_mut().edit_drawing(id, |drawing| {
-            drawing.chart_points[0].price = price;
-            drawing.chart_points[1].price = price;
-        });
+        chart
+            .drawings_mut()
+            .edit_drawing(id, |drawing| {
+                drawing.chart_points[0].price = price;
+                drawing.chart_points[1].price = price;
+            })
+            .unwrap();
     }
 
     /// Puts the first drawing of `chart` in a folder synchronized as `sync`.
@@ -4027,10 +4134,13 @@ mod tests {
             let copy = shown[1].drawings().drawings[0].id;
             shown[1].user_action(|chart| {
                 if edit {
-                    chart.drawings_mut().edit_drawing(copy, |drawing| {
-                        drawing.chart_points[0].price = 50.0;
-                        drawing.chart_points[1].price = 52.0;
-                    });
+                    chart
+                        .drawings_mut()
+                        .edit_drawing(copy, |drawing| {
+                            drawing.chart_points[0].price = 50.0;
+                            drawing.chart_points[1].price = 52.0;
+                        })
+                        .unwrap();
                 } else {
                     assert!(
                         chart

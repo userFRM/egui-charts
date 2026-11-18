@@ -57,7 +57,7 @@ pub(crate) fn fit_study_mapping(
         if low.is_finite()
             && matches!(
                 plot.plot_type,
-                PlotType::Histogram | PlotType::Columns | PlotType::Area
+                PlotType::Histogram | PlotType::Columns | PlotType::Area | PlotType::AreaWithBreaks
             )
         {
             low = low.min(0.0);
@@ -166,7 +166,8 @@ pub(crate) fn render_study_axis(
                             .study_value_color
                             .unwrap_or(member.plot_style(line).color),
                     ),
-                    crate::chart::rendering::axes::named_label(
+                    crate::chart::rendering::axes::study_named_label(
+                        painter.ctx(),
                         axis_options.show_study_names,
                         member.name(),
                         label,

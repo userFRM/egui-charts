@@ -98,10 +98,11 @@ impl Chart {
         self.drawings()
             .validate_drawing(&drawing)
             .map_err(DrawingError::Invalid)?;
-        self.drawings_mut().edit_drawing(id, |target| {
-            target.chart_points = drawing.chart_points;
-        });
-        Ok(())
+        self.drawings_mut()
+            .edit_drawing(id, |target| {
+                target.chart_points = drawing.chart_points;
+            })
+            .map_err(DrawingError::Invalid)
     }
 
     /// Replaces a trend line's, ray's, extended line's, info line's or trend angle's readouts,
@@ -138,19 +139,21 @@ impl Chart {
         self.user_action(|chart| {
             chart.drawings_mut().edit_drawing(id, |drawing| {
                 drawing.line_measurements = measurements;
-            });
-        });
-        Ok(())
+            })
+        })
+        .map_err(DrawingError::Invalid)
     }
 
     /// Replace a retracement's, extension's, channel's, wedge's, circle's, resistance arc's, spiral's,
     /// time projection's or speed resistance fan's Fibonacci settings (levels, typography, text
-    /// placement, construction visibility, fan grid and fan labels) as one undoable edit. Unknown
-    /// ids, locked drawings and invalid settings change nothing.
+    /// placement, construction visibility, fan grid and fan labels) as one undoable edit. A fan
+    /// given changed settings without time levels takes their price levels as its time levels.
+    /// Unknown ids, locked drawings, invalid settings and the drawing's own settings change
+    /// nothing.
     pub fn set_fibonacci_config(
         &mut self,
         id: usize,
-        config: crate::drawings::FibonacciConfig,
+        mut config: crate::drawings::FibonacciConfig,
     ) -> Result<(), DrawingError> {
         let drawing = self
             .drawings()
@@ -181,12 +184,20 @@ impl Chart {
         if !config.is_valid() {
             return Err(DrawingError::Invalid("Invalid Fibonacci settings"));
         }
+        // A fan given changed settings saved before it had time levels takes the current look.
+        if drawing.tool_type == crate::drawings::DrawingToolType::FibonacciSpeedFan
+            && config.time_levels.is_none()
+            && drawing.fib_config.as_ref() != Some(&config)
+        {
+            config.time_levels = Some(config.levels.clone());
+        }
         if drawing.fib_config.as_ref() != Some(&config) {
             self.user_action(|chart| {
                 chart
                     .drawings_mut()
-                    .edit_drawing(id, |drawing| drawing.fib_config = Some(config));
-            });
+                    .edit_drawing(id, |drawing| drawing.fib_config = Some(config))
+            })
+            .map_err(DrawingError::Invalid)?;
         }
         Ok(())
     }
@@ -218,8 +229,9 @@ impl Chart {
             self.user_action(|chart| {
                 chart
                     .drawings_mut()
-                    .edit_drawing(id, |drawing| drawing.vwap = Some(config));
-            });
+                    .edit_drawing(id, |drawing| drawing.vwap = Some(config))
+            })
+            .map_err(DrawingError::Invalid)?;
         }
         Ok(())
     }
@@ -248,8 +260,9 @@ impl Chart {
             self.user_action(|chart| {
                 chart
                     .drawings_mut()
-                    .edit_drawing(id, |drawing| drawing.regression_trend = Some(config));
-            });
+                    .edit_drawing(id, |drawing| drawing.regression_trend = Some(config))
+            })
+            .map_err(DrawingError::Invalid)?;
         }
         Ok(())
     }
@@ -270,8 +283,9 @@ impl Chart {
             self.user_action(|chart| {
                 chart.drawings_mut().edit_drawing(id, |drawing| {
                     drawing.position_readout = readout;
-                });
-            });
+                })
+            })
+            .map_err(DrawingError::Invalid)?;
         }
         Ok(())
     }
@@ -301,8 +315,9 @@ impl Chart {
                     drawing.position_style = style;
                     drawing.position_target_color = target_color;
                     drawing.position_stop_color = stop_color;
-                });
-            });
+                })
+            })
+            .map_err(DrawingError::Invalid)?;
         }
         Ok(())
     }
@@ -338,8 +353,9 @@ impl Chart {
             self.user_action(|chart| {
                 chart
                     .drawings_mut()
-                    .edit_drawing(id, |drawing| drawing.marker = marker);
-            });
+                    .edit_drawing(id, |drawing| drawing.marker = marker)
+            })
+            .map_err(DrawingError::Invalid)?;
         }
         Ok(())
     }
@@ -382,9 +398,9 @@ impl Chart {
         self.user_action(|chart| {
             chart
                 .drawings_mut()
-                .edit_drawing(id, |target| *target = drawing);
-        });
-        Ok(())
+                .edit_drawing(id, |target| *target = drawing)
+        })
+        .map_err(DrawingError::Invalid)
     }
 
     fn position_drawing(&self, id: usize) -> Result<&Drawing, DrawingError> {
@@ -455,9 +471,8 @@ impl Chart {
             manager.edit_drawing(id, |drawing| {
                 drawing.text = Some(uri);
                 drawing.image.get_or_insert_with(Default::default).size = Some(frame.into());
-            });
-        });
-        Ok(())
+            })
+        })
     }
 
     /// The pane that draws drawing `id`, or `None` for an unknown drawing.
@@ -510,8 +525,25 @@ impl Chart {
         if !drawings.drawings.iter().any(|d| d.id == id && !d.locked) {
             return false;
         }
-        drawings.edit_drawing(id, |d| d.pane = owner);
-        true
+        drawings.edit_drawing(id, |d| d.pane = owner).is_ok()
+    }
+
+    /// Deletes the selected drawings as one undo step, as Delete and Backspace do. Locked drawings
+    /// stay selected and in place, and
+    /// [`ChartEvent::LockedDrawingsKept`](super::ChartEvent::LockedDrawingsKept) reports how many,
+    /// so the host can tell the user why.
+    pub fn delete_selected_drawings(&mut self) {
+        let kept = self
+            .drawings
+            .drawings
+            .iter()
+            .filter(|d| d.locked && self.drawings.is_selected(d.id))
+            .count();
+        self.drawings.delete_selected();
+        if kept > 0 {
+            self.host_events
+                .push(super::ChartEvent::LockedDrawingsKept(kept));
+        }
     }
 
     /// Adds a horizontal line at `price` in the pane under `pos`, the pane holding the main series
@@ -1002,6 +1034,18 @@ mod tests {
             assert!(chart.undo());
             assert!(!chart.can_undo());
             assert_eq!(chart.drawings().drawings[0].fib_config, original);
+            if tool == DrawingToolType::FibonacciSpeedFan {
+                // Settings saved before fans had time levels take the price levels as theirs.
+                let mut shared = edited.clone();
+                shared.time_levels = None;
+                chart.set_fibonacci_config(7, shared.clone()).unwrap();
+                let config = chart.drawings().drawings[0].fib_config.as_ref().unwrap();
+                assert_eq!(config.time_levels.as_ref(), Some(&edited.levels));
+                // Setting them again changes nothing, so one undo restores the fan.
+                chart.set_fibonacci_config(7, shared).unwrap();
+                assert!(chart.undo());
+                assert!(!chart.can_undo());
+            }
             chart.drawings_mut().drawings[0].tool_type = DrawingToolType::TrendLine;
             assert!(chart.set_fibonacci_config(7, edited).is_err());
         }
@@ -1339,7 +1383,10 @@ mod tests {
 
         assert!(!chart.move_drawing_to_pane(id, PaneId(999)));
         assert!(!chart.move_drawing_to_pane(id + 1, pane));
-        chart.drawings_mut().edit_drawing(id, |d| d.locked = true);
+        chart
+            .drawings_mut()
+            .edit_drawing(id, |d| d.locked = true)
+            .unwrap();
         assert!(!chart.move_drawing_to_pane(id, pane));
         assert_eq!(chart.drawing_pane(id), Some(PaneId::MAIN));
     }
@@ -1394,10 +1441,13 @@ mod tests {
         empty.load_drawings(&json).unwrap();
         let restored_id = empty.drawings().drawings[0].id;
         assert_eq!(empty.drawing_points(restored_id).unwrap(), edited);
-        chart.drawings_mut().edit_drawing(id, |d| {
-            d.saveable = false;
-            d.listed = false;
-        });
+        chart
+            .drawings_mut()
+            .edit_drawing(id, |d| {
+                d.saveable = false;
+                d.listed = false;
+            })
+            .unwrap();
         assert!(chart.save_drawings().unwrap().drawings().is_empty());
         assert!(chart.drawings().listed_drawings().next().is_none());
         assert!(matches!(
@@ -1492,7 +1542,8 @@ mod tests {
                 .unwrap();
             chart
                 .drawings_mut()
-                .edit_drawing(added, |drawing| drawing.color = [0, 255, 0, 255]);
+                .edit_drawing(added, |drawing| drawing.color = [0, 255, 0, 255])
+                .unwrap();
             let mut saved =
                 Drawing::with_color(9, DrawingToolType::HorizontalLine, [255, 0, 0, 255]);
             saved.chart_points = vec![ChartPoint::new(70.0, 105.0)];

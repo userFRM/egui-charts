@@ -120,6 +120,21 @@ pub(crate) fn named_label(show_name: bool, name: &str, label: String) -> String 
     }
 }
 
+/// [`named_label`] led by a study's name, which goes through the context's translator only when
+/// the axis shows names.
+pub(crate) fn study_named_label(
+    ctx: &egui::Context,
+    show_name: bool,
+    name: &str,
+    label: String,
+) -> String {
+    if show_name {
+        named_label(true, &crate::localization::text(ctx, name), label)
+    } else {
+        label
+    }
+}
+
 /// The axis ending at the plot's left edge uses right-aligned tags.
 fn price_tag_anchor(plot: Rect, axis_right: f32, y: f32) -> (Pos2, Align2) {
     if axis_right <= plot.left() {
@@ -412,7 +427,7 @@ pub(crate) fn render_study_tags(
         let color = axis.study_value_color.unwrap_or(plot_style.color);
         tags.push((
             map.price_to_y(value),
-            named_label(axis.show_study_names, study.name(), label),
+            study_named_label(painter.ctx(), axis.show_study_names, study.name(), label),
             (tag_text_color(color), color),
         ));
     }

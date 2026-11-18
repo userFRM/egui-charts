@@ -104,6 +104,9 @@ impl<'a> FootprintView<'a> {
             .or_else(|| self.closed.first().map(|bar| bar.time))
             .or_else(|| self.flow.bars.first_key_value().map(|(time, _)| *time))
     }
+    pub(crate) fn covered_from(self) -> Option<DateTime<Utc>> {
+        self.flow.covered_from.or_else(|| self.first_time())
+    }
     pub(crate) fn bar_at(self, time: DateTime<Utc>) -> Option<FootprintBarView<'a>> {
         let time = self.flow.clock.bar_open(time);
         if let Some(bar) = self.flow.bars.get(&time) {
@@ -232,7 +235,7 @@ impl<'a> FootprintView<'a> {
     /// Quiet slots are complete; a missing join or a span before held history is not.
     #[cfg(any(feature = "widget", feature = "studies"))]
     pub fn span_is_complete(self, first: DateTime<Utc>, last: DateTime<Utc>) -> bool {
-        self.span_is_complete_from(self.first_time(), first, last)
+        self.span_is_complete_from(self.covered_from(), first, last)
     }
     pub(crate) fn span_is_complete_from(
         self,
@@ -301,7 +304,12 @@ impl FootprintState {
         let Some(before) = self.live.prepared_before() else {
             return;
         };
-        let open = self.live.clock.bar_open(before);
+        let open = self.live.place(before);
+        self.share_owned_before(open);
+    }
+
+    #[cfg(feature = "widget")]
+    fn share_owned_before(&mut self, open: DateTime<Utc>) {
         if self
             .live
             .bars
@@ -315,12 +323,35 @@ impl FootprintState {
             .into_values()
             .collect();
         self.live.rows -= bars.iter().map(|bar| bar.levels.len()).sum::<usize>();
-        self.pages.push(PreparedPage {
+        let owner = PreparedPage {
             first: bars[0].time,
             end: bars.len(),
             start: 0,
             source: Arc::new(bars),
-        });
+        };
+        let mut start = 0;
+        let mut pages = Vec::with_capacity(self.pages.len() * 2 + 1);
+        for page in self.pages.drain(..) {
+            let end = owner.partition(|time| time < page.first);
+            if start < end {
+                pages.push(PreparedPage {
+                    first: owner.source.bar(start).time,
+                    start,
+                    end,
+                    ..owner.clone()
+                });
+            }
+            start = end;
+            pages.push(page);
+        }
+        if start < owner.end {
+            pages.push(PreparedPage {
+                first: owner.source.bar(start).time,
+                start,
+                ..owner
+            });
+        }
+        self.pages = pages;
     }
 
     /// Share admitted history and its boundary seed, without copying the live suffix.
@@ -334,6 +365,8 @@ impl FootprintState {
             trade_starts: Default::default(),
             rows: 0,
             missing: self.live.missing.clone(),
+            missing_bars: self.live.missing_bars.clone(),
+            placement: Default::default(),
             prepared: self.live.prepared.clone(),
             ..self.live
         };
@@ -379,11 +412,11 @@ impl FootprintState {
             self.live.trade_starts.remove(&bar.time);
             #[cfg(feature = "widget")]
             if let Some(before) = self.live.prepared_before() {
-                let end = self
-                    .live
-                    .clock
-                    .next_open(bar.time)
-                    .unwrap_or(DateTime::<Utc>::MAX_UTC);
+                // The executions of the next bar can start before its open.
+                let end = (self.live.clock.next_open(bar.time))
+                    .map_or(DateTime::<Utc>::MAX_UTC, |next| {
+                        self.live.clock.bar_start(next)
+                    });
                 self.live.add_missing(before, end);
             } else {
                 self.live.incomplete_through = self.live.incomplete_through.max(Some(bar.time));
@@ -412,10 +445,13 @@ impl FootprintState {
             trade_bars: Default::default(),
             trade_starts: Default::default(),
             missing: self.live.missing.clone(),
+            missing_bars: self.live.missing_bars.clone(),
+            placement: Default::default(),
             #[cfg(feature = "widget")]
             prepared: None,
             ..self.live
         };
+        live.covered_from = self.live.covered_from.map(|held| held.max(from));
         live.rows = live.bars.values().map(|bar| bar.levels.len()).sum();
         let pages = self
             .pages
@@ -536,7 +572,8 @@ impl FootprintState {
         trades: &crate::data::trades::Trades,
         from_start: bool,
     ) {
-        let open = self.live.clock.bar_open(before);
+        self.live.covered_from = self.view().covered_from().or(Some(before));
+        let open = self.live.place(before);
         if let Some(page) = self.pages.last_mut()
             && page.source.bar(page.end - 1).time == open
         {
@@ -552,12 +589,156 @@ impl FootprintState {
         }
         self.live.prepare_history(before, trades, from_start);
     }
+    /// Record one answered span without mistaking an unavailable answer for empty executions.
+    /// `from` is a bar's open and `before` another's or the prepared cutoff: the span's executions
+    /// run from the first instant of the bar opening at `from` to the cutoff or to the first
+    /// instant of the bar opening at `before`.
     #[cfg(feature = "widget")]
-    pub(crate) fn prepend_prepared(&mut self, mut page: Self) {
-        debug_assert!(self.pages.is_empty() || page.live.bars.is_empty());
-        page.pages.append(&mut self.pages);
-        self.pages = page.pages;
-        self.live.prepend_prepared(page.live);
+    pub(crate) fn record_prepared_span(
+        &mut self,
+        from: DateTime<Utc>,
+        before: DateTime<Utc>,
+        available: bool,
+    ) {
+        if from >= before {
+            return;
+        }
+        let held = self.live.covered_from.unwrap_or(before);
+        // A bar of a trading date can start on either side of its open. When the prepared bar
+        // holding the cutoff opens exactly there, a bound at the cutoff is that bar's open.
+        let cutoff = (self.live.prepared_before())
+            .filter(|&cutoff| (self.live.prepared_boundary()).is_none_or(|bar| bar.time != cutoff));
+        let clock = &self.live.clock;
+        let first_instant = |time| {
+            if Some(time) == cutoff {
+                time
+            } else {
+                clock.bar_start(time)
+            }
+        };
+        let (start, unheld, end) = (
+            first_instant(from),
+            first_instant(held),
+            first_instant(before),
+        );
+        if from < held {
+            self.live.add_missing(start, unheld);
+        }
+        let first = held.min(from);
+        if self.live.covered_from != Some(first) {
+            self.live.covered_from = Some(first);
+            self.live.revision = super::next_revision();
+        }
+        if available {
+            self.live.cover_missing(start, end);
+        } else {
+            self.live.add_missing(start, end);
+        }
+    }
+
+    /// Newest unresolved demand, seeking only interval metadata rather than retained rows.
+    #[cfg(feature = "widget")]
+    pub(crate) fn history_gap(
+        &self,
+        from: DateTime<Utc>,
+        before: DateTime<Utc>,
+    ) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+        if from >= before {
+            return None;
+        }
+        // Gaps hold execution times, and a bar of a trading date can start on either side of its
+        // open.
+        let clock = &self.live.clock;
+        let (since, until) = (clock.bar_start(from), clock.bar_start(before));
+        let end = self
+            .live
+            .missing
+            .partition_point(|(start, _)| *start < until);
+        if let Some(&(start, stop)) = end.checked_sub(1).and_then(|at| self.live.missing.get(at))
+            && stop > since
+        {
+            return Some((
+                clock.instant_open(start.max(since)),
+                clock.instant_open(stop.min(until)),
+            ));
+        }
+        let end = self
+            .live
+            .covered_from
+            .map_or(before, |held| held.min(before));
+        (from < end).then_some((from, end))
+    }
+
+    /// Insert an aligned, validated page without replacing held rows or their shared owners.
+    /// Coverage is recorded separately, including for answers containing no bars.
+    #[cfg(feature = "widget")]
+    pub(crate) fn insert_prepared(
+        &mut self,
+        mut page: Self,
+        from: DateTime<Utc>,
+        before: DateTime<Utc>,
+    ) -> Result<(), crate::data::FeedError> {
+        use crate::data::FeedError;
+        if from >= before
+            || self.live.clock.bar_open(from) != from
+            || self.live.clock.bar_open(before) != before
+            || self
+                .live
+                .prepared_before()
+                .is_none_or(|cutoff| before > self.live.clock.instant_open(cutoff))
+            || self.live.clock != page.live.clock
+            || self.live.tick_size != page.live.tick_size
+            || self.live.ticks_per_row != page.live.ticks_per_row
+        {
+            return Err(FeedError::InvalidData(
+                "invalid prepared footprint insertion span or grid".into(),
+            ));
+        }
+        if !page.closed.is_empty() {
+            return Err(FeedError::InvalidData(
+                "prepared footprint insertion cannot contain sealed source bars".into(),
+            ));
+        }
+        if page.view().first_time().is_some_and(|first| first < from)
+            || page.view().bars(before..).next().is_some()
+            || self.view().bars(from..before).next().is_some()
+        {
+            return Err(FeedError::InvalidData(
+                "prepared footprint insertion overlaps held rows or exceeds its span".into(),
+            ));
+        }
+        if page.view().first_time().is_none() {
+            return Ok(());
+        }
+        // All rejection precedes normalization. Moving bar headers into a shared owner keeps
+        // their price-row allocations intact and preserves the shared/closed/live ordering.
+        if !self.pages.is_empty() || !page.pages.is_empty() || !self.closed.is_empty() {
+            self.share_prepared();
+            page.share_owned_before(before);
+        }
+        // Split only owner metadata if an older sparse page straddles this gap.
+        let at = self.pages.partition_point(|held| held.first < from);
+        if let Some(index) = at.checked_sub(1) {
+            let held = &mut self.pages[index];
+            let split = held.partition(|time| time < from);
+            if split < held.end {
+                let suffix = PreparedPage {
+                    first: held.source.bar(split).time,
+                    start: split,
+                    ..held.clone()
+                };
+                held.end = split;
+                self.pages.insert(at, suffix);
+            }
+        }
+        let at = self.pages.partition_point(|held| held.first < from);
+        self.pages.splice(at..at, page.pages);
+        for (time, bar) in page.live.bars {
+            self.live.rows += bar.levels.len();
+            self.live.bars.insert(time, bar);
+        }
+        self.live.revision = super::next_revision();
+        Ok(())
     }
 }
 
@@ -713,7 +894,7 @@ mod tests {
         flow.live.add_missing(at(2), at(4));
         let older =
             FootprintState::from_page(&request(), FootprintBars::Owned(bars(-1..0)), true).unwrap();
-        flow.prepend_prepared(older);
+        flow.insert_prepared(older, at(-1), at(0)).unwrap();
         let view = flow.view();
         assert_eq!(
             view.bars(..).map(|b| b.time).collect::<Vec<_>>(),
@@ -817,6 +998,288 @@ mod tests {
             ),
         ] {
             assert_eq!(result.unwrap_err().to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn disjoint_pages_close_only_the_answered_gap_and_preserve_owners() {
+        for owned in [false, true] {
+            let newer_owner = Arc::new(Native::new(bars(4..6)));
+            let mut flow = FootprintState::from_page(
+                &request(),
+                if owned {
+                    FootprintBars::Owned(bars(4..6))
+                } else {
+                    FootprintBars::Shared(newer_owner.clone())
+                },
+                false,
+            )
+            .unwrap();
+            flow.prepare_history(at(6), &crate::data::trades::Trades::new(10), true);
+            flow.record_prepared_span(at(4), at(6), true);
+            flow.live.push(&Tick::new(at(6), 100.0, 7.0, None)).unwrap();
+            let newer_row = flow
+                .view()
+                .bar_at(at(4))
+                .unwrap()
+                .levels
+                .values()
+                .next()
+                .unwrap() as *const FootprintLevel;
+            let older_owner = Arc::new(Native::new(bars(0..2)));
+            let older = FootprintState::from_page(
+                &request(),
+                FootprintBars::Shared(older_owner.clone()),
+                false,
+            )
+            .unwrap();
+            flow.insert_prepared(older, at(0), at(2)).unwrap();
+            flow.record_prepared_span(at(0), at(2), true);
+            assert!(flow.live.bars.keys().all(|time| *time >= at(6)));
+            assert_eq!(
+                flow.view()
+                    .bar_at(at(4))
+                    .unwrap()
+                    .levels
+                    .values()
+                    .next()
+                    .unwrap() as *const FootprintLevel,
+                newer_row
+            );
+            assert_eq!(flow.history_gap(at(-2), at(6)), Some((at(2), at(4))));
+            assert_eq!(flow.view().complete_from(), Some(at(4)));
+            assert!(flow.view().span_is_complete(at(0), at(1)));
+            assert!(flow.view().span_is_complete(at(4), at(5)));
+            assert!(!flow.view().span_is_complete(at(0), at(5)));
+            flow.record_prepared_span(at(2), at(4), false);
+            let frozen = flow.clone();
+            let revision = flow.live.revision();
+            let middle =
+                FootprintState::from_page(&request(), FootprintBars::Owned(bars(2..4)), false)
+                    .unwrap();
+            flow.insert_prepared(middle, at(2), at(4)).unwrap();
+            flow.record_prepared_span(at(2), at(4), true);
+            assert_ne!(flow.live.revision(), revision);
+            assert!(flow.view().span_is_complete(at(0), at(5)));
+            assert!(!frozen.view().span_is_complete(at(0), at(5)));
+            assert_eq!(flow.history_gap(at(-2), at(6)), Some((at(-2), at(0))));
+            assert_eq!(flow.view().complete_from(), Some(at(0)));
+            assert_eq!(
+                flow.view().bars(..).map(|bar| bar.time).collect::<Vec<_>>(),
+                (0..7).map(at).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                flow.view()
+                    .bars(..)
+                    .rev()
+                    .map(|bar| bar.time)
+                    .collect::<Vec<_>>(),
+                (0..7).rev().map(at).collect::<Vec<_>>()
+            );
+            {
+                let view = flow.view();
+                let mut rows = view.bars(..);
+                for (front, back) in [(0, 6), (1, 5), (2, 4)] {
+                    assert_eq!(rows.next().unwrap().time, at(front));
+                    assert_eq!(rows.next_back().unwrap().time, at(back));
+                }
+                assert_eq!(rows.next_back().unwrap().time, at(3));
+                assert!(rows.next().is_none());
+                assert!(rows.next_back().is_none());
+            }
+            let FootprintRows::Slice(rows) = flow.view().bar_at(at(0)).unwrap().levels else {
+                panic!("older shared owner copied")
+            };
+            assert_eq!(rows.as_ptr(), older_owner.0[0].1.as_ptr());
+            if !owned {
+                let FootprintRows::Slice(rows) = flow.view().bar_at(at(4)).unwrap().levels else {
+                    panic!("newer shared owner copied")
+                };
+                assert_eq!(rows.as_ptr(), newer_owner.0[0].1.as_ptr());
+            }
+            flow.share_prepared();
+            let snapshot = flow.prepared_snapshot().unwrap();
+            assert_eq!(
+                snapshot
+                    .view()
+                    .bars(..)
+                    .map(|bar| bar.time)
+                    .collect::<Vec<_>>(),
+                (0..6).map(at).collect::<Vec<_>>()
+            );
+            assert!(snapshot.view().span_is_complete(at(0), at(5)));
+            assert_eq!(flow.view().bar_at(at(6)).unwrap().volume(), 7.0);
+        }
+    }
+
+    #[test]
+    fn confirmed_empty_history_counts_without_fabricating_bars() {
+        let mut flow = FootprintState::new(Footprint::new(request().clock, 1.0, 1).unwrap());
+        assert_eq!(flow.history_gap(at(0), at(6)), Some((at(0), at(6))));
+        flow.prepare_history(at(6), &crate::data::trades::Trades::new(10), true);
+        flow.record_prepared_span(at(4), at(6), true);
+        flow.record_prepared_span(at(2), at(4), false);
+        flow.record_prepared_span(at(0), at(2), true);
+        assert_eq!(flow.history_gap(at(0), at(6)), Some((at(2), at(4))));
+        assert!(flow.view().span_is_complete(at(0), at(1)));
+        assert!(!flow.view().span_is_complete(at(0), at(5)));
+        let frozen = flow.snapshot(at(0), Some(at(6)));
+        let revision = flow.live.revision();
+        flow.record_prepared_span(at(2), at(4), true);
+        assert_ne!(flow.live.revision(), revision);
+        assert_eq!(flow.history_gap(at(0), at(6)), None);
+        assert!(flow.view().span_is_complete(at(0), at(5)));
+        assert!(!frozen.view().span_is_complete(at(0), at(5)));
+        assert!(flow.view().bars(..).next().is_none());
+        assert_eq!(flow.view().complete_from(), None);
+        let snapshot = flow.snapshot(at(1), Some(at(6)));
+        assert_eq!(snapshot.view().covered_from(), Some(at(1)));
+        assert!(!snapshot.view().span_is_complete(at(0), at(5)));
+        assert!(snapshot.view().span_is_complete(at(1), at(5)));
+        assert!(
+            flow.prepared_snapshot()
+                .unwrap()
+                .view()
+                .span_is_complete(at(0), at(5))
+        );
+        assert!(FootprintView::from(flow.owned().unwrap()).span_is_complete(at(0), at(5)));
+    }
+
+    #[test]
+    fn insertion_rejects_owned_and_shared_overlap_before_mutation() {
+        for shared in [false, true] {
+            let owner = Arc::new(Native::new(bars(2..4)));
+            let mut flow = FootprintState::from_page(
+                &request(),
+                if shared {
+                    FootprintBars::Shared(owner.clone())
+                } else {
+                    FootprintBars::Owned(bars(2..4))
+                },
+                false,
+            )
+            .unwrap();
+            flow.prepare_history(at(4), &crate::data::trades::Trades::new(10), true);
+            flow.record_prepared_span(at(2), at(4), true);
+            let revision = flow.live.revision();
+            for (from, before, rows) in [
+                (at(1), at(3), bars(1..3)),
+                (at(0), at(1), bars(0..2)),
+                (at(4), at(5), bars(4..5)),
+                (at(0) + TimeDelta::seconds(1), at(1), vec![]),
+            ] {
+                let page = FootprintState::from_page(&request(), FootprintBars::Owned(rows), false)
+                    .unwrap();
+                assert!(flow.insert_prepared(page, from, before).is_err());
+                assert_eq!(flow.live.revision(), revision);
+                assert_eq!(flow.view().covered_from(), Some(at(2)));
+                assert_eq!(
+                    flow.view().bars(..).map(|bar| bar.time).collect::<Vec<_>>(),
+                    [at(2), at(3)]
+                );
+            }
+            let mut sealed =
+                FootprintState::from_page(&request(), FootprintBars::Owned(bars(0..2)), false)
+                    .unwrap();
+            sealed.seal();
+            assert!(flow.insert_prepared(sealed, at(0), at(2)).is_err());
+            assert_eq!(flow.live.revision(), revision);
+            assert_eq!(flow.view().covered_from(), Some(at(2)));
+            assert_eq!(
+                flow.view().bars(..).map(|bar| bar.time).collect::<Vec<_>>(),
+                [at(2), at(3)]
+            );
+        }
+    }
+
+    #[test]
+    fn owned_gap_insertion_keeps_the_owned_tree_and_existing_rows() {
+        let mut flow =
+            FootprintState::from_page(&request(), FootprintBars::Owned(bars(4..6)), false).unwrap();
+        flow.prepare_history(at(6), &crate::data::trades::Trades::new(10), true);
+        flow.record_prepared_span(at(4), at(6), true);
+        let row = flow
+            .view()
+            .bar_at(at(4))
+            .unwrap()
+            .levels
+            .values()
+            .next()
+            .unwrap() as *const FootprintLevel;
+        let older =
+            FootprintState::from_page(&request(), FootprintBars::Owned(bars(0..2)), false).unwrap();
+        flow.insert_prepared(older, at(0), at(2)).unwrap();
+        flow.record_prepared_span(at(0), at(2), true);
+        assert!(flow.owned().is_some());
+        assert_eq!(
+            flow.view()
+                .bar_at(at(4))
+                .unwrap()
+                .levels
+                .values()
+                .next()
+                .unwrap() as *const FootprintLevel,
+            row
+        );
+        assert_eq!(
+            flow.view().bars(..).map(|bar| bar.time).collect::<Vec<_>>(),
+            [0, 1, 4, 5].map(at)
+        );
+        assert_eq!(flow.history_gap(at(0), at(6)), Some((at(2), at(4))));
+    }
+
+    #[test]
+    fn sparse_page_splits_owner_metadata_and_planning_never_reads_bars() {
+        struct Observed {
+            source: Native,
+            reads: std::sync::atomic::AtomicUsize,
+        }
+        impl FootprintSource for Observed {
+            fn len(&self) -> usize {
+                self.source.len()
+            }
+            fn bar(&self, index: usize) -> FootprintBarView<'_> {
+                self.reads
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.source.bar(index)
+            }
+        }
+        let owner = Arc::new(Observed {
+            source: Native::new(bars(0..1).into_iter().chain(bars(5..6)).collect()),
+            reads: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let mut flow =
+            FootprintState::from_page(&request(), FootprintBars::Shared(owner.clone()), false)
+                .unwrap();
+        flow.prepare_history(at(6), &crate::data::trades::Trades::new(10), true);
+        flow.record_prepared_span(at(0), at(6), true);
+        flow.record_prepared_span(at(2), at(4), false);
+        let reads = owner.reads.load(std::sync::atomic::Ordering::Relaxed);
+        for _ in 0..10 {
+            assert_eq!(flow.history_gap(at(-2), at(6)), Some((at(2), at(4))));
+        }
+        assert_eq!(
+            owner.reads.load(std::sync::atomic::Ordering::Relaxed),
+            reads
+        );
+        let middle = FootprintState::from_page(
+            &request(),
+            FootprintBars::Shared(Arc::new(Native::new(bars(2..4)))),
+            false,
+        )
+        .unwrap();
+        flow.insert_prepared(middle, at(2), at(4)).unwrap();
+        flow.record_prepared_span(at(2), at(4), true);
+        assert_eq!(
+            flow.view().bars(..).map(|bar| bar.time).collect::<Vec<_>>(),
+            [0, 2, 3, 5].map(at)
+        );
+        assert!(flow.view().span_is_complete(at(0), at(5)));
+        for (index, minute) in [(0, 0), (1, 5)] {
+            let FootprintRows::Slice(rows) = flow.view().bar_at(at(minute)).unwrap().levels else {
+                panic!("split page copied rows")
+            };
+            assert_eq!(rows.as_ptr(), owner.source.0[index].1.as_ptr());
         }
     }
 }

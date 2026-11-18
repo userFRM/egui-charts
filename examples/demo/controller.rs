@@ -47,7 +47,7 @@ mod study_editor;
 mod templates;
 use egui_charts::services::StoreKind;
 use egui_charts::studies::StudyTemplateSet;
-use egui_charts::ui::dialogs::templates::{DrawingTemplate, TemplateDialog};
+use egui_charts::ui::dialogs::templates::TemplateDialog;
 #[path = "feeds.rs"]
 mod feeds;
 #[cfg(target_arch = "wasm32")]
@@ -434,7 +434,6 @@ pub struct DemoApp {
     /// Changes of the chart arrangement, which autosave counts with the charts' edits.
     grid_edits: u64,
     study_templates: TemplateDialog<StudyTemplateSet>,
-    drawing_templates: TemplateDialog<DrawingTemplate>,
     quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
     sample_scene: Option<commands::SampleScene>,
     sample_study: study_editor::SampleStudyEditor,
@@ -746,7 +745,6 @@ impl DemoApp {
             workspace_recovery: storage::WorkspaceRecovery::default(),
             grid_edits: 0,
             study_templates: TemplateDialog::new(StoreKind::StudyTemplates),
-            drawing_templates: TemplateDialog::new(StoreKind::DrawingTemplates),
             // Filled from the chart's bindings each time it opens.
             quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler::new(
                 Vec::new(),
@@ -921,9 +919,6 @@ impl DemoApp {
             .templates
             .set_storage(app.storage.clone());
         app.apply_formatting();
-        app.drawing_templates
-            .templates
-            .set_storage(app.storage.clone());
         app.drawing_props.templates.set_storage(app.storage.clone());
         let search: Arc<dyn egui_charts::services::SymbolSearch> =
             Arc::new(feeds::search_catalog(&mut app.symbol_search));
@@ -2518,11 +2513,11 @@ impl DemoApp {
         // Variants that touch the indicator registry (not the drawing manager)
         // or surface a notice are handled first, before the `dm` borrow.
         match action {
+            // Each tool's templates are loaded and deleted from its properties' Template menu.
             DrawingToolbarAction::ManageTemplates => {
-                if let Some(template) = self.current_drawing_template() {
-                    self.drawing_templates.open(template);
-                } else {
-                    self.drawing_templates.open_catalog();
+                match self.chart.drawings().sel_drawing() {
+                    Some(id) => self.open_drawing_props_for(id),
+                    None => self.notify("Select a drawing first"),
                 }
                 return;
             }
@@ -2531,14 +2526,14 @@ impl DemoApp {
                     self.notify("Select a drawing first");
                     return;
                 };
-                if let Err(error) = self.drawing_templates.templates.save(&name, template) {
+                if let Err(error) = self.drawing_props.templates.save_for_tool(&name, template) {
                     self.notify(error);
                 }
                 return;
             }
             DrawingToolbarAction::LoadTemplate { template_id } => {
                 if let Some(template) = self
-                    .drawing_templates
+                    .drawing_props
                     .templates
                     .entries()
                     .get(&template_id)
@@ -2953,31 +2948,13 @@ impl DemoApp {
         items
     }
 
-    /// Reads the hovered values from the crosshair payload alone; off the bars, the chart's
-    /// own readout shows the latest bar.
+    /// Reads the hovered values from the crosshair payload; off the bars, the chart's own
+    /// readout shows the latest bar.
     fn build_data_window(&self) -> DataWindowInfo {
-        let Some((pointer, bar)) = self
-            .crosshair
-            .as_ref()
-            .and_then(|pointer| Some((pointer, pointer.bar.as_ref()?)))
-        else {
-            return DataWindowInfo::from_chart(&self.chart);
-        };
-        let mut info = DataWindowInfo::new(self.chart.symbol()).with_timeframe(
-            self.chart
-                .timeframe()
-                .map(|tf| tf.as_str())
-                .unwrap_or_default(),
-        );
-        if let Some(instrument) = self.chart.instrument() {
-            info = info.with_instrument(instrument);
-        }
-        info = info
-            .with_ohlcv(bar.open, bar.high, bar.low, bar.close, bar.volume)
-            .with_timestamp(self.chart.format_time(bar.time))
-            .with_prev_close(pointer.previous_close.unwrap_or(bar.open));
-        info.studies = pointer.studies.iter().map(|(_, row)| row.clone()).collect();
-        info.with_chart_formatters(&self.chart)
+        self.crosshair.as_ref().map_or_else(
+            || DataWindowInfo::from_chart(&self.chart),
+            |pointer| DataWindowInfo::from_pointer(&self.chart, pointer),
+        )
     }
 
     fn handle_object_tree(&mut self, action: ObjectTreeAction, sources: &[SourceItem]) {
@@ -3011,7 +2988,7 @@ impl DemoApp {
                         }
                     }
                 } else {
-                    chart
+                    let _ = chart
                         .drawings_mut()
                         .drag_edit_drawing(id, |d| d.color = color.to_srgba_unmultiplied());
                     self.colour_drag = true;
@@ -3774,6 +3751,9 @@ impl DemoApp {
                         ctx.open_url(egui::OpenUrl::new_tab(link));
                     }
                 }
+                egui_charts::widget::ChartEvent::LockedDrawingsKept(kept) => {
+                    self.toasts.info(locked_drawings_kept(kept));
+                }
                 _ => {}
             }
         }
@@ -3987,7 +3967,7 @@ impl DemoApp {
         };
         let dm = self.chart.drawings_mut();
         match action {
-            DrawingContextMenuAction::Delete => dm.delete_selected(),
+            DrawingContextMenuAction::Delete => self.chart.delete_selected_drawings(),
             DrawingContextMenuAction::Edit => self.open_drawing_props_for(id),
             DrawingContextMenuAction::Clone => self.clone_drawing(id),
             DrawingContextMenuAction::Copy => match self.chart.copy_selected_drawings() {
@@ -4010,8 +3990,12 @@ impl DemoApp {
                 self.object_tree
                     .apply_to_chart(&mut self.chart, &action, &[]);
             }
-            DrawingContextMenuAction::Lock => dm.edit_drawing(id, |d| d.locked = !d.locked),
-            DrawingContextMenuAction::Hide => dm.edit_drawing(id, |d| d.visible = !d.visible),
+            DrawingContextMenuAction::Lock => {
+                let _ = dm.edit_drawing(id, |d| d.locked = !d.locked);
+            }
+            DrawingContextMenuAction::Hide => {
+                let _ = dm.edit_drawing(id, |d| d.visible = !d.visible);
+            }
             DrawingContextMenuAction::BringToFront => dm.bring_to_front(id),
             DrawingContextMenuAction::SendToBack => dm.send_to_back(id),
             DrawingContextMenuAction::MoveTo(pane) => {
@@ -4167,7 +4151,6 @@ impl DemoApp {
             || self.export_dialog.is_open()
             || self.alert_dialog.is_open
             || self.study_templates.is_open
-            || self.drawing_templates.is_open
             || self.indicator_settings.is_open()
             || self.interval_entry.is_some()
             || self.open_layout
@@ -4472,6 +4455,15 @@ fn panel_frame(bg: egui::Color32) -> egui::Frame {
         .fill(bg)
         .stroke(egui::Stroke::NONE)
         .inner_margin(egui::Margin::ZERO)
+}
+
+/// The toast after a delete that kept `kept` locked drawings.
+fn locked_drawings_kept(kept: usize) -> String {
+    if kept == 1 {
+        "The locked drawing was kept. Unlock it to delete it.".to_owned()
+    } else {
+        format!("{kept} locked drawings were kept. Unlock them to delete them.")
+    }
 }
 
 /// Gives the price-based chart types of `chart` half the 14-bar average true range of the bars
@@ -6667,7 +6659,7 @@ mod tests {
             app.toasts.toasts().last().unwrap().message,
             "Select a drawing first"
         );
-        assert!(app.drawing_templates.templates.entries().is_empty());
+        assert!(app.drawing_props.templates.entries().is_empty());
         let mean = app
             .chart
             .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
@@ -6687,6 +6679,7 @@ mod tests {
         app.chart.drawings_mut().drawings.push(drawing);
         app.chart.drawings_mut().select(17);
         app.settings_dialog.templates.poll(&ctx);
+        app.drawing_props.templates.poll(&ctx);
         app.show_templates(&ctx);
         app.settings_dialog
             .templates
@@ -6696,11 +6689,11 @@ mod tests {
             .templates
             .save("Average", app.chart.study_template_set())
             .unwrap();
-        app.drawing_templates
-            .templates
-            .save("Trend", app.current_drawing_template().unwrap())
-            .unwrap();
+        app.handle_drawing_toolbar(DrawingToolbarAction::SaveTemplate {
+            name: "Trend".into(),
+        });
         app.settings_dialog.templates.poll(&ctx);
+        app.drawing_props.templates.poll(&ctx);
         app.show_templates(&ctx);
         let mut storage = AppStorage::default();
         app.save(&mut storage);
@@ -6710,6 +6703,7 @@ mod tests {
         let mut app = DemoApp::new(&cc);
         for _ in 0..2 {
             app.settings_dialog.templates.poll(&ctx);
+            app.drawing_props.templates.poll(&ctx);
             app.show_templates(&ctx);
         }
         assert!(
@@ -6718,17 +6712,27 @@ mod tests {
                 .entries()
                 .contains_key("Canvas")
         );
-        app.chart
+        let ema = app
+            .chart
             .add_indicator(Box::new(egui_charts::studies::EMA::new(5)));
+        app.chart.set_indicator_user_edit_enabled(ema, false);
+        let ids = |app: &DemoApp| app.chart.indicators().map(|(id, _)| id).collect::<Vec<_>>();
+        let before = ids(&app);
         app.handle_top_toolbar(
             &ctx,
             TopToolbarAction::ApplyIndicatorTemplate("Average".into()),
         );
+        // The study the user may not edit stays beside the template's.
+        assert!(ids(&app).contains(&ema));
+        let studies: Vec<_> = app
+            .chart
+            .indicators()
+            .filter(|(id, _)| *id != ema)
+            .collect();
         assert_eq!(
-            app.chart.indicators().next().unwrap().1.inputs()[0].value,
+            studies[0].1.inputs()[0].value,
             egui_charts::studies::InputValue::Length(7)
         );
-        let studies: Vec<_> = app.chart.indicators().collect();
         assert_eq!(
             studies[0].1.source(),
             Some(egui_charts::studies::StudySource::Study {
@@ -6736,14 +6740,36 @@ mod tests {
                 plot: 0
             })
         );
-        let mut target = Drawing::new(23, DrawingToolType::TrendLine);
-        target.chart_points = vec![ChartPoint::new(8.0, 300.0), ChartPoint::new(10.0, 400.0)];
-        target.completed = true;
-        app.chart.drawings_mut().drawings.push(target);
-        app.chart.drawings_mut().select(23);
-        app.handle_drawing_toolbar(DrawingToolbarAction::LoadTemplate {
-            template_id: "Trend".into(),
-        });
+        assert!(app.chart.undo());
+        assert_eq!(ids(&app), before);
+        assert!(app.chart.redo());
+        assert!(ids(&app).contains(&ema));
+        for id in [23, 24] {
+            let mut target = Drawing::new(id, DrawingToolType::TrendLine);
+            target.chart_points = vec![ChartPoint::new(8.0, 300.0), ChartPoint::new(10.0, 400.0)];
+            target.completed = true;
+            target.stroke_width = 1.0;
+            app.chart.drawings_mut().drawings.push(target);
+        }
+        app.chart.drawings_mut().select_drawings([23, 24]);
+        // The row the toolbar's template menu shows for the template.
+        app.show_templates(&ctx);
+        let template_id = app
+            .drawing_toolbar
+            .state
+            .templates
+            .iter()
+            .find(|row| row.name == "Trend")
+            .unwrap()
+            .id
+            .clone();
+        app.handle_drawing_toolbar(DrawingToolbarAction::LoadTemplate { template_id });
+        let widths = |app: &DemoApp| {
+            [23, 24].map(|id| {
+                let drawings = &app.chart.drawings().drawings;
+                drawings.iter().find(|d| d.id == id).unwrap().stroke_width
+            })
+        };
         let target = app
             .chart
             .drawings()
@@ -6751,20 +6777,10 @@ mod tests {
             .iter()
             .find(|drawing| drawing.id == 23)
             .unwrap();
-        assert_eq!(target.id, 23);
         assert_eq!(target.chart_points[0].bar_idx, 8.0);
-        assert_eq!(target.stroke_width, 4.0);
+        assert_eq!(widths(&app), [4.0, 4.0]);
         assert!(app.chart.undo());
-        assert_ne!(
-            app.chart
-                .drawings()
-                .drawings
-                .iter()
-                .find(|drawing| drawing.id == 23)
-                .unwrap()
-                .stroke_width,
-            4.0
-        );
+        assert_eq!(widths(&app), [1.0, 1.0]);
     }
 
     /// Native clipboard events paste the selected drawings without a session cache,
@@ -6919,7 +6935,7 @@ mod tests {
                 let output = frame(&mut app, vec![Event::Text("Simple Moving".into())]);
                 output.drop_without_applying_deltas();
                 let output = frame(&mut app, vec![]);
-                let row = text_at(&output, "Simple Moving Avg");
+                let row = text_at(&output, "Simple Moving Average");
                 output.drop_without_applying_deltas();
                 let click = |app: &mut DemoApp, pos| {
                     for pressed in [true, false] {
@@ -8303,7 +8319,7 @@ mod tests {
         for (timezone, top, bottom, width) in [
             ("Unknown", 10.0, 10.0, 1.0),
             ("UTC", f32::NAN, 10.0, 1.0),
-            ("UTC", 60.0, 40.0, 1.0),
+            ("UTC", 101.0, 0.0, 1.0),
             ("UTC", -1.0, 10.0, 1.0),
             ("UTC", 10.0, 10.0, 0.0),
         ] {
@@ -9062,7 +9078,8 @@ mod tests {
         assert_eq!(app.chart.drawings().drawings[0].font_size, 24.0);
         app.chart
             .drawings_mut()
-            .edit_drawing(7, |d| d.locked = false);
+            .edit_drawing(7, |d| d.locked = false)
+            .unwrap();
         props.apply_to_chart(DrawingId(7), &mut app.chart).unwrap();
         let mut second = app.chart.drawings().drawings[0].clone();
         second.id = 8;
@@ -9106,7 +9123,8 @@ mod tests {
         app.chart.drawings_mut().end_drag_handle();
         app.chart
             .drawings_mut()
-            .edit_drawing(7, |d| d.locked = true);
+            .edit_drawing(7, |d| d.locked = true)
+            .unwrap();
         ctx.run_ui(egui::RawInput::default(), |ui| {
             app.show_drawing_toolbar(ui, egui::Color32::BLACK)
         })
@@ -9210,7 +9228,8 @@ mod tests {
             assert!(app.chart.redo());
             app.chart
                 .drawings_mut()
-                .edit_drawing(7, |d| d.locked = true);
+                .edit_drawing(7, |d| d.locked = true)
+                .unwrap();
             props.font_size = 18.0;
             props.apply_to_chart(DrawingId(7), &mut app.chart).unwrap();
             assert_eq!(app.chart.drawings().drawings[0].font_size, 14.0);
@@ -9297,7 +9316,8 @@ mod tests {
         let ids: Vec<_> = app.chart.drawings().drawings.iter().map(|d| d.id).collect();
         app.chart
             .drawings_mut()
-            .edit_drawing(ids[2], |drawing| drawing.listed = false);
+            .edit_drawing(ids[2], |drawing| drawing.listed = false)
+            .unwrap();
         assert!(
             !app.build_source_items()
                 .iter()
@@ -9305,7 +9325,8 @@ mod tests {
         );
         app.chart
             .drawings_mut()
-            .edit_drawing(ids[2], |drawing| drawing.listed = true);
+            .edit_drawing(ids[2], |drawing| drawing.listed = true)
+            .unwrap();
         let sources = app.build_source_items();
         assert_eq!(
             sources
@@ -9548,6 +9569,34 @@ mod tests {
             for _ in 0..6 {
                 frame(&mut app, vec![]);
             }
+            // The volume histogram with its moving average shown.
+            let volume = app
+                .chart
+                .indicators()
+                .find(|(_, study)| study.is_volume())
+                .unwrap()
+                .0;
+            app.chart
+                .indicator_mut(volume)
+                .unwrap()
+                .set_input(
+                    "show_average",
+                    egui_charts::studies::InputValue::Toggle(true),
+                )
+                .unwrap();
+            if kind == ChartType::Candles {
+                // A comparison whose bar at each main bar's time closes at 500 plus its index.
+                let comparison = app.chart.add_comparison("CMP", egui::Color32::GOLD);
+                let bars = app
+                    .chart
+                    .bars(egui_charts::widget::SeriesId::MAIN)
+                    .iter()
+                    .enumerate()
+                    .map(|(index, bar)| Bar::from_value(bar.time, 500.0 + index as f64))
+                    .collect();
+                app.chart.set_data(comparison, bars);
+                frame(&mut app, vec![]);
+            }
             let (start, end) = app.chart.state().visible_range();
             let index = (start + end) / 2;
             let map = app.chart.get_chart_mapping();
@@ -9588,6 +9637,25 @@ mod tests {
                 )),
                 "{text:?}"
             );
+            if kind == ChartType::Candles {
+                // One volume row, then the average's row and no row for the volume columns.
+                assert!(text.iter().any(|text| text == "Vol"), "{text:?}");
+                let volume: Vec<_> = text
+                    .iter()
+                    .filter(|text| text.starts_with("Volume: "))
+                    .collect();
+                assert!(
+                    volume.len() == 1 && !volume[0].contains(" volume"),
+                    "{text:?}"
+                );
+                let row = text.iter().position(|text| text == "CMP");
+                let value = row.and_then(|row| text.get(row + 1));
+                assert_eq!(
+                    value.and_then(|value| value.replace(',', "").parse::<f64>().ok()),
+                    Some(500.0 + index as f64),
+                    "{text:?}"
+                );
+            }
             assert!(text.iter().any(|text| text == "Gap: Missing"), "{text:?}");
             assert!(text.iter().any(|text| text == "∅"), "{text:?}");
             assert!(
@@ -9598,8 +9666,17 @@ mod tests {
             );
             let pointer = app.crosshair.clone().unwrap();
             let latest = bars.last().unwrap().close;
+            let last = bars.len() - 1;
             frame(&mut app, vec![egui::Event::PointerGone]);
-            assert_eq!(app.build_data_window().close, latest);
+            let off_bars = app.build_data_window();
+            assert_eq!(off_bars.close, latest);
+            if kind == ChartType::Candles {
+                let value = off_bars.series[0].value.as_deref().unwrap();
+                assert_eq!(
+                    value.replace(',', "").parse::<f64>(),
+                    Ok(500.0 + last as f64)
+                );
+            }
             assert_eq!(app.pointer_readout, Some(pointer.clone()));
             app.open_chart_settings_dialog();
             let mut settings = app.settings_state.clone();

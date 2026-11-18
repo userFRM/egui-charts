@@ -41,11 +41,12 @@ impl Chart {
                 self.config.conflation_threshold,
             )
         };
+        let source = self.main_price_source();
         self.merge_groups.update(
             &self.state.data().bars,
             self.state.revision(),
             factor,
-            self.config.price_source,
+            source,
         );
         factor
     }
@@ -203,6 +204,20 @@ impl Chart {
         }
     }
 
+    /// The statistics rows below a footprint: the host's, or the chart settings' on a volume
+    /// footprint chart.
+    fn footprint_statistics_rows(
+        &self,
+        host: Option<&FootprintConfig>,
+    ) -> Option<Vec<crate::model::FootprintStatistic>> {
+        match host {
+            Some(config) => config.statistics.then(|| config.statistics_rows.clone()),
+            None => (self.chart_type == ChartType::VolumeFootprint
+                && self.chart_type_params.footprint_statistics)
+                .then(|| self.chart_type_params.footprint_statistics_rows.clone()),
+        }
+    }
+
     fn show_themed_content(
         &mut self,
         ui: &mut Ui,
@@ -213,6 +228,7 @@ impl Chart {
         self.host_events.touch_position = None;
         self.host_events.target = None;
         self.host_events.primitive_hit = None;
+        self.readout_index = None;
         self.cover_annotation_hit();
         self.apply_config_scale_mode();
         #[cfg(feature = "studies")]
@@ -220,6 +236,13 @@ impl Chart {
         #[cfg(feature = "drawings")]
         self.sync_stored_drawings(ui.ctx());
         self.frame_clock = Some(super::change_marks::FrameClock::shown_in(ui.ctx()));
+        // The pump keeps only requested series, so the open interest rows ask for theirs first.
+        self.footprint_open_interest = self
+            .footprint_statistics_rows(footprint.as_ref().map(|(_, config)| *config))
+            .is_some_and(|rows| {
+                rows.iter()
+                    .any(|row| crate::chart::overlays::OPEN_INTEREST_ROWS.contains(row))
+            });
         self.pump(ui.ctx());
         if let Some(wait) = self.refresh_studies(ui.input(|i| i.time)) {
             ui.ctx()
@@ -324,6 +347,7 @@ impl Chart {
                     events.push((
                         key,
                         crate::model::Marker::event(event.time, event.kind.label())
+                            .with_shape(crate::model::MarkerShape::Circle)
                             .with_id(&event.id)
                             .with_tooltip(format!("{}\n{}", event.title, event.details)),
                     ));
@@ -416,8 +440,7 @@ impl Chart {
         };
         let last = &self.state.shown()[index];
         let price = self
-            .config
-            .price_source
+            .main_price_source()
             .compute(last.open, last.high, last.low, last.close);
         let Some(color) = rendering::candles::line_color_at(
             self.chart_type,
@@ -504,14 +527,18 @@ impl Chart {
             layout.legend_rect = Rect::NOTHING;
         }
         let time_axis_top = shared_time_axis.map_or(layout.price_rect.bottom(), |axis| axis.top());
-        let statistics_rows = if let Some((_, config)) = footprint {
-            config.statistics.then(|| config.statistics_rows.clone())
-        } else {
-            (self.chart_type == ChartType::VolumeFootprint
-                && self.chart_type_params.footprint_statistics)
-                .then(|| self.chart_type_params.footprint_statistics_rows.clone())
-        }
-        .filter(|rows| !rows.is_empty());
+        let statistics_rows =
+            self.footprint_statistics_rows(footprint.as_ref().map(|(_, config)| *config));
+        let open_interest_rows = crate::chart::overlays::OPEN_INTEREST_ROWS;
+        // Rows without open interest are left out, as the table leaves them out.
+        let statistics_rows = statistics_rows
+            .map(|mut rows| {
+                if self.open_interest_points().is_empty() {
+                    rows.retain(|row| !open_interest_rows.contains(row));
+                }
+                rows
+            })
+            .filter(|rows| !rows.is_empty());
         let statistics_rect = statistics_rows
             .as_deref()
             .filter(|_| !self.chart_type.is_time_independent() && self.main_series_visible)
@@ -663,7 +690,8 @@ impl Chart {
         let is_drawing_interaction = box_selection || drawing_gesture;
         let show_price_button =
             self.config.show_plus_button && !eraser_mode && !is_drawing_interaction;
-        let show_axis_settings = !self.layout_inactive || ui.rect_contains_pointer(rect);
+        let show_axis_settings =
+            !self.settings_hidden && (!self.layout_inactive || ui.rect_contains_pointer(rect));
         let price_button_interaction = cfg!(feature = "icons")
             && (show_right_axis || show_left_axis)
             && show_price_button
@@ -1687,7 +1715,7 @@ impl Chart {
             &self.chart_type_params,
             rendering::TradingColors::new(colors.bullish, colors.bearish),
             rendering::CoordMapping::new(chart_rect.min.x),
-            self.config.price_source,
+            self.main_price_source(),
         );
         // Draw one merged bar, or a column's line points, for each group.
         let merged = footprint
@@ -1701,7 +1729,7 @@ impl Chart {
                         &self.merge_groups,
                         start_idx..start_idx + visible_data.len(),
                         line,
-                        self.config.price_source,
+                        self.main_price_source(),
                     )
                 };
                 // Volume columns merge as bars beneath a merged line.
@@ -1725,7 +1753,7 @@ impl Chart {
             &self.chart_type_params,
             rendering::TradingColors::new(colors.bullish, colors.bearish),
             rendering::CoordMapping::new(chart_rect.min.x),
-            self.config.price_source,
+            self.main_price_source(),
         );
 
         // Both paint paths and the summary box mix their shades with what the chart paints.
@@ -2094,6 +2122,10 @@ impl Chart {
                     );
                 }
             }
+            // A chart type that hides volume draws none, wherever the study is pinned.
+            if study.is_volume() && !self.chart_type.supports_volume() {
+                return;
+            }
             // TPO studies draw the chart type's profiles beside the bars.
             if let Some(config) = study
                 .tpo()
@@ -2314,6 +2346,7 @@ impl Chart {
                         flow,
                         config,
                         sessions,
+                        self.open_interest_points(),
                     );
                 }
                 if let Some((_, Some(volume))) = &merged {
@@ -2540,7 +2573,7 @@ impl Chart {
         if show_right_axis || show_left_axis {
             let axis_painter =
                 painter.with_clip_rect(painter.clip_rect().intersect(price_axis_rect));
-            for (item, view) in self.main_primitives(&coords) {
+            for (item, view) in self.axis_primitives(&coords, self.main_series_scale) {
                 item.get()
                     .draw_price_axis(&axis_painter, price_axis_rect, &view);
             }
@@ -2827,7 +2860,7 @@ impl Chart {
         let mut fixed_price_labels = Vec::new();
         if show_price_axis {
             let (fixed, automatic): (Vec<_>, Vec<_>) = self
-                .main_primitives(&coords)
+                .axis_primitives(&coords, self.main_series_scale)
                 .flat_map(|(item, view)| {
                     let map = view.mapping.price;
                     item.get()
@@ -2847,7 +2880,7 @@ impl Chart {
             );
         }
         let mut independent_axis_width =
-            self.paint_series_axes(ui, &painter, rect, price_rect, &colors);
+            self.paint_series_axes(ui, &painter, rect, &coords, &colors);
         for (key, axis) in self.pane_scale_axes(main_pane, rect, price_rect) {
             let super::PaneScale::Study(id) = key else {
                 continue;
@@ -3311,23 +3344,37 @@ impl Chart {
         let mut series_action = None;
         let mut legend_bottom = price_rect.top() + 8.0;
         {
+            // The local pointer takes precedence over a crosshair this chart received from a
+            // linked chart or the host, as drawn below.
+            let crosshair_x = hover_pos.map(|pos| pos.x).or_else(|| {
+                self.synced_crosshair_bar_idx
+                    .filter(|_| !menu_open)
+                    .and_then(|index| {
+                        self.crosshair_position(
+                            Pos2::new(coords.index_to_x(index), price_rect.center().y),
+                            &coords,
+                        )
+                    })
+                    .map(|pos| pos.x)
+                    .filter(|x| coords.is_x_visible(*x))
+            });
             let visible_data = self.state.visible_data();
-            let selected = hover_pos
-                .and_then(|pos| coords.local_idx_at_x(pos.x, visible_data.len()))
-                .map(|index| start_idx + index)
-                .unwrap_or_else(|| {
-                    // The last bar with a value, before any whitespace bars at the end.
-                    let shown = self.state.shown();
-                    shown
-                        .iter()
-                        .rposition(|bar| !bar.is_whitespace())
-                        .unwrap_or(shown.len().saturating_sub(1))
-                });
-            if let Some(bar) = self.state.shown().get(selected) {
+            self.readout_index = crosshair_x
+                .and_then(|x| coords.local_idx_at_x(x, visible_data.len()))
+                .map(|index| start_idx + index);
+            let selected = self.readout_index.unwrap_or_else(|| {
+                // The last bar with a value, before any whitespace bars at the end.
+                let shown = self.state.shown();
+                shown
+                    .iter()
+                    .rposition(|bar| !bar.is_whitespace())
+                    .unwrap_or(shown.len().saturating_sub(1))
+            });
+            if let Some((bar, previous_close)) = self.readout_bar_at(selected) {
                 let timeframe = self.timeframe.map(|tf| tf.as_str()).unwrap_or_default();
                 #[cfg(feature = "ui")]
                 let order_quantity = self.order_quantity.take();
-                let mut legend = super::Legend::new(&self.symbol, &timeframe, bar);
+                let mut legend = super::Legend::new(&self.symbol, &timeframe, &bar);
                 let statuses: Vec<_> = self
                     .legend_statuses
                     .iter()
@@ -3369,6 +3416,7 @@ impl Chart {
                     }
                 }
                 legend.series_visible = self.main_series_visible;
+                legend.show_series_settings = !self.settings_hidden;
                 legend.title_as_description = self.config.title_as_description;
                 // A whitespace bar has no values to show.
                 let values = self.main_series_visible && !bar.is_whitespace();
@@ -3386,9 +3434,7 @@ impl Chart {
                 legend.background = Some(&background);
                 let inputs: Vec<_> = self.study_inputs.iter().map(String::as_str).collect();
                 legend.study_inputs = &inputs;
-                legend.previous_close =
-                    crate::model::last_with_value(&self.state.shown()[..selected])
-                        .map(|bar| bar.close);
+                legend.previous_close = previous_close;
                 legend.bar_index = selected;
                 legend.studies = self.rendered_studies().indicators();
                 legend.show_volume =
@@ -3614,8 +3660,7 @@ impl Chart {
                     if self.main_series_visible {
                         let bar = &self.state.shown()[index];
                         let value = self
-                            .config
-                            .price_source
+                            .main_price_source()
                             .compute(bar.open, bar.high, bar.low, bar.close);
                         if let Some(color) = rendering::candles::line_color_at(
                             self.chart_type,
@@ -3689,8 +3734,9 @@ impl Chart {
                     && let Some(local_idx) = coords.local_idx_at_x(hover_pos.x, visible_data.len())
                     && Some(visible_data[local_idx].time) == crosshair_time
                     && !visible_data[local_idx].is_whitespace()
+                    && let Some((candle, previous_close)) =
+                        self.readout_bar_at(start_idx + local_idx)
                 {
-                    let candle = &visible_data[local_idx];
                     if tooltip_options.on_long_press {
                         let x = coords.idx_to_x(start_idx + local_idx);
                         rendering::draw_dashed_line(
@@ -3731,9 +3777,8 @@ impl Chart {
                     rendering::render_tooltip_with_options(
                         &price_ctx,
                         hover_pos,
-                        candle,
-                        crate::model::last_with_value(&self.state.shown()[..start_idx + local_idx])
-                            .map(|bar| bar.close),
+                        &candle,
+                        previous_close,
                         &tooltip_options,
                         &colors,
                         &price_map,
@@ -3745,10 +3790,8 @@ impl Chart {
                             .study_rows_at(start_idx + local_idx)
                             .into_iter()
                             .filter(|(id, _)| {
-                                // A chart type that hides volume lists no volume rows.
-                                (self.chart_type.supports_volume()
-                                    && (!tooltip_options.on_long_press
-                                        || tooltip_options.show_volume_details))
+                                !tooltip_options.on_long_press
+                                    || tooltip_options.show_volume_details
                                     || self
                                         .study_ids
                                         .iter()

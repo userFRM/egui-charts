@@ -1,7 +1,7 @@
 //! A chart's state as a serializable snapshot, and named layouts of charts as versioned
 //! documents.
 
-use super::{Chart, ChartLayoutMode, ChartLayoutSizing, PaneId, SeriesOptions};
+use super::{Chart, ChartLayoutMode, ChartLayoutSizing, ChartLinkGroups, PaneId, SeriesOptions};
 use crate::drawings::persistence::{DrawingStorage, SaveError, SkippedDrawing};
 use crate::model::{
     ChartType, ChartTypeParams, Marker, MarkerOptions, PriceLine, SeriesStyle, Timeframe,
@@ -173,6 +173,8 @@ pub struct ChartSnapshot {
     pub right_offset: f32,
     /// The symbol's drawings as a drawings document (see [`DrawingStorage::to_json`]).
     /// Version 1 layouts may omit drawings kept in per-symbol storage.
+    /// With drawing storage, [`Chart::restore`] shows the stored drawings and brings back only
+    /// some of these (see there).
     pub drawings: Option<serde_json::Value>,
     /// The chart that took the snapshot, by an identifier no other chart has, also in another
     /// run. [`Chart::restore`] keeps the data table column choices of the saved studies only on
@@ -402,6 +404,17 @@ impl Chart {
     /// without the main series and the original pane the series stays out of the panes and is
     /// not drawn, and its bars come the same way, for the studies and the time axis.
     ///
+    /// With drawing storage ([`set_storage`](Self::set_storage)), the drawings shown are the
+    /// symbol's stored drawings, read again after the restore, rather than the snapshot's written
+    /// over them: a drawing added in another layout after the snapshot was taken shows, and one
+    /// deleted there stays deleted. The snapshot's own copy comes back for a drawing whose
+    /// top-level folder keeps it on one chart or in one layout
+    /// ([`FolderSync::Chart`](crate::drawings::FolderSync::Chart),
+    /// [`FolderSync::Layout`](crate::drawings::FolderSync::Layout)), unless storage holds the
+    /// drawing outside such a folder. Until that read the chart shows the snapshot's drawings, and
+    /// edits made meanwhile are kept. When storage holds no drawings document of the symbol, the
+    /// snapshot's drawings are kept and stored.
+    ///
     /// Errors distinguish a saved [`RestoreError::Study`], invalid [`RestoreError::Settings`],
     /// [`RestoreError::Layout`] geometry and unreadable [`RestoreError::Drawings`].
     pub fn restore(
@@ -420,6 +433,8 @@ impl Chart {
         factory: &IndicatorFactory,
     ) -> Result<Vec<SkippedDrawing>, RestoreError> {
         let (studies, drawings) = check(snapshot, factory, self.main_series_scale)?;
+        // Unsaved drawing edits are stored before the layout's drawings replace them.
+        self.save_stored_drawings();
         let next_series = self.next_series;
         self.layout_identity = crate::model::next_revision();
         let main_present = snapshot.panes.iter().any(|pane| pane.main);
@@ -696,14 +711,9 @@ impl Chart {
         }
         self.apply_synced_time_scale(snapshot.bar_spacing, snapshot.right_offset);
         let skipped = match drawings {
-            Some(json) => {
-                let skipped = self
-                    .load_drawings_remapped(&json, true)
-                    .map_err(RestoreError::Drawings)?;
-                self.history.drawing_edits += 1;
-                self.save_restored_drawings();
-                skipped
-            }
+            Some(json) => self
+                .restore_layout_drawings(&json)
+                .map_err(RestoreError::Drawings)?,
             None => Vec::new(),
         };
         // A layout without the original pane has just left it: the main bars are live again.
@@ -823,17 +833,15 @@ fn check(
         .settings
         .validate()
         .map_err(RestoreError::Settings)?;
+    // Margins that together leave no room for prices are kept: the fit ignores them.
     let valid_scale = |scale: &crate::scales::PriceScale| {
         let range = scale.range();
         let margins = scale.options().scale_margins;
         range.min.is_finite()
             && range.max.is_finite()
             && range.min < range.max
-            && margins.top.is_finite()
-            && margins.bottom.is_finite()
-            && margins.top >= 0.0
-            && margins.bottom >= 0.0
-            && margins.top + margins.bottom < 1.0
+            && (0.0..=1.0).contains(&margins.top)
+            && (0.0..=1.0).contains(&margins.bottom)
             && scale.options().tick_marks.max_marks
                 <= crate::scales::PriceMarkGeneratorConfig::MAX_MARKS
     };
@@ -1009,9 +1017,9 @@ fn check_source_links(
     Ok(())
 }
 
-/// A named arrangement of charts: the [`ChartLayoutMode`], a [`ChartSnapshot`] of each chart and
-/// the chart sizes, as kept in [`StoreKind::Layouts`](crate::services::StoreKind::Layouts)
-/// documents.
+/// A named arrangement of charts: the [`ChartLayoutMode`], a [`ChartSnapshot`] of each chart, the
+/// chart sizes and the symbol and interval groups of each chart, as kept in
+/// [`StoreKind::Layouts`](crate::services::StoreKind::Layouts) documents.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct SavedLayout {
@@ -1024,6 +1032,14 @@ pub struct SavedLayout {
     /// preset proportions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sizing: Option<ChartLayoutSizing>,
+    /// The symbol and interval groups of the charts in the order of their slots, as
+    /// [`ChartLayout::saved_link_groups`](super::ChartLayout::saved_link_groups) gives them.
+    /// Restore each with [`ChartLayout::set_link_groups`](super::ChartLayout::set_link_groups)
+    /// and `skip_history` true, so the charts keep their own symbols and intervals. `None`, also
+    /// read from documents saved before groups were kept, has every chart follow the layout
+    /// setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_groups: Option<Vec<ChartLinkGroups>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1037,13 +1053,15 @@ impl SavedLayout {
     /// The version of the document [`to_json`](Self::to_json) writes.
     pub const VERSION: u32 = 3;
 
-    /// `charts` in the order of their slots, arranged as `mode` in the preset proportions:
-    /// assign [`sizing`](Self::sizing) to keep other sizes.
+    /// `charts` in the order of their slots, arranged as `mode` in the preset proportions and
+    /// following the layout setting: assign [`sizing`](Self::sizing) and
+    /// [`link_groups`](Self::link_groups) to keep other sizes and groups.
     pub fn new(mode: ChartLayoutMode, charts: Vec<ChartSnapshot>) -> Self {
         Self {
             mode,
             charts,
             sizing: None,
+            link_groups: None,
         }
     }
 
@@ -1136,6 +1154,7 @@ mod tests {
             mode: ChartLayoutMode::Single,
             charts: vec![chart.snapshot_with(&factory).unwrap()],
             sizing: None,
+            link_groups: None,
         }
         .to_json()
         .unwrap();
@@ -1287,6 +1306,7 @@ mod tests {
             mode: ChartLayoutMode::Single,
             charts: vec![chart.snapshot().unwrap()],
             sizing: None,
+            link_groups: None,
         }
         .to_json()
         .unwrap();
@@ -1467,6 +1487,7 @@ mod tests {
             ("/options/tooltip/font_size", 1e5),
             ("/config/watermark_font_size", 1e5),
             ("/config/axis_font_size", 0.0),
+            ("/price_scale/options/scale_margins/top", 1.5),
         ] {
             let mut invalid = document.clone();
             *invalid.pointer_mut(pointer).unwrap() = value.into();
@@ -1484,11 +1505,35 @@ mod tests {
             mode: ChartLayoutMode::Single,
             charts: vec![original.snapshot().unwrap()],
             sizing: None,
+            link_groups: None,
         }
         .to_json()
         .unwrap();
         let layout = SavedLayout::from_json(&json).unwrap();
         chart(&[10.0], &[11.0]).restore(&layout.charts[0]).unwrap();
+    }
+
+    /// Margins that together leave no room for prices, which the fit ignores, save and restore
+    /// as they were.
+    #[test]
+    fn margins_without_room_do_not_block_saving() {
+        use crate::scales::PriceScaleMargins;
+        use crate::widget::test_frames::chart;
+        for (top, bottom) in [(0.6, 0.4), (0.7, 0.7)] {
+            let margins = PriceScaleMargins { top, bottom };
+            let mut original = chart(&[10.0], &[11.0]);
+            original.price_scale_mut().options_mut().scale_margins = margins;
+            let json = serde_json::to_string(&original.snapshot().unwrap()).unwrap();
+            let mut restored = chart(&[10.0], &[11.0]);
+            restored
+                .restore(&serde_json::from_str(&json).unwrap())
+                .unwrap();
+            assert_eq!(
+                restored.state().price_scale().options().scale_margins,
+                margins,
+                "{top} {bottom}"
+            );
+        }
     }
 
     /// Ignored style values save as finite equivalents, and the restored chart keeps their
@@ -1557,6 +1602,7 @@ mod tests {
                     mode: ChartLayoutMode::Single,
                     charts: vec![snapshot],
                     sizing: None,
+                    link_groups: None,
                 }
                 .to_json()
                 .unwrap();
@@ -1856,6 +1902,35 @@ mod tests {
         );
     }
 
+    /// Symbol and interval groups come back with the layout. A layout without them writes the
+    /// document it wrote before they were kept, which opens with every chart following the
+    /// layout setting.
+    #[test]
+    fn saved_layout_keeps_symbol_and_interval_groups() {
+        use crate::widget::{ChartLayoutMode, ChartLink, ChartLinkGroups, SavedLayout};
+        let chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        let mut layout = SavedLayout::new(
+            ChartLayoutMode::TwoHorizontal,
+            vec![chart.snapshot().unwrap(); 2],
+        );
+        let json = layout.to_json().unwrap();
+        let document: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let mut keys: Vec<_> = document.as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["charts", "mode", "version"]);
+        assert_eq!(SavedLayout::from_json(&json).unwrap().link_groups, None);
+        let groups = vec![
+            ChartLinkGroups {
+                symbol: ChartLink::Group("🔶".into()),
+                interval: ChartLink::Unlinked,
+            },
+            ChartLinkGroups::default(),
+        ];
+        layout.link_groups = Some(groups.clone());
+        let restored = SavedLayout::from_json(&layout.to_json().unwrap()).unwrap();
+        assert_eq!(restored.link_groups, Some(groups));
+    }
+
     /// Missing axis label switches inherit their saved lines through restore and resave.
     #[test]
     fn layout_saved_with_hidden_crosshair_lines_restores_without_labels() {
@@ -1920,6 +1995,7 @@ mod tests {
                 mode: ChartLayoutMode::Single,
                 charts: vec![chart.snapshot().unwrap()],
                 sizing: None,
+                link_groups: None,
             };
             let mut document: serde_json::Value =
                 serde_json::from_str(&layout.to_json().unwrap()).unwrap();

@@ -2,12 +2,12 @@
 //!
 //! Includes: parallel channel, disjoint channel, regression trend, and flat top/bottom.
 
-use crate::drawings::domain::{Drawing, DrawingToolType};
+use crate::drawings::domain::{Drawing, DrawingToolType, NoteTextStyle};
 use crate::drawings::rendering::{ChartView, MAX_CACHED_SPANS, bars_between};
 use crate::model::math::{LinearFit, Moments};
 use crate::model::{Bar, PriceSource};
 use crate::painting::span_cache::SpanCache;
-use crate::styles::{stroke, typography};
+use crate::styles::typography;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
 use std::cell::RefCell;
@@ -38,26 +38,104 @@ impl Drawing {
                 ));
             }
         }
-        for (i, [a, b]) in outline.lines.into_iter().enumerate() {
-            if i == 2 && self.channel_midline {
-                super::utils::draw_dashed_line(
-                    painter,
-                    a,
-                    b,
-                    Stroke::new(stroke::HAIRLINE, self.color32()),
-                    8.0,
-                    4.0,
-                );
-            } else {
-                self.styled_segment(
-                    painter,
-                    a,
-                    b,
-                    Stroke::new(self.stroke_width, self.color32()),
+        // A parallel channel's middle line, the third line, is painted after the drawing's style.
+        for [a, b] in outline.lines.into_iter().take(2) {
+            self.styled_segment(
+                painter,
+                a,
+                b,
+                Stroke::new(self.stroke_width, self.color32()),
+            );
+        }
+        self.render_placed_line_text(painter, self.points[0], self.points[1]);
+    }
+
+    /// Paints a parallel channel's middle line, when shown, in its own colour, width and pattern,
+    /// after the drawing's own style so that the channel's pattern leaves it alone.
+    pub(super) fn render_channel_middle_line(&self, painter: &egui::Painter, rect: Rect) {
+        if !self.channel_midline {
+            return;
+        }
+        let Some(&[a, b]) = self
+            .parallel_channel_outline(rect)
+            .as_ref()
+            .and_then(|outline| outline.lines.get(2))
+        else {
+            return;
+        };
+        let style = self.middle_line;
+        let color = style.color.map_or(self.color32(), |[r, g, b, a]| {
+            Color32::from_rgba_unmultiplied(r, g, b, a)
+        });
+        let stroke = Stroke::new(style.width, color);
+        match style.line_style.dash_pattern() {
+            None => {
+                painter.line_segment([a, b], stroke);
+            }
+            Some((dash, gap)) => super::utils::draw_dashed_line(painter, a, b, stroke, dash, gap),
+        }
+    }
+
+    /// The style of a flat top/bottom's or disjoint channel's prices: their own, else the line
+    /// colour at 12 points, regular and upright.
+    pub(crate) fn anchor_price_style_or_default(&self) -> NoteTextStyle {
+        self.anchor_price_style
+            .unwrap_or(NoteTextStyle::new(self.color, typography::SM_MD))
+    }
+
+    /// Writes the price at each end of both lines of a flat top/bottom or disjoint channel beside
+    /// it, in the chart's price format and [`Self::anchor_price_style_or_default`]: the anchors'
+    /// prices on the base line, the third anchor's on a flat line and the price under each end of
+    /// a mirrored line. Painted after the drawing's own style, so the text's bold leaves them alone.
+    pub(super) fn render_channel_prices(&self, painter: &egui::Painter, view: &ChartView) {
+        let (&[a, b, ..], &[pa, pb, pc, ..]) =
+            (self.points.as_slice(), self.chart_points.as_slice())
+        else {
+            return;
+        };
+        let Some([c, d]) = self.channel_second_line() else {
+            return;
+        };
+        let far = |p: Pos2| match self.tool_type {
+            DrawingToolType::FlatTopBottom => pc.price,
+            _ => (view.y_to_price)(p.y),
+        };
+        let style = self.anchor_price_style_or_default();
+        let [red, green, blue, alpha] = style.color;
+        let format = egui::TextFormat {
+            italics: style.italic,
+            ..egui::TextFormat::simple(
+                egui::FontId::proportional(typography::font_size(style.font_size)),
+                Color32::from_rgba_unmultiplied(red, green, blue, alpha),
+            )
+        };
+        let gap = DESIGN_TOKENS.spacing.sm + self.stroke_width / 2.0;
+        for (point, other, price) in [
+            (a, b, pa.price),
+            (b, a, pb.price),
+            (c, d, far(c)),
+            (d, c, far(d)),
+        ] {
+            let Some(text) = super::annotations::price_text(price, view) else {
+                continue;
+            };
+            if !point.is_finite() {
+                continue;
+            }
+            let (align, away) = super::measurements::beside_anchor(point, other, gap);
+            let galley =
+                painter.layout_job(egui::text::LayoutJob::simple_format(text, format.clone()));
+            let min = align.anchor_size(point + away, galley.size()).min;
+            painter.galley(min, galley.clone(), format.color);
+            if style.bold {
+                // The same synthetic weight as the drawing's own bold text.
+                painter.galley(
+                    min + egui::vec2(super::style::BOLD_OFFSET, 0.0),
+                    galley,
+                    format.color,
                 );
             }
         }
-        self.render_line_text(painter, self.points[0], self.points[1], true);
     }
 
     pub(super) fn parallel_channel_outline(&self, rect: Rect) -> Option<super::Outline> {
@@ -478,55 +556,324 @@ mod tests {
         assert!(restored.outline(rect).unwrap().areas.is_empty());
     }
 
-    /// A new parallel channel draws its middle line dashed in the line colour at 1 px, whatever
-    /// width its two lines take.
-    #[test]
-    fn parallel_channel_middle_line_stays_one_pixel_at_any_line_width() {
-        let mut drawing = Drawing::new(1, DrawingToolType::ParallelChannel);
-        drawing.points = vec![
-            Pos2::new(100.0, 100.0),
-            Pos2::new(300.0, 100.0),
-            Pos2::new(100.0, 200.0),
-        ];
-        drawing.stroke_width = 3.0;
-        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 500.0));
-        let ctx = egui::Context::default();
-        let output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(pane),
-                ..Default::default()
-            },
-            |ui| drawing.render_channel(ui.painter(), pane),
-        );
+    /// Flattened shapes of `drawing` painted in the shared 500 x 400 test pane, where a price is
+    /// 500 - y.
+    fn painted(drawing: &Drawing) -> Vec<egui::Shape> {
         let mut shapes = Vec::new();
-        for shape in &output.shapes {
-            collect(&shape.shape, &mut shapes);
+        for shape in crate::drawings::rendering::tests::paint(drawing) {
+            collect(&shape, &mut shapes);
         }
-        output.drop_without_applying_deltas();
-        let on_line = |y: f32| -> Vec<_> {
-            shapes
-                .iter()
-                .filter_map(|s| match s {
-                    egui::Shape::LineSegment { points, stroke }
-                        if points.iter().all(|p| p.y == y) =>
-                    {
-                        Some(*stroke)
-                    }
-                    _ => None,
+        shapes
+    }
+
+    /// The middle line is drawn in its own colour, width and pattern, by default a 1 px line
+    /// dashed 8 on 4 in the line colour, whatever width and pattern the channel's two lines take.
+    /// Its dashes start at the first anchor's side, so on the 200 px line from x = 100 they run
+    /// from 100 + 12 i, or 100 + 24 i for large dashes, up to the end at 300.
+    #[test]
+    fn parallel_channel_middle_line_takes_its_own_style() {
+        use crate::drawings::MiddleLineStyle;
+        use crate::model::LineStyle;
+        let channel = Drawing::new(1, DrawingToolType::ParallelChannel);
+        // Saved before the middle line had settings of its own.
+        let mut saved = serde_json::to_value(&channel).unwrap();
+        saved.as_object_mut().unwrap().remove("middle_line");
+        let saved: Drawing = serde_json::from_value(saved).unwrap();
+        let set = MiddleLineStyle {
+            color: Some([10, 20, 30, 128]),
+            width: 2.5,
+            line_style: LineStyle::Solid,
+        };
+        let large = MiddleLineStyle {
+            color: None,
+            width: 2.0,
+            line_style: LineStyle::LargeDashed,
+        };
+        let dashes = |period: f32, dash: f32, count: usize| -> Vec<[f32; 2]> {
+            (0..count)
+                .map(|i| {
+                    let start = 100.0 + period * i as f32;
+                    [start, (start + dash).min(300.0)]
                 })
                 .collect()
         };
-        for y in [100.0, 200.0] {
-            assert_eq!(
-                on_line(y),
-                [Stroke::new(3.0, drawing.color32())],
-                "outer line at {y}"
-            );
+        let line = Color32::from_rgba_unmultiplied(255, 0, 0, 255);
+        for (row, mut drawing, line_style, middle, stroke, spans) in [
+            (
+                "saved before",
+                saved.clone(),
+                LineStyle::Solid,
+                None,
+                Stroke::new(1.0, line),
+                dashes(12.0, 8.0, 17),
+            ),
+            (
+                "channel dotted",
+                saved,
+                LineStyle::Dotted,
+                None,
+                Stroke::new(1.0, line),
+                dashes(12.0, 8.0, 17),
+            ),
+            (
+                "solid, set",
+                channel.clone(),
+                LineStyle::Solid,
+                Some(set),
+                Stroke::new(2.5, Color32::from_rgba_unmultiplied(10, 20, 30, 128)),
+                vec![[100.0, 300.0]],
+            ),
+            (
+                "large dashes",
+                channel,
+                LineStyle::Solid,
+                Some(large),
+                Stroke::new(2.0, line),
+                dashes(24.0, 16.0, 9),
+            ),
+        ] {
+            drawing.points = vec![
+                Pos2::new(100.0, 100.0),
+                Pos2::new(300.0, 100.0),
+                Pos2::new(100.0, 200.0),
+            ];
+            drawing.color = [255, 0, 0, 255];
+            drawing.stroke_width = 3.0;
+            drawing.fill_color = None;
+            drawing.theme_shade = false;
+            drawing.line_style = line_style;
+            if let Some(middle) = middle {
+                drawing.middle_line = middle;
+            }
+            let shapes = painted(&drawing);
+            let on_line = |y: f32| -> Vec<_> {
+                shapes
+                    .iter()
+                    .filter_map(|s| match s {
+                        egui::Shape::LineSegment { points, stroke }
+                            if points.iter().all(|p| p.y == y) =>
+                        {
+                            Some((*stroke, [points[0].x, points[1].x]))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            };
+            if line_style == LineStyle::Solid {
+                for y in [100.0, 200.0] {
+                    let strokes: Vec<_> = on_line(y).into_iter().map(|(s, _)| s).collect();
+                    assert_eq!(strokes, [Stroke::new(3.0, line)], "{row}: line at {y}");
+                }
+            }
+            let middle = on_line(150.0);
+            assert_eq!(middle.len(), spans.len(), "{row}: {middle:?}");
+            for ((got, [a, b]), want) in middle.into_iter().zip(spans) {
+                assert_eq!(got, stroke, "{row}");
+                assert!(
+                    (a - want[0]).abs() < 1e-3 && (b - want[1]).abs() < 1e-3,
+                    "{row}: {a}..{b}, want {want:?}"
+                );
+            }
         }
-        let middle = on_line(150.0);
-        assert!(middle.len() > 1, "the middle line is dashed");
-        for stroke in middle {
-            assert_eq!(stroke, Stroke::new(1.0, drawing.color32()));
+    }
+
+    /// The flat top/bottom and disjoint channel write the price at each end of both lines beside
+    /// it, in the chart's format (two decimals here), in their own style or by default in the
+    /// line colour at 12 points, and in either anchor order. Anchors (100, 300), (300, 100) and
+    /// (200, 250) give a base line of slope -1; the flat line lies at y = 250, price 250, and the
+    /// mirrored line of slope +1 through (200, 250) at y = 150 and 350 at x = 100 and 300.
+    /// Labels sit 4 + 1 pt beside their ends, outside the lines.
+    #[test]
+    fn channel_prices_sit_beside_both_lines_in_their_own_style() {
+        use crate::drawings::{ChartPoint, FontWeight, NoteTextStyle};
+        use egui::Align2 as A;
+        type Label = (&'static str, A, (f32, f32));
+        let flat: [Label; 4] = [
+            ("200.00", A::RIGHT_CENTER, (95.0, 300.0)),
+            ("400.00", A::LEFT_CENTER, (305.0, 100.0)),
+            ("250.00", A::RIGHT_CENTER, (95.0, 250.0)),
+            ("250.00", A::LEFT_CENTER, (305.0, 250.0)),
+        ];
+        let disjoint: [Label; 4] = [
+            ("200.00", A::RIGHT_CENTER, (95.0, 300.0)),
+            ("400.00", A::LEFT_CENTER, (305.0, 100.0)),
+            ("350.00", A::RIGHT_CENTER, (95.0, 150.0)),
+            ("150.00", A::LEFT_CENTER, (305.0, 350.0)),
+        ];
+        let own = NoteTextStyle {
+            color: [10, 20, 30, 128],
+            font_size: 20.0,
+            bold: true,
+            italic: true,
+        };
+        for (tool, labels) in [
+            (DrawingToolType::FlatTopBottom, flat),
+            (DrawingToolType::DisjointChannel, disjoint),
+        ] {
+            for reverse in [false, true] {
+                let mut drawing = Drawing::new(1, tool);
+                let mut points = vec![
+                    Pos2::new(100.0, 300.0),
+                    Pos2::new(300.0, 100.0),
+                    Pos2::new(200.0, 250.0),
+                ];
+                if reverse {
+                    points.swap(0, 1);
+                }
+                drawing.chart_points = points
+                    .iter()
+                    .map(|p| ChartPoint::new(p.x / 10.0, f64::from(500.0 - p.y)))
+                    .collect();
+                drawing.points = points;
+                drawing.fill_color = None;
+                drawing.theme_shade = false;
+                drawing.stroke_width = 2.0;
+                let prices = |drawing: &Drawing| -> Vec<egui::epaint::TextShape> {
+                    painted(drawing)
+                        .into_iter()
+                        .filter_map(|shape| match shape {
+                            egui::Shape::Text(text) if text.galley.text().contains(".00") => {
+                                Some(text)
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                };
+                assert!(prices(&drawing).is_empty(), "{tool:?}: off by default");
+                drawing.line_measurements.price_labels = true;
+                for (style, weight) in [(None, FontWeight::Bold), (Some(own), FontWeight::Normal)] {
+                    drawing.anchor_price_style = style;
+                    // The text's bold does not reach the prices.
+                    drawing.font_weight = weight;
+                    let (color, size, italic, copies) = match style {
+                        None => (drawing.color32(), 12.0, false, 1),
+                        Some(_) => (
+                            Color32::from_rgba_unmultiplied(10, 20, 30, 128),
+                            20.0,
+                            true,
+                            2,
+                        ),
+                    };
+                    let painted = prices(&drawing);
+                    assert_eq!(painted.len(), 4 * copies, "{tool:?} {reverse} {style:?}");
+                    for (label, align, at) in labels {
+                        let at = Pos2::new(at.0, at.1);
+                        // A bold copy sits 0.6 pt right of the plain one.
+                        let copy: Vec<_> = painted
+                            .iter()
+                            .filter(|text| text.galley.text() == label)
+                            .filter(|text| {
+                                let point =
+                                    text.pos + align.pos_in_rect(&text.galley.rect).to_vec2();
+                                (0..copies).any(|i| {
+                                    point.distance(at + egui::vec2(0.6 * i as f32, 0.0)) < 1e-3
+                                })
+                            })
+                            .collect();
+                        assert_eq!(copy.len(), copies, "{tool:?} {reverse} {label} at {at:?}");
+                        for text in copy {
+                            let format = &text.galley.job.sections[0].format;
+                            assert_eq!(format.color, color, "{tool:?} {label}");
+                            assert_eq!(format.font_id.size, size, "{tool:?} {label}");
+                            assert_eq!(format.italics, italic, "{tool:?} {label}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A flat top/bottom's or disjoint channel's line start and line end mark both of its lines
+    /// at the first and second anchor's ends, as extended. By hand: the base line of slope -1
+    /// meets the pane's left edge at y = 400 and its right edge at y = -100; the mirrored line of
+    /// slope +1 through (100, 150) meets them at y = 50 and 550. The flat line lies at y = 250.
+    #[test]
+    fn channel_line_ends_mark_both_lines_from_the_first_anchor() {
+        use crate::drawings::ArrowStyle;
+        type Ends = [(f32, f32); 2];
+        type Row = (DrawingToolType, bool, bool, Ends, Ends);
+        let rows: [Row; 6] = [
+            (
+                DrawingToolType::DisjointChannel,
+                false,
+                false,
+                [(100.0, 300.0), (100.0, 150.0)],
+                [(300.0, 100.0), (300.0, 350.0)],
+            ),
+            (
+                DrawingToolType::DisjointChannel,
+                true,
+                false,
+                [(300.0, 100.0), (300.0, 350.0)],
+                [(100.0, 300.0), (100.0, 150.0)],
+            ),
+            (
+                DrawingToolType::DisjointChannel,
+                false,
+                true,
+                [(0.0, 400.0), (0.0, 50.0)],
+                [(500.0, -100.0), (500.0, 550.0)],
+            ),
+            (
+                DrawingToolType::DisjointChannel,
+                true,
+                true,
+                [(500.0, -100.0), (500.0, 550.0)],
+                [(0.0, 400.0), (0.0, 50.0)],
+            ),
+            (
+                DrawingToolType::FlatTopBottom,
+                false,
+                false,
+                [(100.0, 300.0), (100.0, 250.0)],
+                [(300.0, 100.0), (300.0, 250.0)],
+            ),
+            (
+                DrawingToolType::FlatTopBottom,
+                true,
+                true,
+                [(500.0, -100.0), (500.0, 250.0)],
+                [(0.0, 400.0), (0.0, 250.0)],
+            ),
+        ];
+        let sorted = |mut points: Vec<Pos2>| {
+            points.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+            points
+        };
+        for (tool, reverse, extend, starts, ends) in rows {
+            let mut drawing = Drawing::new(1, tool);
+            drawing.points = vec![
+                Pos2::new(100.0, 300.0),
+                Pos2::new(300.0, 100.0),
+                Pos2::new(200.0, 250.0),
+            ];
+            if reverse {
+                drawing.points.swap(0, 1);
+            }
+            drawing.fill_color = None;
+            drawing.extend_left = extend;
+            drawing.extend_right = extend;
+            // An arrow is a path with its tip first, a square a rectangle centred on its tip.
+            drawing.arrow_start_style = ArrowStyle::Arrow;
+            drawing.arrow_end_style = ArrowStyle::Square;
+            let (mut tips, mut squares) = (Vec::new(), Vec::new());
+            for shape in painted(&drawing) {
+                match shape {
+                    egui::Shape::Path(path) if path.fill != Color32::TRANSPARENT => {
+                        tips.push(path.points[0])
+                    }
+                    egui::Shape::Rect(rect) => squares.push(rect.rect.center()),
+                    _ => {}
+                }
+            }
+            let want = |ends: Ends| sorted(ends.iter().map(|&(x, y)| Pos2::new(x, y)).collect());
+            let row = format!("{tool:?} reverse {reverse} extend {extend}");
+            for (got, want) in [(sorted(tips), want(starts)), (sorted(squares), want(ends))] {
+                assert_eq!(got.len(), 2, "{row}: {got:?}");
+                for (got, want) in got.iter().zip(&want) {
+                    assert!(got.distance(*want) < 1e-3, "{row}: {got:?}, want {want:?}");
+                }
+            }
         }
     }
 

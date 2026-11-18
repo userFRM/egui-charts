@@ -394,11 +394,13 @@ impl PrimitiveView<'_> {
     }
 }
 
-/// A label a primitive puts on the price axis of its pane, on a tag in `color`.
+/// A label a primitive puts on the price axis of its pane, on a tag in `color`. A primitive of a
+/// bar series tags the axis of the series' price scale.
 ///
 /// Automatic tags avoid earlier tags and stay inside the pane. Fixed tags keep their centre,
 /// are clipped to the axis and paint above automatic tags without reserving an overlap slot.
-/// Later fixed tags paint above earlier ones. Hidden series and hidden axes omit their tags.
+/// Later fixed tags paint above earlier ones. Hidden series, hidden axes and bar series on a
+/// scale without an axis, such as an overlay scale, omit their tags.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct PriceAxisLabel {
@@ -516,9 +518,9 @@ pub trait Primitive: Send {
         self.draw_background(painter, view, pass);
     }
 
-    /// Labels for the price axis of the pane, placed at their prices next to the chart's own
-    /// tags. An automatic label off the scale or without room is left out; fixed labels follow
-    /// [`PriceAxisLabel`]'s clipping and overlap rules.
+    /// Labels for the price axis that [`PriceAxisLabel`] describes, placed at their prices next
+    /// to the chart's own tags there. An automatic label off the scale or without room is left
+    /// out; fixed labels follow [`PriceAxisLabel`]'s clipping and overlap rules.
     fn price_axis_labels(&self, view: &PrimitiveView<'_>) -> Vec<PriceAxisLabel> {
         let _ = view;
         Vec::new()
@@ -534,7 +536,8 @@ pub trait Primitive: Send {
         Vec::new()
     }
 
-    /// Draws inside `axis`, the price axis of the pane, behind its labels.
+    /// Draws inside `axis`, the column of the price axis that [`PriceAxisLabel`] describes,
+    /// behind its labels. Not called while that axis is not shown.
     fn draw_price_axis(&self, painter: &Painter, axis: Rect, view: &PrimitiveView<'_>) {
         let _ = (painter, axis, view);
     }

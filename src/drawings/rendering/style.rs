@@ -333,6 +333,7 @@ impl Drawing {
             || matches!(
                 self.tool_type,
                 DrawingToolType::RegressionTrend
+                    | DrawingToolType::Sticker
                     | DrawingToolType::FibonacciRetracement
                     | DrawingToolType::FibonacciExtension
                     | DrawingToolType::FibonacciChannel
@@ -442,6 +443,22 @@ impl Drawing {
             return;
         };
         let b = self.points.get(1).copied().unwrap_or(a);
+        if matches!(self.tool_type, T::FlatTopBottom | T::DisjointChannel) {
+            // Both lines run from the first anchor's side to the second's, as extended.
+            let Some(outline) = self.wedge_channel_outline(rect) else {
+                return;
+            };
+            for [left, right] in outline.lines {
+                let [start, end] = if b.x < a.x {
+                    [right, left]
+                } else {
+                    [left, right]
+                };
+                self.render_marker(painter, start, start - end, self.arrow_start_style);
+                self.render_marker(painter, end, end - start, self.arrow_end_style);
+            }
+            return;
+        }
         let ends = match self.tool_type {
             T::TrendLine | T::InfoLine | T::TrendAngle | T::Ray | T::ExtendedLine | T::Arrow => {
                 self.trend_line_ends(rect).map(|(a, b)| [a, b])
@@ -1269,6 +1286,21 @@ mod tests {
         }
         let ctx = egui::Context::default();
         crate::theme::apply_to_egui(&ctx, &Theme::light());
+        // Prices set in the default orange take the line's shade, as the line does.
+        let mut priced = Drawing::new(1, FlatTopBottom);
+        priced.line_measurements.price_labels = true;
+        priced.anchor_price_style = Some(crate::drawings::NoteTextStyle::new(
+            [255, 152, 0, 255],
+            12.0,
+        ));
+        let colours: Vec<_> = paint_on(&ctx, &anchored(priced), false)
+            .into_iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text) => Some(text.galley.job.sections[0].format.color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(colours, vec![rgb(183, 109, 0); 4]);
         let mut note = anchored(Drawing::new(1, Note));
         note.text = Some("Hi".into());
         let text = paint_on(&ctx, &note, false)

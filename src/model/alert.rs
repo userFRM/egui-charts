@@ -178,7 +178,8 @@ pub struct AlertInputs {
     pub start: Option<DateTime<Utc>>,
     /// Creation window for studies whose calculation depends on visible bars, inclusive.
     pub visible: Option<(DateTime<Utc>, DateTime<Utc>)>,
-    /// Drawing levels interpolate logarithmically on a logarithmic source scale.
+    /// Drawing levels interpolate logarithmically: the scale of the pane that paints the drawing
+    /// the first condition names, or the main series' scale.
     pub logarithmic: bool,
     /// Independent calculation definitions, including study dependencies.
     pub studies: Vec<AlertStudy>,

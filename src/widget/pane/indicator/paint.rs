@@ -479,6 +479,7 @@ impl IndicatorPane {
     /// colour does not read on `background` is drawn in `text_color` after a swatch of it.
     fn legend_job(
         &self,
+        ctx: &egui::Context,
         indicator: &dyn Indicator,
         text_color: Color32,
         muted: Color32,
@@ -488,7 +489,11 @@ impl IndicatorPane {
         let mut job = egui::text::LayoutJob::default();
         let format = |color| egui::TextFormat::simple(egui::FontId::proportional(font_size), color);
         if self.config.show_name {
-            job.append(indicator.name(), 0.0, format(text_color));
+            job.append(
+                &crate::localization::text(ctx, indicator.name()),
+                0.0,
+                format(text_color),
+            );
         }
         if !self.config.inputs.is_empty() {
             if !job.text.is_empty() {
@@ -612,6 +617,7 @@ impl IndicatorPane {
     ) -> std::sync::Arc<egui::Galley> {
         let theme = painter.ctx().active_theme();
         let mut job = self.legend_job(
+            painter.ctx(),
             indicator,
             text_color,
             theme.ui.text_muted,
@@ -811,7 +817,8 @@ mod tests {
                 Color32::from_rgba_unmultiplied(1, 2, 3, 40),
                 false,
             ),
-            // The middle guide never changes the band, even hidden above or below its edges.
+            // A Connors RSI saved with its former middle guide: that guide never changes the band,
+            // even hidden above or below its edges.
             (
                 IndicatorPaneConfig::from_study(&crsi),
                 &crsi,
@@ -972,6 +979,7 @@ mod tests {
             study.calculate(&bars);
             let mut pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
             let job = pane.legend_job(
+                &egui::Context::default(),
                 study.as_ref(),
                 Color32::WHITE,
                 Color32::BLACK,
@@ -990,6 +998,7 @@ mod tests {
                     .apply_settings(&[], serde_json::from_value(settings).unwrap())
                     .unwrap();
                 let pane_values = pane.legend_job(
+                    &egui::Context::default(),
                     studies[0].as_ref(),
                     Color32::WHITE,
                     Color32::BLACK,
@@ -1167,8 +1176,14 @@ mod tests {
                     min < expected_rate && max > expected_rate && max < expected_rate * 2.0,
                     "{kind:?}: {min}..{max}"
                 );
-                let job =
-                    pane.legend_job(&study, Color32::WHITE, Color32::BLACK, Color32::BLACK, 12.0);
+                let job = pane.legend_job(
+                    &egui::Context::default(),
+                    &study,
+                    Color32::WHITE,
+                    Color32::BLACK,
+                    Color32::BLACK,
+                    12.0,
+                );
                 assert!(
                     job.text.contains(&format!("{total} {expected_rate:.2}")),
                     "{}",
@@ -1316,7 +1331,14 @@ mod tests {
         let mut pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
         // Bar 5 shows source bar 4, coloured red.
         pane.bar_index = Some(5);
-        let job = pane.legend_job(&study, Color32::WHITE, Color32::GRAY, Color32::BLACK, 12.0);
+        let job = pane.legend_job(
+            &egui::Context::default(),
+            &study,
+            Color32::WHITE,
+            Color32::GRAY,
+            Color32::BLACK,
+            12.0,
+        );
         let value = job
             .sections
             .iter()
@@ -1334,6 +1356,7 @@ mod tests {
         stepped.calculate(&bars_from_closes([1.0; 8]));
         pane.bar_index = Some(0);
         let job = pane.legend_job(
+            &egui::Context::default(),
             &stepped,
             Color32::WHITE,
             Color32::GRAY,
@@ -1365,6 +1388,7 @@ mod tests {
         for (theme_name, theme) in crate::theme::presets() {
             for study in [&rsi as &dyn Indicator, &macd] {
                 let job = pane.legend_job(
+                    &egui::Context::default(),
                     study,
                     theme.ui.text,
                     theme.ui.text_muted,

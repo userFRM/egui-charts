@@ -129,6 +129,7 @@ impl Chart {
                 (chrono::Utc::now(), crate::model::next_revision()),
             ),
             study_data: Default::default(),
+            footprint_open_interest: false,
             element_studies: Default::default(),
             execution_ranges: Default::default(),
             #[cfg(feature = "studies")]
@@ -239,6 +240,7 @@ impl Chart {
             // Multi-chart sync
             layout_inactive: false,
             layout_link_controls: false,
+            settings_hidden: false,
             layout_identity: crate::model::next_revision(),
             host_crosshair: None,
             synced_crosshair_bar_idx: None,
@@ -249,6 +251,7 @@ impl Chart {
             last_crosshair_series: None,
             last_hover_bar_idx: None,
             last_hover_whitespace: None,
+            readout_index: None,
             // Marks (Widget API)
             marks: Default::default(),
             marker_options: Default::default(),
@@ -295,7 +298,9 @@ impl Chart {
     /// Controls bar spacing, scroll/zoom constraints, right offset, and
     /// time scale behavior. Applies the time scale options immediately. A non-finite
     /// `bar_spacing`, `right_offset` or `right_offset_pixels` keeps its previous value, and a
-    /// `kinetic_scroll.damping_coeff` outside `0.0..1.0` is replaced by the default.
+    /// `kinetic_scroll.damping_coeff` outside `0.0..1.0`, a `min_scroll_speed` that is not a
+    /// finite number above zero and a `max_scroll_speed` that is NaN or negative are replaced
+    /// by their defaults.
     pub fn with_chart_options(mut self, options: ChartOptions) -> Self {
         let options = self.normalize_chart_options(options);
         {
@@ -1202,7 +1207,8 @@ mod tests {
             chart.drawings_mut().drawings.push(drawing);
             chart
                 .drawings_mut()
-                .edit_drawing(7, |d| d.color = [1, 2, 3, 255]);
+                .edit_drawing(7, |d| d.color = [1, 2, 3, 255])
+                .unwrap();
         });
         chart.set_markers(
             SeriesId::MAIN,

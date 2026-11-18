@@ -9,10 +9,12 @@ use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
 use crate::model::{Alert, AlertComparison, AlertCondition, Timeframe};
 use crate::theme::Theme;
+use crate::ui::Control;
 use crate::ui::context_menu::{MenuEntry, MenuItem, show_menu};
 use crate::widget::{Chart, PaneId};
 
 use egui::{Context, Id, Pos2};
+use std::collections::HashSet;
 
 /// Distance between the pointer and the menu corner, enough to clear the handle under the
 /// pointer: half the 8 px handle plus 2 px.
@@ -46,8 +48,8 @@ pub(crate) fn move_targets(
 pub enum DrawingContextMenuAction {
     /// No action requested.
     None,
-    /// Open the alert dialog on this alert, the price crossing the drawing's first visible level, for
-    /// example with [`AlertDialog::edit`](crate::ui::dialogs::AlertDialog::edit),
+    /// Open the alert dialog on this alert: the price, or the first output of the study leading a
+    /// study pane, crossing the drawing's first visible level, for example with [`AlertDialog::edit`](crate::ui::dialogs::AlertDialog::edit),
     /// listing the levels of [`Drawing::alert_levels_with_bars`](crate::drawings::Drawing::alert_levels_with_bars)
     /// as its sources.
     AddAlert(Box<Alert>),
@@ -78,7 +80,8 @@ pub enum DrawingContextMenuAction {
     ReversePosition,
     /// Clone drawing with offset
     Clone,
-    /// Delete drawing
+    /// Delete the selected drawings, for example with [`Chart::delete_selected_drawings`], which
+    /// keeps locked drawings and reports them. The menu disables this entry on a locked drawing.
     Delete,
 }
 
@@ -91,7 +94,7 @@ pub struct DrawingContextMenu {
     pub drawing_id: Option<usize>,
     /// Drawing type name for display
     pub drawing_type: String,
-    /// Whether the drawing is currently locked
+    /// Whether the drawing is currently locked; its Delete entry is then disabled.
     pub is_locked: bool,
     /// Whether the drawing is currently visible
     pub is_visible: bool,
@@ -103,6 +106,10 @@ pub struct DrawingContextMenu {
     pub current_interval: Option<Timeframe>,
     /// Saved interval filter used to mark matching quick commands.
     pub timeframe_visibility: TimeframeVisibility,
+    /// Controls the host hid, set through
+    /// [`ChartMenus::set_control_visible`](crate::ui::context_menu::ChartMenus::set_control_visible);
+    /// only [`Control::Alerts`] applies here.
+    pub(crate) hidden: HashSet<Control>,
     /// Last action taken
     pub last_action: DrawingContextMenuAction,
     /// Skip close detection on first frame
@@ -129,6 +136,7 @@ impl DrawingContextMenu {
             panes: Vec::new(),
             current_interval: None,
             timeframe_visibility: TimeframeVisibility::all(),
+            hidden: HashSet::new(),
             last_action: DrawingContextMenuAction::None,
             just_opened: false,
         }
@@ -151,7 +159,8 @@ impl DrawingContextMenu {
     }
 
     /// Open the menu on drawing `drawing_id` of `chart`, offering an alert when the chart has a
-    /// symbol and the drawing has price levels, and the chart's other panes.
+    /// symbol, the drawing has levels and its pane marks the price or a study, as
+    /// `Chart::drawing_subject` gives, and the chart's other panes.
     pub(crate) fn open_on(&mut self, ctx: &Context, chart: &Chart, pos: Pos2, drawing_id: usize) {
         let drawing = chart
             .drawings()
@@ -168,24 +177,21 @@ impl DrawingContextMenu {
         self.alert = drawing
             .filter(|_| !chart.symbol.is_empty())
             .and_then(|drawing| {
+                let (scale, source, _) = chart.drawing_subject(drawing.id);
+                let bars = chart.bars(crate::chart::series::SeriesId::MAIN);
                 let (level, _, _) = drawing
-                    .alert_levels_with_bars(
-                        chart
-                            .bars(crate::chart::series::SeriesId::MAIN)
-                            .len()
-                            .saturating_sub(1) as f64,
-                        chart.config().right_axis_scale_mode,
-                        chart.bars(crate::chart::series::SeriesId::MAIN),
-                    )
+                    .alert_levels_with_bars(bars.len().saturating_sub(1) as f64, scale, bars)
                     .into_iter()
                     .next()?;
-                Some(Alert::new(
+                let mut alert = Alert::new(
                     chart.symbol.clone(),
                     AlertCondition::Compare {
                         other: drawing.alert_source(level),
                         comparison: AlertComparison::Crossing,
                     },
-                ))
+                );
+                alert.source = source?;
+                Some(alert)
             });
         self.panes = move_targets(Some(ctx), chart, drawing_id);
         self.open(pos, drawing_id);
@@ -261,22 +267,26 @@ impl DrawingContextMenu {
         ctx: &Context,
         shortcuts: &crate::widget::ShortcutMap,
     ) -> Vec<MenuEntry<DrawingContextMenuAction>> {
-        let alert = self.alert.iter().flat_map(|alert| {
-            [
-                MenuEntry::Item(
-                    MenuItem::new(
-                        l10n::format_text(
-                            ctx,
-                            "Add alert on {name}…",
-                            &[("name", l10n::text(ctx, &self.drawing_type).as_str())],
-                        ),
-                        DrawingContextMenuAction::AddAlert(Box::new(alert.clone())),
-                    )
-                    .with_icon(&embedded_icons::ALERTS),
-                ),
-                MenuEntry::Separator,
-            ]
-        });
+        let alert = self
+            .alert
+            .iter()
+            .filter(|_| !self.hidden.contains(&Control::Alerts))
+            .flat_map(|alert| {
+                [
+                    MenuEntry::Item(
+                        MenuItem::new(
+                            l10n::format_text(
+                                ctx,
+                                "Add alert on {name}…",
+                                &[("name", l10n::text(ctx, &self.drawing_type).as_str())],
+                            ),
+                            DrawingContextMenuAction::AddAlert(Box::new(alert.clone())),
+                        )
+                        .with_icon(&embedded_icons::ALERTS),
+                    ),
+                    MenuEntry::Separator,
+                ]
+            });
         alert
             .chain([
                 // Edit section
@@ -364,13 +374,16 @@ impl DrawingContextMenu {
                 ),
                 MenuEntry::Item(MenuItem::new("Clone", DrawingContextMenuAction::Clone)),
                 MenuEntry::Separator,
-                // Delete (last item, potentially destructive)
-                MenuEntry::Item(
-                    MenuItem::new("Delete", DrawingContextMenuAction::Delete)
+                // Delete (last item, potentially destructive); a locked drawing is unlocked first,
+                // as the floating toolbar's Delete button requires.
+                MenuEntry::Item({
+                    let mut item = MenuItem::new("Delete", DrawingContextMenuAction::Delete)
                         .with_icon(&embedded_icons::TRASH)
                         .with_shortcut(shortcuts.shortcut(KeyboardAction::DeleteSelectedDrawing))
-                        .danger(),
-                ),
+                        .danger();
+                    item.enabled = !self.is_locked;
+                    item
+                }),
             ])
             .collect()
     }
@@ -435,7 +448,7 @@ impl DrawingContextMenuAction {
                 .iter()
                 .any(|d| d.id == id && d.timeframe_visibility != filter)
         {
-            chart.user_action(|chart| {
+            let _ = chart.user_action(|chart| {
                 chart
                     .drawings_mut()
                     .edit_drawing(id, |d| d.timeframe_visibility = filter)
@@ -482,6 +495,32 @@ mod tests {
                     })
                     .as_ref()
             );
+        }
+    }
+
+    /// The Delete entry is disabled exactly while the right-clicked drawing is locked.
+    #[test]
+    fn delete_follows_the_lock() {
+        let mut chart = Chart::new(BarData::default());
+        let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
+        drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(1.0, 110.0)];
+        drawing.completed = true;
+        chart.drawings_mut().drawings.push(drawing);
+        let mut menu = DrawingContextMenu::new();
+        for locked in [false, true, false] {
+            chart.drawings_mut().drawings[0].locked = locked;
+            menu.open_on(&Context::default(), &chart, Pos2::ZERO, 7);
+            let enabled = menu
+                .build_menu_items(&Context::default(), &crate::widget::ShortcutMap::default())
+                .into_iter()
+                .find_map(|entry| match entry {
+                    MenuEntry::Item(item) if item.action == DrawingContextMenuAction::Delete => {
+                        Some(item.enabled)
+                    }
+                    _ => None,
+                })
+                .expect("Delete row");
+            assert_eq!(enabled, !locked, "locked {locked}");
         }
     }
 
@@ -653,9 +692,9 @@ mod tests {
                 d.chart_points[0].price = 999.0;
             };
             if bulk {
-                manager.edit_drawings(&[7], edit);
+                manager.edit_drawings(&[7], edit).unwrap();
             } else {
-                manager.edit_drawing(7, edit);
+                manager.edit_drawing(7, edit).unwrap();
             }
             assert_eq!(manager.drawings[0].timeframe_visibility, filter);
             assert_eq!(manager.drawings[0].stroke_width, drawing.stroke_width);

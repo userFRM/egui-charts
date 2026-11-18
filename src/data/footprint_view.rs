@@ -220,9 +220,11 @@ impl<'a> FootprintBarView<'a> {
             .map(|level| level.level)
     }
 
-    /// Contiguous value area grown from the POC toward the larger adjacent volume.
-    /// Ties add one row on each side. `share` is clamped to 0..=1, NaN to zero.
-    /// Gaps hold zero volume.
+    /// Contiguous value area around the POC holding `share` of the volume, clamped to 0..=1 with
+    /// NaN as zero. Each step compares the next two rows above with the next two below and adds
+    /// the heavier pair one row at a time, stopping once the area holds the share; equal sums
+    /// add one row on each side, and a side with no rows left gives way to the other. Gaps hold
+    /// zero volume. Estimated volume profiles and TPO profiles grow by the same rule.
     /// Returns inclusive lower and upper level keys; a zero-volume bar has no area.
     pub fn value_area(&self, share: f64) -> Option<(i64, i64)> {
         if self.volume() <= 0.0 {
@@ -230,62 +232,17 @@ impl<'a> FootprintBarView<'a> {
         }
         let rows: Vec<_> = self.levels.values().collect();
         let poc = self.poc()?;
-        let mut low = rows.partition_point(|row| row.level < poc);
-        let mut high = low;
-        let mut volume = rows[low].volume();
-        let target = self.volume()
-            * if share.is_nan() {
-                0.0
-            } else {
-                share.clamp(0.0, 1.0)
-            };
-        let mut low_key = rows[low].level;
-        let mut high_key = low_key;
-        while volume < target && (low > 0 || high + 1 < rows.len()) {
-            let below = low.checked_sub(1).map(|i| rows[i]);
-            let above = rows.get(high + 1).copied();
-            let below_gap = below.map(|row| low_key as i128 - row.level as i128);
-            let above_gap = above.map(|row| row.level as i128 - high_key as i128);
-            // Skip empty spans in one step, without comparing across untraded prices.
-            let gap = below_gap.into_iter().chain(above_gap).min().unwrap_or(1);
-            if gap > 1 {
-                if below.is_some() {
-                    low_key = (low_key as i128 - gap + 1) as i64;
-                }
-                if above.is_some() {
-                    high_key = (high_key as i128 + gap - 1) as i64;
-                }
-            }
-            let bid_volume = below.map(|row| {
-                if row.level as i128 + 1 == low_key as i128 {
-                    row.volume()
-                } else {
-                    0.0
-                }
-            });
-            let ask_volume = above.map(|row| {
-                if row.level as i128 - 1 == high_key as i128 {
-                    row.volume()
-                } else {
-                    0.0
-                }
-            });
-            if below.is_some() && (above.is_none() || bid_volume >= ask_volume) {
-                low_key -= 1;
-                if below.is_some_and(|row| row.level == low_key) {
-                    low -= 1;
-                    volume += rows[low].volume();
-                }
-            }
-            if above.is_some() && (below.is_none() || ask_volume >= bid_volume) {
-                high_key += 1;
-                if above.is_some_and(|row| row.level == high_key) {
-                    high += 1;
-                    volume += rows[high].volume();
-                }
-            }
-        }
-        Some((low_key, high_key))
+        let share = if share.is_nan() {
+            0.0
+        } else {
+            share.clamp(0.0, 1.0)
+        };
+        Some(super::volume_profile::value_area(
+            rows.len(),
+            |i| (rows[i].level, rows[i].volume()),
+            rows.partition_point(|row| row.level < poc),
+            self.volume() * share,
+        ))
     }
 
     /// (bid, ask) dominance at `level`, comparing horizontally or to the adjacent price.

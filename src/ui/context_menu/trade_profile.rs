@@ -283,11 +283,12 @@ mod tests {
                         .any(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == label))
                 );
             }
-            // Session 0 totals [3, 8, 1, 5]. POC 100 plus row 99 reaches 11/17,
-            // exceeding 60%; its guides bound [98.5, 100.5].
+            // Session 0 totals [3, 8, 1, 5]. The two rows above the POC at 100 (6) outweigh
+            // the one below (3), so 101 and 102 bring 14/17 past 60%; its guides bound
+            // [99.5, 102.5].
             let left = map.idx_to_x(0) - map.bar_spacing * 0.45;
             let right = map.idx_to_x(1) + map.bar_spacing * 0.5;
-            for edge in [98.5, 100.5] {
+            for edge in [99.5, 102.5] {
                 assert!(has_line(
                     &painted,
                     Pos2::new(left, map.price_to_y(edge)),
@@ -316,8 +317,8 @@ mod tests {
                 assert!(!hidden.iter().any(|s| matches!(&s.shape, Shape::Text(t) if ["HVN", "LVN"].contains(&t.galley.text()))));
                 assert!(!has_line(
                     &hidden,
-                    Pos2::new(left, map.price_to_y(98.5)),
-                    Pos2::new(right, map.price_to_y(98.5))
+                    Pos2::new(left, map.price_to_y(99.5)),
+                    Pos2::new(right, map.price_to_y(99.5))
                 ));
                 // Volume mode draws all 4 contracts at 100 from the profile's left edge,
                 // relative to the largest total row, 7 at 101.
