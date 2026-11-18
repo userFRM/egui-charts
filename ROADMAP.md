@@ -134,7 +134,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Spread, Ratio and Correlation Coefficient read their second symbol from the host; correlation also offers log returns. Correlation Coefficient opens as an area with a dashed guide at zero, with editable visibility, value, colour, style, width and latest value line; one saved as a line restores that way, and one saved with guides at 1 and -1 keeps them.
 - [ ] Add a dedicated log-return correlation study.
 - [x] Trend Strength Index plots the rolling correlation of price with bar position, in editable colours above and below zero.
-- [x] Automatic chart-pattern, wedge and key-level detection studies.
+- [x] Automatic chart-pattern, wedge and key-level detection studies. Studies paint their drawings beneath their plots, text and markers; chart patterns show a triangle and abbreviation at each confirmation, with boundaries in their formation colours and dashed while developing. Automatic drawing studies keep plot 0 as their construction style and visibility control.
 - [x] Composite technical ratings, rated on both groups or one, with higher-interval rows and a placed, sized and coloured table, and lunar phases.
 - [x] Volatility Index draws Wilder's stop and reverse a multiple of the average true range from the significant close, with editable periods, multiplier and Wilder or exponential smoothing.
 - [x] ADX-breakout, divergence, key-reversal, intraday and missed-pivot studies.

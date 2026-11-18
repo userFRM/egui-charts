@@ -822,8 +822,10 @@ impl State {
 ///
 /// Line 0 marks a bullish confirmation at the low of its bar, line 1 a bearish one at the
 /// high, each labelled with the abbreviations of the formations it confirms. Boundaries are
-/// also generated as drawings, dashed while developing; a reversal formation draws only its
-/// neckline or breakout level.
+/// also generated as drawings, 1 px wide, in the Bullish or Bearish colour once confirmed and
+/// dashed in the third of [`colors`](Indicator::colors), grey by default, while developing; a
+/// reversal formation draws only its neckline or breakout level. They keep these styles and
+/// show while the study does, whatever the plot styles.
 #[derive(Clone, Debug)]
 pub struct ChartPatterns {
     family: PatternFamily,
@@ -1106,6 +1108,7 @@ impl Indicator for ChartPatterns {
                             crate::drawings::DrawingToolType::TrendLine,
                         );
                         drawing.completed = true;
+                        drawing.stroke_width = 1.0;
                         drawing.color = color.to_srgba_unmultiplied();
                         if !confirmed {
                             drawing.line_style = crate::model::LineStyle::Dashed;
@@ -1134,6 +1137,11 @@ impl Indicator for ChartPatterns {
     #[cfg(feature = "drawings")]
     fn drawings(&self) -> &[crate::drawings::Drawing] {
         &self.drawings
+    }
+
+    #[cfg(feature = "drawings")]
+    fn drawings_use_plot_style(&self) -> bool {
+        false
     }
 
     fn colors(&self) -> Vec<Color32> {
