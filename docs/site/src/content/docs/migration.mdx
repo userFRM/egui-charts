@@ -46,7 +46,9 @@ The application supplies any study language and its compiler.
 
 ## 2. Replace history and update individual bars
 
-Keep constructing a chart with `Chart::new(BarData::from_bars(bars))`, and keep the
+Keep constructing a chart with
+[`Chart::new(BarData::from_bars(bars))`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.new),
+and keep the
 instance between frames. Replace `update_data` and `data` with the main series API.
 
 **0.2.0:**
@@ -93,8 +95,8 @@ or browser task. On native targets a feed must be `Send + Sync`.
 
 | 0.2.0 | Main |
 | --- | --- |
-| `DataSource::fetch_historical` returning `Result<Vec<Bar>, DataSourceError>` | `Datafeed::history(request, reply)`, answering `Reply<HistoryPage>` once |
-| `HistoricalDataRequest::end_ts_millis`, `limit` | `HistoryRequest::before`, `since`, `count`, using UTC timestamps |
+| `DataSource::fetch_historical` returning `Result<Vec<Bar>, DataSourceError>` | [`Datafeed::history(request, reply)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#tymethod.history), answering `Reply<HistoryPage>` once |
+| `HistoricalDataRequest::end_ts_millis`, `limit` | [`HistoryRequest::before`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.HistoryRequest.html#structfield.before), `since`, `count`, using UTC timestamps |
 | `DataSource::poll` / `DataUpdate` | `subscribe` receives a `Subscription`; push bars or trades into its `sink` |
 | `Box<dyn DataSource>` and `with_data_src` | `Arc<dyn Datafeed>` and `with_feed` |
 | `DataSource::search_symbols`, marks | Separate `services::SymbolSearch` and `services::Marks` services |
@@ -133,9 +135,12 @@ assert_eq!(chart.symbol(), "SAMPLE");
 Respect both bounds: `since` is inclusive, `before` exclusive, and `None` for
 `before` requests the latest bars. Return the newest `count` bars in that range.
 Set `end_of_history` only when no earlier history remains. A feed that pages by
-time windows uses `HistoryPage::with_continue_before` to cross empty windows.
-For live updates, retain the supplied sink and stop when `Sink::is_active` is
-false; implement `unsubscribe` for backend cleanup. See
+time windows uses
+[`HistoryPage::with_continue_before`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.HistoryPage.html#method.with_continue_before)
+to cross empty windows.
+For live updates, retain the supplied sink and stop when
+[`Sink::is_active`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html#method.is_active)
+is false; implement `unsubscribe` for backend cleanup. See
 [historical and streaming data](data.mdx) and the
 [network feed example](https://github.com/userFRM/egui-charts/blob/main/examples/network_feed.rs).
 The host continues to own credentials, connections and market data.
@@ -147,7 +152,8 @@ their names. `RateLimited` carries `retry_after: Option<Duration>`.
 
 ## 4. Let the chart own studies, drawings and updates
 
-`ChartBuilder::build` now returns a `Chart`, replacing `TradingChart`. Remove
+[`ChartBuilder::build`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartBuilder.html#method.build)
+now returns a `Chart`, replacing `TradingChart`. Remove
 `tc.update()`; [`Chart::show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show)
 applies feed updates. Replace `tc.chart` with the chart itself. For the lower-level
 widget, move externally owned studies and drawings onto the chart:
@@ -183,7 +189,8 @@ chart.remove_series(study);
 Use [`drawings_mut`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.drawings_mut)
 for chart-owned drawing edits. Replace study indices and
 `ChartElementId::{OverlayIndicator, PaneIndicator}` with `SeriesId` and
-`ChartElementId::Indicator(id)`. Drop host `calculate_all` calls after bar updates;
+[`ChartElementId::Indicator(id)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.ChartElementId.html#variant.Indicator).
+Drop host `calculate_all` calls after bar updates;
 the chart schedules study calculations. Values may be unavailable until a later
 frame. If an export needs results immediately, calculate a clone of the study
 over `chart.bars(SeriesId::MAIN)`.
@@ -231,7 +238,8 @@ chart.set_timeframe(timeframe);
 assert_eq!(timeframe.duration_ms(), 45_000);
 ```
 
-`Timeframe::Custom(45)` now takes `NonZeroU64`; parsing a positive label avoids
+[`Timeframe::Custom(45)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.Timeframe.html#variant.Custom)
+now takes `NonZeroU64`; parsing a positive label avoids
 manual construction. Use `duration_ms()` or `duration()` instead of the removed
 seconds helpers, which lost subsecond precision. See [scales](scales.mdx).
 
