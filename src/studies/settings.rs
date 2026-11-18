@@ -275,14 +275,16 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
         let mut middle = levels[2];
         middle.visible = false;
         settings.levels.push(middle);
-    } else if matches!(study.name(), "KST" | "CMF" | "Force Index")
-        && settings.levels.is_empty()
+    } else if matches!(
+        study.name(),
+        "KST" | "CMF" | "Force Index" | "Advance/Decline Ratio (Bars)"
+    ) && settings.levels.is_empty()
         && levels.len() == 1
     {
-        // Saved before it had a zero guide, the study keeps drawing none until the guide is shown.
-        let mut zero = levels[0];
-        zero.visible = false;
-        settings.levels.push(zero);
+        // Saved before it had a guide, the study keeps drawing none until the guide is shown.
+        let mut guide = levels[0];
+        guide.visible = false;
+        settings.levels.push(guide);
     } else if settings.levels.len() != levels.len()
         && former_guides(study, settings.levels.len()).is_none()
     {
@@ -434,7 +436,8 @@ pub struct StudySettings {
     /// [`StudyPane::levels`](super::StudyPane::levels). Settings saved before levels were
     /// editable, and settings with another number of levels, take the study's own levels and fill.
     /// Only the guide declared since is added, hidden, to a Stochastic saved with two levels or a
-    /// Know Sure Thing, Chaikin Money Flow or Force Index saved with none. A Connors RSI or a
+    /// Know Sure Thing, Chaikin Money Flow, Force Index or Advance/Decline Ratio (Bars) saved
+    /// with none. A Connors RSI or a
     /// Correlation Coefficient with three levels keeps the guides it opened with before: 70, 50
     /// and 30 with the band between 70 and 30, or 1, -1 and 0.
     #[serde(default)]
@@ -2787,6 +2790,33 @@ mod tests {
             .unwrap();
         assert_eq!(again.settings().levels, shown.levels);
         assert_eq!(again.pane().levels[0].1, palette::GRAY);
+        // A new ratio has an equality guide; this template was saved before it had one.
+        let ratio =
+            ConfiguredStudy::new(Box::new(crate::studies::AdvanceDeclineRatioBars::default()));
+        assert_eq!(values(&ratio), [1.0]);
+        assert_eq!(ratio.settings().levels, [zero]);
+        let saved = r#"{"name":"Advance/Decline Ratio (Bars)","inputs":[["period",{"Length":9}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.AdvanceDeclineRatioBars.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let template = serde_json::from_str::<crate::studies::StudyTemplate>(saved).unwrap();
+        let mut older = template.create().unwrap();
+        let mut expected = template.settings.clone();
+        expected.levels.push(LevelStyle {
+            visible: false,
+            ..zero
+        });
+        assert_eq!(older.settings(), expected);
+        assert_eq!(older.pane().levels[0].1, Color32::TRANSPARENT);
+        let mut edited = older.settings();
+        edited.levels[0].value = Some(2.0);
+        edited.levels[0].color = palette::GREEN;
+        edited.levels[0].pattern = LineStyle::Dotted;
+        edited.levels[0].width = 2.0;
+        edited.levels[0].visible = true;
+        older.apply_settings(&[], edited.clone()).unwrap();
+        let again = crate::studies::StudyTemplate::from_study(older.as_ref())
+            .create()
+            .unwrap();
+        assert_eq!(again.settings(), edited);
+        assert_eq!(again.pane().levels, [(2.0, palette::GREEN, "Equality")]);
         let mut adx = ConfiguredStudy::new(Box::new(AdxBreakout::default()));
         let settings = adx.settings();
         adx.apply_settings(&[("threshold".into(), InputValue::Length(25))], settings)
