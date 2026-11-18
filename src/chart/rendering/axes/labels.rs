@@ -716,7 +716,7 @@ mod tests {
                             && text.pos.x < plot.right()
                             && text.pos.y > plot.top() + 50.0
                     )),
-                    "tooltip close"
+                    "tooltip close {kind:?} {separator:?}"
                 );
                 assert!(
                 hovered.iter().any(|shape| matches!(shape,
@@ -1103,7 +1103,9 @@ mod tests {
             let mut instrument = Instrument::new("SAMPLE").with_tick_size(tick);
             instrument.price_decimals = explicit;
             chart.set_instrument(Some(instrument));
-            chart.price_scale_mut().set_price_precision(chosen);
+            if chosen.is_some() {
+                chart.price_scale_mut().set_price_precision(chosen);
+            }
             frame(&ctx, &mut chart, 0.0, vec![]);
             let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
             let text: Vec<_> = painted
