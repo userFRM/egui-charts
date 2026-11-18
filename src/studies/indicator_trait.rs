@@ -777,11 +777,22 @@ pub trait Indicator: Send {
     /// drawing takes plot 0's colour, width, pattern and visibility, and plot 0 is painted and
     /// selected as these drawings instead of as its values, which still scale the study and
     /// fill its readouts. When `false`, each drawing keeps its own style and shows while the
-    /// study does, and plot 0 is painted like the other plots. Only a study with drawings is
-    /// affected.
+    /// study does, unless [`drawing_plot`](Self::drawing_plot) names a plot for it, and plot 0
+    /// is painted like the other plots. Only a study with drawings is affected.
     #[cfg(feature = "drawings")]
     fn drawings_use_plot_style(&self) -> bool {
         true
+    }
+
+    /// The plot whose colour, width, pattern and visibility drawing `index` of
+    /// [`drawings`](Self::drawings) takes while
+    /// [`drawings_use_plot_style`](Self::drawings_use_plot_style) is `false`, so hiding that
+    /// plot hides the drawing. `None`, the default, keeps the drawing's own style and shows it
+    /// while the study does.
+    #[cfg(feature = "drawings")]
+    fn drawing_plot(&self, index: usize) -> Option<usize> {
+        let _ = index;
+        None
     }
 
     /// Market Profile settings of a study whose session profiles the chart builds with
