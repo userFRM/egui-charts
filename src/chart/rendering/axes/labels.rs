@@ -687,6 +687,11 @@ mod tests {
                 #[cfg(feature = "studies")]
                 {
                     let study = chart.add_indicator(Box::new(crate::studies::SMA::new(3)));
+                    // The legend's value of the study would also read as the tooltip's row.
+                    let mut settings = chart.indicator_mut(study).unwrap().settings();
+                    settings.show_legend_values = false;
+                    let sma = chart.indicator_mut(study).unwrap();
+                    sma.apply_settings(&[], settings).unwrap();
                     if _study_host {
                         assert!(chart.set_indicator_formatter(
                             study,

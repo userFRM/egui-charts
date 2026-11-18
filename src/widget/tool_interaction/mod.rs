@@ -663,11 +663,14 @@ mod tests {
             chart.drawings_mut().drawings.push(drawing);
         }
         chart.drawings_mut().select(5);
+        // Only texts left of the price axes, whose tick labels can read as a drawing's price.
         let texts = |chart: &mut crate::Chart, time| {
-            shapes(&ctx, chart, time, vec![])
+            let painted = shapes(&ctx, chart, time, vec![]);
+            let right = chart.get_rendered_price_rect().right();
+            painted
                 .into_iter()
                 .filter_map(|shape| match shape {
-                    Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    Shape::Text(text) if text.pos.x < right => Some(text.galley.text().to_owned()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
