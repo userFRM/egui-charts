@@ -306,10 +306,11 @@ impl Chart {
     /// has no values until it is recomputed. After a bar limit or
     /// [`remove_oldest_bars`](Self::remove_oldest_bars) evicts the oldest bars, it keeps its
     /// values on the bars that remain until its next full recompute, with none for the bars added
-    /// since, unless it draws candles, zones, markers, labels, projections, provisional segments
-    /// or drawings; so it does when its order-flow input drops its oldest bars, or when live bars
-    /// change only the last bar of a history it reads. On price-based types these remain the
-    /// source-bar results; [`Self::study_values_at`] returns the displayed element results.
+    /// since, unless it draws candles, zones, markers, labels, price segments, projections,
+    /// provisional segments or drawings; so it does when its order-flow input drops its oldest
+    /// bars, or when live bars change only the last bar of a history it reads. On price-based
+    /// types these remain the source-bar results; [`Self::study_values_at`] returns the displayed
+    /// element results.
     pub fn indicators(&self) -> impl Iterator<Item = (SeriesId, &dyn Indicator)> {
         let studies = self.studies.indicators().iter().map(|study| study.as_ref());
         self.study_ids.iter().copied().zip(studies)

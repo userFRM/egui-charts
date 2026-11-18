@@ -1,7 +1,9 @@
 //! Style tab - color, line width, line style.
 
 use crate::drawings::glyphs::GLYPHS;
-use crate::drawings::{ArrowStyle, Drawing, DrawingToolType, FontWeight, LineMeasurementPosition};
+use crate::drawings::{
+    ArrowStyle, Drawing, DrawingToolType, FontWeight, GhostFeedConfig, LineMeasurementPosition,
+};
 use crate::localization as l10n;
 use crate::model::LineStyle;
 use egui::{Color32, Role, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo};
@@ -305,6 +307,14 @@ impl StyleTab {
                         ui.checkbox(value, l10n::text(ui.ctx(), label));
                         ui.end_row();
                     }
+                }
+                if settings.tool_type == DrawingToolType::GhostFeed {
+                    ghost_feed_rows(
+                        ui,
+                        &mut settings.ghost_feed,
+                        [&mut *color_picker, &mut *fill_picker, &mut *glyph_picker],
+                        badge_pickers,
+                    );
                 }
                 if settings.tool_type.supports_line_ends() {
                     for (label, style) in [
@@ -621,6 +631,72 @@ fn badge_rows(ui: &mut Ui, props: &mut DrawingProps, pickers: &mut [ColorPickerS
         }
     });
     ui.end_row();
+}
+
+/// The ghost feed's candle rows: the body colours, the borders and the wick, each with a switch,
+/// then the transparency. A ghost feed shows no colour, fill or badge rows, so its five swatches
+/// use those rows' pickers. A palette colour keeps the opacity in use; the custom editor sets it.
+fn ghost_feed_rows(
+    ui: &mut Ui,
+    feed: &mut Option<GhostFeedConfig>,
+    [body_up, body_down, wick]: [&mut ColorPickerState; 3],
+    [border_up, border_down, _]: &mut [ColorPickerState; 3],
+) {
+    let mut config = feed.unwrap_or_default();
+    let original = config;
+    let swatch = |ui: &mut Ui, picker: &mut ColorPickerState, color: &mut [u8; 4], id: &str| {
+        let [r, g, b, a] = *color;
+        let shown = Color32::from_rgba_unmultiplied(r, g, b, a);
+        if let Some(picked) = color_swatch(ui, picker, shown, id) {
+            *color = keep_opacity(picked, shown, picker.custom_mode).to_srgba_unmultiplied();
+        }
+    };
+    ui.label(l10n::text(ui.ctx(), "Body"));
+    ui.horizontal(|ui| {
+        swatch(ui, body_up, &mut config.body_up, "ghost_feed_body_up");
+        swatch(ui, body_down, &mut config.body_down, "ghost_feed_body_down");
+    });
+    ui.end_row();
+    let label = ui.label(l10n::text(ui.ctx(), "Borders"));
+    ui.horizontal(|ui| {
+        ui.checkbox(
+            &mut config.show_border,
+            l10n::text(ui.ctx(), "Show borders"),
+        )
+        .labelled_by(label.id);
+        if config.show_border {
+            swatch(ui, border_up, &mut config.border_up, "ghost_feed_border_up");
+            swatch(
+                ui,
+                border_down,
+                &mut config.border_down,
+                "ghost_feed_border_down",
+            );
+        }
+    });
+    ui.end_row();
+    let label = ui.label(l10n::text(ui.ctx(), "Wick"));
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut config.show_wick, l10n::text(ui.ctx(), "Show wick"))
+            .labelled_by(label.id);
+        if config.show_wick {
+            swatch(ui, wick, &mut config.wick_color, "ghost_feed_wick");
+        }
+    });
+    ui.end_row();
+    let label = ui.label(l10n::text(ui.ctx(), "Transparency"));
+    ui.label_inputs_by(label.id, |ui| {
+        ui.add(
+            egui::DragValue::new(&mut config.transparency)
+                .range(0..=100)
+                .suffix("%"),
+        )
+    });
+    ui.end_row();
+    // Written only when edited, so that an untouched feed keeps `None` and the apply sees no edit.
+    if config != original {
+        *feed = Some(config);
+    }
 }
 
 /// Kit colour swatch for `color`; returns the colour picked this frame.

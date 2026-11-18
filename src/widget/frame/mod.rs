@@ -425,12 +425,14 @@ impl Chart {
     }
 
     /// Pulses at the last price of a line-based chart as its `last_price_animation` asks, and
-    /// keeps repainting while a visible pulse runs.
+    /// keeps repainting while a visible pulse runs. `line_gradient` is the span of a Line chart
+    /// drawn in a gradient.
     fn paint_last_price_pulse(
         &self,
         painter: &egui::Painter,
         price_rect: Rect,
         coords: &ChartMapping,
+        line_gradient: Option<(f32, f32)>,
     ) {
         use crate::model::LastPriceAnimation;
         let styles = &self.chart_type_params.styles;
@@ -447,6 +449,12 @@ impl Chart {
         let price = self
             .main_price_source()
             .compute(last.open, last.high, last.low, last.close);
+        let share = rendering::candles::gradient_share(
+            line_gradient,
+            self.state
+                .time_scale()
+                .idx_to_coord(index, price_rect.min.x, price_rect.width()),
+        );
         let Some(color) = rendering::candles::line_color_at(
             self.chart_type,
             styles,
@@ -455,6 +463,7 @@ impl Chart {
             price_rect,
             price,
             last,
+            share,
         )
         .filter(|_| animation != LastPriceAnimation::Disabled) else {
             return;
@@ -657,7 +666,7 @@ impl Chart {
         #[cfg(not(feature = "drawings"))]
         let drawing_tool_active = false;
         #[cfg(not(feature = "drawings"))]
-        let (is_drawing_interaction, drawing_gesture) = (false, false);
+        let (is_drawing_interaction, drawing_gesture, marking) = (false, false, false);
         #[cfg(feature = "drawings")]
         if self.drawings.selection_area().is_some_and(|area| {
             area.pane
@@ -671,10 +680,30 @@ impl Chart {
         // A Ctrl or Command press on empty space arms a selection area, which only a drag starts.
         #[cfg(feature = "drawings")]
         let box_selection = self.drawings.box_selection_input(ui);
-        // The Magic cursor marks while the button is held, so a drag paints rather than pans.
+        // A mark owns its gesture, so a drag paints rather than pans or moves a drawing.
+        #[cfg(feature = "drawings")]
+        let marking = self.cursor_modes.marks(
+            ui,
+            &response,
+            chart_rect,
+            !eraser_mode
+                && matches!(
+                    self.chart_options.crosshair.style,
+                    crate::config::CrosshairStyle::Demonstration
+                        | crate::config::CrosshairStyle::Magic
+                ),
+            !box_selection
+                && !drawing_tool_active
+                && self.drawings.dragging_handle.is_none()
+                && self.drawings.text_editor.is_none()
+                && self.drawings.curr_drawing.is_none()
+                && !self.zoom_mode_active
+                && !navigation_interaction
+                && !realtime_interaction,
+        );
         #[cfg(feature = "drawings")]
         let drawing_gesture = self.drawings.active_tool.is_some()
-            || self.chart_options.crosshair.style == crate::config::CrosshairStyle::Magic
+            || marking
             || self.drawings.dragging_handle.is_some()
             || self.drawings.text_editor.is_some()
             || self.drawings.curr_drawing.is_some()
@@ -750,19 +779,15 @@ impl Chart {
                 || self.state.data().is_empty(),
         );
         let touch_readout = super::interaction::touch_crosshair(ui, shown.id);
-        if touch_readout.touch_input
-            && self.chart_options.tooltip.enabled
-            && self.chart_options.tooltip.on_long_press
-        {
+        // A touch that draws or erases follows the finger, as a pointer does.
+        let touch_tracking = touch_readout.tracking(&self.chart_options.tooltip)
+            && !is_drawing_interaction
+            && !eraser_mode;
+        if touch_tracking {
             self.host_events.touch_position = Some(None);
         }
         let mut readout_flags = egui::response::Flags::empty();
-        if self.chart_options.tooltip.on_long_press
-            && self.chart_options.tooltip.enabled
-            && touch_readout.touch_input
-            && !is_drawing_interaction
-            && !eraser_mode
-        {
+        if touch_tracking {
             // A contact that activated the readout owns its release as well as its moves.
             readout_flags |= egui::response::Flags::LONG_TOUCHED;
             if touch_readout.owns_gesture {
@@ -1712,6 +1737,15 @@ impl Chart {
                 .and_then(|instrument| instrument.tick_size),
             price_formatter: price_formatter.as_deref(),
         };
+        // The main Line chart's gradient spans the segments of its line in view.
+        let line_gradient = if self.chart_type == ChartType::Line
+            && self.chart_type_params.styles.line_gradient
+        {
+            let (bars, from, _) = render_ctx.with_neighbours();
+            rendering::candles::gradient_span(bars, |at| idx_to_coord(from + at, chart_rect.min.x))
+        } else {
+            None
+        };
 
         let render_params = rendering::ChartTypeParams::new(
             rendering::BarDimensions::new(bar_width, self.config.wick_width),
@@ -2383,7 +2417,7 @@ impl Chart {
                         |index, min_x| merged_x(volume, index, min_x),
                     );
                 }
-                self.paint_last_price_pulse(&clipped_painter, price_rect, &coords);
+                self.paint_last_price_pulse(&clipped_painter, price_rect, &coords, line_gradient);
             }
         };
         let paint_unhovered = |id: &super::SeriesId| {
@@ -2434,14 +2468,22 @@ impl Chart {
         for study in studies
             .indicators()
             .iter()
-            .filter(|study| self.shows_study(study.as_ref()) && study.labels_on_price())
+            .filter(|study| self.shows_study(study.as_ref()))
         {
-            crate::chart::indicators::plots::paint_labels(
+            crate::chart::indicators::plots::paint_price_segments(
                 &clipped_painter,
                 study.as_ref(),
                 &price_map,
                 &coords,
             );
+            if study.labels_on_price() {
+                crate::chart::indicators::plots::paint_labels(
+                    &clipped_painter,
+                    study.as_ref(),
+                    &price_map,
+                    &coords,
+                );
+            }
         }
         self.paint_signals(ui, &coords);
         let target_lines = self
@@ -2467,11 +2509,11 @@ impl Chart {
         // study's pane. Otherwise overlay indicators take priority over the
         // series beneath them; an empty-area click clears the selection. Clicks
         // in a study's pane are resolved where the panes are rendered, outside
-        // this rect. As there, a click with the eraser or a drawing tool keeps
-        // the selection.
+        // this rect. A mark, or a click with the eraser or a drawing tool, keeps the selection.
         if response.clicked()
             && !drawing_tool_active
             && !eraser_mode
+            && !marking
             && let Some(click_pos) = response.interact_pointer_pos()
         {
             #[cfg(feature = "drawings")]
@@ -2662,24 +2704,30 @@ impl Chart {
                 }),
         );
 
+        // The close of the last bar with a value before the trading date of `time`.
+        let previous_session_close = |time| {
+            let bars = &self.state.data().bars;
+            let date = exchange_session.trading_date(time);
+            let index = bars
+                .partition_point(|bar| exchange_session.trading_date(bar.time) < date)
+                .checked_sub(1)?;
+            crate::model::last_with_value(&bars[..=index]).map(|bar| bar.close)
+        };
         // The previous session's close and the last close, for the previous close line and the
         // legend's day change.
         let session_closes = (self.config.show_symbol_prev_close
             || self.config.show_prev_close_line
             || self.config.show_last_day_change)
             .then(|| {
-                let bars = &self.state.data().bars;
-                let last = crate::model::last_with_value(bars)?;
-                let index = bars
-                    .partition_point(|bar| {
-                        exchange_session.trading_date(bar.time)
-                            < exchange_session.trading_date(last.time)
-                    })
-                    .checked_sub(1)?;
-                crate::model::last_with_value(&bars[..=index])
-                    .map(|previous| (previous.close, last.close))
+                let last = crate::model::last_with_value(&self.state.data().bars)?;
+                previous_session_close(last.time).map(|previous| (previous, last.close))
             })
             .flatten();
+        // The previous session's close and the tagged close, for the change on the last price tag.
+        let tag_change = original_last
+            .filter(|_| self.config.show_symbol_last_val && self.config.show_symbol_last_change)
+            .and_then(|bar| Some((previous_session_close(bar.time)?, bar.close)))
+            .filter(|(reference, close)| (close - reference).is_finite());
         if self.main_series_visible
             && (self.config.show_symbol_prev_close || self.config.show_prev_close_line)
             && let Some((previous_close, _)) = session_closes
@@ -2775,6 +2823,25 @@ impl Chart {
                 ui.ctx()
                     .request_repaint_after(std::time::Duration::from_nanos(1_000_000_000 - nanos));
             }
+            let change = tag_change.map(|(reference, close)| {
+                let precision = self
+                    .readout_price_decimals()
+                    .map_or_else(|| crate::scales::price_decimals(close), usize::from);
+                let formatter = self.series_price_formatter(super::SeriesId::MAIN);
+                let (_, absolute, percent) = rendering::price_change_text(
+                    &self.value_formatters(formatter.as_deref()),
+                    price_map.thousands_sep(),
+                    precision,
+                    reference,
+                    close,
+                );
+                format!("{absolute} ({percent})")
+            });
+            let below = [change.as_deref(), countdown.as_deref()]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("\n");
             let quote_tags = rendering::axes::render_quote_tags_with_countdown(
                 &painter,
                 price_rect,
@@ -2798,7 +2865,7 @@ impl Chart {
                     )
                 }),
                 axis_edge,
-                countdown.as_deref(),
+                (!below.is_empty()).then_some(below.as_str()),
                 self.instrument()
                     .and_then(|instrument| instrument.volume_decimals),
                 if has_currency { 24.0 } else { 0.0 },
@@ -3147,11 +3214,25 @@ impl Chart {
             let mut cursor_modes = std::mem::take(&mut self.cursor_modes);
             let mut drawings = std::mem::take(&mut self.drawings);
 
+            // A mark owns the primary gesture: the drawings see the hover but no press, click or
+            // drag.
+            let mut drawing_response = response.clone();
+            if marking {
+                use egui::response::Flags;
+                drawing_response.flags.remove(
+                    Flags::CLICKED
+                        | Flags::FAKE_PRIMARY_CLICKED
+                        | Flags::DRAG_STARTED
+                        | Flags::DRAGGED
+                        | Flags::DRAG_STOPPED
+                        | Flags::IS_POINTER_BUTTON_DOWN_ON,
+                );
+            }
             self.handle_drawings(
                 ui,
                 &mut drawings,
                 &mut cursor_modes,
-                &response,
+                &drawing_response,
                 price_rect,
                 &price_map,
                 &painter,
@@ -3304,23 +3385,14 @@ impl Chart {
         #[cfg(feature = "drawings")]
         {
             self.cursor_modes.update(ui.input(|input| input.stable_dt));
-            let trail = Some(self.chart_options.crosshair.style)
-                .filter(|style| {
-                    matches!(
-                        style,
-                        crate::config::CrosshairStyle::Demonstration
-                            | crate::config::CrosshairStyle::Magic
-                    )
-                })
-                .filter(|_| !eraser_mode);
             self.cursor_modes.follow(
-                trail,
-                response.hover_pos().filter(|pos| price_rect.contains(*pos)),
-                ui.input(|input| input.pointer.primary_down()),
+                (!eraser_mode).then_some(self.chart_options.crosshair.style),
+                response
+                    .interact_pointer_pos()
+                    .filter(|pos| marking && price_rect.contains(*pos)),
+                marking && ui.input(|input| input.pointer.primary_down()),
             );
-            if trail.is_some() {
-                self.cursor_modes.render(ui, price_rect);
-            }
+            self.cursor_modes.render(ui, price_rect);
         }
         let mut table_rect = price_rect;
         for (id, study) in self
@@ -3338,10 +3410,7 @@ impl Chart {
                         - 8.0;
             }
         }
-        let hover_pos = if touch_readout.touch_input
-            && self.chart_options.tooltip.enabled
-            && self.chart_options.tooltip.on_long_press
-        {
+        let hover_pos = if touch_tracking {
             touch_readout
                 .position
                 .filter(|pos| hover_rect.contains(*pos))
@@ -3363,10 +3432,7 @@ impl Chart {
                     })
                 })
         };
-        if touch_readout.touch_input
-            && self.chart_options.tooltip.enabled
-            && self.chart_options.tooltip.on_long_press
-        {
+        if touch_tracking {
             self.host_events.touch_position = Some(hover_pos);
         }
         let hover_pos = hover_pos.and_then(|pos| self.crosshair_position(pos, &coords));
@@ -3641,9 +3707,10 @@ impl Chart {
                 let mut tooltip_options = self.chart_options.tooltip.clone();
                 tooltip_options.enabled &= self.main_series_visible;
                 tooltip_options.show_volume &= self.chart_type.supports_volume();
+                // A touch readout is a held readout, whatever the mouse uses.
+                tooltip_options.on_long_press |= touch_tracking;
                 let held = touch_readout.position.is_some()
-                    || (!touch_readout.touch_input
-                        && ui.input(|input| input.pointer.primary_down()));
+                    || (!touch_tracking && ui.input(|input| input.pointer.primary_down()));
                 let held_values = tooltip_options.enabled
                     && tooltip_options.on_long_press
                     && held
@@ -3702,6 +3769,14 @@ impl Chart {
                         let value = self
                             .main_price_source()
                             .compute(bar.open, bar.high, bar.low, bar.close);
+                        let share = rendering::candles::gradient_share(
+                            line_gradient,
+                            self.state.time_scale().idx_to_coord(
+                                index,
+                                price_rect.min.x,
+                                price_rect.width(),
+                            ),
+                        );
                         if let Some(color) = rendering::candles::line_color_at(
                             self.chart_type,
                             &self.chart_type_params.styles,
@@ -3710,6 +3785,7 @@ impl Chart {
                             price_rect,
                             value,
                             bar,
+                            share,
                         ) {
                             let point =
                                 Pos2::new(coords.idx_to_x(index), price_map.price_to_y(value));
@@ -4063,13 +4139,27 @@ impl Chart {
             } else {
                 price_axis_rect
             };
-            let (button, choice) =
-                rendering::render_axis_currency(ui, axis, currency, unit, &self.currency_choices);
-            self.measured_axis_width = self.measured_axis_width.max(header_width);
-            if choice.is_some() {
-                self.currency_choice = choice;
+            // A label shown on hover keeps the axis width and the value tags' places, so nothing
+            // moves under the pointer; while hidden, the price ticks under it show.
+            if !self.config.currency_unit_on_hover
+                || ui.rect_contains_pointer(axis)
+                || egui::Popup::is_id_open(ui.ctx(), rendering::axes::currency_menu_id(ui, axis))
+            {
+                let (button, choice) = rendering::render_axis_currency(
+                    ui,
+                    axis,
+                    currency,
+                    unit,
+                    &self.currency_choices,
+                );
+                if choice.is_some() {
+                    self.currency_choice = choice;
+                }
+                tags.push(Some(button.rect));
+            } else {
+                tags[0] = None;
             }
-            tags.push(Some(button.rect));
+            self.measured_axis_width = self.measured_axis_width.max(header_width);
         }
 
         // Draw the axis labels, leaving out those the tags overlap
