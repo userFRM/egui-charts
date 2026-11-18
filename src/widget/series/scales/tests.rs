@@ -5192,8 +5192,7 @@ fn pinned_volume_adds_no_range_where_the_chart_type_hides_volume() {
     let mut failures = Vec::new();
     for (kind, stretched) in [(ChartType::Candles, true), (ChartType::Range, false)] {
         let ctx = egui::Context::default();
-        let mut chart =
-            crate::widget::test_frames::chart(&[100.0], &[100.0, 103.0, 106.0, 109.0]);
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[100.0, 103.0, 106.0, 109.0]);
         chart.set_chart_type(kind);
         frame(&ctx, &mut chart, 0.0, vec![]);
         let id = chart
@@ -5201,15 +5200,16 @@ fn pinned_volume_adds_no_range_where_the_chart_type_hides_volume() {
             .find(|(_, study)| study.is_volume())
             .unwrap()
             .0;
-        assert!(chart.set_indicator_scale(
-            id,
-            crate::studies::StudyScale::Shared(SeriesScale::Right)
-        ));
+        assert!(
+            chart.set_indicator_scale(id, crate::studies::StudyScale::Shared(SeriesScale::Right))
+        );
         let range = |chart: &mut Chart, time: f64| {
             for step in 0..3 {
                 frame(&ctx, chart, time + step as f64, vec![]);
             }
-            let range = chart.pane_price_scale(PaneId::MAIN, SeriesScale::Right).range();
+            let range = chart
+                .pane_price_scale(PaneId::MAIN, SeriesScale::Right)
+                .range();
             (range.min, range.max)
         };
         let pinned = range(&mut chart, 1.0);
