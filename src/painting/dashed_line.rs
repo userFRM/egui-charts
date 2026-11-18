@@ -408,13 +408,14 @@ fn append_dashed_segment(
         (stroke.width, stroke.color)
     };
     let edge = ((across - width * 0.5) * pixels_per_point).round() / pixels_per_point;
-    // Snapping can move a line on the clip's edge wholly outside it, where it paints nothing.
+    // Dots wholly outside the clip paint nothing. Dots starting on its far edge can show, where a
+    // moved layer puts that edge on a pixel centre and renderers round the clip out to take it in.
     let shown = if vertical {
         visible.x_range()
     } else {
         visible.y_range()
     };
-    if edge >= shown.max || edge + width <= shown.min {
+    if edge > shown.max || edge + width <= shown.min {
         return Rect::NOTHING;
     }
     let key = if vertical {
@@ -734,16 +735,17 @@ mod tests {
         }
     }
 
-    /// Dotted lines, such as a pane's grid, paint their kept mesh again while nothing they were
-    /// laid out from changes, and are laid out again after a change of the clip, of any line's
-    /// position, of the pixels per point, of the colour or of the dot pattern.
+    /// A grid's dotted lines paint their kept mesh, under its kept clip, again while nothing they
+    /// were laid out from changes, and are laid out again, mesh and clip, after a change of the
+    /// clip, of any line's position, of the pixels per point, of the colour or of the dot pattern.
     #[test]
     fn kept_dots_follow_clip_lines_scale_colour_and_pattern() {
         let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 100.0));
-        // Quarter-point positions, which one and two pixels per point snap differently.
+        // Quarter-point positions, which one and two pixels per point snap differently, on
+        // parallel lines, so that the dots' clip follows each of them.
         let lines = [
             [Pos2::new(0.25, 10.75), Pos2::new(200.0, 10.75)],
-            [Pos2::new(30.75, 0.25), Pos2::new(30.75, 100.0)],
+            [Pos2::new(0.25, 30.75), Pos2::new(200.0, 30.75)],
         ];
         let moved = |line: usize| {
             let mut moved = lines;
@@ -761,7 +763,7 @@ mod tests {
                     ..Default::default()
                 },
                 |_| {
-                    draw_dashed_segments(
+                    draw_grid_dashes(
                         &Painter::new(ctx.clone(), LayerId::background(), clip),
                         lines.map(|[start, end]| (start, end, 0.0)),
                         Stroke::new(1.0, color),
@@ -770,16 +772,16 @@ mod tests {
                     );
                 },
             );
-            let mesh = output
+            let dots = output
                 .shapes
                 .iter()
                 .find_map(|shape| match &shape.shape {
-                    egui::Shape::Mesh(mesh) => Some(mesh.clone()),
+                    egui::Shape::Mesh(mesh) => Some((mesh.clone(), shape.clip_rect)),
                     _ => None,
                 })
                 .expect("the dots are a mesh");
             output.drop_without_applying_deltas();
-            mesh
+            dots
         };
         for (change, next) in [
             ("nothing", first),
@@ -794,15 +796,15 @@ mod tests {
             ("the pattern", (screen, lines, 1.0, Color32::RED, 7.0)),
         ] {
             let ctx = Context::default();
-            let kept = paint(&ctx, first);
-            let painted = paint(&ctx, next);
+            let (kept, _) = paint(&ctx, first);
+            let (painted, clip) = paint(&ctx, next);
             assert_eq!(
                 Arc::ptr_eq(&kept, &painted),
                 change == "nothing",
                 "kept mesh after a change of {change}"
             );
             // Another thread lays the dots out without kept meshes.
-            let fresh = std::thread::scope(|scope| {
+            let (fresh, fresh_clip) = std::thread::scope(|scope| {
                 scope
                     .spawn(|| paint(&Context::default(), next))
                     .join()
@@ -813,6 +815,7 @@ mod tests {
                 "after a change of {change}"
             );
             assert_eq!(painted.indices, fresh.indices, "after a change of {change}");
+            assert_eq!(clip, fresh_clip, "after a change of {change}");
         }
     }
 
@@ -893,6 +896,43 @@ mod tests {
                 assert!(dots > 0);
                 output.drop_without_applying_deltas();
             }
+        }
+    }
+
+    /// A dotted line starting on the clip's far edge shows in a layer moved by half a pixel, where
+    /// that edge falls on a pixel centre and renderers round the clip out to take it in.
+    #[test]
+    fn dots_on_the_far_clip_edge_show_in_a_moved_layer() {
+        let clip = Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(150.0, 90.0));
+        for vertical in [false, true] {
+            let ctx = Context::default();
+            let output = ctx.run_ui(RawInput::default(), |_| {
+                let layer = TSTransform::from_translation(egui::vec2(0.5, 0.5));
+                ctx.set_transform_layer(LayerId::background(), layer);
+                let line = if vertical {
+                    (Pos2::new(150.0, 10.0), Pos2::new(150.0, 90.0), 0.0)
+                } else {
+                    (Pos2::new(10.0, 90.0), Pos2::new(150.0, 90.0), 0.0)
+                };
+                let painter = Painter::new(ctx.clone(), LayerId::background(), clip);
+                draw_grid_dashes(&painter, [line], Stroke::new(1.0, Color32::RED), 1.0, 3.0);
+            });
+            // At one pixel per point, a renderer shows the pixels whose centres a dot covers,
+            // inside the clip rounded to whole pixels.
+            let axis = usize::from(!vertical);
+            let shown = output.shapes.iter().any(|shape| {
+                let egui::Shape::Mesh(mesh) = &shape.shape else {
+                    return false;
+                };
+                let low = shape.clip_rect.min[axis].round();
+                let high = shape.clip_rect.max[axis].round();
+                mesh.vertices.as_chunks::<4>().0.iter().any(|dot| {
+                    let dot = Rect::from_points(&dot.map(|vertex| vertex.pos));
+                    (dot.max[axis] - 0.5).ceil().min(high) > (dot.min[axis] - 0.5).ceil().max(low)
+                })
+            });
+            output.drop_without_applying_deltas();
+            assert!(shown, "vertical {vertical}");
         }
     }
 
