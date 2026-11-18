@@ -46,6 +46,14 @@ impl std::fmt::Display for TooltipMode {
 }
 
 /// Tooltip configuration options
+///
+/// ```
+/// use egui_charts::config::{TooltipOptions, TouchTrackingExitMode};
+///
+/// let mut options = TooltipOptions::default();
+/// options.touch_long_press = false;
+/// options.touch_exit_mode = TouchTrackingExitMode::OnTouchEnd;
+/// ```
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct TooltipOptions {
