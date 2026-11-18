@@ -35,6 +35,31 @@ impl Chart {
         Some(point)
     }
 
+    /// Gives the drawing manager the indices this chart can date, as saving needs for anchors
+    /// without their restored time. Recomputes only when the bars, interval or zone change.
+    pub(super) fn map_drawing_bars(&mut self) {
+        let timeframe = self.calendar_timeframe();
+        let timezone = self.calendar_timezone();
+        let bars = self.state.shown();
+        let key = (
+            bars.len(),
+            self.state.revision(),
+            bars.first().map(|bar| bar.time),
+            bars.last().map(|bar| bar.time),
+            timeframe,
+            timezone.clone(),
+        );
+        if self.drawings.mapped_key.as_ref() == Some(&key) {
+            return;
+        }
+        self.drawings.mapped_bars = (!bars.is_empty()).then(|| {
+            crate::drawings::validation::mapped_bars(bars.len() - 1, |index| {
+                time_at_with_timeframe(bars, index, timeframe, timezone.as_ref()).is_some()
+            })
+        });
+        self.drawings.mapped_key = Some(key);
+    }
+
     /// Captures edited indices before the bars or the rendered element sequence change.
     pub(super) fn anchor_drawing_points(&mut self) {
         let bars = self.state.shown();

@@ -249,6 +249,9 @@ impl Chart {
                 .request_repaint_after(std::time::Duration::from_secs_f64(wait));
         }
         self.show_elements();
+        // Use this frame's displayed bars, including newly built price-based elements.
+        #[cfg(feature = "drawings")]
+        self.map_drawing_bars();
         // A crosshair set by time follows its bar when bars are evicted or loaded in front.
         if let Some(period) = self.synced_crosshair_period {
             self.set_synced_crosshair_for_series(
