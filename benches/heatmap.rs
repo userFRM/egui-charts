@@ -5,7 +5,8 @@
 //! frame, which applies them. It prints the sampling cadence, the time the sink takes per delta
 //! (the aggregation of the book into depth columns), the frame time with tessellation, the
 //! texture data uploaded per second of market time and the most in one frame, the textures and
-//! the heap the chart holds, and the same with a history filled to all its resolutions.
+//! the heap the chart holds, and the same with a history filled to all its resolutions and on a
+//! logarithmic price scale.
 //!
 //! `HEATMAP_SECONDS` sets the market time simulated (default 60); arguments select scenarios by
 //! name as in `frame_time`. The numbers depend on the machine, so quote it with them.
@@ -25,6 +26,7 @@ use egui_charts::data::{
     Subscription,
 };
 use egui_charts::model::{Bar, Instrument, OrderBook, OrderBookLevel, OrderSide, Tick, Timeframe};
+use egui_charts::scales::PriceScaleMode;
 
 const TICK_SIZE: f64 = 0.25;
 /// Depth deltas a second, each changing a few levels, most of them near the touch.
@@ -80,13 +82,14 @@ fn main() {
         "| scenario | cadence ms | deltas pushed | sink µs per delta | frame p50 ms | frame p95 ms | frame max ms | upload KB/s | upload max KB a frame | texture MB | peak heap MB | retained heap MB | history columns |"
     );
     println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
-    for (name, levels, columns, cadence, warmup) in [
+    for (name, levels, columns, cadence, warmup, scale) in [
         (
             "100 levels, 1 s (defaults)",
             100,
             600,
             TimeDelta::seconds(1),
             0,
+            PriceScaleMode::Normal,
         ),
         (
             "1,000 levels, 50 ms (documented)",
@@ -94,6 +97,7 @@ fn main() {
             240,
             TimeDelta::milliseconds(50),
             0,
+            PriceScaleMode::Normal,
         ),
         (
             "1,000 levels, 50 ms, history filled",
@@ -101,10 +105,19 @@ fn main() {
             240,
             TimeDelta::milliseconds(50),
             3600,
+            PriceScaleMode::Normal,
+        ),
+        (
+            "1,000 levels, 50 ms, logarithmic",
+            1000,
+            240,
+            TimeDelta::milliseconds(50),
+            0,
+            PriceScaleMode::Logarithmic,
         ),
     ] {
         if filters.is_empty() || filters.iter().any(|f| name.contains(f.as_str())) {
-            run(name, levels, columns, cadence, warmup, seconds);
+            run(name, levels, columns, cadence, warmup, seconds, scale);
         }
     }
 }
@@ -172,7 +185,15 @@ fn delta(random: &mut u64, now: DateTime<Utc>, levels: i64) -> OrderBook {
     }
 }
 
-fn run(name: &str, levels: i64, columns: usize, cadence: TimeDelta, warmup: usize, seconds: usize) {
+fn run(
+    name: &str,
+    levels: i64,
+    columns: usize,
+    cadence: TimeDelta,
+    warmup: usize,
+    seconds: usize,
+    scale: PriceScaleMode,
+) {
     let now = Utc::now().with_nanosecond(0).unwrap();
     let feed = Arc::new(Feed {
         sink: Mutex::default(),
@@ -182,6 +203,7 @@ fn run(name: &str, levels: i64, columns: usize, cadence: TimeDelta, warmup: usiz
         .with_symbol("BIG")
         .with_timeframe(Timeframe::Min1)
         .with_feed(feed.clone())
+        .with_right_price_scale(true, scale)
         .build();
     let mut config = DepthHistoryConfig::default();
     config.cadence = cadence;

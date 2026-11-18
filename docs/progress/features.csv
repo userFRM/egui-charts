@@ -464,7 +464,7 @@ Order flow,Order flow,Footprint trade counts and average trade size,verified,lib
 Order flow,Order flow,Heatmap colour scaling and intensity controls,verified,library,src/chart/overlays/liquidity_heatmap.rs;src/widget/feed/mod.rs,2300
 Order flow,Order flow,Heatmap depth source and order filters,incomplete,library,src/data/orders.rs;src/data/depth_history.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs;src/chart/overlays/book_profile.rs,3188;3196
 Order flow,Order flow,Heatmap history retention in memory with manual memory release,incomplete,library,src/data/depth_history.rs;src/widget/feed/mod.rs,
-Order flow,Order flow,Heatmap rendering at scale,incomplete,library,src/chart/overlays/liquidity_heatmap.rs;src/data/depth_history.rs;src/data/depth.rs;benches/heatmap.rs;docs/order-flow.md;benches/regression/mod.rs,3189
+Order flow,Order flow,Heatmap rendering at scale,unverified,library,src/chart/overlays/liquidity_heatmap.rs;src/data/depth_history.rs;src/data/depth.rs;benches/heatmap.rs;docs/order-flow.md;benches/regression/mod.rs,3189
 Order flow,Order flow,Horizontal bid vs ask imbalance,incomplete,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame/mod.rs,
 Order flow,Order flow,Iceberg detection from order-level refills at one price,verified,library,src/services/detectors/icebergs.rs;src/services/detectors/depth.rs;src/services/detectors/mod.rs;src/data/orders.rs;,
 Order flow,Order flow,Imbalance zone tracker and rejector,incomplete,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/widget/frame/mod.rs,232;3157

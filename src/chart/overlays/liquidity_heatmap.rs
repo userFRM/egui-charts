@@ -17,6 +17,10 @@ type Key = (DateTime<Utc>, chrono::TimeDelta);
 const UPPER_CUTOFF_PERCENT: usize = 96;
 /// The relative change of the upper cut-off beyond which the held columns are redrawn.
 const REDRAW_CHANGE: f64 = 0.1;
+/// How far, in points, the price in the middle of a quad may lie from the quad's middle before the
+/// quad is halved. A scale bends one way across a quad, so every row edge inside then lies within
+/// twice this of its price.
+const BEND_TOLERANCE: f32 = 0.5;
 
 /// The colour scale over a dark background, by position on the scale, each stop lighter than the
 /// one before: blue for thin size, then yellow and orange, white at full intensity. Below the
@@ -108,7 +112,9 @@ impl LiquidityHeatmapConfig {
 /// takes that tier's colour over its shading. Empty prices and missing time periods stay
 /// transparent. Old columns release their atlas slots; new or changed columns upload only their
 /// own texels. A change of the default cut-off by more than 10%, and changed backgrounds, tiers or
-/// appearance, upload every held column once. No texture side exceeds the backend's limit.
+/// appearance, upload every held column once. No texture side exceeds the backend's limit. Each
+/// tile of a column draws as one quad, halved into a few on a logarithmic price scale where the
+/// scale bends by more than half a point across it, so every row stays within a point of its price.
 #[derive(Default)]
 pub struct LiquidityHeatmap {
     /// Cell brightness and size range, applied on the next render. Unchanged effective settings
@@ -316,6 +322,9 @@ impl LiquidityHeatmap {
             }
             path.clear();
         };
+        let log = mapping.price.transform().mode == crate::scales::PriceScaleMode::Logarithmic;
+        // Runs of a tile's texel rows still to draw, reused across tiles.
+        let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
         for column in self.columns.values() {
             let Some(end) = column.source.time.checked_add_signed(column.source.span) else {
                 continue;
@@ -327,21 +336,24 @@ impl LiquidityHeatmap {
                 continue;
             }
             for &row in &column.rows {
-                let nonlinear =
-                    mapping.price.transform().mode == crate::scales::PriceScaleMode::Logarithmic;
                 let mut mesh =
                     egui::Mesh::with_texture(self.tiles[&(column.slot / size, row)].id());
-                // A logarithmic price scale needs one mapped edge per price row; a linear
-                // scale can draw the whole tile with one quad.
-                let stride = if nonlinear { 1 } else { size };
-                for offset in (0..size).step_by(stride) {
-                    let lo = (row as f64 * size as f64 + offset as f64) * step - half_tick;
-                    let hi = lo + stride as f64 * step;
-                    if nonlinear && lo <= 0.0 {
+                // The lower edge of texel row `offset`, half a tick below its first tick.
+                let edge =
+                    |offset: usize| (row as f64 * size as f64 + offset as f64) * step - half_tick;
+                let u0 = (column.slot % size) as f32 / size as f32;
+                let u1 = (column.slot % size + 1) as f32 / size as f32;
+                // A quad spaces its rows evenly, so a run is halved while the scale bends more
+                // than BEND_TOLERANCE across it: one quad a tile on a linear scale, a few on a
+                // logarithmic one, which also leaves out the rows from price zero down.
+                runs.push(0..size);
+                while let Some(run) = runs.pop() {
+                    let (low, high) = (edge(run.start), edge(run.end));
+                    let positive = !log || low > 0.0;
+                    if !positive && run.len() == 1 {
                         continue;
                     }
-                    let y0 = mapping.price_to_y(lo);
-                    let y1 = mapping.price_to_y(hi);
+                    let (y0, y1) = (mapping.price_to_y(low), mapping.price_to_y(high));
                     if !y0.is_finite() || !y1.is_finite() {
                         continue;
                     }
@@ -349,11 +361,18 @@ impl LiquidityHeatmap {
                     if !rect.intersects(mapping.rect) {
                         continue;
                     }
-                    let u0 = (column.slot % size) as f32 / size as f32;
-                    let u1 = (column.slot % size + 1) as f32 / size as f32;
-                    let low = offset as f32 / size as f32;
-                    let high = (offset + stride) as f32 / size as f32;
-                    let (v0, v1) = if y0 > y1 { (high, low) } else { (low, high) };
+                    if run.len() > 1
+                        && (!positive
+                            || (mapping.price_to_y((low + high) * 0.5) - (y0 + y1) * 0.5).abs()
+                                > BEND_TOLERANCE)
+                    {
+                        let middle = run.start + run.len() / 2;
+                        runs.extend([run.start..middle, middle..run.end]);
+                        continue;
+                    }
+                    let (first, end) =
+                        (run.start as f32 / size as f32, run.end as f32 / size as f32);
+                    let (v0, v1) = if y0 > y1 { (end, first) } else { (first, end) };
                     mesh.add_rect_with_uv(
                         rect,
                         Rect::from_min_max(pos2(u0, v0), pos2(u1, v1)),
@@ -477,7 +496,9 @@ mod tests {
     use crate::theme::Theme;
     use chrono::TimeDelta;
 
-    fn mapping() -> ChartMapping {
+    /// A 100 by 100 point pane from `low` at the bottom to `high` at the top.
+    fn mapping_on(mode: crate::scales::PriceScaleMode, low: f64, high: f64) -> ChartMapping {
+        let transform = PriceTransform::new(mode, 0.0);
         ChartMapping::new(
             Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 100.0)),
             10.0,
@@ -485,8 +506,8 @@ mod tests {
             10,
             0.0,
             PriceMap::new(
-                PriceTransform::default(),
-                PriceRange::new(95.0, 105.0),
+                transform,
+                PriceRange::new(transform.to_scale(low), transform.to_scale(high)),
                 0.0,
                 100.0,
                 false,
@@ -494,7 +515,10 @@ mod tests {
         )
     }
 
-    /// Draws one frame and returns the column texels it uploaded, with what it painted.
+    fn mapping() -> ChartMapping {
+        mapping_on(crate::scales::PriceScaleMode::Normal, 95.0, 105.0)
+    }
+
     fn draw(
         ctx: &egui::Context,
         heatmap: &mut LiquidityHeatmap,
@@ -502,8 +526,19 @@ mod tests {
         step: f64,
         view: &OrderBookView,
     ) -> (Vec<egui::epaint::ImageDelta>, Vec<egui::Shape>) {
+        draw_on(ctx, heatmap, history, step, view, &mapping())
+    }
+
+    /// Draws one frame and returns the column texels it uploaded, with what it painted.
+    fn draw_on(
+        ctx: &egui::Context,
+        heatmap: &mut LiquidityHeatmap,
+        history: &DepthHistory,
+        step: f64,
+        view: &OrderBookView,
+        mapping: &ChartMapping,
+    ) -> (Vec<egui::epaint::ImageDelta>, Vec<egui::Shape>) {
         let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
-        let mapping = mapping();
         let mut output = ctx.run_ui(
             egui::RawInput {
                 max_texture_side: Some(1024),
@@ -512,7 +547,7 @@ mod tests {
             |ui| {
                 heatmap.render(
                     ui.painter(),
-                    &mapping,
+                    mapping,
                     history,
                     step,
                     |t| Some((t - start).num_seconds() as f32 * 10.0),
@@ -916,6 +951,96 @@ mod tests {
                 "{ticks_per_row} ticks per row"
             );
         }
+    }
+
+    /// Guards the cost and the rows of a logarithmic price scale: across the documented budget's
+    /// book the scale is nearly straight, so a tile draws as one quad, as on a linear scale; where
+    /// it bends, a tile draws as a few quads that keep every row edge within a point of its price
+    /// and leave no row out.
+    #[test]
+    fn logarithmic_scales_draw_few_quads_with_rows_on_their_prices() {
+        use crate::scales::PriceScaleMode::{Logarithmic, Normal};
+        let ctx = egui::Context::default();
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let held = |bids: Vec<(i64, f64)>, asks: Vec<(i64, f64)>| {
+            let mut history = DepthHistory::new(Default::default()).unwrap();
+            history.push(DepthColumn {
+                time: start,
+                span: TimeDelta::seconds(1),
+                bids,
+                asks,
+                ..Default::default()
+            });
+            history
+        };
+        // Each tile's mesh with the tile's index.
+        let meshes = |history: &DepthHistory, step: f64, mapping: &ChartMapping| {
+            let mut heatmap = LiquidityHeatmap::default();
+            let (_, shapes) = draw_on(
+                &ctx,
+                &mut heatmap,
+                history,
+                step,
+                &OrderBookView::default(),
+                mapping,
+            );
+            shapes
+                .into_iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Mesh(mesh) => heatmap
+                        .tiles
+                        .iter()
+                        .find(|(_, tile)| tile.id() == mesh.texture_id)
+                        .map(|(&(_, tile), _)| (tile, mesh)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        // The documented budget's book: 1,000 rows a side of a 0.25 tick around 5,000, in the
+        // nine tiles 74 to 82 of 256 rows, all on a pane from 4,740 to 5,260.
+        let book = held(
+            (19_000..20_000).rev().map(|row| (row, 5.0)).collect(),
+            (20_001..=21_000).map(|row| (row, 5.0)).collect(),
+        );
+        let vertices = |mode| {
+            meshes(&book, 0.25, &mapping_on(mode, 4740.0, 5260.0))
+                .iter()
+                .map(|(_, mesh)| mesh.vertices.len())
+                .sum::<usize>()
+        };
+        let linear = vertices(Normal);
+        assert_eq!(linear, 9 * 4);
+        let logarithmic = vertices(Logarithmic);
+        assert!(
+            logarithmic <= 2 * linear,
+            "{logarithmic} vertices against {linear}"
+        );
+
+        // Rows 1 to 999 of a tick of 1 on a scale from 1 to 1,000, which bends by tens of points
+        // across the lowest tile.
+        let wide = held((1..1000).rev().map(|row| (row, 5.0)).collect(), Vec::new());
+        let mapping = mapping_on(Logarithmic, 1.0, 1000.0);
+        let mut drawn = BTreeSet::new();
+        for (tile, mesh) in meshes(&wide, 1.0, &mapping) {
+            for quad in mesh.vertices.chunks(4) {
+                // The left top and left bottom corners and the texel rows between them.
+                let (top, bottom) = (quad[0], quad[2]);
+                let texel = |v: f32| (v * 256.0).round() as i64;
+                let (first, end) = (
+                    texel(top.uv.y.min(bottom.uv.y)),
+                    texel(top.uv.y.max(bottom.uv.y)),
+                );
+                drawn.extend((first..end).map(|offset| tile * 256 + offset));
+                for offset in first + 1..end {
+                    let along = (offset as f32 / 256.0 - top.uv.y) / (bottom.uv.y - top.uv.y);
+                    let y = top.pos.y + along * (bottom.pos.y - top.pos.y);
+                    // The lower edge of the row, half a tick of 1 below its price.
+                    let price = (tile * 256 + offset) as f64 - 0.5;
+                    assert!((y - mapping.price_to_y(price)).abs() <= 1.0, "{price}: {y}");
+                }
+            }
+        }
+        assert!((1..1000).all(|row| drawn.contains(&row)));
     }
 
     /// Guards the marks: a cell takes the colour of the tier its largest recorded order reaches,
