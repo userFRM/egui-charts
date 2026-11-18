@@ -5,7 +5,7 @@ use super::{FeedLink, MIN_SCROLL_BACK_PAGE, Request};
 use crate::data::{FeedError, FootprintPage, FootprintRequest, FootprintState, StudyDataRequest};
 use crate::model::ChartType;
 use crate::widget::Chart;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 
 impl Chart {
     pub(super) fn scroll_footprints(&mut self, link: &mut FeedLink) {
@@ -78,11 +78,10 @@ impl Chart {
             let (Some(from), Some(through)) = (from, through) else {
                 return;
             };
-            let before = link
-                .clock
-                .next_open(through)
-                .unwrap_or(cutoff)
-                .min(link.clock.bar_open(cutoff));
+            // The bar the cutoff joins holds the live executions.
+            let boundary = link.clock.instant_open(cutoff);
+            let before =
+                (link.clock.next_open(through)).map_or(boundary, |next| next.min(boundary));
             let Some((from, before)) = link.footprint_gap(link.clock.bar_open(from), before) else {
                 return;
             };
@@ -154,10 +153,16 @@ impl Chart {
         if page.bars.len() > request.count {
             return Err(invalid("footprint page exceeds the requested bar count"));
         }
+        // The bar of the last execution the page can hold: on a daily or longer clock with a
+        // session a bar opening after the cutoff can hold executions before it.
+        let last = (page
+            .complete_before
+            .checked_sub_signed(TimeDelta::nanoseconds(1)))
+        .map(|last| request.clock.instant_open(last));
         if page.bars.iter().any(|bar| {
             request.before.is_some_and(|before| bar.time >= before)
                 || request.since.is_some_and(|since| bar.time < since)
-                || bar.time >= page.complete_before
+                || last.is_none_or(|last| bar.time > last)
         }) {
             return Err(invalid(
                 "footprint page lies outside its requested range or execution cutoff",
@@ -180,7 +185,8 @@ impl Chart {
             return Ok(());
         };
         let before = page.complete_before;
-        if from >= before
+        // Bars were checked against the cutoff above: a trading date's bar can open after it.
+        if (empty && from >= before)
             || request.since.is_some_and(|since| from < since)
             || request.before.is_some_and(|end| before != end)
             || link.clock.bar_open(from) != from
@@ -194,7 +200,7 @@ impl Chart {
             .as_ref()
             .and_then(|flow| flow.live.prepared_before());
         if prepared.is_some_and(|cutoff| {
-            link.clock.bar_open(before) != before || before > link.clock.bar_open(cutoff)
+            link.clock.bar_open(before) != before || before > link.clock.instant_open(cutoff)
         }) {
             return Err(invalid(
                 "internal footprint fills must be aligned and precede the live boundary",
@@ -221,8 +227,10 @@ impl Chart {
             incoming.live.rebuild_prepared(&link.trades);
             link.footprint = Some(incoming);
         }
-        if !available {
-            link.suppress_footprint_span(from, before);
+        // Requests name bars, and the initial page's cutoff lies in the bar the trades continue.
+        let end = prepared.map_or_else(|| link.clock.instant_open(before), |_| before);
+        if !available && from < end {
+            link.suppress_footprint_span(from, end);
         }
         let held = link.footprint.as_ref().unwrap();
         for (input, _) in &link.study_inputs {

@@ -342,6 +342,31 @@ impl BarClock {
         start
     }
 
+    /// First instant that joins the bar opening at `open` or a later one. On a daily or longer
+    /// clock with a session it is the open of the bar's first trading date, which can come before
+    /// `open`, as an evening session's does, or after it, as on UTC days for a New York session,
+    /// whose midnight still belongs to the post-market of the date before; for a bar without
+    /// trading, such as a weekend's, it is that of the next bar with trading. Elsewhere, and when
+    /// no window opens within a year, `open`.
+    pub(crate) fn bar_start(&self, open: DateTime<Utc>) -> DateTime<Utc> {
+        let Some(session) = self.date_session() else {
+            return open;
+        };
+        if self.instant_open(open) == open {
+            return self.instant_start(open);
+        }
+        // The bar's time lies in an earlier date: step from window to window into the bar.
+        let mut at = self.open_at_or_after(open);
+        while let Some(t) = at
+            && self.instant_open(t) < open
+        {
+            at = session
+                .session_close(t, true)
+                .and_then(|close| self.open_at_or_after(close));
+        }
+        at.map_or(open, |t| self.instant_start(t))
+    }
+
     /// Open of the first bar after the one opening at `open` that a trade inside this clock's
     /// windows can join: that of the first window instant from [`next_open`](Self::next_open)
     /// on, and on a daily or longer clock with a session the bar of the next trading date.
@@ -406,7 +431,7 @@ impl BarClock {
 /// The bar that [`BarClock::instant_open`] gave a recent update, with its clock and the instants
 /// that share the update's trading date, so that a stream of trades, quotes and heartbeats finds
 /// the session once per date rather than once per update.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Placement(Option<(BarClock, Range<DateTime<Utc>>, DateTime<Utc>)>);
 
 impl Placement {
@@ -811,8 +836,12 @@ mod tests {
         for (clock, at, open, start, next) in cases {
             assert_eq!(clock.instant_open(t(at)), t(open), "{at}");
             assert_eq!(clock.instant_start(t(at)), t(start), "{at}");
+            assert_eq!(clock.bar_start(t(open)), t(start), "{at}");
             assert_eq!(clock.next_trading_open(t(open)), Some(t(next)), "{at}");
         }
+        // A bar without trading starts where the next one with trading does.
+        let saturday = day.bar_start(t("2024-01-13T06:00:00Z"));
+        assert_eq!(saturday, t("2024-01-15T23:00:00Z"));
         // Through the feed: Sunday's heartbeat opens Monday's candle, an evening trade Tuesday's.
         let inbox = std::sync::Arc::new(crate::data::inbox::Inbox::default());
         let sink = inbox.subscribe("SAMPLE".into(), day, 100, None);

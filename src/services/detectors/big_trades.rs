@@ -5,7 +5,9 @@ use std::collections::VecDeque;
 use chrono::{DateTime, Utc};
 
 use super::Threshold;
-use crate::model::{BarClock, Direction, OrderSide, Signal, SignalId, SignalShape, Tick};
+use crate::model::{
+    BarClock, Direction, OrderSide, Placement, Signal, SignalId, SignalShape, Tick,
+};
 use crate::scales::{PriceFormatter, VolumeFormatter};
 use crate::services::SignalEvent;
 
@@ -88,6 +90,8 @@ pub(super) struct BigTrades {
     clock: Option<BarClock>,
     /// The forming bar.
     bar: Option<Bar>,
+    /// The bar of the last fill or zone start placed.
+    placement: Placement,
 }
 
 struct Trade {
@@ -158,7 +162,7 @@ impl BigTrades {
         out: &mut Vec<SignalEvent>,
     ) {
         // shortcut: history has no observation clock, add a feed-time policy before rejecting jumps.
-        let open = self.clock.as_ref().map(|clock| clock.bar_open(fill.ts));
+        let open = (self.clock.as_ref()).map(|clock| self.placement.open(clock, fill.ts));
         if let (Some(open), Some(bar)) = (open, &self.bar)
             && open > bar.open_time
         {
@@ -284,7 +288,7 @@ impl BigTrades {
 
     /// Classifies the zones of the forming bar, which closed, removing those not kept.
     fn classify(&mut self, rule: &BigTradeRule, out: &mut Vec<SignalEvent>) {
-        let Some(bar) = &self.bar else {
+        let (Some(bar), Some(clock)) = (&self.bar, &self.clock) else {
             return;
         };
         let (bottom, top) = (bar.open.min(bar.close), bar.open.max(bar.close));
@@ -297,7 +301,7 @@ impl BigTrades {
             // retain bars if classification is needed.
             let body = (bottom..=top).contains(&zone.price);
             if !bar.whole
-                || zone.from < bar.open_time
+                || self.placement.open(clock, zone.from) < bar.open_time
                 || if body {
                     rule.body_zones
                 } else {

@@ -4,6 +4,7 @@
 use crate::localization as l10n;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, Offset, Utc};
 use egui::text::LayoutJob;
@@ -18,7 +19,8 @@ use crate::data::{CompanyFinancials, Datafeed, FeedError, SymbolDetails};
 use crate::icons::icons;
 use crate::model::{ExtendedSession, Instrument, Quote, TimezoneId};
 use crate::scales::StudyFormat;
-use crate::services::{Storage, StoreKind};
+use crate::services::revisions::{Revisions, Settled, Written};
+use crate::services::{ConflictChoice, Storage, StoreKind};
 use crate::theme::ThemeExt;
 use crate::ui_kit::IconButton;
 use crate::ui_kit::status_message::{MessageKind, status_message};
@@ -46,6 +48,28 @@ struct NotesDocument {
     notes: String,
 }
 
+/// The stored form of the notes `text`.
+fn document(text: &str) -> String {
+    serde_json::to_string(&NotesDocument {
+        version: 1,
+        notes: text.to_owned(),
+    })
+    .expect("a string field always serializes")
+}
+
+/// The notes a stored document holds, empty without one, or why they cannot be read.
+fn read_notes(document: Option<String>) -> Result<String, String> {
+    let Some(document) = document else {
+        return Ok(String::new());
+    };
+    let document: NotesDocument =
+        serde_json::from_str(&document).map_err(|error| error.to_string())?;
+    if document.version != 1 {
+        return Err("unsupported notes version".into());
+    }
+    Ok(document.notes)
+}
+
 /// The notes of one symbol.
 #[derive(Debug, Default)]
 struct Notes {
@@ -54,6 +78,10 @@ struct Notes {
     /// successful read, so a failed read never lets an empty field replace the stored notes.
     written: Option<String>,
     saving: bool,
+    /// Whether the last write failed, so that a run of failures is reported once.
+    failing: bool,
+    /// The input time from which a failed write is tried again.
+    retry_at: Option<f64>,
 }
 
 /// What an inbox answer is for.
@@ -83,11 +111,13 @@ enum Request {
 /// [`financials`](Self::financials). Notes
 /// are kept in memory per symbol, and with a storage service attached they are read from and
 /// written to one [`StoreKind::SymbolNotes`] document per symbol as they are edited, one write per
-/// document at a time. Call [`poll`](Self::poll) each frame, even while the panel is hidden, then
-/// [`show`](Self::show) while it is open. The More menu's Financials item is reported by
-/// [`take_financials_request`](Self::take_financials_request), for the host to open a
-/// [`FinancialsPanel`](crate::ui::financials::FinancialsPanel) with the company's figures, such
-/// as [`financials`](Self::financials).
+/// document at a time, a failed write being tried again a second later. With a host that keeps
+/// revisions they are written over the version read; see
+/// [`storage_conflict`](Self::storage_conflict). Call [`poll`](Self::poll) each frame, even while
+/// the panel is hidden, then [`show`](Self::show) while it is open. The More menu's Financials
+/// item is reported by [`take_financials_request`](Self::take_financials_request), for the host
+/// to open a [`FinancialsPanel`](crate::ui::financials::FinancialsPanel) with the company's
+/// figures, such as [`financials`](Self::financials).
 ///
 /// The Performance and Seasonality sections show what the host supplies. Call
 /// [`take_market_requests`](Self::take_market_requests) each frame: the first call for a symbol
@@ -95,7 +125,6 @@ enum Request {
 /// with [`set_period_returns`](Self::set_period_returns) and
 /// [`set_seasonality`](Self::set_seasonality). A host that never calls it sees neither section.
 /// Each section says whether it is loading, empty, unavailable or failed.
-#[derive(Default)]
 pub struct SymbolDetailsPanel {
     instrument: Option<Instrument>,
     quote: Option<Quote>,
@@ -111,11 +140,39 @@ pub struct SymbolDetailsPanel {
     notes: HashMap<String, Notes>,
     feed: Option<Arc<dyn Datafeed>>,
     storage: Option<Arc<dyn Storage>>,
+    /// The revisions the notes were read or written at, and the writes the host refused.
+    revisions: Revisions,
     inbox: Arc<Inbox>,
     requests: HashMap<u64, Request>,
     next: u64,
     financials_requested: bool,
     hide_financials: bool,
+}
+
+impl Default for SymbolDetailsPanel {
+    fn default() -> Self {
+        Self {
+            instrument: None,
+            quote: None,
+            average_volume: None,
+            timezone: TimezoneId::default(),
+            hidden: HashSet::new(),
+            details: None,
+            financials: None,
+            returns: None,
+            seasonality: None,
+            error: None,
+            notes: HashMap::new(),
+            feed: None,
+            storage: None,
+            revisions: Revisions::new(StoreKind::SymbolNotes),
+            inbox: Arc::default(),
+            requests: HashMap::new(),
+            next: 0,
+            financials_requested: false,
+            hide_financials: false,
+        }
+    }
 }
 
 impl std::fmt::Debug for SymbolDetailsPanel {
@@ -156,6 +213,7 @@ impl SymbolDetailsPanel {
     /// Keep notes in `storage`, reading them again from it. Edits not yet written are dropped.
     pub fn set_storage(&mut self, storage: Arc<dyn Storage>) {
         self.storage = Some(storage);
+        self.revisions = Revisions::new(StoreKind::SymbolNotes);
         self.notes.clear();
         self.requests
             .retain(|_, request| matches!(request, Request::Details(_) | Request::Financials(_)));
@@ -297,7 +355,7 @@ impl SymbolDetailsPanel {
         };
         self.notes.insert(symbol.clone(), Notes::default());
         let key = self.key(Request::Load(symbol.clone()));
-        storage.load(StoreKind::SymbolNotes, &symbol, self.inbox.reply(key));
+        self.revisions.load(&*storage, &symbol, &self.inbox, key);
     }
 
     /// Receive the feed's and storage's answers, write edited notes, and wake the UI when the
@@ -305,118 +363,196 @@ impl SymbolDetailsPanel {
     pub fn poll(&mut self, ctx: &egui::Context) {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
+        let now = ctx.input(|input| input.time);
         let shown = self.symbol().map(str::to_owned);
         let current = |symbol: &str| shown.as_deref() == Some(symbol);
-        for (key, answer) in self.inbox.drain().answers {
-            let Some(request) = self.requests.remove(&key) else {
-                continue;
-            };
-            match request {
-                Request::Details(symbol) => {
-                    let result = *answer
-                        .downcast::<Result<SymbolDetails, FeedError>>()
-                        .expect("symbol details");
-                    if !current(&symbol) {
-                        continue;
-                    }
-                    match result {
-                        Ok(details) => self.details = Some(details),
-                        Err(FeedError::NotSupported) => {}
-                        Err(error) => {
-                            self.error = Some(l10n::format_text(
-                                ctx,
-                                "Details unavailable: {error}",
-                                &[("error", error.to_string().as_str())],
-                            ))
-                        }
-                    }
-                }
-                Request::Financials(symbol) => {
-                    let result = *answer
-                        .downcast::<Result<CompanyFinancials, FeedError>>()
-                        .expect("company financials");
-                    if !current(&symbol) {
-                        continue;
-                    }
-                    match result {
-                        Ok(financials) => {
-                            self.financials =
-                                Some(financials).filter(|figures| !figures.pages.is_empty());
-                        }
-                        Err(FeedError::NotSupported) => {}
-                        Err(error) => {
-                            self.error = Some(l10n::format_text(
-                                ctx,
-                                "Financials unavailable: {error}",
-                                &[("error", error.to_string().as_str())],
-                            ))
-                        }
-                    }
-                }
-                Request::Load(symbol) => {
-                    let result = answer
-                        .downcast::<Result<Option<String>, FeedError>>()
-                        .expect("notes load")
-                        .map_err(|error| error.to_string())
-                        .and_then(|document| {
-                            let Some(document) = document else {
-                                return Ok(String::new());
-                            };
-                            let document: NotesDocument = serde_json::from_str(&document)
-                                .map_err(|error| error.to_string())?;
-                            if document.version != 1 {
-                                return Err("unsupported notes version".into());
+        let storage = self.storage.clone();
+        if let Some(storage) = &storage {
+            for (symbol, settled) in self.revisions.poll(&**storage, ctx) {
+                let Some(notes) = self.notes.get_mut(&symbol) else {
+                    continue;
+                };
+                match settled {
+                    // The notes, read only meanwhile, are written again below.
+                    Settled::Overwrite(_) => notes.saving = false,
+                    Settled::Copied(_) => {}
+                    Settled::Reload(stored) => {
+                        notes.saving = false;
+                        match read_notes(stored) {
+                            Ok(text) => {
+                                notes.text.clone_from(&text);
+                                notes.written = Some(text);
                             }
-                            Ok(document.notes)
-                        });
-                    match result {
-                        Ok(text) => {
-                            let notes = self.notes.entry(symbol).or_default();
-                            notes.text = text.clone();
-                            notes.written = Some(text);
+                            Err(error) => {
+                                notes.written = None;
+                                if current(&symbol) {
+                                    self.error = Some(l10n::format_text(
+                                        ctx,
+                                        "Notes unavailable: {error}",
+                                        &[("error", error.as_str())],
+                                    ));
+                                }
+                            }
                         }
-                        Err(error) if current(&symbol) => {
-                            self.error = Some(l10n::format_text(
-                                ctx,
-                                "Notes unavailable: {error}",
-                                &[("error", error.to_string().as_str())],
-                            ));
-                        }
-                        Err(_) => {}
                     }
-                }
-                Request::Save(symbol, text) => {
-                    let result = *answer
-                        .downcast::<Result<(), FeedError>>()
-                        .expect("notes save");
-                    if let Err(error) = result {
+                    Settled::CopyFailed(reason) => {
                         self.error = Some(l10n::format_text(
                             ctx,
-                            "Notes for {symbol} not saved: {error}",
-                            &[
-                                ("symbol", symbol.as_str()),
-                                ("error", error.to_string().as_str()),
-                            ],
+                            "Could not keep a copy of the notes for {symbol}: {reason}",
+                            &[("symbol", symbol.as_str()), ("reason", reason.as_str())],
                         ));
-                    }
-                    // After a failure too, so the next edit writes again rather than every frame.
-                    if let Some(notes) = self.notes.get_mut(&symbol) {
-                        notes.saving = false;
-                        notes.written = Some(text);
                     }
                 }
             }
         }
-        self.save_notes();
+        loop {
+            let answers = self.inbox.drain().answers;
+            if answers.is_empty() {
+                break;
+            }
+            for (key, answer) in answers {
+                let Some(request) = self.requests.remove(&key) else {
+                    continue;
+                };
+                match request {
+                    Request::Details(symbol) => {
+                        let result = *answer
+                            .downcast::<Result<SymbolDetails, FeedError>>()
+                            .expect("symbol details");
+                        if !current(&symbol) {
+                            continue;
+                        }
+                        match result {
+                            Ok(details) => self.details = Some(details),
+                            Err(FeedError::NotSupported) => {}
+                            Err(error) => {
+                                self.error = Some(l10n::format_text(
+                                    ctx,
+                                    "Details unavailable: {error}",
+                                    &[("error", error.to_string().as_str())],
+                                ))
+                            }
+                        }
+                    }
+                    Request::Financials(symbol) => {
+                        let result = *answer
+                            .downcast::<Result<CompanyFinancials, FeedError>>()
+                            .expect("company financials");
+                        if !current(&symbol) {
+                            continue;
+                        }
+                        match result {
+                            Ok(financials) => {
+                                self.financials =
+                                    Some(financials).filter(|figures| !figures.pages.is_empty());
+                            }
+                            Err(FeedError::NotSupported) => {}
+                            Err(error) => {
+                                self.error = Some(l10n::format_text(
+                                    ctx,
+                                    "Financials unavailable: {error}",
+                                    &[("error", error.to_string().as_str())],
+                                ))
+                            }
+                        }
+                    }
+                    Request::Load(symbol) => {
+                        let storage = storage.as_deref().expect("notes storage");
+                        let Some(result) =
+                            self.revisions
+                                .loaded(storage, &symbol, answer, &self.inbox, key)
+                        else {
+                            self.requests.insert(key, Request::Load(symbol));
+                            continue;
+                        };
+                        match result
+                            .map_err(|error| error.to_string())
+                            .and_then(read_notes)
+                        {
+                            Ok(text) => {
+                                let notes = self.notes.entry(symbol).or_default();
+                                notes.text = text.clone();
+                                notes.written = Some(text);
+                            }
+                            Err(error) if current(&symbol) => {
+                                self.error = Some(l10n::format_text(
+                                    ctx,
+                                    "Notes unavailable: {error}",
+                                    &[("error", error.to_string().as_str())],
+                                ));
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                    Request::Save(symbol, text) => {
+                        let storage = storage.as_deref().expect("notes storage");
+                        let Some(written) = self.revisions.saved(
+                            storage,
+                            &symbol,
+                            &document(&text),
+                            answer,
+                            &self.inbox,
+                            key,
+                        ) else {
+                            self.requests.insert(key, Request::Save(symbol, text));
+                            continue;
+                        };
+                        let Some(notes) = self.notes.get_mut(&symbol) else {
+                            continue;
+                        };
+                        match written {
+                            Written::Saved => {
+                                notes.saving = false;
+                                notes.written = Some(text);
+                                notes.failing = false;
+                                notes.retry_at = None;
+                            }
+                            // The notes stay as typed, and unsaved, until the user's choice.
+                            Written::Refused(stored) => {
+                                notes.failing = false;
+                                self.revisions.refuse(&symbol, document(&text), stored);
+                            }
+                            Written::Failed(error) => {
+                                notes.saving = false;
+                                notes.retry_at = Some(now + 1.0);
+                                if !notes.failing {
+                                    self.error = Some(l10n::format_text(
+                                        ctx,
+                                        "Notes for {symbol} not saved: {error}",
+                                        &[
+                                            ("symbol", symbol.as_str()),
+                                            ("error", error.to_string().as_str()),
+                                        ],
+                                    ));
+                                }
+                                notes.failing = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.save_notes(now);
+        if let Some(at) = self
+            .notes
+            .values()
+            .filter_map(|notes| notes.retry_at)
+            .filter(|&at| at > now)
+            .min_by(f64::total_cmp)
+        {
+            ctx.request_repaint_after(Duration::from_secs_f64(at - now));
+        }
     }
 
-    /// Write the notes that differ from storage and have no write in flight.
-    fn save_notes(&mut self) {
+    /// Write the notes that differ from storage, have no write in flight and are not waiting to
+    /// try a failed write again.
+    fn save_notes(&mut self, now: f64) {
         let Some(storage) = &self.storage else {
             return;
         };
         for (symbol, notes) in &mut self.notes {
             if notes.saving
+                || notes.retry_at.is_some_and(|at| at > now)
                 || notes
                     .written
                     .as_ref()
@@ -424,22 +560,38 @@ impl SymbolDetailsPanel {
             {
                 continue;
             }
-            let document = serde_json::to_string(&NotesDocument {
-                version: 1,
-                notes: notes.text.clone(),
-            })
-            .expect("a string field always serializes");
+            notes.retry_at = None;
             let key = self.next;
             self.next += 1;
             self.requests
                 .insert(key, Request::Save(symbol.clone(), notes.text.clone()));
             notes.saving = true;
-            storage.save(
-                StoreKind::SymbolNotes,
-                symbol,
-                document,
-                self.inbox.reply(key),
-            );
+            self.revisions
+                .save(&**storage, symbol, document(&notes.text), &self.inbox, key);
+        }
+    }
+
+    /// The symbol whose notes the host refused to write because another client changed them
+    /// since they were read: the shown symbol first, then the others by name. `None` while no
+    /// write waits, and while the choice to keep a local copy takes effect. Until it is settled
+    /// the notes stay as typed and cannot be edited; show a
+    /// [`StorageConflictDialog`](crate::ui::dialogs::StorageConflictDialog) and pass the choice
+    /// to [`resolve_storage_conflict`](Self::resolve_storage_conflict).
+    pub fn storage_conflict(&self) -> Option<&str> {
+        let shown = self.symbol();
+        self.revisions
+            .conflicts()
+            .find(|symbol| Some(*symbol) == shown)
+            .or_else(|| self.revisions.conflicts().next())
+    }
+
+    /// Settles the refused write of the notes on `symbol`, taking effect at the next
+    /// [`poll`](Self::poll): [`ConflictChoice::ReloadRemote`] takes the stored notes,
+    /// [`ConflictChoice::KeepLocalCopy`] first saves the typed ones as `<symbol> (local copy)`,
+    /// and [`ConflictChoice::Retry`] writes them over the stored ones.
+    pub fn resolve_storage_conflict(&mut self, symbol: &str, choice: ConflictChoice) {
+        if let Some(storage) = self.storage.clone() {
+            self.revisions.resolve(&*storage, symbol, choice);
         }
     }
 
@@ -463,6 +615,7 @@ impl SymbolDetailsPanel {
             seasonality,
             error,
             notes,
+            revisions,
             financials_requested,
             hide_financials,
             ..
@@ -795,8 +948,9 @@ impl SymbolDetailsPanel {
                     ui.add_space(theme.spacing.md);
                     ui.label(RichText::new(l10n::text(ui.ctx(), "Notes")).strong());
                     let notes = notes.entry(instrument.symbol.clone()).or_default();
+                    // Refused notes stay as typed until the user's choice settles them.
                     let field = ui.add_enabled(
-                        notes.written.is_some(),
+                        notes.written.is_some() && !revisions.refused(&instrument.symbol),
                         egui::TextEdit::multiline(&mut notes.text)
                             .hint_text(l10n::text(ui.ctx(), "Add a note"))
                             .desired_width(f32::INFINITY)
@@ -1028,6 +1182,13 @@ mod tests {
                 })
                 .collect()
         }
+
+        /// Fails the writes waiting for an answer, keeping nothing.
+        fn fail_saves(&self) {
+            for (_, _, reply) in std::mem::take(&mut *self.saves.lock().unwrap()) {
+                reply.send(Err(FeedError::Network("offline".into())));
+            }
+        }
     }
 
     impl Storage for Store {
@@ -1134,6 +1295,65 @@ mod tests {
         restored.set_instrument(&Instrument::new("BAD"));
         restored.poll(&ctx);
         assert!(restored.error.is_some());
+
+        // A failed write is tried again a second later without a new edit, and a run of
+        // failures is reported once.
+        let poll_at = |panel: &mut SymbolDetailsPanel, time: f64| {
+            let input = egui::RawInput {
+                time: Some(time),
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| panel.poll(ui.ctx()))
+                .drop_without_applying_deltas();
+        };
+        restored.error = None;
+        restored.notes.get_mut("MSFT").unwrap().text = "third".into();
+        poll_at(&mut restored, 10.0);
+        store.fail_saves();
+        poll_at(&mut restored, 10.0);
+        assert!(restored.error.take().is_some());
+        assert!(store.saves.lock().unwrap().is_empty());
+        poll_at(&mut restored, 10.5);
+        assert!(store.saves.lock().unwrap().is_empty());
+        poll_at(&mut restored, 11.0);
+        assert_eq!(store.saves.lock().unwrap().len(), 1);
+        store.fail_saves();
+        poll_at(&mut restored, 11.0);
+        assert!(restored.error.is_none());
+        poll_at(&mut restored, 12.0);
+        assert_eq!(store.answer_saves(), [r#"{"version":1,"notes":"third"}"#]);
+    }
+
+    #[test]
+    fn notes_changed_elsewhere_wait_for_the_users_choice() {
+        use crate::services::document::tests::Revised;
+        let ctx = egui::Context::default();
+        let document = |notes: &str| format!(r#"{{"version":1,"notes":"{notes}"}}"#);
+        for (choice, kept) in [
+            (ConflictChoice::ReloadRemote, "remote"),
+            (ConflictChoice::Retry, "local"),
+        ] {
+            let host = Arc::new(Revised::default());
+            host.put("MSFT", &document("old"));
+            let mut panel = SymbolDetailsPanel::new();
+            panel.set_storage(host.clone());
+            panel.set_instrument(&Instrument::new("MSFT"));
+            panel.poll(&ctx);
+            assert_eq!(panel.notes["MSFT"].text, "old");
+            // Another client changes the notes after they were read.
+            host.put("MSFT", &document("remote"));
+            panel.notes.get_mut("MSFT").unwrap().text = "local".into();
+            panel.poll(&ctx);
+            panel.poll(&ctx);
+            assert_eq!(panel.storage_conflict(), Some("MSFT"));
+            assert_eq!(host.get("MSFT"), Some(document("remote")));
+            panel.resolve_storage_conflict("MSFT", choice);
+            panel.poll(&ctx);
+            panel.poll(&ctx);
+            assert_eq!(panel.storage_conflict(), None);
+            assert_eq!(panel.notes["MSFT"].text, kept);
+            assert_eq!(host.get("MSFT"), Some(document(kept)));
+        }
     }
 
     /// The extended-hours change is measured from the regular last price, not the previous close,

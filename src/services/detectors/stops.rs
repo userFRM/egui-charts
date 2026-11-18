@@ -6,7 +6,9 @@ use chrono::{DateTime, TimeDelta, Utc};
 
 use super::{DetectionKind, Detector};
 use crate::data::{Footprint, meets_threshold};
-use crate::model::{BarClock, Direction, OrderSide, Signal, SignalId, SignalShape, Tick};
+use crate::model::{
+    BarClock, Direction, OrderSide, Placement, Signal, SignalId, SignalShape, Tick,
+};
 use crate::services::SignalEvent;
 
 /// A burst of at least five same-side fills, at most 20 ms apart, travelling at least three
@@ -143,6 +145,11 @@ pub(super) struct StopSweeps {
     first: Option<DateTime<Utc>>,
     volumes: VecDeque<f64>,
     last_time: Option<DateTime<Utc>>,
+    /// The bar of the last fill or feed time placed.
+    placement: Placement,
+    /// The bar of the last trade evicted from `trades`, kept apart so that eviction and the live
+    /// fills do not displace each other's date.
+    evicted: Placement,
 }
 
 struct Prices {
@@ -164,6 +171,8 @@ impl StopSweeps {
             first: None,
             volumes: VecDeque::new(),
             last_time: None,
+            placement: Placement::default(),
+            evicted: Placement::default(),
         }
     }
 
@@ -210,10 +219,10 @@ impl StopSweeps {
             && let Some(old) = self.trades.pop_front()
             && let Some(clock) = &self.clock
         {
-            let cut = clock.bar_open(old.ts);
+            let cut = self.evicted.open(clock, old.ts);
             if self.first.is_none_or(|first| cut > first) {
                 self.first = Some(cut);
-                if cut == clock.bar_open(fill.ts) {
+                if cut == self.placement.open(clock, fill.ts) {
                     let mut footprint = Footprint::new(clock.clone(), self.tick, 1).unwrap();
                     footprint.set_budget(12, 100_000);
                     self.footprint = Some(footprint);
@@ -230,7 +239,7 @@ impl StopSweeps {
         let (Some(clock), Some(footprint)) = (&self.clock, &mut self.footprint) else {
             return;
         };
-        let open = clock.bar_open(fill.ts);
+        let open = self.placement.open(clock, fill.ts);
         let first = *self.first.get_or_insert(open);
         if open <= first || !matches!(footprint.push(fill), Ok(true)) {
             return;
@@ -259,7 +268,7 @@ impl StopSweeps {
         let (Some(clock), Some(footprint)) = (&self.clock, &self.footprint) else {
             return;
         };
-        let open = clock.bar_open(time);
+        let open = self.placement.open(clock, time);
         for (&at, prices) in self.bars.range(..open) {
             if self.closed.is_some_and(|closed| at <= closed) {
                 continue;
