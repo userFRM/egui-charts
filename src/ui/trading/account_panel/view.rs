@@ -866,10 +866,10 @@ impl Trading {
         }
         match row_action {
             Some((RowAction::Position(position), _)) => {
-                self.pending = Some(TradingLineAction::Close(position.clone()));
+                self.ask(TradingLineAction::Close(position.clone()), true);
             }
             Some((RowAction::Order(order), false)) => {
-                self.pending = Some(TradingLineAction::Cancel(order.clone()));
+                self.ask(TradingLineAction::Cancel(order.clone()), false);
             }
             Some((RowAction::Order(order), true)) => {
                 self.ticket.open = false;

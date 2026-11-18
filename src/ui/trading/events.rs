@@ -166,7 +166,8 @@ impl Trading {
                 if matches!(self.pending, Some(TradingLineAction::Modify(_, _)))
                     && !account.capabilities.modify
                     || matches!(self.pending, Some(TradingLineAction::Close(_)))
-                        && !account.capabilities.close
+                        && (!account.capabilities.close
+                            || self.close_quantity.is_some() && !account.capabilities.partial_close)
                     || matches!(self.pending, Some(TradingLineAction::Reverse(_)))
                         && !account.capabilities.reverse
                     || matches!(&self.pending,

@@ -242,6 +242,7 @@ impl State {
                 brackets: true,
                 take_profit_levels: true,
                 close: true,
+                partial_close: true,
                 reverse: true,
                 preview: false,
                 modify: true,
