@@ -4036,7 +4036,10 @@ fn footprint_after_store_loss_does_not_fill_the_first_bar_from_the_page() {
 /// 5 and 6 (11), and the live 7 and 8 (15). A store of seven leaves out the buy of 1 in both
 /// orders, and a store of six the buys of 1 and 2, so that the oldest held execution opens the
 /// second bar. Either way the first bar draws a candle and the others keep their cells, however
-/// many pages rebuild the footprint afterwards.
+/// many pages rebuild the footprint afterwards. The last row's page also holds a copy of the live
+/// 7, which the store keeps apart, and the live 8 then drops the buy of 1. A bar replay keeps the
+/// page's cells while its cutoff is at or before the first live buy, at 6 s, held or kept apart,
+/// and has no footprint past it, since after the loss the stream is not summed again.
 #[test]
 fn history_page_after_a_store_loss_keeps_the_matched_cells() {
     use crate::model::OrderSide::Buy;
@@ -4067,11 +4070,12 @@ fn history_page_after_a_store_loss_keeps_the_matched_cells() {
             })
             .collect()
     };
-    for (label, live_first, capacity) in [
-        ("history page after the loss", false, 7),
-        ("trade page that overflows the store", true, 7),
-        ("history page after the loss of a whole bar", false, 6),
-        ("trade page that leaves out a whole bar", true, 6),
+    for (label, live_first, capacity, page_buys) in [
+        ("history page after the loss", false, 7, 6),
+        ("trade page that overflows the store", true, 7, 6),
+        ("history page after the loss of a whole bar", false, 6, 6),
+        ("trade page that leaves out a whole bar", true, 6, 6),
+        ("trade page that holds the first live buy", false, 7, 7),
     ] {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
@@ -4095,7 +4099,8 @@ fn history_page_after_a_store_loss_keeps_the_matched_cells() {
         if live_first {
             live(&mut chart, &mut frames);
         }
-        (feed.trades.lock().unwrap().remove(0)).send(Ok(TradePage::new(tape.clone(), false)));
+        let trade_page = TradePage::new((0..page_buys).map(buy).collect(), false);
+        (feed.trades.lock().unwrap().remove(0)).send(Ok(trade_page));
         frames.run(&mut chart);
         if !live_first {
             live(&mut chart, &mut frames);
@@ -4105,6 +4110,116 @@ fn history_page_after_a_store_loss_keeps_the_matched_cells() {
         feed.page().send(page(Vec::new(), true));
         frames.run(&mut chart);
         assert_eq!(volumes(&chart), kept, "{label}, after the empty page");
+        let link = chart.feed_link.as_ref().unwrap();
+        let replayed = |cutoff| {
+            let flow = link.footprint(Some(cutoff), chart.bars(SeriesId::MAIN))?;
+            let cells = flow.bars().iter().map(|(open, bar)| (*open, bar.volume()));
+            Some((flow.complete_from(), cells.collect::<Vec<_>>()))
+        };
+        let at = |second| start + TimeDelta::seconds(second);
+        let page_cells = (Some(at(2)), vec![(at(2), 7.0), (at(4), 11.0)]);
+        assert_eq!(
+            replayed(at(6)),
+            Some(page_cells),
+            "{label}: replay to the stream"
+        );
+        let past = at(6) + TimeDelta::nanoseconds(1);
+        assert_eq!(replayed(past), None, "{label}: replay into the stream");
+    }
+}
+
+#[cfg(feature = "studies")]
+#[test]
+fn history_only_tick_trade_rate_uses_proven_receipts() {
+    use crate::data::OrderFlowKind;
+    use crate::studies::OrderFlowStudy;
+
+    let start = bars(1)[0].time;
+    let later = start + TimeDelta::seconds(1);
+    let tape = [
+        (start, 1.0),
+        (start, 2.0),
+        (start, 4.0),
+        (later, 8.0),
+        (later, 16.0),
+    ]
+    .map(|(ts, size)| Tick::new(ts, 100.0, size, None));
+    let bar = |at, volume| Bar::new(at, 100.0, 100.0, 100.0, 100.0, volume);
+    // Same data, separate drains: either feed response can arrive first.
+    for (trades_first, complete, middle_volume) in [
+        (false, true, 12.0),
+        (true, true, 12.0),
+        (false, false, 12.0),
+        (true, true, 13.0),
+    ] {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_timeframe("2t".parse().unwrap());
+        let rate = chart.add_indicator(Box::new(OrderFlowStudy::new(OrderFlowKind::TradeRate {
+            volume: false,
+            seconds: 2,
+            instant: 1,
+        })));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        frames.run(&mut chart);
+        let candles = || {
+            feed.page().send(page(
+                vec![
+                    bar(start, 3.0),
+                    bar(start + TimeDelta::nanoseconds(1), middle_volume),
+                    bar(later, 16.0),
+                ],
+                true,
+            ));
+        };
+        let trades = || {
+            let held = if complete { &tape[..] } else { &tape[3..] };
+            feed.trades
+                .lock()
+                .unwrap()
+                .remove(0)
+                .send(Ok(TradePage::new(held.to_vec(), complete)));
+        };
+        if trades_first {
+            trades();
+            frames.run(&mut chart);
+            candles();
+        } else {
+            candles();
+            frames.run(&mut chart);
+            trades();
+        }
+        frames.run(&mut chart);
+        // Volume and Trade Rate each get a frame for their full recalculation.
+        frames.run(&mut chart);
+        let study = chart.indicators().find(|(id, _)| *id == rate).unwrap().1;
+        let values = |i| [0, 1, 2].map(|line| study.values().value(line, i));
+        if complete && middle_volume == 12.0 {
+            // Window rates use provider times through the last receipt of this bar,
+            // not the allocated bar open or later receipts sharing that timestamp.
+            assert_eq!(values(0), [2.0, 1.0, 2.0].map(Some));
+            assert_eq!(values(1), [2.0, 2.0, 1.0].map(Some));
+            assert_eq!(values(2), [1.0, 2.5, 2.0].map(Some));
+
+            // The sink allocates this fill to the last bar key independently. The page
+            // proves no join there: neither its count nor its windows carry over.
+            feed.sink().push_tick(tape[4].clone());
+            frames.run(&mut chart);
+            frames.run(&mut chart);
+            let study = chart.indicators().find(|(id, _)| *id == rate).unwrap().1;
+            assert_eq!(
+                [0, 1, 2].map(|line| study.values().value(line, 2)),
+                [1.0, 0.5, 1.0].map(Some)
+            );
+        } else {
+            // A truncated tape or a mismatched candle proves no full run.
+            for i in 0..3 {
+                assert_eq!(values(i), [None; 3]);
+            }
+        }
     }
 }
 
@@ -4462,6 +4577,7 @@ fn replay_with_or_without_a_trade_store_loss_stops_at_the_cutoff() {
 /// On 3t, replay groups all executions the sink allocated, including those left to a page.
 /// The first two rows count buys in threes; the last merges an older live buy before a kept sell
 /// whose page copy has a different timestamp. Each cutoff excludes executions at or after it.
+/// A profile drawing on a Volume Footprint chart reads those same cells through the replay pump.
 #[test]
 fn replay_footprint_bars_open_at_chart_bars() {
     use crate::model::OrderSide::{self, Buy, Sell};
@@ -4554,6 +4670,30 @@ fn replay_footprint_bars_open_at_chart_bars() {
             .map(|(open, bar)| (*open, bar.bid, bar.ask))
             .collect();
         assert_eq!(replayed, cells, "cutoff {cutoff}: replay");
+        #[cfg(feature = "drawings")]
+        {
+            use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+            chart.set_chart_type(ChartType::VolumeFootprint);
+            let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
+            drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(1.0, 100.0)];
+            chart.drawings_mut().drawings.push(drawing);
+            chart.set_replay_time(Some(at(cutoff)));
+            frames.run(&mut chart);
+            let link = chart.feed_link.as_ref().unwrap();
+            let pumped = (link.replay_footprint.as_ref()).map(|(time, flow)| {
+                let cells = flow.as_ref().map(|flow| {
+                    (flow.bars().iter())
+                        .map(|(open, bar)| (*open, bar.bid, bar.ask))
+                        .collect::<Vec<_>>()
+                });
+                (*time, cells)
+            });
+            assert_eq!(
+                pumped,
+                Some((at(cutoff), Some(cells))),
+                "cutoff {cutoff}: pump"
+            );
+        }
     }
 }
 
