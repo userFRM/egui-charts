@@ -677,7 +677,7 @@ impl FibonacciConfig {
 /// Settings of the regression trend drawing.
 ///
 /// ```
-/// use egui_charts::drawings::RegressionTrendConfig;
+/// use egui_charts::drawings::{RegressionBandLine, RegressionTrendConfig};
 /// use egui_charts::model::{LineStyle, PriceSource};
 ///
 /// let mut config = RegressionTrendConfig::default()
@@ -686,6 +686,12 @@ impl FibonacciConfig {
 /// config.use_upper = false;
 /// config.source = PriceSource::HL2;
 /// config.line_style = LineStyle::Solid;
+/// config.show_base_line = true;
+/// config.upper_line = RegressionBandLine::new([242, 54, 69, 255])
+///     .with_width(Some(2.0))
+///     .unwrap();
+/// config.lower_line.visible = false;
+/// config.show_correlation = false;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "RegressionTrendFields")]
@@ -702,6 +708,16 @@ pub struct RegressionTrendConfig {
     pub source: crate::model::PriceSource,
     /// Pattern of the fitted line.
     pub line_style: crate::model::LineStyle,
+    /// Whether the fitted line is drawn, in the drawing's colour and width and in
+    /// [`Self::line_style`]. The drawing's text is placed along it either way.
+    pub show_base_line: bool,
+    /// The line through the upper bound.
+    pub upper_line: RegressionBandLine,
+    /// The line through the lower bound.
+    pub lower_line: RegressionBandLine,
+    /// Whether the Pearson correlation of the fitted prices is written below the start of the
+    /// lower line.
+    pub show_correlation: bool,
     precision: Option<u8>,
 }
 
@@ -717,6 +733,10 @@ struct RegressionTrendFields {
     use_lower: Option<bool>,
     source: Option<crate::model::PriceSource>,
     line_style: Option<crate::model::LineStyle>,
+    show_base_line: Option<bool>,
+    upper_line: Option<RegressionBandLine>,
+    lower_line: Option<RegressionBandLine>,
+    show_correlation: Option<bool>,
     precision: Option<u8>,
 }
 
@@ -731,6 +751,10 @@ impl TryFrom<RegressionTrendFields> for RegressionTrendConfig {
             use_lower: fields.use_lower.unwrap_or(default.use_lower),
             source: fields.source.unwrap_or(default.source),
             line_style: fields.line_style.unwrap_or(default.line_style),
+            show_base_line: fields.show_base_line.unwrap_or(default.show_base_line),
+            upper_line: fields.upper_line.unwrap_or(default.upper_line),
+            lower_line: fields.lower_line.unwrap_or(default.lower_line),
+            show_correlation: fields.show_correlation.unwrap_or(default.show_correlation),
             ..default
         };
         config
@@ -796,8 +820,9 @@ impl RegressionTrendConfig {
 }
 
 impl Default for RegressionTrendConfig {
-    /// A dashed line fitted to the closes, with bands two standard deviations away and a
-    /// correlation label of two decimals.
+    /// A dashed line fitted to the closes in the drawing's colour and width, solid bands two
+    /// standard deviations away in the accent blue at the drawing's width, and a correlation label
+    /// of two decimals.
     fn default() -> Self {
         Self {
             upper: 2.0,
@@ -806,8 +831,84 @@ impl Default for RegressionTrendConfig {
             use_lower: true,
             source: crate::model::PriceSource::Close,
             line_style: crate::model::LineStyle::Dashed,
+            show_base_line: true,
+            upper_line: RegressionBandLine::new(super::drawing::BLUE),
+            lower_line: RegressionBandLine::new(super::drawing::BLUE),
+            show_correlation: true,
             precision: None,
         }
+    }
+}
+
+/// One band line of a regression trend: whether it is drawn, and its colour, pattern and width.
+///
+/// ```
+/// use egui_charts::drawings::RegressionBandLine;
+/// use egui_charts::model::LineStyle;
+///
+/// let mut line = RegressionBandLine::new([242, 54, 69, 128])
+///     .with_width(Some(3.0))
+///     .unwrap();
+/// line.line_style = LineStyle::Dotted;
+/// line.visible = false;
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "RegressionBandLineFields")]
+pub struct RegressionBandLine {
+    /// Whether the line is drawn. A hidden line still bounds the fill.
+    pub visible: bool,
+    /// Colour, whose alpha is the line's opacity.
+    pub color: [u8; 4],
+    /// Pattern of the line.
+    pub line_style: crate::model::LineStyle,
+    width: Option<f32>,
+}
+
+/// Stored settings of a band line, checked by [`RegressionBandLine::with_width`] on load.
+#[derive(Deserialize)]
+struct RegressionBandLineFields {
+    visible: bool,
+    color: [u8; 4],
+    line_style: crate::model::LineStyle,
+    width: Option<f32>,
+}
+
+impl TryFrom<RegressionBandLineFields> for RegressionBandLine {
+    type Error = &'static str;
+
+    fn try_from(fields: RegressionBandLineFields) -> Result<Self, Self::Error> {
+        Self {
+            visible: fields.visible,
+            line_style: fields.line_style,
+            ..Self::new(fields.color)
+        }
+        .with_width(fields.width)
+        .ok_or("regression trend line width out of bounds")
+    }
+}
+
+impl RegressionBandLine {
+    /// A shown, solid line in `color`, as wide as the drawing's line.
+    pub fn new(color: [u8; 4]) -> Self {
+        Self {
+            visible: true,
+            color,
+            line_style: crate::model::LineStyle::Solid,
+            width: None,
+        }
+    }
+
+    /// The line at `width` px, above 0 and at most 100, or as wide as the drawing's line for
+    /// `None`. Returns `None` when out of bounds.
+    pub fn with_width(self, width: Option<f32>) -> Option<Self> {
+        width
+            .is_none_or(|w| w > 0.0 && w <= crate::drawings::validation::MAX_STROKE_WIDTH)
+            .then_some(Self { width, ..self })
+    }
+
+    /// Width in px, or `None` while the line is as wide as the drawing's line.
+    pub fn width(&self) -> Option<f32> {
+        self.width
     }
 }
 
@@ -1673,8 +1774,22 @@ mod tests {
         }
         assert!(regression.with_precision(Some(8)).is_some());
         assert!(regression.with_precision(Some(9)).is_none());
-        for saved in [r#"{"upper":2.0,"lower":0.0}"#, r#"{"precision":9}"#] {
+        for saved in [
+            r#"{"upper":2.0,"lower":0.0}"#,
+            r#"{"precision":9}"#,
+            r#"{"upper_line":{"visible":true,"color":[1,2,3,255],"line_style":"Solid","width":0.0}}"#,
+        ] {
             assert!(serde_json::from_str::<RegressionTrendConfig>(saved).is_err());
+        }
+        // Settings saved before the lines were styled draw them as they did.
+        for saved in [
+            r#"{"deviations":2.0}"#,
+            r#"{"upper":2.0,"lower":2.0,"use_upper":true,"use_lower":true,"source":"Close","line_style":"Dashed","precision":null}"#,
+        ] {
+            let saved = serde_json::from_str::<RegressionTrendConfig>(saved).unwrap();
+            let band = RegressionBandLine::new([41, 98, 255, 255]);
+            assert!(saved.show_base_line && saved.show_correlation);
+            assert_eq!([saved.upper_line, saved.lower_line], [band, band]);
         }
     }
 
