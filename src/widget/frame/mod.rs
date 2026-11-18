@@ -3806,6 +3806,7 @@ impl Chart {
                         self.instrument().or(heading.as_ref()),
                         rendering::ValueFormatters {
                             price_decimals: self.readout_price_decimals(),
+                            thousands_sep: price_map.thousands_sep(),
                             ..self.value_formatters(
                                 self.series_price_formatter(super::SeriesId::MAIN)
                                     .as_deref(),

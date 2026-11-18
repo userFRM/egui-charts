@@ -602,36 +602,45 @@ mod tests {
             (crate::theme::Theme::light(), 760.0),
             (crate::theme::Theme::dark(), 320.0),
         ] {
+            // Without a display format (`None`), the chart writes the same text.
             for (kind, separator, host, close, change) in [
                 (
-                    SeriesFormat::Price,
+                    Some(SeriesFormat::Price),
                     Some(','),
                     false,
                     "1,234,568.14",
                     "+0.25",
                 ),
                 (
-                    SeriesFormat::Price,
+                    Some(SeriesFormat::Price),
                     Some(' '),
                     false,
                     "1 234 568.14",
                     "+0.25",
                 ),
-                (SeriesFormat::Price, None, false, "1234568.14", "+0.25"),
                 (
-                    SeriesFormat::Percentage,
+                    Some(SeriesFormat::Price),
+                    None,
+                    false,
+                    "1234568.14",
+                    "+0.25",
+                ),
+                (
+                    Some(SeriesFormat::Percentage),
                     Some(','),
                     false,
                     "1,234,568.14%",
                     "+0.25%",
                 ),
                 (
-                    SeriesFormat::Price,
+                    Some(SeriesFormat::Price),
                     Some(','),
                     true,
                     "host 1234568.14",
                     "host 0.25",
                 ),
+                (None, Some(','), false, "1,234,568.14", "+0.25"),
+                (None, None, false, "1234568.14", "+0.25"),
             ] {
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[1_234_500.0], &[1_234_567.89, 1_234_568.14]);
@@ -643,7 +652,7 @@ mod tests {
                 chart
                     .series_style_mut(SeriesId::MAIN)
                     .unwrap()
-                    .display_format = Some(SeriesDisplayFormat {
+                    .display_format = kind.map(|kind| SeriesDisplayFormat {
                     kind,
                     ..Default::default()
                 });
@@ -700,6 +709,14 @@ mod tests {
                     &mut chart,
                     0.2,
                     vec![egui::Event::PointerMoved(pointer)],
+                );
+                assert!(
+                    hovered.iter().any(|shape| matches!(shape,
+                        egui::Shape::Text(text) if text.galley.text() == close
+                            && text.pos.x < plot.right()
+                            && text.pos.y > plot.top() + 50.0
+                    )),
+                    "tooltip close"
                 );
                 assert!(
                 hovered.iter().any(|shape| matches!(shape,

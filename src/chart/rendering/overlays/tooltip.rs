@@ -13,7 +13,7 @@ use crate::model::{Bar, Instrument, percent_change};
 use crate::scales::price_decimals;
 use crate::scales::{
     DefaultPriceFormatter, HorizontalScale, PriceFormatter, PriceMap, VolumeFormatter,
-    instrument_price_precision,
+    group_thousands, instrument_price_precision,
 };
 use crate::styles::typography::font_size;
 use crate::theme::ThemeExt;
@@ -42,6 +42,9 @@ pub struct ValueFormatters<'a> {
     /// The decimals of built-in prices in place of the instrument's; the chart sets it to the
     /// precision chosen for its price scale.
     pub(crate) price_decimals: Option<u8>,
+    /// Groups the thousands of built-in prices and of studies in price units; the chart sets it
+    /// from `ChartConfig::thousands_sep`.
+    pub(crate) thousands_sep: Option<char>,
 }
 
 impl ValueFormatters<'_> {
@@ -50,6 +53,27 @@ impl ValueFormatters<'_> {
         self.price_decimals
             .or_else(|| instrument.and_then(instrument_price_precision))
             .map(usize::from)
+    }
+
+    /// `price` at `decimals` with its thousands grouped, else in the host's price format.
+    fn price(&self, price: f64, decimals: usize) -> String {
+        self.price.map_or_else(
+            || {
+                let text = DefaultPriceFormatter::with_precision(decimals).format(price);
+                group_thousands(text, self.thousands_sep)
+            },
+            |formatter| formatter.format(price),
+        )
+    }
+
+    /// The study's value, its thousands grouped in price units as the legend groups them.
+    fn study(&self, study: &StudyValue) -> String {
+        let text = study.formatted_value();
+        if study.format == crate::scales::StudyFormat::Price {
+            group_thousands(text, self.thousands_sep)
+        } else {
+            text
+        }
     }
 }
 
@@ -209,10 +233,7 @@ pub fn render_floating_tooltip(
         let decimals = formatters
             .decimals(instrument)
             .unwrap_or_else(|| price_decimals(price).min(options.price_precision));
-        formatters.price.map_or_else(
-            || DefaultPriceFormatter::with_precision(decimals).format(price),
-            |formatter| formatter.format(price),
-        )
+        formatters.price(price, decimals)
     };
     let mut rows = Vec::new();
 
@@ -263,7 +284,7 @@ pub fn render_floating_tooltip(
     rows.extend(studies.iter().map(|study| {
         (
             study.translated_label(painter.ctx()),
-            study.formatted_value(),
+            formatters.study(study),
             // A fully transparent colour holds no RGB, so it has no opaque form.
             if study.color.a() == 0 {
                 options.text_color
@@ -464,10 +485,7 @@ pub fn render_tracking_tooltip(
             ("L: {value}", candle.low),
             ("C: {value}", candle.close),
         ] {
-            let value = formatters.price.map_or_else(
-                || format!("{value:.precision$}"),
-                |formatter| formatter.format(value),
-            );
+            let value = formatters.price(value, precision);
             parts.push(l10n::format_text(
                 painter.ctx(),
                 label,
@@ -499,7 +517,7 @@ pub fn render_tracking_tooltip(
         format!(
             "{}: {}",
             study.translated_label(painter.ctx()),
-            study.formatted_value()
+            formatters.study(study)
         )
     }));
 
