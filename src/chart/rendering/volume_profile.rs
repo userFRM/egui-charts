@@ -1,6 +1,6 @@
 //! Horizontal price-row histograms shared by drawing and study profiles.
 
-use crate::data::{ProfileDisplay, StudyProfile};
+use crate::data::{ProfileDisplay, ProfileSource, StudyProfile};
 use egui::{Pos2, Rect};
 use std::ops::Range;
 
@@ -14,6 +14,9 @@ pub(crate) fn profile_span(plot: &StudyProfile, coords: &super::ChartMapping) ->
     }
     if plot.right_aligned {
         coords.rect.right() - coords.rect.width() * 0.3..coords.rect.right()
+    } else if plot.profile.source() == ProfileSource::Options {
+        // Strikes have no bars to stand beside.
+        coords.rect.left()..coords.rect.left() + coords.rect.width() * 0.3
     } else {
         (coords.idx_to_x(plot.bars.start) - coords.bar_spacing * 0.5).max(coords.rect.left())
             ..(coords.idx_to_x(plot.bars.end - 1) + coords.bar_spacing * 0.5)
@@ -60,6 +63,7 @@ pub(crate) fn hit_profile(
                 profile,
                 plot.config.display,
                 span,
+                plot.width,
                 price_to_y,
             )
             .into_iter()

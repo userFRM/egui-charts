@@ -603,7 +603,7 @@ impl Chart {
             .instrument
             .take()
             .filter(|instrument| instrument.symbol == self.symbol);
-        self.state.price_scale_mut().set_price_precision(None);
+        self.state.price_scale_mut().set_instrument_precision(None);
         self.state.price_scale_mut().set_tick_size(None);
         if retain_trades {
             link.trades.reanchor();
@@ -712,7 +712,7 @@ impl Chart {
     fn subscribe(&mut self, link: &mut FeedLink, instrument: Instrument) {
         self.state
             .price_scale_mut()
-            .set_price_precision(crate::scales::instrument_price_precision(&instrument));
+            .set_instrument_precision(crate::scales::instrument_price_precision(&instrument));
         self.state
             .price_scale_mut()
             .set_tick_size(instrument.tick_size);
