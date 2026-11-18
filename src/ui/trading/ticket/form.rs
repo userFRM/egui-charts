@@ -531,9 +531,11 @@ impl OrderTicket {
                            index: usize,
                            bracket: &mut Bracket,
                            control: &mut dyn FnMut(&mut Ui) -> bool| {
-            let exit = entry.map(|entry| {
+            let exit = entry.and_then(|entry| {
                 let price = bracket.price(side, entry, tick, per_point, profit);
-                (entry, to_step(price, tick, f64::round))
+                price
+                    .is_finite()
+                    .then(|| (entry, to_step(price, tick, f64::round)))
             });
             let mut mode = bracket.mode;
             let enabled = ui
