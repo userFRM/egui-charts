@@ -76,6 +76,9 @@ struct Live {
     /// Pending bars the pending limit does not count, those of a replay rebuild until the chart
     /// drains them; `usize::MAX` while the rebuild runs.
     rebuilt_bars: usize,
+    /// The trade-based grouping the queued executions continued after the last drain.
+    /// `None` once a pushed bar regrouped some of them.
+    queued_from: Option<TradeBars>,
     updates: Updates,
 }
 
@@ -245,6 +248,8 @@ impl Inbox {
             .map(|(id, live)| {
                 let next = Updates::new(live.updates.trades.empty());
                 let mut updates = std::mem::replace(&mut live.updates, next);
+                // The executions queued next continue the stream's grouping after these.
+                live.queued_from = Some(live.grouping());
                 if live.rebuilt_bars != usize::MAX {
                     live.rebuilt_bars = 0;
                 }
