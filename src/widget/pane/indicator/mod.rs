@@ -84,6 +84,9 @@ pub struct IndicatorPane {
     pub(super) draw_axis: bool,
     pub(super) legend_offset: f32,
     pub(super) pane_controls: bool,
+    /// Draw the settings button in the legend row. The chart clears it while `Control::Settings`
+    /// is hidden; a pane shown on its own keeps it.
+    pub(super) show_settings: bool,
     pub(super) axis_rect: Option<Rect>,
     pub(super) axis_tags: Vec<Option<Rect>>,
     pub(super) fixed_axis_tags: Vec<Option<Rect>>,
@@ -126,6 +129,7 @@ impl IndicatorPane {
             draw_axis: true,
             legend_offset: 0.0,
             pane_controls: false,
+            show_settings: true,
             axis_rect: None,
             axis_tags: Vec::new(),
             fixed_axis_tags: Vec::new(),
@@ -703,6 +707,7 @@ impl IndicatorPane {
                 Some(self.background_at(ui.ctx(), controls.center())),
                 response.id.with("study_controls"),
                 indicator,
+                self.show_settings,
             )
         });
         let legend_rect = Rect::from_min_max(

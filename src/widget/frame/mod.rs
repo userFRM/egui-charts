@@ -3425,7 +3425,7 @@ impl Chart {
                     }
                 }
                 legend.series_visible = self.main_series_visible;
-                legend.show_series_settings = !self.settings_hidden;
+                legend.show_settings = !self.settings_hidden;
                 legend.title_as_description = self.config.title_as_description;
                 // A whitespace bar has no values to show.
                 let values = self.main_series_visible && !bar.is_whitespace();
