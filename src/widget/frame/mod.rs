@@ -957,6 +957,7 @@ impl Chart {
             self.last_crosshair = None;
             self.last_rendered_price_rect = layout.price_rect;
             self.last_rendered_volume_rect = Rect::NOTHING;
+            self.last_vertical_grid_x.clear();
             let scale = self.state.price_scale();
             self.last_price_map = scale
                 .map(scale.transform(), chart_rect.top(), chart_rect.bottom())
@@ -1574,7 +1575,7 @@ impl Chart {
             (Vec::new(), Vec::new(), time_coords.clone())
         };
 
-        if self.config.show_grid && self.config.show_vertical_grid {
+        self.last_vertical_grid_x = if self.config.show_grid && self.config.show_vertical_grid {
             let style = self
                 .config
                 .vertical_grid_line_style
@@ -1591,7 +1592,7 @@ impl Chart {
                     style,
                     horizontal_grid
                         .then_some((self.config.grid_color, self.config.grid_line_style)),
-                );
+                )
             } else {
                 rendering::render_vertical_grid(
                     &painter,
@@ -1601,9 +1602,11 @@ impl Chart {
                         .vertical_grid_color
                         .unwrap_or(self.config.grid_color),
                     style,
-                );
+                )
             }
-        }
+        } else {
+            Vec::new()
+        };
 
         let session_tf = self.resolve_session_timeframe(visible_data);
         let exchange_session = rendering::exchange_session(
