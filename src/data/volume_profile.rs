@@ -20,9 +20,12 @@ pub struct StudyProfile {
     /// Colour of the point of control and value-area lines, `Color32::PLACEHOLDER` as bytes
     /// following the theme's foreground.
     pub color: [u8; 4],
-    /// Draw at the right of the viewport instead of beside the first source bar.
+    /// Draw in the right 30% of the plot instead of beside the first source bar. A profile of
+    /// [`VolumeProfile::from_options`] rows, which has no source bars, otherwise takes the left
+    /// 30%.
     pub right_aligned: bool,
-    /// Share of the span, from 0 to 1, that the row with the most volume takes.
+    /// Share of the span, from 0 to 1, that the row with the most volume takes. An options
+    /// exposure overlay's largest bar takes half of it on each side of its centre.
     pub width: f32,
 }
 
@@ -253,6 +256,17 @@ pub(crate) struct ExposureProfile {
     pub note: String,
 }
 
+/// Calls plus puts of each selected expiry by row, for an options profile drawn by expiry.
+#[cfg(any(feature = "studies", feature = "widget"))]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ExpiryParts {
+    /// Each expiry's date label and colour, in the order its part is drawn from the base.
+    pub labels: Vec<(String, [u8; 4])>,
+    /// `rows[part][row]`, the expiry's calls plus puts in each row. A row's parts add up to its
+    /// volume.
+    pub rows: Vec<Vec<f64>>,
+}
+
 /// Volume traded at each price row of bars or host-supplied option strikes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VolumeProfile {
@@ -274,6 +288,9 @@ pub struct VolumeProfile {
     // Signed figures and their readout for an options exposure overlay; row volumes bound it.
     #[cfg(any(feature = "studies", feature = "widget"))]
     pub(crate) exposure: Option<Arc<ExposureProfile>>,
+    // Each row split by expiry, for an options profile drawn by expiry.
+    #[cfg(any(feature = "studies", feature = "widget"))]
+    pub(crate) expiry_parts: Option<ExpiryParts>,
 }
 
 fn valid_bar(bar: &Bar) -> bool {
@@ -292,6 +309,40 @@ impl VolumeProfile {
     /// Duplicate strikes are summed. Empty, invalid, overflowing or unrepresentable
     /// snapshots, including grids exceeding 10,000 rows, produce no profile.
     pub fn from_options(data: &[crate::data::OptionsVolume], row_size: f64) -> Option<Self> {
+        Self::options_rows(data, row_size).map(|(profile, _)| profile)
+    }
+
+    /// [`Self::from_options`], with each row also split by expiry: `part[i]` is the index in
+    /// `labels` of `data[i]`'s expiry. `None` where `from_options` is, or when `part` does not
+    /// give every datum a label.
+    // Only the options study calls it; under `widget` alone it would be dead code.
+    #[cfg(feature = "studies")]
+    pub(crate) fn from_option_parts(
+        data: &[crate::data::OptionsVolume],
+        part: &[usize],
+        labels: Vec<(String, [u8; 4])>,
+        row_size: f64,
+    ) -> Option<Self> {
+        if part.len() != data.len() || part.iter().any(|part| *part >= labels.len()) {
+            return None;
+        }
+        let (mut profile, rows) = Self::options_rows(data, row_size)?;
+        let mut parts = vec![vec![0.0; profile.volume.len()]; labels.len()];
+        for ((value, part), row) in data.iter().zip(part).zip(rows) {
+            parts[*part][row] += value.calls + value.puts;
+        }
+        profile.expiry_parts = Some(ExpiryParts {
+            labels,
+            rows: parts,
+        });
+        Some(profile)
+    }
+
+    /// [`Self::from_options`] and the row of each datum.
+    fn options_rows(
+        data: &[crate::data::OptionsVolume],
+        row_size: f64,
+    ) -> Option<(Self, Vec<usize>)> {
         if data.is_empty()
             || !row_size.is_finite()
             || row_size <= 0.0
@@ -341,16 +392,22 @@ impl VolumeProfile {
             options: true,
             #[cfg(any(feature = "studies", feature = "widget"))]
             exposure: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            expiry_parts: None,
         };
         let mut total = 0.0;
-        for v in data {
-            let row = (key(v.strike) - first) as usize;
-            profile.up[row] += v.calls;
-            profile.down[row] += v.puts;
-            profile.volume[row] = profile.up[row] + profile.down[row];
-            total += v.calls + v.puts;
-        }
-        total.is_finite().then_some(profile)
+        let rows = data
+            .iter()
+            .map(|v| {
+                let row = (key(v.strike) - first) as usize;
+                profile.up[row] += v.calls;
+                profile.down[row] += v.puts;
+                profile.volume[row] = profile.up[row] + profile.down[row];
+                total += v.calls + v.puts;
+                row
+            })
+            .collect();
+        total.is_finite().then_some((profile, rows))
     }
 
     /// Distribute finite, nonnegative-volume bars over their high-low ranges.
@@ -408,6 +465,8 @@ impl VolumeProfile {
             options: false,
             #[cfg(any(feature = "studies", feature = "widget"))]
             exposure: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            expiry_parts: None,
         };
         for (&level, row) in &bar.levels {
             let i = (level - first) as usize;
@@ -523,6 +582,8 @@ impl VolumeProfile {
             options: false,
             #[cfg(any(feature = "studies", feature = "widget"))]
             exposure: None,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            expiry_parts: None,
         };
         bars.iter().for_each(|bar| profile.add(bar));
         Some(profile)
