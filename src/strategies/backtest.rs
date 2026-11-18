@@ -269,7 +269,8 @@ pub trait Strategy {
     }
 
     /// Changes a calculation input. Call `prepare` again before using cached calculations.
-    /// Implementations reject unknown ids, wrong types and values outside their schema.
+    /// Implementations reject unknown ids, wrong types and values outside their schema. Check
+    /// rules that join several inputs in [`validate_inputs`](Self::validate_inputs).
     fn set_input(
         &mut self,
         id: &str,
@@ -277,6 +278,15 @@ pub trait Strategy {
     ) -> Result<(), &'static str> {
         let _ = (id, value);
         Err("strategy has no editable inputs")
+    }
+
+    /// Checks the inputs together once all of them are set, such as two levels where one must
+    /// stay below the other. [`set_input`](Self::set_input) checks each input on its own, so the
+    /// inputs can be set in any order. [`optimise`](crate::strategies::optimise) skips a
+    /// combination this refuses and the strategy tester does not run it; [`Backtest::run`] does
+    /// not call it. Accepts every combination by default.
+    fn validate_inputs(&self) -> Result<(), &'static str> {
+        Ok(())
     }
 
     /// Computes what the strategy needs from the whole run once, before the first bar, such as

@@ -14,7 +14,7 @@ use crate::data::{
     ScreenerTextAnswer, ScreenerUniverse,
 };
 use crate::icons::icons;
-use crate::services::{Storage, StoreKind};
+use crate::services::{ConflictChoice, Storage, StoreKind};
 use crate::theme::ThemeExt;
 use crate::ui::dialogs::templates::TemplateStore;
 use crate::ui_kit::buttons::Button;
@@ -199,6 +199,22 @@ impl ScreenerPanel {
     pub fn set_storage(&mut self, storage: Arc<dyn Storage>) {
         self.stored = true;
         self.saved.set_storage(storage);
+    }
+
+    /// The saved screen whose write the host refused because another client changed or created
+    /// it; see [`TemplateStore::storage_conflict`].
+    pub fn storage_conflict(&self) -> Option<&str> {
+        self.saved.storage_conflict()
+    }
+
+    /// Settles the refused write of the saved screen `name`; see
+    /// [`TemplateStore::resolve_storage_conflict`]. Only overwriting completes a rename refused
+    /// so: otherwise the screen keeps its old name.
+    pub fn resolve_storage_conflict(&mut self, name: &str, choice: ConflictChoice) {
+        if choice != ConflictChoice::Retry && self.saved.storage_conflict() == Some(name) {
+            self.renaming = None;
+        }
+        self.saved.resolve_storage_conflict(name, choice);
     }
 
     fn query(&self, offset: usize) -> ScreenerQuery {

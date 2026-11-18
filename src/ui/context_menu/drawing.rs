@@ -9,10 +9,12 @@ use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
 use crate::model::{Alert, AlertComparison, AlertCondition, Timeframe};
 use crate::theme::Theme;
+use crate::ui::Control;
 use crate::ui::context_menu::{MenuEntry, MenuItem, show_menu};
 use crate::widget::{Chart, PaneId};
 
 use egui::{Context, Id, Pos2};
+use std::collections::HashSet;
 
 /// Distance between the pointer and the menu corner, enough to clear the handle under the
 /// pointer: half the 8 px handle plus 2 px.
@@ -104,6 +106,10 @@ pub struct DrawingContextMenu {
     pub current_interval: Option<Timeframe>,
     /// Saved interval filter used to mark matching quick commands.
     pub timeframe_visibility: TimeframeVisibility,
+    /// Controls the host hid, set through
+    /// [`ChartMenus::set_control_visible`](crate::ui::context_menu::ChartMenus::set_control_visible);
+    /// only [`Control::Alerts`] applies here.
+    pub(crate) hidden: HashSet<Control>,
     /// Last action taken
     pub last_action: DrawingContextMenuAction,
     /// Skip close detection on first frame
@@ -130,6 +136,7 @@ impl DrawingContextMenu {
             panes: Vec::new(),
             current_interval: None,
             timeframe_visibility: TimeframeVisibility::all(),
+            hidden: HashSet::new(),
             last_action: DrawingContextMenuAction::None,
             just_opened: false,
         }
@@ -262,22 +269,26 @@ impl DrawingContextMenu {
         ctx: &Context,
         shortcuts: &crate::widget::ShortcutMap,
     ) -> Vec<MenuEntry<DrawingContextMenuAction>> {
-        let alert = self.alert.iter().flat_map(|alert| {
-            [
-                MenuEntry::Item(
-                    MenuItem::new(
-                        l10n::format_text(
-                            ctx,
-                            "Add alert on {name}…",
-                            &[("name", l10n::text(ctx, &self.drawing_type).as_str())],
-                        ),
-                        DrawingContextMenuAction::AddAlert(Box::new(alert.clone())),
-                    )
-                    .with_icon(&embedded_icons::ALERTS),
-                ),
-                MenuEntry::Separator,
-            ]
-        });
+        let alert = self
+            .alert
+            .iter()
+            .filter(|_| !self.hidden.contains(&Control::Alerts))
+            .flat_map(|alert| {
+                [
+                    MenuEntry::Item(
+                        MenuItem::new(
+                            l10n::format_text(
+                                ctx,
+                                "Add alert on {name}…",
+                                &[("name", l10n::text(ctx, &self.drawing_type).as_str())],
+                            ),
+                            DrawingContextMenuAction::AddAlert(Box::new(alert.clone())),
+                        )
+                        .with_icon(&embedded_icons::ALERTS),
+                    ),
+                    MenuEntry::Separator,
+                ]
+            });
         alert
             .chain([
                 // Edit section

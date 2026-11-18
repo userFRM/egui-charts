@@ -139,6 +139,10 @@ pub struct Legend<'a> {
     /// Whether the series is shown. A hidden series keeps its title and controls, dimmed, so it
     /// can be shown again.
     pub(crate) series_visible: bool,
+    /// Draw the settings button among the title controls. The chart clears it while
+    /// `Control::Settings` is hidden.
+    #[cfg_attr(not(feature = "icons"), allow(dead_code))]
+    pub(crate) show_series_settings: bool,
     /// Prefer the host description over the ticker.
     pub title_as_description: bool,
     /// Display OHLC fields, or the close alone in a compact plot.
@@ -206,6 +210,7 @@ impl<'a> Legend<'a> {
             show_volume: true,
             show_title: true,
             series_visible: true,
+            show_series_settings: true,
             title_as_description: true,
             show_ohlc: true,
             show_change: true,
@@ -476,7 +481,12 @@ impl<'a> Legend<'a> {
         // Values follow the title directly; the controls take the space after them on hover.
         #[cfg(feature = "icons")]
         if self.show_title {
-            let size = Vec2::new(116.0, 20.0);
+            let width = if self.show_series_settings {
+                116.0
+            } else {
+                96.0
+            };
+            let size = Vec2::new(width, 20.0);
             // On a full row the controls cover its end instead of opening an empty row. They and
             // the outline keep to the end of the title's first row on every row the title spans.
             let controls = if layout.pos.x + size.x > title_end {
@@ -587,7 +597,9 @@ impl<'a> Legend<'a> {
                         ui.close();
                     }
                 });
-                for (index, (action, icon, label)) in [
+                // The id keeps the button's index, so a focused remove button keeps its focus
+                // when the settings button comes or goes.
+                for (slot, (index, (action, icon, label))) in [
                     (
                         SeriesAction::ToggleVisibility,
                         if self.series_visible {
@@ -614,9 +626,13 @@ impl<'a> Legend<'a> {
                 ]
                 .into_iter()
                 .enumerate()
+                .filter(|(_, (action, ..))| {
+                    self.show_series_settings || *action != SeriesAction::Settings
+                })
+                .enumerate()
                 {
                     let rect = Rect::from_min_size(
-                        controls.min + Vec2::new(56.0 + index as f32 * 20.0, 0.0),
+                        controls.min + Vec2::new(56.0 + slot as f32 * 20.0, 0.0),
                         Vec2::splat(20.0),
                     )
                     .intersect(bounds);
