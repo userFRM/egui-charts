@@ -171,7 +171,7 @@ impl StudyContextMenu {
         self.is_open = true;
         self.volume = study.is_volume();
         self.name = if self.volume { "Vol" } else { study.name() }.to_owned();
-        self.catalogue_name = study.name().to_owned();
+        self.catalogue_name = study.registered_name().to_owned();
         self.alert = chart
             .indicator_value_at(id, bar)
             .filter(|_| !chart.symbol.is_empty())
@@ -616,5 +616,40 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Guards #3221: removing the last study of a pane through its menu deletes the line drawn
+    /// in that pane, locked as it is, from the chart and its saved drawings and queues its
+    /// deletion, in the step that removed the study; one undo brings both back.
+    #[test]
+    fn removing_the_last_study_of_a_pane_deletes_its_drawings_in_one_step() {
+        use crate::drawings::manager::DrawingSyncAction;
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        let rsi = chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+        let pane = chart.series_pane(rsi).unwrap();
+        let mut line = Drawing::new(0, DrawingToolType::HorizontalLine);
+        line.chart_points = vec![ChartPoint::new(50.0, 70.0)];
+        let line = chart.drawings_mut().add_drawing(line).unwrap();
+        assert!(chart.move_drawing_to_pane(line, pane));
+        chart
+            .drawings_mut()
+            .edit_drawing(line, |d| d.locked = true)
+            .unwrap();
+        chart.drawings().pending_sync.lock().unwrap().clear();
+
+        chart.user_action(|chart| apply(chart, rsi, &StudyContextMenuAction::Remove));
+        assert!(!chart.panes().contains(&pane));
+        assert!(chart.drawings().drawings.is_empty());
+        assert!(chart.save_drawings().unwrap().drawings().is_empty());
+        assert!(matches!(
+            chart.drawings().pending_sync.lock().unwrap().as_slice(),
+            [DrawingSyncAction::Delete(id)] if *id == line.to_string()
+        ));
+
+        assert!(chart.undo());
+        assert_eq!(chart.series_pane(rsi), Some(pane));
+        assert_eq!(chart.drawing_pane(line), Some(pane));
+        assert!(chart.drawings().drawings[0].locked);
     }
 }

@@ -688,18 +688,24 @@ impl TradeBars {
 impl Live {
     #[cfg(any(feature = "widget", feature = "alert-engine"))]
     pub(super) fn connect_study_inputs(&mut self, inputs: Vec<crate::data::OrderFlowInput>) {
-        if self.clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
-            for input in &inputs {
-                if !self.study_inputs.iter().any(|old| input.same_source(old)) {
-                    // The chart rebuilt drained history; include the executions still queued.
-                    let repeats = &self.updates.repeats;
-                    let queued = self.updates.trades.iter();
-                    for trade in queued.filter(|t| t.id.is_none_or(|id| !repeats.contains(&id))) {
-                        input.push_trade(&self.clock, trade);
-                    }
-                    if let Some(open) = self.forming {
-                        input.set_trade_bar(open);
-                    }
+        let trade_based = self.clock.timeframe().is_some_and(|tf| tf.is_trade_based());
+        for input in &inputs {
+            if self.study_inputs.iter().any(|old| input.same_source(old)) {
+                continue;
+            }
+            // The chart filled it from the executions that a reset waiting for its drain discards.
+            if self.updates.reset {
+                input.clear();
+            }
+            if trade_based {
+                // The chart rebuilt drained history; include the executions still queued.
+                let repeats = &self.updates.repeats;
+                let queued = self.updates.trades.iter();
+                for trade in queued.filter(|t| t.id.is_none_or(|id| !repeats.contains(&id))) {
+                    input.push_trade(&self.clock, trade);
+                }
+                if let Some(open) = self.forming {
+                    input.set_trade_bar(open);
                 }
             }
         }

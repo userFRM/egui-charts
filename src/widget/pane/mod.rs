@@ -45,8 +45,9 @@ fn upgraded_study(
         settings: study.settings(),
         visible: true,
         scale: None,
+        metric: None,
     }
-    .upgraded(declared)?;
+    .upgraded(name, declared)?;
     // A listed input the study lacks fails the match as stored too, so only `declared` counts.
     let takes = template
         .inputs
@@ -229,6 +230,27 @@ impl Pane {
 }
 
 impl Chart {
+    /// Keep an unavailable metric's pane usable while its host data source reports an error.
+    fn paint_metric_notice(&self, ui: &egui::Ui, pane: PaneId, rect: Rect) {
+        let unavailable = self.indicators().any(|(id, study)| {
+            study.metric().is_some()
+                && study.is_visible()
+                && self.series_pane(id) == Some(pane)
+                && study.data_requests().iter().any(|request| {
+                    request.metric.is_some() && self.study_data_error(request).is_some()
+                })
+        });
+        if unavailable {
+            ui.painter().with_clip_rect(rect).text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                crate::localization::text(ui.ctx(), "Metric data unavailable"),
+                egui::FontId::proportional(13.0),
+                self.config.text_color,
+            );
+        }
+    }
+
     fn pane_axes(
         &self,
         id: PaneId,

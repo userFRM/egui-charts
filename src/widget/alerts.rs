@@ -110,7 +110,7 @@ impl Chart {
                 .indicators()
                 .map(|(id, study)| crate::model::AlertStudy {
                     id: id.0,
-                    name: study.name().to_owned(),
+                    name: study.registered_name().to_owned(),
                     inputs: study
                         .inputs()
                         .into_iter()
