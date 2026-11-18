@@ -176,6 +176,8 @@ impl Chart {
         ui: &mut Ui,
         footprint: Option<(FootprintView<'_>, &FootprintConfig)>,
     ) -> Response {
+        #[cfg(feature = "drawings")]
+        self.layered_drawings.clear();
         let footprint = footprint.filter(|_| self.replay.is_none());
         let theme = self.theme_override.clone();
         // Axis labels take their size from the theme's label text.
@@ -421,6 +423,16 @@ impl Chart {
         // Within the frame of the edit, in case it is the last.
         #[cfg(feature = "drawings")]
         self.save_stored_drawings();
+        #[cfg(feature = "drawings")]
+        {
+            let mut layers: std::collections::HashMap<_, Vec<_>> = std::collections::HashMap::new();
+            for (layer, before, range) in std::mem::take(&mut self.layered_drawings) {
+                layers.entry(layer).or_default().push((before, range));
+            }
+            for (layer, moves) in layers {
+                primitives::move_shapes_before(ui.ctx(), layer, &moves);
+            }
+        }
         response
     }
 
@@ -483,6 +495,12 @@ impl Chart {
         let show_right_axis = primary_side == Some(crate::model::AxisSide::Right);
         let main_pane = self.main_series_pane();
         let order = self.main_series_order().to_vec();
+        #[cfg(feature = "drawings")]
+        let layered = self
+            .drawings
+            .drawings
+            .iter()
+            .any(|d| d.series_layer.is_some());
         // Register the icon loader once per context, and the general SVG loader for UI images.
         #[cfg(feature = "icons")]
         {
@@ -2074,6 +2092,30 @@ impl Chart {
                 })
                 .or_else(|| builtin_at(pos))
         };
+        #[cfg(feature = "drawings")]
+        if layered {
+            let (hover, press) =
+                ui.input(|input| (input.pointer.hover_pos(), input.pointer.press_origin()));
+            let mut probes = Vec::new();
+            for point in [pointer, response.interact_pointer_pos(), hover, press]
+                .into_iter()
+                .flatten()
+            {
+                if price_rect.contains(point) && !probes.contains(&point) {
+                    probes.push(point);
+                }
+            }
+            let covers = probes.into_iter().filter_map(|point| {
+                let (element, _) = element_at(point)?;
+                let (super::ChartElementId::Indicator(id) | super::ChartElementId::Series(id)) =
+                    element;
+                order
+                    .iter()
+                    .position(|member| *member == id)
+                    .map(|e| (point, e + 1))
+            });
+            self.drawings.set_covers(price_rect, covers);
+        }
         // The element under the pointer goes last when hovered series are drawn on top.
         let on_top = ui
             .input(|input| input.pointer.hover_pos())
@@ -2391,7 +2433,19 @@ impl Chart {
                 paint_overlay(id);
             }
         };
-        behind.iter().for_each(paint_unhovered);
+        #[cfg(feature = "drawings")]
+        let mut marks = Vec::new();
+        for id in behind {
+            #[cfg(feature = "drawings")]
+            if layered {
+                marks.push(Some(primitives::next_shape(&clipped_painter)));
+            }
+            paint_unhovered(id);
+        }
+        #[cfg(feature = "drawings")]
+        if layered {
+            marks.push(Some(primitives::next_shape(&clipped_painter)));
+        }
         if !main_on_top {
             paint_main_series();
         }
@@ -2410,7 +2464,13 @@ impl Chart {
             });
         }
 
-        front.iter().for_each(paint_unhovered);
+        for id in front.iter().filter(|id| **id != super::SeriesId::MAIN) {
+            #[cfg(feature = "drawings")]
+            if layered {
+                marks.push(Some(primitives::next_shape(&clipped_painter)));
+            }
+            paint_unhovered(id);
+        }
         match on_top {
             Some(super::ChartElementId::Indicator(id)) => paint_overlay(&id),
             _ if main_on_top => paint_main_series(),
@@ -3162,6 +3222,12 @@ impl Chart {
             self.cursor_modes = cursor_modes;
             self.history
                 .finish_drawing_action(&mut self.drawings, drawing_history);
+            Self::queue_layered_drawings(
+                &self.drawings,
+                &mut self.layered_drawings,
+                painter.layer_id(),
+                &marks,
+            );
         }
         #[cfg(feature = "drawings")]
         if let Some(id) = pointer.and_then(|pos| self.drawings.hit_test(pos)) {

@@ -227,6 +227,8 @@ impl Chart {
             feed_link: None,
             #[cfg(feature = "drawings")]
             cursor_modes: CursorModeState::new(),
+            #[cfg(feature = "drawings")]
+            layered_drawings: Vec::new(),
             main_series_style: crate::model::SeriesStyle::default(),
             last_price_pulse: std::cell::Cell::new(None),
             last_price_map: PriceMap::new(
