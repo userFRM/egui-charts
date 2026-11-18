@@ -31,7 +31,7 @@ pub fn render_grid(
     );
 }
 
-/// Renders vertical grid lines at fixed bar intervals
+/// Renders vertical grid lines at fixed bar intervals and returns their x positions.
 /// Grid lines are tied directly to bar indices, so they move 1:1 with the chart during pan
 pub fn render_vertical_grid(
     painter: &Painter,
@@ -39,7 +39,7 @@ pub fn render_vertical_grid(
     coords: &ChartMapping,
     grid_color: Color32,
     style: LineStyle,
-) {
+) -> Vec<f32> {
     // Calculate grid interval based on bar spacing (zoom level)
     // More zoomed in (larger bar_spacing) = more grid lines
     // More zoomed out (smaller bar_spacing) = fewer grid lines
@@ -61,19 +61,28 @@ pub fn render_vertical_grid(
         0
     };
 
-    let lines = (0..=(visible_bars / bars_per_grid + 2)).filter_map(|i| {
-        let grid_idx = first_visible_idx.saturating_add(i.saturating_mul(bars_per_grid));
+    let xs: Vec<f32> = (0..=(visible_bars / bars_per_grid + 2))
+        .filter_map(|i| {
+            let grid_idx = first_visible_idx.saturating_add(i.saturating_mul(bars_per_grid));
 
-        // Convert bar index to x coord using same formula as candle rendering
-        let x = coords.idx_to_x(grid_idx);
+            // Convert bar index to x coord using same formula as candle rendering
+            let x = coords.idx_to_x(grid_idx);
 
-        // Skip if outside visible area
-        if x < rect.min.x - 1.0 || x > rect.max.x + 1.0 {
-            return None;
-        }
-        Some([Pos2::new(x, rect.min.y), Pos2::new(x, rect.max.y)])
-    });
-    render_grid_lines(painter, lines, grid_color, style);
+            // Skip if outside visible area
+            if x < rect.min.x - 1.0 || x > rect.max.x + 1.0 {
+                return None;
+            }
+            Some(x)
+        })
+        .collect();
+    render_grid_lines(
+        painter,
+        xs.iter()
+            .map(|&x| [Pos2::new(x, rect.min.y), Pos2::new(x, rect.max.y)]),
+        grid_color,
+        style,
+    );
+    xs
 }
 
 /// Paints one-pixel grid lines in `style`, batching their square dots into one mesh.
@@ -85,13 +94,22 @@ pub(crate) fn render_grid_lines(
 ) {
     let stroke = Stroke::new(DESIGN_TOKENS.stroke.hairline, color);
     match style.hairline_pattern() {
-        Some((dash, gap)) => draw_dashed_segments(
-            painter,
-            lines.into_iter().map(|[start, end]| (start, end, 0.0)),
-            stroke,
-            dash,
-            gap,
-        ),
+        Some((dash, gap)) => {
+            // Tessellation starts a new mesh where the clip changes, so an empty shape under
+            // another clip on each side gives the dots a mesh of their own, sized once, instead
+            // of growing, and copying, the mesh of the shapes painted around them.
+            let mut apart = painter.clone();
+            apart.set_clip_rect(painter.clip_rect().expand(1.0));
+            apart.add(egui::Shape::Noop);
+            draw_dashed_segments(
+                painter,
+                lines.into_iter().map(|[start, end]| (start, end, 0.0)),
+                stroke,
+                dash,
+                gap,
+            );
+            apart.add(egui::Shape::Noop);
+        }
         None => {
             painter.extend(
                 lines

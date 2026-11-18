@@ -586,7 +586,7 @@ impl Chart {
                 config.show_legend = entry.is_some()
                     && (config.show_name || config.show_values || !config.inputs.is_empty());
                 config.height = height;
-                config.show_grid &= Some(entry) == first;
+                config.show_grid = self.config.show_grid && Some(entry) == first;
                 let mut panel = IndicatorPane::with_config(config);
                 panel.legend_backdrop = self.config.indicator_backdrop_opacity;
                 panel.background = Some((
@@ -595,6 +595,21 @@ impl Chart {
                     self.config.background_color,
                 ));
                 panel.text_color = Some(self.config.text_color);
+                let chart = &self.config;
+                panel.grid = Some(super::indicator::PaneGrid {
+                    horizontal: chart
+                        .show_horizontal_grid
+                        .then_some((chart.grid_color, chart.grid_line_style)),
+                    vertical: chart.show_vertical_grid.then(|| {
+                        (
+                            chart.vertical_grid_color.unwrap_or(chart.grid_color),
+                            chart
+                                .vertical_grid_line_style
+                                .unwrap_or(chart.grid_line_style),
+                            self.last_vertical_grid_x.clone(),
+                        )
+                    }),
+                });
                 panel.axis_options = crate::config::PriceAxisOptions {
                     show_study_values: self.config.price_axis.show_study_values,
                     ..self.config.price_axis
@@ -622,6 +637,8 @@ impl Chart {
                         | crate::scales::PriceScaleMode::IndexedTo100
                 ) {
                     panel.price_formatter = self.percentage_formatter.clone();
+                } else if let Some(id) = id {
+                    panel.price_formatter = self.study_formatter(id, indicator.value_format());
                 }
                 panel.axis_rect = axes
                     .iter()

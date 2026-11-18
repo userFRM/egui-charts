@@ -64,6 +64,15 @@ mod indicator_sizing {
     pub const MULTI_LINE_HEIGHT: f32 = 150.0;
 }
 
+/// The grid of the chart showing a pane, in the chart's colours and line patterns.
+pub(super) struct PaneGrid {
+    /// Colour and pattern of the horizontal lines, at the pane's price marks; `None` hides them.
+    pub(super) horizontal: Option<(egui::Color32, crate::model::LineStyle)>,
+    /// Colour and pattern of the vertical lines and their x positions, those of the chart's
+    /// price pane; `None` hides them.
+    pub(super) vertical: Option<(egui::Color32, crate::model::LineStyle, Vec<f32>)>,
+}
+
 /// A separate-pane indicator panel rendered via direct egui painting.
 ///
 /// Each `IndicatorPane` renders one indicator (RSI, MACD, etc.) in its own
@@ -98,6 +107,9 @@ pub struct IndicatorPane {
     /// Colour of the legend text and the axis labels, the scale text colour of the chart showing
     /// the pane. A pane shown on its own takes them from the egui style and the theme.
     pub(super) text_color: Option<egui::Color32>,
+    /// The grid of the chart showing the pane. A pane shown on its own draws its own grid in
+    /// the theme's grid colour.
+    pub(super) grid: Option<PaneGrid>,
 }
 
 impl std::fmt::Debug for IndicatorPane {
@@ -134,6 +146,7 @@ impl IndicatorPane {
             legend_backdrop: 0.6,
             background: None,
             text_color: None,
+            grid: None,
         }
     }
 

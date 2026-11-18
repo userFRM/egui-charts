@@ -404,6 +404,10 @@ pub struct Chart {
     volume_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     series_formatters:
         std::collections::HashMap<SeriesId, std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    /// Host formatters of single studies. Kept after a study's removal, so that undo restores
+    /// it with its formatter; study ids are never reused.
+    study_formatters:
+        std::collections::HashMap<SeriesId, std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     extended_hours: bool,
     conversion: Option<String>,
     pub(crate) measured_axis_width: f32,
@@ -450,6 +454,9 @@ pub struct Chart {
     pub(crate) last_rendered_price_rect: Rect,
     /// Last rendered volume rect (actual rect used for volume rendering)
     pub(crate) last_rendered_volume_rect: Rect,
+    /// X positions of the vertical grid lines of the last rendered price pane, which the study
+    /// panes below it repeat; empty when the chart hides its vertical grid.
+    pub(crate) last_vertical_grid_x: Vec<f32>,
     /// Last rendered indicator pane info for hit testing
     /// Each entry: (indicator_index, panel_rect, chart_rect, y_min, y_max, coords)
     pub(crate) last_rendered_indicator_panes: Vec<RenderedIndicatorPane>,

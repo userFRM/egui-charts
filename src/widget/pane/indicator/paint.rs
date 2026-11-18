@@ -146,6 +146,13 @@ impl IndicatorPane {
 
         // Draw subtle grid lines
         if self.config.show_grid {
+            if let Some(grid) = &self.grid {
+                // A chart's pane draws the chart's horizontal grid, at its own price marks.
+                if let (Some((color, style)), Some(map)) = (grid.horizontal, self.price_map) {
+                    crate::chart::rendering::render_grid(painter, rect, &map, color, style);
+                }
+                return;
+            }
             if let Some(map) = self.price_map {
                 for mark in map.marks() {
                     painter.line_segment(
@@ -175,8 +182,9 @@ impl IndicatorPane {
         }
     }
 
-    /// Draw vertical grid lines aligned with main chart
-    /// Uses the same coordinate system as the main chart for seamless grid appearance
+    /// Draw vertical grid lines aligned with main chart.
+    /// A chart's pane repeats the price pane's vertical lines; a pane shown on its own spaces
+    /// its lines by bar index with the same coordinate system as the main chart.
     pub(super) fn draw_vertical_grid_aligned(
         &self,
         painter: &egui::Painter,
@@ -184,6 +192,18 @@ impl IndicatorPane {
         coords: &IndicatorCoordParams,
         grid_color: Color32,
     ) {
+        if let Some(grid) = &self.grid {
+            if let Some((color, style, xs)) = &grid.vertical {
+                crate::chart::rendering::grid::render_grid_lines(
+                    painter,
+                    xs.iter()
+                        .map(|&x| [Pos2::new(x, rect.min.y), Pos2::new(x, rect.max.y)]),
+                    *color,
+                    *style,
+                );
+            }
+            return;
+        }
         // Create mapping for coordinate conversion (y range doesn't matter for grid)
         let mapping = coords.to_mapping(rect, 0.0, 1.0);
 
@@ -386,7 +406,7 @@ impl IndicatorPane {
                     last_in_view,
                     axis_edge,
                     &mut tags,
-                    None,
+                    self.price_formatter.as_deref(),
                     &self.axis_options,
                 );
             }
@@ -690,6 +710,207 @@ mod tests {
             .count();
         // An 800 point wide chart has room for ten lines 80 points apart in each grid.
         assert!(vertical <= 30, "{vertical} vertical lines");
+    }
+
+    /// A chart's study pane draws the grid its price pane draws: the same directions, in the
+    /// chart's horizontal and vertical grid colours and line patterns, with the vertical lines
+    /// at the price pane's positions; hiding the grid hides it in the pane too.
+    #[test]
+    fn study_panes_draw_the_chart_grid() {
+        use crate::model::LineStyle::{self, *};
+        use crate::widget::test_frames::{chart, shapes};
+        use egui::Shape;
+        let h = Color32::from_rgba_unmultiplied(200, 10, 10, 160);
+        let v = Color32::from_rgba_unmultiplied(10, 200, 10, 120);
+        // show_grid, horizontal, vertical, vertical colour, style, vertical style.
+        type Row = (
+            bool,
+            bool,
+            bool,
+            Option<Color32>,
+            LineStyle,
+            Option<LineStyle>,
+        );
+        let rows: [Row; 7] = [
+            (true, true, true, Some(v), Solid, Some(Solid)),
+            (true, true, false, Some(v), Dotted, None),
+            (true, false, true, Some(v), Dashed, Some(LargeDashed)),
+            (true, true, true, None, Dashed, None),
+            (true, false, true, Some(v), Solid, Some(SparseDotted)),
+            // The grid set to None in the chart settings.
+            (false, false, false, Some(v), Solid, Some(Solid)),
+            // The grid toggled off from the keyboard, its directions kept.
+            (false, true, true, Some(v), Solid, Some(Solid)),
+        ];
+        // Axis-aligned segments in `color` with their midpoint in `rect`, as (vertical, across,
+        // length, width), and the centres of the dots in `color` in `rect`.
+        let pieces = |shapes: &[Shape], rect: Rect, color: Color32| {
+            let mut segments = Vec::new();
+            let mut dots = Vec::new();
+            for shape in shapes {
+                match shape {
+                    Shape::LineSegment {
+                        points: [a, b],
+                        stroke,
+                    } if stroke.color == color
+                        && (a.x == b.x || a.y == b.y)
+                        && rect.contains(a.lerp(*b, 0.5)) =>
+                    {
+                        let vertical = a.x == b.x;
+                        let across = if vertical { a.x } else { a.y };
+                        segments.push((vertical, across, a.distance(*b), stroke.width));
+                    }
+                    Shape::Mesh(mesh) => {
+                        for quad in mesh.vertices.as_chunks::<4>().0 {
+                            if quad.iter().all(|vertex| vertex.color == color) {
+                                let centre =
+                                    Rect::from_points(&quad.map(|vertex| vertex.pos)).center();
+                                if rect.contains(centre) {
+                                    dots.push(centre);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            (segments, dots)
+        };
+        for (row, &(show, horizontal, vertical, vertical_color, style, vertical_style)) in
+            rows.iter().enumerate()
+        {
+            let mut chart = chart(&[10.0, 20.0], &[15.0, 25.0]);
+            chart.add_indicator(Box::new(crate::studies::RSI::default()));
+            let config = chart.config_mut();
+            config.show_grid = show;
+            config.show_horizontal_grid = horizontal;
+            config.show_vertical_grid = vertical;
+            config.grid_color = h;
+            config.vertical_grid_color = vertical_color;
+            config.grid_line_style = style;
+            config.vertical_grid_line_style = vertical_style;
+            let ctx = egui::Context::default();
+            shapes(&ctx, &mut chart, 0.0, Vec::new());
+            let painted = shapes(&ctx, &mut chart, 1.0, Vec::new());
+            let theme = ctx.active_theme().chart.grid_line;
+            let pane = chart.last_rendered_indicator_panes[0].chart_rect;
+            let price = chart.get_rendered_price_rect();
+            // (vertical, shown, colour, style) of each direction.
+            let directions = [
+                (false, show && horizontal, h, style),
+                (
+                    true,
+                    show && vertical,
+                    vertical_color.unwrap_or(h),
+                    vertical_style.unwrap_or(style),
+                ),
+            ];
+            // A dot belongs to the shown dotted direction of its colour.
+            let dotted_in = |color: Color32| {
+                directions.iter().find(|(_, shown, c, s)| {
+                    *shown && *c == color && matches!(s, Dotted | SparseDotted)
+                })
+            };
+            for &(is_vertical, shown, color, style) in &directions {
+                let name = if is_vertical {
+                    "vertical"
+                } else {
+                    "horizontal"
+                };
+                if !shown {
+                    for color in [h, v, theme] {
+                        let (segments, dots) = pieces(&painted, pane.shrink(0.5), color);
+                        assert!(
+                            !segments.iter().any(|piece| piece.0 == is_vertical),
+                            "row {row}: hidden {name} lines painted in {color:?}"
+                        );
+                        assert!(
+                            dots.is_empty() || dotted_in(color).is_some(),
+                            "row {row}: hidden {name} dots painted in {color:?}"
+                        );
+                    }
+                    continue;
+                }
+                let (segments, dots) = pieces(&painted, pane, color);
+                let segments: Vec<_> = segments
+                    .into_iter()
+                    .filter(|piece| piece.0 == is_vertical)
+                    .collect();
+                // The x positions of the vertical lines, from their segments or dots.
+                let mut across: Vec<f32> = if matches!(style, Dotted | SparseDotted) {
+                    let gap = if style == Dotted { 4.0 } else { 8.0 };
+                    assert!(!dots.is_empty(), "row {row}: {name} dots shown");
+                    let line = |dot: &Pos2| if is_vertical { dot.x } else { dot.y };
+                    let along = |dot: &Pos2| if is_vertical { dot.y } else { dot.x };
+                    let mut gaps = Vec::new();
+                    let mut lines: Vec<f32> = dots.iter().map(line).collect();
+                    lines.sort_by(f32::total_cmp);
+                    lines.dedup();
+                    for &across in &lines {
+                        let mut on_line: Vec<f32> = dots
+                            .iter()
+                            .filter(|dot| line(dot) == across)
+                            .map(along)
+                            .collect();
+                        on_line.sort_by(f32::total_cmp);
+                        gaps.extend(on_line.windows(2).map(|pair| pair[1] - pair[0]));
+                    }
+                    gaps.sort_by(f32::total_cmp);
+                    let median = gaps[gaps.len() / 2];
+                    assert!(
+                        (median - gap).abs() < 0.01,
+                        "row {row}: {name} dot gap {median}"
+                    );
+                    lines
+                } else {
+                    assert!(!segments.is_empty(), "row {row}: {name} lines shown");
+                    for &(_, _, length, width) in &segments {
+                        assert_eq!(width, 1.0, "row {row}: {name} line width");
+                        if style == Solid {
+                            let span = if is_vertical {
+                                pane.height()
+                            } else {
+                                pane.width()
+                            };
+                            assert!(
+                                (length - span).abs() < 0.01,
+                                "row {row}: {name} line spans {length} of {span}"
+                            );
+                        }
+                    }
+                    if style != Solid {
+                        let dash = if style == Dashed { 4.0 } else { 8.0 };
+                        let longest = segments.iter().map(|piece| piece.2).fold(0.0, f32::max);
+                        assert!(
+                            (longest - dash).abs() < 0.01,
+                            "row {row}: {name} dash {longest}"
+                        );
+                    }
+                    segments.iter().map(|piece| piece.1).collect()
+                };
+                if is_vertical {
+                    let (segments, dots) = pieces(&painted, price, color);
+                    let mut expected: Vec<f32> = if matches!(style, Dotted | SparseDotted) {
+                        dots.iter().map(|dot| dot.x).collect()
+                    } else {
+                        segments
+                            .iter()
+                            .filter(|piece| piece.0)
+                            .map(|piece| piece.1)
+                            .collect()
+                    };
+                    for xs in [&mut across, &mut expected] {
+                        xs.sort_by(f32::total_cmp);
+                        xs.dedup();
+                    }
+                    assert!(
+                        !expected.is_empty(),
+                        "row {row}: the price pane's vertical grid"
+                    );
+                    assert_eq!(across, expected, "row {row}: vertical line positions");
+                }
+            }
+        }
     }
 
     /// A study's levels in its own pane are painted over its pane tint, as on the price pane.
