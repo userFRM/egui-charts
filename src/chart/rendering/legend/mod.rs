@@ -169,6 +169,9 @@ pub struct Legend<'a> {
     /// Groups the thousands of built-in price values; the chart sets it from
     /// `ChartConfig::thousands_sep`.
     pub(crate) thousands_sep: Option<char>,
+    /// The decimals of the series' prices in place of the instrument's; the chart sets it to
+    /// the precision chosen for its price scale.
+    pub(crate) price_decimals: Option<u8>,
     /// The rects the chart shades as extended hours under the legend, left to right, and their
     /// shading. The chart sets it.
     pub(crate) extended_hours: (&'a [Rect], Color32),
@@ -222,6 +225,7 @@ impl<'a> Legend<'a> {
             study_backdrop: 0.6,
             quantity: None,
             thousands_sep: None,
+            price_decimals: None,
             extended_hours: (&[], Color32::TRANSPARENT),
             background: None,
         }
@@ -951,8 +955,11 @@ impl<'a> Legend<'a> {
     }
 
     fn price_precision(&self, price: f64) -> usize {
-        self.instrument
-            .and_then(crate::scales::instrument_price_precision)
+        self.price_decimals
+            .or_else(|| {
+                self.instrument
+                    .and_then(crate::scales::instrument_price_precision)
+            })
             .map_or_else(|| price_decimals(price), usize::from)
     }
 }

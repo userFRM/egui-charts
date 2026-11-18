@@ -289,7 +289,13 @@ pub struct PriceScale {
     manual: bool,
     /// Larger magnitude of the data at the last fit, in scale units
     level: f64,
-    price_precision: Option<u8>,
+    /// The instrument's decimals. Saves made before a precision could be chosen hold the
+    /// precision shown here, which the next instrument replaces as it did then.
+    #[serde(rename = "price_precision")]
+    instrument_precision: Option<u8>,
+    /// The decimals chosen by the user or the host, which outlast instrument changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    chosen_precision: Option<u8>,
     #[serde(default)]
     tick_size: Option<f64>,
     bar_ratio: Option<f64>,
@@ -312,21 +318,36 @@ impl PriceScale {
             transform: PriceTransform::default(),
             manual: false,
             level: 0.0,
-            price_precision: None,
+            instrument_precision: None,
+            chosen_precision: None,
             tick_size: None,
             bar_ratio: None,
         }
     }
 
-    /// Sets the decimals used by price ticks and tags. `None` derives them from the tick step.
+    /// Chooses the decimals of price ticks and tags, as the precision of the chart settings does.
+    /// The choice stays through changes of the instrument, interval and symbol. `None` follows
+    /// the instrument's precision, else derives the decimals from the tick step.
     pub fn set_price_precision(&mut self, decimals: Option<u8>) {
-        self.price_precision = decimals;
+        self.chosen_precision = decimals;
     }
 
-    /// The decimals [`Self::set_price_precision`] set, whatever the scale's mode shows.
-    #[cfg(feature = "widget")]
+    /// The decimals ticks and tags take, whatever the scale's mode shows: the chosen ones, else
+    /// the instrument's.
     pub(crate) fn price_precision(&self) -> Option<u8> {
-        self.price_precision
+        self.chosen_precision.or(self.instrument_precision)
+    }
+
+    /// The decimals [`Self::set_price_precision`] chose, if any.
+    #[cfg(feature = "widget")]
+    pub(crate) fn chosen_precision(&self) -> Option<u8> {
+        self.chosen_precision
+    }
+
+    /// The instrument's decimals, which a chosen precision overrides.
+    #[cfg(feature = "widget")]
+    pub(crate) fn set_instrument_precision(&mut self, decimals: Option<u8>) {
+        self.instrument_precision = decimals;
     }
 
     /// The instrument's default price grid, separate from the host's tick-mark override.
@@ -554,7 +575,7 @@ impl PriceScale {
             bottom,
             self.options.invert_scale,
         )
-        .with_price_precision(self.price_precision)
+        .with_price_precision(self.price_precision())
         .with_tick_marks(tick_marks)
     }
 }

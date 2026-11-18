@@ -1253,6 +1253,10 @@ impl Indicator for ConfiguredStudy {
         if self.study.is_volume() {
             plot.visible &= self.study.plot_style(line).visible;
         }
+        // A readout shows in the legend, never as a line.
+        if self.study.readout_only(line) {
+            plot.visible = false;
+        }
         plot
     }
     fn plot_tagged(&self, line: usize) -> bool {
@@ -1648,6 +1652,16 @@ impl Indicator for ConfiguredStudy {
         self.study.legend_lines()
     }
     fn legend_visible(&self, line: usize) -> bool {
+        // The style tab shows or hides a readout that the chart never draws.
+        if self.study.readout_only(line) {
+            return self.settings.show_legend_values
+                && self
+                    .settings
+                    .plots
+                    .get(line)
+                    .is_none_or(|plot| plot.visible)
+                && self.study.legend_visible(line);
+        }
         let (shown, own) = (
             self.study.legend_visible(line),
             self.study.plot_style(line).visible,
@@ -1771,6 +1785,9 @@ impl Indicator for ConfiguredStudy {
     }
     fn is_volume(&self) -> bool {
         self.study.is_volume()
+    }
+    fn readout_only(&self, line: usize) -> bool {
+        self.study.readout_only(line)
     }
     fn level_style(&self, value: f64) -> LineStyle {
         // Levels moved onto one value draw with the pattern of the first visible one.
