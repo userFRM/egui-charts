@@ -1295,9 +1295,10 @@ fn fib_row(
     }
 }
 
-fn pitchfork(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerState>) {
-    // A fork saved without a config shows the levels it is drawn with.
-    let mut config = drawing.pitchfork.clone().unwrap_or_else(|| {
+/// The levels a pitchfork is drawn with: its own, or for a fork saved without them the legacy
+/// levels in its colour and width.
+pub(crate) fn pitchfork_shown(drawing: &Drawing) -> PitchforkConfig {
+    drawing.pitchfork.clone().unwrap_or_else(|| {
         let mut config = PitchforkConfig::legacy();
         for level in &mut config.levels {
             level.color = drawing.color;
@@ -1308,7 +1309,11 @@ fn pitchfork(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
             });
         }
         config
-    });
+    })
+}
+
+fn pitchfork(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerState>) {
+    let mut config = pitchfork_shown(drawing);
     let original = config.clone();
     ui.strong(l10n::text(ui.ctx(), "Pitchfork levels"));
     ui.label(l10n::text(
