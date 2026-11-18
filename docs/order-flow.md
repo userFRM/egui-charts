@@ -94,11 +94,13 @@ data and stop footprint requests until refresh; they never certify empty or unav
 Use [`FootprintPage::partial`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FootprintPage.html#method.partial)
 for recorded rows whose executions are explicitly incomplete. It accepts `FootprintBars`
 and a nonempty, strictly increasing list of unique, clock-aligned slot opens, each naming a
-supplied bar. Even the initial `complete_before` must be aligned and close every supplied
-slot. On daily or longer session charts, an initial partial page must also leave out the
-trading-date bar holding that cutoff instant, even when the instant equals its midnight
-label. Admission revalidates public payload fields; malformed declarations leave held rows
-and coverage unchanged. `partial_slots()` borrows this metadata without allocating:
+supplied bar. Even the initial `complete_before` must be aligned and close every marked
+slot. On daily or longer session charts, an aligned midnight cutoff may lie inside a
+trading session. Its trading-date bar cannot be marked partial, but must be supplied
+unmarked if it has executions before the cutoff: those rows seed the live bar, as on a
+complete page. Leaving it out certifies no executions before the cutoff. Admission
+revalidates public payload fields; malformed declarations leave held rows and coverage
+unchanged. `partial_slots()` borrows this metadata without allocating:
 `Some(slots)` distinguishes a partial declaration from an unavailable page, although both
 return false from `is_available()`. `Some([])` is invalid, not a complete page.
 

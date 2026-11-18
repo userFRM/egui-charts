@@ -714,9 +714,10 @@ pub struct FootprintPage {
     /// A bounded answer must end at [`FootprintRequest::before`], and leaves out the trades of
     /// the bar opening there. Internal fills must be clock-aligned and do not move the initial
     /// prepared/live boundary.
-    /// Partial pages require alignment even for the initial reply, closing every supplied
-    /// slot. An initial partial page cannot include the trading-date bar holding this instant.
-    /// This boundary does not certify the executions in marked slots.
+    /// Partial pages require alignment even for the initial reply, closing every marked
+    /// slot. An unmarked trading-date bar holding this instant may seed the live bar with
+    /// its executions before the cutoff, as on an available page. This boundary does not
+    /// certify the executions in marked slots.
     pub complete_before: DateTime<Utc>,
     /// Nothing exists before the oldest returned bar, or the requested boundary for an empty
     /// terminal page. This does not certify or suppress internal recording gaps.

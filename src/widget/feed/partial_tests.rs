@@ -180,7 +180,7 @@ fn invalid_partial_declarations_leave_admitted_rows_and_coverage_unchanged() {
 }
 
 #[test]
-fn initial_partial_cutoff_must_close_every_supplied_slot() {
+fn initial_partial_cutoff_must_be_aligned() {
     let (feed, mut chart, mut frames) = prepared_chart();
     let mut page = partial_page(true, 0..3, &[2]);
     page.complete_before = at(2) + TimeDelta::seconds(30);
@@ -578,12 +578,12 @@ fn partial_marker_replaces_poc_value_area_and_imbalance_highlights() {
     use egui::{Color32, Shape};
     let mut trades = Vec::new();
     for minute in 0..2 {
-        // POC 102, value-area edges 100.5/104.5, sell imbalance 100, buy imbalance 104.
+        // POC 102, value-area edges 100.5/104.5, with both diagonal imbalances at 102.
         for (price, sell, buy) in [
             (104.0, 10.0, 50.0),
-            (103.0, 10.0, 20.0),
+            (103.0, 10.0, 10.0),
             (102.0, 50.0, 50.0),
-            (101.0, 20.0, 10.0),
+            (101.0, 10.0, 10.0),
             (100.0, 30.0, 10.0),
         ] {
             for (size, side) in [(sell, OrderSide::Sell), (buy, OrderSide::Buy)] {
@@ -637,6 +637,16 @@ fn partial_marker_replaces_poc_value_area_and_imbalance_highlights() {
                 imbalance_bid_color: Some(Color32::from_rgb(19, 209, 229)),
                 ..Default::default()
             };
+            assert_eq!(
+                prepared_view(&chart).bar_at(at(0)).unwrap().imbalance(
+                    102,
+                    config.imbalance_ratio,
+                    config.diagonal,
+                    config.imbalance_min_volume,
+                ),
+                (true, true),
+                "exercise the two-sided imbalance fill, not only one-sided highlights"
+            );
             for seconds in [0, 30] {
                 for minute in 0..2 {
                     let partial = minute == 0;
@@ -646,7 +656,7 @@ fn partial_marker_replaces_poc_value_area_and_imbalance_highlights() {
                         104.0,
                         100.0,
                         103.0,
-                        260.0,
+                        240.0,
                     )];
                     let mut output = frames.ctx.run_ui(
                         egui::RawInput {
@@ -720,7 +730,6 @@ fn partial_marker_replaces_poc_value_area_and_imbalance_highlights() {
 
 #[test]
 fn chart_paints_an_entirely_partial_page_without_fallback_candles() {
-    let mut candle_geometry = Vec::new();
     for seconds in [0, 30] {
         let feed = Arc::new(Script::default());
         feed.prepared_footprints.store(true, Ordering::Relaxed);
@@ -730,13 +739,14 @@ fn chart_paints_an_entirely_partial_page_without_fallback_candles() {
         frames.run(&mut chart);
         feed.resolve()
             .send(Ok(Instrument::new("A").with_tick_size(1.0)));
-        let ohlc = bars(5)
-            .into_iter()
-            .map(|mut bar| {
-                bar.time += TimeDelta::seconds(seconds);
-                bar
-            })
-            .collect();
+        let mut ohlc = bars(5);
+        // Unique extremes identify a fallback candle at the marked bar independently
+        // of the timestamp alignment, volume bars and the last-price line.
+        ohlc[4].high = 110.0;
+        ohlc[4].low = 90.0;
+        for bar in &mut ohlc {
+            bar.time += TimeDelta::seconds(seconds);
+        }
         feed.page().send(page(ohlc, true));
         frames.run(&mut chart);
         frames.run(&mut chart);
@@ -760,15 +770,29 @@ fn chart_paints_an_entirely_partial_page_without_fallback_candles() {
                 egui::Shape::Text(text) if text.galley.text() == label)));
         }
         assert_eq!(prepared_view(&chart).profile(at(0), at(4)).unknown, 0.0);
-        candle_geometry.push(
-            [chart.config().bullish_color, chart.config().bearish_color]
-                .map(|color| candle_ys(&painted, color)),
-        );
+        let colors = [chart.config().bullish_color, chart.config().bearish_color];
+        let ys = colors.map(|color| candle_ys(&painted, color)).concat();
+        let mapping = chart.get_chart_mapping();
+        for price in [90.0, 110.0] {
+            let y = mapping.price_to_y(price);
+            assert!(
+                ys.iter().all(|at| (at - y).abs() >= 1.0),
+                "no fallback candle at the marked bar: price={price}, stamp=:{seconds}"
+            );
+        }
+        // Positive control: the same bar really paints those extremes as a candle.
+        chart.set_chart_type(ChartType::Candles);
+        let candles = shapes(&frames.ctx, &mut chart, 2.0, Vec::new());
+        let ys = colors.map(|color| candle_ys(&candles, color)).concat();
+        let mapping = chart.get_chart_mapping();
+        for price in [90.0, 110.0] {
+            let y = mapping.price_to_y(price);
+            assert!(
+                ys.iter().any(|at| (at - y).abs() < 1.0),
+                "candle control: price={price}, stamp=:{seconds}"
+            );
+        }
     }
-    assert_eq!(
-        candle_geometry[0], candle_geometry[1],
-        "an intra-slot timestamp must not add fallback candles over partial cells"
-    );
 }
 
 #[cfg(feature = "timezones")]
@@ -776,7 +800,7 @@ fn chart_paints_an_entirely_partial_page_without_fallback_candles() {
 fn partial_trading_dates_are_sealed_and_raw_replay_excludes_their_evening_executions() {
     use crate::model::{Session, SessionWindow, TimezoneId};
     use chrono::{NaiveTime, Weekday::*};
-    for closed in [false, true] {
+    for (closed, seed_boundary) in [(false, false), (true, false), (true, true)] {
         let chicago = TimezoneId::named("America/Chicago").unwrap();
         let hour = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
         let futures = Instrument::new("ES")
@@ -811,8 +835,27 @@ fn partial_trading_dates_are_sealed_and_raw_replay_excludes_their_evening_execut
             None,
         );
         let marked = clock.instant_open(evening.ts);
+        let next = Tick::new(cutoff - TimeDelta::hours(6), 100.0, 9.0, None);
+        let complete = clock.instant_open(next.ts);
         let mut flow = Footprint::new(clock.clone(), 1.0, 1).unwrap();
         flow.push(&evening).unwrap();
+        if seed_boundary {
+            flow.push(&next).unwrap();
+            feed.trades
+                .lock()
+                .unwrap()
+                .pop()
+                .unwrap()
+                .send(Ok(TradePage::new(
+                    vec![
+                        evening.clone(),
+                        next.clone(),
+                        Tick::new(cutoff, 100.0, 7.0, None),
+                    ],
+                    true,
+                )));
+            frames.run(&mut chart);
+        }
         let answer = FootprintPage::partial(
             FootprintBars::Shared(Arc::new(flow.bars().values().cloned().collect::<Vec<_>>())),
             cutoff,
@@ -839,15 +882,37 @@ fn partial_trading_dates_are_sealed_and_raw_replay_excludes_their_evening_execut
             chart.feed.last_error
         );
         assert!(prepared_view(&chart).partial_at(marked));
-        let next = Tick::new(cutoff - TimeDelta::hours(6), 100.0, 9.0, None);
-        let complete = clock.instant_open(next.ts);
-        feed.trades
-            .lock()
-            .unwrap()
-            .pop()
-            .unwrap()
-            .send(Ok(TradePage::new(vec![evening, next], true)));
-        frames.run(&mut chart);
+        if seed_boundary {
+            assert_eq!(
+                prepared_view(&chart)
+                    .complete_bar_at(complete)
+                    .unwrap()
+                    .unknown,
+                16.0,
+                "the unmarked pre-cutoff prefix joins the held boundary execution"
+            );
+            feed.sink()
+                .push_tick(Tick::new(cutoff + TimeDelta::seconds(1), 100.0, 11.0, None));
+            frames.run(&mut chart);
+            assert_eq!(
+                prepared_view(&chart)
+                    .complete_bar_at(complete)
+                    .unwrap()
+                    .unknown,
+                27.0,
+                "later live trades retain the unmarked prepared prefix"
+            );
+            assert_eq!(prepared_view(&chart).bar_at(marked).unwrap().unknown, 3.0);
+        }
+        if !seed_boundary {
+            feed.trades
+                .lock()
+                .unwrap()
+                .pop()
+                .unwrap()
+                .send(Ok(TradePage::new(vec![evening, next], true)));
+            frames.run(&mut chart);
+        }
         let link = chart.feed_link.as_ref().unwrap();
         let replay = link
             .footprint(Some(cutoff), chart.bars(SeriesId::MAIN))

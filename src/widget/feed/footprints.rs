@@ -165,7 +165,7 @@ impl Chart {
                 "partial footprint history requires supplied slots and an aligned cutoff",
             ));
         }
-        // Unlike complete initial pages, partial pages must not seed a still-changing bar.
+        // Marked slots must be sealed; an unmarked boundary bar can still seed live trades.
         let partial_end = (partial && request.before.is_none()).then(|| {
             request
                 .clock
@@ -182,7 +182,9 @@ impl Chart {
             request.before.is_some_and(|before| bar.time >= before)
                 || request.since.is_some_and(|since| bar.time < since)
                 || last.is_none_or(|last| bar.time > last)
-                || partial_end.is_some_and(|end| bar.time >= end)
+        }) || partial_end.is_some_and(|end| {
+            page.partial_slots()
+                .is_some_and(|slots| slots.iter().any(|&slot| slot >= end))
         }) {
             return Err(invalid(
                 "footprint page lies outside its requested range or execution cutoff",
