@@ -393,8 +393,8 @@ impl FeedLink {
         }
         if let Some(cutoff) = before.filter(|_| trade_based) {
             // A cutoff can fall inside a sink allocation. Rebuild from every streamed execution:
-            // the held live ones, those kept apart at the first paged instant and the page's
-            // later copies. Their anchor is known only while the whole stream is held.
+            // the held live ones, those kept apart at the first instant a page covers and the
+            // page's later copies. Their anchor is known only while the whole stream is held.
             if self.trades.lost_until().is_none() {
                 let (unheld_at, unheld) = self.trades.unheld_live().unzip();
                 let copies = unheld_at
