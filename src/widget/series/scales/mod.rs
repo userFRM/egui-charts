@@ -1311,8 +1311,10 @@ impl Chart {
             let crate::studies::StudyScale::Shared(key) = study.scale() else {
                 continue;
             };
+            // A chart type that hides volume draws no volume columns in the price pane.
             if !study.is_visible()
                 || self.series_pane(id) != Some(pane)
+                || (study.is_volume() && !self.chart_type.supports_volume())
                 || (key == self.main_series_scale
                     && (!autoscale || self.config.scale_price_chart_only))
             {

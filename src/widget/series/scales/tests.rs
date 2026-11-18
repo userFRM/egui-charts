@@ -5183,6 +5183,45 @@ fn volume_pane_keeps_its_range_without_volume_in_view() {
     );
 }
 
+/// A volume study pinned to the price scale adds no range on a chart type that hides volume, so
+/// the scale fits the prices as it does with the study hidden. On candles the pinned columns
+/// reach down to zero and stretch the scale below the lowest price of 100.
+#[cfg(feature = "studies")]
+#[test]
+fn pinned_volume_adds_no_range_where_the_chart_type_hides_volume() {
+    let mut failures = Vec::new();
+    for (kind, stretched) in [(ChartType::Candles, true), (ChartType::Range, false)] {
+        let ctx = egui::Context::default();
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[100.0, 103.0, 106.0, 109.0]);
+        chart.set_chart_type(kind);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let id = chart
+            .indicators()
+            .find(|(_, study)| study.is_volume())
+            .unwrap()
+            .0;
+        assert!(
+            chart.set_indicator_scale(id, crate::studies::StudyScale::Shared(SeriesScale::Right))
+        );
+        let range = |chart: &mut Chart, time: f64| {
+            for step in 0..3 {
+                frame(&ctx, chart, time + step as f64, vec![]);
+            }
+            let range = chart
+                .pane_price_scale(PaneId::MAIN, SeriesScale::Right)
+                .range();
+            (range.min, range.max)
+        };
+        let pinned = range(&mut chart, 1.0);
+        assert!(chart.set_indicator_visible(id, false));
+        let hidden = range(&mut chart, 10.0);
+        if (pinned != hidden) != stretched || (stretched && pinned.0 >= hidden.0) {
+            failures.push(format!("{kind:?}: {pinned:?} pinned, {hidden:?} hidden"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 /// A margin-only request (prices left out, as the hook allows) while no bar is in view: the
 /// main scale has nothing to fit, so it keeps the range it had, as `PriceScale::autoscale`
 /// documents for bounds that are not finite. With the default 10% margins and 40 points at each

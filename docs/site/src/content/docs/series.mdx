@@ -119,7 +119,10 @@ Use [`Chart::bars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/w
 to inspect retained data and
 [`Chart::drain_events`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.drain_events)
 for [`ChartEvent`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.ChartEvent.html)
-notifications such as `SeriesAdded`, `DataUpdated` and `SeriesRemoved`.
+notifications such as
+[`SeriesAdded`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.ChartEvent.html#variant.SeriesAdded),
+[`DataUpdated`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.ChartEvent.html#variant.DataUpdated) and
+[`SeriesRemoved`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.ChartEvent.html#variant.SeriesRemoved).
 Removing `MAIN` pauses its feed and retains the time axis for the remaining
 series and drawings. Use
 [`set_main_series_visible(false)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_main_series_visible)
@@ -127,5 +130,7 @@ to hide it while keeping its data and feed active, so it can be shown again.
 
 `add_series` does not start a feed. A chart already connected to your datafeed can
 use [`Chart::add_feed_series`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.add_feed_series)
-to request the symbol in `SeriesOptions::name`. Your host still supplies the
+to request the symbol in
+[`SeriesOptions::name`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.name).
+Your host still supplies the
 history and stream. Without a connected feed, it behaves as a plain host-fed series.

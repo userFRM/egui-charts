@@ -5,7 +5,9 @@
 On the published guide, select **Run example** to inspect the execution and book inputs a
 host study can read. **Retain last 6 bars only** moves the execution coverage boundary
 without changing the supplied candles; **Lose latest book** makes the latest depth
-unavailable. The source reads `OrderFlowInput::footprints_from` and `books_from` rather than
+unavailable. The source reads
+[`OrderFlowInput::footprints_from`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowInput.html#method.footprints_from)
+and `books_from` rather than
 estimating aggressors or book sizes from OHLCV. Each covered minute has volume 12 and delta
 +5; its unknown-side unit adds volume only.
 
@@ -14,7 +16,8 @@ estimating aggressors or book sizes from OHLCV. Each covered minute has volume 1
 This example covers market-event inputs. The calendar and lower-interval contracts below
 remain independent; the [history and live studies guide](https://userfrm.github.io/egui-charts/docs/studies/live-data/)
 has a runnable history-paging and EMA scene. See [order-flow coverage](order-flow.md#footprints-and-books-for-host-studies)
-for the handles a custom study returns from `Indicator::order_flow_inputs`.
+for the handles a custom study returns from
+[`Indicator::order_flow_inputs`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.order_flow_inputs).
 
 ## Calendar and lower-interval data
 
@@ -82,7 +85,9 @@ fn supply_snapshots(
 
 A response replaces the prior snapshot. The chart sorts, deduplicates and validates it through
 its shared study-data path; a connected [`Datafeed`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html) loads and subscribes automatically.
-A live stream failure is available through `Chart::study_data_error` while older study history
+A live stream failure is available through
+[`Chart::study_data_error`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.study_data_error)
+while older study history
 keeps paging. A new live bar, a stream reset or a renewed subscription clears that stream
 error; an outstanding history error takes precedence and keeps its existing retry policy.
 The fixed range and anchored volume profile drawings add the finer interval that
