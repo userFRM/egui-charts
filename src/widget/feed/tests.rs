@@ -4037,6 +4037,8 @@ fn footprint_after_store_loss_does_not_fill_the_first_bar_from_the_page() {
 /// orders, and a store of six the buys of 1 and 2, so that the oldest held execution opens the
 /// second bar. Either way the first bar draws a candle and the others keep their cells, however
 /// many pages rebuild the footprint afterwards.
+/// Replay keeps the page's cells through the first live buy at 6 s, then falls back once its
+/// cutoff includes that buy, since the lost stream cannot be summed again.
 #[test]
 fn history_page_after_a_store_loss_keeps_the_matched_cells() {
     use crate::model::OrderSide::Buy;
@@ -4105,6 +4107,21 @@ fn history_page_after_a_store_loss_keeps_the_matched_cells() {
         feed.page().send(page(Vec::new(), true));
         frames.run(&mut chart);
         assert_eq!(volumes(&chart), kept, "{label}, after the empty page");
+        let link = chart.feed_link.as_ref().unwrap();
+        let replayed = |cutoff| {
+            let flow = link.footprint(Some(cutoff), chart.bars(SeriesId::MAIN))?;
+            let cells = flow.bars().iter().map(|(open, bar)| (*open, bar.volume()));
+            Some((flow.complete_from(), cells.collect::<Vec<_>>()))
+        };
+        let at = |second| start + TimeDelta::seconds(second);
+        let page_cells = (Some(at(2)), vec![(at(2), 7.0), (at(4), 11.0)]);
+        assert_eq!(
+            replayed(at(6)),
+            Some(page_cells),
+            "{label}: replay to the stream"
+        );
+        let past = at(6) + TimeDelta::nanoseconds(1);
+        assert_eq!(replayed(past), None, "{label}: replay into the stream");
     }
 }
 
@@ -4462,6 +4479,7 @@ fn replay_with_or_without_a_trade_store_loss_stops_at_the_cutoff() {
 /// On 3t, replay groups all executions the sink allocated, including those left to a page.
 /// The first two rows count buys in threes; the last merges an older live buy before a kept sell
 /// whose page copy has a different timestamp. Each cutoff excludes executions at or after it.
+/// A profile drawing on a Volume Footprint chart reads those same cells through the replay pump.
 #[test]
 fn replay_footprint_bars_open_at_chart_bars() {
     use crate::model::OrderSide::{self, Buy, Sell};
@@ -4554,6 +4572,30 @@ fn replay_footprint_bars_open_at_chart_bars() {
             .map(|(open, bar)| (*open, bar.bid, bar.ask))
             .collect();
         assert_eq!(replayed, cells, "cutoff {cutoff}: replay");
+        #[cfg(feature = "drawings")]
+        {
+            use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+            chart.set_chart_type(ChartType::VolumeFootprint);
+            let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
+            drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(1.0, 100.0)];
+            chart.drawings_mut().drawings.push(drawing);
+            chart.set_replay_time(Some(at(cutoff)));
+            frames.run(&mut chart);
+            let link = chart.feed_link.as_ref().unwrap();
+            let pumped = (link.replay_footprint.as_ref()).map(|(time, flow)| {
+                let cells = flow.as_ref().map(|flow| {
+                    (flow.bars().iter())
+                        .map(|(open, bar)| (*open, bar.bid, bar.ask))
+                        .collect::<Vec<_>>()
+                });
+                (*time, cells)
+            });
+            assert_eq!(
+                pumped,
+                Some((at(cutoff), Some(cells))),
+                "cutoff {cutoff}: pump"
+            );
+        }
     }
 }
 
