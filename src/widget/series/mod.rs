@@ -809,14 +809,12 @@ impl Chart {
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
         #[cfg(feature = "drawings")]
         let pane = self.series_pane(id).filter(|_| id != SeriesId::MAIN);
-        if !self.remove_series_keeping_drawings(id) {
-            return false;
-        }
+        let removed = self.remove_series_keeping_drawings(id);
         #[cfg(feature = "drawings")]
-        if let Some(pane) = pane {
+        if let Some(pane) = pane.filter(|_| removed) {
             self.release_drawings(id, pane);
         }
-        true
+        removed
     }
 
     /// Keeps drawn the drawings that `id`, just removed from `pane`, owned: the pane takes them
