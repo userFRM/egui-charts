@@ -1382,6 +1382,7 @@ mod tests {
                     d.ghost_feed = Some(GhostFeedConfig {
                         average_range_ticks: 10.0,
                         noise_ticks: 0.0,
+                        ..Default::default()
                     })
                 },
             ),
