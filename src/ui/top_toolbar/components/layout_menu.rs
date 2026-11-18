@@ -1118,6 +1118,7 @@ mod tests {
             mode: crate::widget::ChartLayoutMode::TwoHorizontal,
             charts: Vec::new(),
             sizing: None,
+            link_groups: None,
         };
         let host = Arc::new(Host::default());
         host.0
@@ -1204,6 +1205,7 @@ mod tests {
             mode: crate::widget::ChartLayoutMode::TwoHorizontal,
             charts: Vec::new(),
             sizing: None,
+            link_groups: None,
         };
         let mut latest = layout.clone();
         latest.mode = crate::widget::ChartLayoutMode::Single;
@@ -1317,6 +1319,7 @@ mod tests {
             mode,
             charts: Vec::new(),
             sizing: None,
+            link_groups: None,
         };
         let document = |mode| layout(mode).to_json().unwrap();
         let stored = |host: &Revised, name: &str| {

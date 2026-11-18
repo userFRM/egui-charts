@@ -312,7 +312,8 @@ impl super::Chart {
     /// Dispatch keys before other application controls, after dialogs have had their turn.
     ///
     /// `show` also calls this for standalone charts. Each pass dispatches at most once.
-    /// Text fields, other focused widgets and open popups keep their input.
+    /// Text fields, other focused widgets and open popups keep their input. In a
+    /// [`ChartLayout`](super::ChartLayout) only the active chart takes keys.
     pub fn dispatch_shortcuts(&mut self, ctx: &Context) {
         let pass = ctx.cumulative_pass_nr();
         if self.keyboard.last_pass == Some(pass) {
@@ -341,7 +342,8 @@ impl super::Chart {
         if self.menu_open {
             self.suppress_shortcuts(ctx);
         }
-        if !self.chart_options.keyboard.enabled || shortcuts_suppressed(ctx) {
+        if !self.chart_options.keyboard.enabled || shortcuts_suppressed(ctx) || self.layout_inactive
+        {
             return;
         }
         let focused = ctx.memory(|memory| memory.focused());
