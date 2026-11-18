@@ -1,7 +1,7 @@
 //! Controls for the demo's chart readouts and series annotations.
 
 use super::DemoApp;
-use egui_charts::config::TooltipMode;
+use egui_charts::config::{TooltipMode, TouchTrackingExitMode};
 
 impl DemoApp {
     pub(super) fn show_readout_controls(&mut self, ui: &mut egui::Ui) {
@@ -24,6 +24,16 @@ impl DemoApp {
         } else {
             "Move the pointer over a bar. On touch, press and wait."
         });
+        ui.radio_value(
+            &mut options.touch_exit_mode,
+            TouchTrackingExitMode::OnNextTap,
+            "Keep touch values until a tap",
+        );
+        ui.radio_value(
+            &mut options.touch_exit_mode,
+            TouchTrackingExitMode::OnTouchEnd,
+            "Clear touch values on release",
+        );
         if options.mode == TooltipMode::Magnifier {
             ui.add(
                 egui::Slider::new(&mut options.magnifier_size, 60.0..=360.0).text("Lens diameter"),

@@ -67,15 +67,24 @@ pub fn render_axis_currency(
     }
     let mut chosen = None;
     if !currency.is_empty() {
-        egui::Popup::menu(&response).show(|ui| {
-            let _ = ui.selectable_label(true, currency);
-            for choice in choices.iter().filter(|choice| choice.as_str() != currency) {
-                if ui.selectable_label(false, choice).clicked() {
-                    chosen = Some(choice.clone());
-                    ui.close();
+        egui::Popup::menu(&response)
+            .id(currency_menu_id(ui, axis))
+            .show(|ui| {
+                let _ = ui.selectable_label(true, currency);
+                for choice in choices.iter().filter(|choice| choice.as_str() != currency) {
+                    if ui.selectable_label(false, choice).clicked() {
+                        chosen = Some(choice.clone());
+                        ui.close();
+                    }
                 }
-            }
-        });
+            });
     }
     (response, chosen)
+}
+
+/// The memory id of the currency menu of the price axis `axis`, to keep a label that shows on
+/// hover visible while its menu is open.
+pub(crate) fn currency_menu_id(ui: &Ui, axis: Rect) -> egui::Id {
+    ui.scope_id()
+        .with(("axis_currency_menu", axis.top().to_bits()))
 }

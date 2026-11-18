@@ -55,7 +55,7 @@ pub(super) fn render_area(
         ));
     }
     draw_area_fill(painter, &fill_points, price_rect, style);
-    draw_bar_line(painter, bars, &line_points, &style.line, false);
+    draw_bar_line(painter, bars, &line_points, &style.line, None, false);
     for (point, bar) in line_points[in_view.clone()]
         .iter()
         .zip(&bars[in_view.clone()])
@@ -125,7 +125,7 @@ pub(super) fn render_hlc_area(
                 line_type: LineType::Simple,
                 ..line.clone()
             };
-            draw_bar_line(painter, bars, &line_points, &line, false);
+            draw_bar_line(painter, bars, &line_points, &line, None, false);
         }
     }
 
