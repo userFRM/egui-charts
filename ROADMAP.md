@@ -25,6 +25,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] HLC area charts draw high, low and close lines with their own colour, width and style, and two fills with their own colour and opacity, which a palette colour keeps; high line, low line and each fill can be hidden. The close line follows the bar closes whatever price source the line and area types plot. The settings persist in layouts and undo, and layouts and chart templates saved with the former fill opacity and close line width restore as they were drawn. Kagi stroke widths are exposed in the settings.
 - [x] TPO profiles can show a statistics table below them with the point of control, value area, initial balance range, TPO counts below and above the point of control, rotation factor and range extension, switched by one setting on the chart type and the study.
 - [x] TPO single-print highlights and the midpoint caption and marker are off by default and switch on from the chart's settings or the study's inputs. Charts and studies saved before the midpoint had a setting restore with it shown.
+- [x] The TPO study keeps its profiles to the trading day, the regular hours, the pre-market or post-market alone, or custom daily hours in any zone, counting only the bars inside them, and its extended-hours split profiles each segment of the day from the bars of its hours.
 
 ### Pan, Zoom and Cursor
 
@@ -352,7 +353,7 @@ The crate renders supplied data and exposes interfaces for application services.
 
 The order below prioritises correctness and complete library workflows. It carries no delivery dates.
 
-1. **Chart rendering and order flow:** leave bars outside session hours out of session profiles, finish scale name tags, and the ladder's size mode and highlight tiers.
+1. **Chart rendering and order flow:** finish scale name tags, and the ladder's size mode and highlight tiers.
 2. **Indicators and drawings:** finish the remaining style and calculation controls of built-in studies, volume profile study settings and the remaining dedicated studies; give drawing tools their own default styles and complete the labels of line drawings.
 3. **Terminal UI:** handle the remaining actions with application interception and move the demo onto `Terminal`; gate order-flow entries on the feed's declarations, add the depth panel and open the study editor and replay trading in the bottom dock; finish the colour popup and standalone replay toolbar.
 4. **Layouts and snapshots:** restore custom series from snapshots and include symbol navigation in terminal undo.
