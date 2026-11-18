@@ -1413,6 +1413,7 @@ mod tests {
 
     /// Undoing a settings copy restores the precision, event markers and price line colour it
     /// changed, on both charts after replacing the layout with a clone, and redo applies them again.
+    /// A chosen precision equal to the instruments' own is a change too.
     #[test]
     fn settings_copy_undo_restores_precision_events_and_price_line() {
         let (mut a, mut b) = (chart(50), chart(50));
@@ -1420,7 +1421,7 @@ mod tests {
             chart.set_instrument(Some(Instrument::new("SAMPLE").with_tick_size(0.01)));
         }
         let mut settings = ChartSettingsState::from_chart(&a);
-        settings.precision = PrecisionMode::Decimals4;
+        settings.precision = PrecisionMode::Decimals2;
         settings.events.show_earnings = true;
         settings.scales_and_lines.symbol_price_color = Some(egui::Color32::GOLD);
         let state = |chart: &Chart| {
@@ -1433,7 +1434,7 @@ mod tests {
             )
         };
         let before = (PrecisionMode::Default, false, None);
-        let applied = (PrecisionMode::Decimals4, true, Some(egui::Color32::GOLD));
+        let applied = (PrecisionMode::Decimals2, true, Some(egui::Color32::GOLD));
         assert_eq!([state(&a), state(&b)], [before, before]);
         let factory = IndicatorFactory::new();
         let mut layout = pair();
