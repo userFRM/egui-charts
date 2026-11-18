@@ -2796,7 +2796,7 @@ mod tests {
         assert_eq!(ratio.settings().levels, [zero]);
         let saved = r#"{"name":"Advance/Decline Ratio (Bars)","inputs":[["period",{"Length":9}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.AdvanceDeclineRatioBars.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
         let template = serde_json::from_str::<crate::studies::StudyTemplate>(saved).unwrap();
-        let mut older = template.create().unwrap();
+        let older = template.create().unwrap();
         let mut expected = template.settings.clone();
         expected.levels.push(LevelStyle {
             visible: false,
