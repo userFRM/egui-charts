@@ -435,7 +435,7 @@ impl Terminal {
                     .filter(|drawing| drawing.locked != lock_all)
                     .map(|drawing| drawing.id)
                     .collect();
-                manager.edit_drawings(&ids, |drawing| drawing.locked = lock_all);
+                let _ = manager.edit_drawings(&ids, |drawing| drawing.locked = lock_all);
             }
             DrawingToolbarAction::InsertGlyph { icon_name, size } => {
                 let manager = chart.drawings_mut();
@@ -501,10 +501,10 @@ impl Terminal {
                 match action {
                     DrawingContextMenuAction::Delete => manager.delete_selected(),
                     DrawingContextMenuAction::Lock => {
-                        manager.edit_drawing(id, |d| d.locked = !d.locked)
+                        let _ = manager.edit_drawing(id, |d| d.locked = !d.locked);
                     }
                     DrawingContextMenuAction::Hide => {
-                        manager.edit_drawing(id, |d| d.visible = !d.visible)
+                        let _ = manager.edit_drawing(id, |d| d.visible = !d.visible);
                     }
                     DrawingContextMenuAction::BringToFront => manager.bring_to_front(id),
                     DrawingContextMenuAction::SendToBack => manager.send_to_back(id),
@@ -678,7 +678,7 @@ impl Terminal {
                             study.set_color(0, color);
                         }
                     } else {
-                        chart
+                        let _ = chart
                             .drawings_mut()
                             .drag_edit_drawing(id, |d| d.color = color.to_srgba_unmultiplied());
                         state.colour_drag = true;
@@ -1253,7 +1253,8 @@ mod tests {
         terminal
             .chart_mut()
             .drawings_mut()
-            .edit_drawing(ids[2], |drawing| drawing.listed = false);
+            .edit_drawing(ids[2], |drawing| drawing.listed = false)
+            .unwrap();
         assert!(
             !terminal
                 .build_source_items()
@@ -1263,7 +1264,8 @@ mod tests {
         terminal
             .chart_mut()
             .drawings_mut()
-            .edit_drawing(ids[2], |drawing| drawing.listed = true);
+            .edit_drawing(ids[2], |drawing| drawing.listed = true)
+            .unwrap();
         let study = terminal.chart_mut().add_indicator(Box::new(SMA::new(2)));
         // The main series, every study (the volume one included) and the three drawings, each
         // under its own id: studies above any drawing, the main series last of all.
@@ -1419,11 +1421,13 @@ mod tests {
         terminal
             .chart_mut()
             .drawings_mut()
-            .edit_drawing(ids[0], |drawing| drawing.visible = false);
+            .edit_drawing(ids[0], |drawing| drawing.visible = false)
+            .unwrap();
         terminal
             .chart_mut()
             .drawings_mut()
-            .edit_drawing(ids[0], |drawing| drawing.locked = true);
+            .edit_drawing(ids[0], |drawing| drawing.locked = true)
+            .unwrap();
         // The toolbar has flipped its flags before it emits: hide all and lock all.
         terminal.drawings.toolbar.state.hide_drawings = true;
         terminal.drawings.toolbar.state.lock_all = true;
@@ -1442,13 +1446,15 @@ mod tests {
         terminal
             .chart_mut()
             .drawings_mut()
-            .edit_drawings(&ids, |drawing| drawing.locked = true);
+            .edit_drawings(&ids, |drawing| drawing.locked = true)
+            .unwrap();
         frame(&mut terminal, SIZE, vec![]);
         assert!(terminal.drawings.toolbar.state.lock_all);
         terminal
             .chart_mut()
             .drawings_mut()
-            .edit_drawing(ids[0], |drawing| drawing.locked = false);
+            .edit_drawing(ids[0], |drawing| drawing.locked = false)
+            .unwrap();
         frame(&mut terminal, SIZE, vec![]);
         assert!(!terminal.drawings.toolbar.state.lock_all);
     }

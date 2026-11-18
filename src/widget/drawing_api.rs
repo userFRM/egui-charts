@@ -98,10 +98,11 @@ impl Chart {
         self.drawings()
             .validate_drawing(&drawing)
             .map_err(DrawingError::Invalid)?;
-        self.drawings_mut().edit_drawing(id, |target| {
-            target.chart_points = drawing.chart_points;
-        });
-        Ok(())
+        self.drawings_mut()
+            .edit_drawing(id, |target| {
+                target.chart_points = drawing.chart_points;
+            })
+            .map_err(DrawingError::Invalid)
     }
 
     /// Replaces a trend line's, ray's, extended line's, info line's or trend angle's readouts,
@@ -138,9 +139,9 @@ impl Chart {
         self.user_action(|chart| {
             chart.drawings_mut().edit_drawing(id, |drawing| {
                 drawing.line_measurements = measurements;
-            });
-        });
-        Ok(())
+            })
+        })
+        .map_err(DrawingError::Invalid)
     }
 
     /// Replace a retracement's, extension's, channel's, wedge's, circle's, resistance arc's, spiral's,
@@ -194,8 +195,9 @@ impl Chart {
             self.user_action(|chart| {
                 chart
                     .drawings_mut()
-                    .edit_drawing(id, |drawing| drawing.fib_config = Some(config));
-            });
+                    .edit_drawing(id, |drawing| drawing.fib_config = Some(config))
+            })
+            .map_err(DrawingError::Invalid)?;
         }
         Ok(())
     }
@@ -227,8 +229,9 @@ impl Chart {
             self.user_action(|chart| {
                 chart
                     .drawings_mut()
-                    .edit_drawing(id, |drawing| drawing.vwap = Some(config));
-            });
+                    .edit_drawing(id, |drawing| drawing.vwap = Some(config))
+            })
+            .map_err(DrawingError::Invalid)?;
         }
         Ok(())
     }
@@ -257,8 +260,9 @@ impl Chart {
             self.user_action(|chart| {
                 chart
                     .drawings_mut()
-                    .edit_drawing(id, |drawing| drawing.regression_trend = Some(config));
-            });
+                    .edit_drawing(id, |drawing| drawing.regression_trend = Some(config))
+            })
+            .map_err(DrawingError::Invalid)?;
         }
         Ok(())
     }
@@ -279,8 +283,9 @@ impl Chart {
             self.user_action(|chart| {
                 chart.drawings_mut().edit_drawing(id, |drawing| {
                     drawing.position_readout = readout;
-                });
-            });
+                })
+            })
+            .map_err(DrawingError::Invalid)?;
         }
         Ok(())
     }
@@ -310,8 +315,9 @@ impl Chart {
                     drawing.position_style = style;
                     drawing.position_target_color = target_color;
                     drawing.position_stop_color = stop_color;
-                });
-            });
+                })
+            })
+            .map_err(DrawingError::Invalid)?;
         }
         Ok(())
     }
@@ -347,8 +353,9 @@ impl Chart {
             self.user_action(|chart| {
                 chart
                     .drawings_mut()
-                    .edit_drawing(id, |drawing| drawing.marker = marker);
-            });
+                    .edit_drawing(id, |drawing| drawing.marker = marker)
+            })
+            .map_err(DrawingError::Invalid)?;
         }
         Ok(())
     }
@@ -391,9 +398,9 @@ impl Chart {
         self.user_action(|chart| {
             chart
                 .drawings_mut()
-                .edit_drawing(id, |target| *target = drawing);
-        });
-        Ok(())
+                .edit_drawing(id, |target| *target = drawing)
+        })
+        .map_err(DrawingError::Invalid)
     }
 
     fn position_drawing(&self, id: usize) -> Result<&Drawing, DrawingError> {
@@ -464,9 +471,8 @@ impl Chart {
             manager.edit_drawing(id, |drawing| {
                 drawing.text = Some(uri);
                 drawing.image.get_or_insert_with(Default::default).size = Some(frame.into());
-            });
-        });
-        Ok(())
+            })
+        })
     }
 
     /// The pane that draws drawing `id`, or `None` for an unknown drawing.
@@ -519,8 +525,7 @@ impl Chart {
         if !drawings.drawings.iter().any(|d| d.id == id && !d.locked) {
             return false;
         }
-        drawings.edit_drawing(id, |d| d.pane = owner);
-        true
+        drawings.edit_drawing(id, |d| d.pane = owner).is_ok()
     }
 
     /// Deletes the selected drawings as one undo step, as Delete and Backspace do. Locked drawings
@@ -1378,7 +1383,10 @@ mod tests {
 
         assert!(!chart.move_drawing_to_pane(id, PaneId(999)));
         assert!(!chart.move_drawing_to_pane(id + 1, pane));
-        chart.drawings_mut().edit_drawing(id, |d| d.locked = true);
+        chart
+            .drawings_mut()
+            .edit_drawing(id, |d| d.locked = true)
+            .unwrap();
         assert!(!chart.move_drawing_to_pane(id, pane));
         assert_eq!(chart.drawing_pane(id), Some(PaneId::MAIN));
     }
@@ -1433,10 +1441,13 @@ mod tests {
         empty.load_drawings(&json).unwrap();
         let restored_id = empty.drawings().drawings[0].id;
         assert_eq!(empty.drawing_points(restored_id).unwrap(), edited);
-        chart.drawings_mut().edit_drawing(id, |d| {
-            d.saveable = false;
-            d.listed = false;
-        });
+        chart
+            .drawings_mut()
+            .edit_drawing(id, |d| {
+                d.saveable = false;
+                d.listed = false;
+            })
+            .unwrap();
         assert!(chart.save_drawings().unwrap().drawings().is_empty());
         assert!(chart.drawings().listed_drawings().next().is_none());
         assert!(matches!(
@@ -1531,7 +1542,8 @@ mod tests {
                 .unwrap();
             chart
                 .drawings_mut()
-                .edit_drawing(added, |drawing| drawing.color = [0, 255, 0, 255]);
+                .edit_drawing(added, |drawing| drawing.color = [0, 255, 0, 255])
+                .unwrap();
             let mut saved =
                 Drawing::with_color(9, DrawingToolType::HorizontalLine, [255, 0, 0, 255]);
             saved.chart_points = vec![ChartPoint::new(70.0, 105.0)];
