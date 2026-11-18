@@ -21,8 +21,9 @@ const TIERS: usize = 8;
 #[non_exhaustive]
 pub struct DepthHistoryConfig {
     /// Length of a column. The book is sampled at the end of every period of this length counted
-    /// from the Unix epoch, and the sample stands for the whole period. At least a millisecond;
-    /// one second by default.
+    /// from the Unix epoch, and the sample stands for the whole period. A period that ends while
+    /// the book waits for a snapshot, before the first one or after a sequence gap or an unusable
+    /// update, has no column. At least a millisecond; one second by default.
     pub cadence: TimeDelta,
     /// Price rows kept per side of each column, those nearest the best bid and ask. 100 by
     /// default.
@@ -149,7 +150,9 @@ impl DepthHistory {
         &self.config
     }
 
-    /// Every column, oldest first. Consecutive columns are adjacent unless the chart lost columns.
+    /// Every column, oldest first. Consecutive columns are adjacent unless the chart lost columns
+    /// or the book could not be sampled between them, see [`DepthHistoryConfig::cadence`] and
+    /// [`DepthHistoryConfig::orders`].
     pub fn columns(&self) -> impl DoubleEndedIterator<Item = &DepthColumn> {
         self.shared().map(Arc::as_ref)
     }
@@ -397,7 +400,8 @@ impl Sampler {
     /// Called before `book` applies an update stamped `ts`. When the update opens a later period,
     /// returns the book as it stood since the end of the open period's last update: one column
     /// from the open period to the update's. An update stamped before the open period's start
-    /// samples nothing. `None` also for a book without a tick size. `largest` holds the largest
+    /// samples nothing. `None` also for a book without a tick size or a snapshot: the periods up
+    /// to the update's have no column, and the update's period opens. `largest` holds the largest
     /// order at each price of the orders `book` sums and gives the column's largest orders; `None`
     /// for aggregate depth, whose columns record none.
     pub(crate) fn sample(

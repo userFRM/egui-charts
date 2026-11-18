@@ -166,6 +166,32 @@ where
         .end
         .max(coords.x_to_idx(rect.right()).saturating_add(1))
         .min(coords.x_to_idx(click_pos.x + reach).saturating_add(2));
+    let joins = plot.plot_type.joins_gaps();
+    // A joined segment that crosses the reach starts at the defined bar before it.
+    // shortcut: scans a gap on each test, O(gap length); keep the nearest defined bars if long
+    // gaps show in profiles.
+    let start = if joins {
+        (0..start)
+            .rev()
+            .find(|&bar| indicator.plot_value(line_idx, bar).is_some())
+            .unwrap_or(start)
+    } else {
+        start
+    };
+    let last = indicator
+        .values()
+        .len()
+        .saturating_add_signed(indicator.plot_offset(line_idx));
+    // Where a segment from `bar` ends: the next defined value of a joined plot, the next bar's
+    // value otherwise.
+    let next_point = |bar: usize| {
+        let (next, value) = if joins {
+            (bar + 1..last).find_map(|next| Some((next, indicator.plot_value(line_idx, next)?)))?
+        } else {
+            (bar + 1, indicator.plot_value(line_idx, bar + 1)?)
+        };
+        Some(Pos2::new(coords.idx_to_x(next), value_to_y(value)))
+    };
     for bar in start..end {
         let Some(value) = indicator.plot_value(line_idx, bar) else {
             continue;
@@ -191,35 +217,49 @@ where
                 .expand(HIT_TOLERANCE)
                 .contains(click_pos)
             }
-            PlotType::Area => {
-                let Some(next) = indicator.plot_value(line_idx, bar + 1) else {
+            // On the line, which reaches half its width past the fill, or inside the fill.
+            PlotType::Area | PlotType::AreaWithBreaks => {
+                let Some(next) = next_point(bar) else {
                     continue;
                 };
-                let next = Pos2::new(coords.idx_to_x(bar + 1), value_to_y(next));
-                if !next.is_finite() || click_pos.x < point.x || click_pos.x > next.x {
+                if !next.is_finite() {
                     continue;
                 }
-                let t = (click_pos.x - point.x) / (next.x - point.x);
-                let edge = point.y + t * (next.y - point.y);
-                let baseline = value_to_y(0.0);
-                let baseline = if baseline.is_finite() {
-                    baseline.clamp(rect.top(), rect.bottom())
-                } else {
-                    rect.bottom()
-                };
-                (edge.min(baseline)..=edge.max(baseline)).contains(&click_pos.y)
+                point_to_segment_distance(click_pos, point, next)
+                    <= HIT_TOLERANCE + plot.width * 0.5
+                    || ((point.x..=next.x).contains(&click_pos.x) && {
+                        let t = (click_pos.x - point.x) / (next.x - point.x);
+                        let edge = point.y + t * (next.y - point.y);
+                        let baseline = value_to_y(0.0);
+                        let baseline = if baseline.is_finite() {
+                            baseline.clamp(rect.top(), rect.bottom())
+                        } else {
+                            rect.bottom()
+                        };
+                        (edge.min(baseline)..=edge.max(baseline)).contains(&click_pos.y)
+                    })
             }
             PlotType::Circles
             | PlotType::Crosses
             | PlotType::TriangleUp
             | PlotType::TriangleDown => click_pos.distance(point) <= plot.width + HIT_TOLERANCE,
-            PlotType::Line | PlotType::StepLine => {
-                let next = (bar + 1 < end)
-                    .then(|| indicator.plot_value(line_idx, bar + 1))
-                    .flatten();
-                let next = next.map(|v| Pos2::new(coords.idx_to_x(bar + 1), value_to_y(v)));
+            PlotType::Line
+            | PlotType::LineWithBreaks
+            | PlotType::StepLine
+            | PlotType::StepLineWithBreaks
+            | PlotType::StepLineWithDiamonds => {
+                let next = if joins {
+                    next_point(bar)
+                } else {
+                    (bar + 1 < end).then(|| next_point(bar)).flatten()
+                };
                 let next = next.unwrap_or(point);
-                let distance = if plot.plot_type == PlotType::StepLine {
+                let distance = if matches!(
+                    plot.plot_type,
+                    PlotType::StepLine
+                        | PlotType::StepLineWithBreaks
+                        | PlotType::StepLineWithDiamonds
+                ) {
                     let corner = Pos2::new(next.x, point.y);
                     point_to_segment_distance(click_pos, point, corner)
                         .min(point_to_segment_distance(click_pos, corner, next))
@@ -318,6 +358,38 @@ mod tests {
             false,
         );
         let coords = ChartMapping::new(rect, 100.0, 0, 1, 0.0, price);
+        // Whether a click at `point` selects a study with `values` plotted as `kind`.
+        let selects = |values: &[IndicatorValue],
+                       coords: &ChartMapping,
+                       kind: PlotType,
+                       point: Pos2,
+                       overlay: bool| {
+            let values = values.to_vec();
+            let visible = 0..values.len();
+            let mut study = ConfiguredStudy::new(Box::new(
+                CustomIndicator::new("Plot", move |_| values.clone()).with_overlay(overlay),
+            ));
+            study.calculate(&[]);
+            let mut settings = study.settings();
+            settings.plots[0].plot_type = kind;
+            study.apply_settings(&[], settings).unwrap();
+            let found = if overlay {
+                hit_test_indicator(point, &study, 3, visible, coords, |v| 100.0 - v as f32)
+            } else {
+                hit_test_pane_indicator(point, &study, 3, visible, rect, coords)
+            };
+            if let Some(found) = &found {
+                assert_eq!(found.indicator_idx, 3);
+            }
+            found.is_some()
+        };
+        // A missing value between two defined ones: x 74, 124 and 174, y 20, none and 60.
+        let gapped = ChartMapping::new(rect, 50.0, 0, 2, 0.0, price);
+        let gap = [
+            IndicatorValue::Single(80.0),
+            IndicatorValue::None,
+            IndicatorValue::Single(40.0),
+        ];
         for overlay in [true, false] {
             for (kind, point, hit) in [
                 (PlotType::Histogram, Pos2::new(49.0, 60.0), true),
@@ -328,30 +400,34 @@ mod tests {
                 (PlotType::Columns, Pos2::new(79.0, 60.0), true),
                 (PlotType::StepLine, Pos2::new(99.0, 20.0), true),
                 (PlotType::Area, Pos2::new(99.0, 60.0), true),
+                // Above the fill, on the line's tolerance: the values sit at y 20.
+                (PlotType::Area, Pos2::new(99.0, 17.0), true),
                 (PlotType::Area, Pos2::new(99.0, 5.0), false),
                 (PlotType::Area, Pos2::new(160.0, 60.0), false),
             ] {
-                let mut study = ConfiguredStudy::new(Box::new(
-                    CustomIndicator::new("Plot", |_| vec![IndicatorValue::Single(80.0); 2])
-                        .with_overlay(overlay),
-                ));
-                study.calculate(&[]);
-                let mut settings = study.settings();
-                settings.plots[0].plot_type = kind;
-                study.apply_settings(&[], settings).unwrap();
-                let found = if overlay {
-                    hit_test_indicator(point, &study, 3, 0..2, &coords, |v| 100.0 - v as f32)
-                } else {
-                    hit_test_pane_indicator(point, &study, 3, 0..2, rect, &coords)
-                };
+                let values = vec![IndicatorValue::Single(80.0); 2];
                 assert_eq!(
-                    found.is_some(),
+                    selects(&values, &coords, kind, point, overlay),
                     hit,
                     "{kind:?}, overlay {overlay}, {point:?}"
                 );
-                if let Some(found) = found {
-                    assert_eq!(found.indicator_idx, 3);
-                }
+            }
+            // Joined types are selected on the segment across the gap, the types with breaks
+            // are not.
+            for (kind, point, hit) in [
+                (PlotType::Line, Pos2::new(124.0, 40.0), true),
+                (PlotType::LineWithBreaks, Pos2::new(124.0, 40.0), false),
+                (PlotType::StepLine, Pos2::new(124.0, 20.0), true),
+                (PlotType::StepLineWithBreaks, Pos2::new(124.0, 20.0), false),
+                (PlotType::StepLineWithDiamonds, Pos2::new(124.0, 20.0), true),
+                (PlotType::Area, Pos2::new(124.0, 70.0), true),
+                (PlotType::AreaWithBreaks, Pos2::new(124.0, 70.0), false),
+            ] {
+                assert_eq!(
+                    selects(&gap, &gapped, kind, point, overlay),
+                    hit,
+                    "{kind:?} across a gap, overlay {overlay}, {point:?}"
+                );
             }
             #[cfg(feature = "studies")]
             {

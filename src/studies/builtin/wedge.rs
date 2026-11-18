@@ -318,7 +318,8 @@ impl<const RISING: bool> Indicator for Wedge<RISING> {
             width: if line < 2 { 2.0 } else { 1.0 },
             pattern: crate::model::LineStyle::Solid,
             plot_type: match line {
-                0 | 1 => crate::studies::PlotType::Line,
+                // A developing line exists only while its wedge does.
+                0 | 1 => crate::studies::PlotType::LineWithBreaks,
                 _ if RISING => crate::studies::PlotType::TriangleDown,
                 _ => crate::studies::PlotType::TriangleUp,
             },

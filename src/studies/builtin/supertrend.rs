@@ -200,6 +200,17 @@ impl Indicator for SuperTrend {
         vec![self.bullish_color, self.bearish_color]
     }
 
+    fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
+        crate::studies::PlotStyle {
+            color: self.colors().get(line).copied().unwrap_or(Color32::WHITE),
+            width: self.line_style(line).width,
+            pattern: crate::model::LineStyle::Solid,
+            // Each trend line holds values only while its trend lasts.
+            plot_type: crate::studies::PlotType::LineWithBreaks,
+            visible: true,
+        }
+    }
+
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if !colors.is_empty() {
             self.bullish_color = colors[0];

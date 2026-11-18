@@ -48,7 +48,10 @@ fn shared_prices(
             let base = values.peek().is_some()
                 && matches!(
                     study.plot_style(line).plot_type,
-                    PlotType::Histogram | PlotType::Columns | PlotType::Area
+                    PlotType::Histogram
+                        | PlotType::Columns
+                        | PlotType::Area
+                        | PlotType::AreaWithBreaks
                 );
             values.chain(base.then_some(0.0))
         })

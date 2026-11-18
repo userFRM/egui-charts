@@ -2264,8 +2264,8 @@ mod tests {
     /// body. The bar holds (sell, buy) rows 104: 10, 50; 103: 10, 20; 102: 50, 50; 101: 20, 10;
     /// 100: 30, 10. 50 bought at 104 is five times the 10 sold one row below; 30 sold at 100 is
     /// exactly three times the 10 bought one row above; no other diagonal pair reaches three.
-    /// Value area of 182 out of 260: POC 102 (100), a tie adds 103 and 101 (160), then 104 (220),
-    /// so its edges are at 104.5 and 100.5.
+    /// Value area of 182 out of 260: from the POC 102 (100), the two rows above (90) outweigh the
+    /// two below (70), and 103 and 104 bring it to 190, so its edges are at 104.5 and 101.5.
     #[test]
     fn the_default_ladder_shades_sides_and_marks_imbalances_and_the_value_area() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
@@ -2371,7 +2371,7 @@ mod tests {
         dotted.sort_by(f32::total_cmp);
         dotted.dedup();
         assert_eq!(dotted.len(), 2);
-        for (y, price) in dotted.iter().zip([104.5, 100.5]) {
+        for (y, price) in dotted.iter().zip([104.5, 101.5]) {
             assert!((y - map.price_to_y(price)).abs() <= 1.0, "{y} at {price}");
         }
         // In the profile display a number wider than its bar takes the text colour, because a
