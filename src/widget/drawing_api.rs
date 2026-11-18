@@ -107,9 +107,9 @@ impl Chart {
 
     /// Replaces a trend line's, ray's, extended line's, info line's or trend angle's readouts,
     /// midpoint, price labels and text placement as one undoable edit. A horizontal line or ray
-    /// draws only the text placement, and a vertical line the text placement, the text's orientation
-    /// and the reach across panes. Unknown, locked and other drawing types leave drawings and
-    /// history untouched.
+    /// and a regression trend draw only the text placement, and a vertical line the text
+    /// placement, the text's orientation and the reach across panes. Unknown, locked and other
+    /// drawing types leave drawings and history untouched.
     pub fn set_line_measurements(
         &mut self,
         id: usize,
@@ -130,10 +130,11 @@ impl Chart {
                 crate::drawings::DrawingToolType::HorizontalLine
                     | crate::drawings::DrawingToolType::HorizontalRay
                     | crate::drawings::DrawingToolType::VerticalLine
+                    | crate::drawings::DrawingToolType::RegressionTrend
             ))
         {
             return Err(DrawingError::Invalid(
-                "Drawing is not a trend line, ray, extended line, info line, trend angle, horizontal line, horizontal ray or vertical line",
+                "Drawing is not a trend line, ray, extended line, info line, trend angle, horizontal line, horizontal ray, vertical line or regression trend",
             ));
         }
         self.user_action(|chart| {
@@ -237,8 +238,9 @@ impl Chart {
     }
 
     /// Replace a regression trend's settings (source, upper and lower bounds and whether each is
-    /// a deviation or the extreme price, fitted line pattern and correlation precision) as one
-    /// undoable edit. Unknown ids, locked drawings and other tools change nothing.
+    /// a deviation or the extreme price, the visibility and style of each line, the correlation
+    /// label and its precision) as one undoable edit. Unknown ids, locked drawings and other tools
+    /// change nothing.
     pub fn set_regression_trend_config(
         &mut self,
         id: usize,
@@ -939,6 +941,7 @@ mod tests {
             T::HorizontalLine,
             T::HorizontalRay,
             T::VerticalLine,
+            T::RegressionTrend,
         ] {
             chart.drawings_mut().drawings[0].tool_type = tool;
             chart.drawings_mut().drawings[0].line_measurements = measurements;
@@ -1122,8 +1125,8 @@ mod tests {
         assert!(!chart.can_undo());
     }
 
-    /// Hosts set a regression trend's source, bounds, line pattern and precision in one history
-    /// entry, which templates and saved drawings carry; locked, missing and other drawings
+    /// Hosts set a regression trend's source, bounds, line styles and correlation label in one
+    /// history entry, which templates and saved drawings carry; locked, missing and other drawings
     /// change nothing.
     #[test]
     fn regression_trend_settings_are_undoable_and_saved() {
@@ -1140,6 +1143,13 @@ mod tests {
         edited.use_upper = false;
         edited.source = crate::model::PriceSource::HL2;
         edited.line_style = crate::model::LineStyle::Dotted;
+        edited.show_base_line = false;
+        edited.upper_line = crate::drawings::RegressionBandLine::new([200, 0, 0, 128])
+            .with_width(Some(5.0))
+            .unwrap();
+        edited.upper_line.line_style = crate::model::LineStyle::Dotted;
+        edited.lower_line.visible = false;
+        edited.show_correlation = false;
         chart.set_regression_trend_config(7, edited).unwrap();
         assert_eq!(chart.drawings().drawings[0].regression_trend, Some(edited));
         assert!(chart.undo());
@@ -1148,17 +1158,34 @@ mod tests {
         assert!(chart.redo());
         // An unchanged assignment does not create a second history entry.
         chart.set_regression_trend_config(7, edited).unwrap();
+        let measurements = crate::drawings::LineMeasurements {
+            text_horizontal_align: crate::drawings::LineTextHorizontalAlign::Left,
+            text_vertical_align: crate::drawings::LineTextVerticalAlign::Top,
+            ..Default::default()
+        };
+        chart.set_line_measurements(7, measurements).unwrap();
+        chart
+            .user_action(|chart| {
+                chart.drawings_mut().edit_drawing(7, |drawing| {
+                    drawing.font_weight = crate::drawings::FontWeight::Bold;
+                    drawing.italic = true;
+                    drawing.text_color = Some([1, 2, 3, 128]);
+                })
+            })
+            .unwrap();
         let template = DrawingTemplate::from_drawing(&chart.drawings().drawings[0]);
         let mut peer = Drawing::new(8, DrawingToolType::RegressionTrend);
         template.apply_to(&mut peer).unwrap();
-        assert_eq!(peer.regression_trend, Some(edited));
         let saved = chart.save_drawings().unwrap().to_json().unwrap();
         let mut restored = Chart::new(BarData::default());
         restored.load_drawings(&saved).unwrap();
-        assert_eq!(
-            restored.drawings().drawings[0].regression_trend,
-            Some(edited)
-        );
+        for drawing in [&peer, &restored.drawings().drawings[0]] {
+            assert_eq!(drawing.regression_trend, Some(edited));
+            assert_eq!(drawing.line_measurements, measurements);
+            assert_eq!(drawing.font_weight, crate::drawings::FontWeight::Bold);
+            assert!(drawing.italic);
+            assert_eq!(drawing.text_color, Some([1, 2, 3, 128]));
+        }
         let default = RegressionTrendConfig::default();
         chart.drawings_mut().drawings[0].locked = true;
         assert_eq!(
@@ -1175,7 +1202,33 @@ mod tests {
         chart.drawings_mut().drawings[0].tool_type = DrawingToolType::RegressionTrend;
         assert_eq!(chart.drawings().drawings[0].regression_trend, Some(edited));
         assert!(chart.undo());
+        assert_eq!(
+            chart.drawings().drawings[0].font_weight,
+            crate::drawings::FontWeight::Normal
+        );
+        assert!(chart.undo());
+        assert_eq!(
+            chart.drawings().drawings[0].line_measurements,
+            Default::default()
+        );
+        assert!(chart.undo());
         assert!(!chart.can_undo());
+        // Saved before regression line settings, at a non-default width. The missing band
+        // widths follow that width and the text keeps its centred-above placement.
+        let old = r#"{"version":10,"symbol":"LEGACY","timeframe":null,"drawings":[{"id":"7","points":[{"ts_ms":120000,"price":100.0},{"ts_ms":480000,"price":200.0}],"drawing":{"label":null,"pane":null,"selectable":true,"saveable":true,"listed":true,"group":null,"folder":[],"custom_tool":null,"custom_settings":null,"tool_type":"RegressionTrend","screen_anchor":null,"color":[242,54,69,255],"stroke_width":3.0,"text":"Legacy trend","post":null,"line_style":"Solid","fill_color":[41,98,255,51],"locked":false,"visible":true,"font_size":14.0,"font_weight":"Normal","italic":false,"text_color":null,"background":true,"border":true,"border_color":null,"text_wrap":false,"text_wrap_width":200.0,"text_follows_zoom":false,"text_zoom_spacing":null,"note_text_style":null,"extend_left":false,"extend_right":false,"arrow_start_style":"None","arrow_end_style":"None","timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"price_axis_label":true,"time_axis_label":true,"line_measurements":{"persistent":false,"price_change":false,"percent_change":false,"pip_change":false,"bar_count":false,"elapsed_time":false,"length":false,"inclination":false,"midpoint":false,"price_labels":false,"position":"Right","text_horizontal_align":"Center","text_vertical_align":"Bottom","text_orientation":"Vertical","across_panes":false},"position_size":null,"position_sizing":{"point_value":1.0,"lot_size":1.0,"quantity_step":0.0,"leverage":1.0},"position_readout":{"persistent":false,"condensed":false,"account_currency":null,"conversion_rate":null,"quantity_decimals":null},"position_target_color":null,"position_stop_color":null,"position_style":{"line_color":null,"line_width":1.0,"text_color":null,"font_size":12.0,"label_background":true,"label_color":null,"fill":true,"border":false,"border_color":[102,123,139,255]},"marker":{"show_text":true,"glyph":"🙂","show_glyph":false,"glyph_color":null},"fib_config":null,"volume_profile":null,"regression_trend":{"upper":2.0,"lower":2.0,"use_upper":true,"use_lower":true,"source":"Close","line_style":"Dashed","precision":null},"vwap":null,"gann":null,"ghost_feed":null,"channel_midline":false,"anchor_price_style":null,"middle_line":{"color":null,"width":1.0,"line_style":"Dashed"},"theme_shade":true,"image":null,"closed":false,"pitchfork":null,"elliott_degree":"Minor","bars_pattern":null,"z_order":0},"created_at":1795031062320,"modified_at":1795031062320,"notes":null}],"metadata":{"created_at":1795031062320,"modified_at":1795031062320,"app_version":null}}"#;
+        restored.set_symbol("LEGACY");
+        restored.load_drawings(old).unwrap();
+        let drawing = &restored.drawings().drawings[0];
+        assert_eq!(
+            drawing.regression_trend,
+            Some(RegressionTrendConfig::default())
+        );
+        assert_eq!(drawing.stroke_width, 3.0);
+        assert_eq!(drawing.text.as_deref(), Some("Legacy trend"));
+        assert_eq!(drawing.line_measurements, Default::default());
+        assert_eq!(drawing.font_weight, crate::drawings::FontWeight::Normal);
+        assert!(!drawing.italic);
+        assert_eq!(drawing.text_color, None);
     }
 
     /// A host sets a pin's or a signpost's marker in one undoable step; other tools, a glyph
