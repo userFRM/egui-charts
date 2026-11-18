@@ -6224,6 +6224,103 @@ fn calendar_reload_uses_the_resolved_exchange_zone() {
     assert!(feed.calls().is_empty());
 }
 
+/// A resolve answer belongs to the requested symbol even under another name. Its trading hours
+/// reload once with delayed replies, and a pause keeps the bars and prepared study inputs.
+#[test]
+fn a_resolved_instrument_with_another_symbol_reloads_once_and_resumes() {
+    use crate::model::{Session, SessionWindow};
+    use chrono::{NaiveTime, Weekday};
+    let at = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+    // The Friday bars at 00:00 through 00:04 UTC fall inside these weekday hours.
+    let weekdays = [
+        Weekday::Mon,
+        Weekday::Tue,
+        Weekday::Wed,
+        Weekday::Thu,
+        Weekday::Fri,
+    ];
+    let hours = Session::new([SessionWindow::new(weekdays, at(0), at(12))]);
+    let instrument = Instrument::new("X:A")
+        .with_session(hours)
+        .with_tick_size(1.0);
+    let feed = Arc::new(Script::default());
+    feed.prepared_footprints.store(true, Ordering::Relaxed);
+    let mut chart = fed(&feed, Some("A"));
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    for frame in 0..10 {
+        // A network feed answers in a later frame.
+        for reply in std::mem::take(&mut *feed.resolves.lock().unwrap()) {
+            reply.send(Ok(instrument.clone()));
+        }
+        frames.run(&mut chart);
+        let symbol = chart.instrument().map(|i| i.symbol.as_str());
+        assert_eq!(symbol, Some("X:A"), "frame {frame}");
+    }
+    let calls = feed.calls();
+    let resolves = calls.iter().filter(|call| matches!(call, Call::Resolve(_)));
+    let latest = calls
+        .iter()
+        .filter(|call| matches!(call, Call::History(request) if request.before.is_none()));
+    assert!(resolves.count() <= 2 && latest.count() <= 2, "{calls:?}");
+
+    let reply = feed.pages.lock().unwrap().pop().unwrap();
+    reply.send(page(bars(5), true));
+    frames.run(&mut chart);
+    assert_eq!(chart.bars(SeriesId::MAIN), bars(5));
+    #[cfg(feature = "studies")]
+    let input = {
+        let id = chart.add_indicator(
+            crate::studies::IndicatorFactory::new()
+                .create("Vol Profile FR")
+                .unwrap(),
+        );
+        frames.run(&mut chart);
+        let start = bars(1)[0].time;
+        feed.footprints
+            .lock()
+            .unwrap()
+            .pop()
+            .unwrap()
+            .send(Ok(prepared_page(
+                &[Tick::new(start, 100.0, 5.0, None)],
+                start + TimeDelta::minutes(1),
+                true,
+            )));
+        frames.run(&mut chart);
+        chart
+            .indicators()
+            .find(|(seen, _)| *seen == id)
+            .unwrap()
+            .1
+            .order_flow_inputs()[0]
+            .clone()
+    };
+    #[cfg(feature = "studies")]
+    let reset = input.reset_revision();
+    chart.set_feed_paused(true);
+    chart.set_feed_paused(false);
+    frames.run(&mut chart);
+    // A resume keeps the bars but the last, which the next page rebuilds.
+    assert_eq!(chart.bars(SeriesId::MAIN), &bars(5)[..4]);
+    #[cfg(feature = "studies")]
+    assert_eq!(
+        input.reset_revision(),
+        reset,
+        "a resume keeps the study input"
+    );
+    #[cfg(feature = "studies")]
+    assert_eq!(
+        input
+            .footprint_snapshot(bars(1)[0].time)
+            .bars(..)
+            .map(|bar| bar.volume())
+            .collect::<Vec<_>>(),
+        [5.0],
+        "a resume keeps the prepared study input"
+    );
+}
+
 #[test]
 fn scroll_to_time_shows_the_nearest_bar_and_loads_older_history() {
     let all = bars(3000);
