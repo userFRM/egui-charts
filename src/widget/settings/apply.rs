@@ -369,16 +369,8 @@ impl ChartSettingsState {
         settings.crosshair.color = crosshair.horz_line_color;
         settings.crosshair.line_width = crosshair.horz_line_width;
         settings.crosshair.line_style = crosshair.horz_line_style;
-        let decimals = chart
-            .state()
-            .price_scale()
-            .map(Default::default(), 0.0, 1.0)
-            .price_precision();
-        settings.precision = PrecisionMode::all()
-            .iter()
-            .copied()
-            .find(|mode| mode.decimals() == decimals)
-            .unwrap_or_default();
+        settings.precision =
+            PrecisionMode::from_decimals(chart.state().price_scale().chosen_precision());
         settings.watermark.mode = if !config.show_watermark {
             WatermarkMode::ReplayMode
         } else if config.watermark_text.is_some() {
@@ -746,16 +738,10 @@ impl ChartSettingsState {
         let options = chart.state.price_scale_mut().options_mut();
         options.mode = mode;
         options.invert_scale = self.scales_and_lines.invert_scale;
-        let precision = self
-            .precision
-            .decimals()
-            .map(|value| value as u8)
-            .or_else(|| {
-                chart
-                    .instrument()
-                    .and_then(crate::scales::instrument_price_precision)
-            });
-        chart.state.price_scale_mut().set_price_precision(precision);
+        chart
+            .state
+            .price_scale_mut()
+            .set_price_precision(self.precision.decimals().map(|value| value as u8));
         if let Some(style) = chart.series_style_mut(crate::widget::SeriesId::MAIN) {
             style.price_line_color = self.scales_and_lines.symbol_price_color;
             if let Some(source) = self.scales_and_lines.price_line_source {
@@ -1397,6 +1383,22 @@ mod tests {
                 .unwrap();
         });
         assert!(!chart.can_undo());
+
+        // A precision the host chose stays, also one the list lacks, on an instrument of 2.
+        for decimals in [0, 1, 7, 9] {
+            let mut chart = Chart::new(bars());
+            let instrument = crate::model::Instrument::new("SAMPLE").with_price_decimals(2);
+            chart.set_instrument(Some(instrument));
+            chart.price_scale_mut().set_price_precision(Some(decimals));
+            chart.user_action(|chart| {
+                ChartSettingsState::from_chart(chart)
+                    .apply_to_chart(chart)
+                    .unwrap();
+            });
+            let precision = chart.state().price_scale().price_precision();
+            assert_eq!(precision, Some(decimals), "precision {decimals}");
+            assert!(!chart.can_undo(), "precision {decimals}");
+        }
 
         // Hidden and doubled price axes read as a right placement, which keeps them as they are.
         for (left, right) in [(false, false), (true, true)] {

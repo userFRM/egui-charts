@@ -13,7 +13,7 @@ use crate::model::{Bar, Instrument, percent_change};
 use crate::scales::price_decimals;
 use crate::scales::{
     DefaultPriceFormatter, HorizontalScale, PriceFormatter, PriceMap, VolumeFormatter,
-    instrument_price_precision,
+    group_thousands, instrument_price_precision,
 };
 use crate::styles::typography::font_size;
 use crate::theme::ThemeExt;
@@ -39,6 +39,42 @@ pub struct ValueFormatters<'a> {
     pub volume: Option<&'a dyn PriceFormatter>,
     /// Percentage changes.
     pub percentage: Option<&'a dyn PriceFormatter>,
+    /// The decimals of built-in prices in place of the instrument's; the chart sets it to the
+    /// precision chosen for its price scale.
+    pub(crate) price_decimals: Option<u8>,
+    /// Groups the thousands of built-in prices and of studies in price units; the chart sets it
+    /// from `ChartConfig::thousands_sep`.
+    pub(crate) thousands_sep: Option<char>,
+}
+
+impl ValueFormatters<'_> {
+    /// The decimals of built-in prices: the chart's, else the instrument's.
+    fn decimals(&self, instrument: Option<&Instrument>) -> Option<usize> {
+        self.price_decimals
+            .or_else(|| instrument.and_then(instrument_price_precision))
+            .map(usize::from)
+    }
+
+    /// `price` at `decimals` with its thousands grouped, else in the host's price format.
+    fn price(&self, price: f64, decimals: usize) -> String {
+        self.price.map_or_else(
+            || {
+                let text = DefaultPriceFormatter::with_precision(decimals).format(price);
+                group_thousands(text, self.thousands_sep)
+            },
+            |formatter| formatter.format(price),
+        )
+    }
+
+    /// The study's value, its thousands grouped in price units as the legend groups them.
+    fn study(&self, study: &StudyValue) -> String {
+        let text = study.formatted_value();
+        if study.format == crate::scales::StudyFormat::Price {
+            group_thousands(text, self.thousands_sep)
+        } else {
+            text
+        }
+    }
 }
 
 impl std::fmt::Debug for ValueFormatters<'_> {
@@ -194,14 +230,10 @@ pub fn render_floating_tooltip(
 ) {
     let options = &options.resolved(painter.ctx());
     let price = |price: f64| {
-        let decimals = instrument.and_then(instrument_price_precision).map_or_else(
-            || price_decimals(price).min(options.price_precision),
-            usize::from,
-        );
-        formatters.price.map_or_else(
-            || DefaultPriceFormatter::with_precision(decimals).format(price),
-            |formatter| formatter.format(price),
-        )
+        let decimals = formatters
+            .decimals(instrument)
+            .unwrap_or_else(|| price_decimals(price).min(options.price_precision));
+        formatters.price(price, decimals)
     };
     let mut rows = Vec::new();
 
@@ -222,12 +254,8 @@ pub fn render_floating_tooltip(
         let change_pct = percent_change(reference, candle.close);
         let absolute = formatters.price.map_or_else(
             || {
-                format!(
-                    "{change:+.*}",
-                    instrument
-                        .and_then(instrument_price_precision)
-                        .map_or(2, usize::from)
-                )
+                let decimals = formatters.decimals(instrument).unwrap_or(2);
+                group_thousands(format!("{change:+.decimals$}"), formatters.thousands_sep)
             },
             |formatter| formatter.format_change(change),
         );
@@ -259,7 +287,7 @@ pub fn render_floating_tooltip(
     rows.extend(studies.iter().map(|study| {
         (
             study.translated_label(painter.ctx()),
-            study.formatted_value(),
+            formatters.study(study),
             // A fully transparent colour holds no RGB, so it has no opaque form.
             if study.color.a() == 0 {
                 options.text_color
@@ -441,9 +469,9 @@ pub fn render_tracking_tooltip(
     painter.rect_filled(bar_rect, 0.0, options.tracking_bar_background);
 
     // Build tracking text
-    let precision = instrument
-        .and_then(instrument_price_precision)
-        .map_or(options.price_precision.min(4), usize::from);
+    let precision = formatters
+        .decimals(instrument)
+        .unwrap_or(options.price_precision.min(4));
     let mut parts: Vec<String> = instrument
         .map(|instrument| instrument.symbol.clone())
         .into_iter()
@@ -460,10 +488,7 @@ pub fn render_tracking_tooltip(
             ("L: {value}", candle.low),
             ("C: {value}", candle.close),
         ] {
-            let value = formatters.price.map_or_else(
-                || format!("{value:.precision$}"),
-                |formatter| formatter.format(value),
-            );
+            let value = formatters.price(value, precision);
             parts.push(l10n::format_text(
                 painter.ctx(),
                 label,
@@ -495,7 +520,7 @@ pub fn render_tracking_tooltip(
         format!(
             "{}: {}",
             study.translated_label(painter.ctx()),
-            study.formatted_value()
+            formatters.study(study)
         )
     }));
 
@@ -1077,6 +1102,53 @@ mod tests {
                 Some(symbol) => assert!(first.starts_with(symbol), "{first:?}"),
                 None => assert!(!first.contains("SAMPLE"), "{first:?}"),
             }
+        }
+    }
+
+    /// Without a host formatter the floating readout groups the thousands of its change, as the
+    /// legend and the data window do.
+    #[test]
+    fn floating_readout_groups_the_thousands_of_its_change() {
+        let plot = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(800.0, 300.0));
+        let time = chrono::DateTime::UNIX_EPOCH;
+        let bar = Bar::new(time, 1000.0, 2300.0, 900.0, 2234.5, 1.0);
+        let instrument = Instrument::new("SAMPLE").with_tick_size(0.01);
+        let scale = crate::scales::TimeFormatterBuilder::new().build();
+        for (separator, expected) in [
+            (Some(','), "+1,234.50 (+123.45%)"),
+            (None, "+1234.50 (+123.45%)"),
+        ] {
+            let ctx = egui::Context::default();
+            let output = ctx.run_ui(Default::default(), |ui| {
+                render_floating_tooltip(
+                    ui.painter(),
+                    Pos2::new(plot.left() + 100.0, plot.center().y),
+                    plot,
+                    10.0,
+                    &bar,
+                    Some(1000.0),
+                    &TooltipOptions::default(),
+                    egui::Color32::GREEN,
+                    &scale,
+                    3600,
+                    &[],
+                    Some(&instrument),
+                    ValueFormatters {
+                        thousands_sep: separator,
+                        ..Default::default()
+                    },
+                );
+            });
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            assert!(texts.iter().any(|text| text == expected), "{texts:?}");
         }
     }
 

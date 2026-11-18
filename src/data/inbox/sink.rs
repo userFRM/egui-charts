@@ -430,7 +430,7 @@ impl Sink {
                 .get_or_insert_with(|| OrderQueue::new(live.tick_size));
             let result = book.set_snapshot(sequence, time, orders);
             let trades = book.take_executions();
-            live.sync_orders(sequence, time, result);
+            live.sync_orders(time, result);
             for trade in trades {
                 live.tick(trade, Utc::now());
             }
@@ -449,7 +449,7 @@ impl Sink {
                 .get_or_insert_with(|| OrderQueue::new(live.tick_size));
             let result = book.event(sequence, time, event);
             let trades = book.take_executions();
-            live.sync_orders(sequence, time, result);
+            live.sync_orders(time, result);
             for trade in trades {
                 live.tick(trade, Utc::now());
             }
@@ -908,16 +908,20 @@ impl Live {
             Some(filter) if sampler.due(ts) => {
                 let levels = self.orders.as_ref().and_then(|queue| {
                     let summed = queue.filtered(&self.symbol, filter).ok()?;
-                    Some((summed, queue.largest_levels(filter)))
+                    Some((summed, queue.largest_levels(filter), queue.sequence()))
                 });
-                let Some((summed, sizes)) = levels else {
+                let Some((summed, sizes, sequence)) = levels else {
                     sampler.lose();
                     return false;
                 };
                 summed_book = Book::new(self.tick_size);
                 largest_book = Book::new(self.tick_size);
-                let _ = summed_book.snapshot(0, summed);
-                let _ = largest_book.snapshot(0, sizes);
+                // A queue waiting for a snapshot leaves both without one, so the period has no
+                // column and the update's period opens.
+                if let Some(sequence) = sequence {
+                    let _ = summed_book.snapshot(sequence, summed);
+                    let _ = largest_book.snapshot(sequence, sizes);
+                }
                 (&summed_book, Some(&largest_book))
             }
             _ => (&self.book, None),
@@ -937,19 +941,17 @@ impl Live {
         false
     }
 
-    fn sync_orders(&mut self, sequence: u64, time: DateTime<Utc>, result: Result<(), Lost>) {
+    fn sync_orders(&mut self, time: DateTime<Utc>, result: Result<(), Lost>) {
         self.orders_changed = true;
-        let levels = self
-            .orders
-            .as_ref()
-            .expect("order book")
-            .aggregate(&self.symbol, 0.0);
-        let sequence = self
-            .orders
-            .as_ref()
-            .and_then(OrderQueue::sequence)
-            .unwrap_or(sequence);
-        let derived = self.book.snapshot(sequence, levels);
+        let queue = self.orders.as_ref().expect("order book");
+        // The book derived from a queue that waits for a snapshot waits too, rather than holding
+        // an empty snapshot of it.
+        let derived = match queue.sequence() {
+            Some(sequence) => self
+                .book
+                .snapshot(sequence, queue.aggregate(&self.symbol, 0.0)),
+            None => Err(self.book.lose(false)),
+        };
         self.depth_result(time, result.and(derived));
     }
 

@@ -603,7 +603,7 @@ impl Chart {
             .instrument
             .take()
             .filter(|instrument| instrument.symbol == self.symbol);
-        self.state.price_scale_mut().set_price_precision(None);
+        self.state.price_scale_mut().set_instrument_precision(None);
         self.state.price_scale_mut().set_tick_size(None);
         if retain_trades {
             link.trades.reanchor();
@@ -712,7 +712,7 @@ impl Chart {
     fn subscribe(&mut self, link: &mut FeedLink, instrument: Instrument) {
         self.state
             .price_scale_mut()
-            .set_price_precision(crate::scales::instrument_price_precision(&instrument));
+            .set_instrument_precision(crate::scales::instrument_price_precision(&instrument));
         self.state
             .price_scale_mut()
             .set_tick_size(instrument.tick_size);
@@ -1010,20 +1010,41 @@ impl Chart {
                 .map(crate::data::FootprintState::new);
         }
         for (input, _) in &link.study_inputs {
-            if changed || (prepared_before.is_some() && input.is_footprint()) {
+            // A prepared footprint input keeps the executions it received: only a page that
+            // changes executions from the cutoff on rebuilds it, as it does the chart's footprint.
+            let prepared = prepared_before.is_some() && input.is_footprint();
+            let rebuild = if prepared { tail_changed } else { changed };
+            if rebuild {
                 input.replace_trades(
                     &link.clock,
                     &link.trades,
                     &self.state.data().bars,
                     link.footprint.as_ref(),
                 );
+            } else if prepared {
+                if rejected == 0
+                    && let Some((from, end, oldest, live)) = coverage
+                {
+                    // The store's losses can include executions the input never received, so the
+                    // page proves its coverage only after the newest of them.
+                    let from = link.trades.lost_until().map_or(from, |lost| {
+                        from.max(
+                            lost.checked_add_signed(chrono::TimeDelta::nanoseconds(1))
+                                .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC),
+                        )
+                    });
+                    input.cover_footprint(from, end.min(oldest.unwrap_or(end)));
+                    if let Some(retained) = unproven.1 {
+                        input.cover_footprint(from.max(retained), end.min(live.unwrap_or(end)));
+                    }
+                }
+                input.refresh_footprint_coverage(&link.trades, None, None);
             }
         }
         link.trade_cursor = continuation;
         link.trades_complete |=
             // The latest page can repeat a retained tape without reaching its oldest execution.
-            end || (continuation.is_none() && !changed && asked.before.is_some())
-                || link.trades.room() == 0;
+            end || (continuation.is_none() && !changed && asked.before.is_some());
     }
 
     /// The start of the range to ask for below `before`: the time `scroll_to_time` is heading
@@ -1038,6 +1059,8 @@ impl Chart {
     /// Asks for trades older than the oldest held once the view reaches it, for the order flow
     /// that consumes them: bubbles, a footprint or a study.
     fn scroll_trades(&mut self, link: &mut FeedLink, executions: bool) {
+        // A page never evicts newer trades, so a full store takes no older ones.
+        link.trades_complete |= link.trades.room() == 0;
         let consumed = link.bubbles.is_some()
             || (executions && link.footprint.is_some())
             || !link.study_inputs.is_empty();

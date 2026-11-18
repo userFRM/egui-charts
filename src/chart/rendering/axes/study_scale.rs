@@ -57,7 +57,7 @@ pub(crate) fn fit_study_mapping(
         if low.is_finite()
             && matches!(
                 plot.plot_type,
-                PlotType::Histogram | PlotType::Columns | PlotType::Area
+                PlotType::Histogram | PlotType::Columns | PlotType::Area | PlotType::AreaWithBreaks
             )
         {
             low = low.min(0.0);

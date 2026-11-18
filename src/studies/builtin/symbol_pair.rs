@@ -29,8 +29,8 @@
 //!
 //! # Presentation
 //!
-//! The correlation opens as an area from zero with a dashed guide at zero. The ratio and the
-//! spread open as lines without guides.
+//! The correlation opens as an area from zero, its line over a translucent fill, with a dashed
+//! guide at zero. The ratio and the spread open as lines without guides.
 
 use crate::model::{Bar, PriceSource};
 use crate::studies::palette;

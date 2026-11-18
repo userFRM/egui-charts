@@ -390,7 +390,8 @@ impl Indicator for RSI {
                 match output {
                     2 => PlotType::TriangleUp,
                     3 => PlotType::TriangleDown,
-                    _ => PlotType::Line,
+                    // A divergence is a segment between two pivots, missing elsewhere.
+                    _ => PlotType::LineWithBreaks,
                 },
             ),
             None => (

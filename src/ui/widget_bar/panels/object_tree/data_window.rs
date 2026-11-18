@@ -19,8 +19,8 @@ impl DataWindowInfo {
     /// Populates the readout from the bar the chart's status line shows: the one under its
     /// crosshair, whether from the pointer, a linked chart or the host, falling back to the
     /// latest bar with a value.
-    /// Uses the chart's time formatter, instrument precision, visible added series and visible
-    /// study plots, leaving out the volume columns that the volume row shows.
+    /// Uses the chart's time formatter, price precision, visible added series and visible study
+    /// plots, leaving out the volume columns that the volume row shows.
     /// Call after [`crate::widget::Chart::show`] so hover and study values describe the current frame.
     pub fn from_chart(chart: &crate::widget::Chart) -> Self {
         let index = chart
@@ -95,15 +95,22 @@ impl DataWindowInfo {
     }
 
     /// Formats this readout's raw values as the chart's status line writes them: with the
-    /// chart's host formatters, else with the instrument's or the status line's decimals and the
-    /// chart's thousands separator. Call after populating OHLCV and previous close.
+    /// chart's host formatters, else with its price decimals and thousands separator.
+    /// [`Self::price_decimals`] becomes the precision chosen for the chart's price scale, else
+    /// the instrument's; without either it keeps its own, and `None` writes the status line's
+    /// decimals. Call after populating OHLCV and previous close.
     pub fn with_chart_formatters(mut self, chart: &crate::widget::Chart) -> Self {
         let price_formatter = chart.series_price_formatter(crate::widget::SeriesId::MAIN);
         let formats = chart.value_formatters(price_formatter.as_deref());
+        self.price_decimals = chart.readout_price_decimals().or(self.price_decimals);
         let decimals = self
             .price_decimals
             .map_or_else(|| crate::scales::price_decimals(self.close), usize::from);
-        let separator = chart.config.thousands_sep;
+        // Built-in labels write '.' as the decimal point, so '.' and digits group nothing.
+        let separator = chart
+            .config
+            .thousands_sep
+            .filter(|separator| *separator != '.' && !separator.is_ascii_digit());
         let price = |value: f64| match formats.price {
             Some(formatter) => formatter.format(value),
             None if value.is_finite() => {
@@ -344,17 +351,20 @@ mod tests {
         let next = time + chrono::TimeDelta::minutes(1);
         // 0.00001 / 1.23455 * 100 = 0.000810... percentage points; without an instrument,
         // 41,639.77 / 1,000 * 100 = 4,163.977 percentage points, written as the status line does.
-        for (instrument, custom, separator, expected) in [
+        // A precision chosen for the price scale replaces the instrument's.
+        for (instrument, custom, separator, chosen, expected) in [
             (
                 true,
                 false,
                 Some(','),
+                None,
                 &["0.00000", "1.23456", "+0.00001 (+0.00%)", "1.234K"][..],
             ),
             (
                 true,
                 true,
                 Some(','),
+                None,
                 &[
                     "p 0.00000",
                     "p 1.23456",
@@ -366,13 +376,29 @@ mod tests {
                 false,
                 false,
                 Some(','),
+                None,
                 &["1,332.57", "42,639.77", "+41,639.77 (+4163.98%)"],
             ),
             (
                 false,
                 false,
                 None,
+                None,
                 &["1332.57", "42639.77", "+41639.77 (+4163.98%)"],
+            ),
+            (
+                false,
+                false,
+                Some('.'),
+                None,
+                &["1332.57", "42639.77", "+41639.77 (+4163.98%)"],
+            ),
+            (
+                true,
+                false,
+                Some(','),
+                Some(7),
+                &["0.0000000", "1.2345600", "+0.0000100 (+0.00%)", "1.234K"],
             ),
         ] {
             let mut chart = crate::widget::Chart::new(BarData::from_bars(if instrument {
@@ -403,8 +429,20 @@ mod tests {
                     format!("{value:.0} units")
                 }))));
             }
+            chart.price_scale_mut().set_price_precision(chosen);
             let data = DataWindowInfo::from_chart(&chart);
-            assert_eq!(data.price_decimals, instrument.then_some(5));
+            assert_eq!(data.price_decimals, chosen.or(instrument.then_some(5)));
+            // A host that reads the bar from its own pointer events, as the terminal does on
+            // hover, writes the same prices.
+            let mut host = DataWindowInfo::new("FX")
+                .with_ohlcv(data.open, data.high, data.low, data.close, data.volume)
+                .with_prev_close(data.prev_close);
+            if let Some(instrument) = chart.instrument() {
+                host = host.with_instrument(instrument);
+            }
+            let host = host.with_chart_formatters(&chart);
+            assert_eq!(host.formatted_prices, data.formatted_prices, "{chosen:?}");
+            assert_eq!(host.formatted_change, data.formatted_change, "{chosen:?}");
             let ctx = egui::Context::default();
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 show_ohlcv_grid(ui, &data);

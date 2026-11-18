@@ -48,8 +48,8 @@ pub(crate) fn move_targets(
 pub enum DrawingContextMenuAction {
     /// No action requested.
     None,
-    /// Open the alert dialog on this alert, the price crossing the drawing's first visible level, for
-    /// example with [`AlertDialog::edit`](crate::ui::dialogs::AlertDialog::edit),
+    /// Open the alert dialog on this alert: the price, or the first output of the study leading a
+    /// study pane, crossing the drawing's first visible level, for example with [`AlertDialog::edit`](crate::ui::dialogs::AlertDialog::edit),
     /// listing the levels of [`Drawing::alert_levels_with_bars`](crate::drawings::Drawing::alert_levels_with_bars)
     /// as its sources.
     AddAlert(Box<Alert>),
@@ -159,7 +159,8 @@ impl DrawingContextMenu {
     }
 
     /// Open the menu on drawing `drawing_id` of `chart`, offering an alert when the chart has a
-    /// symbol and the drawing has price levels, and the chart's other panes.
+    /// symbol, the drawing has levels and its pane marks the price or a study, as
+    /// `Chart::drawing_subject` gives, and the chart's other panes.
     pub(crate) fn open_on(&mut self, ctx: &Context, chart: &Chart, pos: Pos2, drawing_id: usize) {
         let drawing = chart
             .drawings()
@@ -176,24 +177,21 @@ impl DrawingContextMenu {
         self.alert = drawing
             .filter(|_| !chart.symbol.is_empty())
             .and_then(|drawing| {
+                let (scale, source, _) = chart.drawing_subject(drawing.id);
+                let bars = chart.bars(crate::chart::series::SeriesId::MAIN);
                 let (level, _, _) = drawing
-                    .alert_levels_with_bars(
-                        chart
-                            .bars(crate::chart::series::SeriesId::MAIN)
-                            .len()
-                            .saturating_sub(1) as f64,
-                        chart.config().right_axis_scale_mode,
-                        chart.bars(crate::chart::series::SeriesId::MAIN),
-                    )
+                    .alert_levels_with_bars(bars.len().saturating_sub(1) as f64, scale, bars)
                     .into_iter()
                     .next()?;
-                Some(Alert::new(
+                let mut alert = Alert::new(
                     chart.symbol.clone(),
                     AlertCondition::Compare {
                         other: drawing.alert_source(level),
                         comparison: AlertComparison::Crossing,
                     },
-                ))
+                );
+                alert.source = source?;
+                Some(alert)
             });
         self.panes = move_targets(Some(ctx), chart, drawing_id);
         self.open(pos, drawing_id);
@@ -450,7 +448,7 @@ impl DrawingContextMenuAction {
                 .iter()
                 .any(|d| d.id == id && d.timeframe_visibility != filter)
         {
-            chart.user_action(|chart| {
+            let _ = chart.user_action(|chart| {
                 chart
                     .drawings_mut()
                     .edit_drawing(id, |d| d.timeframe_visibility = filter)
@@ -694,9 +692,9 @@ mod tests {
                 d.chart_points[0].price = 999.0;
             };
             if bulk {
-                manager.edit_drawings(&[7], edit);
+                manager.edit_drawings(&[7], edit).unwrap();
             } else {
-                manager.edit_drawing(7, edit);
+                manager.edit_drawing(7, edit).unwrap();
             }
             assert_eq!(manager.drawings[0].timeframe_visibility, filter);
             assert_eq!(manager.drawings[0].stroke_width, drawing.stroke_width);

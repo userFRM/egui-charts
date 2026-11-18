@@ -5,9 +5,8 @@ use super::ChartLayout;
 use crate::chart::overlays::BubbleGrouping;
 use crate::config::ChartConfig;
 use crate::model::{Bar, ChartType};
-use crate::scales::instrument_price_precision;
 use crate::studies::{Indicator, IndicatorFactory, InputValue, StudySource, StudyTemplateSet};
-use crate::widget::settings::{ChartSettingsState, PrecisionMode};
+use crate::widget::settings::ChartSettingsState;
 use crate::widget::study_templates::{Keep, NO_STUDY};
 use crate::widget::{Chart, SeriesId};
 
@@ -258,27 +257,21 @@ impl CopiedStudies {
     }
 }
 
-/// Applies the settings of the chart with `from` as its configuration and `from_decimals` as its
-/// instrument's precision to another chart. That chart keeps the parameters of its chart type,
-/// whose sizes and base prices suit its own prices, its own price-to-bar ratio when the settings
-/// lock it, its quantity unit and order-flow sizes, and its bubble grouping when the source uses
-/// a price step, which suit its own instrument. It keeps all its order-flow settings when
-/// `from_feed` is false, since a chart without a feed holds none. It takes the colours of `from`
-/// for its candles when the settings describe another style of candles and so do not hold them.
-///
-/// shortcut: a precision chosen equal to the source instrument's follows each chart's instrument,
-/// as a chart does not keep whether its precision was chosen; keep that choice to tell them apart.
+/// Applies the settings of the chart with `from` as its configuration to another chart. That
+/// chart keeps the parameters of its chart type, whose sizes and base prices suit its own prices,
+/// its own price-to-bar ratio when the settings lock it, its quantity unit and order-flow sizes,
+/// and its bubble grouping when the source uses a price step, which suit its own instrument. It
+/// keeps all its order-flow settings when `from_feed` is false, since a chart without a feed
+/// holds none. It takes the colours of `from` for its candles when the settings describe another
+/// style of candles and so do not hold them. A precision left at its default follows each
+/// chart's instrument.
 fn apply_to_other_chart(
     settings: &ChartSettingsState,
     from: &ChartConfig,
-    from_decimals: Option<u8>,
     from_feed: bool,
     chart: &mut Chart,
 ) {
     let mut settings = settings.clone();
-    if settings.precision.decimals().map(|value| value as u8) == from_decimals {
-        settings.precision = PrecisionMode::Default;
-    }
     if let Some(params) = settings.chart_type_params.take() {
         let mut own = chart.chart_type_params().clone();
         own.styles = params.styles;
@@ -401,7 +394,6 @@ impl ChartLayout {
             return issues;
         }
         let from_config = from.config().clone();
-        let from_decimals = from.instrument().and_then(instrument_price_precision);
         let from_feed = from.feed_link.is_some();
         let edit = self.edits.start();
         // Only the charts the copy changes take part in the edit, so that it leaves no empty step.
@@ -425,13 +417,7 @@ impl ChartLayout {
                 // The issues above already refused what would fail here.
                 match (copy, &studies) {
                     (LayoutCopy::Settings(settings), _) => {
-                        apply_to_other_chart(
-                            settings,
-                            &from_config,
-                            from_decimals,
-                            from_feed,
-                            chart,
-                        );
+                        apply_to_other_chart(settings, &from_config, from_feed, chart);
                     }
                     (_, Some(studies)) => {
                         let ids = chart
@@ -999,9 +985,10 @@ mod tests {
         }
         assert_eq!(charts[1].chart_type(), ChartType::HollowCandles);
         assert_eq!(charts[1].chart_type_params().renko_brick_size, 0.25);
-        let precision = |chart: &Chart| ChartSettingsState::from_chart(chart).precision;
-        assert_eq!(precision(charts[0]), PrecisionMode::Decimals2);
-        assert_eq!(precision(charts[1]), PrecisionMode::Decimals4);
+        // Neither chose a precision, so each writes its own instrument's.
+        let precision = |chart: &Chart| chart.state().price_scale().price_precision();
+        assert_eq!(precision(charts[0]), Some(2));
+        assert_eq!(precision(charts[1]), Some(4));
 
         assert!(charts[0].undo());
         show(&mut layout, &mut charts);
@@ -1426,6 +1413,7 @@ mod tests {
 
     /// Undoing a settings copy restores the precision, event markers and price line colour it
     /// changed, on both charts after replacing the layout with a clone, and redo applies them again.
+    /// A chosen precision equal to the instruments' own is a change too.
     #[test]
     fn settings_copy_undo_restores_precision_events_and_price_line() {
         let (mut a, mut b) = (chart(50), chart(50));
@@ -1433,7 +1421,7 @@ mod tests {
             chart.set_instrument(Some(Instrument::new("SAMPLE").with_tick_size(0.01)));
         }
         let mut settings = ChartSettingsState::from_chart(&a);
-        settings.precision = PrecisionMode::Decimals4;
+        settings.precision = PrecisionMode::Decimals2;
         settings.events.show_earnings = true;
         settings.scales_and_lines.symbol_price_color = Some(egui::Color32::GOLD);
         let state = |chart: &Chart| {
@@ -1445,8 +1433,8 @@ mod tests {
                     .and_then(|style| style.price_line_color),
             )
         };
-        let before = (PrecisionMode::Decimals2, false, None);
-        let applied = (PrecisionMode::Decimals4, true, Some(egui::Color32::GOLD));
+        let before = (PrecisionMode::Default, false, None);
+        let applied = (PrecisionMode::Decimals2, true, Some(egui::Color32::GOLD));
         assert_eq!([state(&a), state(&b)], [before, before]);
         let factory = IndicatorFactory::new();
         let mut layout = pair();

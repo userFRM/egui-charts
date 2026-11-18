@@ -69,8 +69,9 @@ Use [`FootprintPage::new`](https://userfrm.github.io/egui-charts/docs/api/egui_c
 for owned bars, or [`FootprintPage::from_shared`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FootprintPage.html#method.from_shared)
 for an immutable [`FootprintSource`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.FootprintSource.html).
 Its bar views borrow sorted native rows; storage and byte conversion stay in the host. The
-constructor docs include examples of both forms. `FootprintPage::bars` is a
-[`FootprintBars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/enum.FootprintBars.html);
+constructor docs include examples of both forms.
+[`FootprintPage::bars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FootprintPage.html#structfield.bars)
+is a [`FootprintBars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/enum.FootprintBars.html);
 its `iter` method reads either form.
 
 A bounded request names `[since, before)`. Each reply answers one contiguous suffix ending
@@ -87,7 +88,9 @@ internal gaps. Internal fills use clock-aligned boundaries and leave the initial
 prepared/live cutoff unchanged. Existing row owners remain retained; closing even an empty
 gap updates coverage and invalidates affected study results. Older end-of-history does not
 prevent an internal gap from being filled after resuming a paused feed. Resume retains
-prepared owners; an explicit `Chart::reload_feed()` instead discards the old bars, trades and
+prepared owners; an explicit
+[`Chart::reload_feed()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.reload_feed)
+instead discards the old bars, trades and
 prepared history and requests the latest pages again. Invalid replies preserve accepted
 data and stop footprint requests until refresh; they never certify empty or unavailable history.
 
@@ -122,10 +125,11 @@ shared row owners; exported images preserve the recorded values and partial mark
 A shared owner can serve several charts. Admission validates its clock, grid, rows, totals and
 exclusive execution cutoff when each page is accepted. Of the shared page's bars, only an
 unfinished boundary is copied into mutable rows; subsequent live trades use the existing accumulator.
-The owner must remain unchanged, and reading it must not allocate or perform I/O.
-Complete-only statistics and annotations use the same complete bars, including valid history
-before a missing join. Only the cell painter additionally displays explicitly partial rows.
-`Footprint::bars()` keeps its existing owned
+The owner must remain unchanged, and reading it must not allocate or perform I/O. Footprint
+cells, statistics and annotations use the same complete bars,
+including valid history before a missing join.
+[`Footprint::bars()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Footprint.html#method.bars)
+keeps its existing owned
 store API. Fixed range and anchored volume profile drawings also read these shared rows through
 [`ChartView::executions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/drawings/rendering/struct.ChartView.html#structfield.executions)
 and group them into their rows as the volume profile studies below group executions.
@@ -138,9 +142,10 @@ trade-driven studies still require individual executions.
 Call [`Chart::set_liquidity_heatmap(true)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_liquidity_heatmap) on a chart with a feed and an instrument tick size.
 It starts the default [`DepthHistory`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.DepthHistory.html) if the host has not configured one. Call
 [`Chart::set_depth_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_depth_history) first to choose cadence, grouping and retention. The book is sampled
-where depth arrives, independently of UI frames. No column covers a period when the book was
-lost. A merged historical column averages size over its span and uses its best retained row for
-the inside-market path; it cannot restore individual quotes from before merging.
+where depth arrives, independently of UI frames. No column covers a period that ends while the
+aggregate or order-level book waits for a snapshot, so merging never averages an outage into the
+sizes beside it. A merged historical column averages size over its span and uses its best
+retained row for the inside-market path; it cannot restore individual quotes from before merging.
 
 The renderer stores one texel per time column and grouped price level in texture atlases. New
 or corrected columns upload only their column. One colour scale encodes size, the same for bids
@@ -383,8 +388,11 @@ through [`Indicator::set_bar_clock`](https://userfrm.github.io/egui-charts/docs/
 updates the study from the first bar that changed.
 
 Profile studies use the shared reader for painting, extended levels and autoscale. Frozen chart
-exports call `Indicator::clone_for_export`; profile studies use `OrderFlowInput::frozen` there,
-so even a first query after later live updates sees the saved state. Ordinary study clones still
+exports call
+[`Indicator::clone_for_export`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.clone_for_export);
+profile studies use
+[`OrderFlowInput::frozen`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowInput.html#method.frozen)
+there, so even a first query after later live updates sees the saved state. Ordinary study clones still
 share their live input. Other indicators keep their existing clone behavior unless they override
 the export hook.
 

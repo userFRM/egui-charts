@@ -406,6 +406,55 @@ fn older_trades_follow_the_view_without_repeating_a_cursor() {
     assert!(matches!(state.last_error, Some(FeedError::InvalidData(_))));
 }
 
+/// Live executions that fill the trade store leave no room for older ones, so none are asked
+/// for: a feed's empty answer to a request for none would read as the start of trade history.
+#[test]
+fn a_trade_store_filled_live_asks_for_no_older_trades() {
+    let all = bars(1000);
+    let oldest = all[999].time;
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    chart.set_volume_bubbles(Some(VolumeBubblesConfig::default()));
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.page().send(page(all, false));
+    feed.resolve().send(Ok(Instrument::new("A")));
+    frames.run(&mut chart);
+    chart.feed_link.as_mut().unwrap().trades = Trades::new(2);
+    feed.calls();
+    // The latest page leaves room for older trades; the stream fills it in the same drain.
+    feed.trades
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(TradePage::new(
+            vec![Tick::new(oldest, 100.0, 1.0, None)],
+            false,
+        )));
+    for second in 1..3 {
+        feed.sink().push_tick(Tick::new(
+            oldest + TimeDelta::seconds(second),
+            100.0,
+            1.0,
+            None,
+        ));
+    }
+    frames.run(&mut chart);
+    assert_eq!(
+        feed.calls()
+            .into_iter()
+            .filter(|call| matches!(call, Call::Trades(_)))
+            .collect::<Vec<_>>(),
+        []
+    );
+    assert!(
+        chart
+            .feed_state(SeriesId::MAIN)
+            .unwrap()
+            .trade_history_complete
+    );
+}
+
 /// A changed conversion resolves and loads the symbol again with the choice in every request,
 /// and a reply to the previous choice, however late, is not shown.
 #[test]
@@ -495,6 +544,117 @@ fn inactive_symbol_state_can_be_forgotten() {
     assert!(chart.forget_symbol("marked"));
     chart.set_symbol("marked");
     assert!(chart.markers(SeriesId::MAIN).is_empty());
+}
+
+/// A precision chosen in the chart settings outlasts an interval change, a reload, a pause and
+/// resume, a symbol change and a save and restore, while each instrument's decimals arrive
+/// beneath it, and "Default" follows the instrument again. A layout saved before a precision
+/// could be chosen held the precision shown, which restores as none chosen and gives way to the
+/// next instrument's, as it did.
+#[test]
+fn chosen_precision_survives_interval_symbol_and_reload() {
+    use crate::widget::settings::{ChartSettingsState, PrecisionMode};
+    let answer = |feed: &Script, symbol: &str, decimals: u8| {
+        while !feed.resolves.lock().unwrap().is_empty() {
+            let instrument = Instrument::new(symbol).with_price_decimals(decimals);
+            feed.resolve().send(Ok(instrument));
+        }
+    };
+    let shown = |chart: &Chart| {
+        let precision = ChartSettingsState::from_chart(chart).precision;
+        (chart.state.price_scale().price_precision(), precision)
+    };
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    answer(&feed, "A", 2);
+    frames.run(&mut chart);
+    assert_eq!(
+        shown(&chart),
+        (Some(2), PrecisionMode::Default),
+        "never chosen"
+    );
+    let mut settings = ChartSettingsState::from_chart(&chart);
+    settings.precision = PrecisionMode::Decimals5;
+    settings.apply_to_chart(&mut chart).unwrap();
+    let chosen = (Some(5), PrecisionMode::Decimals5);
+    type Step<'a> = (&'a str, &'a dyn Fn(&mut Chart));
+    let steps: [Step; 4] = [
+        ("interval", &|chart| chart.set_timeframe(Timeframe::Hour1)),
+        ("reload", &|chart| chart.reload_feed()),
+        ("pause", &|chart| chart.set_feed_paused(true)),
+        ("resume", &|chart| chart.set_feed_paused(false)),
+    ];
+    for (step, change) in steps {
+        change(&mut chart);
+        frames.run(&mut chart);
+        answer(&feed, "A", 2);
+        frames.run(&mut chart);
+        assert_eq!(shown(&chart), chosen, "{step}");
+    }
+    chart.set_symbol("B");
+    frames.run(&mut chart);
+    answer(&feed, "B", 3);
+    frames.run(&mut chart);
+    assert_eq!(shown(&chart), chosen, "symbol");
+
+    #[cfg(feature = "ui")]
+    {
+        let saved = chart.snapshot().unwrap();
+        let restored_feed = Arc::new(Script::default());
+        let mut restored = fed(&restored_feed, Some("B"));
+        restored.restore(&saved).unwrap();
+        frames.run(&mut restored);
+        answer(&restored_feed, "B", 3);
+        frames.run(&mut restored);
+        assert_eq!(shown(&restored), chosen, "restored");
+
+        // Before, the saved scale held the five decimals shown and no choice.
+        let mut older = serde_json::to_value(&saved).unwrap();
+        let scale = older["price_scale"].as_object_mut().unwrap();
+        assert!(scale.remove("chosen_precision").is_some());
+        scale["price_precision"] = 5.into();
+        let older: crate::widget::ChartSnapshot = serde_json::from_value(older).unwrap();
+        let older_feed = Arc::new(Script::default());
+        let mut restored = fed(&older_feed, Some("B"));
+        restored.restore(&older).unwrap();
+        assert_eq!(
+            shown(&restored),
+            (Some(5), PrecisionMode::Default),
+            "older save"
+        );
+        frames.run(&mut restored);
+        answer(&older_feed, "B", 3);
+        frames.run(&mut restored);
+        assert_eq!(
+            shown(&restored),
+            (Some(3), PrecisionMode::Default),
+            "older save, fed"
+        );
+
+        // A layout saved without its scale holds only the precision shown, in its settings.
+        let mut unscaled = serde_json::to_value(&saved).unwrap();
+        let scale = unscaled.as_object_mut().unwrap().remove("price_scale");
+        assert!(scale.is_some());
+        let unscaled: crate::widget::ChartSnapshot = serde_json::from_value(unscaled).unwrap();
+        let unscaled_feed = Arc::new(Script::default());
+        let mut restored = fed(&unscaled_feed, Some("B"));
+        restored.restore(&unscaled).unwrap();
+        frames.run(&mut restored);
+        answer(&unscaled_feed, "B", 3);
+        frames.run(&mut restored);
+        assert_eq!(
+            shown(&restored),
+            (Some(3), PrecisionMode::Default),
+            "saved without a scale"
+        );
+    }
+
+    let mut settings = ChartSettingsState::from_chart(&chart);
+    settings.precision = PrecisionMode::Default;
+    settings.apply_to_chart(&mut chart).unwrap();
+    assert_eq!(shown(&chart), (Some(3), PrecisionMode::Default), "default");
 }
 
 /// `count` one-minute bars from 00:00 on 15 March 2024, closing at 100 plus their index.
@@ -1380,7 +1540,7 @@ fn prepared_history_joins_live_once_and_keeps_unknown_sides() {
 }
 
 #[test]
-fn prepared_rows_survive_eviction_and_trade_page_rebuild_without_cloning() {
+fn prepared_rows_survive_eviction_and_a_late_trade_page_without_cloning() {
     let (feed, mut chart, mut frames) = prepared_chart();
     #[cfg(feature = "studies")]
     let input = {
@@ -1436,6 +1596,16 @@ fn prepared_rows_survive_eviction_and_trade_page_rebuild_without_cloning() {
         frames.run(&mut chart);
         assert_eq!(row_address(&chart), original);
     }
+    // The profile kept the executions the store evicted, so the bars after the cutoff's are
+    // complete before the late page.
+    #[cfg(feature = "studies")]
+    let reset = {
+        let read = input.footprint_snapshot(start);
+        assert!(
+            read.span_is_complete(start + TimeDelta::minutes(3), start + TimeDelta::minutes(5))
+        );
+        input.reset_revision()
+    };
     feed.trades
         .lock()
         .unwrap()
@@ -1454,13 +1624,23 @@ fn prepared_rows_survive_eviction_and_trade_page_rebuild_without_cloning() {
     assert_eq!(flow.bar_at(start).unwrap().unknown, 5.0);
     #[cfg(feature = "studies")]
     {
+        assert_eq!(
+            input.reset_revision(),
+            reset,
+            "a late trade page must not reset the profile"
+        );
         let read = input.footprint_snapshot(start);
+        assert!(
+            read.span_is_complete(start + TimeDelta::minutes(3), start + TimeDelta::minutes(5))
+        );
+        // The cutoff's bar keeps its unproven first instant: the store dropped that execution.
         assert_eq!(
             read.bars(..)
                 .map(|bar| (bar.time, bar.volume()))
                 .collect::<Vec<_>>(),
             [
                 (start, 5.0),
+                (start + TimeDelta::minutes(3), 1.0),
                 (start + TimeDelta::minutes(4), 1.0),
                 (start + TimeDelta::minutes(5), 1.0)
             ]
@@ -1490,96 +1670,112 @@ fn prepared_rows_survive_eviction_and_trade_page_rebuild_without_cloning() {
 
 #[test]
 fn prepared_join_keeps_both_complete_sides_until_a_trade_page_fills_it() {
-    let (feed, mut chart, mut frames) = prepared_chart();
-    #[cfg(feature = "studies")]
-    let input = {
-        let id = chart.add_indicator(
-            crate::studies::IndicatorFactory::new()
-                .create("Vol Profile FR")
-                .unwrap(),
-        );
-        frames.run(&mut chart);
-        chart
-            .indicators()
-            .find(|(seen, _)| *seen == id)
-            .unwrap()
-            .1
-            .order_flow_inputs()[0]
-            .clone()
-    };
     let start = bars(1)[0].time;
     let cutoff = start + TimeDelta::seconds(90);
-    let saved = [
-        Tick::new(start, 100.0, 5.0, None),
-        Tick::new(start + TimeDelta::minutes(1), 100.0, 7.0, None),
-    ];
-    for (second, size, id) in [(130, 11.0, 7), (180, 13.0, 42)] {
-        feed.sink().push_tick(
-            Tick::new(start + TimeDelta::seconds(second), 100.0, size, None).with_id(id),
-        );
-    }
-    frames.run(&mut chart);
-    feed.footprints
-        .lock()
-        .unwrap()
-        .remove(0)
-        .send(Ok(prepared_page(&saved, cutoff, true)));
-    frames.run(&mut chart);
-    let flow = chart
-        .feed_link
-        .as_ref()
-        .unwrap()
-        .footprint
-        .as_ref()
-        .unwrap()
-        .view();
-    assert_eq!(flow.complete_from(), Some(start + TimeDelta::minutes(3)));
-    assert_eq!(
-        flow.complete_bars(..)
-            .map(|bar| bar.time)
-            .collect::<Vec<_>>(),
-        vec![start, start + TimeDelta::minutes(3)]
-    );
-    assert!(flow.complete_bar_at(cutoff).is_none());
-    #[cfg(feature = "studies")]
-    {
-        let read = input.footprint_snapshot(start);
+    // An execution at the cutoff fills the join; one before it proves the join empty without
+    // changing a bar, so the profile is not rebuilt.
+    for (paged, cutoff_volume) in [
+        (Tick::new(cutoff, 100.0, 2.0, None).with_id(99), 9.0),
+        (
+            Tick::new(start + TimeDelta::seconds(30), 100.0, 3.0, None),
+            7.0,
+        ),
+    ] {
+        let (feed, mut chart, mut frames) = prepared_chart();
+        #[cfg(feature = "studies")]
+        let input = {
+            let id = chart.add_indicator(
+                crate::studies::IndicatorFactory::new()
+                    .create("Vol Profile FR")
+                    .unwrap(),
+            );
+            frames.run(&mut chart);
+            chart
+                .indicators()
+                .find(|(seen, _)| *seen == id)
+                .unwrap()
+                .1
+                .order_flow_inputs()[0]
+                .clone()
+        };
+        let saved = [
+            Tick::new(start, 100.0, 5.0, None),
+            Tick::new(start + TimeDelta::minutes(1), 100.0, 7.0, None),
+        ];
+        for (second, size, id) in [(130, 11.0, 7), (180, 13.0, 42)] {
+            feed.sink().push_tick(
+                Tick::new(start + TimeDelta::seconds(second), 100.0, size, None).with_id(id),
+            );
+        }
+        frames.run(&mut chart);
+        feed.footprints
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(prepared_page(&saved, cutoff, true)));
+        frames.run(&mut chart);
+        let flow = chart
+            .feed_link
+            .as_ref()
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap()
+            .view();
+        assert_eq!(flow.complete_from(), Some(start + TimeDelta::minutes(3)));
         assert_eq!(
-            read.bars(..)
-                .map(|bar| (bar.time, bar.volume()))
+            flow.complete_bars(..)
+                .map(|bar| bar.time)
                 .collect::<Vec<_>>(),
-            [(start, 5.0), (start + TimeDelta::minutes(3), 13.0)]
+            vec![start, start + TimeDelta::minutes(3)]
         );
-        assert!(!read.span_is_complete(start, start + TimeDelta::minutes(3)));
-    }
-    feed.trades
-        .lock()
-        .unwrap()
-        .remove(0)
-        .send(Ok(TradePage::new(
-            vec![Tick::new(cutoff, 100.0, 2.0, None).with_id(99)],
-            false,
-        )));
-    frames.run(&mut chart);
-    let flow = chart
-        .feed_link
-        .as_ref()
-        .unwrap()
-        .footprint
-        .as_ref()
-        .unwrap()
-        .view();
-    assert!(!flow.span_has_gap(start, None));
-    assert_eq!(flow.complete_from(), Some(start));
-    assert_eq!(flow.bar_at(cutoff).unwrap().unknown, 9.0);
-    #[cfg(feature = "studies")]
-    {
-        let read = input.footprint_snapshot(start);
-        assert_eq!(
-            read.bars(..).map(|bar| bar.volume()).collect::<Vec<_>>(),
-            [5.0, 9.0, 11.0, 13.0]
-        );
-        assert!(read.span_is_complete(start, start + TimeDelta::minutes(3)));
+        assert!(flow.complete_bar_at(cutoff).is_none());
+        #[cfg(feature = "studies")]
+        {
+            let read = input.footprint_snapshot(start);
+            assert_eq!(
+                read.bars(..)
+                    .map(|bar| (bar.time, bar.volume()))
+                    .collect::<Vec<_>>(),
+                [(start, 5.0), (start + TimeDelta::minutes(3), 13.0)]
+            );
+            assert!(!read.span_is_complete(start, start + TimeDelta::minutes(3)));
+        }
+        #[cfg(feature = "studies")]
+        let (reset, fills) = (input.reset_revision(), paged.ts >= cutoff);
+        feed.trades
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(TradePage::new(vec![paged], false)));
+        frames.run(&mut chart);
+        let flow = chart
+            .feed_link
+            .as_ref()
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap()
+            .view();
+        assert!(!flow.span_has_gap(start, None));
+        assert_eq!(flow.complete_from(), Some(start));
+        assert_eq!(flow.bar_at(cutoff).unwrap().unknown, cutoff_volume);
+        #[cfg(feature = "studies")]
+        {
+            let read = input.footprint_snapshot(start);
+            assert_eq!(
+                read.bars(..).map(|bar| bar.volume()).collect::<Vec<_>>(),
+                [5.0, cutoff_volume, 11.0, 13.0]
+            );
+            assert!(read.span_is_complete(start, start + TimeDelta::minutes(3)));
+            if !fills {
+                assert_eq!(
+                    input.reset_revision(),
+                    reset,
+                    "a page before the cutoff must not rebuild the profile"
+                );
+            }
+        }
     }
 }
 

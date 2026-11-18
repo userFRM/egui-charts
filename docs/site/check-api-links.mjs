@@ -1,9 +1,13 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, resolve, sep } from 'node:path';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { basename, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'parse5';
 
 const site = new URL('https://userfrm.github.io/egui-charts/docs/');
+const memberKinds = ['method', 'tymethod', 'structfield', 'variant', 'associatedconstant', 'associatedtype'];
+const memberSpan = /^(?:[a-z_][a-z0-9_]*::)*([A-Z][A-Za-z0-9_]*)::([A-Za-z_][A-Za-z0-9_]*)(?:\(.*\))?$/s;
+// The release notes quote members as each release named them; they are not a guide.
+const notGuides = new Set(['release-notes/index.html']);
 
 export function checkLinks(root, api = join(root, 'api')) {
   root = resolve(root);
@@ -14,8 +18,9 @@ export function checkLinks(root, api = join(root, 'api')) {
 
   function page(file) {
     if (pages.has(file)) return pages.get(file);
-    const result = { ids: new Set(), links: [], redirect: undefined };
-    function visit(node) {
+    const result = { ids: new Set(), links: [], codes: [], redirect: undefined };
+    const text = (node) => node.value ?? (node.childNodes ?? []).map(text).join('');
+    function visit(node, pre = false) {
       const attrs = Object.fromEntries((node.attrs ?? []).map(({ name, value }) => [name, value]));
       if (attrs.id) result.ids.add(attrs.id);
       if (node.tagName === 'a' && attrs.name) result.ids.add(attrs.name);
@@ -23,7 +28,8 @@ export function checkLinks(root, api = join(root, 'api')) {
       if (node.tagName === 'meta' && attrs['http-equiv']?.toLowerCase() === 'refresh') {
         result.redirect = attrs.content?.match(/url\s*=\s*['"]?([^'"]+)/i)?.[1];
       }
-      for (const child of node.childNodes ?? []) visit(child);
+      if (node.tagName === 'code' && !pre) result.codes.push(text(node).trim());
+      for (const child of node.childNodes ?? []) visit(child, pre || node.tagName === 'pre');
     }
     visit(parse(readFileSync(file, 'utf8')));
     pages.set(file, result);
@@ -47,6 +53,21 @@ export function checkLinks(root, api = join(root, 'api')) {
     }
     const id = decodeURIComponent(url.hash.slice(1));
     if (id && !document.ids.has(id) && id.toLowerCase() !== 'top') throw new Error(`missing anchor #${id}`);
+    return `${file}#${id}`;
+  }
+
+  let types;
+  function members(type, member) {
+    if (!types) {
+      types = new Map();
+      const crate = join(api, 'egui_charts');
+      for (const entry of existsSync(crate) ? readdirSync(crate, { recursive: true }) : []) {
+        const name = basename(entry).match(/^(?:struct|enum|trait|union|type)\.(\w+)\.html$/)?.[1];
+        if (name) types.set(name, [...(types.get(name) ?? []), join(crate, entry)]);
+      }
+    }
+    return (types.get(type) ?? []).filter((file) => !page(file).redirect).flatMap((file) =>
+      memberKinds.filter((kind) => page(file).ids.has(`${kind}.${member}`)).map((kind) => `${file}#${kind}.${member}`));
   }
 
   function walk(directory) {
@@ -57,6 +78,7 @@ export function checkLinks(root, api = join(root, 'api')) {
         if (file !== join(root, 'api')) walk(file);
       } else if (entry.name.endsWith('.html')) {
         const from = new URL(relative(root, file), site);
+        const reached = new Set();
         for (const href of page(file).links) {
           try {
             const url = new URL(href, from);
@@ -64,9 +86,17 @@ export function checkLinks(root, api = join(root, 'api')) {
             // The runnable examples are published by the Pages assembly and checked by its own test.
             if (url.pathname.startsWith(`${site.pathname}examples/`)) continue;
             links++;
-            target(url);
+            reached.add(target(url));
           } catch (error) {
             errors.push(`${relative(root, file)}: ${href}: ${error.message}`);
+          }
+        }
+        if (notGuides.has(relative(root, file).split(sep).join('/'))) continue;
+        for (const code of new Set(page(file).codes)) {
+          const [, type, member] = code.match(memberSpan) ?? [];
+          const anchors = type ? members(type, member) : [];
+          if (anchors.length && !anchors.some((anchor) => reached.has(anchor))) {
+            errors.push(`${relative(root, file)}: \`${code}\` has no link to ${anchors.map((anchor) => relative(api, anchor)).join(' or ')}`);
           }
         }
       }

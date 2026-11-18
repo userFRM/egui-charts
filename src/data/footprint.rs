@@ -241,9 +241,11 @@ impl FootprintBar {
         FootprintBarView::from(self).poc()
     }
 
-    /// Contiguous value area grown from the POC toward the larger adjacent volume.
-    /// Ties add one row on each side. `share` is clamped to 0..=1, NaN to zero.
-    /// Gaps hold zero volume.
+    /// Contiguous value area around the POC holding `share` of the volume, clamped to 0..=1 with
+    /// NaN as zero. Each step compares the next two rows above with the next two below and adds
+    /// the heavier pair one row at a time, stopping once the area holds the share; equal sums
+    /// add one row on each side, and a side with no rows left gives way to the other. Gaps hold
+    /// zero volume. Estimated volume profiles and TPO profiles grow by the same rule.
     /// Returns inclusive lower and upper level keys; a zero-volume bar has no area.
     pub fn value_area(&self, share: f64) -> Option<(i64, i64)> {
         FootprintBarView::from(self).value_area(share)
@@ -1526,7 +1528,8 @@ mod tests {
             assert_eq!((bar.volume(), bar.delta(), bar.trades()), (10.0, 1.0, 5));
             assert_eq!(bar.average_size(), Some(2.0));
             assert_eq!(bar.poc(), Some(-1));
-            assert_eq!(bar.value_area(0.7), Some((-2, -1)));
+            // The two rows above the POC, the gap at 0 and 3 at 1, outweigh the 2 at -2.
+            assert_eq!(bar.value_area(0.7), Some((-1, 1)));
             assert_eq!(bar.imbalance(-1, 2.0, true, 0.0), (false, true));
             assert!(levels.get(&0).is_none());
             let mut iter = levels.iter();
@@ -2408,8 +2411,8 @@ mod tests {
         );
         assert_eq!(flow.bar_at(start + TimeDelta::seconds(59)), Some(bar));
         assert_eq!(bar.poc(), Some(401));
-        // POC 8, choose upper neighbour 7 over lower 5, then lower 5: 20 >= 16.8.
-        assert_eq!(bar.value_area(0.7), Some((400, 402)));
+        // POC 8; the two rows above it (7 + 4) outweigh the one below (5): 19 >= 16.8.
+        assert_eq!(bar.value_area(0.7), Some((401, 403)));
         assert_eq!(bar.imbalance(401, 1.5, true, 0.0), (false, true));
         assert_eq!(bar.imbalance(403, 1.5, true, 0.0), (false, true));
         assert_eq!(bar.delta_percent(), Some(7.0 / 24.0 * 100.0));

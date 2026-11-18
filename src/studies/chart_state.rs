@@ -386,6 +386,7 @@ impl ChartState {
                                 crate::studies::PlotType::Histogram
                                     | crate::studies::PlotType::Columns
                                     | crate::studies::PlotType::Area
+                                    | crate::studies::PlotType::AreaWithBreaks
                             );
                         values.chain(zero.then_some(0.0))
                     })
