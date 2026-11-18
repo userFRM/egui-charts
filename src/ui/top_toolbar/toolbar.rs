@@ -833,6 +833,11 @@ impl TopToolbar {
     fn show_indicator_templates(&mut self, ui: &mut Ui, action: &mut TopToolbarAction) {
         use crate::ui_kit::{EmptyState, list_item::LabelContent};
         ui.set_width(292.0);
+        // A page can be taller than the popup was on the preceding frame.
+        let max_height = ui.ctx().content_rect().bottom()
+            - ui.next_widget_position().y
+            - ui.spacing().menu_margin.sum().y;
+        ui.set_max_height(max_height.max(0.0));
         self.show_templates_tabs(ui);
         ui.style_mut().override_font_id = Some(egui::FontId::proportional(14.0));
         let (entries, builtin, empty) = match self.templates_page {
@@ -1682,6 +1687,9 @@ mod tests {
                 }
                 toolbar
                     .builtin_indicator_templates
+                    .extend((0..5).map(|at| (format!("set-{at}"), format!("Study set {at}"))));
+                toolbar
+                    .builtin_indicator_templates
                     .push(("swing".into(), "Swing trading".into()));
                 toolbar
                     .favorite_indicators
@@ -1690,7 +1698,6 @@ mod tests {
                     expected,
                     TopToolbarAction::SaveIndicatorTemplate
                         | TopToolbarAction::ApplyIndicatorTemplate(_)
-                        | TopToolbarAction::ApplyBuiltinIndicatorTemplate(_)
                 ) {
                     toolbar.templates_page = TemplatesPage::Templates;
                 }
@@ -1774,6 +1781,23 @@ mod tests {
                 );
                 frame(vec![]);
                 let (_, _, mut labels) = frame(vec![]);
+                if matches!(expected, TopToolbarAction::ApplyBuiltinIndicatorTemplate(_)) {
+                    // Switch from the shorter Indicators page before choosing the last set.
+                    let tab = labels
+                        .iter()
+                        .find(|(text, _)| text == "Templates")
+                        .unwrap()
+                        .1;
+                    frame(vec![Event::PointerMoved(tab)]);
+                    frame(vec![click(tab, true)]);
+                    assert_eq!(
+                        frame(vec![click(tab, false)]).0,
+                        TopToolbarAction::None,
+                        "switching pages must not apply a study"
+                    );
+                    frame(vec![]);
+                    labels = frame(vec![]).2;
+                }
                 if slot == S::Screenshot && !publishing {
                     assert!(!labels.iter().any(|(text, _)| text == "Copy link"));
                     assert!(!labels.iter().any(|(text, _)| text == "Post image"));
