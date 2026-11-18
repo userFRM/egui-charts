@@ -552,12 +552,12 @@ impl StudyTemplate {
                     fill.visible = false;
                 }
             }
-            // Keep the earlier swing calculation and display inputs, and every saved plot style.
+            // An Elliott Wave saved before its swings could be sized by price counted bars, showed
+            // the developing wave and drew no projections or impulse drawings.
             "Elliott Wave" if !has("swing_mode") => {
                 for (id, value) in [
                     ("swing_mode", InputValue::Choice(0)),
                     ("swing_move", InputValue::Number(5.0)),
-                    ("length_type", InputValue::Choice(0)),
                     ("show_developing", InputValue::Toggle(true)),
                     ("projections", InputValue::Toggle(false)),
                     ("as_drawings", InputValue::Toggle(false)),
@@ -1198,7 +1198,6 @@ mod tests {
                     ("history", Length(7)),
                     ("swing_mode", Choice(0)),
                     ("swing_move", Number(5.0)),
-                    ("length_type", Choice(0)),
                     ("show_developing", Toggle(true)),
                     ("projections", Toggle(false)),
                     ("as_drawings", Toggle(false)),
@@ -1209,7 +1208,6 @@ mod tests {
                 vec![
                     ("swing_mode", Choice(2)),
                     ("swing_move", Number(2.5)),
-                    ("length_type", Choice(1)),
                     ("history", Length(7)),
                     ("show_developing", Toggle(false)),
                     ("projections", Toggle(true)),
@@ -1218,7 +1216,6 @@ mod tests {
                 vec![
                     ("swing_mode", Choice(2)),
                     ("swing_move", Number(2.5)),
-                    ("length_type", Choice(1)),
                     ("history", Length(7)),
                     ("show_developing", Toggle(false)),
                     ("projections", Toggle(true)),
@@ -1289,7 +1286,7 @@ mod tests {
         // Chart saves made before the input labels changed keep every saved id, value and
         // style while the editor describes the three study-local controls distinctly.
         for (saved, id, label) in [
-            // Captured from origin/main before Elliott Wave gained its swing and display inputs.
+            // Saved before Elliott Wave gained its swing and display inputs.
             (
                 r#"{"name":"Elliott Wave","inputs":[["left",{"Length":2}],["right",{"Length":3}],["history",{"Length":7}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ElliottWave.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Circles","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleUp","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
                 "left",

@@ -20,13 +20,10 @@
 //! Wave 3 is not the shortest of 1, 3 and 5: not (W3 < W1 and W3 < W5)
 //! ```
 //!
-//! Wave lengths are price differences, or with the percent length type the change as a percentage
-//! of the price the wave starts from.
-//!
 //! A truncated fifth wave is allowed. Whenever the swings change, the latest pivots are checked for
 //! the longest construction that satisfies the rules up to the wave reached. From wave 3 on it is
-//! developing; it is invalidated when the close breaks
-//! the end of wave 1 (`P1`), where wave 4 would overlap wave 1, or when a later pivot breaks a rule.
+//! developing; it is invalidated when the close breaks the end of wave 1 (`P1`), where wave 4 would
+//! overlap wave 1, or when a later pivot breaks a rule.
 //! A construction that reaches `P5` is confirmed on the bar that confirms `P5` and consumes its
 //! pivots, except `P5`, so the next one needs new pivots. Confirmed constructions never change.
 //!
@@ -44,14 +41,12 @@
 //! 1 to 5. Hiding the developing wave removes the developing construction, its value and its table
 //! row. Projections extend the developing construction by its next wave, dashed: wave 4 retraces
 //! 38.2% of wave 3 but stops at the end of wave 1, and wave 5 is as long as the shorter of waves 1
-//! and 3, capped by their shorter percentage when Length type is Percent. A fifth-wave percentage
-//! projection is omitted when wave 4 ends at zero. It ends as many bars after the latest anchor
-//! as wave 2, or wave 1, took. The legs and
+//! and 3. It ends as many bars after the latest anchor as wave 2, or wave 1, took. The legs and
 //! drawings need the `drawings` feature. Without it, Place as drawings also hides the anchor
 //! numbers; projection numbers remain available.
 //!
-//! The defaults are swings of 5 bars on each side of a pivot, a swing move of 5, wave lengths in
-//! price, 5 confirmed impulses listed, the developing wave shown, and no projections or drawings.
+//! The defaults are swings of 5 bars on each side of a pivot, a swing move of 5, 5 confirmed
+//! impulses listed, the developing wave shown, and no projections or drawings.
 
 use super::swings::{Swing, Swings};
 use crate::model::Bar;
@@ -75,15 +70,6 @@ enum SwingMode {
     Percent,
 }
 
-/// How the length of a wave is measured when the rules compare waves.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LengthType {
-    /// The price difference between the start and the end of the wave.
-    Absolute,
-    /// The change from the start to the end of the wave, as a percentage of the start price.
-    Percent,
-}
-
 /// Elliott Wave: five-wave impulses in confirmed swing pivots.
 #[derive(Clone, Debug)]
 pub struct ElliottWave {
@@ -91,7 +77,6 @@ pub struct ElliottWave {
     left: usize,
     right: usize,
     swing_move: f64,
-    length_type: LengthType,
     history: usize,
     show_developing: bool,
     projections: bool,
@@ -134,9 +119,8 @@ struct State {
     confirmed: VecDeque<Construction>,
 }
 
-/// The longest construction of at least three waves that ends at the newest pivot, with wave
-/// lengths measured as `length_type` says.
-fn construct(pivots: &VecDeque<Swing>, length_type: LengthType) -> Option<Construction> {
+/// The longest construction of at least three waves that ends at the newest pivot.
+fn construct(pivots: &VecDeque<Swing>) -> Option<Construction> {
     (3..=5).rev().find_map(|waves| {
         let anchors: Vec<_> = pivots
             .range(pivots.len().checked_sub(waves + 1)?..)
@@ -145,10 +129,7 @@ fn construct(pivots: &VecDeque<Swing>, length_type: LengthType) -> Option<Constr
         // Prices as seen by a bullish impulse, negated for a bearish one.
         let sign = if anchors[0].high { -1.0 } else { 1.0 };
         let p = |n: usize| sign * anchors[n].price;
-        let wave = |n: usize| match length_type {
-            LengthType::Absolute => p(n) - p(n - 1),
-            LengthType::Percent => (p(n) - p(n - 1)) / anchors[n - 1].price.abs(),
-        };
+        let wave = |n: usize| p(n) - p(n - 1);
         let valid = p(2) > p(0)
             && p(3) > p(1)
             && (waves < 4 || p(4) > p(1))
@@ -162,10 +143,9 @@ fn construct(pivots: &VecDeque<Swing>, length_type: LengthType) -> Option<Constr
 
 /// The next anchor of a developing construction, in its own direction: wave 4 retraces 38.2% of
 /// wave 3 but stops at the end of wave 1, and wave 5 is as long as the shorter of waves 1 and 3.
-/// With percent wave lengths it also stops at the shorter percentage, measured from wave 4.
 /// It lies as many bars after the latest anchor as wave 2, or wave 1, took. `None` when the price
-/// is not finite or a percentage would start at zero.
-fn projection(construction: &Construction, length_type: LengthType) -> Option<(usize, f64)> {
+/// is not finite.
+fn projection(construction: &Construction) -> Option<(usize, f64)> {
     let anchors = &construction.anchors;
     let sign = if construction.bullish() { 1.0 } else { -1.0 };
     let p = |n: usize| sign * anchors[n].price;
@@ -178,16 +158,7 @@ fn projection(construction: &Construction, length_type: LengthType) -> Option<(u
             i(3) + (i(2) - i(1)),
         )
     } else {
-        let mut length = (p(1) - p(0)).min(p(3) - p(2));
-        if length_type == LengthType::Percent {
-            if p(4) == 0.0 {
-                return None;
-            }
-            // A shorter price move can still be the longer percentage from a different start.
-            let percent = ((p(1) - p(0)) / p(0).abs()).min((p(3) - p(2)) / p(2).abs());
-            length = length.min(percent * p(4).abs());
-        }
-        let target = p(4) + length;
+        let target = p(4) + (p(1) - p(0)).min(p(3) - p(2));
         (target.is_finite().then_some(target)?, i(4) + (i(1) - i(0)))
     };
     Some((bar, sign * target))
@@ -203,7 +174,6 @@ impl ElliottWave {
             left: left.max(1),
             right: right.max(1),
             swing_move: 5.0,
-            length_type: LengthType::Absolute,
             history: history.clamp(1, 100),
             show_developing: true,
             projections: false,
@@ -297,7 +267,7 @@ impl ElliottWave {
         }
         if self.projections
             && let Some(construction) = developing
-            && let Some((bar, price)) = projection(construction, self.length_type)
+            && let Some((bar, price)) = projection(construction)
         {
             let last = construction.anchors[construction.wave()];
             labels.push(label(bar, price, construction.wave() + 1, !last.high, 0));
@@ -330,7 +300,6 @@ impl Indicator for ElliottWave {
         left: length("Pivot bars left", 1, usize::MAX) if swing_mode in [0],
         right: length("Pivot bars right", 1, usize::MAX) if swing_mode in [0],
         swing_move: number("Swing move", 0.0, f64::MAX) if swing_mode in [1, 2],
-        length_type: choice("Length type", [LengthType::Absolute, LengthType::Percent]),
         history: length("Confirmed impulses listed", 1, 100),
         show_developing: toggle("Show developing wave"),
         projections: toggle("Show projections"),
@@ -370,7 +339,7 @@ impl Indicator for ElliottWave {
                 ),
             };
             if changed {
-                state.developing = construct(&state.swings.pivots, self.length_type);
+                state.developing = construct(&state.swings.pivots);
                 if let Some(mut construction) = state.developing.take() {
                     let sign = if construction.bullish() { 1.0 } else { -1.0 };
                     let last = construction.anchors[construction.wave()].price;
@@ -638,20 +607,6 @@ mod tests {
         assert_eq!(column(&study, 1, 13), [None; 13]);
         assert_eq!(study.values().value(0, 12), Some(130.0));
         assert_eq!(study.values().value(3, 12), Some(3.0));
-        // Waves 1, 3 and 5 of 10, 9 and 12 from 10, 15 and 22 break the rule in price, but in
-        // percent wave 3 (60%) is longer than wave 5 (54.5%), so the impulse is confirmed.
-        let closes = [
-            12.0, 10.0, 15.0, 20.0, 17.0, 15.0, 20.0, 24.0, 23.0, 22.0, 28.0, 34.0, 33.0,
-        ];
-        for (length_type, confirmed) in [(0, None), (1, Some(34.0))] {
-            let (bars, mut study) = run(&closes);
-            study
-                .set_input("length_type", InputValue::Choice(length_type))
-                .unwrap();
-            study.calculate(&bars);
-            assert_eq!(study.values().value(1, 12), confirmed, "{length_type}");
-            assert_eq!(column(&study, 1, 12), [None; 12]);
-        }
         // The impulse up to bar 8, then a close at 108 under 110.
         let (_, study) = run(&[
             105.0, 100.0, 105.0, 110.0, 107.0, 104.0, 115.0, 125.0, 120.0, 108.0,
@@ -1032,45 +987,6 @@ mod tests {
                 assert_eq!(rows[0][0], StudyCell::Text("No impulse".into()));
             }
         }
-        // Motive moves 100 and 60 are 50% and 40% from -200 and -150. From -95, a move
-        // of 60 would be 63.16%, making wave 3 the shortest. Limit it to 40% of 95 = 38.
-        for sign in [1.0, -1.0] {
-            for (length_type, target) in [(0, -35.0), (1, -57.0)] {
-                let closes = [
-                    -150.0, -200.0, -150.0, -100.0, -125.0, -150.0, -120.0, -90.0, -92.0, -95.0,
-                    -93.0,
-                ]
-                .map(|c| sign * c);
-                let (bars, mut study) = run(&closes);
-                study
-                    .set_input("length_type", InputValue::Choice(length_type))
-                    .unwrap();
-                study
-                    .set_input("projections", InputValue::Toggle(true))
-                    .unwrap();
-                study.calculate(&bars);
-                let projected = study.labels().last().unwrap();
-                assert_eq!(projected.bar, 11);
-                assert_eq!(
-                    projected.price,
-                    sign * target,
-                    "length type {length_type}, sign {sign}"
-                );
-            }
-        }
-        // The next percentage cannot be measured from a wave-4 anchor priced at zero.
-        let (bars, mut study) = run(&[
-            -150.0, -200.0, -150.0, -100.0, -125.0, -150.0, -50.0, 10.0, 5.0, 0.0, 2.0,
-        ]);
-        study
-            .set_input("length_type", InputValue::Choice(1))
-            .unwrap();
-        study
-            .set_input("projections", InputValue::Toggle(true))
-            .unwrap();
-        study.calculate(&bars);
-        assert_eq!(study.labels().last().unwrap().bar, 9);
-        assert_eq!(study.labels().last().unwrap().text, "4");
     }
 
     /// The chart paints the five legs of a confirmed impulse end to end in the colour of the
