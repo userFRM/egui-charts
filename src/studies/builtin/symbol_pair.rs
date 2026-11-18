@@ -30,8 +30,7 @@
 //! # Presentation
 //!
 //! The correlation opens as an area from zero, its line over a translucent fill, with a dashed
-//! guide at zero. The ratio and the spread open as lines without guides. All three are drawn with
-//! breaks, leaving a gap at a bar without output.
+//! guide at zero. The ratio and the spread open as lines without guides.
 
 use crate::model::{Bar, PriceSource};
 use crate::studies::palette;
@@ -327,12 +326,11 @@ impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO,
             color: self.colors().get(line).copied().unwrap_or(Color32::WHITE),
             width: self.line_style(line).width,
             pattern: crate::model::LineStyle::Solid,
-            // The correlation is an area from zero and the ratio and the spread are lines, all
-            // broken where a bar has no output.
+            // The correlation is an area from zero; the ratio and the spread are lines.
             plot_type: if CORRELATION {
-                crate::studies::PlotType::AreaWithBreaks
+                crate::studies::PlotType::Area
             } else {
-                crate::studies::PlotType::LineWithBreaks
+                crate::studies::PlotType::Line
             },
             visible: true,
         }
