@@ -657,7 +657,7 @@ impl Chart {
         #[cfg(not(feature = "drawings"))]
         let drawing_tool_active = false;
         #[cfg(not(feature = "drawings"))]
-        let (is_drawing_interaction, drawing_gesture) = (false, false);
+        let (is_drawing_interaction, drawing_gesture, marking) = (false, false, false);
         #[cfg(feature = "drawings")]
         if self.drawings.selection_area().is_some_and(|area| {
             area.pane
@@ -671,10 +671,30 @@ impl Chart {
         // A Ctrl or Command press on empty space arms a selection area, which only a drag starts.
         #[cfg(feature = "drawings")]
         let box_selection = self.drawings.box_selection_input(ui);
-        // The Magic cursor marks while the button is held, so a drag paints rather than pans.
+        // A mark owns its gesture, so a drag paints rather than pans or moves a drawing.
+        #[cfg(feature = "drawings")]
+        let marking = self.cursor_modes.marks(
+            ui,
+            &response,
+            chart_rect,
+            !eraser_mode
+                && matches!(
+                    self.chart_options.crosshair.style,
+                    crate::config::CrosshairStyle::Demonstration
+                        | crate::config::CrosshairStyle::Magic
+                ),
+            !box_selection
+                && !drawing_tool_active
+                && self.drawings.dragging_handle.is_none()
+                && self.drawings.text_editor.is_none()
+                && self.drawings.curr_drawing.is_none()
+                && !self.zoom_mode_active
+                && !navigation_interaction
+                && !realtime_interaction,
+        );
         #[cfg(feature = "drawings")]
         let drawing_gesture = self.drawings.active_tool.is_some()
-            || self.chart_options.crosshair.style == crate::config::CrosshairStyle::Magic
+            || marking
             || self.drawings.dragging_handle.is_some()
             || self.drawings.text_editor.is_some()
             || self.drawings.curr_drawing.is_some()
@@ -2458,11 +2478,11 @@ impl Chart {
         // study's pane. Otherwise overlay indicators take priority over the
         // series beneath them; an empty-area click clears the selection. Clicks
         // in a study's pane are resolved where the panes are rendered, outside
-        // this rect. As there, a click with the eraser or a drawing tool keeps
-        // the selection.
+        // this rect. A mark, or a click with the eraser or a drawing tool, keeps the selection.
         if response.clicked()
             && !drawing_tool_active
             && !eraser_mode
+            && !marking
             && let Some(click_pos) = response.interact_pointer_pos()
         {
             #[cfg(feature = "drawings")]
@@ -3138,11 +3158,25 @@ impl Chart {
             let mut cursor_modes = std::mem::take(&mut self.cursor_modes);
             let mut drawings = std::mem::take(&mut self.drawings);
 
+            // A mark owns the primary gesture: the drawings see the hover but no press, click or
+            // drag.
+            let mut drawing_response = response.clone();
+            if marking {
+                use egui::response::Flags;
+                drawing_response.flags.remove(
+                    Flags::CLICKED
+                        | Flags::FAKE_PRIMARY_CLICKED
+                        | Flags::DRAG_STARTED
+                        | Flags::DRAGGED
+                        | Flags::DRAG_STOPPED
+                        | Flags::IS_POINTER_BUTTON_DOWN_ON,
+                );
+            }
             self.handle_drawings(
                 ui,
                 &mut drawings,
                 &mut cursor_modes,
-                &response,
+                &drawing_response,
                 price_rect,
                 &price_map,
                 &painter,
@@ -3295,23 +3329,14 @@ impl Chart {
         #[cfg(feature = "drawings")]
         {
             self.cursor_modes.update(ui.input(|input| input.stable_dt));
-            let trail = Some(self.chart_options.crosshair.style)
-                .filter(|style| {
-                    matches!(
-                        style,
-                        crate::config::CrosshairStyle::Demonstration
-                            | crate::config::CrosshairStyle::Magic
-                    )
-                })
-                .filter(|_| !eraser_mode);
             self.cursor_modes.follow(
-                trail,
-                response.hover_pos().filter(|pos| price_rect.contains(*pos)),
-                ui.input(|input| input.pointer.primary_down()),
+                (!eraser_mode).then_some(self.chart_options.crosshair.style),
+                response
+                    .interact_pointer_pos()
+                    .filter(|pos| marking && price_rect.contains(*pos)),
+                marking && ui.input(|input| input.pointer.primary_down()),
             );
-            if trail.is_some() {
-                self.cursor_modes.render(ui, price_rect);
-            }
+            self.cursor_modes.render(ui, price_rect);
         }
         let mut table_rect = price_rect;
         for (id, study) in self
