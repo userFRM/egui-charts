@@ -232,12 +232,13 @@ impl Chart {
     /// Times include the chart's UTC offset, including DST changes and subsecond timestamps; on a
     /// [horizontal scale](Self::set_horizontal_scale) other than time, keys read as the crosshair
     /// label does.
-    /// Prices use the instrument's decimals. Without `price_decimals` or a valid `tick_size`, the
-    /// main series and price studies write the decimals the main series' prices hold, and an
-    /// added series those its closes hold, at least two and at most twelve, so a price the chart
-    /// shows does not read as another number; an added series keeps at least four significant
-    /// digits. Study overrides and non-price units retain their precision. Missing/non-finite
-    /// values are empty cells.
+    /// Prices use the instrument's decimals, and the main series the precision chosen for the
+    /// price scale in their place. Without `price_decimals` or a valid `tick_size`, price studies
+    /// take the main series' precision, and without a chosen one the main series and price
+    /// studies write the decimals the main series' prices hold, and an added series those its
+    /// closes hold, at least two and at most twelve, so a price the chart shows does not read as
+    /// another number; an added series keeps at least four significant digits. Study overrides and
+    /// non-price units retain their precision. Missing/non-finite values are empty cells.
     #[cfg(feature = "csv")]
     #[cfg_attr(docsrs, doc(cfg(feature = "csv")))]
     pub fn export_csv(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -999,15 +1000,23 @@ mod tests {
     }
 
     /// Without instrument decimals, exported prices keep the decimals they hold, so a sub-cent
-    /// close does not read 0.00; an instrument's tick size still sets them.
+    /// close does not read 0.00; an instrument's tick size still sets them, and a precision chosen
+    /// for the price scale sets the main series'.
     #[test]
     #[cfg(feature = "csv")]
     fn csv_prices_keep_their_decimals_without_instrument_metadata() {
-        type Row = (&'static str, Option<f64>, [f64; 2], [&'static str; 3]);
+        type Row = (
+            &'static str,
+            Option<f64>,
+            Option<u8>,
+            [f64; 2],
+            [&'static str; 3],
+        );
         // Last row's close, added series close and price study cells.
-        let cases: [Row; 4] = [
+        let cases: [Row; 5] = [
             (
                 "sub-cent",
+                None,
                 None,
                 [0.000123, 0.000162],
                 ["0.000162", "0.0001620", "0.000162"],
@@ -1015,11 +1024,13 @@ mod tests {
             (
                 "four decimals",
                 None,
+                None,
                 [1.0812, 1.0851],
                 ["1.0851", "1.0851", "1.0851"],
             ),
             (
                 "binary noise",
+                None,
                 None,
                 [0.1, 0.1 + 0.2],
                 ["0.30", "0.3000", "0.30"],
@@ -1027,14 +1038,22 @@ mod tests {
             (
                 "tick size",
                 Some(0.01),
+                None,
                 [1.0812, 1.0851],
                 ["1.09", "1.085", "1.09"],
+            ),
+            (
+                "chosen",
+                Some(0.01),
+                Some(4),
+                [1.0812, 1.0851],
+                ["1.0851", "1.085", "1.09"],
             ),
         ];
         let start = DateTime::parse_from_rfc3339("2024-01-02T00:00:00Z")
             .unwrap()
             .to_utc();
-        for (case, tick_size, closes, expected) in cases {
+        for (case, tick_size, chosen, closes, expected) in cases {
             let bars: Vec<_> = (0..)
                 .zip(closes)
                 .map(|(minute, close)| {
@@ -1048,6 +1067,7 @@ mod tests {
                 instrument.tick_size = tick_size;
                 chart.set_instrument(Some(instrument));
             }
+            chart.price_scale_mut().set_price_precision(chosen);
             let peer = chart.add_series(crate::widget::SeriesOptions {
                 name: "Peer".into(),
                 ..Default::default()
