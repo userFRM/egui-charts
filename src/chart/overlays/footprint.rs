@@ -1514,13 +1514,13 @@ pub(crate) fn render_footprint_statistics_rows_read(
         let volume = row.volume();
         let first_volume = last_volume.is_none();
         let previous = last_volume
-            .replace((bar.time, volume))
-            .filter(|(time, _)| !flow.span_has_gap(*time, Some(bar.time)))
+            .replace((row.time, volume))
+            .filter(|(time, _)| !flow.span_has_gap(*time, Some(row.time)))
             .map(|(_, volume)| volume);
         let cumulative_known = cumulative_start.is_none_or(|start| flow.complete_at(start))
             && !flow.span_has_gap(
                 cumulative_start.unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC),
-                Some(bar.time),
+                Some(row.time),
             );
         let x = mapping.idx_to_x(i);
         if !mapping.is_x_visible(x) {

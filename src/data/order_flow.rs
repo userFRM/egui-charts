@@ -1066,7 +1066,7 @@ impl OrderFlowInput {
                     .map(|before| last.unwrap_or(before).min(lost))
             });
             if let Some(changed) = flow.live.refresh_prepared_coverage(trades, from, retained) {
-                let open = flow.view().clock().bar_open(changed);
+                let open = flow.view().clock().instant_open(changed);
                 state.revision = state.revision.wrapping_add(1);
                 let revision = state.revision;
                 state.changes.insert(open, revision);
@@ -1327,15 +1327,6 @@ impl OrderFlowInput {
                 None
             };
             let trade_based = trade_timeframe.is_some();
-            // A footprint keeps its executions in calendar periods.
-            let footprint = matches!(state.source, Source::Footprint);
-            let place = |time| {
-                if footprint {
-                    clock.bar_open(time)
-                } else {
-                    clock.instant_open(time)
-                }
-            };
             let open = if let Some((open, _)) = &partial {
                 *open
             } else if trade_based {
@@ -1360,28 +1351,19 @@ impl OrderFlowInput {
                     .or(chart)
                     .unwrap_or(cutoff)
             } else {
-                place(cutoff)
+                clock.instant_open(cutoff)
             };
             let prepared = state
                 .footprint
                 .as_ref()
                 .and_then(|flow| flow.live.prepared_before());
-            // The saved boundary already holds executions before the prepared cutoff.
-            let start = if footprint {
-                open.max(prepared.unwrap_or(open))
-            } else {
-                clock.instant_start(cutoff)
-            };
+            // A bar of a trading date can start before its own time, and the saved boundary
+            // already holds executions before the prepared cutoff.
+            let start =
+                (clock.instant_start(cutoff)).max(prepared.unwrap_or(DateTime::<Utc>::MIN_UTC));
             let held = trades.filter(|trades| {
                 prepared.is_none_or(|before| cutoff >= before)
-                    && trades.lost_until().is_none_or(|lost| {
-                        !trade_based
-                            && if footprint {
-                                lost < start
-                            } else {
-                                place(lost) < open
-                            }
-                    })
+                    && (trades.lost_until()).is_none_or(|lost| !trade_based && lost < start)
             });
             let known = held.is_some();
             let held = held
@@ -1799,7 +1781,7 @@ impl State {
             None if clock.timeframe().is_some_and(|tf| tf.is_trade_based()) => {
                 flow.live.bars().last_key_value().map(|(open, _)| *open)
             }
-            None => Some(clock.bar_open(trade.ts)),
+            None => Some(self.placement.open(clock, trade.ts)),
         };
         let result = match part {
             Some((open, size)) => flow.live.push_part(trade, open, size),
@@ -3086,5 +3068,69 @@ mod tests {
         assert_eq!(flow.complete_from, Some(at(60)));
         assert_eq!(flow.bars.keys().copied().collect::<Vec<_>>(), [at(60)]);
         assert_eq!(flow.bars[&at(60)].bid, 4.0);
+    }
+
+    /// On a daily clock with a session a footprint source cuts a replay at the trading date of
+    /// the cutoff, and a live execution names the bar of its date as the one it changed.
+    #[cfg(all(feature = "widget", feature = "timezones"))]
+    #[test]
+    fn footprint_sources_replay_and_recalculate_by_trading_date() {
+        use crate::model::{Session, SessionWindow, TimezoneId};
+        use chrono::{NaiveTime, Weekday::*};
+        let t = |time: &str| time.parse::<DateTime<Utc>>().unwrap();
+        let hm = |hour, minute| NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+        let weekdays = [Mon, Tue, Wed, Thu, Fri];
+        let chicago = TimezoneId::named("America/Chicago").unwrap();
+        // A date trades from 17:00 the evening before to 16:00 in Chicago, 23:00 to 22:00 UTC.
+        let futures = BarClock::new(Timeframe::Day1)
+            .with_timezone(chicago.clone())
+            .with_session(
+                chicago,
+                Session::new([SessionWindow::new(weekdays, hm(17, 0), hm(16, 0))]),
+                false,
+            );
+        let input = OrderFlowInput::footprint();
+        input.set_tick_size(Some(1.0));
+        let mut held = super::super::trades::Trades::new(10);
+        // Monday 15:00, Monday 18:30 on Tuesday's date and Tuesday 09:00 in Chicago.
+        for (time, size) in [
+            ("2024-01-08T21:00:00Z", 1.0),
+            ("2024-01-09T00:30:00Z", 2.0),
+            ("2024-01-09T15:00:00Z", 4.0),
+        ] {
+            let trade = Tick::new(t(time), 100.0, size, Some(OrderSide::Buy));
+            input.push_trade(&futures, &trade);
+            held.push(trade);
+        }
+        input.set_replay(&futures, Some(t("2024-01-09T14:00:00Z")), Some(&held), &[]);
+        let replayed = input.footprints_from(DateTime::<Utc>::MIN_UTC).bars;
+        assert_eq!(
+            (replayed.iter())
+                .map(|(open, bar)| (*open, bar.volume()))
+                .collect::<Vec<_>>(),
+            [
+                (t("2024-01-08T06:00:00Z"), 1.0),
+                (t("2024-01-09T06:00:00Z"), 2.0)
+            ]
+        );
+        // On UTC days the post-market hour after midnight trades the date before.
+        let equities = BarClock::new(Timeframe::Day1).with_session(
+            TimezoneId::named("America/New_York").unwrap(),
+            Session::new([SessionWindow::new(weekdays, hm(9, 30), hm(16, 0))])
+                .with_extended_windows([
+                    SessionWindow::new(weekdays, hm(4, 0), hm(9, 30)),
+                    SessionWindow::new(weekdays, hm(16, 0), hm(20, 0)),
+                ]),
+            true,
+        );
+        let input = OrderFlowInput::footprint();
+        input.set_tick_size(Some(1.0));
+        let revision = input.revision();
+        let late = Tick::new(t("2024-01-10T00:30:00Z"), 100.0, 1.0, Some(OrderSide::Buy));
+        input.push_trade(&equities, &late);
+        assert_eq!(
+            input.changed_since(revision),
+            Some(t("2024-01-09T00:00:00Z"))
+        );
     }
 }

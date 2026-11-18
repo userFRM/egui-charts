@@ -1850,7 +1850,8 @@ mod tests {
     /// A vertical line runs through the panes it does not belong to at its anchor's bar, without
     /// its text, and is hit and moved there. A move from such a pane is a move in time: the price
     /// stays on the scale of the line's own pane, whichever pane that is. Switched off, the line
-    /// paints and hits only in its own pane.
+    /// paints and hits only in its own pane. Every pane draws it in one colour: the tool's
+    /// default in the shade the theme needs for contrast, a chosen colour as chosen.
     #[cfg(feature = "ui")]
     #[test]
     fn vertical_line_reaches_other_panes_without_leaving_its_own_scale() {
@@ -1859,15 +1860,24 @@ mod tests {
         use egui::Pos2;
 
         const COLOR: [u8; 4] = [23, 57, 181, 255];
-        for in_study in [false, true] {
+        // The tool's blue (41, 98, 255) has 3.65:1 on (19, 23, 34). Step 21 of 255 towards the
+        // dark theme's text (219, 219, 219), (56, 108, 252), is the first with 4:1: 4.02:1, while
+        // step 20, (55, 107, 252), has 3.98:1.
+        let mut theme = crate::theme::Theme::dark();
+        theme.chart.bg = Color32::from_rgb(19, 23, 34);
+        theme.ui.panel_bg = theme.chart.bg;
+        for (in_study, chosen) in [(false, true), (true, true), (false, false), (true, false)] {
             let ctx = Context::default();
             let mut chart = chart(&[90.0], &[110.0]);
+            chart.set_theme(&ctx, &theme);
             let study = chart.add_indicator(Box::new(RSI::new(14))).0;
             let price = if in_study { 50.0 } else { 100.0 };
             let mut line = Drawing::new(1, DrawingToolType::VerticalLine);
             line.chart_points = vec![ChartPoint::new(60.0, price)];
             line.completed = true;
-            line.color = COLOR;
+            if chosen {
+                line.color = COLOR;
+            }
             line.pane = in_study.then_some(study);
             line.text = Some("Weekly".into());
             chart.drawings_mut().drawings.push(line);
@@ -1879,7 +1889,8 @@ mod tests {
             } else {
                 (main, other)
             };
-            let color = Color32::from_rgba_unmultiplied(23, 57, 181, 255);
+            let [r, g, b, _] = if chosen { COLOR } else { [56, 108, 252, 255] };
+            let color = Color32::from_rgb(r, g, b);
             let paint = |chart: &mut crate::widget::Chart, time| {
                 let shapes = shapes(&ctx, chart, time, vec![]);
                 let texts: Vec<_> = shapes
@@ -1898,11 +1909,13 @@ mod tests {
                         _ => None,
                     })
                     .collect();
-                (texts, lines)
+                // The own pane keeps last frame's tessellation, a mesh in the line's colour.
+                let ys = crate::widget::test_frames::candle_ys(&shapes, color);
+                (texts, lines, ys)
             };
-            let (texts, lines) = paint(&mut chart, 0.1);
+            let (texts, lines, ys) = paint(&mut chart, 0.1);
             let x = chart.drawings().drawings[0].points[0].x;
-            let row = format!("in study {in_study}");
+            let row = format!("in study {in_study}, chosen {chosen}");
             assert!(
                 lines.iter().all(|[a, b]| a.x == x && b.x == x),
                 "{row}: {lines:?}"
@@ -1912,6 +1925,10 @@ mod tests {
                     .iter()
                     .any(|[a, b]| a.y == foreign.top() && b.y == foreign.bottom()),
                 "{row}: {lines:?}"
+            );
+            assert!(
+                ys.iter().any(|y| own.y_range().contains(*y)),
+                "{row}: {ys:?}"
             );
             assert_eq!(texts.len(), 1, "{row}");
             assert!(own.y_range().contains(texts[0].y), "{row}: {texts:?}");
@@ -1966,7 +1983,7 @@ mod tests {
             chart.drawings_mut().drawings[0]
                 .line_measurements
                 .across_panes = false;
-            let (_, lines) = paint(&mut chart, 1.0);
+            let (_, lines, _) = paint(&mut chart, 1.0);
             assert!(
                 lines.iter().all(|[a, _]| own.y_range().contains(a.y)),
                 "{row}: {lines:?}"

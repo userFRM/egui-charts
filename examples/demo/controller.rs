@@ -6687,6 +6687,7 @@ mod tests {
             name: "Trend".into(),
         });
         app.settings_dialog.templates.poll(&ctx);
+        app.drawing_props.templates.poll(&ctx);
         app.show_templates(&ctx);
         let mut storage = AppStorage::default();
         app.save(&mut storage);
@@ -6705,17 +6706,27 @@ mod tests {
                 .entries()
                 .contains_key("Canvas")
         );
-        app.chart
+        let ema = app
+            .chart
             .add_indicator(Box::new(egui_charts::studies::EMA::new(5)));
+        app.chart.set_indicator_user_edit_enabled(ema, false);
+        let ids = |app: &DemoApp| app.chart.indicators().map(|(id, _)| id).collect::<Vec<_>>();
+        let before = ids(&app);
         app.handle_top_toolbar(
             &ctx,
             TopToolbarAction::ApplyIndicatorTemplate("Average".into()),
         );
+        // The study the user may not edit stays beside the template's.
+        assert!(ids(&app).contains(&ema));
+        let studies: Vec<_> = app
+            .chart
+            .indicators()
+            .filter(|(id, _)| *id != ema)
+            .collect();
         assert_eq!(
-            app.chart.indicators().next().unwrap().1.inputs()[0].value,
+            studies[0].1.inputs()[0].value,
             egui_charts::studies::InputValue::Length(7)
         );
-        let studies: Vec<_> = app.chart.indicators().collect();
         assert_eq!(
             studies[0].1.source(),
             Some(egui_charts::studies::StudySource::Study {
@@ -6723,6 +6734,10 @@ mod tests {
                 plot: 0
             })
         );
+        assert!(app.chart.undo());
+        assert_eq!(ids(&app), before);
+        assert!(app.chart.redo());
+        assert!(ids(&app).contains(&ema));
         for id in [23, 24] {
             let mut target = Drawing::new(id, DrawingToolType::TrendLine);
             target.chart_points = vec![ChartPoint::new(8.0, 300.0), ChartPoint::new(10.0, 400.0)];

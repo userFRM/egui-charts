@@ -39,6 +39,8 @@ mod posts;
 mod profile_directory;
 mod profiles;
 mod quotes;
+#[cfg(feature = "ui")]
+pub(crate) mod revisions;
 mod search;
 #[cfg(feature = "widget")]
 #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]

@@ -32,11 +32,11 @@ const RELOAD: u64 = 7;
 
 /// How many names a kept copy tries, from `<name> (local copy)` to `<name> (local copy 100)`,
 /// before it is reported as failed.
-const COPY_NAMES: u32 = 100;
+pub(crate) const COPY_NAMES: u32 = 100;
 
 /// The name of kept copy `number` of the document `name`: `<name> (local copy)` for the first,
 /// `<name> (local copy 2)` and so on after it.
-fn copy_name(name: &str, number: u32) -> String {
+pub(crate) fn copy_name(name: &str, number: u32) -> String {
     match number {
         1 => format!("{name} (local copy)"),
         number => format!("{name} (local copy {number})"),
