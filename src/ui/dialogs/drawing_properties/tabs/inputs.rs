@@ -607,16 +607,6 @@ impl InputsTab {
                         );
                     });
                     ui.end_row();
-                    let label = ui.label(l10n::text(&ctx, "Line style"));
-                    ui.label_inputs_by(label.id, |ui| {
-                        ui.combo_select(
-                            "regression_line_style",
-                            &mut config.line_style,
-                            LineStyle::all().iter().copied(),
-                            |style| l10n::text(&ctx, style.name()),
-                        );
-                    });
-                    ui.end_row();
                     let label = ui.label(l10n::text(&ctx, "Precision"));
                     ui.label_inputs_by(label.id, |ui| {
                         ui.combo_select(
