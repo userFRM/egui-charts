@@ -656,8 +656,8 @@ impl DrawingManager {
         if !tool.implementation.settings(ui, &mut settings) || settings == drawing.custom_settings {
             return false;
         }
-        self.edit_drawing(id, |drawing| drawing.custom_settings = settings);
-        true
+        self.edit_drawing(id, |drawing| drawing.custom_settings = settings)
+            .is_ok()
     }
 
     /// Switches eraser mode on or off. In eraser mode a click on the chart deletes the
@@ -1169,7 +1169,9 @@ mod tests {
         manager
             .drawings
             .push(Drawing::new(7, DrawingToolType::TrendLine));
-        manager.drag_edit_drawing(7, |drawing| drawing.text = Some("Draft".into()));
+        manager
+            .drag_edit_drawing(7, |drawing| drawing.text = Some("Draft".into()))
+            .unwrap();
         manager.copy_dragged_drawings();
         assert_eq!(manager.drawings.len(), 1);
         manager.end_drag_handle();
