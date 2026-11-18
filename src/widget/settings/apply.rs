@@ -1384,6 +1384,22 @@ mod tests {
         });
         assert!(!chart.can_undo());
 
+        // A precision the host chose stays, also one the list lacks, on an instrument of 2.
+        for decimals in [0, 1, 7, 9] {
+            let mut chart = Chart::new(bars());
+            let instrument = crate::model::Instrument::new("SAMPLE").with_price_decimals(2);
+            chart.set_instrument(Some(instrument));
+            chart.price_scale_mut().set_price_precision(Some(decimals));
+            chart.user_action(|chart| {
+                ChartSettingsState::from_chart(chart)
+                    .apply_to_chart(chart)
+                    .unwrap();
+            });
+            let precision = chart.state().price_scale().price_precision();
+            assert_eq!(precision, Some(decimals), "precision {decimals}");
+            assert!(!chart.can_undo(), "precision {decimals}");
+        }
+
         // Hidden and doubled price axes read as a right placement, which keeps them as they are.
         for (left, right) in [(false, false), (true, true)] {
             let mut chart = Chart::new(bars());

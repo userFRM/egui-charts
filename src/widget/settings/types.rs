@@ -138,10 +138,15 @@ impl WatermarkMode {
 
 /// Precision mode for price display
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum PrecisionMode {
     #[default]
     /// Default.
     Default,
+    /// Whole numbers.
+    Decimals0,
+    /// Use 1 decimal place.
+    Decimals1,
     /// Use 2 decimal places.
     Decimals2,
     /// Use 3 decimal places.
@@ -152,8 +157,13 @@ pub enum PrecisionMode {
     Decimals5,
     /// Use 6 decimal places.
     Decimals6,
+    /// Use 7 decimal places.
+    Decimals7,
     /// Use 8 decimal places.
     Decimals8,
+    /// A number of decimal places the list lacks, such as one a host chose with
+    /// [`PriceScale::set_price_precision`](crate::scales::PriceScale::set_price_precision).
+    Other(u8),
 }
 
 impl PrecisionMode {
@@ -161,47 +171,61 @@ impl PrecisionMode {
     pub fn all() -> &'static [PrecisionMode] {
         &[
             PrecisionMode::Default,
+            PrecisionMode::Decimals0,
+            PrecisionMode::Decimals1,
             PrecisionMode::Decimals2,
             PrecisionMode::Decimals3,
             PrecisionMode::Decimals4,
             PrecisionMode::Decimals5,
             PrecisionMode::Decimals6,
+            PrecisionMode::Decimals7,
             PrecisionMode::Decimals8,
         ]
     }
 
     /// Display name for settings menus.
-    pub fn name(&self) -> &'static str {
+    pub fn name(&self) -> std::borrow::Cow<'static, str> {
         match self {
-            PrecisionMode::Default => "Default",
-            PrecisionMode::Decimals2 => "2 decimals",
-            PrecisionMode::Decimals3 => "3 decimals",
-            PrecisionMode::Decimals4 => "4 decimals",
-            PrecisionMode::Decimals5 => "5 decimals",
-            PrecisionMode::Decimals6 => "6 decimals",
-            PrecisionMode::Decimals8 => "8 decimals",
+            PrecisionMode::Default => "Default".into(),
+            PrecisionMode::Decimals0 => "0 decimals".into(),
+            PrecisionMode::Decimals1 => "1 decimal".into(),
+            PrecisionMode::Decimals2 => "2 decimals".into(),
+            PrecisionMode::Decimals3 => "3 decimals".into(),
+            PrecisionMode::Decimals4 => "4 decimals".into(),
+            PrecisionMode::Decimals5 => "5 decimals".into(),
+            PrecisionMode::Decimals6 => "6 decimals".into(),
+            PrecisionMode::Decimals7 => "7 decimals".into(),
+            PrecisionMode::Decimals8 => "8 decimals".into(),
+            PrecisionMode::Other(decimals) => format!("{decimals} decimals").into(),
         }
     }
 
     /// The mode of a chosen precision of `decimals`, `Default` when none is chosen.
     pub(crate) fn from_decimals(decimals: Option<u8>) -> Self {
+        let Some(decimals) = decimals else {
+            return Self::Default;
+        };
         Self::all()
             .iter()
             .copied()
-            .find(|mode| mode.decimals() == decimals.map(usize::from))
-            .unwrap_or_default()
+            .find(|mode| mode.decimals() == Some(usize::from(decimals)))
+            .unwrap_or(Self::Other(decimals))
     }
 
     /// Explicit precision, or None to follow the instrument.
     pub fn decimals(&self) -> Option<usize> {
         match self {
             PrecisionMode::Default => None,
+            PrecisionMode::Decimals0 => Some(0),
+            PrecisionMode::Decimals1 => Some(1),
             PrecisionMode::Decimals2 => Some(2),
             PrecisionMode::Decimals3 => Some(3),
             PrecisionMode::Decimals4 => Some(4),
             PrecisionMode::Decimals5 => Some(5),
             PrecisionMode::Decimals6 => Some(6),
+            PrecisionMode::Decimals7 => Some(7),
             PrecisionMode::Decimals8 => Some(8),
+            PrecisionMode::Other(decimals) => Some(usize::from(*decimals)),
         }
     }
 }
