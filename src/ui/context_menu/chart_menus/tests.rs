@@ -1304,21 +1304,27 @@ fn study_menu_entries_act_on_the_study() {
     );
     assert!(!sma_behind(&mut chart, &mut menus));
 
-    // On the daily chart, the daily interval and above hides the study on intraday ones.
-    use Timeframe::*;
+    // On the daily chart, the daily interval and above hides the study on intraday ones and
+    // replaces a daily interval hidden exactly by settings saved before interval ranges.
+    let daily = chart.indicator_mut(sma).unwrap();
+    let mut settings = daily.settings();
+    settings.hidden_intervals = vec![Timeframe::Day1];
+    daily.apply_settings(&[], settings).unwrap();
+    assert!(!study(&chart, sma).unwrap().is_visible());
     pick(
         &mut chart,
         &mut menus,
         sma,
         &["Visibility on intervals", "Current interval and above"],
     );
-    assert_eq!(
-        study(&chart, sma).unwrap().settings().hidden_intervals,
-        [
-            Ms100, Ms250, Ms500, Sec1, Sec2, Sec5, Sec10, Sec30, Min1, Min5, Min15, Min30, Hour1,
-            Hour4
-        ]
+    assert!(
+        study(&chart, sma)
+            .unwrap()
+            .settings()
+            .hidden_intervals
+            .is_empty()
     );
+    assert!(study(&chart, sma).unwrap().is_visible());
     chart.set_timeframe(Timeframe::Custom(
         std::num::NonZeroU64::new(7 * 3600).unwrap(),
     ));
