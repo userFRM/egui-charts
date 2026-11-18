@@ -298,6 +298,42 @@ impl Chart {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
     }
+
+    /// The cursor over a plot, by the crosshair style.
+    pub(crate) fn plot_cursor(&self) -> egui::CursorIcon {
+        use crate::config::CrosshairStyle;
+        match self.chart_options.crosshair.style {
+            CrosshairStyle::Full => egui::CursorIcon::Crosshair,
+            // The dot, the arrow and the trails draw their own marker over the default pointer.
+            CrosshairStyle::Dot
+            | CrosshairStyle::Arrow
+            | CrosshairStyle::Demonstration
+            | CrosshairStyle::Magic
+            | CrosshairStyle::Hidden => egui::CursorIcon::Default,
+        }
+    }
+
+    /// The cursor over a price axis: a vertical resize while a drag there zooms the scale,
+    /// otherwise the plot's.
+    pub(crate) fn price_axis_cursor(&self) -> egui::CursorIcon {
+        let scale = self.chart_options.handle_scale;
+        if scale.enabled && scale.axis_pressed_mouse_move.price {
+            egui::CursorIcon::ResizeVertical
+        } else {
+            self.plot_cursor()
+        }
+    }
+
+    /// The cursor over the time axis: a horizontal resize while a drag there zooms the bar
+    /// spacing, otherwise the plot's.
+    pub(crate) fn time_axis_cursor(&self) -> egui::CursorIcon {
+        let scale = self.chart_options.handle_scale;
+        if scale.enabled && scale.axis_pressed_mouse_move.time {
+            egui::CursorIcon::ResizeHorizontal
+        } else {
+            self.plot_cursor()
+        }
+    }
 }
 
 #[cfg(test)]

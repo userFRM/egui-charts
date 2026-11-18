@@ -913,27 +913,18 @@ impl Chart {
         if self.zoom_mode_active && response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ZoomIn);
         }
-        // Set cursor icon based on crosshair style (cursor type)
-        // This is only for default case - drawing manager may override for eraser mode
+        // Axes that a drag would zoom show its direction, keeping the axis where it began.
+        // The drawing manager may override the cursor below.
         else if response.hovered() {
-            use crate::config::CrosshairStyle;
-            match self.chart_options.crosshair.style {
-                CrosshairStyle::Full => {
-                    // Cross cursor mode - show crosshair cursor
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-                }
-                CrosshairStyle::Dot => {
-                    // Dot mode - default pointer (dot is rendered on chart)
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
-                }
-                CrosshairStyle::Arrow
-                | CrosshairStyle::Demonstration
-                | CrosshairStyle::Magic
-                | CrosshairStyle::Hidden => {
-                    // Arrow mode - default pointer
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
-                }
-            }
+            let at = ui
+                .input(|i| i.pointer.press_origin().or(i.pointer.hover_pos()))
+                .filter(|_| !(is_drawing_interaction || touch_readout_interaction));
+            let cursor = match at {
+                Some(pos) if price_axis_rect.contains(pos) => self.price_axis_cursor(),
+                Some(pos) if time_axis_rect.contains(pos) => self.time_axis_cursor(),
+                _ => self.plot_cursor(),
+            };
+            ui.ctx().set_cursor_icon(cursor);
         }
 
         // Draw background (solid or gradient)
