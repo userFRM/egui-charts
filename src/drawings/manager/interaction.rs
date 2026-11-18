@@ -309,8 +309,9 @@ impl DrawingManager {
             .before
             .into_iter()
             .map(|d| {
-                let index = erase.order.iter().position(|id| *id == d.id).unwrap();
-                (index, d)
+                // A stroke added while the drag ran goes back after the others.
+                let index = erase.order.iter().position(|id| *id == d.id);
+                (index.unwrap_or(erase.order.len()), d)
             })
             .collect();
         drawings.sort_by_key(|(index, _)| *index);
@@ -1407,6 +1408,26 @@ mod tests {
         assert!(manager.undo());
         assert_eq!(manager.drawings[0].text, None);
         assert!(!manager.undo());
+    }
+
+    /// A stroke added while an eraser drag runs, as a host or a storage read can, is cut like
+    /// the others, and undo of the drag puts it back whole.
+    #[test]
+    fn a_partial_erase_restores_a_stroke_added_during_the_drag() {
+        let mut manager = DrawingManager::new();
+        manager.erase_strokes_to(Pos2::ZERO, Pos2::ZERO, None);
+        let mut stroke = Drawing::new(0, DrawingToolType::Brush);
+        stroke.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(10.0, 100.0)];
+        let id = manager.add_drawing(stroke.clone()).unwrap();
+        // Where the next paint puts its samples.
+        manager.drawings[0].points = vec![Pos2::new(0.0, 100.0), Pos2::new(100.0, 100.0)];
+        manager.erase_strokes_to(Pos2::ZERO, Pos2::new(50.0, 200.0), None);
+        assert_eq!(manager.drawings.len(), 2);
+        manager.end_drag_handle();
+        assert!(manager.undo());
+        assert_eq!(manager.drawings.len(), 1);
+        assert_eq!(manager.drawings[0].id, id);
+        assert_eq!(manager.drawings[0].chart_points, stroke.chart_points);
     }
 
     /// Dragging the label of a tool that annotates a point leaves that point on its bar and price,
