@@ -150,7 +150,8 @@ impl DepthHistory {
         &self.config
     }
 
-    /// Every column, oldest first. Consecutive columns are adjacent unless the chart lost columns.
+    /// Every column, oldest first. Consecutive columns are adjacent unless the chart lost columns
+    /// or no column covers the time between them, see [`DepthHistoryConfig::cadence`].
     pub fn columns(&self) -> impl DoubleEndedIterator<Item = &DepthColumn> {
         self.shared().map(Arc::as_ref)
     }
