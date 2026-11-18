@@ -51,6 +51,7 @@ impl Chart {
         }
         indicator.set_value_formatter(self.inherited_study_formatter(indicator.value_format()));
         indicator.set_instrument(self.instrument());
+        indicator.set_chart_symbol(&self.symbol);
         indicator.set_time_scale_events(held_events(
             &self.time_scale_events,
             self.frozen_source_events,
@@ -343,9 +344,10 @@ impl Chart {
         let events = held_events(&self.time_scale_events, self.frozen_source_events);
         for (at, study) in self.studies.indicators_mut().iter_mut().enumerate() {
             let instrument_changed = study.set_instrument(instrument.as_ref());
+            let symbol_changed = study.set_chart_symbol(&self.symbol);
             let clock_changed = study.set_bar_clock(&clock);
             let events_changed = study.set_time_scale_events(events);
-            if instrument_changed || clock_changed || events_changed {
+            if instrument_changed || symbol_changed || clock_changed || events_changed {
                 self.pending_from[at] = Some(0);
                 self.element_studies.dirty = true;
                 self.readout_revision = crate::model::next_revision();

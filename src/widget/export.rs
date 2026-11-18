@@ -312,6 +312,7 @@ impl Chart {
         let clock = self.bar_clock();
         for study in &mut studies {
             study.set_instrument(self.instrument());
+            study.set_chart_symbol(&self.symbol);
             study.set_time_scale_events(&self.time_scale_events);
             if let Some(timeframe) = self.timeframe {
                 study.set_timeframe(timeframe);
