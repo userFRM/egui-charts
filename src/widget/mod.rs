@@ -1136,6 +1136,7 @@ impl Chart {
     #[cfg(feature = "drawings")]
     #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
     pub fn drawings_mut(&mut self) -> &mut DrawingManager {
+        self.map_drawing_bars();
         &mut self.drawings
     }
 }

@@ -1273,6 +1273,7 @@ mod tests {
 
     /// A chart capped at two studies refuses a third from the interface and pastes, and stays
     /// as it was; host code and lifting the cap still add.
+    #[cfg(feature = "drawings")]
     #[test]
     fn the_study_limit_refuses_additions_beyond_it() {
         let mut chart = super::super::test_frames::chart(&[100.0], &[110.0]);
@@ -1346,6 +1347,7 @@ mod tests {
     }
 
     /// Saved study presentation hides only legend values and keeps edit permissions across history.
+    #[cfg(feature = "drawings")]
     #[test]
     fn study_metadata_keeps_values_and_blocks_user_settings() {
         use crate::studies::{IndicatorFactory, StudySettings};

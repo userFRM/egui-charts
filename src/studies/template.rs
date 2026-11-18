@@ -873,12 +873,24 @@ mod tests {
             });
             for (template, expected) in [
                 (saved, &edited[..]),
+                // A literal save from before drawings could keep their own style restores its
+                // settings and the input ids that identify its study pane unchanged.
+                (
+                    serde_json::from_str(r#"{"name":"Auto Trend Line","inputs":[["swing_size",{"Choice":1}],["atr_multiple",{"Number":3.0}],["atr_period",{"Length":10}],["deviation_percent",{"Number":5.0}],["depth",{"Length":3}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.AutoDrawing.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap(),
+                    &[
+                        ("swing_size", InputValue::Choice(1)),
+                        ("deviation_percent", InputValue::Number(5.0)),
+                        ("depth", InputValue::Length(3)),
+                    ][..],
+                ),
                 (
                     before_atr,
                     &[edited[0].clone(), edited[3].clone(), edited[4].clone()][..],
                 ),
             ] {
-                let inputs = template.create().unwrap().inputs();
+                let restored = template.create().unwrap();
+                assert_eq!(restored.settings(), template.settings);
+                let inputs = restored.inputs();
                 for (id, value) in expected {
                     let restored = inputs.iter().find(|input| input.id == *id).unwrap();
                     assert_eq!(&restored.value, value, "{id}");

@@ -312,6 +312,11 @@ pub struct DrawingManager {
     /// drawing ids start again: unique to each manager, and kept when the manager moves or reads
     /// its drawings from storage again.
     pub(crate) identity: u64,
+    /// Indices the owning chart can date for saving an anchor without its restored time.
+    /// `None` outside a chart or while the chart has no bars.
+    pub(crate) mapped_bars: Option<std::ops::RangeInclusive<f32>>,
+    /// The chart mapping used for `mapped_bars`, to avoid recomputing unchanged bounds.
+    pub(crate) mapped_key: Option<crate::drawings::validation::MappingKey>,
 }
 
 impl std::fmt::Debug for DrawingManager {
@@ -382,6 +387,8 @@ impl DrawingManager {
             pending_sync: Arc::new(Mutex::new(Vec::new())),
             sync_enabled: true,
             identity: crate::model::next_revision(),
+            mapped_bars: None,
+            mapped_key: None,
         };
         manager.update_snap_options();
         manager
@@ -476,12 +483,23 @@ impl DrawingManager {
         for (index, old) in &before {
             let drawing = &mut self.drawings[*index];
             edit(drawing);
-            if let Err(reason) = crate::drawings::validation::validate_edit(old, drawing) {
+            if let Err(reason) =
+                crate::drawings::validation::validate_edit(old, drawing, self.mapped_bars.as_ref())
+            {
                 for (index, old) in &before {
                     self.drawings[*index] = old.clone();
                 }
                 return Err(reason);
             }
+        }
+        if let Some(reason) = before
+            .iter()
+            .find_map(|(index, old)| self.check_identity(*index, old).err())
+        {
+            for (index, old) in &before {
+                self.drawings[*index] = old.clone();
+            }
+            return Err(reason);
         }
         for (_, old) in &before {
             self.queue_edit(old);
@@ -1511,10 +1529,20 @@ mod tests {
             m.complete_curr_drawing();
         }
         const TWO: &[(f32, f64)] = &[(1.0, 105.0), (2.0, 106.0)];
+        const FAR: &[(f32, f64)] = &[(1.0, 105.0), (1e9, 106.0)];
         const NAN: &[(f32, f64)] = &[(1.0, 105.0), (2.0, f64::NAN)];
         const ONE: &[(f32, f64)] = &[(1.0, 105.0)];
         type Create = fn(&mut DrawingManager);
-        let cases: [(&str, bool, Create); 12] = [
+        let cases: [(&str, bool, Create); 15] = [
+            ("add, anchor off the chart", false, |m| {
+                let _ = m.add_drawing(line(DrawingToolType::TrendLine, FAR));
+            }),
+            ("paste, anchor off the chart", false, |m| {
+                m.paste_drawings(&[line(DrawingToolType::TrendLine, FAR)])
+            }),
+            ("sync, anchor off the chart", false, |m| {
+                let _ = m.add_synced_drawing(line(DrawingToolType::TrendLine, FAR));
+            }),
             ("duplicate, disabled tool", true, |m| {
                 m.duplicate_drawing(m.drawings[0].id)
             }),

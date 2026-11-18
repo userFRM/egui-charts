@@ -159,7 +159,10 @@ pub(crate) fn drawing_prices(
         .drawings()
         .iter()
         .filter_map(move |drawing| {
-            if !study.plot_style(0).visible || !drawing.visible || bars.is_empty() {
+            if (study.drawings_use_plot_style() && !study.plot_style(0).visible)
+                || !drawing.visible
+                || bars.is_empty()
+            {
                 return None;
             }
             let levels = drawing.fib_levels();
