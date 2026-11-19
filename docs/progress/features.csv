@@ -824,7 +824,7 @@ Studies,Strategy tester,Built-in Price Channel strategy,verified,library,src/str
 Studies,Strategy tester,Built-in RSI strategy,unverified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/rsi.rs,1155;3295;3447
 Studies,Strategy tester,Built-in Stochastic Slow strategy,unverified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/stochastic.rs,1155;3295
 Studies,Strategy tester,Built-in Supertrend strategy,verified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/supertrend.rs,1155
-Studies,Strategy tester,Built-in Technical Ratings strategy,unverified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/technical_ratings.rs,1155;3178;3447
+Studies,Strategy tester,Built-in Technical Ratings strategy,incomplete,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/technical_ratings.rs,1155;3178;3447
 Studies,Strategy tester,Built-in channel breakout strategy,verified,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs,1154
 Studies,Strategy tester,Built-in inside bar strategy,verified,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs,1154
 Studies,Strategy tester,Built-in outside bar strategy,verified,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs,1154
