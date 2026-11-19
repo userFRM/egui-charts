@@ -15,12 +15,15 @@
 
 use crate::model::bar::{bar_level_keys, level_grid, level_key};
 use crate::model::{Bar, BarClock, SessionProvider};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use std::collections::HashMap;
 use std::ops::RangeInclusive;
 
 /// Letter sequence for TPO periods (A, B, C... Z, a, b...)
 const TPO_LETTERS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+/// Default opacity of TPO blocks outside the value area.
+pub(crate) const OUTSIDE_VALUE_AREA_OPACITY: f32 = 0.45;
 
 /// A single TPO letter placed at a price level during one time period.
 #[derive(Debug, Clone)]
@@ -105,8 +108,21 @@ pub struct TPOConfig {
     pub value_area_pct: f64,
     /// Show letters or blocks
     pub display_mode: TPODisplayMode,
+    /// Draw periods side by side in time order, each in its own column, instead of packing each
+    /// row from the left edge. The value area, point of control and statistics stay the same.
+    pub split_periods: bool,
     /// Color mode for TPO letters
     pub color_mode: TPOColorMode,
+    /// Colours of the entries under [`TPOColorMode::ByPeriod`]: the first pair covers the first
+    /// half of the longest session's periods and the second pair covers the second half.
+    /// Entries keep 3:1 contrast on the background, or 4.5:1 for letters without blocks, moving
+    /// toward the chart text colour when needed.
+    pub period_colors: [egui::Color32; 4],
+    /// Colour of every entry under [`TPOColorMode::Solid`], kept readable in the same way.
+    pub solid_color: egui::Color32,
+    /// Opacity of blocks outside the value area over the chart background, clamped to 0..=1.
+    /// Zero paints the background colour; one leaves blocks undimmed. NaN reads 0.45.
+    pub outside_value_area_opacity: f32,
     /// Show POC line
     pub show_poc: bool,
     /// Show Value Area
@@ -126,8 +142,11 @@ pub struct TPOConfig {
     /// Highlight opening range
     pub show_opening_range: bool,
     /// Split each session where it moves between regular, extended and overnight hours, giving
-    /// separate overnight, pre-market, regular and post-market profiles
+    /// separate overnight, pre-market, regular and post-market profiles.
+    /// Session profiles only; see [`TPOProfilePeriod`].
     pub split_sessions: bool,
+    /// Length of each profile: a session, the default, or a week or month of sessions.
+    pub profile_period: TPOProfilePeriod,
     /// Custom letters sequence; an empty string uses the default letters
     pub custom_letters: Option<String>,
     /// Sessions to combine: the profiles whose sessions open within one range form a single
@@ -159,7 +178,16 @@ impl Default for TPOConfig {
             initial_balance_minutes: 60,
             value_area_pct: 0.70,
             display_mode: TPODisplayMode::Letters,
+            split_periods: false,
             color_mode: TPOColorMode::ByPeriod,
+            period_colors: [
+                egui::Color32::from_rgb(214, 56, 100),
+                egui::Color32::from_rgb(90, 197, 97),
+                egui::Color32::from_rgb(84, 185, 209),
+                egui::Color32::from_rgb(93, 36, 245),
+            ],
+            solid_color: crate::tokens::DESIGN_TOKENS.semantic.tpo.letter_default,
+            outside_value_area_opacity: OUTSIDE_VALUE_AREA_OPACITY,
             show_poc: true,
             show_value_area: true,
             show_midpoint: false,
@@ -170,6 +198,7 @@ impl Default for TPOConfig {
             show_statistics: false,
             show_opening_range: true,
             split_sessions: false,
+            profile_period: TPOProfilePeriod::Session,
             custom_letters: None,
             composites: Vec::new(),
             splits: Vec::new(),
@@ -195,12 +224,61 @@ pub enum TPODisplayMode {
 pub enum TPOColorMode {
     /// Color by time period
     ByPeriod,
-    /// Single color
+    /// Every entry in [`TPOConfig::solid_color`].
     Solid,
     /// Color by value area
     ByValueArea,
     /// Color by initial balance
     ByInitialBalance,
+}
+
+/// Length of a TPO profile.
+///
+/// Week and month profiles combine sessions by the trading date of each session's first bar.
+/// Their letters, point of control, value area and statistics cover all those sessions; the open
+/// and initial balance remain those of the first session. They hold whole sessions, ignoring
+/// [`TPOConfig::split_sessions`]. Explicit [`TPOConfig::splits`] still divide them, and subsequent
+/// sessions of the period join the last part. [`TPOConfig::composites`] still join profiles whose
+/// first sessions open in a range. On daily and longer bars, a period no longer than the session
+/// changes nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum TPOProfilePeriod {
+    /// One profile per session.
+    #[default]
+    Session,
+    /// One profile per ISO week, Monday to Sunday, of the sessions' trading dates.
+    Week,
+    /// One profile per calendar month of the sessions' trading dates.
+    Month,
+}
+
+impl TPOProfilePeriod {
+    /// The week or month of the bar's trading date; sessions never join by period.
+    pub(crate) fn key(
+        self,
+        sessions: &crate::model::ExchangeSessionProvider,
+        time: DateTime<Utc>,
+    ) -> Option<(i32, u32)> {
+        match self {
+            Self::Session => None,
+            Self::Week => {
+                let week = sessions.trading_date(time).iso_week();
+                Some((week.year(), week.week()))
+            }
+            Self::Month => {
+                let date = sessions.trading_date(time);
+                Some((date.year(), date.month()))
+            }
+        }
+    }
+}
+
+impl TPOConfig {
+    /// Only session profiles split at transitions between regular, extended and overnight hours.
+    pub(crate) fn split_hours(&self) -> bool {
+        self.split_sessions && self.profile_period == TPOProfilePeriod::Session
+    }
 }
 
 /// Session classification for splitting TPO profiles.
@@ -413,6 +491,9 @@ pub(crate) fn session_starts(
 
 /// Transform bars into TPO profiles
 ///
+/// With `config.profile_period` a week or month, sessions opening in one form a single profile,
+/// as [`TPOProfilePeriod`] describes.
+///
 /// Sessions are the trading days of `clock`: the exchange sessions it carries,
 /// or calendar days in its time zone, split further at the moves between
 /// regular, extended and overnight hours with `config.split_sessions` and combined over
@@ -464,6 +545,7 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
         .collect::<Vec<_>>();
 
     let mut profiles: Vec<TPOProfile> = Vec::new();
+    let mut opened: Vec<bool> = Vec::new();
     let mut current_profile: Option<TPOProfile> = None;
     let mut session_open = bars[0].time;
     // The open period: its index, first bar time and row-range endpoints
@@ -472,12 +554,13 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
     let interval_minutes = clock.timeframe().map_or(0, |t| t.duration_ms() / 60_000);
     let period_minutes = i64::from(config.period_minutes.max(1)).max(interval_minutes);
     let sessions = clock.sessions();
-    let mut starts = session_starts(bars, &sessions, config.split_sessions, &config.splits)
+    let split_hours = config.split_hours();
+    let mut starts = session_starts(bars, &sessions, split_hours, &config.splits)
         .into_iter()
         .peekable();
     // A split starts a profile, while its periods keep counting from the session's open.
     let mut opens = (!config.splits.is_empty()).then(|| {
-        session_starts(bars, &sessions, config.split_sessions, &[])
+        session_starts(bars, &sessions, split_hours, &[])
             .into_iter()
             .peekable()
     });
@@ -522,7 +605,7 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
         };
         if opens_session {
             session_open = sessions
-                .session_open(bar.time, config.split_sessions)
+                .session_open(bar.time, split_hours)
                 .unwrap_or(bar.time);
         }
         let elapsed = (bar.time - session_open).num_minutes().max(0);
@@ -549,6 +632,7 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
         if is_new_session {
             // Save the current profile
             profiles.extend(current_profile.take());
+            opened.push(opens_session);
 
             // Start new profile
             current_profile = Some(TPOProfile {
@@ -603,9 +687,13 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
             .iter()
             .position(|range| range.contains(open))
     };
-    for profile in profiles {
+    let period = |profile: &TPOProfile| config.profile_period.key(&sessions, profile.session_date);
+    for (profile, opens) in profiles.into_iter().zip(opened) {
         match combined.last_mut() {
-            Some(last) if composite(last).is_some() && composite(last) == composite(&profile) => {
+            Some(last)
+                if (composite(last).is_some() && composite(last) == composite(&profile))
+                    || (opens && period(last).is_some() && period(last) == period(&profile)) =>
+            {
                 last.merge(profile)
             }
             _ => combined.push(profile),
@@ -1002,6 +1090,131 @@ mod tests {
     }
 
     #[test]
+    fn week_and_month_profiles_equal_composites_of_their_sessions() {
+        let monday = Utc.with_ymd_and_hms(2024, 3, 4, 14, 30, 0).unwrap();
+        let bars: Vec<_> = [
+            (0, 0, 100.0, 102.0),
+            (0, 30, 101.0, 103.0),
+            (1, 0, 101.0, 101.0),
+            (1, 30, 101.0, 102.0),
+            (2, 0, 99.0, 100.0),
+            (3, 0, 101.0, 104.0),
+            (4, 0, 101.0, 101.0),
+            (7, 0, 105.0, 105.0),
+            (28, 0, 100.0, 100.0),
+        ]
+        .into_iter()
+        .map(|(day, minute, low, high)| bar_at(monday, day * 1440 + minute, low, high, low, high))
+        .collect();
+        let clock = Timeframe::Min30.into();
+        let config = TPOConfig {
+            tick_size: 1.0,
+            profile_period: TPOProfilePeriod::Week,
+            ..Default::default()
+        };
+        let weekly = to_tpo_profiles(&bars, &config, &clock);
+        assert_eq!(
+            weekly.iter().map(|p| p.session_date).collect::<Vec<_>>(),
+            [
+                monday,
+                monday + Duration::days(7),
+                monday + Duration::days(28)
+            ]
+        );
+        let first = &weekly[0];
+        // Counts 1,2,6,4,2,1 total 16. From POC 101, the upper pair wins 6 to 3;
+        // adding 102 and 103 reaches the twelve-TPO target.
+        assert_eq!(
+            first
+                .price_levels()
+                .into_iter()
+                .map(|price| (price, first.tpo_count_at(price)))
+                .collect::<Vec<_>>(),
+            [
+                (104.0, 1),
+                (103.0, 2),
+                (102.0, 4),
+                (101.0, 6),
+                (100.0, 2),
+                (99.0, 1)
+            ]
+        );
+        assert_eq!(
+            (first.poc_price, first.value_area_low, first.value_area_high),
+            (101.0, 101.0, 103.0)
+        );
+        assert_eq!(first.single_prints, [99.0, 104.0]);
+        assert_eq!(
+            (first.initial_balance_low, first.initial_balance_high),
+            (100.0, 103.0)
+        );
+        assert_eq!(
+            first.letters.iter().map(|l| l.letter).collect::<String>(),
+            "AAABBBABBAAAAAAA"
+        );
+        let composite = to_tpo_profiles(
+            &bars,
+            &TPOConfig {
+                profile_period: TPOProfilePeriod::Session,
+                composites: vec![monday..=monday + Duration::days(4)],
+                ..config.clone()
+            },
+            &clock,
+        );
+        let merged = &composite[0];
+        assert_eq!(
+            (
+                first.poc_price,
+                first.value_area_low,
+                first.value_area_high,
+                first.initial_balance_low,
+                first.initial_balance_high
+            ),
+            (
+                merged.poc_price,
+                merged.value_area_low,
+                merged.value_area_high,
+                merged.initial_balance_low,
+                merged.initial_balance_high
+            )
+        );
+        assert_eq!(first.single_prints, merged.single_prints);
+        assert_eq!(first.price_tpo_count, merged.price_tpo_count);
+        assert_eq!(
+            first
+                .letters
+                .iter()
+                .map(|l| (l.price, l.letter, l.period_idx, l.ts))
+                .collect::<Vec<_>>(),
+            merged
+                .letters
+                .iter()
+                .map(|l| (l.price, l.letter, l.period_idx, l.ts))
+                .collect::<Vec<_>>()
+        );
+        let monthly = to_tpo_profiles(
+            &bars,
+            &TPOConfig {
+                profile_period: TPOProfilePeriod::Month,
+                ..config
+            },
+            &clock,
+        );
+        assert_eq!(monthly.len(), 2);
+        assert_eq!(monthly[1].session_date, monday + Duration::days(28));
+        assert_eq!(monthly[0].letters.len(), 17);
+        assert_eq!(
+            (
+                monthly[0].poc_price,
+                monthly[0].value_area_low,
+                monthly[0].value_area_high
+            ),
+            (101.0, 101.0, 103.0)
+        );
+        assert_eq!(monthly[0].single_prints, [99.0, 104.0, 105.0]);
+    }
+
+    #[test]
     fn sessions_follow_the_clock_and_combine_over_composites() {
         use crate::model::{Session, SessionWindow, TimezoneId};
         use chrono::{NaiveTime, Weekday::*};
@@ -1030,7 +1243,7 @@ mod tests {
         // 2024-03-05 is a Tuesday, 13:00 UTC is 08:00 in New York
         let start = Utc.with_ymd_and_hms(2024, 3, 5, 13, 0, 0).unwrap();
         let both_days = start..=start + Duration::days(1);
-        // (case, clock, bar minutes from `start`, split, composites, splits, profiles as (open, letters))
+        // (case, clock, bar minutes from `start`, split, composites, splits, period, profiles as (open, letters))
         type Case<'a> = (
             &'a str,
             BarClock,
@@ -1038,9 +1251,10 @@ mod tests {
             bool,
             Vec<RangeInclusive<DateTime<Utc>>>,
             Vec<i64>,
+            TPOProfilePeriod,
             &'a [(i64, &'a str)],
         );
-        let cases: [Case; 12] = [
+        let cases: [Case; 17] = [
             (
                 "exchange day across UTC midnight",
                 overnight,
@@ -1048,6 +1262,7 @@ mod tests {
                 false,
                 vec![],
                 vec![],
+                TPOProfilePeriod::Session,
                 &[(600, "ABDt"), (2040, "A")],
             ),
             (
@@ -1058,15 +1273,17 @@ mod tests {
                 vec![],
                 vec![],
                 // Pre-market opens at 04:00, eight periods before the first bar at 08:00
+                TPOProfilePeriod::Session,
                 &[(0, "IJKLMNOPQRSTUVWXYZa")],
             ),
             (
                 "split at extended hours",
-                stock,
+                stock.clone(),
                 (0..19).map(|i| i * 30).collect(),
                 true,
                 vec![],
                 vec![],
+                TPOProfilePeriod::Session,
                 &[(0, "IJK"), (90, "ABCDEFGHIJKLM"), (480, "ABC")],
             ),
             (
@@ -1089,6 +1306,7 @@ mod tests {
                 true,
                 vec![],
                 vec![],
+                TPOProfilePeriod::Session,
                 &[(720, "AB"), (1200, "AB"), (1530, "A")],
             ),
             // Post-market opens where regular hours close, inside its all-day extended window
@@ -1104,6 +1322,7 @@ mod tests {
                 true,
                 vec![],
                 vec![],
+                TPOProfilePeriod::Session,
                 &[(540, "CD")],
             ),
             // No extended hours divide a lunch break, so 13:00 counts from the 09:00 open
@@ -1121,6 +1340,7 @@ mod tests {
                 true,
                 vec![],
                 vec![],
+                TPOProfilePeriod::Session,
                 &[(300, "I")],
             ),
             (
@@ -1130,6 +1350,7 @@ mod tests {
                 false,
                 vec![],
                 vec![],
+                TPOProfilePeriod::Session,
                 &[(0, "ABC")],
             ),
             (
@@ -1139,6 +1360,7 @@ mod tests {
                 false,
                 vec![],
                 vec![],
+                TPOProfilePeriod::Session,
                 &[(0, "AB"), (1440, "AB")],
             ),
             (
@@ -1148,6 +1370,7 @@ mod tests {
                 false,
                 vec![both_days],
                 vec![],
+                TPOProfilePeriod::Session,
                 &[(0, "ABAB")],
             ),
             (
@@ -1157,6 +1380,7 @@ mod tests {
                 false,
                 vec![],
                 vec![60],
+                TPOProfilePeriod::Session,
                 &[(0, "AB"), (60, "CD")],
             ),
             (
@@ -1166,6 +1390,7 @@ mod tests {
                 false,
                 vec![],
                 vec![60],
+                TPOProfilePeriod::Session,
                 &[(0, "AB"), (90, "D")],
             ),
             (
@@ -1175,10 +1400,63 @@ mod tests {
                 false,
                 vec![],
                 vec![1000],
+                TPOProfilePeriod::Session,
                 &[(0, "AB"), (1440, "AB")],
             ),
+            (
+                "UTC days by week",
+                Timeframe::Min30.into(),
+                vec![0, 30, 1440, 7200, 8640],
+                false,
+                vec![],
+                vec![],
+                TPOProfilePeriod::Week,
+                &[(0, "ABAA"), (8640, "A")],
+            ),
+            (
+                "UTC days by month",
+                Timeframe::Min30.into(),
+                vec![0, 37440, 38880],
+                false,
+                vec![],
+                vec![],
+                TPOProfilePeriod::Month,
+                &[(0, "AA"), (38880, "A")],
+            ),
+            (
+                "a split divides a week profile",
+                Timeframe::Min30.into(),
+                vec![0, 30, 60, 1440],
+                false,
+                vec![],
+                vec![30],
+                TPOProfilePeriod::Week,
+                &[(0, "A"), (30, "BCA")],
+            ),
+            (
+                "a composite joins week profiles",
+                Timeframe::Min30.into(),
+                vec![0, 8640],
+                false,
+                vec![start..=start + Duration::minutes(8640)],
+                vec![],
+                TPOProfilePeriod::Week,
+                &[(0, "AA")],
+            ),
+            (
+                "week profiles keep whole sessions",
+                stock,
+                (0..19).map(|i| i * 30).collect(),
+                true,
+                vec![],
+                vec![],
+                TPOProfilePeriod::Week,
+                &[(0, "IJKLMNOPQRSTUVWXYZa")],
+            ),
         ];
-        for (case, clock, minutes, split_sessions, composites, splits, expected) in cases {
+        for (case, clock, minutes, split_sessions, composites, splits, profile_period, expected) in
+            cases
+        {
             let bars: Vec<_> = minutes
                 .iter()
                 .map(|&m| bar_at(start, m, 100.0, 100.0, 100.0, 100.0))
@@ -1186,6 +1464,7 @@ mod tests {
             let config = TPOConfig {
                 tick_size: 1.0,
                 split_sessions,
+                profile_period,
                 composites,
                 splits: splits
                     .into_iter()
