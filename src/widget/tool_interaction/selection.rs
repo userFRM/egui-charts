@@ -20,8 +20,11 @@ use egui::{Painter, Rect, Response, Stroke, Ui, epaint::StrokeKind};
 /// Ctrl or Command held at the press, a drag erases parts of unlocked brush and highlighter
 /// strokes, keeping the rest in the same style as one undo step.
 /// Ctrl/Command-drag on empty space adds drawings intersecting the visible area. Releasing
-/// the modifier continues the gesture; Escape cancels it. Locked drawings can be selected,
-/// but subsequent editing retains the existing lock rules. Shift+click on empty space measures.
+/// the modifier continues the gesture; Escape cancels it. Held during any other drag,
+/// Ctrl/Command inverts the magnet; on a body or move handle it also copies the moved
+/// drawings, while an anchor handle still reshapes its own drawing. Locked drawings can be
+/// selected, but subsequent editing retains the existing lock rules. Shift+click on empty
+/// space measures.
 pub fn handle_selection<F1, F2, F3>(
     ui: &Ui,
     drawing_manager: &mut DrawingManager,
@@ -152,11 +155,12 @@ pub fn handle_selection<F1, F2, F3>(
                 .any(|d| d.id == id && !d.locked)
         });
         if let Some((id, handle)) = handle {
-            ui.ctx().set_cursor_icon(if handle == HandlePos::Middle {
-                egui::CursorIcon::Grab
-            } else {
-                handle_cursor(drawing_manager, id, handle)
-            });
+            ui.ctx()
+                .set_cursor_icon(if matches!(handle, HandlePos::Middle | HandlePos::Rotate) {
+                    egui::CursorIcon::Grab
+                } else {
+                    handle_cursor(drawing_manager, id, handle)
+                });
         } else if hit.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
@@ -284,10 +288,47 @@ fn handle_cursor(manager: &DrawingManager, id: usize, handle: HandlePos) -> egui
             && d.points.len() >= 2
             && (d.points[1].x - d.points[0].x) * (d.points[1].y - d.points[0].y) < 0.0
     });
+    // Resize along the rotated corner's diagonal, rounded to the nearest eighth turn.
+    let glyph_corner = manager
+        .drawings
+        .iter()
+        .find(|d| {
+            d.id == id
+                && matches!(
+                    d.tool_type,
+                    DrawingToolType::FontIcon | DrawingToolType::Sticker
+                )
+        })
+        .filter(|_| {
+            matches!(
+                handle,
+                HandlePos::TopLeft
+                    | HandlePos::TopRight
+                    | HandlePos::BottomLeft
+                    | HandlePos::BottomRight
+            )
+        })
+        .and_then(|d| {
+            let center = *d.points.first()?;
+            let (_, point) = manager
+                .get_handles(d)
+                .into_iter()
+                .find(|(h, _)| *h == handle)?;
+            Some(point - center)
+        });
+    if let Some(to) = glyph_corner {
+        let eighth = (to.y.atan2(to.x) / std::f32::consts::FRAC_PI_4).round() as i32;
+        return [
+            CursorIcon::ResizeHorizontal,
+            CursorIcon::ResizeNwSe,
+            CursorIcon::ResizeVertical,
+            CursorIcon::ResizeNeSw,
+        ][eighth.rem_euclid(4) as usize];
+    }
     match handle {
         HandlePos::TopLeft | HandlePos::BottomRight if reversed => CursorIcon::ResizeNeSw,
         HandlePos::TopRight | HandlePos::BottomLeft if reversed => CursorIcon::ResizeNwSe,
-        HandlePos::Middle => CursorIcon::Grabbing,
+        HandlePos::Middle | HandlePos::Rotate => CursorIcon::Grabbing,
         HandlePos::TopLeft | HandlePos::BottomRight => CursorIcon::ResizeNwSe,
         HandlePos::TopRight | HandlePos::BottomLeft => CursorIcon::ResizeNeSw,
         HandlePos::Top | HandlePos::Bottom => CursorIcon::ResizeVertical,
@@ -585,8 +626,133 @@ mod tests {
         }
     }
 
-    /// Shift projects a dragged endpoint onto 45 degrees, locks body movement to one axis,
-    /// and command drags leave the original untouched with a single undoable copy.
+    /// Shift keeps the box of a box tool square on screen while either anchor or a corner is
+    /// dragged, in precise bars, cut to the pane; releasing it during the drag frees the corner.
+    #[test]
+    fn shift_drags_keep_the_anchor_box_square() {
+        use DrawingToolType as T;
+        use egui::{Modifiers, pos2, vec2};
+        let base = [pos2(80.0, 80.0), pos2(180.0, 140.0)];
+        let far = [pos2(80.0, 80.0), pos2(240.5, 240.5)];
+        let near = [pos2(60.5, 20.5), pos2(180.0, 140.0)];
+        for (tool, grab, to, held, expected) in [
+            (T::FibonacciCircles, base[1], pos2(240.5, 200.0), true, far),
+            (T::GannSquare, base[1], pos2(240.5, 200.0), true, far),
+            (T::GannFixed, base[1], pos2(240.5, 200.0), true, far),
+            (T::GannFan, base[1], pos2(240.5, 200.0), true, far),
+            (T::GannBox, base[1], pos2(240.5, 200.0), true, far),
+            (T::Rect, base[1], pos2(240.5, 200.0), true, far),
+            (T::Ellipse, base[1], pos2(240.5, 200.0), true, far),
+            (T::FibonacciCircles, base[0], pos2(60.5, 100.0), true, near),
+            (T::GannFan, base[0], pos2(60.5, 100.0), true, near),
+            (T::GannBox, base[0], pos2(60.5, 100.0), true, near),
+            (T::GannSquare, base[0], pos2(60.5, 100.0), true, near),
+            (T::GannFixed, base[0], pos2(60.5, 100.0), true, near),
+            (
+                T::GannBox,
+                pos2(80.0, 140.0),
+                pos2(60.5, 180.0),
+                true,
+                [pos2(60.5, 80.0), pos2(180.0, 199.5)],
+            ),
+            (
+                T::GannBox,
+                pos2(180.0, 80.0),
+                pos2(200.0, 60.0),
+                true,
+                [pos2(80.0, 20.0), pos2(200.0, 140.0)],
+            ),
+            (
+                T::GannSquare,
+                base[1],
+                pos2(470.0, 200.0),
+                true,
+                [pos2(80.0, 80.0), pos2(400.0, 400.0)],
+            ),
+            (
+                T::GannBox,
+                base[1],
+                pos2(240.5, 200.0),
+                false,
+                [base[0], pos2(240.5, 200.0)],
+            ),
+        ] {
+            let ctx = Context::default();
+            let pane = Rect::from_min_size(Pos2::ZERO, vec2(500.0, 400.0));
+            let mut manager = DrawingManager::new();
+            manager.options.snap_to_time = true;
+            manager.update_pane_anchors(pane);
+            let mut cursors = CursorModeState::default();
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = base.to_vec();
+            drawing.chart_points = base
+                .iter()
+                .map(|p| ChartPoint::new(p.x, f64::from(p.y)))
+                .collect();
+            drawing.completed = true;
+            manager.drawings.push(drawing);
+            manager.select(7);
+            let button = |pos, pressed, modifiers| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers,
+            };
+            let released = if held {
+                Modifiers::SHIFT
+            } else {
+                Modifiers::NONE
+            };
+            for (modifiers, events) in [
+                (Modifiers::SHIFT, vec![Event::PointerMoved(grab)]),
+                (Modifiers::SHIFT, vec![button(grab, true, Modifiers::SHIFT)]),
+                (released, vec![Event::PointerMoved(to)]),
+                (released, vec![button(to, false, released)]),
+            ] {
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(pane),
+                        events: std::iter::once(Event::ModifiersChanged(modifiers))
+                            .chain(events)
+                            .collect(),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let response =
+                            ui.interact(pane, Id::NULL.with("chart"), Sense::click_and_drag());
+                        handle_selection(
+                            ui,
+                            &mut manager,
+                            &mut cursors,
+                            &response,
+                            pane,
+                            None,
+                            &|x| x,
+                            &|y: f32| f64::from(y.clamp(pane.top(), pane.bottom())),
+                            &|price, from, to| price + f64::from(to - from),
+                        );
+                    },
+                )
+                .drop_without_applying_deltas();
+            }
+            let drawing = &manager.drawings[0];
+            assert_eq!(drawing.points, expected, "{tool:?}, {grab:?}, held {held}");
+            assert_eq!(
+                drawing.chart_points,
+                expected
+                    .iter()
+                    .map(|p| ChartPoint::new(p.x, f64::from(p.y)))
+                    .collect::<Vec<_>>(),
+                "{tool:?}, {grab:?}, held {held}"
+            );
+        }
+    }
+
+    /// Shift projects a dragged endpoint onto 45 degrees and locks body movement to one axis.
+    /// Command inverts the magnet: an end handle drag reshapes the drawing itself in one undo
+    /// step, while a body or move handle drag leaves the original untouched with a single
+    /// undoable copy. Ctrl rows grab an unselected drawing, which has no handles, so even its
+    /// end moves and copies it.
     #[test]
     fn modifier_drags_constrain_points_and_copy_once() {
         use egui::{Modifiers, pos2, vec2};
@@ -599,15 +765,19 @@ mod tests {
             (DrawingToolType::TrendLine, false, vec2(20.0, 0.0)),
             (DrawingToolType::TrendLine, false, vec2(0.0, 20.0)),
         ] {
-            for body in [false, true] {
-                for (modifiers, snap_to_time) in [
-                    (Modifiers::SHIFT, true),
-                    (Modifiers::CTRL, true),
-                    (Modifiers::COMMAND, true),
-                    (Modifiers::SHIFT, false),
+            // 0 grabs the end handle, 1 the body and 2 the move handle the shown midpoint adds.
+            for grab in 0..3 {
+                let body = grab > 0;
+                for (modifiers, snap_to_time, magnet) in [
+                    (Modifiers::SHIFT, true, false),
+                    (Modifiers::CTRL, true, false),
+                    (Modifiers::COMMAND, true, false),
+                    (Modifiers::COMMAND, true, true),
+                    (Modifiers::SHIFT, false, false),
                 ] {
                     if (off_pane || pan != egui::Vec2::ZERO)
                         && (body || modifiers != Modifiers::SHIFT || !snap_to_time)
+                        || (grab == 2 && tool != DrawingToolType::TrendLine)
                     {
                         continue;
                     }
@@ -615,6 +785,7 @@ mod tests {
                     let pane = Rect::from_min_size(Pos2::ZERO, vec2(500.0, 400.0));
                     let mut manager = DrawingManager::new();
                     manager.options.snap_to_time = snap_to_time;
+                    manager.options.magnet_mode = magnet;
                     manager.update_pane_anchors(pane);
                     let mut cursors = CursorModeState::default();
                     let mut drawing = Drawing::new(7, tool);
@@ -639,20 +810,27 @@ mod tests {
                         .collect();
                     drawing.completed = true;
                     drawing.stored_id = Some("original".into());
+                    drawing.line_measurements.midpoint = grab == 2;
                     let before = drawing.chart_points.clone();
                     manager.drawings.push(drawing);
+                    // Its first anchor is within the magnet's reach of the end handle's target.
+                    let mut neighbour = Drawing::new(8, DrawingToolType::TrendLine);
+                    neighbour.points = vec![pos2(250.0, 210.0), pos2(450.0, 210.0)];
+                    neighbour.chart_points = neighbour
+                        .points
+                        .iter()
+                        .map(|p| ChartPoint::new(p.x, f64::from(p.y)))
+                        .collect();
+                    neighbour.completed = true;
+                    manager.drawings.push(neighbour);
                     if modifiers != Modifiers::CTRL {
                         manager.select(7);
                     }
-                    let from = if body {
-                        pos2(110.0, 110.0)
-                    } else {
-                        pos2(180.0, 180.0)
-                    };
+                    let from = [pos2(180.0, 180.0), pos2(110.0, 110.0), pos2(130.0, 130.0)][grab];
                     let to = if off_pane {
                         pos2(140.0, 0.0)
                     } else if body {
-                        pos2(210.5, 160.0)
+                        from + vec2(100.5, 50.0)
                     } else {
                         pos2(240.0, 200.0)
                     };
@@ -710,12 +888,20 @@ mod tests {
                         )
                         .drop_without_applying_deltas();
                     }
-                    let copying = modifiers != Modifiers::SHIFT;
-                    assert_eq!(manager.drawings.len(), if copying { 2 } else { 1 });
+                    let copying =
+                        modifiers != Modifiers::SHIFT && (body || modifiers == Modifiers::CTRL);
+                    let case = format!("{tool:?}, grab {grab}, {modifiers:?}, magnet {magnet}");
+                    assert_eq!(
+                        manager.drawings.len(),
+                        if copying { 3 } else { 2 },
+                        "{case}"
+                    );
                     if copying {
-                        assert_eq!(manager.drawings[0].chart_points, before);
+                        assert_eq!(manager.drawings[0].chart_points, before, "{case}");
                     }
-                    let moved = manager.drawings.last().unwrap();
+                    // The copy is added after the neighbour; a reshape keeps the original first.
+                    let moved_index = if copying { 2 } else { 0 };
+                    let moved = &manager.drawings[moved_index];
                     let expected = if pan != egui::Vec2::ZERO {
                         pos2(210.0 + pan.x, 210.0 + pan.y)
                     } else if off_pane {
@@ -730,15 +916,16 @@ mod tests {
                         } else {
                             pos2(280.5, 180.0)
                         }
-                    } else if copying {
+                    } else if modifiers == Modifiers::SHIFT {
+                        pos2(220.0, 220.0)
+                    } else if magnet {
+                        // The modifier turns the magnet off, so the end follows the pointer.
                         to
                     } else {
-                        pos2(220.0, 220.0)
+                        // The modifier turns the magnet on, so the end snaps to the neighbour.
+                        pos2(250.0, 210.0)
                     };
-                    assert_eq!(
-                        moved.points[1], expected,
-                        "{tool:?}, body {body}, {modifiers:?}"
-                    );
+                    assert_eq!(moved.points[1], expected, "{case}");
                     // A Shift move keeps whole bars, though its converter is precise, while
                     // anchors snap to bars in time.
                     let bar = if body && !copying && snap_to_time {
@@ -748,17 +935,18 @@ mod tests {
                     };
                     assert_eq!(
                         moved.chart_points[1],
-                        ChartPoint::new(bar - pan.x, f64::from(expected.y - pan.y))
+                        ChartPoint::new(bar - pan.x, f64::from(expected.y - pan.y)),
+                        "{case}"
                     );
                     if copying {
                         assert_eq!(moved.stored_id, None);
                     }
                     assert!(manager.undo());
-                    assert_eq!(manager.drawings.len(), 1);
+                    assert_eq!(manager.drawings.len(), 2);
                     assert_eq!(manager.drawings[0].chart_points, before);
                     assert!(!manager.undo());
                     assert!(manager.redo());
-                    assert_eq!(manager.drawings.last().unwrap().points[1], expected);
+                    assert_eq!(manager.drawings[moved_index].points[1], expected);
                 }
             }
         }

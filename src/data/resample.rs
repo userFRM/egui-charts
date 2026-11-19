@@ -92,6 +92,8 @@ pub fn resample(
 /// and the last output includes all available inputs even while its period is forming.
 /// Daily and longer inputs already carry their trading date as a calendar label. Pass timeframes
 /// for UTC labels, or matching source and target [`BarClock`] values to retain another calendar.
+/// With `extended_hours`, both extended and overnight windows participate; see
+/// [`resample_with_session_hours`] to leave the overnight windows out.
 /// Exchange time determines the trading date; the target clock determines its output label.
 ///
 /// As with [`resample`], returns `None` if an input straddles target slots or folded volume
@@ -104,8 +106,64 @@ pub fn resample_with_session(
     instrument: &Instrument,
     extended_hours: bool,
 ) -> Option<Vec<Bar>> {
+    resample_with_session_hours(bars, from, to, instrument, extended_hours, extended_hours)
+}
+
+/// As [`resample_with_session`], for the hours a [`HistoryRequest`](super::HistoryRequest)
+/// selects: regular hours without `extended_hours`, extended hours without the
+/// [overnight windows](crate::model::Session::overnight_windows) with `extended_hours` alone,
+/// and all hours with both. `overnight_hours` without `extended_hours` selects regular hours.
+///
+/// ```
+/// use chrono::{NaiveTime, Weekday::*};
+/// use egui_charts::data::{Bar, HistoryRequest, resample_with_session_hours};
+/// use egui_charts::model::{Instrument, Session, SessionWindow, Timeframe, TimezoneId};
+///
+/// let at = |hour, minute| NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+/// let days = [Mon, Tue, Wed, Thu, Fri];
+/// let session = Session::new([SessionWindow::new(days, at(9, 30), at(16, 0))])
+///     .with_extended_windows([SessionWindow::new(days, at(4, 0), at(9, 30))])
+///     .with_overnight_windows([SessionWindow::new(days, at(20, 0), at(4, 0))]);
+/// let instrument = Instrument::new("XYZ")
+///     .with_time_zone(TimezoneId::utc())
+///     .with_session(session);
+/// // An overnight minute and a pre-market minute of Monday's trading date.
+/// let minutes = ["2024-03-10T20:00:00Z", "2024-03-11T04:00:00Z"]
+///     .map(|time| Bar::new(time.parse().unwrap(), 1.0, 1.0, 1.0, 1.0, 1.0));
+/// let mut request = HistoryRequest::new("XYZ", "45min".parse::<Timeframe>().unwrap(), 500);
+/// request.extended_hours = true;
+/// for (overnight_hours, opens) in [
+///     // Extended hours count from the 04:00 pre-market open.
+///     (false, &["2024-03-11T04:00:00Z"][..]),
+///     // All hours count from the 20:00 overnight open, so 04:00 is in the 03:30 bar.
+///     (true, &["2024-03-10T20:00:00Z", "2024-03-11T03:30:00Z"][..]),
+/// ] {
+///     request.overnight_hours = overnight_hours;
+///     let bars = resample_with_session_hours(
+///         &minutes,
+///         Timeframe::Min1,
+///         request.clock.clone(),
+///         &instrument,
+///         request.extended_hours,
+///         request.overnight_hours,
+///     )
+///     .unwrap();
+///     let times: Vec<String> = bars.iter()
+///         .map(|bar| bar.time.format("%FT%TZ").to_string())
+///         .collect();
+///     assert_eq!(times, opens);
+/// }
+/// ```
+pub fn resample_with_session_hours(
+    bars: &[Bar],
+    from: impl Into<BarClock>,
+    to: impl Into<BarClock>,
+    instrument: &Instrument,
+    extended_hours: bool,
+    overnight_hours: bool,
+) -> Option<Vec<Bar>> {
     Some(
-        resample_periods(bars, from, to, instrument, extended_hours)?
+        resample_periods(bars, from, to, instrument, extended_hours, overnight_hours)?
             .into_iter()
             .map(|(_, bar)| bar)
             .collect(),
@@ -118,6 +176,7 @@ pub(crate) fn resample_periods(
     to: impl Into<BarClock>,
     instrument: &Instrument,
     extended_hours: bool,
+    overnight_hours: bool,
 ) -> Option<Vec<(std::ops::Range<usize>, Bar)>> {
     use crate::model::{ExchangeSessionProvider, TimezoneId};
 
@@ -148,12 +207,8 @@ pub(crate) fn resample_periods(
         );
     }
     let mut session = instrument.session.clone();
-    if !extended_hours && let Some(session) = &mut session {
-        // Keep an empty regular schedule distinct from an explicitly continuous session.
-        if session.windows.is_empty() && !session.extended_windows.is_empty() {
-            return Some(Vec::new());
-        }
-        session.clear_extended_windows();
+    if let Some(session) = &mut session {
+        session.select_hours(extended_hours, extended_hours && overnight_hours);
     }
     let provider = ExchangeSessionProvider::new(zone, session);
     let opens = provider.opens(bars.iter().map(|bar| bar.time));
@@ -271,6 +326,36 @@ mod tests {
                     extended
                 ),
                 Some(expected)
+            );
+        }
+        // Only the override opens regular hours; the weekly pre-market must stay closed.
+        let date = "2024-03-15".parse().unwrap();
+        let extended_only = Session::new([]).with_extended_windows([SessionWindow::new(
+            [Weekday::Fri],
+            clock(8, 30),
+            clock(9, 30),
+        )]);
+        for (session, expected) in [
+            (extended_only.clone(), vec![]),
+            (
+                extended_only.with_overrides([crate::model::SessionOverride::new(date)
+                    .with_windows([crate::model::OverrideWindow::new(
+                        clock(9, 30),
+                        clock(16, 0),
+                    )])]),
+                vec![bar("2024-03-15T00:00:00Z", [10.0, 16.0, 7.0, 8.0, 14.0])],
+            ),
+        ] {
+            let instrument = instrument.clone().with_session(session);
+            assert_eq!(
+                resample_with_session(
+                    &input,
+                    Timeframe::Hour1,
+                    Timeframe::Day1,
+                    &instrument,
+                    false
+                ),
+                Some(expected),
             );
         }
         let continuous = Instrument::new("CONTINUOUS")
@@ -444,5 +529,95 @@ mod tests {
                 bar("2024-03-10T08:00:00Z", [103.0, 105.0, 102.0, 104.0, 4.0]),
             ])
         );
+    }
+
+    /// Guards the three hour choices a chart requests on a session with overnight windows:
+    /// intraday slots count from the first selected window of the trading date, as the
+    /// chart's clock does, and bars outside the selected hours stay out of every period.
+    #[test]
+    fn resamples_each_chart_hours_choice() {
+        use crate::model::{Session, SessionWindow, TimezoneId};
+        use chrono::{NaiveTime, Weekday::*};
+        let at = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        let days = [Mon, Tue, Wed, Thu, Fri];
+        let session = Session::new([SessionWindow::new(days, at(9, 30), at(16, 0))])
+            .with_extended_windows([
+                SessionWindow::new(days, at(4, 0), at(9, 30)),
+                SessionWindow::new(days, at(16, 0), at(20, 0)),
+            ])
+            .with_overnight_windows([SessionWindow::new(days, at(20, 0), at(4, 0))]);
+        let instrument = Instrument::new("OVERNIGHT")
+            .with_time_zone(TimezoneId::utc())
+            .with_session(session.clone());
+        // Monday's trading date opens on Sunday at 20:00 with overnight hours, else at 04:00
+        // with extended hours and at 09:30 with regular hours. Each volume is a distinct bit.
+        let input: Vec<Bar> = [
+            ("2024-03-10T20:00:00Z", 1.0),
+            ("2024-03-11T03:59:00Z", 2.0),
+            ("2024-03-11T04:00:00Z", 4.0),
+            ("2024-03-11T04:44:00Z", 8.0),
+            ("2024-03-11T04:45:00Z", 16.0),
+            ("2024-03-11T05:30:00Z", 32.0),
+            ("2024-03-11T10:00:00Z", 256.0),
+            ("2024-03-11T19:59:00Z", 64.0),
+            // Tuesday's overnight window.
+            ("2024-03-11T20:00:00Z", 128.0),
+        ]
+        .into_iter()
+        .map(|(time, volume)| bar(time, [1.0, 1.0, 1.0, 1.0, volume]))
+        .collect();
+        let min45: Timeframe = "45min".parse().unwrap();
+        type Row = (
+            (bool, bool),
+            &'static [(&'static str, f64)],
+            &'static [(&'static str, f64)],
+        );
+        #[rustfmt::skip]
+        let rows: [Row; 4] = [
+            ((false, false), &[("2024-03-11T09:30:00Z", 256.0)], &[("2024-03-11T00:00:00Z", 256.0)]),
+            // Overnight hours need extended hours, as in a request.
+            ((false, true), &[("2024-03-11T09:30:00Z", 256.0)], &[("2024-03-11T00:00:00Z", 256.0)]),
+            ((true, false), &[
+                ("2024-03-11T04:00:00Z", 12.0), ("2024-03-11T04:45:00Z", 16.0),
+                ("2024-03-11T05:30:00Z", 32.0), ("2024-03-11T10:00:00Z", 256.0),
+                ("2024-03-11T19:45:00Z", 64.0),
+            ], &[("2024-03-11T00:00:00Z", 380.0)]),
+            ((true, true), &[
+                ("2024-03-10T20:00:00Z", 1.0), ("2024-03-11T03:30:00Z", 6.0),
+                ("2024-03-11T04:15:00Z", 24.0), ("2024-03-11T05:00:00Z", 32.0),
+                ("2024-03-11T09:30:00Z", 256.0), ("2024-03-11T19:15:00Z", 64.0),
+                ("2024-03-11T20:00:00Z", 128.0),
+            ], &[("2024-03-11T00:00:00Z", 383.0), ("2024-03-12T00:00:00Z", 128.0)]),
+        ];
+        for ((extended, overnight), intraday, daily) in rows {
+            for (to, expected) in [(min45, intraday), (Timeframe::Day1, daily)] {
+                let bars = resample_with_session_hours(
+                    &input,
+                    Timeframe::Min1,
+                    to,
+                    &instrument,
+                    extended,
+                    overnight,
+                )
+                .unwrap();
+                let got: Vec<_> = bars.iter().map(|bar| (bar.time, bar.volume)).collect();
+                let expected: Vec<_> = expected
+                    .iter()
+                    .map(|&(time, volume)| (time.parse::<DateTime<Utc>>().unwrap(), volume))
+                    .collect();
+                assert_eq!(got, expected, "{extended} {overnight} {to}");
+            }
+            // The chart's clock for the same choice opens the same intraday bars.
+            let clock = BarClock::new(min45).with_session_hours(
+                TimezoneId::utc(),
+                session.clone(),
+                extended,
+                overnight,
+            );
+            for &(time, _) in intraday {
+                let time: DateTime<Utc> = time.parse().unwrap();
+                assert_eq!(clock.bar_open(time), time, "{extended} {overnight}");
+            }
+        }
     }
 }

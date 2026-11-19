@@ -563,17 +563,33 @@ impl StrategyReport {
     /// order), one header line and one line per trade, each ending with `\n`.
     ///
     /// Columns: `number` (from 1, in this order), `side` (`long` or `short`), `quantity`,
-    /// `entry_time`, `entry_price`, `exit_time`, `exit_price`, `profit`, `fees`, `label`. Times are
-    /// RFC 3339 in UTC (`2024-01-02T00:00:00Z`), numbers use the shortest form that reads back to the
-    /// same value, and an open trade leaves the three exit columns empty.
+    /// `entry_time`, `entry_price`, `exit_time`, `exit_price`, `profit`, `fees`, `label`, `mae` and
+    /// `mfe`. Times are RFC 3339 in UTC (`2024-01-02T00:00:00Z`), numbers use the shortest form that
+    /// reads back to the same value, and an open trade leaves the three exit columns empty. `mae`
+    /// and `mfe` stay empty here; [`Self::trades_csv_with_excursions`] fills them.
     /// Text cells starting with `=`, `+`, `-`, `@`, tab or carriage return gain a leading apostrophe
     /// so spreadsheets treat them as text. Numeric cells, including negative numbers, are unchanged.
     #[cfg(feature = "csv")]
     #[cfg_attr(docsrs, doc(cfg(feature = "csv")))]
     pub fn trades_csv(&self) -> String {
+        self.trades_csv_with_excursions(&StrategyComparison::default())
+    }
+
+    /// [`Self::trades_csv`] with each trade's maximum adverse and favourable excursion in `mae`
+    /// and `mfe`, as the report panel's list of trades shows them. `comparison` is this report's
+    /// [`Self::comparison`] over the bars of the run; a trade without an excursion there leaves
+    /// both cells empty.
+    #[cfg(feature = "csv")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "csv")))]
+    pub fn trades_csv_with_excursions(&self, comparison: &StrategyComparison) -> String {
         const IN_MEMORY: &str = "writing CSV to memory cannot fail";
-        let mut trades: Vec<&StrategyTrade> = self.trades.iter().filter(|t| t.is_valid()).collect();
-        trades.sort_by_key(|t| t.entry_time);
+        let mut trades: Vec<_> = self
+            .trades
+            .iter()
+            .enumerate()
+            .filter(|(_, trade)| trade.is_valid())
+            .collect();
+        trades.sort_by_key(|(_, trade)| trade.entry_time);
         let time = |t: DateTime<Utc>| csv_text(&t.to_rfc3339_opts(SecondsFormat::AutoSi, true));
         let mut csv = csv::Writer::from_writer(Vec::new());
         csv.write_record([
@@ -587,9 +603,11 @@ impl StrategyReport {
             "profit",
             "fees",
             "label",
+            "mae",
+            "mfe",
         ])
         .expect(IN_MEMORY);
-        for (i, trade) in trades.into_iter().enumerate() {
+        for (i, (index, trade)) in trades.into_iter().enumerate() {
             let (exit_time, exit_price, profit) = match &trade.exit {
                 Some(exit) => (
                     time(exit.time),
@@ -602,6 +620,16 @@ impl StrategyReport {
                 OrderSide::Buy => "long",
                 OrderSide::Sell => "short",
             };
+            let (mae, mfe) = comparison
+                .excursions
+                .get(index)
+                .and_then(Option::as_ref)
+                .map_or_else(Default::default, |excursion| {
+                    (
+                        excursion.adverse.to_string(),
+                        excursion.favourable.to_string(),
+                    )
+                });
             csv.write_record([
                 (i + 1).to_string(),
                 side.to_string(),
@@ -613,6 +641,8 @@ impl StrategyReport {
                 profit,
                 trade.fees.to_string(),
                 csv_text(trade.label.as_deref().unwrap_or_default()),
+                mae,
+                mfe,
             ])
             .expect(IN_MEMORY);
         }
@@ -1411,12 +1441,34 @@ mod tests {
         let mut invalid = closed(1.0, 0.0);
         invalid.quantity = -1.0;
         r.trades = vec![late, invalid, first, second];
+        let comparison = StrategyComparison {
+            excursions: vec![
+                Some(StrategyExcursion {
+                    adverse: 0.5,
+                    favourable: 3.25,
+                }),
+                None,
+                Some(StrategyExcursion {
+                    adverse: 6.0,
+                    favourable: 16.0,
+                }),
+                None,
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            r.trades_csv_with_excursions(&comparison),
+            "number,side,quantity,entry_time,entry_price,exit_time,exit_price,profit,fees,label,mae,mfe\n\
+             1,long,1,2024-01-02T01:00:00Z,100,2024-01-02T02:00:00Z,101,-1.25,0.25,,6,16\n\
+             2,long,1,2024-01-02T01:00:00Z,100,2024-01-02T03:00:00Z,101,3,0.5,,,\n\
+             3,short,2,2024-01-02T05:00:00Z,101.5,,,,0,\"Breakout, short\",0.5,3.25\n"
+        );
         assert_eq!(
             r.trades_csv(),
-            "number,side,quantity,entry_time,entry_price,exit_time,exit_price,profit,fees,label\n\
-             1,long,1,2024-01-02T01:00:00Z,100,2024-01-02T02:00:00Z,101,-1.25,0.25,\n\
-             2,long,1,2024-01-02T01:00:00Z,100,2024-01-02T03:00:00Z,101,3,0.5,\n\
-             3,short,2,2024-01-02T05:00:00Z,101.5,,,,0,\"Breakout, short\"\n"
+            "number,side,quantity,entry_time,entry_price,exit_time,exit_price,profit,fees,label,mae,mfe\n\
+             1,long,1,2024-01-02T01:00:00Z,100,2024-01-02T02:00:00Z,101,-1.25,0.25,,,\n\
+             2,long,1,2024-01-02T01:00:00Z,100,2024-01-02T03:00:00Z,101,3,0.5,,,\n\
+             3,short,2,2024-01-02T05:00:00Z,101.5,,,,0,\"Breakout, short\",,\n"
         );
         for (label, expected) in [
             ("=1+1", "'=1+1"),

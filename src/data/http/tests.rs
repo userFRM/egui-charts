@@ -18,6 +18,7 @@ fn request() -> HistoryRequest {
         since: None,
         count: 2,
         extended_hours: false,
+        overnight_hours: false,
         adjusted: false,
         conversion: None,
     }
@@ -576,6 +577,7 @@ fn old_subscription_cannot_publish_or_schedule_after_cancellation() {
                 timeframe: Timeframe::Min1,
                 clock,
                 extended_hours: false,
+                overnight_hours: false,
                 conversion: None,
                 sink,
             },
@@ -682,6 +684,7 @@ fn stalled_requests_answer_a_network_error() {
         timeframe: Timeframe::Min1,
         clock,
         extended_hours: false,
+        overnight_hours: false,
         conversion: None,
         sink,
     });
@@ -724,6 +727,7 @@ fn only_connection_attempts_report_connecting() {
                 timeframe: Timeframe::Min1,
                 clock,
                 extended_hours: false,
+                overnight_hours: false,
                 conversion: None,
                 sink,
             },

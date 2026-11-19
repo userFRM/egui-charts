@@ -64,6 +64,25 @@ pub enum AutoAnchor {
     Century,
 }
 
+impl AutoAnchor {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::HighestHigh => "Highest High",
+            Self::LowestLow => "Lowest Low",
+            Self::HighestVolume => "Highest Volume",
+            Self::Session => "Session",
+            Self::Week => "Week",
+            Self::Month => "Month",
+            Self::Quarter => "Quarter",
+            Self::Year => "Year",
+            Self::Decade => "Decade",
+            Self::Century => "Century",
+        }
+    }
+}
+
 /// VWAP from an automatically found anchor bar to the latest bar, with three pairs of bands
 /// at one, two and three times a multiple of the volume-weighted standard deviation of the
 /// source, or of one percent of the absolute VWAP. The first pair is drawn and filled between
