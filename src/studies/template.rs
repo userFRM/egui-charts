@@ -1435,6 +1435,26 @@ mod tests {
                 "{name}"
             );
         }
+        // Literal study saved on main before Hours existed: all saved inputs and styles stay,
+        // and the trading day remains selected with its extended hours split.
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Time Price Opportunity","inputs":[["period",{"Length":30}],["row_ticks",{"Length":0}],["value_area",{"Number":70.0}],["split_sessions",{"Toggle":true}],["single_prints",{"Toggle":false}],["midpoint",{"Toggle":false}],["statistics",{"Toggle":false}],["display",{"Choice":0}],["sessions",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TimePriceOpportunity.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[16,16,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        let study = saved.create().unwrap();
+        assert_eq!(study.settings(), saved.settings);
+        let inputs = study.inputs();
+        for (id, value) in saved
+            .inputs
+            .iter()
+            .chain(&[("hours".to_owned(), Choice(0))])
+        {
+            assert_eq!(
+                inputs
+                    .iter()
+                    .find(|input| input.id == *id)
+                    .map(|input| &input.value),
+                Some(value),
+                "Time Price Opportunity {id}"
+            );
+        }
 
         // A chart save of an anchored profile from before tick heights and width were inputs
         // keeps its settings and inputs and takes the defaults of both.

@@ -2,9 +2,10 @@
 
 use super::{Chart, ChartEvent};
 use crate::data::{FeedError, inbox::Inbox};
-use crate::drawings::DrawingToolType;
+use crate::drawings::{ChartPoint, DrawingManager, DrawingToolType};
 use crate::model::PostContent;
 use crate::services::Posts;
+use chrono::{DateTime, Utc};
 use std::sync::{Arc, Mutex, PoisonError};
 
 pub(super) struct PostSource {
@@ -22,6 +23,12 @@ impl Chart {
     /// that link and saves it with them; it never fetches a link itself. Without a source, or
     /// after a failed answer, the card says the link could not be loaded; setting a source
     /// asks for those links again. Replacing or removing the source drops pending answers.
+    ///
+    /// A card the user places stands on the bar of the time its content was published, at the
+    /// price where it was placed: as it is placed when it carries its content, otherwise when
+    /// its link resolves, unless the card was moved or locked first. A time before the loaded
+    /// history keeps the card on that time until the bars arrive. Cards a host adds or loads
+    /// keep their anchors.
     pub fn set_post_source(&mut self, source: Option<Arc<dyn Posts>>) {
         self.post_source = source.map(|source| PostSource {
             source,
@@ -90,6 +97,99 @@ impl Chart {
             source.pending.push((id, post.link.clone()));
             source.source.resolve(&post.link, source.inbox.reply(id));
         }
+        self.move_resolved_posts();
+    }
+
+    /// Anchors post or idea card `id`, which the user placed this frame, on the bar of the time
+    /// its content was published, at the price where it was placed. A card whose content is not
+    /// known yet is remembered, to move there when the content arrives.
+    pub(super) fn place_new_post(&self, manager: &mut DrawingManager, id: usize) {
+        let Some(drawing) = manager.drawings.iter_mut().find(|d| {
+            d.id == id
+                && !d.locked
+                && matches!(d.tool_type, DrawingToolType::Tweet | DrawingToolType::Idea)
+        }) else {
+            return;
+        };
+        let Some(&anchor) = drawing.chart_points.first() else {
+            return;
+        };
+        match drawing.post.as_ref().and_then(|post| post.content.as_ref()) {
+            Some(content) => {
+                drawing.chart_points[0] = self.publication_anchor(content.time, anchor.price);
+            }
+            None => manager
+                .unplaced_posts
+                .push((id, self.drawing_point_time(&anchor), anchor)),
+        }
+    }
+
+    /// Moves each card placed before its content was known to the bar of the time the content
+    /// was published, once it has arrived. A card that was removed, locked or moved meanwhile, or
+    /// whose placement editor closed without a link, is forgotten and keeps its anchor.
+    fn move_resolved_posts(&mut self) {
+        let editing = self
+            .drawings
+            .text_editor
+            .as_ref()
+            .filter(|editor| editor.placed)
+            .map(|editor| editor.id);
+        let mut moves = Vec::new();
+        let unplaced = std::mem::take(&mut self.drawings.unplaced_posts);
+        let waiting = unplaced
+            .into_iter()
+            .filter(|&(id, time, placed)| {
+                let Some((index, drawing)) = (self.drawings.drawings.iter().enumerate())
+                    .find(|(_, d)| d.id == id && !d.locked)
+                else {
+                    return false;
+                };
+                let Some(anchor) = drawing.chart_points.first() else {
+                    return false;
+                };
+                let unmoved = anchor.price == placed.price
+                    && match time {
+                        Some(time) => self.drawing_point_time(anchor) == Some(time),
+                        None => anchor.bar_idx == placed.bar_idx,
+                    };
+                match drawing.post.as_ref().map(|post| post.content.as_ref()) {
+                    _ if !unmoved => false,
+                    // The editor opened at placement may still give the card a link.
+                    None => editing == Some(id),
+                    Some(None) => true,
+                    Some(Some(content)) => {
+                        moves.push((index, self.publication_anchor(content.time, anchor.price)));
+                        false
+                    }
+                }
+            })
+            .collect();
+        self.drawings.unplaced_posts = waiting;
+        for (index, point) in moves {
+            self.drawings.drawings[index].chart_points[0] = point;
+        }
+    }
+
+    /// The anchor of a card published at `time`, at `price`: on the bar or price-based element
+    /// whose period holds `time`, or on its slot in the whitespace after the last bar. A time
+    /// before the first bar, or a chart without bars, keeps the card on `time` until the bars
+    /// arrive, as [`Chart::create_drawing`] does.
+    fn publication_anchor(&self, time: DateTime<Utc>, price: f64) -> ChartPoint {
+        let index = crate::chart::rendering::candles::price_based::element_index_at(
+            &self.state,
+            self.chart_type,
+            &self.chart_type_params,
+            self.older_bars_drawn,
+            time,
+        )
+        .map(|index| index as f64)
+        .or_else(|| self.time_to_index(time));
+        match index {
+            Some(index) if index >= 0.0 && index.is_finite() => {
+                ChartPoint::new(index.floor() as f32, price)
+            }
+            _ => self.anchor_at_time(time, price),
+        }
     }
 
     pub(super) fn click_link(&mut self, ctx: &egui::Context, pos: egui::Pos2) {
@@ -119,7 +219,7 @@ mod tests {
     use crate::data::Reply;
     use crate::drawings::persistence::DrawingStorage;
     use crate::drawings::{ChartPoint, Drawing};
-    use crate::model::PostLink;
+    use crate::model::{Bar, BarData, ChartType, ChartTypeParams, PostLink};
     use crate::services::{Storage, StoreKind};
     use crate::widget::test_frames::{chart, frame, shapes};
     use chrono::{TimeZone, Utc};
@@ -233,6 +333,8 @@ mod tests {
         assert!(source.0.lock().unwrap().is_empty());
         for drawing in &chart.drawings.drawings[..2] {
             assert_eq!(drawing.post, Some(PostLink::resolved(a, content())));
+            // A card a host adds keeps its anchor.
+            assert_eq!(drawing.chart_points[0].bar_idx, 40.0);
         }
         let failed = chart.drawings.drawings[2].post.as_ref().unwrap();
         assert!(failed.failed && failed.content.is_none());
@@ -295,6 +397,180 @@ mod tests {
             restored.drawings.drawings[2].post,
             Some(PostLink::resolved(b, content()))
         );
+        // A card loaded from storage keeps its anchor.
+        assert_eq!(restored.drawings.drawings[2].chart_points[0].bar_idx, 40.0);
+    }
+
+    /// A card the user places stands on the bar of its content's publication time, at the
+    /// price where it was placed: at once when it is placed with its content, otherwise when its
+    /// link resolves, within the undo step that placed or linked it. A time before the bars
+    /// keeps the card on that time, and one after them on its slot. A card moved or locked
+    /// before the answer keeps its anchor.
+    #[test]
+    fn placed_cards_move_to_the_time_their_content_was_published() {
+        #[derive(Clone, Copy, PartialEq)]
+        enum Placed {
+            /// Tweet tool, click, address typed into the editor.
+            Typed,
+            /// `start_post_insertion` with a link to resolve, then a click.
+            Linked,
+            /// `start_post_insertion` with resolved content, then a click.
+            Resolved,
+        }
+        #[derive(Clone, Copy, PartialEq)]
+        enum Meanwhile {
+            Nothing,
+            Moved,
+            Locked,
+        }
+        let bar = |i: i64| Utc.timestamp_opt(1_700_000_000 + i * 86_400, 0).unwrap();
+        let hours = chrono::TimeDelta::hours;
+        let link = "https://example.invalid/p/1";
+        // Each row: how the card is placed, what happens before the answer, when its content
+        // was published and the anchor time expected after the answer; `None` keeps the anchor
+        // the card had before it.
+        for (placed, meanwhile, published, expected) in [
+            (
+                Placed::Typed,
+                Meanwhile::Nothing,
+                bar(20) + hours(18),
+                Some(bar(20)),
+            ),
+            (
+                Placed::Linked,
+                Meanwhile::Nothing,
+                bar(20) + hours(18),
+                Some(bar(20)),
+            ),
+            (
+                Placed::Resolved,
+                Meanwhile::Nothing,
+                bar(20) + hours(18),
+                Some(bar(20)),
+            ),
+            (
+                Placed::Linked,
+                Meanwhile::Nothing,
+                bar(-3) - hours(6),
+                Some(bar(-3) - hours(6)),
+            ),
+            (
+                Placed::Linked,
+                Meanwhile::Nothing,
+                bar(101) + hours(1),
+                Some(bar(101)),
+            ),
+            (Placed::Linked, Meanwhile::Moved, bar(20) + hours(18), None),
+            (Placed::Linked, Meanwhile::Locked, bar(20) + hours(18), None),
+        ] {
+            let ctx = Context::default();
+            let source = Arc::new(Source::default());
+            let mut chart = chart(&[95.0], &[105.0]);
+            chart.set_post_source(Some(source.clone()));
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let content = PostContent::new("Ada", published, "Rates hold");
+            match placed {
+                Placed::Typed => {
+                    chart
+                        .drawings_mut()
+                        .set_active_tool(Some(DrawingToolType::Tweet));
+                }
+                Placed::Linked => chart
+                    .drawings_mut()
+                    .start_post_insertion(DrawingToolType::Idea, PostLink::new(link)),
+                Placed::Resolved => chart.drawings_mut().start_post_insertion(
+                    DrawingToolType::Tweet,
+                    PostLink::resolved(link, content.clone()),
+                ),
+            }
+            let rect = chart.get_rendered_price_rect();
+            let pos = rect.min + rect.size() * egui::vec2(0.2, 0.3);
+            frame(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)]);
+            frame(&ctx, &mut chart, 0.2, vec![button(pos, true)]);
+            frame(&ctx, &mut chart, 0.3, vec![button(pos, false)]);
+            let id = chart.drawings.drawings[0].id;
+            let price = chart.drawings.drawings[0].chart_points[0].price;
+            if placed == Placed::Typed {
+                frame(&ctx, &mut chart, 0.4, vec![Event::Text(link.into())]);
+                frame(
+                    &ctx,
+                    &mut chart,
+                    0.5,
+                    vec![key(Key::Enter, Modifiers::COMMAND)],
+                );
+            }
+            let before = chart.drawing_points(id).unwrap();
+            match meanwhile {
+                Meanwhile::Nothing => {}
+                Meanwhile::Moved => chart.set_drawing_points(id, &[(bar(30), 100.0)]).unwrap(),
+                Meanwhile::Locked => chart
+                    .drawings_mut()
+                    .edit_drawing(id, |drawing| drawing.locked = true)
+                    .unwrap(),
+            }
+            let moved_or_locked = chart.drawing_points(id).unwrap();
+            frame(&ctx, &mut chart, 0.6, vec![]);
+            for (_, reply) in std::mem::take(&mut *source.0.lock().unwrap()) {
+                reply.send(Ok(content.clone()));
+            }
+            frame(&ctx, &mut chart, 0.7, vec![]);
+            frame(&ctx, &mut chart, 0.8, vec![]);
+            let drawing = &chart.drawings.drawings[0];
+            assert_eq!(
+                drawing.post.as_ref().and_then(|post| post.content.as_ref()),
+                Some(&content)
+            );
+            let anchor = chart.drawing_points(id).unwrap();
+            match expected {
+                Some(time) => assert_eq!(anchor, [(time, price)], "{published}"),
+                None => assert_eq!(anchor, moved_or_locked, "{published}"),
+            }
+            if meanwhile != Meanwhile::Nothing {
+                continue;
+            }
+            // Undoing the step that placed or linked the card takes the move with it.
+            assert!(chart.undo());
+            if placed == Placed::Typed {
+                assert_eq!(chart.drawings.drawings[0].post, None);
+                assert_eq!(chart.drawing_points(id).unwrap(), before);
+            } else {
+                assert!(chart.drawings.drawings.is_empty());
+            }
+            assert!(chart.redo());
+            assert_eq!(chart.drawing_points(id).unwrap(), anchor);
+        }
+    }
+
+    /// On a chart of price-based elements a card stands on the element whose period holds its
+    /// publication time, the one completed next, as signals and restored drawings do.
+    #[test]
+    fn a_card_on_price_based_elements_stands_on_the_element_holding_its_time() {
+        let minute = |i: i64| chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(i);
+        let bars = (0..10)
+            .map(|i| Bar::from_value(minute(i), 100.0 + 10.0 * i as f64))
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.set_chart_type(ChartType::Renko);
+        chart.set_chart_type_params(ChartTypeParams {
+            renko_brick_size: 10.0,
+            ..Default::default()
+        });
+        let ctx = Context::default();
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let published = minute(2) + chrono::TimeDelta::seconds(30);
+        let content = PostContent::new("Ada", published, "Rates hold");
+        chart.drawings_mut().start_post_insertion(
+            DrawingToolType::Tweet,
+            PostLink::resolved("https://example.invalid/p/1", content),
+        );
+        let rect = chart.get_rendered_price_rect();
+        let pos = rect.min + rect.size() * egui::vec2(0.2, 0.3);
+        frame(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)]);
+        frame(&ctx, &mut chart, 0.2, vec![button(pos, true)]);
+        frame(&ctx, &mut chart, 0.3, vec![button(pos, false)]);
+        let id = chart.drawings.drawings[0].id;
+        // One brick completes each minute; the brick completed at minute 3 holds 00:02:30.
+        assert_eq!(chart.drawing_points(id).unwrap()[0].0, minute(3));
     }
 
     fn button(pos: Pos2, pressed: bool) -> Event {
@@ -375,14 +651,16 @@ mod tests {
         let ctx = Context::default();
         let mut chart = chart(&[95.0], &[105.0]);
         frame(&ctx, &mut chart, 0.0, vec![]);
+        let rect = chart.get_rendered_price_rect();
+        let pos = rect.min + rect.size() * egui::vec2(0.2, 0.3);
         let mut content = content();
         content.title = "Breakout".into();
+        // Published at the clicked time, so the card stays in view where it is placed.
+        content.time = chart.x_to_time(pos.x).unwrap();
         let post = PostLink::resolved("https://example.invalid/a", content);
         chart
             .drawings_mut()
             .start_post_insertion(DrawingToolType::Idea, post.clone());
-        let rect = chart.get_rendered_price_rect();
-        let pos = rect.min + rect.size() * egui::vec2(0.2, 0.3);
         frame(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)]);
         frame(&ctx, &mut chart, 0.2, vec![button(pos, true)]);
         let painted = shapes(&ctx, &mut chart, 0.3, vec![button(pos, false)]);

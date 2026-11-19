@@ -1243,10 +1243,12 @@ impl Chart {
             .collect::<Vec<_>>();
         // The newest close of a price-based chart can lie beyond its newest element. While that
         // element is in view, the price its last price line shows is fitted with it, so that the
-        // line and its label are drawn. The newest element in view is among the fitted bars.
+        // line and its label are drawn. The newest element in view is among the fitted bars, as
+        // is the close of that element, which the line shows instead when the type labels it.
         let last_price = (!time_based
             && self.main_series_visible
             && self.main_series_style.price_line_source == crate::model::PriceLineSource::LastBar
+            && !self.chart_type_params.labels_element_price(self.chart_type)
             && start_idx < end_idx
             && end_idx == self.state.shown().len())
         .then(|| crate::model::last_with_value(&self.state.data().bars))
@@ -1753,6 +1755,21 @@ impl Chart {
         {
             bar_clock = bar_clock.with_timezone(zone.clone());
         }
+        let range_phantoms = if self.chart_type == ChartType::Range
+            && self.chart_type_params.styles.range.phantom_bars
+            && self.state.shows_elements()
+        {
+            rendering::candles::price_based::range_phantoms(
+                &self.execution_ranges,
+                &self.state.data().bars,
+                self.state.revision(),
+                &self.chart_type_params,
+                start_idx,
+                visible_data.len(),
+            )
+        } else {
+            Vec::new()
+        };
         let render_ctx = rendering::CandleDataContext {
             price_ctx: &clipped_price_ctx,
             volume_ctx: &clipped_volume_ctx,
@@ -1763,6 +1780,7 @@ impl Chart {
             // computed over the complete series, not just the visible slice.
             full_data: &self.state.data().bars,
             shows_elements: self.state.shows_elements(),
+            range_phantoms: &range_phantoms,
             revision: self.state.revision(),
             heikin_ashi: &self.heikin_ashi,
             start_idx,
@@ -1887,8 +1905,13 @@ impl Chart {
 
         let style = &self.main_series_style;
         // Last price line & label, from the newest bar even when it is scrolled out of view, or
-        // from the newest bar in view
+        // from the newest bar in view. A price-based chart can label its newest element instead.
         let (last_bars, last_from) = match style.price_line_source {
+            crate::model::PriceLineSource::LastBar
+                if self.chart_type_params.labels_element_price(self.chart_type) =>
+            {
+                (self.state.shown(), 0)
+            }
             crate::model::PriceLineSource::LastBar => (self.state.data().bars.as_slice(), 0),
             crate::model::PriceLineSource::LastVisible => {
                 let (from, to) = self.state.visible_range();
@@ -2233,11 +2256,16 @@ impl Chart {
             if study.is_volume() && !self.chart_type.supports_volume() {
                 return;
             }
-            // TPO studies draw the chart type's profiles beside the bars.
+            // TPO studies draw the chart type's profiles beside the bars, in the hours they keep.
             if let Some(config) = study
                 .tpo()
                 .filter(|_| !self.chart_type.is_time_independent())
             {
+                let (clock, session) = self.profile_hours(&config.session);
+                let config = crate::model::TPOConfig {
+                    session: session.clone(),
+                    ..config.clone()
+                };
                 rendering::candles::tpo::render_live_tpo(
                     &clipped_painter,
                     price_rect,
@@ -2245,9 +2273,9 @@ impl Chart {
                     start_idx..start_idx + visible_data.len(),
                     self.state.revision(),
                     &price_map,
-                    config,
+                    &config,
                     render_ctx.tick_size,
-                    &bar_clock,
+                    &clock,
                     idx_to_coord,
                     chart_rect.min.x,
                     colors.bullish,

@@ -1085,7 +1085,9 @@ impl DrawingManager {
     /// Prepares a post or idea card showing `post`, placed by the next click on the chart, as
     /// [`Self::start_icon_insertion`] does for a picked icon. The tool's saved defaults apply,
     /// and the inline editor does not open, since the card has its content. Does nothing for
-    /// other tools or a disabled one.
+    /// other tools or a disabled one. On a chart, the card stands on the bar of the time its
+    /// content was published, at the clicked price, as
+    /// [`Chart::set_post_source`](crate::widget::Chart::set_post_source) describes.
     pub fn start_post_insertion(&mut self, tool: DrawingToolType, post: PostLink) {
         if !matches!(tool, DrawingToolType::Tweet | DrawingToolType::Idea)
             || !self.registry.availability(tool).enabled
