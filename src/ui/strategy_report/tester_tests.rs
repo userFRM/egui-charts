@@ -280,34 +280,63 @@ fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
 }
 
 #[test]
-fn tick_slippage_starts_at_the_price_increment() {
-    let mut tester = StrategyTester::default();
-    tester.select_strategy("Consecutive Up/Down").unwrap();
-    tester.tab = Tab::Properties;
-    let mut h = Harness::builder()
-        .with_size(Vec2::new(1440.0, 900.0))
-        .build_ui_state(
-            |ui, tester: &mut StrategyTester| {
-                tester.show(ui, "TEST", Timeframe::Min1, &bars());
-            },
-            tester,
+fn tick_slippage_follows_the_price_increment_until_a_size_is_typed() {
+    // Three rising closes buy at market at bar 4's open of 100, two ticks higher.
+    for (order, entry) in [
+        ("increment first", 100.5),
+        ("increment after", 100.5),
+        ("host increment after", 100.5),
+        ("typed size", 101.0),
+    ] {
+        let mut tester = StrategyTester::default();
+        tester.select_strategy("Consecutive Up/Down").unwrap();
+        tester.tab = Tab::Properties;
+        let mut h = Harness::builder()
+            .with_size(Vec2::new(1440.0, 900.0))
+            .build_ui_state(
+                |ui, tester: &mut StrategyTester| {
+                    tester.show(ui, "TEST", Timeframe::Min1, &bars());
+                },
+                tester,
+            );
+        h.run();
+        let increment = |h: &mut Harness<'_, StrategyTester>| {
+            h.get_by_role_and_label(Role::SpinButton, "Price increment")
+                .set_value_accesskit(0.25);
+            h.run();
+        };
+        if order == "increment first" {
+            increment(&mut h);
+        }
+        h.get_by_role_and_label(Role::ComboBox, "Slippage model")
+            .click();
+        h.run();
+        h.get_by_label("Ticks").click();
+        h.run();
+        h.get_by_role_and_label(Role::SpinButton, "Slippage ticks")
+            .set_value_accesskit(2.0);
+        h.run();
+        if order == "typed size" {
+            h.get_by_role_and_label(Role::SpinButton, "Tick size")
+                .set_value_accesskit(0.5);
+            h.run();
+        }
+        if order == "host increment after" {
+            let mut settings = h.state().settings().clone();
+            settings.price_increment = 0.25;
+            h.state_mut().set_settings(settings).unwrap();
+            h.run();
+        } else if order != "increment first" {
+            increment(&mut h);
+        }
+        h.get_by_role_and_label(Role::Button, "Run").click();
+        h.run();
+        assert_eq!(
+            h.state().report().unwrap().trades[0].entry_price,
+            entry,
+            "{order}"
         );
-    h.run();
-    h.get_by_role_and_label(Role::SpinButton, "Price increment")
-        .set_value_accesskit(0.25);
-    h.run();
-    h.get_by_role_and_label(Role::ComboBox, "Slippage model")
-        .click();
-    h.run();
-    h.get_by_label("Ticks").click();
-    h.run();
-    h.get_by_role_and_label(Role::SpinButton, "Slippage ticks")
-        .set_value_accesskit(2.0);
-    h.run();
-    h.get_by_role_and_label(Role::Button, "Run").click();
-    h.run();
-    // Three rising closes buy at market at bar 4's open of 100, two ticks of 0.25 higher.
-    assert_eq!(h.state().report().unwrap().trades[0].entry_price, 100.5);
+    }
 }
 
 #[test]
