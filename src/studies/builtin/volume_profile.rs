@@ -1086,7 +1086,8 @@ impl ProfileStudy {
             let mut layout = None;
             let mut span = crate::data::price_span(&self.data[range.start..range.start.max(keep)]);
             for i in range.start.max(keep)..range.end {
-                if let Some((low, high)) = crate::data::price_span(&self.data[i..=i]) {
+                let bar_span = crate::data::price_span(&self.data[i..=i]);
+                if let Some((low, high)) = bar_span {
                     span = Some(span.map_or((low, high), |(lo, hi)| (lo.min(low), hi.max(high))));
                 }
                 let config = self.range_config(span, base, false);
@@ -1128,7 +1129,8 @@ impl ProfileStudy {
                             VolumeProfile::from_bars(&self.data[range.start..=i], config)
                         }
                     });
-                if let Some(profile) = &profile
+                if bar_span.is_some()
+                    && let Some(profile) = &profile
                     && let Some((poc, (low, high))) = profile.poc_and_value_area(self.value_area)
                 {
                     for (line, row) in [poc as f64 + 0.5, high as f64 + 1.0, low as f64]
