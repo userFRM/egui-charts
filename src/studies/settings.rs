@@ -862,6 +862,11 @@ impl ConfiguredStudy {
                     .any(|input| matches!(input.kind, super::InputKind::Symbol)))
     }
 
+    /// Whether the offset can move the study's plots, bands and fills together.
+    fn offers_offset(&self) -> bool {
+        self.study.source().is_some() || self.study.draws_only_plots()
+    }
+
     /// The bars the study is calculated on while it runs on another symbol or interval.
     fn calculation_request(&self) -> super::StudyDataRequest {
         super::StudyDataRequest {
@@ -1024,7 +1029,7 @@ impl Indicator for ConfiguredStudy {
             );
         }
         use super::{InputKind, StudyInput};
-        if self.study.source().is_some() {
+        if self.offers_offset() {
             inputs.push(
                 StudyInput::new(
                     "plot_offset",
@@ -1074,7 +1079,7 @@ impl Indicator for ConfiguredStudy {
         inputs
     }
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
-        if id == "plot_offset" && self.study.source().is_some() {
+        if id == "plot_offset" && self.offers_offset() {
             let InputValue::Integer(offset) = value else {
                 return Err(crate::studies::StudyError::invalid_input(id));
             };
@@ -1158,6 +1163,17 @@ impl Indicator for ConfiguredStudy {
             self.study.calculate(&[]);
             Ok(())
         } else {
+            // An offset moves plots only; inputs adding other outputs require Offset 0.
+            if self.offset != 0 && self.study.source().is_none() {
+                let mut probe = self.study.clone_box();
+                probe.set_input(id, value.clone())?;
+                if !probe.draws_only_plots() {
+                    return Err(super::StudyError::InvalidInput {
+                        id: id.into(),
+                        reason: "needs Offset 0, as the study would draw outputs the offset does not move".into(),
+                    });
+                }
+            }
             let format = self.study.value_format();
             self.study.set_input(id, value)?;
             if self.study.value_format() != format {
@@ -1533,6 +1549,9 @@ impl Indicator for ConfiguredStudy {
             .plot_offset(line)
             .saturating_add(self.offset as isize)
     }
+    fn draws_only_plots(&self) -> bool {
+        self.study.draws_only_plots()
+    }
     fn plot_value(&self, line: usize, bar: usize) -> Option<f64> {
         let kept = self.kept.as_ref().map(|kept| &kept.values);
         if let Some(values) = kept.or(self.aligned.as_ref()) {
@@ -1725,7 +1744,8 @@ impl Indicator for ConfiguredStudy {
         }
         let mut edited = self.clone();
         let mut inputs: Vec<_> = inputs.iter().collect();
-        // Close-wait applies before clearing its interval; both precede the study's own inputs.
+        // Close-wait precedes clearing its interval. Clear an available Offset before own
+        // inputs; otherwise apply it after them, once they decide whether it is offered.
         if (edited.study.source().is_none() && edited.runs_on_other_bars())
             || edited.calculation_timeframe.is_some()
             || inputs.iter().any(|(id, value)| {
@@ -1733,9 +1753,12 @@ impl Indicator for ConfiguredStudy {
                     && matches!(value, InputValue::Source(super::StudySource::Study { .. }))
             })
         {
-            inputs.sort_by_key(|(id, _)| match id.as_str() {
-                "wait_for_close" => 0,
-                "calculation_symbol" | "calculation_timeframe" => 1,
+            let offers_offset = edited.offers_offset();
+            inputs.sort_by_key(|(id, value)| match (id.as_str(), value) {
+                ("wait_for_close", _) => 0,
+                ("calculation_symbol" | "calculation_timeframe", _) => 1,
+                ("plot_offset", InputValue::Integer(0)) if offers_offset => 1,
+                ("plot_offset", _) => 3,
                 _ => 2,
             });
         }
@@ -2634,14 +2657,141 @@ mod tests {
         }
     }
 
+    /// VWAP and all six band values move together, including the filled first band pair.
+    #[test]
+    fn an_offset_moves_vwap_auto_anchored_with_its_bands() {
+        use super::super::{AutoAnchor, FillBoundary, VwapAutoAnchored};
+        let bars: Vec<_> = [(10.0, 100.0), (11.0, 10.0), (12.0, 10.0)]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (close, volume))| {
+                Bar::new(
+                    chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(i as i64),
+                    close,
+                    close + 1.0,
+                    close - 1.0,
+                    close,
+                    volume,
+                )
+            })
+            .collect();
+        let mut study = ConfiguredStudy::new(Box::new(
+            VwapAutoAnchored::new()
+                .with_anchor(AutoAnchor::HighestVolume)
+                .with_length(3),
+        ));
+        study
+            .set_input("plot_offset", InputValue::Integer(2))
+            .unwrap();
+        study.calculate(&bars);
+        assert_eq!(study.line_count(), 7);
+        for line in 0..7 {
+            assert_eq!(study.plot_offset(line), 2);
+            assert_eq!(study.plot_value(line, 0), None);
+            assert_eq!(study.plot_value(line, 1), None);
+            for bar in 0..3 {
+                assert_eq!(
+                    study.plot_value(line, bar + 2),
+                    study.study.values().value(line, bar)
+                );
+            }
+        }
+        // Sum(v*p)=1230, sum(v)=120; E(p^2)=12650/120, so variance=17/48.
+        assert_eq!(study.plot_value(0, 2), Some(10.0));
+        assert_eq!(study.plot_value(0, 4), Some(10.25));
+        assert_eq!(study.plot_value(1, 2), Some(10.0));
+        for (line, sign) in [(1, 1.0), (2, -1.0)] {
+            let expected = 10.25 + sign * (17.0f64 / 48.0).sqrt();
+            assert!((study.plot_value(line, 4).unwrap() - expected).abs() < 1e-12);
+        }
+        let fills = study.fills();
+        assert_eq!(fills.len(), 1);
+        assert!(matches!(fills[0].first, FillBoundary::Plot(1)));
+        assert!(matches!(fills[0].second, FillBoundary::Plot(2)));
+    }
+
+    /// Crossing markers remain on their bars: Offset and a crossing pair cannot coexist.
+    /// One Apply can clear either of them before enabling the other, in either input order.
+    #[test]
+    fn an_offset_study_draws_no_markers_it_would_not_move() {
+        use super::super::{IndicatorFactory, StudyError, test_support::make_bar};
+        let factory = IndicatorFactory::new();
+        let mut study = ConfiguredStudy::new(factory.create("Multi MA").unwrap());
+        study
+            .set_input("plot_offset", InputValue::Integer(2))
+            .unwrap();
+        study
+            .set_input("cross_first", InputValue::Choice(1))
+            .unwrap();
+        assert!(
+            matches!(study.set_input("cross_second", InputValue::Choice(2)),
+            Err(StudyError::InvalidInput { id, .. }) if id == "cross_second")
+        );
+        assert_eq!(
+            study
+                .inputs()
+                .into_iter()
+                .find(|input| input.id == "cross_second")
+                .unwrap()
+                .value,
+            InputValue::Choice(0)
+        );
+        let bars: Vec<_> = (0..60)
+            .chain((1..=60).rev())
+            .map(|close| make_bar(f64::from(close)))
+            .collect();
+        for reverse in [false, true] {
+            let mut edited = study.clone();
+            let mut inputs = vec![
+                ("cross_first".into(), InputValue::Choice(1)),
+                ("cross_second".into(), InputValue::Choice(2)),
+                ("plot_offset".into(), InputValue::Integer(0)),
+            ];
+            if reverse {
+                inputs.reverse();
+            }
+            edited.apply_settings(&inputs, edited.settings()).unwrap();
+            assert!(
+                !edited
+                    .inputs()
+                    .iter()
+                    .any(|input| input.id == "plot_offset")
+            );
+            edited.calculate(&bars);
+            assert!(!edited.markers().is_empty());
+            assert!(
+                edited
+                    .set_input("plot_offset", InputValue::Integer(2))
+                    .is_err()
+            );
+
+            let mut edited = ConfiguredStudy::new(factory.create("MA Cross").unwrap());
+            let mut inputs = vec![
+                ("plot_offset".into(), InputValue::Integer(2)),
+                ("cross_first".into(), InputValue::Choice(0)),
+            ];
+            if reverse {
+                inputs.reverse();
+            }
+            edited.apply_settings(&inputs, edited.settings()).unwrap();
+            assert_eq!(edited.plot_offset(0), 2);
+            assert!(
+                edited
+                    .inputs()
+                    .iter()
+                    .any(|input| input.id == "plot_offset")
+            );
+        }
+    }
+
     /// The listed controls and accepted edits agree for bar-only and multi-output studies.
     #[test]
     fn sourceless_studies_offer_symbol_and_offset_as_they_draw() {
         for (name, symbol, offset) in [
-            ("PSAR", true, false),
+            ("PSAR", true, true),
             ("MA Cross", true, false),
-            ("VWAP Auto Anchored", true, false),
-            ("Multi MA", true, false),
+            ("VWAP Auto Anchored", true, true),
+            ("Multi MA", true, true),
             ("ZigZag", true, false),
             ("Trading Sessions", true, false),
             ("Donchian", true, false),
@@ -2688,6 +2838,7 @@ mod tests {
             assert_eq!(
                 &ids[own..],
                 [
+                    "plot_offset",
                     "calculation_symbol",
                     "calculation_timeframe",
                     "wait_for_close"

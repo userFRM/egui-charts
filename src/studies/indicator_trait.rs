@@ -348,6 +348,15 @@ pub trait Indicator: Send {
         0
     }
 
+    /// Whether everything drawn under the current inputs is plots, their shapes, bands and
+    /// fills, all of which an offset moves bar for bar. A study without a
+    /// [`source`](Self::source) offers Offset while this holds. Return true only when it reads
+    /// the chart's bars alone and draws no markers, labels, zones, projections, tables,
+    /// candles, profiles or drawings. False by default.
+    fn draws_only_plots(&self) -> bool {
+        false
+    }
+
     /// Optional per-bar colour, overriding the plot colour at a source bar.
     fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
         let _ = (line, bar);

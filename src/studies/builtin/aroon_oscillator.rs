@@ -80,6 +80,10 @@ impl Indicator for AroonOscillator {
     fn line_count(&self) -> usize {
         1
     }
+
+    fn draws_only_plots(&self) -> bool {
+        true
+    }
     fn set_color(&mut self, line: usize, color: Color32) {
         if line == 0 {
             self.colors.fill(color);
