@@ -16,8 +16,10 @@ impl Trading {
     /// Applies the broker's pushes and answers, and reports refused orders and fills in `toasts`.
     /// A lagged stream is replaced by a new one, on which the broker restates the account: the
     /// order ticket, a previewed order and the quantity calculator stay as the user left them,
-    /// while a change to an order or a position that waits for confirmation is dropped. Call it
-    /// every frame, even while the chart is hidden.
+    /// a change to an order or a position that waits for confirmation is dropped, and a
+    /// confirmed position order that still waits for its trading rules is reported as refused,
+    /// as while the broker is not live, and never sent. Call it every frame, even while the
+    /// chart is hidden.
     pub fn poll(&mut self, ctx: &egui::Context, toasts: &mut Toasts) {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
@@ -158,8 +160,12 @@ impl Trading {
         self.account_panel.record(&event);
         match event {
             AccountEvent::Account(account) => {
+                let waiting = self.placing.len();
                 self.placing
                     .retain(|(_, _, order)| account.capabilities.accepts(&order.order_type));
+                for _ in self.placing.len()..waiting {
+                    self.refuse("the account no longer accepts this order type");
+                }
                 if !account.capabilities.preview {
                     self.preview = None;
                 }
@@ -223,11 +229,15 @@ impl Trading {
                 }
             }
             AccountEvent::Position(position) => {
+                let waiting = self.placing.len();
                 self.placing.retain(|(_, old, _)| {
                     old.symbol != position.symbol
                         || (old.quantity == position.quantity
                             && old.average_price == position.average_price)
                 });
+                for _ in self.placing.len()..waiting {
+                    self.refuse("the position changed before the order was sent");
+                }
                 if matches!(&self.pending,
                     Some(TradingLineAction::Close(old) | TradingLineAction::Reverse(old) | TradingLineAction::Exit(old, _))
                     if old.symbol == position.symbol
@@ -329,7 +339,7 @@ impl Trading {
                     // arrive, after it is back: refuse them now instead.
                     (true, false) => {
                         for _ in std::mem::take(&mut self.placing) {
-                            self.refuse();
+                            self.refuse(super::NOT_LIVE);
                         }
                     }
                     // Ask once more for what the broker may not have answered meanwhile.
@@ -1006,6 +1016,49 @@ mod tests {
                 Some("Bell".to_owned())
             )
         );
+    }
+
+    /// A close the user confirmed waits for the trading rules of its symbol; when the stream lags
+    /// before their answer is read, the close is reported as refused, as when the broker stops
+    /// being live, and never sent, so the position stays open. A regression drops the close
+    /// without a word, or sends it on a stream that restated the account.
+    #[test]
+    fn a_lagged_stream_refuses_a_close_waiting_for_rules() {
+        use crate::data::inbox::Inbox;
+        use crate::model::TimeInForce;
+        use crate::services::{Broker, PaperAccount};
+        let ctx = egui::Context::default();
+        let paper = Arc::new(PaperAccount::new("USD", 100_000.0));
+        paper.set_price("SYM", 100.0);
+        let mut buy = OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Market);
+        buy.time_in_force = TimeInForce::GoodTillCancelled;
+        paper.place(buy, Arc::new(Inbox::default()).reply(0));
+        let mut trading = Trading::default();
+        trading.set_service(paper.clone());
+        trading.poll(&ctx, &mut Toasts::new());
+        let position = trading.positions[0].clone();
+        trading.execute(Some(TradingLineAction::Close(position)));
+        assert_eq!(
+            trading.placing.len(),
+            1,
+            "the close waits for the rules of SYM"
+        );
+        // Revaluing the position pushes it and the account per price: 10,004 pushes overflow
+        // the stream before the next frame reads the rules.
+        for price in [101.0, 100.0].repeat(2_501) {
+            paper.set_price("SYM", price);
+        }
+        let mut toasts = Toasts::new();
+        trading.poll(&ctx, &mut toasts);
+        trading.poll(&ctx, &mut toasts);
+        let messages: Vec<_> = (toasts.toasts().iter())
+            .map(|toast| toast.message.as_str())
+            .collect();
+        assert_eq!(messages, ["Order refused: the broker is not connected"]);
+        let held: Vec<_> = (trading.positions.iter())
+            .map(|position| (position.symbol.as_str(), position.quantity))
+            .collect();
+        assert_eq!((held, trading.orders.len()), (vec![("SYM", 1.0)], 0));
     }
 
     /// Each fill's triangles sit under its own bar, also among fills on the bars beside it, with

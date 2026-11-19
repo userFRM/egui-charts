@@ -211,7 +211,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] `Trading` connects order tickets, account tables and chart overlays to a supplied `Broker`.
 - [x] Market, limit, stop and stop-limit tickets, units/value sizing, risk-percent sizing on every order type, time in force, presets and attached stop-loss/take-profit levels.
 - [x] Validated one-click orders, chart context-menu entry and broker/account selection components.
-- [x] Order and position lines show levels and profit/loss; confirmed actions modify/cancel orders, close/reverse positions and edit brackets.
+- [x] Order and position lines show levels and profit/loss; confirmed actions modify/cancel orders, close/reverse positions and edit brackets. A confirmed position order waiting for its symbol's trading rules is reported as refused if the stream is replaced, the broker disconnects, the position changes or the account withdraws its order type; a late rules answer never sends it.
 - [x] A depth ladder supports order entry, drag modification and right-click cancellation through the broker interface.
 - [x] Account summary, positions, orders, history, executions, balance and journal tables, with CSV export.
 - [x] Execution markers, rejection/fill notifications and execution sound intents.
