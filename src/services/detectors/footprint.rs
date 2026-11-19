@@ -1,0 +1,243 @@
+//! Footprint conditions on the bars of the latest subscribed time interval.
+
+use chrono::{DateTime, Utc};
+
+use super::DetectionKind;
+use crate::data::FootprintBar;
+use crate::model::{ChartTypeParams, Direction, Signal, SignalId, SignalShape};
+use crate::services::SignalEvent;
+
+/// Footprint conditions that mark a bar of the latest subscribed time interval, each at most
+/// once per bar, and alert as [`Detector::alert`](super::Detector::alert) says.
+///
+/// Imbalances are read when a bar closes, on rows of one instrument tick, with this rule's
+/// ratio, comparison, minimum volume and stack, as
+/// [`FootprintBar::imbalance`](crate::data::FootprintBar::imbalance) reads them and the footprint's
+/// stacked imbalance zones join them; [`follow_chart`](Self::follow_chart) copies these from a
+/// chart. Volume and delta levels are read on the forming bar after each sided execution: a level
+/// fires on the execution that takes the value past it, by more than the rounding of a sum of
+/// sizes, from the bar's previous value, which starts at zero. Unknown-side executions never
+/// count. Trade-based intervals and the first retained bar have no conditions, and a bar that
+/// opened before the bar of the first live event since tracking or
+/// [`reset`](super::OrderFlowDetectors::reset), such as loaded history, is marked without an
+/// alert.
+///
+/// ```
+/// use egui_charts::model::ChartTypeParams;
+/// use egui_charts::services::OrderFlowDetectors;
+///
+/// let detectors = OrderFlowDetectors::new();
+/// let mut settings = detectors.settings();
+/// settings.footprint.enabled = true;
+/// settings.footprint.alert = true;
+/// settings.footprint.rule.stacked_buy_imbalance = true;
+/// settings.footprint.rule.sell_volume_above = Some(100.0);
+/// settings.footprint.rule.follow_chart(&ChartTypeParams::default());
+/// detectors.set_settings(settings);
+/// ```
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct FootprintRule {
+    /// A closed bar with a row where buying dominates.
+    pub buy_imbalance: bool,
+    /// A closed bar with a row where selling dominates.
+    pub sell_imbalance: bool,
+    /// A closed bar with at least [`stack`](Self::stack) adjacent rows where buying dominates.
+    pub stacked_buy_imbalance: bool,
+    /// A closed bar with at least [`stack`](Self::stack) adjacent rows where selling dominates.
+    pub stacked_sell_imbalance: bool,
+    /// The forming bar's buy volume rises above this finite, non-negative level.
+    pub buy_volume_above: Option<f64>,
+    /// The forming bar's sell volume rises above this finite, non-negative level.
+    pub sell_volume_above: Option<f64>,
+    /// The forming bar's delta rises above this finite level.
+    pub delta_above: Option<f64>,
+    /// The forming bar's delta falls below this finite level.
+    pub delta_below: Option<f64>,
+    /// Dominance multiple of an imbalance, 3 by default. Below 1 or not a number, none.
+    pub imbalance_ratio: f64,
+    /// Compare a side with the opposite side one row away rather than at the same price, by
+    /// default.
+    pub diagonal: bool,
+    /// Inclusive minimum volume of the dominant side, 0 by default. Negative or not finite, none.
+    pub imbalance_min_volume: f64,
+    /// Adjacent imbalances that make a stack, at least one; 3 by default.
+    pub stack: usize,
+}
+
+impl Default for FootprintRule {
+    fn default() -> Self {
+        Self {
+            buy_imbalance: false,
+            sell_imbalance: false,
+            stacked_buy_imbalance: false,
+            stacked_sell_imbalance: false,
+            buy_volume_above: None,
+            sell_volume_above: None,
+            delta_above: None,
+            delta_below: None,
+            imbalance_ratio: 3.0,
+            diagonal: true,
+            imbalance_min_volume: 0.0,
+            stack: 3,
+        }
+    }
+}
+
+impl FootprintRule {
+    /// Takes the imbalance ratio, comparison, minimum volume and stack of the footprint under
+    /// `params`, such as a chart's `Chart::chart_type_params`, so that alerts read the
+    /// imbalances that chart shows. Its row grouping does not apply: rows stay one tick.
+    pub fn follow_chart(&mut self, params: &ChartTypeParams) {
+        self.imbalance_ratio = params.footprint_imbalance_ratio;
+        self.diagonal = params.footprint_diagonal;
+        self.imbalance_min_volume = params.footprint_imbalance_min_volume;
+        self.stack = params.footprint_stack;
+    }
+}
+
+/// Pushes the imbalance conditions of `rule` that the closed `bar`, opened at `at` and closed
+/// at `close`, meets.
+pub(super) fn closed(
+    bar: &FootprintBar,
+    at: DateTime<Utc>,
+    close: f64,
+    rule: &FootprintRule,
+    out: &mut Vec<SignalEvent>,
+) {
+    // Per side, sell then buy: imbalanced rows, the run of adjacent ones and the longest run.
+    let (mut rows, mut run, mut longest) = ([0_usize; 2], [0_usize; 2], [0_usize; 2]);
+    let mut previous: Option<i64> = None;
+    for &level in bar.levels.keys() {
+        let (sell, buy) = bar.imbalance(
+            level,
+            rule.imbalance_ratio,
+            rule.diagonal,
+            rule.imbalance_min_volume,
+        );
+        let adjacent = previous.and_then(|key| key.checked_add(1)) == Some(level);
+        for (side, active) in [sell, buy].into_iter().enumerate() {
+            run[side] = match (active, adjacent) {
+                (false, _) => 0,
+                (true, true) => run[side] + 1,
+                (true, false) => 1,
+            };
+            rows[side] += usize::from(active);
+            longest[side] = longest[side].max(run[side]);
+        }
+        previous = Some(level);
+    }
+    let stack = rule.stack.max(1);
+    for (met, key, label, up, count, preposition) in [
+        (
+            rule.buy_imbalance && rows[1] > 0,
+            "buy-imbalance",
+            "Buy imbalance",
+            true,
+            rows[1],
+            "on",
+        ),
+        (
+            rule.sell_imbalance && rows[0] > 0,
+            "sell-imbalance",
+            "Sell imbalance",
+            false,
+            rows[0],
+            "on",
+        ),
+        (
+            rule.stacked_buy_imbalance && longest[1] >= stack,
+            "stacked-buy",
+            "Stacked buy imbalance",
+            true,
+            longest[1],
+            "of",
+        ),
+        (
+            rule.stacked_sell_imbalance && longest[0] >= stack,
+            "stacked-sell",
+            "Stacked sell imbalance",
+            false,
+            longest[0],
+            "of",
+        ),
+    ] {
+        if met {
+            let unit = if count == 1 { "row" } else { "rows" };
+            let tooltip = format!("{label} {preposition} {count} {unit}");
+            out.push(signal(key, at, close, up, label, tooltip));
+        }
+    }
+}
+
+/// Pushes the volume and delta levels of `rule` that one execution at `price` takes the forming
+/// bar opened at `at` past, from `before` to `after`, each its buy volume, sell volume and delta.
+pub(super) fn forming(
+    before: [f64; 3],
+    after: [f64; 3],
+    at: DateTime<Utc>,
+    price: f64,
+    rule: &FootprintRule,
+    out: &mut Vec<SignalEvent>,
+) {
+    for (level, index, above, key, label) in [
+        (
+            rule.buy_volume_above,
+            0,
+            true,
+            "buy-volume",
+            "Buy volume above",
+        ),
+        (
+            rule.sell_volume_above,
+            1,
+            true,
+            "sell-volume",
+            "Sell volume above",
+        ),
+        (rule.delta_above, 2, true, "delta-above", "Delta above"),
+        (rule.delta_below, 2, false, "delta-below", "Delta below"),
+    ] {
+        let Some(level) = level else { continue };
+        let past = |value: f64| {
+            if above {
+                exceeds(value, level)
+            } else {
+                exceeds(level, value)
+            }
+        };
+        if !past(before[index]) && past(after[index]) {
+            let name = ["Buy volume", "Sell volume", "Delta"][index];
+            let side = if above { "above" } else { "below" };
+            let tooltip = format!("{name} {} {side} {level}", after[index]);
+            out.push(signal(key, at, price, above && index != 1, label, tooltip));
+        }
+    }
+}
+
+/// Whether `value` exceeds `level` by more than the rounding of a sum of sizes.
+fn exceeds(value: f64, level: f64) -> bool {
+    value - level > 1e-9 * value.abs().max(level.abs())
+}
+
+fn signal(
+    key: &str,
+    at: DateTime<Utc>,
+    price: f64,
+    up: bool,
+    label: &str,
+    tooltip: String,
+) -> SignalEvent {
+    SignalEvent::Upsert(Signal {
+        id: SignalId(format!("footprint-{key}-{}", at.timestamp_millis())),
+        shape: SignalShape::Marker {
+            time: at,
+            price: Some(price),
+            direction: if up { Direction::Up } else { Direction::Down },
+        },
+        category: DetectionKind::FootprintCondition.category().into(),
+        label: Some(label.into()),
+        tooltip: Some(tooltip),
+    })
+}

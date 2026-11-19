@@ -633,6 +633,10 @@ impl DemoApp {
         top_toolbar.timeframe_selector.current = Timeframe::Min1;
         // A host's own call to action sits at the right end; the demo only reports it.
         top_toolbar.call_to_action = Some(("upgrade".into(), "Upgrade".into()));
+        top_toolbar.builtin_indicator_templates = StudyTemplateSet::builtin()
+            .into_iter()
+            .map(|(name, _)| (name.to_owned(), name.to_owned()))
+            .collect();
         let mut menus = ChartMenus::default();
         menus.host_entries.extend([
             HostMenuEntry::new("research", "Open in research")
@@ -1816,7 +1820,18 @@ impl eframe::App for DemoApp {
                 ctx.request_repaint_after(delay);
             }
         }
-        self.order_flow.set_service(self.live.detectors());
+        let detectors = self.live.detectors();
+        let mut settings = detectors.settings();
+        let before = settings.clone();
+        // Footprint alerts read the imbalances the active chart shows.
+        settings
+            .footprint
+            .rule
+            .follow_chart(self.chart.chart_type_params());
+        if settings != before {
+            detectors.set_settings(settings);
+        }
+        self.order_flow.set_service(detectors);
         self.notification_host
             .watch_detectors(self.live.detectors());
         let sounds = self.order_flow.poll(&ctx, &mut self.toasts);
@@ -2380,6 +2395,14 @@ impl DemoApp {
             }
             TopToolbarAction::ApplyIndicatorTemplate(id) => {
                 if let Some(template) = self.study_templates.templates.entries().get(&id).cloned() {
+                    self.load_study_template(&template);
+                }
+            }
+            TopToolbarAction::ApplyBuiltinIndicatorTemplate(id) => {
+                if let Some((_, template)) = StudyTemplateSet::builtin()
+                    .into_iter()
+                    .find(|(name, _)| *name == id)
+                {
                     self.load_study_template(&template);
                 }
             }
@@ -3977,11 +4000,14 @@ impl DemoApp {
                 self.object_tree
                     .apply_to_chart(&mut self.chart, &action, &[]);
             }
+            // The menu and the toolbar show the state of the drawing they opened on.
             DrawingContextMenuAction::Lock => {
-                let _ = dm.edit_drawing(id, |d| d.locked = !d.locked);
+                let locked = dm.drawings.iter().any(|d| d.id == id && d.locked);
+                dm.set_selected_locked(!locked);
             }
             DrawingContextMenuAction::Hide => {
-                let _ = dm.edit_drawing(id, |d| d.visible = !d.visible);
+                let visible = dm.drawings.iter().any(|d| d.id == id && d.visible);
+                dm.set_selected_visible(!visible);
             }
             DrawingContextMenuAction::BringToFront => dm.bring_to_front(id),
             DrawingContextMenuAction::SendToBack => dm.send_to_back(id),
@@ -6220,6 +6246,29 @@ mod tests {
     }
 
     #[test]
+    fn footprint_alerts_follow_the_active_chart() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let mut params = app.chart.chart_type_params().clone();
+        params.footprint_imbalance_ratio = 4.0;
+        params.footprint_diagonal = false;
+        params.footprint_imbalance_min_volume = 5.0;
+        params.footprint_stack = 2;
+        app.chart.set_chart_type_params(params);
+        settle(&mut app, &ctx);
+        let rule = app.live.detectors().settings().footprint.rule;
+        assert_eq!(
+            (
+                rule.imbalance_ratio,
+                rule.diagonal,
+                rule.imbalance_min_volume,
+                rule.stack
+            ),
+            (4.0, false, 5.0, 2)
+        );
+    }
+
+    #[test]
     fn opening_state_is_quiet_and_saved_features_restore() {
         use eframe::App;
         use egui_charts::services::{DetectionCounts, DetectionKind};
@@ -6453,6 +6502,45 @@ mod tests {
                 assert_eq!(chart.config().text_color, app.theme.chart.axis_text);
             }
         }
+    }
+
+    /// The template menu offers the library's built-in sets apart from the saved ones, and
+    /// choosing one replaces the chart's studies in a single undo step.
+    #[test]
+    fn built_in_study_sets_apply_from_the_template_menu_in_one_undo_step() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let builtin = StudyTemplateSet::builtin();
+        assert_eq!(
+            app.top_toolbar.builtin_indicator_templates,
+            builtin
+                .iter()
+                .map(|(name, _)| ((*name).to_owned(), (*name).to_owned()))
+                .collect::<Vec<_>>()
+        );
+        app.chart
+            .add_indicator(Box::new(egui_charts::studies::EMA::new(5)));
+        let names = |app: &DemoApp| {
+            app.chart
+                .indicators()
+                .map(|(_, study)| study.name().to_owned())
+                .collect::<Vec<_>>()
+        };
+        let before = names(&app);
+        let (name, set) = &builtin[3];
+        app.handle_top_toolbar(
+            &ctx,
+            TopToolbarAction::ApplyBuiltinIndicatorTemplate((*name).to_owned()),
+        );
+        assert_eq!(
+            names(&app),
+            set.studies
+                .iter()
+                .map(|study| study.name.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(app.chart.undo());
+        assert_eq!(names(&app), before);
     }
 
     #[test]
@@ -6835,6 +6923,53 @@ mod tests {
             app.chart.drawings().drawings[0].chart_points[0],
             ChartPoint::new(10.0, 100.0)
         );
+    }
+
+    /// Lock and Hide from the drawing menu and toolbar set every selected drawing to the opposite
+    /// of the menu drawing's state, mixed selections included, and one undo restores them all.
+    #[test]
+    fn drawing_menu_hides_and_locks_every_selected_drawing() {
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.chart.drawings_mut().drawings.clear();
+        // (id, locked, visible): 7 plain, 8 locked, 9 hidden.
+        for (id, locked, visible) in [(7, false, true), (8, true, true), (9, false, false)] {
+            let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+            let price = 100.0 + id as f64;
+            drawing.chart_points = vec![ChartPoint::new(10.0, price), ChartPoint::new(20.0, price)];
+            drawing.completed = true;
+            drawing.locked = locked;
+            drawing.visible = visible;
+            app.chart.drawings_mut().drawings.push(drawing);
+        }
+        let state = |app: &DemoApp| {
+            [7, 8, 9].map(|id| {
+                let drawings = &app.chart.drawings().drawings;
+                let drawing = drawings.iter().find(|d| d.id == id).unwrap();
+                (drawing.locked, drawing.visible)
+            })
+        };
+        let initial = [(false, true), (true, true), (false, false)];
+        for (action, expected) in [
+            (
+                DrawingContextMenuAction::Lock,
+                [(true, true), (true, true), (true, false)],
+            ),
+            (
+                DrawingContextMenuAction::Hide,
+                [(false, false), (true, false), (false, false)],
+            ),
+        ] {
+            // The menu opens on 7, which a right-click within the selection makes primary.
+            app.chart.drawings_mut().select_drawings([7, 8, 9]);
+            assert_eq!(app.chart.drawings().sel_drawing(), Some(7));
+            app.handle_drawing_context(&ctx, action.clone());
+            assert_eq!(state(&app), expected, "{action:?}");
+            assert!(app.chart.undo(), "{action:?}");
+            assert_eq!(state(&app), initial, "{action:?}");
+        }
     }
 
     #[test]
@@ -10530,16 +10665,22 @@ mod tests {
                 let child = app
                     .chart
                     .add_indicator(Box::new(egui_charts::studies::SMA::new(2)));
+                app.chart.remove_series(parent);
+                // Removing a source removes its readers, so name the removed parent afterwards,
+                // as a layout saved with a missing source does.
                 app.chart
-                    .set_indicator_source(
-                        child,
-                        egui_charts::studies::StudySource::Study {
-                            id: parent.0,
-                            plot: 0,
-                        },
+                    .indicator_mut(child)
+                    .unwrap()
+                    .set_input(
+                        "source",
+                        egui_charts::studies::InputValue::Source(
+                            egui_charts::studies::StudySource::Study {
+                                id: parent.0,
+                                plot: 0,
+                            },
+                        ),
                     )
                     .unwrap();
-                app.chart.remove_series(parent);
                 let mut missing = Alert::new("FOREXA", AlertCondition::Above(0.0));
                 missing.frequency = egui_charts::model::AlertFrequency::OncePerBarClose;
                 missing.source = egui_charts::model::AlertSource::Study {

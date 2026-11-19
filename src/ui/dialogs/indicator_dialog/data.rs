@@ -83,38 +83,61 @@ impl IndicatorInfo {
         infos
     }
 
-    /// Further names a built-in study is found by in the browser: conventional full names its
-    /// description does not carry, and the same names with the qualifier last, as study lists
-    /// often order them.
+    /// Further names a built-in study is found by in the browser: conventional full and short
+    /// names its description does not carry, other common spellings, the author's name before
+    /// the study's, and the same names with the qualifier last, as study lists often order them.
     pub(super) fn search_names(&self) -> &'static [&'static str] {
         match self.id.as_str() {
+            "%B" => &["Bollinger Bands %B"],
             "52W High/Low" => &["52 Week High/Low"],
+            "A/D" => &["Accumulation Distribution", "ADL"],
+            "ADX Breakout" => &["Rob Booker - ADX Breakout"],
             "ASI" => &["Accumulative Swing Index"],
             "Auto Fibonacci Extension" => &["Auto Fib Extension"],
             "Auto Fibonacci Retracement" => &["Auto Fib Retracement"],
+            "Auto Trend Line" => &["Auto Trendlines"],
+            "Average Daily Range" => &["ADR"],
+            "BBW" => &["Bollinger BandWidth"],
             "C2C Vol" => &["Volatility Close-to-Close"],
+            "Connors RSI" => &["CRSI"],
+            "Donchian" => &["DC"],
             "EMA Cross" | "MA Cross" => &["Double Moving Average", "Moving Average Double"],
+            "Elliott Wave" => &["Elliott Waves"],
+            "Force Index" => &["Elder's Force Index", "EFI"],
             "GK Vol" => &["Volatility O-H-L-C"],
             "Hamming MA" => &["Hamming Moving Average", "Moving Average Hamming"],
+            "Higher Interval Candles" => &["Multi-Time Period Charts"],
+            "Intraday Pivot Points" => &["Rob Booker Intraday Pivot Points"],
             "KAMA" => &[
                 "Kaufman's Adaptive Moving Average",
                 "Moving Average Adaptive",
             ],
             "Klinger" => &["Klinger Oscillator"],
+            "Knoxville Divergence" => &["Rob Booker - Knoxville Divergence"],
             "LinReg" => &["Linear Regression Curve"],
             "Lunar Phases" => &["Moon Phases"],
             "MA Ribbon" => &["Moving Average Ribbon"],
+            "MACD" => &["Moving Average Convergence Divergence"],
+            "Missed Pivot Levels" => &["Rob Booker Missed Pivot Points"],
             "Multi MA" => &["Moving Average Multiple"],
             "OHLC4" => &["Average Price"],
+            "Price Momentum Oscillator" => &["PMO"],
             "SMA/EMA Cross" => &[
                 "MA with EMA Cross",
                 "Double Moving Average",
                 "Moving Average Double",
             ],
+            "StochRSI" => &["Stoch RSI"],
+            "TEMA" => &["Triple EMA"],
+            "Time Price Opportunity" => &["TPO", "Session Time Price Opportunity"],
             "Triple MA" => &["Triple Moving Average", "Moving Average Triple"],
+            "VPT" => &["Price Volume Trend", "PVT"],
+            "VWMA" => &["Volume-Weighted Moving Average"],
             "Vol Profile Anchored" => &["Anchored Volume Profile"],
             "Vol Profile Auto Anchored" => &["Auto Anchored Volume Profile"],
             "Vol Profile FR" => &["Fixed Range Volume Profile"],
+            "Vol Profile Periodic" => &["Periodic Volume Profile"],
+            "Vol Profile Session" => &["Session Volume Profile", "Session Volume Profile HD"],
             "Vol Profile VR" => &[
                 "Visible Range Volume Profile",
                 "Volume Profile Visible Range",

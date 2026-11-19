@@ -121,6 +121,9 @@ pub struct ChartSnapshot {
     pub interval: Option<Timeframe>,
     /// Whether extended hours are requested.
     pub extended_hours: bool,
+    /// Whether overnight hours are requested together with extended hours. False in older saves.
+    #[serde(default)]
+    pub overnight_hours: bool,
     /// The chart type.
     pub chart_type: ChartType,
     /// The parameters of the price-based chart types and of the baseline.
@@ -176,6 +179,12 @@ pub struct ChartSnapshot {
     /// With drawing storage, [`Chart::restore`] shows the stored drawings and brings back only
     /// some of these (see there).
     pub drawings: Option<serde_json::Value>,
+    /// With drawing storage, the drawings the chart keeps aside for each other symbol it showed
+    /// that storage does not hold, those in a top-level folder kept on the chart or in the layout,
+    /// as one drawings document per symbol. Empty without drawing storage and in layouts saved
+    /// before it was recorded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub other_symbol_drawings: Vec<serde_json::Value>,
     /// The chart that took the snapshot, by an identifier no other chart has, also in another
     /// run. [`Chart::restore`] keeps the data table column choices of the saved studies only on
     /// that chart; on any other chart, and for `None` in layouts saved before it was recorded,
@@ -246,6 +255,11 @@ impl Chart {
         }
         let drawings =
             Some(serde_json::to_value(self.save_drawings()?).expect("drawings were validated"));
+        let other_symbol_drawings = self
+            .kept_aside_drawings()?
+            .into_iter()
+            .map(|document| serde_json::to_value(document).expect("drawings were validated"))
+            .collect();
         let panes = self.panes();
         let pane_of = |id| {
             self.series_pane(id)
@@ -290,6 +304,7 @@ impl Chart {
             symbol: self.symbol.clone(),
             interval: self.timeframe,
             extended_hours: self.extended_hours,
+            overnight_hours: self.overnight_hours,
             chart_type: self.chart_type,
             chart_type_params: self.chart_type_params.clone(),
             main_series_visible: self.main_series_visible,
@@ -378,6 +393,7 @@ impl Chart {
                 .and_then(|positions| positions.unit),
             right_offset,
             drawings,
+            other_symbol_drawings,
             saved_by: Some(self.data_table_identity),
         };
         // A layout that restore would refuse is an error now rather than at the next load.
@@ -413,7 +429,9 @@ impl Chart {
     /// [`FolderSync::Layout`](crate::drawings::FolderSync::Layout)), unless storage holds the
     /// drawing outside such a folder. Until that read the chart shows the snapshot's drawings, and
     /// edits made meanwhile are kept. When storage holds no drawings document of the symbol, the
-    /// snapshot's drawings are kept and stored.
+    /// snapshot's drawings are kept, and stored but for those in such a folder. The drawings in
+    /// such a folder that the chart keeps aside for other symbols are replaced by those of
+    /// [`ChartSnapshot::other_symbol_drawings`], which show when the chart shows their symbol.
     ///
     /// Errors distinguish a saved [`RestoreError::Study`], invalid [`RestoreError::Settings`],
     /// [`RestoreError::Layout`] geometry and unreadable [`RestoreError::Drawings`].
@@ -460,6 +478,7 @@ impl Chart {
             self.drawings.curr_timeframe.clear();
         }
         self.set_extended_hours(snapshot.extended_hours);
+        self.set_overnight_hours(snapshot.overnight_hours);
         self.set_dividend_adjusted(snapshot.settings.adjust_for_dividends);
         self.set_chart_type(snapshot.chart_type);
         self.set_chart_type_params(snapshot.chart_type_params.clone());
@@ -733,6 +752,7 @@ impl Chart {
                 .map_err(RestoreError::Drawings)?,
             None => Vec::new(),
         };
+        self.restore_aside_drawings(&snapshot.other_symbol_drawings);
         // A layout without the original pane has just left it: the main bars are live again.
         self.follow_feed_pause();
         self.history.clear();
@@ -981,6 +1001,9 @@ fn check(
         }
         _ => None,
     };
+    for document in &snapshot.other_symbol_drawings {
+        DrawingStorage::from_json(&document.to_string()).map_err(RestoreError::Drawings)?;
+    }
     Ok((studies, drawings))
 }
 
