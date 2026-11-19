@@ -318,7 +318,7 @@ completed session's POC, VAH and VAL to the first later bar that trades in their
 
 ## Stream studies
 
-The factory supplies four studies, each in its own pane:
+Among others, the factory supplies these studies, each in its own pane:
 
 | Factory title | Definition and defaults |
 | --- | --- |
@@ -326,6 +326,8 @@ The factory supplies four studies, each in its own pane:
 | Book Size | Last synchronized snapshot's summed bid and ask size, plus bid minus ask. Nearest 10 levels per side by default. A positive Price distance uses that inclusive distance from each side's inside market instead of the level count. |
 | Trade Rate | Execution count per bar, count per second over 60 seconds and count per second over 3 seconds. Count volume switches all three to executed size. Zero-size executions count as trades. |
 | Levels Traded Through | Sum of absolute changes of best bid and best ask, in integer instrument ticks, plus their total. Per bar by default; Window seconds selects a rolling window instead. This measures inside-market movement, not an inference about how an order swept the book. |
+| Book Balance | Last synchronized bid and ask balance, `(bid - ask) / (bid + ask)` in percent, for two disjoint bands on a -100 to 100 scale. The near band takes the nearest 5 levels per side and the far band the next 10 by default. A positive Near price distance selects both bands by distance instead: the near band reaches that distance from each side's inside market and the far band reaches Far price distance further. The near edge belongs only to the near band. Empty or lost bands have no value. The individual-order filters apply as for Book Size. |
+| Volatility Regime | Highest minus lowest execution price in a rolling 60-second window, ranked against the window values of the previous 100 bars. The percentile is the share of available earlier values that are smaller, from 0 to 100; decimal rounding ties do not count as smaller. The legend reads Low below 20, High above 80, and Normal at or between the boundaries. Window, lookback (1 to 1,000 bars) and both boundaries are inputs. Without an earlier value there is no rank. |
 
 Rolling windows include events in `(now - window, now]`. Rates divide by the full configured
 window even during startup. Feed heartbeats expire rates after queued executions are merged
@@ -334,6 +336,17 @@ missing; heartbeats consume no event capacity. Newly attached rate studies use t
 accepted heartbeat when replaying retained executions. Quotes seed the movement path, and a
 lost book breaks it so the next quote does not count an unobserved jump. A loss leaves book size missing until
 a new synchronized snapshot arrives, including recovery within the same bar.
+
+Book Balance needs depth, or individual-order depth when its filter is active. Volatility
+Regime needs live executions but not their side. Both appear in the Order flow category only
+when those services are declared. Their input values use the same settings and template path
+as the other studies, including saved layouts. Changing the range window starts a fresh source;
+changing its lookback or regime boundaries reuses the held ranges. Bars without executions
+remain gaps and do not enter the rank. A heartbeat can expire every execution in an existing
+bar's window, leaving a zero range. Equal boundaries are normal; when the lower boundary
+exceeds the upper one, the low check takes priority. The regime is a legend-only output,
+available to study alerts; a host formatter or an explicit precision override can format it
+numerically. A lost or overflowing window remains missing until the missing executions expire.
 
 On history-only tick-count, range, volume and delta intervals, Trade Rate uses the recorded executions
 when the tape reaches its start without a gap and reproduces every candle's key and OHLCV.

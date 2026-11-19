@@ -1,13 +1,15 @@
 use super::{
     Button, COVERAGE_CELL, ExitButtons, HEIGHT, LABEL_INSET, Level, NODE_INSET, PADDING, PnlUnit,
     TradingLabelAlignment, TradingLineAction, TradingLineOptions, coverage_text, direction,
-    exit_buttons_width, label_fill, offered_exits, paint_coverage, paint_glyph, pnl_text,
+    exit_buttons_width, label_fill, menu_entry, offered_exits, paint_coverage, paint_glyph,
+    pnl_text,
 };
 use crate::chart::coords::ChartMapping;
 use crate::chart::rendering::render_price_line;
 use crate::localization as l10n;
 use crate::model::{
-    LineStyle, OrderRequest, OrderSide, OrderType, Position, PositionBracket, PriceLine,
+    Capabilities, LineStyle, OrderRequest, OrderSide, OrderType, Position, PositionBracket,
+    PriceLine,
 };
 use crate::theme::ThemeExt;
 use egui::{Color32, FontId, Rect, Sense, Stroke, Ui, pos2, vec2};
@@ -21,6 +23,7 @@ pub(super) fn show_position(
     mapping: &ChartMapping,
     options: &TradingLineOptions<'_>,
     position: &Position,
+    held: (bool, bool),
     coverage: Option<(f64, f64)>,
     tags: &mut Vec<(f64, Color32)>,
 ) -> Option<TradingLineAction> {
@@ -30,7 +33,14 @@ pub(super) fn show_position(
     } else {
         OrderSide::Sell
     };
-    let color = crate::theme::trading_side_color(&theme, side);
+    let look = options
+        .position_appearance
+        .iter()
+        .find(|(symbol, _)| symbol == &position.symbol)
+        .map(|(_, look)| look);
+    let color = look
+        .and_then(|look| look.color)
+        .unwrap_or_else(|| crate::theme::trading_side_color(&theme, side));
     let size = position.quantity.abs();
     let entry = position.average_price;
     let y = mapping.price_to_y(entry);
@@ -38,7 +48,10 @@ pub(super) fn show_position(
         return None;
     }
     let painter = ui.painter().with_clip_rect(mapping.rect);
-    let line = PriceLine::new(entry, color).with_style(LineStyle::Solid);
+    let line = PriceLine::new(entry, color).with_style(
+        look.and_then(|look| look.line_style)
+            .unwrap_or(LineStyle::Solid),
+    );
     tags.push((entry, color));
 
     let key = ui.scope_id().with(("trading_position", &position.symbol));
@@ -58,10 +71,14 @@ pub(super) fn show_position(
     };
     let exits = offered_exits(options.take_profit, options.stop_loss);
     let quantity = layout(format!("{size}"), Color32::WHITE);
+    let text = look
+        .and_then(|look| look.text.as_ref())
+        .map(|text| layout(text.clone(), color));
     let close = if options.close { HEIGHT } else { 0.0 };
     let fixed_width = exit_buttons_width(ui, exits)
         + width(&quantity)
         + coverage.map_or(0.0, |_| COVERAGE_CELL)
+        + text.as_deref().map_or(0.0, width)
         + close;
     let pnl = options.pnl.and_then(|unit| {
         let gain = options
@@ -149,6 +166,25 @@ pub(super) fn show_position(
     let hovered = ui.rect_contains_pointer(hover_rect.intersect(mapping.rect));
     let stroke = Stroke::new(1.0, color);
     let mut action = None;
+    if options.menu.is_some() || look.and_then(|look| look.hover_text.as_ref()).is_some() {
+        let response = ui.interact(
+            label.intersect(mapping.rect),
+            key.with("menu"),
+            if options.menu.is_some() {
+                Sense::click()
+            } else {
+                Sense::hover()
+            },
+        );
+        let response = if let Some(text) = look.and_then(|look| look.hover_text.as_ref()) {
+            response.on_hover_text(text)
+        } else {
+            response
+        };
+        if let Some(capabilities) = options.menu {
+            response.context_menu(|ui| action = position_menu(ui, position, capabilities, held));
+        }
+    }
 
     if reverse && hovered {
         let rect = reverse_rect;
@@ -191,24 +227,15 @@ pub(super) fn show_position(
     }
     .show(ui, mapping, options, tags);
     if let Some((exit, price)) = released {
-        let mut request = OrderRequest::new(
-            position.symbol.clone(),
-            match side {
-                OrderSide::Buy => OrderSide::Sell,
-                OrderSide::Sell => OrderSide::Buy,
-            },
-            size,
+        let request = exit_request(
+            position,
             if exit == Level::TakeProfit {
-                OrderType::Limit(price)
+                PositionBracket::TakeProfit
             } else {
-                OrderType::Stop(price)
+                PositionBracket::StopLoss
             },
+            price,
         );
-        request.position_bracket = Some(if exit == Level::TakeProfit {
-            PositionBracket::TakeProfit
-        } else {
-            PositionBracket::StopLoss
-        });
         action = action.or(Some(TradingLineAction::Exit(position.clone(), request)));
     }
 
@@ -253,6 +280,16 @@ pub(super) fn show_position(
         )
         .on_hover_text(coverage_text(ui.ctx(), coverage));
     }
+    if let Some(text) = text {
+        let rect = cell(x, width(&text));
+        x = rect.right();
+        painter.vline(rect.left(), rect.y_range(), stroke);
+        painter.galley(
+            pos2(rect.left() + PADDING, y - text.size().y / 2.0),
+            text,
+            color,
+        );
+    }
     if let Some((pnl, text_color)) = pnl {
         let rect = cell(x, width(&pnl));
         x = rect.right();
@@ -290,4 +327,61 @@ pub(super) fn show_position(
         }
     }
     action
+}
+
+/// An exit on the other side for the position's full size, with its bracket role retained.
+pub(crate) fn exit_request(
+    position: &Position,
+    bracket: PositionBracket,
+    price: f64,
+) -> OrderRequest {
+    let mut request = OrderRequest::new(
+        &position.symbol,
+        if position.quantity > 0.0 {
+            OrderSide::Sell
+        } else {
+            OrderSide::Buy
+        },
+        position.quantity.abs(),
+        match bracket {
+            PositionBracket::TakeProfit => OrderType::Limit(price),
+            PositionBracket::StopLoss => OrderType::Stop(price),
+        },
+    );
+    request.position_bracket = Some(bracket);
+    request
+}
+
+fn position_menu(
+    ui: &mut Ui,
+    position: &Position,
+    capabilities: Capabilities,
+    held: (bool, bool),
+) -> Option<TradingLineAction> {
+    if menu_entry(
+        ui,
+        "Close position",
+        capabilities.close,
+        "The account does not support closing positions",
+    ) {
+        return Some(TradingLineAction::Close(position.clone()));
+    }
+    if menu_entry(
+        ui,
+        "Reverse position",
+        capabilities.reverse,
+        "The account does not support reversing positions",
+    ) {
+        return Some(TradingLineAction::Reverse(position.clone()));
+    }
+    let offers = (capabilities.limit && !held.0) || (capabilities.stop && !held.1);
+    let why = if !capabilities.limit && !capabilities.stop {
+        "The account does not support take-profit or stop-loss orders"
+    } else {
+        "The position has every exit the account supports"
+    };
+    if menu_entry(ui, "Protect position", offers, why) {
+        return Some(TradingLineAction::Protect(position.clone()));
+    }
+    None
 }
