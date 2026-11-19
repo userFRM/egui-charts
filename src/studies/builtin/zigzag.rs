@@ -34,9 +34,9 @@ impl ZigZagMode {
 #[non_exhaustive]
 pub enum ZigZagChange {
     /// The price difference, signed.
+    #[default]
     Price,
     /// The percentage of the previous pivot's price, signed.
-    #[default]
     Percent,
 }
 
@@ -69,7 +69,6 @@ pub struct ZigZagPivot {
 ///   `depth`, as if it were not in the series. A bar whose prices are not positive is skipped:
 ///   it is never a pivot and never confirms one, and a leg is drawn across it. A series with no
 ///   positive prices has no values, because the percentage filter needs positive prices.
-///   A deviation of 0 filters nothing, so it gives no values either.
 /// - Until the first reversal the study tracks the highest high and the lowest low. A rise
 ///   of `deviation_percent` from the lowest low confirms that low as the first pivot; a fall
 ///   from the highest high confirms that high. When one bar confirms both, the earlier
@@ -87,9 +86,14 @@ pub struct ZigZagPivot {
 ///   pivots: two pivots can be fewer than `depth` bars apart, and a swing shorter than
 ///   `depth` bars is drawn when a later bar confirms it.
 /// - The last pivot is the extreme of the current leg, which moves while price extends it.
-///   Bars before the first pivot and after the last have no value.
-/// - Optional labels show each pivot's price, change and leg volume; the last leg, whose end
-///   still moves, is drawn dashed.
+///   Bars before the first pivot have no value. With the extension to the last bar, on by
+///   default, a last segment runs from the last pivot to the close of the latest bar whose prices
+///   in the chosen mode are finite, straight across the bars between as a leg is. It is no pivot
+///   and has no label, and there is none when that bar is the last pivot's or its close is not
+///   finite. Without it the bars after the last pivot have no value.
+/// - Labels show each pivot's price, its change from the previous pivot as a price difference or
+///   a percentage, and the volume of the leg that ends at it. The last leg and the extension,
+///   whose ends still move, are drawn dashed.
 #[derive(Clone, Debug)]
 pub struct ZigZag {
     /// Min percentage change to register a swing
@@ -112,6 +116,8 @@ pub struct ZigZag {
     change_labels: bool,
     change_mode: ZigZagChange,
     volume_labels: bool,
+    /// Whether a last segment runs from the last pivot to the latest close.
+    extend_to_last_bar: bool,
     /// The instrument's decimals and those of the study's presentation settings.
     precision: Option<usize>,
     label_precision: Option<usize>,
@@ -133,10 +139,20 @@ struct Checkpoint {
 }
 
 impl ZigZag {
-    /// `deviation_percent` is clamped into 0 to `f64::MAX`, NaN to 0; at 0 there are no values.
+    /// The smallest deviation in percent that [`new`](Self::new) and the input accept.
+    pub(crate) const MIN_DEVIATION: f64 = 0.000_01;
+    /// The largest deviation in percent.
+    pub(crate) const MAX_DEVIATION: f64 = 100.0;
+
+    /// `deviation_percent` is clamped into 0.00001 to 100, NaN to 0.00001. Pivots are labelled
+    /// with their price, change and leg volume, and the line extends to the last bar.
     pub fn new(deviation_percent: f64, depth: usize) -> Self {
         Self {
-            deviation_percent: clamp_param(deviation_percent, 0.0, f64::MAX),
+            deviation_percent: clamp_param(
+                deviation_percent,
+                Self::MIN_DEVIATION,
+                Self::MAX_DEVIATION,
+            ),
             depth: depth.max(1),
             mode: ZigZagMode::HighLow,
             values: IndicatorValues::new(),
@@ -149,10 +165,11 @@ impl ZigZag {
             before_last: Checkpoint::default(),
             color: palette::BLUE,
             visible: true,
-            price_labels: false,
-            change_labels: false,
-            change_mode: ZigZagChange::Percent,
-            volume_labels: false,
+            price_labels: true,
+            change_labels: true,
+            change_mode: ZigZagChange::Price,
+            volume_labels: true,
+            extend_to_last_bar: true,
             precision: None,
             label_precision: None,
             labels: Vec::new(),
@@ -185,12 +202,21 @@ impl ZigZag {
 
     /// Labels each pivot, above highs and below lows, with its price, its change from the
     /// previous pivot (`None` leaves it out) and the volume of the leg that ends at it, from the
-    /// bar after the previous pivot through the pivot's bar. No labels by default.
+    /// bar after the previous pivot through the pivot's bar. A new study shows all three,
+    /// the change as a price difference.
     pub fn with_labels(mut self, price: bool, change: Option<ZigZagChange>, volume: bool) -> Self {
         self.price_labels = price;
         self.change_labels = change.is_some();
         self.change_mode = change.unwrap_or(self.change_mode);
         self.volume_labels = volume;
+        self
+    }
+
+    /// Whether a last segment runs from the last pivot to the close of the latest bar whose prices
+    /// in the chosen mode are finite. It is on by default and changes neither
+    /// [`pivots`](Self::pivots) nor the labels.
+    pub fn with_extend_to_last_bar(mut self, extend: bool) -> Self {
+        self.extend_to_last_bar = extend;
         self
     }
 
@@ -435,9 +461,10 @@ impl Indicator for ZigZag {
     }
 
     crate::studies::inputs::study_inputs!(self;
-        deviation_percent: number("Deviation percent", 0.0, f64::MAX),
+        deviation_percent: number("Deviation percent", Self::MIN_DEVIATION, Self::MAX_DEVIATION),
         depth: length("Depth", 1, usize::MAX),
         mode: choice("Mode", [ZigZagMode::HighLow, ZigZagMode::Close, ZigZagMode::Typical]),
+        extend_to_last_bar: toggle("Extend to last bar"),
         price_labels: toggle("Show price"),
         change_labels: toggle("Show change"),
         change_mode: choice("Change as", [ZigZagChange::Price, ZigZagChange::Percent]),
@@ -471,8 +498,8 @@ impl Indicator for ZigZag {
                 && first.bar_index < last.bar_index
             {
                 let first = self.finite.partition_point(|&bar| bar < first.bar_index);
-                let end = self.finite.partition_point(|&bar| bar <= last.bar_index);
-                for &bar in &self.finite[first..end] {
+                // Up to the latest bar, which an extension may have reached.
+                for &bar in &self.finite[first..] {
                     self.values.set(bar, IndicatorValue::None);
                 }
             }
@@ -487,6 +514,22 @@ impl Indicator for ZigZag {
                 self.values.set(
                     self.finite[position],
                     IndicatorValue::Single(leg[0].price + (leg[1].price - leg[0].price) * t),
+                );
+            }
+        }
+        if self.extend_to_last_bar
+            && let (Some(&pivot), Some(&last)) = (self.pivots.last(), self.finite.last())
+            && last > pivot.bar_index
+            && data[last].close.is_finite()
+        {
+            let first = self.finite.binary_search(&pivot.bar_index).unwrap();
+            let end = self.finite.len() - 1;
+            let close = data[last].close;
+            for position in first + 1..=end {
+                let t = (position - first) as f64 / (end - first) as f64;
+                self.values.set(
+                    self.finite[position],
+                    IndicatorValue::Single(pivot.price + (close - pivot.price) * t),
                 );
             }
         }
@@ -552,7 +595,7 @@ impl Indicator for ZigZag {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!(
-            "ZigZag({:.1}%, {})",
+            "ZigZag({}%, {})",
             self.deviation_percent, self.depth
         )]
     }
@@ -583,11 +626,10 @@ mod tests {
         })
         .collect();
         let study = || ZigZag::new(5.0, 1);
-        for (price, change, volume, want) in [
+        // `None` keeps the labels a new study opens with.
+        for (shown, want) in [
             (
-                true,
-                Some(ZigZagChange::Price),
-                true,
+                None,
                 &[
                     (0, "100.00"),
                     (3, "110.00\n+10.00\n2.00K"),
@@ -595,9 +637,15 @@ mod tests {
                 ][..],
             ),
             (
-                true,
-                Some(ZigZagChange::Percent),
-                true,
+                Some((true, Some(ZigZagChange::Price), true)),
+                &[
+                    (0, "100.00"),
+                    (3, "110.00\n+10.00\n2.00K"),
+                    (4, "103.00\n-7.00\n750"),
+                ][..],
+            ),
+            (
+                Some((true, Some(ZigZagChange::Percent), true)),
                 &[
                     (0, "100.00"),
                     (3, "110.00\n+10.00%\n2.00K"),
@@ -605,14 +653,15 @@ mod tests {
                 ][..],
             ),
             (
-                false,
-                Some(ZigZagChange::Percent),
-                false,
+                Some((false, Some(ZigZagChange::Percent), false)),
                 &[(3, "+10.00%"), (4, "-6.36%")][..],
             ),
-            (false, None, false, &[][..]),
+            (Some((false, None, false)), &[][..]),
         ] {
-            let mut zigzag = study().with_labels(price, change, volume);
+            let mut zigzag = match shown {
+                Some((price, change, volume)) => study().with_labels(price, change, volume),
+                None => study(),
+            };
             zigzag.calculate(&data);
             let got: Vec<_> = zigzag
                 .labels()
@@ -638,6 +687,194 @@ mod tests {
         zigzag.update(&data, 5);
         assert_eq!(zigzag.provisional_after(0), Some(3));
         assert_eq!(zigzag.provisional_after(1), None);
+    }
+
+    /// The extension follows every tick without changing pivots or labels. At 5% and depth 1,
+    /// the initial pivots are 100 at bar 0, 110 at bar 3 and 103 at bar 4. A low of 102 at bar 7
+    /// extends the down leg; the high of 108 at bar 9 reverses it by 5.88%.
+    #[test]
+    fn the_extension_reaches_the_latest_close_on_every_tick() {
+        let nan = f64::NAN;
+        let bar = |(high, low, close)| make_bar(high, low, close);
+        let mut data: Vec<Bar> = [
+            (101.0, 100.0, 100.5),
+            (103.0, 102.0, 102.5),
+            (106.0, 105.0, 105.5),
+            (110.0, 109.0, 109.5),
+            (104.0, 103.0, 103.5),
+        ]
+        .into_iter()
+        .map(bar)
+        .collect();
+        let mut on = ZigZag::new(5.0, 1);
+        let mut off = ZigZag::new(5.0, 1).with_extend_to_last_bar(false);
+        on.calculate(&data);
+        off.calculate(&data);
+        // (the bar written at `from`, values with the extension from bar 3 on)
+        type Step<'a> = (Option<(usize, (f64, f64, f64))>, &'a [Option<f64>]);
+        let steps: &[Step] = &[
+            (None, &[Some(110.0), Some(103.0)]),
+            (
+                Some((5, (105.0, 104.0, 104.5))),
+                &[Some(110.0), Some(103.0), Some(104.5)],
+            ),
+            (
+                Some((5, (106.0, 104.5, 105.8))),
+                &[Some(110.0), Some(103.0), Some(105.8)],
+            ),
+            (
+                Some((6, (107.0, 106.0, 106.5))),
+                &[Some(110.0), Some(103.0), Some(104.75), Some(106.5)],
+            ),
+            (
+                Some((7, (nan, nan, nan))),
+                &[Some(110.0), Some(103.0), Some(104.75), Some(106.5), None],
+            ),
+            (
+                Some((7, (102.5, 102.0, 102.2))),
+                &[
+                    Some(110.0),
+                    Some(108.0),
+                    Some(106.0),
+                    Some(104.0),
+                    Some(102.0),
+                ],
+            ),
+            (
+                Some((8, (103.0, 102.5, 102.9))),
+                &[
+                    Some(110.0),
+                    Some(108.0),
+                    Some(106.0),
+                    Some(104.0),
+                    Some(102.0),
+                    Some(102.9),
+                ],
+            ),
+            (
+                Some((9, (108.0, 107.0, 107.5))),
+                &[
+                    Some(110.0),
+                    Some(108.0),
+                    Some(106.0),
+                    Some(104.0),
+                    Some(102.0),
+                    Some(105.0),
+                    Some(108.0),
+                ],
+            ),
+            (
+                Some((10, (107.5, 106.0, 106.2))),
+                &[
+                    Some(110.0),
+                    Some(108.0),
+                    Some(106.0),
+                    Some(104.0),
+                    Some(102.0),
+                    Some(105.0),
+                    Some(108.0),
+                    Some(106.2),
+                ],
+            ),
+            // A finite high/low with no close withdraws the extension on this tick.
+            (
+                Some((10, (107.5, 106.0, nan))),
+                &[
+                    Some(110.0),
+                    Some(108.0),
+                    Some(106.0),
+                    Some(104.0),
+                    Some(102.0),
+                    Some(105.0),
+                    Some(108.0),
+                    None,
+                ],
+            ),
+            (
+                Some((10, (107.5, 106.0, 106.2))),
+                &[
+                    Some(110.0),
+                    Some(108.0),
+                    Some(106.0),
+                    Some(104.0),
+                    Some(102.0),
+                    Some(105.0),
+                    Some(108.0),
+                    Some(106.2),
+                ],
+            ),
+            (
+                Some((11, (nan, nan, nan))),
+                &[
+                    Some(110.0),
+                    Some(108.0),
+                    Some(106.0),
+                    Some(104.0),
+                    Some(102.0),
+                    Some(105.0),
+                    Some(108.0),
+                    Some(106.2),
+                    None,
+                ],
+            ),
+            // A non-positive high/low cannot be a pivot, but its finite close ends the extension.
+            // Between 108 and 104 the one finite intermediate bar is 106; whitespace stays empty.
+            (
+                Some((12, (0.0, 0.0, 104.0))),
+                &[
+                    Some(110.0),
+                    Some(108.0),
+                    Some(106.0),
+                    Some(104.0),
+                    Some(102.0),
+                    Some(105.0),
+                    Some(108.0),
+                    Some(106.0),
+                    None,
+                    Some(104.0),
+                ],
+            ),
+        ];
+        for (step, &(write, want)) in steps.iter().enumerate() {
+            if let Some((from, prices)) = write {
+                if from == data.len() {
+                    data.push(bar(prices));
+                } else {
+                    data[from] = bar(prices);
+                }
+                on.update(&data, from);
+                off.update(&data, from);
+            }
+            assert_eq!(on.pivots(), off.pivots(), "step {step}");
+            assert_eq!(on.labels(), off.labels(), "step {step}");
+            assert_eq!(
+                on.provisional_after(0),
+                off.provisional_after(0),
+                "step {step}"
+            );
+            let last = on.pivots().last().unwrap().bar_index;
+            let got: Vec<_> = (3..data.len())
+                .map(|bar| on.values().value(0, bar))
+                .collect();
+            assert_eq!(got.len(), want.len(), "step {step}");
+            for (bar, (got, want)) in (3..).zip(got.iter().zip(want)) {
+                match (got, want) {
+                    (Some(got), Some(want)) => {
+                        assert!(
+                            (got - want).abs() < 1e-9,
+                            "step {step} bar {bar}: {got} != {want}"
+                        )
+                    }
+                    _ => assert_eq!(got, want, "step {step} bar {bar}"),
+                }
+                let without = off.values().value(0, bar);
+                let expected = if bar <= last { *got } else { None };
+                assert_eq!(
+                    without, expected,
+                    "step {step} bar {bar} without the extension"
+                );
+            }
+        }
     }
 
     /// Expected values from an independent percentage-filter reference
@@ -746,7 +983,7 @@ mod tests {
                 ],
             ),
             (
-                // A deviation of 0 filters nothing, so there are no swings to draw.
+                // A deviation of 0 is raised to 0.00001, so the 3% rise from bar 0 confirms its low.
                 "deviation 0",
                 ZigZag::new(0.0, 1),
                 &[
@@ -755,7 +992,12 @@ mod tests {
                     (106.0, 105.0),
                     (110.0, 109.0),
                 ],
-                &[None; 4],
+                &[
+                    Some(100.0),
+                    Some(103.333_333_333_333_33),
+                    Some(106.666_666_666_666_67),
+                    Some(110.0),
+                ],
             ),
             (
                 // The first leg starts at the low of bar 0, not at the first high.
@@ -864,7 +1106,7 @@ mod tests {
 
         for (name, zz, bars, expected) in cases {
             let data: Vec<Bar> = bars.iter().map(|&(h, l)| make_bar(h, l, l)).collect();
-            let mut zz = zz.clone();
+            let mut zz = zz.clone().with_extend_to_last_bar(false);
             zz.calculate(&data);
             let extremes: &[(usize, bool)] = match *name {
                 "close mode" => &[(0, false), (1, true), (2, false)],
@@ -874,12 +1116,13 @@ mod tests {
                     &[(0, false), (3, true), (5, false), (9, true)]
                 }
                 "rises from the first bar" => &[(0, false), (3, true), (4, false)],
+                "deviation 0" => &[(0, false), (3, true)],
                 "outside bar" => &[(0, false), (4, true)],
                 "high before the low" => &[(1, false), (2, true)],
                 "touches zero" => &[(0, true), (3, false)],
                 "NaN bar inside a leg" => &[(0, false), (1, true)],
                 "NaN first bar" => &[(2, true), (7, false), (11, true), (16, false), (19, true)],
-                "flat" | "deviation 0" | "negative prices" => &[],
+                "flat" | "negative prices" => &[],
                 _ => unreachable!("case needs its pivot expectations"),
             };
             assert_eq!(zz.pivots().len(), extremes.len(), "{name}");
@@ -909,13 +1152,33 @@ mod tests {
                     _ => panic!("{name} bar {i}: got {g:?}, expected {e:?}\n  got {got:?}"),
                 }
             }
-            zz.set_input("deviation_percent", crate::studies::InputValue::Number(0.0))
-                .unwrap();
-            zz.calculate(&data);
-            for _ in 0..2 {
-                zz.update(&data, data.len().saturating_sub(1));
-                assert!(zz.pivots().is_empty(), "{name}: disabled swings");
-                assert!((0..data.len()).all(|bar| zz.values().value(0, bar).is_none()));
+            let before = format!("{:?}", (zz.inputs(), zz.pivots(), zz.values().to_rows()));
+            for (deviation, accepted) in [
+                (0.0, false),
+                (0.000_01, true),
+                (100.0, true),
+                (150.0, false),
+            ] {
+                let mut edited = zz.clone();
+                let result = edited.set_input(
+                    "deviation_percent",
+                    crate::studies::InputValue::Number(deviation),
+                );
+                assert_eq!(result.is_ok(), accepted, "{name} {deviation}");
+                if !accepted {
+                    assert!(
+                        matches!(result, Err(crate::studies::StudyError::InvalidInput { .. })),
+                        "{name} {deviation}"
+                    );
+                    assert_eq!(
+                        format!(
+                            "{:?}",
+                            (edited.inputs(), edited.pivots(), edited.values().to_rows())
+                        ),
+                        before,
+                        "{name} {deviation}"
+                    );
+                }
             }
         }
     }
