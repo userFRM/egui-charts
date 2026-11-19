@@ -394,14 +394,35 @@ impl Chart {
     }
 
     /// The study `id`, to change its settings. Its values reflect the bars as of the last
-    /// [`show`](Self::show); the next one recomputes it in full.
+    /// [`show`](Self::show); the next one recomputes it in full. Changes report
+    /// [`ChartEvent::Study`](super::ChartEvent::Study) before the next chart notification.
     pub fn indicator_mut(&mut self, id: SeriesId) -> Option<&mut (dyn Indicator + 'static)> {
         let at = self.study_ids.iter().position(|study| *study == id)?;
         self.record_study(id);
+        Some(self.edit_study(at))
+    }
+
+    /// Settings dialog previews keep recomputation and history bookkeeping without reporting
+    /// [`ChartEvent::Study`](super::ChartEvent::Study); the host reports the committed edit.
+    #[cfg(feature = "ui")]
+    pub(crate) fn preview_indicator_mut(
+        &mut self,
+        id: SeriesId,
+    ) -> Option<&mut (dyn Indicator + 'static)> {
+        let at = self.study_ids.iter().position(|study| *study == id)?;
+        self.record_study(id);
+        self.host_events
+            .studies
+            .retain(|(watched, _)| *watched != id);
+        Some(self.edit_study(at))
+    }
+
+    /// Marks the study for a full recompute at the next `show`.
+    fn edit_study(&mut self, at: usize) -> &mut (dyn Indicator + 'static) {
         self.pending_from[at] = Some(0);
         self.next_refresh[at] = f64::NEG_INFINITY;
         self.readout_revision = crate::model::next_revision();
-        Some(self.studies.indicators_mut()[at].as_mut())
+        self.studies.indicators_mut()[at].as_mut()
     }
 
     /// Updates every study with a pending change, as of `now` in seconds. An incremental study

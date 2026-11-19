@@ -186,6 +186,7 @@ impl DrawingManager {
         }
         for (_, old) in &before {
             self.queue_update(old.id);
+            self.report(old.id, DrawingEventKind::PropertiesChanged);
         }
         if record {
             self.history.push_snapshot(before);

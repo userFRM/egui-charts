@@ -218,7 +218,7 @@ impl IndicatorSettingsDialog {
         if self.edit.is_none() {
             if self.previewed.take().is_some()
                 && let Some(original) = self.original.take()
-                && let Some(study) = chart.indicator_mut(id)
+                && let Some(study) = chart.preview_indicator_mut(id)
             {
                 // The host can revoke editing while a preview is open.
                 let enabled = study.user_edit_enabled();
@@ -242,7 +242,7 @@ impl IndicatorSettingsDialog {
             .map(|input| (input.id.clone(), input.value.clone()))
             .collect();
         if self.previewed.as_ref() != Some(&pending)
-            && let Some(study) = chart.indicator_mut(id)
+            && let Some(study) = chart.preview_indicator_mut(id)
             && study
                 .apply_settings(&pending.inputs, pending.settings.clone())
                 .is_ok()
@@ -1682,6 +1682,7 @@ mod tests {
                         );
                     }
                 }
+                chart.drain_events().for_each(drop);
                 let mut applied = None;
                 let setup_theme = theme.clone();
                 let mut harness = Harness::builder()
@@ -1721,6 +1722,11 @@ mod tests {
                     );
                 }
                 assert!(!chart.undo(), "preview must not enter history");
+                assert!(
+                    !chart.drain_events().any(|event| matches!(event,
+                        crate::widget::ChartEvent::Study { id: study, .. } if study == id)),
+                    "{name}: preview reported a study change"
+                );
                 let setup_theme = theme.clone();
                 let mut harness = Harness::builder()
                     .with_context_setup(move |ctx| {
@@ -1800,6 +1806,12 @@ mod tests {
                         .1
                         .snapshot_settings()
                         == before
+                );
+
+                assert!(
+                    !chart.drain_events().any(|event| matches!(event,
+                        crate::widget::ChartEvent::Study { id: study, .. } if study == id)),
+                    "{name}: {action} reported the preview"
                 );
                 if action == "Cancel" {
                     assert!(applied.is_none());

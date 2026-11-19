@@ -238,7 +238,7 @@ impl Chart {
         &mut self,
         drawings: Vec<Drawing>,
     ) -> Vec<(usize, &'static str)> {
-        self.flush_drawing_events();
+        self.flush_change_events();
         let mut manager = DrawingManager::new();
         manager.set_sync_enabled(self.drawings.sync_enabled);
         manager.registry = self.drawings.registry.clone();
