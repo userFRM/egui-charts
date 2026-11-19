@@ -45,6 +45,11 @@ pub enum DrawingToolbarAction {
     /// [`ToolAvailability::enabled`](crate::drawings::ToolAvailability::enabled). The toolbar
     /// selects nothing, so the host can tell the user why the tool is unavailable.
     ToolUnavailable(DrawingToolType),
+    /// A registered tool was chosen by id in `DrawingToolbar::registry`. Start construction
+    /// with [`DrawingManager::set_custom_tool`](crate::drawings::DrawingManager::set_custom_tool).
+    SelectCustomTool(String),
+    /// A registered tool disabled by the host was clicked; the toolbar selects nothing.
+    CustomToolUnavailable(String),
     /// Set cursor type (Cross, Dot, Arrow, Magic)
     SetCursorType(CursorType),
     /// Magnet mode toggled, from a click on the magnet or its Off row

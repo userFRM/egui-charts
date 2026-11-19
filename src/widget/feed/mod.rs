@@ -764,6 +764,7 @@ impl Chart {
                 next.0.registry = self.drawings.registry.clone();
                 next.0.options = self.drawings.options.clone();
                 next.0.tool_defaults = self.drawings.tool_defaults.clone();
+                next.0.custom_tool_defaults = self.drawings.custom_tool_defaults.clone();
                 next.0.set_active_tool(self.drawings.active_tool);
                 if let Some(id) = self.drawings.active_custom_tool() {
                     let _ = next.0.set_custom_tool(id);

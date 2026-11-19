@@ -4,7 +4,7 @@ use super::super::categories::cursors::CursorType;
 use super::super::{components::render_svg_at_rect_themed, icons};
 use super::{DrawingToolbar, DrawingToolbarAction};
 use crate::drawings::DrawingToolType;
-use crate::icons::icons as embedded_icons;
+use crate::icons::{Icon, icons as embedded_icons};
 use crate::localization as l10n;
 use crate::styles::icons as icon_sizes;
 use crate::theme::ThemeExt;
@@ -14,7 +14,7 @@ use egui::{Color32, Id, Pos2, Rect, Sense, Ui, Vec2};
 impl DrawingToolbar {
     /// Render the floating strip of favourite drawing tools and return a drawing pick.
     /// Use [`Self::show_floating_with_action`] to include cursor modes and receive their host
-    /// actions.
+    /// actions. Registered tools appear only with [`Self::show_floating_with_action`].
     ///
     /// [`Self::show`] and [`Self::show_with_action`] already draw it beside the toolbar and return
     /// a tool picked on it; call this only to place the strip elsewhere, before them, as a
@@ -70,8 +70,19 @@ impl DrawingToolbar {
             .copied()
             .filter(|tool| self.registry.availability(*tool).visible)
             .collect();
+        let custom: Vec<_> = self
+            .state
+            .custom_favorites
+            .iter()
+            .filter_map(|id| {
+                let tool = self.registry.get(id)?;
+                (cursors && self.registry.custom_availability(id).visible)
+                    .then_some((id.clone(), tool))
+            })
+            .collect();
         if !self.state.floating_visible
-            || (tools.is_empty() && (!cursors || self.state.cursor_favorites.is_empty()))
+            || (tools.is_empty()
+                && (!cursors || (self.state.cursor_favorites.is_empty() && custom.is_empty())))
         {
             return None;
         }
@@ -91,61 +102,46 @@ impl DrawingToolbar {
                         ui.horizontal(|ui| {
                             moved = Self::strip_grip(ui);
                             for tool in tools {
-                                let is_sel = self.state.sel_tool == Some(tool);
+                                let is_sel = self.state.sel_builtin() == Some(tool);
                                 let enabled = self.registry.availability(tool).enabled;
-                                let (rect, response) = ui.allocate_exact_size(
-                                    Vec2::splat(DESIGN_TOKENS.sizing.button_md),
-                                    Sense::click(),
-                                );
-                                let translated_label = l10n::text(ui.ctx(), tool.as_str());
-                                response.widget_info(|| {
-                                    egui::WidgetInfo::selected(
-                                        egui::Role::Button,
-                                        enabled,
-                                        is_sel,
-                                        &translated_label,
-                                    )
-                                });
-                                crate::styles::focus::draw_focus_ring(
-                                    ui,
-                                    &response,
-                                    ui.active_theme().radius.sm,
-                                );
-                                // A disabled tool is drawn as egui draws a disabled widget but
-                                // still answers clicks, so the host can say why.
-                                let opacity = ui.opacity();
-                                if !enabled {
-                                    ui.multiply_opacity(ui.visuals().disabled_alpha());
-                                }
-
-                                let bg = if is_sel {
-                                    ui.active_theme().ui.accent
-                                } else if response.hovered() {
-                                    ui.visuals().widgets.hovered.bg_fill
-                                } else {
-                                    Color32::TRANSPARENT
-                                };
-                                ui.painter()
-                                    .rect_filled(rect, ui.active_theme().radius.sm, bg);
-
-                                let icon_rect = Rect::from_center_size(
-                                    rect.center(),
-                                    Vec2::splat(icon_sizes::MD),
-                                );
-                                render_svg_at_rect_themed(
+                                if Self::strip_tool(
                                     ui,
                                     icons::get_icon(tool),
-                                    icon_rect,
-                                    response.hovered(),
+                                    tool.as_str(),
                                     is_sel,
-                                );
-                                ui.set_opacity(opacity);
-
-                                if response.on_hover_text(translated_label).clicked() {
+                                    enabled,
+                                )
+                                .clicked()
+                                {
                                     new_selection = Some(if enabled {
                                         DrawingToolbarAction::SelectTool(tool)
                                     } else {
                                         DrawingToolbarAction::ToolUnavailable(tool)
+                                    });
+                                }
+                            }
+
+                            for (id, tool) in &custom {
+                                let enabled = self.registry.custom_availability(id).enabled;
+                                let selected =
+                                    self.state.sel_custom_tool.as_deref() == Some(id.as_str());
+                                let icon = tool
+                                    .icon
+                                    .as_ref()
+                                    .unwrap_or(icons::get_icon(DrawingToolType::Polyline));
+                                if Self::strip_tool(
+                                    ui,
+                                    icon,
+                                    self.registry.custom_name(id),
+                                    selected,
+                                    enabled,
+                                )
+                                .clicked()
+                                {
+                                    new_selection = Some(if enabled {
+                                        DrawingToolbarAction::SelectCustomTool(id.clone())
+                                    } else {
+                                        DrawingToolbarAction::CustomToolUnavailable(id.clone())
                                     });
                                 }
                             }
@@ -194,6 +190,44 @@ impl DrawingToolbar {
         }
 
         self.apply_pick(new_selection?)
+    }
+
+    fn strip_tool(
+        ui: &mut Ui,
+        icon: &Icon,
+        label: &str,
+        is_sel: bool,
+        enabled: bool,
+    ) -> egui::Response {
+        let (rect, response) =
+            ui.allocate_exact_size(Vec2::splat(DESIGN_TOKENS.sizing.button_md), Sense::click());
+        let translated_label = l10n::text(ui.ctx(), label);
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::Role::Button, enabled, is_sel, &translated_label)
+        });
+        crate::styles::focus::draw_focus_ring(ui, &response, ui.active_theme().radius.sm);
+        // A disabled tool is drawn as egui draws a disabled widget but
+        // still answers clicks, so the host can say why.
+        let opacity = ui.opacity();
+        if !enabled {
+            ui.multiply_opacity(ui.visuals().disabled_alpha());
+        }
+
+        let bg = if is_sel {
+            ui.active_theme().ui.accent
+        } else if response.hovered() {
+            ui.visuals().widgets.hovered.bg_fill
+        } else {
+            Color32::TRANSPARENT
+        };
+        ui.painter()
+            .rect_filled(rect, ui.active_theme().radius.sm, bg);
+
+        let icon_rect = Rect::from_center_size(rect.center(), Vec2::splat(icon_sizes::MD));
+        render_svg_at_rect_themed(ui, icon, icon_rect, response.hovered(), is_sel);
+        ui.set_opacity(opacity);
+
+        response.on_hover_text(translated_label)
     }
 
     /// The dotted grip at the strip's leading edge. Returns how far the user dragged it.
