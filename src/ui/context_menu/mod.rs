@@ -57,7 +57,7 @@ pub enum ContextMenuAction {
         /// Instrument identifier used by the host.
         symbol: String,
     },
-    /// A limit or stop order at the clicked price, for the user to confirm in the order ticket
+    /// A limit, stop or stop-limit order at the clicked price, for the user to confirm in the order ticket
     /// ([`Trading::open_ticket`](crate::ui::trading::Trading::open_ticket)).
     Order(OrderRequest),
     /// Open the object tree panel
@@ -181,7 +181,8 @@ pub struct ChartContextMenu {
     /// The last price. Order entries need it: a click above it offers a sell limit and a buy
     /// stop, a click below it a buy limit and a sell stop.
     pub market_price: Option<f64>,
-    /// The symbol's tick size, to which order prices are rounded.
+    /// The symbol's tick size, to which order prices are rounded, and by which a stop-limit
+    /// row's limit lies beyond its stop; without it there is no stop-limit row.
     pub tick_size: Option<f64>,
     /// Names of the watchlists the symbol can be added to; without any, the menu has no such
     /// entry.
@@ -366,12 +367,12 @@ impl ChartContextMenu {
             && self.click_price.is_finite()
             && let Some(market) = self.market_price.filter(|price| price.is_finite())
         {
-            let price = self
+            let tick = self
                 .tick_size
-                .filter(|tick| tick.is_finite() && *tick > 0.0)
-                .map_or(self.click_price, |tick| {
-                    crate::scales::to_step(self.click_price, tick, f64::round)
-                });
+                .filter(|tick| tick.is_finite() && *tick > 0.0);
+            let price = tick.map_or(self.click_price, |tick| {
+                crate::scales::to_step(self.click_price, tick, f64::round)
+            });
             // Above the market a sell waits as a limit order and a buy as a stop order; below it,
             // the other way round. At the market either order can fill immediately.
             let (limit, stop) = if price >= market {
@@ -384,10 +385,26 @@ impl ChartContextMenu {
                 symbol,
                 self.order_quantity,
             );
+            // The limit lies one tick beyond the stop, in the direction it triggers.
+            let stop_limit = tick.map(|tick| {
+                let beyond = if stop == OrderSide::Buy {
+                    price + tick
+                } else {
+                    price - tick
+                };
+                OrderType::StopLimit {
+                    stop: price,
+                    limit: crate::scales::to_step(beyond, tick, f64::round),
+                }
+            });
             for (side, order_type) in [
-                (limit, OrderType::Limit(price)),
-                (stop, OrderType::Stop(price)),
+                (limit, Some(OrderType::Limit(price))),
+                (stop, Some(OrderType::Stop(price))),
+                (stop, stop_limit),
             ] {
+                let Some(order_type) = order_type else {
+                    continue;
+                };
                 if !self.order_types.accepts(&order_type) {
                     continue;
                 }
@@ -396,9 +413,15 @@ impl ChartContextMenu {
                     (OrderSide::Buy, OrderType::Limit(_)) => {
                         "Buy {quantity} {symbol} @ {price} limit"
                     }
+                    (OrderSide::Buy, OrderType::StopLimit { .. }) => {
+                        "Buy {quantity} {symbol} @ {price} stop limit {limit}"
+                    }
                     (OrderSide::Buy, _) => "Buy {quantity} {symbol} @ {price} stop",
                     (OrderSide::Sell, OrderType::Limit(_)) => {
                         "Sell {quantity} {symbol} @ {price} limit"
+                    }
+                    (OrderSide::Sell, OrderType::StopLimit { .. }) => {
+                        "Sell {quantity} {symbol} @ {price} stop limit {limit}"
                     }
                     (OrderSide::Sell, _) => "Sell {quantity} {symbol} @ {price} stop",
                 };
@@ -406,17 +429,20 @@ impl ChartContextMenu {
                     OrderSide::Buy => &embedded_icons::LONG_POS,
                     OrderSide::Sell => &embedded_icons::SHORT_POS,
                 };
+                let price = price_text(price);
+                let mut values = vec![
+                    ("quantity", quantity.as_str()),
+                    ("symbol", symbol.as_str()),
+                    ("price", price.as_str()),
+                ];
+                let limit;
+                if let OrderType::StopLimit { limit: value, .. } = order_type {
+                    limit = price_text(value);
+                    values.push(("limit", limit.as_str()));
+                }
                 trading.push(MenuEntry::Item(
                     MenuItem::new(
-                        l10n::format_text(
-                            ctx,
-                            key,
-                            &[
-                                ("quantity", quantity.as_str()),
-                                ("symbol", symbol.as_str()),
-                                ("price", price_text(price).as_str()),
-                            ],
-                        ),
+                        l10n::format_text(ctx, key, &values),
                         ContextMenuAction::Order(request),
                     )
                     .with_icon(icon),
@@ -566,7 +592,7 @@ mod tests {
     #[test]
     fn order_entries_follow_the_market() {
         use OrderSide::{Buy, Sell};
-        use OrderType::{Limit, Stop};
+        use OrderType::{Limit, Stop, StopLimit};
         let mut menu = ChartContextMenu::new();
         menu.symbol = "AAPL".into();
         menu.market_price = Some(100.0);
@@ -576,27 +602,105 @@ mod tests {
             stop: true,
             ..Capabilities::default()
         };
-        // (click, accepted types) -> entries
-        for (click, types, expected) in [
+        let all = Capabilities {
+            stop_limit: true,
+            ..menu.order_types
+        };
+        let stop_limit_only = Capabilities {
+            stop_limit: true,
+            ..Capabilities::default()
+        };
+        // (click, tick, accepted types) -> entries
+        for (click, tick, types, expected) in [
             (
                 101.1,
+                Some(0.25),
                 menu.order_types,
                 vec![(Sell, Limit(101.0)), (Buy, Stop(101.0))],
             ),
             (
                 100.0,
+                Some(0.25),
                 menu.order_types,
                 vec![(Sell, Limit(100.0)), (Buy, Stop(100.0))],
             ),
             (
                 98.9,
+                Some(0.25),
                 menu.order_types,
                 vec![(Buy, Limit(99.0)), (Sell, Stop(99.0))],
             ),
-            (98.9, stop_only, vec![(Sell, Stop(99.0))]),
-            (f64::NAN, menu.order_types, vec![]),
+            (98.9, Some(0.25), stop_only, vec![(Sell, Stop(99.0))]),
+            (f64::NAN, Some(0.25), menu.order_types, vec![]),
+            (
+                101.1,
+                Some(0.25),
+                all,
+                vec![
+                    (Sell, Limit(101.0)),
+                    (Buy, Stop(101.0)),
+                    (
+                        Buy,
+                        StopLimit {
+                            stop: 101.0,
+                            limit: 101.25,
+                        },
+                    ),
+                ],
+            ),
+            (
+                100.0,
+                Some(0.25),
+                all,
+                vec![
+                    (Sell, Limit(100.0)),
+                    (Buy, Stop(100.0)),
+                    (
+                        Buy,
+                        StopLimit {
+                            stop: 100.0,
+                            limit: 100.25,
+                        },
+                    ),
+                ],
+            ),
+            (
+                98.9,
+                Some(0.25),
+                all,
+                vec![
+                    (Buy, Limit(99.0)),
+                    (Sell, Stop(99.0)),
+                    (
+                        Sell,
+                        StopLimit {
+                            stop: 99.0,
+                            limit: 98.75,
+                        },
+                    ),
+                ],
+            ),
+            (
+                98.9,
+                Some(0.25),
+                stop_limit_only,
+                vec![(
+                    Sell,
+                    StopLimit {
+                        stop: 99.0,
+                        limit: 98.75,
+                    },
+                )],
+            ),
+            (
+                98.9,
+                None,
+                all,
+                vec![(Buy, Limit(98.9)), (Sell, Stop(98.9))],
+            ),
         ] {
             menu.click_price = click;
+            menu.tick_size = tick;
             menu.order_types = types;
             let entries: Vec<_> = menu
                 .build_menu_items(
@@ -712,6 +816,7 @@ mod tests {
         chart.market_price = Some(100.0);
         chart.tick_size = Some(1.0);
         chart.order_quantity = 2.0;
+        chart.order_types.stop_limit = true;
         chart.indicator_cnt = 2;
         chart.horizontal_line = true;
         chart.open(pos2(100.0, 100.0), 101.1);
@@ -730,6 +835,7 @@ mod tests {
                     "~1301~101.10~",
                     "~1301~",
                     "~2~1301~101.00~",
+                    "~2~1301~101.00~102.00~",
                     "~2~",
                 ],
             ),
