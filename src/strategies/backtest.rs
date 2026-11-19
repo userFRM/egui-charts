@@ -52,6 +52,9 @@ pub enum Slippage {
     },
     /// A fraction of absolute price.
     Fraction(f64),
+    /// A number of ticks, each one [`BacktestSettings::price_increment`], so that a tick stays
+    /// one increment when the increment changes.
+    Increments(u32),
 }
 
 /// Account and execution assumptions of a [`Backtest`].
@@ -93,7 +96,8 @@ pub struct BacktestSettings {
     /// there.
     /// Applies to entries, triggered stop-limits and profit-taking exits, without slippage.
     pub require_limit_cross: bool,
-    /// Smallest price increment for limit verification. Must be positive and finite.
+    /// Smallest price increment for limit verification and [`Slippage::Increments`]. Must be
+    /// positive and finite.
     pub price_increment: f64,
     /// Unit step used to truncate the minimum liquidation before closing four times that size.
     /// A deficit on a position smaller than one step closes the whole position, since truncation
@@ -188,6 +192,7 @@ impl BacktestSettings {
         let amount = match self.slippage {
             Slippage::Ticks { ticks, tick_size } => f64::from(ticks) * nonnegative(tick_size),
             Slippage::Fraction(rate) => price.abs() * nonnegative(rate),
+            Slippage::Increments(ticks) => f64::from(ticks) * nonnegative(self.price_increment),
         };
         price + sign(side) * amount
     }
@@ -711,6 +716,9 @@ impl Backtest {
             Slippage::Fraction(value) => format!("Fraction: {}", nonnegative(value)),
             Slippage::Ticks { ticks, tick_size } => {
                 format!("{ticks} ticks of {}", nonnegative(tick_size))
+            }
+            Slippage::Increments(ticks) => {
+                format!("{ticks} ticks of {}", nonnegative(settings.price_increment))
             }
         };
         report.properties = vec![

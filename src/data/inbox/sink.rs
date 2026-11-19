@@ -586,7 +586,7 @@ pub(crate) struct TradeBars {
     pub(crate) forming: Option<DateTime<Utc>>,
     current: Option<(Bar, u64)>,
     delta: f64,
-    closed: bool,
+    pub(in crate::data) closed: bool,
     last: Option<DateTime<Utc>>,
 }
 

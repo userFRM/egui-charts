@@ -916,6 +916,44 @@ impl Chart {
             self.series_label_formatter(id, transform.mode).as_deref(),
         ))
     }
+
+    /// `value`, read at `pos`, as the chart's context menus write it: a price of the main series
+    /// in its pane, else a value of the first series or study of the pane at `pos`. A bar series
+    /// writes it as [`Self::format_series_price`] does, and as a price on a percentage or
+    /// indexed scale too, since the menus act on prices: with its formatter, else at its scale's
+    /// precision, else by magnitude. A study writes it as its crosshair label does. `None` while
+    /// the series has no drawn pane.
+    #[cfg(feature = "ui")]
+    pub(crate) fn format_menu_price(&self, pos: egui::Pos2, value: f64) -> Option<String> {
+        use crate::scales::PriceFormatter as _;
+        let id = match self.pane_at_position(pos) {
+            Some(pane) if Some(pane) != self.series_pane(SeriesId::MAIN) => {
+                self.pane_series_iter(pane).next()?
+            }
+            _ => SeriesId::MAIN,
+        };
+        if let Some((_, study)) = self.indicators().find(|(study, _)| *study == id) {
+            return Some(study.format_value(value));
+        }
+        let map = self.series_price_map(id)?;
+        if !matches!(
+            map.transform().mode,
+            PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
+        ) {
+            return self.format_series_price(id, value);
+        }
+        if let Some(formatter) = self.series_price_formatter(id) {
+            return Some(formatter.format(value));
+        }
+        let decimals = self
+            .series_price_scale(id)?
+            .price_precision()
+            .map_or_else(|| crate::scales::price_decimals(value), usize::from);
+        Some(crate::scales::group_thousands(
+            crate::scales::DefaultPriceFormatter::with_precision(decimals).format(value),
+            map.thousands_sep(),
+        ))
+    }
 }
 
 #[cfg(test)]
