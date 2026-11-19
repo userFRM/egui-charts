@@ -297,7 +297,7 @@ total volume or signed delta through the first [`FootprintConfig::modes`](https:
 value area, POC, developing POC and volume nodes on the host's price mapping.
 [`developing_value_area`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradeProfile.html#method.developing_value_area) returns the inclusive value area rows after each
 contributing bar of the footprint the profile came from, by the final area's share and tie rules. The Profile section of the Symbol settings can trace that area and extend each
-completed session's POC, VAH and VAL to the first later bar that trades in their row; all are off by default, and sessions labelled "Partial executions" do not extend.
+completed session's POC, VAH and VAL to the first later bar that trades in their row; all are off by default, and sessions labelled "Partial executions" do not extend. The same section can hide the POC, choose the value area edges its guides draw, and colour the POC, each edge and the up and down volume inside and outside the value area; a level's colour also paints its extension.
 
 ## Stream studies
 
@@ -318,11 +318,13 @@ accepted heartbeat when replaying retained executions. Quotes seed the movement 
 lost book breaks it so the next quote does not count an unobserved jump. A loss leaves book size missing until
 a new synchronized snapshot arrives, including recovery within the same bar.
 
-On history-only tick-count and range intervals, Trade Rate uses the recorded executions
+On history-only tick-count, range, volume and delta intervals, Trade Rate uses the recorded executions
 when the tape reaches its start without a gap and reproduces every candle's key and OHLCV.
 Range intervals use the instrument's tick size; without it the study stays blank. The
 last candle may be unfinished. Each rate stops at its candle's last execution, even when
-the next candle starts at the same provider timestamp. A partial tape or a mismatched
+the next candle starts at the same provider timestamp. When a fill spans candles, each
+candle counts the fill once (or just its allocated lots in volume mode). Both rate windows
+count the original execution or its full size only once. A partial tape or a mismatched
 candle leaves a gap; candle volume alone never supplies an execution count.
 
 [`Indicator::order_flow_inputs`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.order_flow_inputs) returns the study's [`OrderFlowInput`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowInput.html) sources. Charts connect quote and
