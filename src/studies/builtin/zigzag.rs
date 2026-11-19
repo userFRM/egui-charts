@@ -145,6 +145,7 @@ impl ZigZag {
     }
 
     /// The minimum number of bars from a pivot to the bar that confirms the next reversal.
+    #[cfg(feature = "drawings")]
     pub(super) fn depth(&self) -> usize {
         self.depth
     }
