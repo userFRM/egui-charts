@@ -27,6 +27,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] TPO profiles can show a statistics table below them with the point of control, value area, initial balance range, TPO counts below and above the point of control, rotation factor and range extension, switched by one setting on the chart type and the study.
 - [x] TPO single-print highlights and the midpoint caption and marker are off by default and switch on from the chart's settings or the study's inputs. Charts and studies saved before the midpoint had a setting restore with it shown.
 - [x] The TPO study keeps its profiles to the trading day, the regular hours, the pre-market or post-market alone, or custom daily hours in any zone, counting only the bars inside them, and its extended-hours split profiles each segment of the day from the bars of its hours.
+- [x] TPO profiles can caption the initial balance high and low, the opening price, poor highs and lows and single-print runs besides the point of control, value area and midpoint, each with its own switch, write each caption's price at the instrument's precision and tag the newest profile's captioned levels on the price scale. Charts saved before these settings keep their captions.
 
 ### Pan, Zoom and Cursor
 

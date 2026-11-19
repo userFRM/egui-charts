@@ -2803,6 +2803,29 @@ impl Chart {
                 }),
         );
 
+        // The newest TPO profile's captioned levels use their caption colours on the axis.
+        if self.main_series_visible
+            && footprint.is_none()
+            && self.chart_type == ChartType::TimePriceOpportunity
+            && self.chart_type_params.tpo_level_tags
+        {
+            let tick = render_ctx.tick_size;
+            let config = self.chart_type_params.tpo_config(tick);
+            pending_values.extend(
+                rendering::candles::tpo::latest_level_tags(
+                    &self.state.data().bars,
+                    start_idx..start_idx + visible_data.len(),
+                    self.state.revision(),
+                    (&config, tick),
+                    &bar_clock,
+                    (&price_map, price_rect, |i| coords.idx_to_x(i)),
+                    (&ui.active_theme().chart, colors.bullish, colors.bearish),
+                )
+                .into_iter()
+                .map(|(price, fill)| (price, (rendering::axes::tag_text_color(fill), fill), false)),
+            );
+        }
+
         // The close of the last bar with a value before the trading date of `time`.
         let previous_session_close = |time| {
             let bars = &self.state.data().bars;

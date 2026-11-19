@@ -217,6 +217,93 @@ mod tests {
         }
     }
 
+    /// Rows of four 0.25 ticks: day one counts 2,2 (POC 100, VA 100..101);
+    /// day two counts 2,3,2 (POC 111, VA 110..112). Only day two tags the scale.
+    #[test]
+    fn tpo_level_tags_mark_only_the_latest_profile() {
+        use crate::model::{Bar, BarData, ChartType, ChartTypeParams, Instrument, Timeframe};
+        use crate::widget::SeriesId;
+        let start: chrono::DateTime<chrono::Utc> = "2024-01-02T14:30:00Z".parse().unwrap();
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let mut baseline = Vec::new();
+            for tags in [false, true] {
+                let bars = [
+                    (0, 100.25, 101.0, 100.0, 100.75),
+                    (30, 100.25, 101.0, 100.0, 100.75),
+                    (1440, 110.5, 112.0, 110.0, 111.0),
+                    (1470, 111.0, 112.0, 110.0, 111.5),
+                    (1500, 111.0, 111.0, 111.0, 111.0),
+                ]
+                .into_iter()
+                .map(|(m, o, h, l, c)| {
+                    Bar::new(start + chrono::Duration::minutes(m), o, h, l, c, 1.0)
+                })
+                .collect();
+                let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+                chart.set_timeframe(Timeframe::Min30);
+                chart.set_instrument(Some(Instrument::new("ES").with_tick_size(0.25)));
+                chart.set_chart_type(ChartType::TimePriceOpportunity);
+                chart.set_chart_type_params(ChartTypeParams {
+                    tpo_row_ticks: 4,
+                    tpo_level_tags: tags,
+                    ..Default::default()
+                });
+                chart.config_mut().show_volume = false;
+                chart.config_mut().show_symbol_last_val = false;
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let painted = shapes(&ctx, &mut chart, 0.0, vec![]);
+                let plot = chart.get_rendered_price_rect();
+                let mut tag_rects: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Rect(r)
+                            if r.rect.left() >= plot.right() - 1.0
+                                && [theme.chart.axis_text, theme.chart.axis_text_secondary]
+                                    .contains(&r.fill) =>
+                        {
+                            Some((r.rect, r.fill))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                // The scale's existing controls can use the caption colours too.
+                if !tags {
+                    baseline = tag_rects;
+                    continue;
+                }
+                tag_rects.retain(|tag| !baseline.contains(tag));
+                assert_eq!(
+                    tag_rects.len(),
+                    3,
+                    "tags={tags}, background {:?}",
+                    theme.chart.bg
+                );
+                if tags {
+                    let map = chart.series_price_map(SeriesId::MAIN).unwrap();
+                    for (price, color) in [
+                        (111.0, theme.chart.axis_text),
+                        (112.0, theme.chart.axis_text_secondary),
+                        (110.0, theme.chart.axis_text_secondary),
+                    ] {
+                        assert!(
+                            tag_rects.iter().any(|(r, fill)| *fill == color
+                                && r.y_range().contains(map.price_to_y(price))),
+                            "missing {price}"
+                        );
+                    }
+                    for price in [100.0, 101.0] {
+                        assert!(
+                            tag_rects
+                                .iter()
+                                .all(|(r, _)| !r.y_range().contains(map.price_to_y(price)))
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[cfg(feature = "studies")]
     #[test]
     fn tpo_study_draws_the_table_of_its_statistics_input() {

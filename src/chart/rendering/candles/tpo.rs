@@ -53,6 +53,190 @@ const LETTER_MIN_COLUMN_PX: f32 = 7.0;
 /// Width kept free to the left of a profile for its level captions.
 const LABEL_ROOM_PX: f32 = 40.0;
 
+/// Estimated caption digit width, shared by painting, fitting and hit testing.
+// shortcut: font-free room assumes digits no wider than 0.6 em; measure if host fonts clip.
+const PRICE_CHAR_PX: f32 = 0.6 * typography::XS;
+
+/// Caption order also decides which coinciding level keeps its own row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Level {
+    Poc,
+    ValueAreaHigh,
+    ValueAreaLow,
+    Midpoint,
+    InitialBalanceHigh,
+    InitialBalanceLow,
+    Open,
+    PoorHigh,
+    PoorLow,
+    SinglePrints,
+}
+
+impl Level {
+    /// Caption text and translation key.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Poc => "POC",
+            Self::ValueAreaHigh => "VAH",
+            Self::ValueAreaLow => "VAL",
+            Self::Midpoint => "Mid",
+            Self::InitialBalanceHigh => "IBH",
+            Self::InitialBalanceLow => "IBL",
+            Self::Open => "Open",
+            Self::PoorHigh => "PH",
+            Self::PoorLow => "PL",
+            Self::SinglePrints => "SP",
+        }
+    }
+
+    /// Row levels mark the row centre rather than the exact price.
+    fn is_row(self) -> bool {
+        matches!(
+            self,
+            Self::Poc
+                | Self::ValueAreaHigh
+                | Self::ValueAreaLow
+                | Self::PoorHigh
+                | Self::PoorLow
+                | Self::SinglePrints
+        )
+    }
+}
+
+/// A single price, or the first and last row of a single-print run.
+struct Caption {
+    level: Level,
+    low: f64,
+    high: f64,
+}
+
+fn level_captions(profile: &TPOProfile, config: &TPOConfig) -> Vec<Caption> {
+    let labels = &config.labels;
+    let balance =
+        config.show_initial_balance && profile.initial_balance_high >= profile.initial_balance_low;
+    let mut captions: Vec<_> = [
+        (Level::Poc, config.show_poc && labels.poc, profile.poc_price),
+        (
+            Level::ValueAreaHigh,
+            config.show_value_area && labels.value_area_high,
+            profile.value_area_high,
+        ),
+        (
+            Level::ValueAreaLow,
+            config.show_value_area && labels.value_area_low,
+            profile.value_area_low,
+        ),
+        (
+            Level::Midpoint,
+            config.show_midpoint && labels.midpoint,
+            (profile.profile_high + profile.profile_low) * 0.5,
+        ),
+        (
+            Level::InitialBalanceHigh,
+            balance && labels.initial_balance_high,
+            profile.initial_balance_high,
+        ),
+        (
+            Level::InitialBalanceLow,
+            balance && labels.initial_balance_low,
+            profile.initial_balance_low,
+        ),
+        (
+            Level::Open,
+            config.show_opening_range && labels.opening_price,
+            profile.opening_price,
+        ),
+        (
+            Level::PoorHigh,
+            config.show_poor_highs_lows && profile.has_poor_high && labels.poor_high,
+            profile.profile_high,
+        ),
+        (
+            Level::PoorLow,
+            config.show_poor_highs_lows && profile.has_poor_low && labels.poor_low,
+            profile.profile_low,
+        ),
+    ]
+    .into_iter()
+    .filter(|(_, shown, _)| *shown)
+    .map(|(level, _, price)| Caption {
+        level,
+        low: price,
+        high: price,
+    })
+    .collect();
+    if config.show_single_prints && labels.single_prints {
+        captions.extend(
+            profile
+                .single_prints
+                .chunk_by(|a, b| (b - a - profile.tick_size).abs() < profile.tick_size * 0.5)
+                .map(|run| Caption {
+                    level: Level::SinglePrints,
+                    low: run[0],
+                    high: run[run.len() - 1],
+                }),
+        );
+    }
+    captions
+}
+
+fn caption_value(caption: &Caption, profile: &TPOProfile) -> String {
+    let tick = if caption.level == Level::Midpoint {
+        profile.instrument_tick * 0.5
+    } else {
+        profile.instrument_tick
+    };
+    let decimals = crate::scales::decimals(tick);
+    let Caption { low, high, .. } = *caption;
+    if low == high {
+        format!("{low:.decimals$}")
+    } else {
+        format!("{low:.decimals$} / {high:.decimals$}")
+    }
+}
+
+fn caption_color(
+    level: Level,
+    profile: &TPOProfile,
+    chart: &ChartColors,
+    render_config: &TpoRenderConfig,
+    bullish: Color32,
+    bearish: Color32,
+) -> Color32 {
+    let color = match level {
+        Level::Poc | Level::PoorHigh | Level::PoorLow => return chart.axis_text,
+        Level::ValueAreaHigh | Level::ValueAreaLow => return chart.axis_text_secondary,
+        Level::Midpoint => bearish,
+        Level::InitialBalanceHigh | Level::InitialBalanceLow => render_config.initial_balance_color,
+        Level::Open => {
+            if profile.poc_price >= profile.opening_price {
+                bullish
+            } else {
+                bearish
+            }
+        }
+        Level::SinglePrints => render_config.single_print_color.to_opaque(),
+    };
+    readable_color(color, chart.axis_text, &[chart.bg], 4.5)
+}
+
+/// All placed profiles contribute, so vertical scrolling keeps the same gutter.
+fn label_room<'a>(config: &TPOConfig, profiles: impl IntoIterator<Item = &'a TPOProfile>) -> f32 {
+    if !config.labels.prices {
+        return LABEL_ROOM_PX;
+    }
+    let chars = profiles
+        .into_iter()
+        .flat_map(|profile| {
+            level_captions(profile, config)
+                .into_iter()
+                .map(move |caption| caption_value(&caption, profile).chars().count() + 1)
+        })
+        .max()
+        .unwrap_or(0);
+    LABEL_ROOM_PX + PRICE_CHAR_PX * chars as f32
+}
+
 /// TPO rendering configuration (visual settings)
 #[derive(Debug, Clone)]
 pub struct TpoRenderConfig {
@@ -401,7 +585,7 @@ pub fn render_live_tpo(
         (base_config, instrument_tick),
         clock,
         (price_map, price_rect, |i| idx_to_coord(i, chart_rect_min_x)),
-        |profile, config, anchor_x, column_width, room, labels| {
+        |profile, config, anchor_x, column_width, room, label_room| {
             draw_session_profile(
                 painter,
                 price_rect,
@@ -412,7 +596,7 @@ pub fn render_live_tpo(
                 anchor_x,
                 column_width,
                 room,
-                labels,
+                label_room,
                 bullish_color,
                 bearish_color,
             );
@@ -428,7 +612,7 @@ pub(crate) fn visit_profiles(
     (base_config, instrument_tick): (&TPOConfig, Option<f64>),
     clock: &BarClock,
     (price_map, price_rect, idx_to_coord): (&PriceMap, Rect, impl Fn(usize) -> f32),
-    mut visit: impl FnMut(&TPOProfile, &TPOConfig, f32, f32, f32, bool),
+    mut visit: impl FnMut(&TPOProfile, &TPOConfig, f32, f32, f32, f32),
 ) {
     if visible.is_empty() || visible.end > full_data.len() {
         return;
@@ -456,10 +640,56 @@ pub(crate) fn visit_profiles(
         &config,
         &sessions,
         idx_to_coord,
-        |profile, anchor, column, room, labels| {
-            visit(profile, &config, anchor, column, room, labels)
+        |profile, anchor, column, room, label_room| {
+            visit(profile, &config, anchor, column, room, label_room)
         },
     );
+}
+
+/// Captioned prices and colours of the profile holding the last bar, while it is placed.
+/// Single-print runs span prices and take no scale tag.
+pub(crate) fn latest_level_tags(
+    full_data: &[Bar],
+    visible: Range<usize>,
+    revision: u64,
+    config: (&TPOConfig, Option<f64>),
+    clock: &BarClock,
+    placement: (&PriceMap, Rect, impl Fn(usize) -> f32),
+    (chart, bullish, bearish): (&ChartColors, Color32, Color32),
+) -> Vec<(f64, Color32)> {
+    let mut tags = Vec::new();
+    let right = placement.1.right();
+    visit_profiles(
+        full_data,
+        visible,
+        revision,
+        config,
+        clock,
+        placement,
+        |profile, config, anchor, _, room, _| {
+            if room.is_infinite() && anchor < right {
+                tags.extend(
+                    level_captions(profile, config)
+                        .into_iter()
+                        .filter(|caption| caption.level != Level::SinglePrints)
+                        .map(|caption| {
+                            (
+                                caption.low,
+                                caption_color(
+                                    caption.level,
+                                    profile,
+                                    chart,
+                                    &TpoRenderConfig::default(),
+                                    bullish,
+                                    bearish,
+                                ),
+                            )
+                        }),
+                );
+            }
+        },
+    );
+    tags
 }
 
 /// `base_config` with a row height: its own, or about `TARGET_ROWS` rows over the visible
@@ -498,7 +728,7 @@ fn place_profiles(
     config: &TPOConfig,
     sessions: &ExchangeSessionProvider,
     idx_to_coord: impl Fn(usize) -> f32,
-    mut visit: impl FnMut(&TPOProfile, f32, f32, f32, bool),
+    mut visit: impl FnMut(&TPOProfile, f32, f32, f32, f32),
 ) {
     let balance_room = if config.show_initial_balance_extensions {
         10.0
@@ -556,14 +786,17 @@ fn place_profiles(
     }
     // Level labels sit in the room left before each next session, so they show only while every
     // session in full view keeps at least as much width for its own profile.
-    let labels = placed
-        .iter()
-        .filter(|(.., cut)| !cut)
-        .all(|&(_, _, width, ..)| width >= 2.0 * LABEL_ROOM_PX);
-    let room = (if labels { LABEL_ROOM_PX } else { 0.0 }).max(balance_room + poor_room);
+    let label_room = label_room(config, placed.iter().map(|p| p.0));
+    // The forming session has infinite room, but its priced gutter must still fit the plot.
+    let labels = (!config.labels.prices || label_room < price_rect.width())
+        && placed
+            .iter()
+            .filter(|(.., cut)| !cut)
+            .all(|&(_, _, width, ..)| width >= 2.0 * label_room);
+    let room = (if labels { label_room } else { 0.0 }).max(balance_room + poor_room);
     if labels {
         for (_, anchor, width, widest, _) in &mut placed {
-            let gutter = (price_rect.left() + LABEL_ROOM_PX - *anchor).max(0.0);
+            let gutter = (price_rect.left() + label_room - *anchor).max(0.0);
             if *width >= gutter + room + *widest as f32 {
                 *anchor += gutter;
                 *width -= gutter;
@@ -584,7 +817,7 @@ fn place_profiles(
             anchor_x,
             column.min(fit(width, widest)).max(1.0),
             width,
-            labels,
+            if labels { label_room } else { 0.0 },
         );
     }
 }
@@ -646,7 +879,7 @@ pub(crate) fn profile_at(
         &config,
         &sessions,
         |i| mapping.idx_to_x(i),
-        |profile, anchor, column, _, labels| {
+        |profile, anchor, column, _, label_room| {
             let column = column.min(profile_row_height(profile, &mapping.price));
             let price = mapping.y_to_price(pos.y);
             let row = profile.row_price(price);
@@ -665,7 +898,7 @@ pub(crate) fn profile_at(
                 letters.len()
             };
             // Keep the gutter beside occupied rows in the profile's context-menu target.
-            let left = anchor - if labels { LABEL_ROOM_PX } else { 0.0 };
+            let left = anchor - label_room;
             if reach > 0 && pos.x >= left && pos.x < anchor + reach as f32 * column {
                 let period = (pos.x >= anchor)
                     .then(|| ((pos.x - anchor) / column) as usize)
@@ -687,7 +920,7 @@ pub(crate) fn profile_at(
 }
 
 /// Draw one session's profile anchored at pixel x `anchor_x`, growing rightward in columns of
-/// `column_width` pixels, with its level labels to the left when `labels` is set and its
+/// `column_width` pixels, with its level labels in the left `label_room` and its
 /// statistics below when they fit the `room` of its session.
 #[allow(clippy::too_many_arguments)]
 fn draw_session_profile(
@@ -700,7 +933,7 @@ fn draw_session_profile(
     anchor_x: f32,
     column_width: f32,
     room: f32,
-    labels: bool,
+    label_room: f32,
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
@@ -928,7 +1161,6 @@ fn draw_session_profile(
         );
     }
 
-    let guide_color = chart.axis_text_secondary;
     if config.show_value_area {
         let stroke = Stroke::new(
             DESIGN_TOKENS.stroke.light,
@@ -949,47 +1181,39 @@ fn draw_session_profile(
         }
     }
 
-    if labels {
+    if label_room > 0.0 {
         let mut label_rows = Vec::new();
-        for (show, price, y, text, color) in [
-            (
-                config.show_poc,
-                profile.poc_price,
-                row_y(profile.poc_price),
-                "POC",
-                chart.axis_text,
-            ),
-            (
-                config.show_value_area,
-                profile.value_area_high,
-                row_y(profile.value_area_high),
-                "VAH",
-                guide_color,
-            ),
-            (
-                config.show_value_area,
-                profile.value_area_low,
-                row_y(profile.value_area_low),
-                "VAL",
-                guide_color,
-            ),
-            (
-                config.show_midpoint,
-                (profile.profile_high + profile.profile_low) * 0.5,
-                coords.price_to_y((profile.profile_high + profile.profile_low) * 0.5),
-                "Mid",
-                readable_color(bearish_color, chart.axis_text, &[chart.bg], 4.5),
-            ),
-        ] {
-            if !show || !price_rect.y_range().contains(y) || anchor_x - price_rect.left() < 32.0 {
+        let captions = level_captions(profile, config);
+        let candidates = 2 * captions.len();
+        for caption in captions {
+            let level = caption.level;
+            let y_at = |price| {
+                if level.is_row() {
+                    row_y(price)
+                } else {
+                    coords.price_to_y(price)
+                }
+            };
+            let y = (y_at(caption.low) + y_at(caption.high)) * 0.5;
+            if !price_rect.y_range().contains(y) || anchor_x - price_rect.left() < label_room - 8.0
+            {
                 continue;
             }
-            let caption_text = l10n::text(painter.ctx(), text);
-            let galley = painter.layout_no_wrap(
-                caption_text.clone(),
-                FontId::proportional(typography::XS),
-                color,
+            let name = l10n::text(painter.ctx(), level.name());
+            let text = if config.labels.prices {
+                format!("{name} {}", caption_value(&caption, profile))
+            } else {
+                name.clone()
+            };
+            let color = caption_color(
+                level,
+                profile,
+                &chart,
+                render_config,
+                bullish_color,
+                bearish_color,
             );
+            let galley = painter.layout_no_wrap(text, FontId::proportional(typography::XS), color);
             let half_height = galley.size().y * 0.5;
             if price_rect.height() < galley.size().y {
                 continue;
@@ -1001,18 +1225,17 @@ fn draw_session_profile(
             );
             // Displace only the caption when levels coincide; the marker keeps its price.
             // Each earlier caption can block two neighbouring candidates.
-            let Some(label_y) = [
-                0.0, -1.0, 1.0, -2.0, 2.0, -3.0, 3.0, -4.0, 4.0, -5.0, 5.0, -6.0, 6.0,
-            ]
-            .into_iter()
-            .map(|offset| center + offset * spacing)
-            .find(|candidate| {
-                *candidate >= price_rect.top() + half_height
-                    && *candidate <= price_rect.bottom() - half_height
-                    && label_rows
-                        .iter()
-                        .all(|previous: &f32| (candidate - previous).abs() >= galley.size().y + 1.0)
-            }) else {
+            let Some(label_y) = std::iter::once(0.0)
+                .chain((1..=candidates).flat_map(|i| [-(i as f32), i as f32]))
+                .map(|offset| center + offset * spacing)
+                .find(|candidate| {
+                    *candidate >= price_rect.top() + half_height
+                        && *candidate <= price_rect.bottom() - half_height
+                        && label_rows.iter().all(|previous: &f32| {
+                            (candidate - previous).abs() >= galley.size().y + 1.0
+                        })
+                })
+            else {
                 continue;
             };
             label_rows.push(label_y);
@@ -1025,23 +1248,26 @@ fn draw_session_profile(
                     Stroke::new(DESIGN_TOKENS.stroke.extra_thin, color),
                 );
             }
-            let caption = egui::Align2::RIGHT_CENTER
+            let caption_rect = egui::Align2::RIGHT_CENTER
                 .anchor_size(Pos2::new(anchor_x - 8.0, label_y), galley.size());
-            painter.galley(caption.min, galley, color);
+            painter.galley(caption_rect.min, galley, color);
             let ctx = painter.ctx();
             if ctx.pointer_hover_pos().is_some_and(|p| {
-                caption.contains(p) && ctx.layer_id_at(p) == Some(painter.layer_id())
+                caption_rect.contains(p) && ctx.layer_id_at(p) == Some(painter.layer_id())
             }) {
                 egui::Tooltip::always_open(
                     ctx.clone(),
                     painter.layer_id(),
-                    egui::Id::unique(("tpo-level", profile.session_date, text)),
-                    caption,
+                    egui::Id::unique((
+                        "tpo-level",
+                        profile.session_date,
+                        level,
+                        caption.low.to_bits(),
+                    )),
+                    caption_rect,
                 )
                 .show(|ui| {
-                    // A midpoint can lie halfway between instrument ticks.
-                    let decimals = crate::scales::decimals(profile.instrument_tick * 0.5);
-                    ui.label(format!("{caption_text} {price:.decimals$}"));
+                    ui.label(format!("{name} {}", caption_value(&caption, profile)));
                 });
             }
             painter.add(Shape::convex_polygon(
@@ -1118,9 +1344,8 @@ fn draw_session_profile(
 
     if config.show_statistics {
         // The next session's captions sit in the strip that ends this session's room.
-        let captions =
-            labels && (config.show_poc || config.show_value_area || config.show_midpoint);
-        let room = if captions { room - LABEL_ROOM_PX } else { room };
+        let captions = label_room > 0.0 && config.shows_captions();
+        let room = if captions { room - label_room } else { room };
         draw_statistics(painter, price_rect, coords, profile, anchor_x, room);
     }
 }
@@ -1384,7 +1609,7 @@ mod tests {
                 10.25,
                 12.0,
                 f32::INFINITY,
-                false,
+                0.0,
                 Color32::GREEN,
                 Color32::RED,
             );
@@ -1684,7 +1909,7 @@ mod tests {
                     10.25,
                     12.0,
                     f32::INFINITY,
-                    false,
+                    0.0,
                     Color32::GREEN,
                     Color32::RED,
                 );
@@ -1758,7 +1983,7 @@ mod tests {
                 40.0,
                 20.0,
                 f32::INFINITY,
-                false,
+                0.0,
                 Color32::GREEN,
                 Color32::RED,
             );
@@ -1845,7 +2070,7 @@ mod tests {
                     40.0,
                     20.0,
                     f32::INFINITY,
-                    false,
+                    0.0,
                     Color32::GREEN,
                     Color32::RED,
                 );
@@ -2052,7 +2277,7 @@ mod tests {
                                 10.25,
                                 column,
                                 f32::INFINITY,
-                                false,
+                                0.0,
                                 Color32::GREEN,
                                 Color32::RED,
                             );
@@ -2178,7 +2403,7 @@ mod tests {
                 10.0,
                 20.0,
                 f32::INFINITY,
-                true,
+                LABEL_ROOM_PX,
                 Color32::GREEN,
                 Color32::RED,
             );
@@ -2224,7 +2449,7 @@ mod tests {
             10.0,
             20.0,
             f32::INFINITY,
-            false,
+            0.0,
             Color32::GREEN,
             Color32::RED,
         );
@@ -2242,6 +2467,270 @@ mod tests {
         assert!(letter.is_some_and(|y| (y - 74.0).abs() < 1.0), "{letter:?}");
     }
 
+    /// Each caption follows its own switch and visible level, including coinciding levels and
+    /// instrument-precision prices. Counts in F1 are 2,2,2,2,1,1,3,3,3,3,2 (24 TPOs):
+    /// POC 106; the 17-TPO target grows up to 110, then down to 103 (18 TPOs).
+    #[test]
+    fn level_captions_show_exactly_their_switches_while_levels_are_drawn() {
+        use crate::model::TPOLabels;
+        let fixture = |prices: &[(f64, f64, f64, f64)]| {
+            prices
+                .iter()
+                .enumerate()
+                .map(|(i, &(o, h, l, c))| {
+                    Bar::new(
+                        chrono::DateTime::UNIX_EPOCH + Duration::minutes(30 * i as i64),
+                        o,
+                        h,
+                        l,
+                        c,
+                        1.0,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let f1 = fixture(&[
+            (107.0, 110.0, 106.0, 108.0),
+            (108.0, 110.0, 105.0, 106.0),
+            (104.0, 104.0, 100.0, 101.0),
+            (101.0, 103.0, 100.0, 102.0),
+            (107.0, 109.0, 106.0, 108.0),
+        ]);
+        let f2 = fixture(&[(100.5, 101.25, 100.0, 101.0), (101.0, 101.0, 100.25, 100.5)]);
+        let names = [
+            "POC", "VAH", "VAL", "Mid", "IBH", "IBL", "Open", "PH", "PL", "SP",
+        ];
+        let labels = |on: &[&str], prices| TPOLabels {
+            poc: on.contains(&"POC"),
+            value_area_high: on.contains(&"VAH"),
+            value_area_low: on.contains(&"VAL"),
+            midpoint: on.contains(&"Mid"),
+            initial_balance_high: on.contains(&"IBH"),
+            initial_balance_low: on.contains(&"IBL"),
+            opening_price: on.contains(&"Open"),
+            poor_high: on.contains(&"PH"),
+            poor_low: on.contains(&"PL"),
+            single_prints: on.contains(&"SP"),
+            prices,
+        };
+        let config = TPOConfig {
+            show_midpoint: true,
+            show_poor_highs_lows: true,
+            show_single_prints: true,
+            ..Default::default()
+        };
+        let with_labels = |on: &[&str], prices| TPOConfig {
+            labels: labels(on, prices),
+            ..config.clone()
+        };
+        let mut rows = vec![(
+            "defaults",
+            &f1,
+            config.clone(),
+            vec!["POC", "VAH", "VAL", "Mid"],
+        )];
+        for name in names {
+            rows.push((name, &f1, with_labels(&[name], false), vec![name]));
+        }
+        rows.extend([
+            ("all", &f1, with_labels(&names, false), names.to_vec()),
+            (
+                "all prices",
+                &f1,
+                with_labels(&names, true),
+                vec![
+                    "POC 106",
+                    "VAH 110",
+                    "VAL 103",
+                    "Mid 105.0",
+                    "IBH 110",
+                    "IBL 105",
+                    "Open 107",
+                    "PH 110",
+                    "PL 100",
+                    "SP 104 / 105",
+                ],
+            ),
+            (
+                "balance hidden",
+                &f1,
+                TPOConfig {
+                    show_initial_balance: false,
+                    ..with_labels(&["IBH", "IBL"], false)
+                },
+                vec![],
+            ),
+            (
+                "poor extremes hidden",
+                &f1,
+                TPOConfig {
+                    show_poor_highs_lows: false,
+                    ..with_labels(&["PH", "PL"], false)
+                },
+                vec![],
+            ),
+            (
+                "single prints hidden",
+                &f1,
+                TPOConfig {
+                    show_single_prints: false,
+                    ..with_labels(&["SP"], false)
+                },
+                vec![],
+            ),
+            (
+                "opening hidden",
+                &f1,
+                TPOConfig {
+                    show_opening_range: false,
+                    ..with_labels(&["Open"], false)
+                },
+                vec![],
+            ),
+            (
+                "coinciding VAH and IBH",
+                &f1,
+                with_labels(&["VAH", "IBH"], false),
+                vec!["VAH", "IBH"],
+            ),
+            (
+                "quarter tick IBH",
+                &f2,
+                TPOConfig {
+                    tick_size: 0.25,
+                    ..with_labels(&["IBH"], true)
+                },
+                vec!["IBH 101.25"],
+            ),
+            (
+                "half tick midpoint",
+                &f2,
+                TPOConfig {
+                    tick_size: 0.25,
+                    ..with_labels(&["Mid"], true)
+                },
+                vec!["Mid 100.625"],
+            ),
+            (
+                "balance absent",
+                &f1,
+                TPOConfig {
+                    initial_balance_minutes: 0,
+                    ..with_labels(&["IBH", "IBL"], false)
+                },
+                vec![],
+            ),
+            (
+                "POC hidden",
+                &f1,
+                TPOConfig {
+                    show_poc: false,
+                    ..with_labels(&["POC"], false)
+                },
+                vec![],
+            ),
+            (
+                "value area hidden",
+                &f1,
+                TPOConfig {
+                    show_value_area: false,
+                    ..with_labels(&["VAH", "VAL"], false)
+                },
+                vec![],
+            ),
+            (
+                "midpoint hidden",
+                &f1,
+                TPOConfig {
+                    show_midpoint: false,
+                    ..with_labels(&["Mid"], false)
+                },
+                vec![],
+            ),
+        ]);
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(95.0, 115.0),
+            0.0,
+            400.0,
+            false,
+        );
+        let mut failures = Vec::new();
+        for width in [400.0, 80.0] {
+            let rect = Rect::from_x_y_ranges(0.0..=width, 0.0..=400.0);
+            for (case, bars, config, expected) in &rows {
+                // The longest priced gutters are 100 px for F1 and at least 82 px for F2.
+                let mut expected = if width == 80.0 && config.labels.prices {
+                    vec![]
+                } else {
+                    expected.clone()
+                };
+                let ctx = egui::Context::default();
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(rect),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        render_live_tpo(
+                            ui.painter(),
+                            rect,
+                            bars,
+                            0..bars.len(),
+                            1,
+                            &coords,
+                            config,
+                            None,
+                            &BarClock::new(Timeframe::Min30),
+                            |i, _| i as f32 * 30.0,
+                            0.0,
+                            Color32::GREEN,
+                            Color32::RED,
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+                let captions: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Text(t)
+                            if names.contains(&t.galley.text().split(' ').next().unwrap()) =>
+                        {
+                            Some((
+                                t.galley.text().to_owned(),
+                                Rect::from_min_size(t.pos, t.galley.size()),
+                            ))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let mut texts: Vec<_> = captions.iter().map(|(text, _)| text.as_str()).collect();
+                texts.sort_unstable();
+                expected.sort_unstable();
+                let contained = captions.iter().all(|(_, r)| rect.contains_rect(*r));
+                let separate = captions
+                    .iter()
+                    .enumerate()
+                    .all(|(i, (_, r))| captions[..i].iter().all(|(_, prev)| !r.intersects(*prev)));
+                let profile_in_view = output.shapes.iter().any(|shape| match &shape.shape {
+                    Shape::Text(t)
+                        if t.galley.text().len() == 1
+                            && t.galley.text().chars().all(|c| c.is_ascii_uppercase()) =>
+                    {
+                        rect.contains(Rect::from_min_size(t.pos, t.galley.size()).center())
+                    }
+                    Shape::Rect(r) if r.rect.width() > 2.0 => rect.contains(r.rect.center()),
+                    _ => false,
+                });
+                if texts != expected || !contained || !separate || !profile_in_view {
+                    failures.push(format!("{case}, {width}px: expected {expected:?}, got {texts:?}, contained={contained}, separate={separate}, profile_in_view={profile_in_view}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     #[test]
     fn level_labels_and_extremes_fit_between_sessions() {
         for (high, tick, prices, readouts) in [
@@ -2249,13 +2738,13 @@ mod tests {
                 101.0,
                 1.0,
                 [99.0, 101.0, 99.0, 100.0],
-                ["POC 99.0", "VAH 101.0", "VAL 99.0", "Mid 100.0"],
+                ["POC 99", "VAH 101", "VAL 99", "Mid 100.0"],
             ),
             (
                 101.25,
                 0.25,
                 [99.0, 100.5, 99.0, 100.125],
-                ["POC 99.000", "VAH 100.500", "VAL 99.000", "Mid 100.125"],
+                ["POC 99.00", "VAH 100.50", "VAL 99.00", "Mid 100.125"],
             ),
         ] {
             // Three UTC days of four half-hour bars each
@@ -2688,6 +3177,7 @@ mod tests {
         let cases = [
             ("steady", [true, true], [6, 3], 'A', 1.0),
             ("display", [true, true], [6, 3], 'A', 1.0),
+            ("labels", [true, true], [6, 3], 'A', 1.0),
             ("forming bar", [true, false], [6, 4], 'A', 1.0),
             ("revision", [false, false], [6, 4], 'A', 1.0),
             ("older correction", [false, false], [7, 4], 'A', 1.0),
@@ -2709,6 +3199,11 @@ mod tests {
             match change {
                 "steady" | "steady NaN" => {}
                 "display" => config.display_mode = TPODisplayMode::Blocks,
+                "labels" => {
+                    config.labels.poc = false;
+                    config.labels.initial_balance_high = true;
+                    config.labels.prices = true;
+                }
                 "forming bar" => bars[2].high = 103.0,
                 "revision" => revision += 1,
                 "older correction" => {
@@ -2740,7 +3235,7 @@ mod tests {
             );
             assert_eq!(
                 Rc::ptr_eq(&current, &previous),
-                matches!(change, "steady" | "display" | "steady NaN"),
+                matches!(change, "steady" | "display" | "labels" | "steady NaN"),
                 "session lookup reuse: {change}"
             );
             assert!(Rc::ptr_eq(
@@ -2920,7 +3415,7 @@ mod tests {
                 10.0,
                 20.0,
                 f32::INFINITY,
-                true,
+                LABEL_ROOM_PX,
                 Color32::GREEN,
                 Color32::RED,
             );

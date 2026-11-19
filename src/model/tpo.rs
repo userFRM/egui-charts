@@ -127,7 +127,8 @@ pub struct TPOConfig {
     pub show_poc: bool,
     /// Show Value Area
     pub show_value_area: bool,
-    /// Show the caption and marker at the middle of the profile's range
+    /// Show the caption and marker at the middle of the profile's range, with
+    /// [`TPOLabels::midpoint`].
     pub show_midpoint: bool,
     /// Show Initial Balance
     pub show_initial_balance: bool,
@@ -141,6 +142,8 @@ pub struct TPOConfig {
     pub show_statistics: bool,
     /// Highlight opening range
     pub show_opening_range: bool,
+    /// Level captions and their prices; see [`TPOLabels`].
+    pub labels: TPOLabels,
     /// Split each session where it moves between regular, extended and overnight hours, giving
     /// separate overnight, pre-market, regular and post-market profiles.
     /// Session profiles only; see [`TPOProfilePeriod`].
@@ -202,6 +205,7 @@ impl Default for TPOConfig {
             show_single_prints: false,
             show_statistics: false,
             show_opening_range: true,
+            labels: TPOLabels::default(),
             split_sessions: false,
             session: ProfileSession::Chart,
             profile_period: TPOProfilePeriod::Session,
@@ -210,6 +214,73 @@ impl Default for TPOConfig {
             splits: Vec::new(),
             latest_session_only: false,
             instrument_tick: None,
+        }
+    }
+}
+
+/// Level captions beside a TPO profile, with optional prices.
+///
+/// Each switch requires its level to be drawn by [`TPOConfig`]: `show_poc`,
+/// `show_value_area`, `show_midpoint`, `show_initial_balance`, `show_opening_range`,
+/// `show_poor_highs_lows` or `show_single_prints`. Initial balance and poor extremes
+/// also require that level to exist. The midpoint has no mark apart from its caption,
+/// so hiding its caption hides the midpoint. Coinciding captions occupy separate rows,
+/// with earlier fields keeping the level's row. Defaults keep the point of control,
+/// value area edges and midpoint captions, without prices.
+///
+/// ```
+/// use egui_charts::model::{ChartTypeParams, TPOLabels};
+///
+/// let mut labels = TPOLabels::default();
+/// labels.initial_balance_high = true;
+/// labels.prices = true;
+/// let params = ChartTypeParams { tpo_labels: labels, ..Default::default() };
+/// assert!(params.tpo_config(Some(0.25)).labels.initial_balance_high);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct TPOLabels {
+    /// Caption the point of control `POC`. On by default.
+    pub poc: bool,
+    /// Caption the value area high `VAH`. On by default.
+    pub value_area_high: bool,
+    /// Caption the value area low `VAL`. On by default.
+    pub value_area_low: bool,
+    /// Caption the profile's midpoint `Mid`. On by default.
+    pub midpoint: bool,
+    /// Caption the initial balance high `IBH`.
+    pub initial_balance_high: bool,
+    /// Caption the initial balance low `IBL`.
+    pub initial_balance_low: bool,
+    /// Caption the session's opening price `Open`.
+    pub opening_price: bool,
+    /// Caption a poor high `PH`.
+    pub poor_high: bool,
+    /// Caption a poor low `PL`.
+    pub poor_low: bool,
+    /// Caption each run of adjacent single-print rows `SP`.
+    pub single_prints: bool,
+    /// Append prices at [`TPOProfile::instrument_tick`] precision, or half that tick
+    /// for the midpoint: `IBH 101.25` on a 0.25 tick. Single-print runs show their
+    /// lowest and highest row, such as `SP 104 / 105`. Widens the caption gutter.
+    pub prices: bool,
+}
+
+impl Default for TPOLabels {
+    fn default() -> Self {
+        Self {
+            poc: true,
+            value_area_high: true,
+            value_area_low: true,
+            midpoint: true,
+            initial_balance_high: false,
+            initial_balance_low: false,
+            opening_price: false,
+            poor_high: false,
+            poor_low: false,
+            single_prints: false,
+            prices: false,
         }
     }
 }
@@ -281,6 +352,20 @@ impl TPOProfilePeriod {
 }
 
 impl TPOConfig {
+    /// Whether a caption is enabled for a level the profiles draw.
+    #[cfg(feature = "widget")]
+    pub(crate) fn shows_captions(&self) -> bool {
+        let labels = &self.labels;
+        (labels.poc && self.show_poc)
+            || ((labels.value_area_high || labels.value_area_low) && self.show_value_area)
+            || (labels.midpoint && self.show_midpoint)
+            || ((labels.initial_balance_high || labels.initial_balance_low)
+                && self.show_initial_balance)
+            || (labels.opening_price && self.show_opening_range)
+            || ((labels.poor_high || labels.poor_low) && self.show_poor_highs_lows)
+            || (labels.single_prints && self.show_single_prints)
+    }
+
     /// Only session profiles split at transitions between regular, extended and overnight hours.
     pub(crate) fn split_hours(&self) -> bool {
         self.split_sessions && self.profile_period == TPOProfilePeriod::Session
