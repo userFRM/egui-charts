@@ -68,6 +68,37 @@ impl DrawingManager {
         self.delete_drawings(&ids);
     }
 
+    /// Shows or hides the selected drawings as one undo step, locked ones included, and queues
+    /// the ones that change to be saved. Hiding deselects them, as [`Self::edit_drawing`] does.
+    /// Drawings already in that state are left alone; without such a drawing nothing is recorded.
+    pub fn set_selected_visible(&mut self, visible: bool) {
+        self.edit_selected_where(|d| d.visible != visible, |d| d.visible = visible);
+    }
+
+    /// Locks or unlocks the selected drawings as one undo step and queues the ones that change to
+    /// be saved. Drawings already in that state are left alone; without such a drawing nothing is
+    /// recorded.
+    pub fn set_selected_locked(&mut self, locked: bool) {
+        self.edit_selected_where(|d| d.locked != locked, |d| d.locked = locked);
+    }
+
+    /// Applies `edit` as one undo step to the selected drawings that `differs` picks, locked ones
+    /// included, unlike [`Self::edit_selected`].
+    fn edit_selected_where(
+        &mut self,
+        differs: impl Fn(&Drawing) -> bool,
+        edit: impl FnMut(&mut Drawing),
+    ) {
+        let ids: Vec<_> = self
+            .drawings
+            .iter()
+            .filter(|d| d.selectable && self.selection.is_selected(d.id) && differs(d))
+            .map(|d| d.id)
+            .collect();
+        // Visibility and the lock take no part in validation, so the edit is never refused.
+        let _ = self.edit_drawings(&ids, edit);
+    }
+
     /// Deletes the given drawings as one undo step, keeping any locked ones.
     pub fn delete_drawings(&mut self, ids: &[usize]) {
         let unlocked: Vec<_> = self

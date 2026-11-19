@@ -167,8 +167,8 @@ impl FeedLink {
         }
     }
 
-    fn rebuild_paged_tick_rate(&self, input: &crate::data::OrderFlowInput, history: &[Bar]) {
-        if let Some(Timeframe::Ticks(count)) = self.clock.timeframe()
+    fn rebuild_paged_trade_rate(&self, input: &crate::data::OrderFlowInput, history: &[Bar]) {
+        if let Some(tf @ (Timeframe::Ticks(_) | Timeframe::Range(_))) = self.clock.timeframe()
             && self.trades_from_start
             && self.pushed_from.is_none()
             && self.trades.live().next().is_none()
@@ -177,7 +177,8 @@ impl FeedLink {
             && self.trades.retained_until().is_none()
             && self.trades.left_out().is_empty()
         {
-            input.rebuild_paged_tick_rate(count, &self.trades, history);
+            let tick_size = self.instrument.as_ref().and_then(|i| i.tick_size);
+            input.rebuild_paged_trade_rate(tf, tick_size, &self.trades, history);
         }
     }
 
@@ -197,7 +198,7 @@ impl FeedLink {
         }
         input.set_tick_size(self.instrument.as_ref().and_then(|i| i.tick_size));
         input.replace_trades(&self.clock, &self.trades, history, self.footprint.as_ref());
-        self.rebuild_paged_tick_rate(input, history);
+        self.rebuild_paged_trade_rate(input, history);
         if let Some(now) = self.time {
             input.advance_time(&self.clock, now);
         }

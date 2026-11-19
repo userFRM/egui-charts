@@ -1924,8 +1924,8 @@ mod tests {
         }
     }
 
-    /// The browser finds a study by its conventional full name, also with the qualifier last,
-    /// without catching its neighbours.
+    /// The browser finds a study by its conventional full and short names, also with the
+    /// qualifier last, without catching its neighbours.
     #[test]
     fn search_finds_studies_by_their_full_names() {
         // (search, studies listed, studies not listed)
@@ -2025,6 +2025,66 @@ mod tests {
                 &["C2C Vol"],
             ),
             ("Volatility O-H-L-C", &["GK Vol"], &[]),
+            ("Average True Range", &["ATR"], &["TR"]),
+            (
+                "Average Directional Index",
+                &["ADX"],
+                &["DMI", "ADX Breakout"],
+            ),
+            ("Accumulation Distribution", &["A/D"], &[]),
+            ("ADL", &["A/D"], &[]),
+            ("Moving Average Convergence Divergence", &["MACD"], &[]),
+            ("Triple EMA", &["TEMA"], &["Triple MA"]),
+            ("Volume-Weighted Moving Average", &["VWMA"], &[]),
+            ("Bollinger BandWidth", &["BBW"], &["BB"]),
+            ("Bollinger Bands %b", &["%B"], &["BB", "BBW"]),
+            ("Elliott Waves", &["Elliott Wave"], &[]),
+            (
+                "Elder's Force Index",
+                &["Force Index"],
+                &["Impulse", "Elder Ray"],
+            ),
+            ("EFI", &["Force Index"], &[]),
+            (
+                "Volume Weighted Average Price",
+                &["VWAP", "AVWAP", "VWAP Auto Anchored"],
+                &["VWMA", "Time Weighted Average Price"],
+            ),
+            ("Price Volume Trend", &["VPT", "PVT Enhanced"], &[]),
+            ("PVT", &["VPT", "PVT Enhanced"], &[]),
+            (
+                "Session Volume Profile",
+                &["Vol Profile Session"],
+                &["Vol Profile Periodic"],
+            ),
+            ("Session Volume Profile HD", &["Vol Profile Session"], &[]),
+            (
+                "Periodic Volume Profile",
+                &["Vol Profile Periodic"],
+                &["Vol Profile Session"],
+            ),
+            ("Stoch RSI", &["StochRSI"], &["Stochastic"]),
+            (
+                "Rob Booker Intraday Pivot Points",
+                &["Intraday Pivot Points"],
+                &[],
+            ),
+            (
+                "Rob Booker",
+                &[
+                    "ADX Breakout",
+                    "Knoxville Divergence",
+                    "Intraday Pivot Points",
+                    "Missed Pivot Levels",
+                ],
+                &["Pivot Points Standard"],
+            ),
+            ("CRSI", &["Connors RSI"], &[]),
+            ("DC", &["Donchian"], &[]),
+            ("ADR", &["Average Daily Range"], &[]),
+            ("PMO", &["Price Momentum Oscillator"], &[]),
+            ("TPO", &["Time Price Opportunity"], &[]),
+            ("Variable Index Dynamic Average", &["VIDYA"], &[]),
         ];
         let ctx = egui::Context::default();
         let mut dialog = IndicatorDialog::new();

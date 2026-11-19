@@ -16,6 +16,8 @@ pub(super) fn validate(settings: &BacktestSettings) -> Result<(), &'static str> 
     let slippage = match settings.slippage {
         Slippage::Fraction(v) => v,
         Slippage::Ticks { tick_size, .. } => tick_size,
+        // Its tick is the price increment, checked below.
+        Slippage::Increments(_) => 0.0,
     };
     if [settings.long_funding, settings.short_funding]
         .into_iter()
@@ -50,9 +52,10 @@ pub(super) fn validate(settings: &BacktestSettings) -> Result<(), &'static str> 
     Ok(())
 }
 
-fn number(ui: &mut egui::Ui, label: &str, value: &mut f64, min: f64) {
+/// Returns whether the user changed the value.
+fn number(ui: &mut egui::Ui, label: &str, value: &mut f64, min: f64) -> bool {
     let label = ui.label(l10n::text(ui.ctx(), label));
-    ui.add(
+    let response = ui.add(
         egui::DragValue::new(value)
             .range(min..=f64::MAX)
             .speed(0.01)
@@ -68,9 +71,25 @@ fn number(ui: &mut egui::Ui, label: &str, value: &mut f64, min: f64) {
                     text
                 }
             }),
-    )
-    .labelled_by(label.id);
+    );
+    let changed = response.labelled_by(label.id).changed();
     ui.end_row();
+    changed
+}
+
+/// The tick count and tick size fields. Until a size is typed, a tick is one price increment
+/// and follows later changes of the increment.
+fn tick_fields(ui: &mut egui::Ui, mut ticks: u32, typed: Option<f64>, increment: f64) -> Slippage {
+    let label = ui.label(l10n::text(ui.ctx(), "Slippage ticks"));
+    ui.add(egui::DragValue::new(&mut ticks).range(0..=u32::MAX))
+        .labelled_by(label.id);
+    ui.end_row();
+    let mut tick_size = typed.unwrap_or(increment);
+    let edited = number(ui, "Tick size", &mut tick_size, 0.0);
+    match typed {
+        None if !edited => Slippage::Increments(ticks),
+        _ => Slippage::Ticks { ticks, tick_size },
+    }
 }
 
 fn choice(ui: &mut egui::Ui, label: &str, index: &mut usize, choices: &[&str]) {
@@ -156,29 +175,27 @@ pub(super) fn show(
             1 => Commission::PerUnit(amount),
             _ => Commission::PerOrder(amount),
         };
-        let mut kind = usize::from(matches!(settings.slippage, Slippage::Ticks { .. }));
+        let mut kind = usize::from(!matches!(settings.slippage, Slippage::Fraction(_)));
         choice(
             ui,
             "Slippage model",
             &mut kind,
             &["Price fraction", "Ticks"],
         );
-        match (kind, &mut settings.slippage) {
-            (0, Slippage::Fraction(amount)) => number(ui, "Slippage fraction", amount, 0.0),
-            (1, Slippage::Ticks { ticks, tick_size }) => {
-                let label = ui.label(l10n::text(ui.ctx(), "Slippage ticks"));
-                ui.add(egui::DragValue::new(ticks).range(0..=u32::MAX))
-                    .labelled_by(label.id);
-                ui.end_row();
-                number(ui, "Tick size", tick_size, 0.0);
+        match (kind, settings.slippage) {
+            (0, Slippage::Fraction(mut amount)) => {
+                number(ui, "Slippage fraction", &mut amount, 0.0);
+                settings.slippage = Slippage::Fraction(amount);
             }
             (0, _) => settings.slippage = Slippage::Fraction(0.0),
-            _ => {
-                settings.slippage = Slippage::Ticks {
-                    ticks: 0,
-                    tick_size: settings.price_increment,
-                }
+            (_, Slippage::Ticks { ticks, tick_size }) => {
+                settings.slippage =
+                    tick_fields(ui, ticks, Some(tick_size), settings.price_increment);
             }
+            (_, Slippage::Increments(ticks)) => {
+                settings.slippage = tick_fields(ui, ticks, None, settings.price_increment);
+            }
+            _ => settings.slippage = Slippage::Increments(0),
         }
         for (side, label) in [
             (OrderSide::Buy, "Long funding (%)"),
