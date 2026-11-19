@@ -2,13 +2,15 @@
 //!
 //! Also known as the *Linear Regression Line* or *Moving Linear Regression*,
 //! LSMA fits an ordinary least-squares line through the last `N` closing
-//! prices and reports the endpoint value. An optional `offset` parameter
-//! projects the line forward (or backward) by a specified number of bars.
+//! prices and reports the endpoint value. An optional `offset` reads the
+//! fitted line that many bars before the window's last bar; a negative
+//! offset projects it beyond that bar.
 //!
 //! # Formula
 //!
 //! For each window of `period` prices, compute the best-fit line
-//! `y = m*x + b` and evaluate it at the last position (+offset).
+//! `y = m*x + b`, with `x` counting the window's bars from 0 at the oldest,
+//! and evaluate it at `x = period - 1 - offset`.
 //!
 //! # Example
 //!
@@ -33,7 +35,7 @@ use egui::Color32;
 #[derive(Clone, Debug)]
 pub struct LSMA {
     period: usize,
-    offset: i32, // Future projection offset (can be negative for past)
+    offset: i32, // Bars back from the window's last bar; negative values project forward
     values: IndicatorValues,
     color: Color32,
     visible: bool,
@@ -54,7 +56,8 @@ impl LSMA {
         }
     }
 
-    /// Set the forward (positive) or backward (negative) projection offset in bars.
+    /// Set the regression offset in bars: a positive offset reads the fitted line that many bars
+    /// before the window's last bar, a negative one beyond it.
     pub fn with_offset(mut self, offset: i32) -> Self {
         self.offset = offset;
         self
@@ -67,7 +70,7 @@ impl LSMA {
     }
 
     /// Compute the least-squares regression value for a price window,
-    /// evaluated at the last index plus `offset`.
+    /// evaluated `offset` bars before the last index.
     fn linear_regression(prices: &[f64], offset: i32) -> f64 {
         let n = prices.len() as f64;
         if n == 0.0 {
@@ -98,8 +101,8 @@ impl LSMA {
         let m = (n * sum_xy - sum_x * sum_y) / denominator;
         let b = (sum_y - m * sum_x) / n;
 
-        // Calculate value at the last point + offset
-        let x_target = (prices.len() - 1) as f64 + offset as f64;
+        // A positive offset reads the fitted line that many bars before the window's last bar.
+        let x_target = (prices.len() - 1) as f64 - offset as f64;
         m * x_target + b
     }
 }
@@ -221,7 +224,8 @@ mod tests {
         for (closes, offset, expected) in [
             ([100.0; 5], 0, 100.0),
             ([100.0, 101.0, 102.0, 103.0, 104.0], 0, 104.0),
-            ([100.0, 101.0, 102.0, 103.0, 104.0], 1, 105.0),
+            ([10.0, 12.0, 11.0, 15.0, 17.0], 1, 14.7),
+            ([10.0, 12.0, 11.0, 15.0, 17.0], -1, 18.1),
         ] {
             let data: Vec<Bar> = closes.into_iter().map(make_bar).collect();
             let mut lsma = LSMA::new(data.len()).with_offset(offset);
