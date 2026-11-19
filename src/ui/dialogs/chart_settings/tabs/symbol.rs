@@ -266,6 +266,20 @@ impl SettingsDialog {
                     "Adjust data for dividends",
                     theme.ui.text,
                 );
+                if self.futures_data {
+                    styled_checkbox(
+                        ui,
+                        &mut self.settings.back_adjust_futures,
+                        "Back-adjust continuous futures",
+                        theme.ui.text,
+                    );
+                    styled_checkbox(
+                        ui,
+                        &mut self.settings.settlement_as_close,
+                        "Settlement as close",
+                        theme.ui.text,
+                    );
+                }
                 ui.add_space(ui.active_theme().spacing.xxl);
 
                 // PRECISION

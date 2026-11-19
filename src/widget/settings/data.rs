@@ -678,6 +678,17 @@ pub struct ChartSettingsState {
     /// `None` keeps the chart's choice, as do settings saved without this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extended_hours: Option<bool>,
+    /// Ask the host for continuous futures history back-adjusted at each roll. The host owns
+    /// the data, so [`apply_to_chart`](Self::apply_to_chart) leaves reloading to the host;
+    /// [`from_chart`](Self::from_chart) leaves this off.
+    #[serde(default)]
+    pub back_adjust_futures: bool,
+    /// Ask the host to use settlement prices as the close of daily and longer futures bars.
+    /// The host owns the data, so [`apply_to_chart`](Self::apply_to_chart) leaves reloading to
+    /// the host. New settings enable this; older saves without it keep last-trade closes.
+    /// Intraday history is unchanged. Hosts preserve their choice when refreshing settings.
+    #[serde(default)]
+    pub settlement_as_close: bool,
 
     // Order flow tab
     /// Independent heatmap, live book and trade bubble settings; older documents keep them off.
@@ -762,6 +773,8 @@ impl Default for ChartSettingsState {
             show_price_targets: false,
             adjust_for_dividends: false,
             extended_hours: None,
+            back_adjust_futures: false,
+            settlement_as_close: true,
 
             order_flow: OrderFlowSettings::default(),
 

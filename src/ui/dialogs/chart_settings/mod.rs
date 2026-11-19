@@ -61,6 +61,8 @@ pub struct SettingsDialog {
     /// Controls the host hid.
     hidden: HashSet<Control>,
     apply_to_all: bool,
+    /// Whether the Symbol tab offers the futures data choices.
+    futures_data: bool,
     /// The local sounds the host can play, by name, offered on the Trading and Alerts tabs. The host
     /// plays the chosen one; see
     /// [`Trading::take_execution_sound`](crate::ui::trading::Trading::take_execution_sound).
@@ -164,6 +166,7 @@ impl SettingsDialog {
             config: SettingsDialogConfig::default(),
             hidden: HashSet::new(),
             apply_to_all: false,
+            futures_data: false,
             execution_sounds: Vec::new(),
             sound_preview: None,
             order_flow_layers: [true; 4],
@@ -185,6 +188,15 @@ impl SettingsDialog {
     /// [`SettingsAction::ApplyToAll`]. Off by default.
     pub fn offer_apply_to_all(&mut self, offered: bool) {
         self.apply_to_all = offered;
+    }
+
+    /// Offers continuous futures back adjustment and settlement closes on the Symbol tab for
+    /// a host that reloads its history for these choices. They return in
+    /// [`ChartSettingsState::back_adjust_futures`] and
+    /// [`ChartSettingsState::settlement_as_close`]. Off by default; the host offers these only
+    /// for supported futures history. Settlement affects daily and longer bars only.
+    pub fn offer_futures_data(&mut self, offered: bool) {
+        self.futures_data = offered;
     }
 
     /// Shows or hides `control`: Templates (the template button and menu; Reset to defaults

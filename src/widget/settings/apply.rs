@@ -161,8 +161,8 @@ fn set_unless_resolved(current: &mut Option<Color32>, fallback: Color32, color: 
 }
 
 impl ChartSettingsState {
-    /// Read the chart's current display settings. Host-managed trading and alert groups
-    /// retain defaults; hosts preserve their current values when refreshing chart settings.
+    /// Read the chart's current display settings. Host-managed trading and alert groups and
+    /// futures data choices retain defaults; hosts preserve them when refreshing settings.
     pub fn from_chart(chart: &Chart) -> Self {
         let config = chart.config();
         let mut settings = Self {

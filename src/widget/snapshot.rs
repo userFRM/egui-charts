@@ -106,8 +106,8 @@ pub struct SavedPane {
 
 /// What a chart shows and how: everything a user sets on it, without the bars, which come from
 /// the host's feed. Take one with [`Chart::snapshot`] and apply it with [`Chart::restore`].
-/// The trading and alert settings of the settings dialog belong to the host and are not part
-/// of it.
+/// The trading and alert settings and futures data choices of the settings dialog belong to
+/// the host and are not part of it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ChartSnapshot {
