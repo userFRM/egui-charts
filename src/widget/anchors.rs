@@ -244,6 +244,7 @@ impl Chart {
         manager.registry = self.drawings.registry.clone();
         manager.options = self.drawings.options.clone();
         manager.tool_defaults = self.drawings.tool_defaults.clone();
+        manager.custom_tool_defaults = self.drawings.custom_tool_defaults.clone();
         manager.active_tool = self.drawings.active_tool;
         if let Some(id) = self.drawings.active_custom_tool() {
             let _ = manager.set_custom_tool(id);

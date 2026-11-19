@@ -1015,9 +1015,13 @@ impl DrawingManager {
 
     /// Starts a registered tool's multi-click construction. One-anchor tools complete on the
     /// first click. The host picker uses `registry.custom_tools()` for its ids and names.
+    /// An unknown or disabled tool returns an error and leaves the state unchanged.
     pub fn set_custom_tool(&mut self, id: &str) -> Result<(), &'static str> {
         if self.registry.get(id).is_none() {
             return Err("Unknown drawing tool");
+        }
+        if !self.registry.custom_availability(id).enabled {
+            return Err("Drawing tool is disabled");
         }
         self.cancel_curr_drawing();
         self.eraser_mode = false;
@@ -1152,7 +1156,9 @@ impl DrawingManager {
         G: Fn(f32) -> f64,
     {
         if tool_type.is_cursor()
-            || (self.active_custom_tool.is_none() && !self.registry.availability(tool_type).enabled)
+            || !self
+                .registry
+                .creates(self.active_custom_tool.as_deref(), tool_type)
         {
             return;
         }
@@ -1164,7 +1170,10 @@ impl DrawingManager {
             }
             _ => {
                 let id = self.take_id();
-                self.new_drawing(id, tool_type)
+                match self.active_custom_tool.clone() {
+                    Some(tool) => self.new_custom_drawing(id, &tool),
+                    None => self.new_drawing(id, tool_type),
+                }
             }
         };
         if let Some(id) = &self.active_custom_tool {
