@@ -2298,19 +2298,26 @@ mod tests {
         let metrics = report.performance();
         assert_eq!(
             (
-                metrics.closed_trades,
-                metrics.open_trades,
+                metrics.all.closed_trades,
+                metrics.all.open_trades,
                 metrics.skipped_trades
             ),
             (9, 1, 0)
         );
-        assert_eq!((metrics.winning_trades, metrics.losing_trades), (6, 1));
         assert_eq!(
-            (metrics.net_profit, metrics.gross_profit, metrics.gross_loss),
+            (metrics.all.winning_trades, metrics.all.losing_trades),
+            (6, 1)
+        );
+        assert_eq!(
+            (
+                metrics.all.net_profit,
+                metrics.all.gross_profit,
+                metrics.all.gross_loss
+            ),
             (70.5, 72.5, 2.0)
         );
-        assert_eq!(metrics.win_rate, Some(6.0 / 9.0));
-        assert_eq!(metrics.profit_factor, Some(36.25));
+        assert_eq!(metrics.all.win_rate, Some(6.0 / 9.0));
+        assert_eq!(metrics.all.profit_factor, Some(36.25));
 
         // Without the later bars the run sees and does the same up to its last bar.
         let first = backtest.run(&mut Script(script), &bars[..4], &[]);
@@ -2671,19 +2678,19 @@ mod tests {
             let metrics = report.performance();
             assert_eq!(
                 (
-                    metrics.closed_trades,
-                    metrics.open_trades,
-                    metrics.winning_trades,
-                    metrics.losing_trades
+                    metrics.all.closed_trades,
+                    metrics.all.open_trades,
+                    metrics.all.winning_trades,
+                    metrics.all.losing_trades
                 ),
                 (closed, open, wins, 0)
             );
-            assert!((metrics.net_profit - profit).abs() < 1e-15);
+            assert!((metrics.all.net_profit - profit).abs() < 1e-15);
             assert_eq!(
-                metrics.win_rate,
+                metrics.all.win_rate,
                 (closed > 0).then(|| wins as f64 / closed as f64)
             );
-            assert_eq!(metrics.profit_factor, None);
+            assert_eq!(metrics.all.profit_factor, None);
             #[cfg(feature = "csv")]
             assert!(!report.trades_csv().contains(",-0"));
         }
@@ -4426,7 +4433,7 @@ mod tests {
             let mut engine = Backtest::new("On close", "TEST", Timeframe::Hour1, 1000.0);
             engine.settings.fill_on_close = true;
             let report = engine.run(&mut Script(stop_then_close), &source, &lower);
-            assert_eq!(report.performance().closed_trades, 1);
+            assert_eq!(report.performance().all.closed_trades, 1);
             assert_eq!(report.trades[0].entry_time, entry_time);
             let exit = report.trades[0].exit.as_ref().unwrap();
             assert_eq!(exit.time, exit_time);

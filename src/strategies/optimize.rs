@@ -234,7 +234,7 @@ mod tests {
                     ]
                 );
                 // Two units times the exit minus entry price, less 1 on each fill.
-                assert_eq!(trial.performance.net_profit, profits[i]);
+                assert_eq!(trial.performance.all.net_profit, profits[i]);
                 let separate_runs = AtomicUsize::new(0);
                 let mut separate = Timed {
                     entry,

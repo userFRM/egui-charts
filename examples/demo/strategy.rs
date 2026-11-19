@@ -421,9 +421,9 @@ mod tests {
             let bars = source(slope, 121);
             let report = sample_backtest("SAMPLE", Timeframe::Min1, &bars);
             let performance = report.performance();
-            assert_eq!(performance.net_profit, profit);
-            assert_eq!(performance.closed_trades, 3);
-            assert_eq!(performance.total_fees, 6.0);
+            assert_eq!(performance.all.net_profit, profit);
+            assert_eq!(performance.all.closed_trades, 3);
+            assert_eq!(performance.all.total_fees, 6.0);
             assert_eq!(performance.skipped_equity_points, 0);
             assert_eq!(report.equity_curve().len(), 122);
             assert_eq!(report.equity[0].1, 10_000.0);
