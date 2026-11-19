@@ -1674,8 +1674,11 @@ impl Chart {
         );
         let session_painter = painter.with_clip_rect(price_rect);
         let session_ctx = RenderContext::new(&session_painter, price_rect);
-        // Sessions and extended hours are periods of time, absent from other horizontal scales.
-        if self.config.show_session_breaks && host_scale.is_none() {
+        // Sessions and extended hours are periods of time within a day, absent from other
+        // horizontal scales and from daily and longer bars.
+        let intraday = host_scale.is_none()
+            && session_tf.duration_ms() < crate::model::Timeframe::Day1.duration_ms();
+        if self.config.show_session_breaks && intraday {
             let provider = self
                 .session_provider
                 .as_deref()
@@ -1693,11 +1696,7 @@ impl Chart {
                 time_coords.start_idx,
             );
         }
-        let extended_hours = if time_based
-            && host_scale.is_none()
-            && session_tf.duration_ms() < crate::model::Timeframe::Day1.duration_ms()
-            && self.config.show_extended_hours
-        {
+        let extended_hours = if time_based && intraday && self.config.show_extended_hours {
             let accent = ui.active_theme().ui.accent;
             let shade = |color: egui::Color32, opacity| {
                 if color == egui::Color32::PLACEHOLDER {
@@ -2835,7 +2834,7 @@ impl Chart {
             let line = chart_line(
                 &self.config.prev_close_line,
                 previous_close,
-                ui.active_theme().ui.text_secondary,
+                crate::config::ChartConfig::prev_close_fallback(&ui.active_theme()),
                 self.config.show_prev_close_line,
             );
             rendering::render_price_line(

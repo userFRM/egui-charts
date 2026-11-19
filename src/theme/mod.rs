@@ -161,6 +161,11 @@ fn default_order_notable() -> Color32 {
 fn default_order_large() -> Color32 {
     Theme::light().chart.order_large
 }
+/// The blue of every preset, for a theme saved without it.
+#[cfg(feature = "serde")]
+fn default_session_break() -> Color32 {
+    Theme::dark().chart.session_break
+}
 
 impl Default for UiColors {
     fn default() -> Self {
@@ -183,6 +188,9 @@ pub struct ChartColors {
     pub grid_line: Color32,
     /// Major grid lines.
     pub grid_line_major: Color32,
+    /// Session break lines.
+    #[cfg_attr(feature = "serde", serde(default = "default_session_break"))]
+    pub session_break: Color32,
     /// Axis labels.
     pub axis_text: Color32,
     /// Secondary axis labels.
@@ -476,6 +484,11 @@ mod tests {
             for scale in ["text", "spacing", "radius"] {
                 saved.as_object_mut().unwrap().remove(scale);
             }
+            // A theme saved before session breaks had a colour of their own loads the blue.
+            saved["chart"]
+                .as_object_mut()
+                .unwrap()
+                .remove("session_break");
             assert_eq!(serde_json::from_value::<Theme>(saved).unwrap(), theme);
         }
     }
