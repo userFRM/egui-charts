@@ -511,6 +511,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Terminal’s Time and Sales panel drops the old rows when a feed resets its trade tape, even without a market replay driver. ([#3670](https://github.com/userFRM/egui-charts/issues/3670))
+
 - Trade Rate now fills history-only volume and delta intervals when the complete tape reproduces every candle. A split execution contributes to each candle it touches, but only once to the rate windows. ([#3622](https://github.com/userFRM/egui-charts/issues/3622))
 
 - Trade Rate now fills history-only range intervals when the instrument's tick size and the complete trade tape reproduce the candles. ([#3453](https://github.com/userFRM/egui-charts/issues/3453))
