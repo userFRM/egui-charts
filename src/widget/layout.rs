@@ -1286,6 +1286,8 @@ impl ChartLayout {
     }
 
     /// Selects a chart slot and focuses its canvas when shown; out-of-range indices are ignored.
+    /// While a chart is maximized, the next [`Self::show`] shows this slot maximized in its place
+    /// unless it is detached. A slot past the preset is clamped to its last supplied chart.
     pub fn set_active(&mut self, index: usize) {
         if index < 16 {
             self.active = index;
@@ -1683,11 +1685,14 @@ impl ChartLayout {
             chart.keyboard.layout_keys = keys.filter(|_| index < count).map(|keys| (pass, keys));
         }
         self.active = self.active.min(count - 1);
-        if self.maximized.is_some_and(|index| index >= count) {
+        // Tabs already show one chart at a time and use their strip to select the others.
+        if self.mode == ChartLayoutMode::Tabs || self.maximized.is_some_and(|index| index >= count)
+        {
             self.maximized = None;
         }
-        if let Some(index) = self.maximized {
-            self.active = index;
+        // Host activation replaces the maximized chart; a detached chart keeps its window.
+        if self.maximized.is_some() && !self.detached[self.active] {
+            self.maximized = Some(self.active);
         }
         // A chart supplied or restored in a slot starts a new baseline: nothing changed in it.
         #[cfg(feature = "drawings")]
@@ -4821,7 +4826,10 @@ mod tests {
         for _ in 0..3 {
             frame(&mut layout, &mut charts, false, false);
         }
-        let tile = charts[2].get_rendered_price_rect();
+        let tiles = charts
+            .each_ref()
+            .map(|chart| chart.get_rendered_price_rect());
+        let tile = tiles[2];
         let viewport = charts[2].get_time_scale_state();
         frame(&mut layout, &mut charts, true, false);
         // The chart's widget id follows its rect, so focus moves over to it on the next frames.
@@ -4847,6 +4855,17 @@ mod tests {
                 "layout keys reached the host: {requests:?}"
             );
         }
+        layout.maximized = Some(2);
+        frame(&mut layout, &mut charts, false, false);
+        layout.set_active(1);
+        frame(&mut layout, &mut charts, false, false);
+        frame(&mut layout, &mut charts, false, false);
+        assert_eq!((layout.maximized, layout.active()), (Some(1), 1));
+        assert!(charts[1].get_rendered_price_rect().width() > tiles[1].width() * 1.8);
+        layout.mode = ChartLayoutMode::Tabs;
+        frame(&mut layout, &mut charts, false, false);
+        assert_eq!(layout.maximized, None);
+        layout.mode = ChartLayoutMode::Four;
     }
 
     /// A border drag changes only the charts beside it and leaves the dragged border under the
