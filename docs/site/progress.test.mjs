@@ -27,6 +27,11 @@ test('map labels end at word boundaries and retain their full group tooltip', ()
 });
 
 test('published group tables and badges count only independently verified features', () => {
+  for (const group of ['Broker API', 'Trading panel']) {
+    assert.deepEqual([...new Set(features.filter((feature) => feature.group === group).map((feature) => feature.area))], ['Trading'], group);
+  }
+  const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8');
+  assert.deepEqual([...readme.matchAll(/\/progress\/badge-([a-z-]+)\.svg/g)].map((match) => match[1]), areas.map(slug));
   assert.deepEqual(statuses, ['verified', 'unverified', 'incomplete', 'missing']);
   const sample = statuses.map((status) => ({ ...features[0], status }));
   assert.deepEqual(counts(sample), { verified: 1, unverified: 1, incomplete: 1, missing: 1, total: 4 });

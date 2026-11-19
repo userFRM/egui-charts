@@ -207,7 +207,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Aggressor Rate counts distinct identified parent orders per bar and per second, and `CombinedTrade::consumed` lists the resting orders they filled, shown in the time-and-sales row hover.
 - [x] `OrderFlowInput::footprint` and `OrderFlowInput::book` give a study each bar's executions by price and last synchronised book through `Indicator::order_flow_inputs`. On tick, volume, range and delta intervals, newly attached execution sources place queued executions in the sink's chart bars. If queue loss or a pushed bar prevents replaying those allocations, they leave bars through the forming one incomplete and rolling values missing while their windows reach the omitted executions.
 
-## Trading and Strategy Reports
+## Trading
 
 - [x] `Trading` connects order tickets, account tables and chart overlays to a supplied `Broker`.
 - [x] Market, limit, stop and stop-limit tickets, units/value sizing, risk-percent sizing on every order type, time in force, presets and attached stop-loss/take-profit levels. Switching between units and an amount preserves the order quantity; money exits show no price and keep their entered value when the quantity is zero or invalid.
@@ -216,6 +216,9 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] A depth ladder supports order entry, drag modification and right-click cancellation through the broker interface.
 - [x] Account summary, positions, orders, history, executions, balance and journal tables, with CSV export.
 - [x] Execution markers, rejection/fill notifications and execution sound intents. Order and fill notices use the order symbol's host price and quantity text in their titles, messages and cards, with the account tables' built-in text as the fallback.
+
+## Strategy Reports
+
 - [x] `StrategyReportPanel` accepts `StrategyReport` data and shows trade lists, equity/drawdown plots, performance metrics, supplied properties and chart navigation; trades export as CSV.
 - [x] `Backtest::update` processes new closed bars incrementally, retains observed forming-bar fills when tick recalculation is enabled, and rebuilds corrected history.
 - [x] `StrategyTester` selects factory strategies, reuses the study input editor, edits account and execution settings, requests history from the host and displays runs with labelled fill signals. Edits mark the report stale. The demo answers supported start-date and finer-fill requests from its synthetic history, explains interval and retention limits before execution, and preserves the last report on failure.

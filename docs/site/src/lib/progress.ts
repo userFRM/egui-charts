@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 
-export const areas = ['Chart', 'Drawings', 'Studies', 'Order flow', 'Options', 'Terminal', 'Builder API'] as const;
+export const areas = ['Chart', 'Drawings', 'Studies', 'Order flow', 'Trading', 'Options', 'Terminal', 'Builder API'] as const;
 export const statuses = ['verified', 'unverified', 'incomplete', 'missing'] as const;
 type Status = typeof statuses[number];
 export type Feature = {
