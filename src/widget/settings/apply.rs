@@ -280,6 +280,7 @@ impl ChartSettingsState {
         settings.status_line.show_symbol = config.show_symbol_labels;
         settings.status_line.title_as_description = config.title_as_description;
         settings.status_line.show_quote_boxes = config.show_quote_boxes;
+        settings.status_line.quote_panel = config.quote_panel;
         settings.status_line.show_ohlc = config.show_ohlc_info;
         settings.status_line.show_change = config.show_ohlc_change;
         settings.status_line.show_change_percent = config.show_ohlc_change_percent;
@@ -653,6 +654,7 @@ impl ChartSettingsState {
         config.show_symbol_labels = self.status_line.show_symbol;
         config.title_as_description = self.status_line.title_as_description;
         config.show_quote_boxes = self.status_line.show_quote_boxes;
+        config.quote_panel = self.status_line.quote_panel;
         config.show_ohlc_change = self.status_line.show_change;
         config.show_ohlc_change_percent = self.status_line.show_change_percent;
         config.show_legend_volume = self.status_line.show_volume;

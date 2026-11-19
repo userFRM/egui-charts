@@ -656,7 +656,7 @@ impl PointFigureStyle {
 }
 
 /// The Line Break chart's line borders. A colour left `None` draws the border in its line's
-/// colour at 70% opacity, as a chart that has not set it.
+/// colour at full opacity, as a chart that has not set it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -680,7 +680,7 @@ impl Default for LineBreakStyle {
 }
 
 /// The Renko chart's brick borders and wicks. Colours left `None` draw as a chart that has not
-/// set them: the border in its brick's colour at 70% opacity and the wick in the brick's colour.
+/// set them: the border in its brick's colour at full opacity and the wick in the brick's colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]

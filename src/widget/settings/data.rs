@@ -117,6 +117,8 @@ pub struct StatusLineOptions {
     pub show_market_status: bool,
     /// Display current bid and ask controls.
     pub show_quote_boxes: bool,
+    /// Show Buy and Sell as a movable panel over the price pane instead of in the legend.
+    pub quote_panel: bool,
     /// Display study names.
     pub show_indicator_titles: bool,
     /// Display host-supplied study inputs.
@@ -145,6 +147,7 @@ impl Default for StatusLineOptions {
             title_as_description: true,
             show_market_status: true,
             show_quote_boxes: true,
+            quote_panel: false,
             show_indicator_titles: true,
             show_indicator_inputs: true,
             show_indicator_values: true,

@@ -42,6 +42,7 @@ use ticket::{OrderTicket, order_quantity};
 /// chart. Open the order ticket with [`open_ticket`](Self::open_ticket), for example from the
 /// chart menu's [`Order`](crate::ui::context_menu::ContextMenuAction::Order) entries, and route
 /// the chart's Buy and Sell buttons ([`Chart::take_quote_action`](crate::widget::Chart::take_quote_action)) to [`trade`](Self::trade).
+/// Without a two-sided quote the buttons show the last price while a broker is set.
 /// Orders reach the broker only from the ticket's submit button, or once the user confirms them
 /// in the depth ladder, or at once from Buy and Sell and the ladder when the user turned on
 /// [`TradingSettings::instant_orders`].
@@ -229,6 +230,21 @@ impl Default for Trading {
             connection_lost: false,
         }
     }
+}
+
+/// `quantity` of `symbol` in the host's text, else at its own decimals, up to eight,
+/// with thousands separators, as the account tables write it.
+pub(crate) fn quantity_text(
+    formatter: Option<&dyn TradingFormatter>,
+    symbol: &str,
+    quantity: f64,
+) -> String {
+    Numbers {
+        symbol,
+        decimals: 2,
+        formatter,
+    }
+    .quantity(quantity, account_panel::quantity_decimals(quantity))
 }
 
 impl Trading {
