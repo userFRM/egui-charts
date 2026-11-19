@@ -1469,6 +1469,107 @@ mod tests {
         }
     }
 
+    /// Renko bricks and Line Break lines without border colours of their own are outlined in the
+    /// rising and falling body colours at full opacity, and the Border row starts from them, so a
+    /// palette colour picked after ticking Custom up is stored and painted opaque. Flat bars
+    /// closing at 100, 102 and 99 build Renko bricks of 1 from 100 up to 102 and from 101 down
+    /// to 99, two rising and two falling, and the Line Break lines 100 to 100, 100 to 102 and
+    /// 100 to 99, two rising and one falling. Expected: the opaque default body colours #089981
+    /// and #F23645, then opaque black on the rising elements.
+    #[test]
+    fn brick_borders_are_opaque_by_default_and_as_picked() {
+        use egui::Color32;
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        for (kind, rising, falling) in [(ChartType::Renko, 2, 2), (ChartType::LineBreak, 2, 1)] {
+            let bars = [100.0, 102.0, 99.0]
+                .into_iter()
+                .enumerate()
+                .map(|(i, close)| {
+                    let time = chrono::DateTime::UNIX_EPOCH + chrono::Duration::minutes(i as i64);
+                    Bar::new(time, close, close, close, close, 0.0)
+                })
+                .collect();
+            let mut chart = Chart::new(BarData::from_bars(bars));
+            chart.set_chart_type(kind);
+            let ctx = Context::default();
+            // The stroke of the outline drawn at the centre of each element's slot.
+            let borders = |chart: &mut Chart, time: f64| {
+                crate::widget::test_frames::frame(&ctx, chart, time, vec![]);
+                crate::widget::test_frames::frame(&ctx, chart, time + 0.1, vec![]);
+                let painted = crate::widget::test_frames::shapes(&ctx, chart, time + 0.2, vec![]);
+                let map = chart.get_chart_mapping();
+                (0..rising + falling)
+                    .map(|i| {
+                        let x = map.idx_to_x(i);
+                        painted.iter().find_map(|shape| match shape {
+                            Shape::Rect(r)
+                                if r.stroke.width > 0.0 && (r.rect.center().x - x).abs() < 0.5 =>
+                            {
+                                Some(r.stroke.color)
+                            }
+                            _ => None,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let (up, down) = (chart.config().bullish_color, chart.config().bearish_color);
+            let expected = |top| [vec![Some(top); rising], vec![Some(down); falling]].concat();
+            assert_eq!(borders(&mut chart, 0.0), expected(up), "{kind:?} unset");
+
+            let mut dialog = SettingsDialog::new();
+            dialog.set_control_visible(crate::ui::Control::Templates, false);
+            dialog.open(ChartSettingsState::from_chart(&chart));
+            let theme = Theme::light();
+            let setup_theme = theme.clone();
+            let mut harness = Harness::builder()
+                .with_context_setup(move |ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &setup_theme);
+                })
+                .with_size(Vec2::new(1440.0, 900.0))
+                .build_ui_state(
+                    move |ui, (dialog, accepted): &mut (SettingsDialog, _)| {
+                        if let SettingsAction::Apply(settings) = dialog.show(ui.ctx(), &theme) {
+                            *accepted = Some(settings);
+                        }
+                    },
+                    (dialog, None),
+                );
+            harness.run();
+            // The Border row comes before Renko's Wick row.
+            harness
+                .get_all_by_role_and_label(Role::CheckBox, "Custom up")
+                .next()
+                .unwrap()
+                .click();
+            harness.run();
+            // The rising Body well comes first, then the Border well that Custom up enabled.
+            let [r, g, b, _] = up.to_srgba_unmultiplied();
+            harness
+                .get_all_by_role_and_label(Role::ColorWell, &format!("#{r:02X}{g:02X}{b:02X}"))
+                .nth(1)
+                .expect("the rising Border well shows the rising body colour")
+                .click();
+            harness.run();
+            harness
+                .get_by_role_and_label(Role::ColorWell, "#000000")
+                .click();
+            harness.run();
+            harness.get_by_label("Ok").click();
+            harness.run();
+            let (_, accepted) = harness.state();
+            let accepted: &ChartSettingsState = accepted.as_ref().expect("accepted");
+            accepted.apply_to_chart(&mut chart).unwrap();
+            assert_eq!(
+                borders(&mut chart, 1.0),
+                expected(Color32::BLACK),
+                "{kind:?} black picked"
+            );
+        }
+    }
+
     /// Choosing a palette colour for an HLC area fill keeps the fill's opacity, which has no
     /// control of its own. Expected: white at the seeded alpha of 51.
     #[test]
