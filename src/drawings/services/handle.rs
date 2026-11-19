@@ -17,6 +17,9 @@ use crate::styles::typography::font_size;
 use crate::theme::ThemeExt;
 use egui::{Color32, Pos2};
 
+/// Gap in points between the glyph top edge and its rotation handle.
+const GLYPH_ROTATE_GAP: f32 = 20.0;
+
 /// Configuration for selection handle appearance and hit testing.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -59,7 +62,8 @@ impl HandleService {
     /// - **Two-point tools** (TrendLine, Fibonacci, etc.): Start and End handles
     /// - **Rectangle and Gann box**: Four corner handles and four edge handles
     /// - **Single-point tools** (HorizontalLine, VerticalLine): One Start handle
-    /// - **Glyphs**: Four resize corners around the centre and a Middle move handle
+    /// - **Glyphs**: Four resize corners and a rotation handle beyond the top edge, all rotated
+    ///   with the glyph, and a Middle move handle at its centre
     /// - **Image**: One bottom-right corner that resizes with locked proportions
     /// - **Brushes**: One Middle handle on the stroke, which moves it whole
     /// - **Three-anchor channels**: Four indexed handles, one at each line end
@@ -94,14 +98,14 @@ impl HandleService {
             }
             DrawingToolType::FontIcon | DrawingToolType::Sticker => {
                 if let Some(&center) = drawing.points.first() {
-                    let rect = egui::Rect::from_center_size(
-                        center,
-                        egui::Vec2::splat(font_size(drawing.font_size)),
-                    );
-                    handles.push((HandlePos::TopLeft, rect.left_top()));
-                    handles.push((HandlePos::TopRight, rect.right_top()));
-                    handles.push((HandlePos::BottomLeft, rect.left_bottom()));
-                    handles.push((HandlePos::BottomRight, rect.right_bottom()));
+                    let half = font_size(drawing.font_size) / 2.0;
+                    let turn = egui::emath::Rot2::from_angle(drawing.glyph_radians());
+                    let at = |x: f32, y: f32| center + turn * egui::vec2(x, y);
+                    handles.push((HandlePos::TopLeft, at(-half, -half)));
+                    handles.push((HandlePos::TopRight, at(half, -half)));
+                    handles.push((HandlePos::BottomLeft, at(-half, half)));
+                    handles.push((HandlePos::BottomRight, at(half, half)));
+                    handles.push((HandlePos::Rotate, at(0.0, -half - GLYPH_ROTATE_GAP)));
                     handles.push((HandlePos::Middle, center));
                 }
             }
@@ -308,6 +312,16 @@ impl HandleService {
             }
             DrawingToolType::Rect | DrawingToolType::GannBox => {
                 Self::update_rect_handle(drawing, handle, new_pos, &x_to_bar, &y_to_price);
+            }
+            DrawingToolType::FontIcon | DrawingToolType::Sticker if handle == HandlePos::Rotate => {
+                if let Some(&center) = drawing.points.first() {
+                    let to = new_pos - center;
+                    // Within a point of the centre the pointer has no useful direction.
+                    if to.length_sq() >= 1.0 {
+                        // Up is zero; (sin a, -cos a) points toward the pointer on screen.
+                        drawing.set_glyph_angle(to.x.atan2(-to.y).to_degrees());
+                    }
+                }
             }
             DrawingToolType::FontIcon | DrawingToolType::Sticker
                 if matches!(
@@ -608,14 +622,17 @@ impl HandleService {
             DrawingToolType::FontIcon | DrawingToolType::Sticker
         );
         if glyph && let Some(&center) = drawing.points.first() {
-            painter.rect_stroke(
-                egui::Rect::from_center_size(
-                    center,
-                    egui::Vec2::splat(font_size(drawing.font_size)),
-                ),
-                0.0,
-                egui::Stroke::new(1.0, color(config.color)),
-                egui::StrokeKind::Outside,
+            painter.add(
+                egui::epaint::RectShape::stroke(
+                    egui::Rect::from_center_size(
+                        center,
+                        egui::Vec2::splat(font_size(drawing.font_size)),
+                    ),
+                    0.0,
+                    egui::Stroke::new(1.0, color(config.color)),
+                    egui::StrokeKind::Outside,
+                )
+                .with_angle(drawing.glyph_radians()),
             );
         }
 
@@ -715,6 +732,7 @@ mod tests {
                     (TopRight, pos2(120.0, 180.0)),
                     (BottomLeft, pos2(80.0, 220.0)),
                     (BottomRight, pos2(120.0, 220.0)),
+                    (Rotate, pos2(100.0, 160.0)),
                     (Middle, pos2(100.0, 200.0)),
                 ],
                 None,
@@ -727,6 +745,7 @@ mod tests {
                     (TopRight, pos2(155.0, 145.0)),
                     (BottomLeft, pos2(45.0, 255.0)),
                     (BottomRight, pos2(155.0, 255.0)),
+                    (Rotate, pos2(100.0, 125.0)),
                     (Middle, pos2(100.0, 200.0)),
                 ],
                 None,
@@ -1086,6 +1105,10 @@ mod tests {
             });
             let before = drawing.clone();
             manager.drawings.push(drawing);
+            // A strong magnet would size the drawing by the distance to its target.
+            manager.options.magnet_mode = true;
+            manager.options.strong_magnet = true;
+            manager.snap_targets = vec![pos2(0.0, 0.0)];
             manager.start_drag_handle(1, HandlePos::BottomRight);
             manager.update_drag_handle(pointer, x_to_bar, y_to_price, |p, from, to| {
                 p + f64::from(from - to)
@@ -1128,6 +1151,10 @@ mod tests {
                 let drawing = create_test_drawing(tool, vec![pos2(100.0, 200.0)]);
                 let (anchors, size_before) = (drawing.chart_points.clone(), drawing.font_size);
                 manager.drawings.push(drawing);
+                // A strong magnet would size the drawing by the distance to its target.
+                manager.options.magnet_mode = true;
+                manager.options.strong_magnet = true;
+                manager.snap_targets = vec![pos2(0.0, 0.0)];
                 manager.start_drag_handle(1, handle);
                 // A corner is half a diagonal from the centre: side = radius * sqrt(2).
                 // Offsets (30, 40) have radius 50, giving side 70.710678.
@@ -1198,6 +1225,112 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Rotation follows the pointer past a magnet, keeps the centre and size, turns the handles,
+    /// frame and painted hit area together, and undoes the gesture in one step.
+    #[test]
+    fn glyph_rotation_turns_its_handles_frame_and_hit_area() {
+        use crate::drawings::DrawingManager;
+        use crate::drawings::services::DrawingInteraction;
+
+        let mut manager = DrawingManager::new();
+        let mut drawing = create_test_drawing(DrawingToolType::FontIcon, vec![pos2(100.0, 200.0)]);
+        drawing.text = Some("icon:square".into());
+        let anchors = drawing.chart_points.clone();
+        manager.drawings.push(drawing);
+        manager.options.magnet_mode = true;
+        manager.options.strong_magnet = true;
+        manager.snap_targets = vec![pos2(0.0, 0.0)];
+        let ctx = egui::Context::default();
+        let paint = |drawing: &Drawing, handles| {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |_| {
+                let painter = egui::Painter::new(
+                    ctx.clone(),
+                    egui::LayerId::background(),
+                    egui::Rect::EVERYTHING,
+                );
+                if handles {
+                    HandleService::render_handles(
+                        &painter,
+                        drawing,
+                        &HandleConfig::default(),
+                        Some(HandlePos::Rotate),
+                    );
+                } else {
+                    drawing.render_font_icon(&painter);
+                }
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            shapes
+        };
+        assert_eq!(
+            HandleService::hit_test_handle(&manager.drawings[0], pos2(100.0, 160.0), 8.0),
+            Some(HandlePos::Rotate)
+        );
+        let upright = paint(&manager.drawings[0], false);
+        assert!(DrawingInteraction::hit_test_painted(
+            pos2(115.0, 215.0),
+            &upright
+        ));
+        assert!(!DrawingInteraction::hit_test_painted(
+            pos2(100.0, 221.0),
+            &upright
+        ));
+        manager.start_drag_handle(1, HandlePos::Rotate);
+        for pointer in [pos2(140.0, 160.0), pos2(100.5, 200.5)] {
+            manager.update_drag_handle(pointer, x_to_bar, y_to_price, |p, from, to| {
+                p + f64::from(from - to)
+            });
+            assert!((manager.drawings[0].glyph_angle - 45.0).abs() < 1e-3);
+        }
+        let drawing = &manager.drawings[0];
+        assert_eq!(drawing.points, [pos2(100.0, 200.0)]);
+        assert_eq!(drawing.chart_points, anchors);
+        assert_eq!(drawing.font_size, 40.0);
+        // A 40 pt square at 45 degrees has corner offsets of 20 * sqrt(2).
+        let expected = [
+            (HandlePos::TopLeft, pos2(100.0, 171.715_73)),
+            (HandlePos::TopRight, pos2(128.284_27, 200.0)),
+            (HandlePos::BottomLeft, pos2(71.715_73, 200.0)),
+            (HandlePos::BottomRight, pos2(100.0, 228.284_27)),
+            (HandlePos::Rotate, pos2(128.284_27, 171.715_73)),
+            (HandlePos::Middle, pos2(100.0, 200.0)),
+        ];
+        let handles = HandleService::get_handles(drawing);
+        assert_eq!(handles.len(), expected.len());
+        for ((handle, point), (want_handle, want_point)) in handles.into_iter().zip(expected) {
+            assert_eq!(handle, want_handle);
+            assert!(point.distance(want_point) < 1e-3, "{handle:?}: {point:?}");
+        }
+        assert_eq!(
+            HandleService::hit_test_handle(drawing, pos2(128.3, 171.7), 8.0),
+            Some(HandlePos::Rotate)
+        );
+        assert!(paint(drawing, true).iter().any(|s| matches!(&s.shape,
+            egui::Shape::Rect(r) if r.rect.center() == pos2(100.0, 200.0)
+                && (r.rect.width() - 40.0).abs() < 1e-4
+                && (r.rect.height() - 40.0).abs() < 1e-4 && r.stroke.width > 0.0
+                && (r.angle - std::f32::consts::FRAC_PI_4).abs() < 1e-5
+        )));
+        // The painted square has half-side 15: at 45 degrees its bottom vertex is y=221.213.
+        // The former corner (115,215) is now 6.21 pt from an edge, outside the 5 pt tolerance.
+        let rotated = paint(drawing, false);
+        assert!(DrawingInteraction::hit_test_painted(
+            pos2(100.0, 221.0),
+            &rotated
+        ));
+        assert!(!DrawingInteraction::hit_test_painted(
+            pos2(115.0, 215.0),
+            &rotated
+        ));
+        manager.end_drag_handle();
+        assert!(manager.undo());
+        assert_eq!(manager.drawings[0].glyph_angle, 0.0);
+        assert!(!manager.undo(), "one undo for the whole rotation");
+        assert!(manager.redo());
+        assert!((manager.drawings[0].glyph_angle - 45.0).abs() < 1e-3);
     }
 
     #[test]

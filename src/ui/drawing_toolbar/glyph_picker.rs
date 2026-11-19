@@ -150,7 +150,7 @@ fn cells(ui: &mut Ui, glyphs: &[&Glyph], registry: &DrawingToolRegistry) -> Opti
                 });
                 let rect = Rect::from_center_size(response.rect.center(), Vec2::splat(26.0));
                 let color = ui.visuals().text_color();
-                if !glyphs::paint(ui.painter(), glyph.id, rect, color) {
+                if !glyphs::paint(ui.painter(), glyph.id, rect, color, 0.0) {
                     ui.painter().text(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
