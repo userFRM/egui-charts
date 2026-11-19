@@ -33,9 +33,16 @@ impl SymbolSearchDialog {
                 &symbol.symbol,
             )
         });
+        let mut description = venue_label(symbol);
+        if let Some((kind, value)) = matched_identifier(ui.ctx(), &self.search_query, symbol) {
+            if !description.is_empty() {
+                description.push_str(", ");
+            }
+            description.push_str(&format!("{kind} {value}"));
+        }
         ui.ctx().accesskit_node_builder(response.id, |node| {
             node.set_selected(is_sel);
-            node.set_description(venue_label(symbol));
+            node.set_description(description);
         });
         if is_sel || response.hovered() {
             ui.painter().rect_filled(rect, 4.0, theme.ui.btn_bg_hover);
@@ -257,6 +264,16 @@ fn venue_label(symbol: &Instrument) -> String {
     }
 }
 
+/// The identifier `query` names exactly, as its translated kind label and its value.
+pub(super) fn matched_identifier<'a>(
+    ctx: &Context,
+    query: &str,
+    symbol: &'a Instrument,
+) -> Option<(String, &'a str)> {
+    let (kind, value) = crate::services::SymbolQuery::new(query).matched_identifier(symbol)?;
+    Some((l10n::text(ctx, kind.to_string()), value.as_str()))
+}
+
 /// Corner radius of the symbol search and comparison dialogs.
 pub(super) const SEARCH_RADIUS: f32 = 20.0;
 
@@ -319,17 +336,41 @@ pub(super) fn paint_symbol_text(
         )
     });
     let badge_width = badge.as_ref().map_or(0.0, |badge| badge.size().x + 14.0);
+    let identifier = matched_identifier(ui.ctx(), query, symbol).map(|(kind, value)| {
+        let mut job = egui::text::LayoutJob::default();
+        for (text, color) in [
+            (format!("{kind} "), colors[1]),
+            (value.to_owned(), theme.ui.accent),
+        ] {
+            job.append(
+                &text,
+                0.0,
+                egui::TextFormat::simple(egui::FontId::proportional(12.0), color),
+            );
+        }
+        job.wrap =
+            egui::text::TextWrapping::truncate_at_width((width - badge_width - 8.0).max(0.0));
+        ui.painter().layout_job(job)
+    });
+    let identifier_width = identifier
+        .as_ref()
+        .map_or(0.0, |galley| galley.size().x + 8.0);
     let description = line(
         symbol.description.as_deref().unwrap_or(&symbol.symbol),
         12.0,
         colors[1],
-        (width - badge_width).max(0.0),
+        (width - badge_width - identifier_width).max(0.0),
     );
     let top = rect.center().y + 3.0;
-    let badge_left = left + description.size().x + 6.0;
+    let identifier_left = left + description.size().x + 8.0;
+    let badge_left = left + description.size().x + identifier_width + 6.0;
     let description_height = description.size().y;
     ui.painter()
         .galley(Pos2::new(left, top), description, colors[1]);
+    if let Some(identifier) = identifier {
+        ui.painter()
+            .galley(Pos2::new(identifier_left, top), identifier, colors[1]);
+    }
     if let Some(badge) = badge {
         let frame = egui::Rect::from_min_size(
             Pos2::new(
