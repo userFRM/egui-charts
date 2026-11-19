@@ -472,8 +472,9 @@ pub struct ChartConfig {
     pub show_price_line: bool,
     /// Draw a line at the preceding session close independently of its tag.
     pub show_prev_close_line: bool,
-    /// Colour, width and pattern of the previous close line and its tag. Without a colour it
-    /// follows the theme's secondary text colour.
+    /// Colour, width and pattern of the previous close line and its tag. Without a colour it is
+    /// mid grey, #555555, in a light theme and follows the theme's secondary text colour in a
+    /// dark one.
     #[serde(default)]
     pub prev_close_line: ChartLineStyle,
     /// Whether to show previous close value line
@@ -810,6 +811,17 @@ impl ChartConfig {
                 .lerp_to_gamma(Color32::from_rgb(10, 16, 33), 0.18)
         };
         self
+    }
+
+    /// The colour of the previous close line and its tag while `prev_close_line` sets none:
+    /// mid grey, #555555, in a light theme, apart from the black scale text, and the theme's
+    /// secondary text colour in a dark one.
+    pub(crate) fn prev_close_fallback(theme: &Theme) -> Color32 {
+        if theme.dark {
+            theme.ui.text_secondary
+        } else {
+            Color32::from_gray(85)
+        }
     }
 }
 
