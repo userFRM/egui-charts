@@ -77,7 +77,8 @@ impl Default for StyleControls {
 /// [`Self::new`] and assign the optional presentation fields.
 ///
 /// ```
-/// use egui_charts::drawings::{ChartView, Drawing, DrawingRenderer, DrawingToolRegistry, RegisteredDrawingTool};
+/// use egui_charts::drawings::{Drawing, DrawingRenderer, DrawingToolRegistry, RegisteredDrawingTool};
+/// use egui_charts::drawings::rendering::ChartView;
 /// use std::sync::Arc;
 ///
 /// struct Dot;
