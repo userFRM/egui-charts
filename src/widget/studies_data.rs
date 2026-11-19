@@ -2842,17 +2842,17 @@ pub(super) mod tests {
                 let case = format!("{name}: {order}, apply_settings {apply}");
                 let mut chart = chart();
                 let id = chart.add_indicator(study());
-                for batch in edits {
+                for edit in edits {
                     let study = chart.indicator_mut(id).unwrap();
                     let result = if apply {
-                        let inputs: Vec<_> = batch
+                        let inputs: Vec<_> = edit
                             .iter()
                             .map(|(id, value)| (id.to_string(), value.clone()))
                             .collect();
                         let settings = study.settings();
                         study.apply_settings(&inputs, settings)
                     } else {
-                        batch
+                        edit
                             .iter()
                             .try_for_each(|(id, value)| study.set_input(id, value.clone()))
                     };
