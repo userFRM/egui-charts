@@ -1,0 +1,8 @@
+# Instructions per measured profile calculation or tail update, including developing plots.
+# Measured with rustc 1.95.0, release defaults, x86_64 Linux, using frame_time profiles-*.
+# Reference compiler matches CI. check-regressions.sh allows 5% and also checks scaling.
+# Recompute each entry as measured minus zero from check-regressions.sh --measure.
+profiles-tick-1000 101904
+profiles-tick-4000 103594
+profiles-calculate-1000 54596428
+profiles-calculate-4000 194682985

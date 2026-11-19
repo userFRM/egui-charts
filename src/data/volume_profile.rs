@@ -626,6 +626,12 @@ impl VolumeProfile {
     /// price). A flat span uses one narrow row; `None` for an unrepresentable grid.
     pub(crate) fn of(bars: &[Bar], rows: usize, row_size: Option<f64>) -> Option<Self> {
         let (low, high) = price_span(bars)?;
+        let mut profile = Self::empty(low, high, rows, row_size)?;
+        bars.iter().for_each(|bar| profile.add(bar));
+        Some(profile)
+    }
+
+    pub(crate) fn empty(low: f64, high: f64, rows: usize, row_size: Option<f64>) -> Option<Self> {
         if rows == 0 || rows > 10_000 {
             return None;
         }
@@ -642,7 +648,7 @@ impl VolumeProfile {
         if !low.is_finite() || !high.is_finite() || !row_height.is_finite() || row_height <= 0.0 {
             return None;
         }
-        let mut profile = Self {
+        Some(Self {
             low,
             high,
             row_height,
@@ -657,9 +663,73 @@ impl VolumeProfile {
             exposure: None,
             #[cfg(any(feature = "studies", feature = "widget"))]
             expiry_parts: None,
+        })
+    }
+
+    /// Keep a developing estimate in bounded work per bar by redistributing its row volumes
+    /// when the grid changes, instead of distributing every earlier source bar again.
+    #[cfg(feature = "studies")]
+    pub(crate) fn extend_developing(
+        &mut self,
+        span: (f64, f64),
+        rows: usize,
+        row_size: Option<f64>,
+        bars: &[Bar],
+    ) -> Option<()> {
+        let same_grid = if let Some(height) = row_size {
+            self.fixed_height
+                && self.row_height == height
+                && span.0 >= self.low
+                && span.1 < self.high
+        } else {
+            !self.fixed_height
+                && if let Some(price) = self.flat_price {
+                    span == (price, price)
+                } else {
+                    span == (self.low, self.high) && rows == self.volume.len()
+                }
         };
-        bars.iter().for_each(|bar| profile.add(bar));
-        Some(profile)
+        if same_grid {
+            bars.iter().for_each(|bar| self.add(bar));
+            return Some(());
+        }
+        let mut next = Self::empty(span.0, span.1, rows, row_size)?;
+        if (self.low, self.high, self.row_height, self.volume.len())
+            != (next.low, next.high, next.row_height, next.volume.len())
+        {
+            let last = next.volume.len() - 1;
+            let row_of = |price| (grid_row(next.low, next.row_height, price).0 as usize).min(last);
+            for i in 0..self.volume.len() {
+                let low = self
+                    .flat_price
+                    .unwrap_or(self.low + i as f64 * self.row_height);
+                let high = self.flat_price.unwrap_or(low + self.row_height);
+                for row in row_of(low)..=row_of(high) {
+                    let fraction = if low == high {
+                        1.0
+                    } else {
+                        // A new tick grid can trim the old grid's empty price padding.
+                        let bottom = if row == 0 {
+                            low
+                        } else {
+                            next.low + row as f64 * next.row_height
+                        };
+                        let top = if row == last {
+                            high
+                        } else {
+                            next.low + (row + 1) as f64 * next.row_height
+                        };
+                        (high.min(top) - low.max(bottom)).max(0.0) / (high - low)
+                    };
+                    next.volume[row] += self.volume[i] * fraction;
+                    next.up[row] += self.up[i] * fraction;
+                    next.down[row] += self.down[i] * fraction;
+                }
+            }
+            *self = next;
+        }
+        bars.iter().for_each(|bar| self.add(bar));
+        Some(())
     }
 
     /// Replaces each of `bars` by the sorted `finer` bars opening inside it, up to the next
@@ -1151,6 +1221,46 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Developing grid changes conserve total, up and down volume, including a padded flat span.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn developing_rows_rebin_without_losing_volume() {
+        let time = chrono::DateTime::UNIX_EPOCH;
+        let flat = Bar::new(time, 10.0, 10.0, 10.0, 10.0, 100.0);
+        for height in [None, Some(1.0)] {
+            let mut profile = VolumeProfile::of(std::slice::from_ref(&flat), 2, height).unwrap();
+            let up = Bar::new(time, 8.0, 12.0, 8.0, 12.0, 40.0);
+            profile
+                .extend_developing((8.0, 12.0), 2, None, &[up])
+                .unwrap();
+            assert_eq!(profile.volume(), [20.0, 120.0]);
+            let down = Bar::new(time, 12.0, 16.0, 4.0, 4.0, 120.0);
+            profile
+                .extend_developing((4.0, 16.0), 2, None, &[down])
+                .unwrap();
+            assert_eq!(profile.volume(), [80.0, 180.0]);
+            assert_eq!(profile.up(), [20.0, 120.0]);
+            assert_eq!(profile.down(), [60.0, 60.0]);
+            // A changed whole-tick height can cross the old row boundaries.
+            profile
+                .extend_developing((4.0, 16.0), 2, Some(7.0), &[])
+                .unwrap();
+            for (rows, total) in [
+                (profile.volume(), 260.0),
+                (profile.up(), 140.0),
+                (profile.down(), 120.0),
+            ] {
+                assert_close(rows.iter().sum(), total);
+            }
+        }
+        let flat = Bar::new(time, 10.9, 10.9, 10.9, 10.9, 100.0);
+        let mut profile = VolumeProfile::of(&[flat], 2, Some(3.0)).unwrap();
+        profile
+            .extend_developing((10.9, 10.9), 2, Some(5.0), &[])
+            .unwrap();
+        assert_eq!(profile.volume(), [100.0]);
     }
 
     /// Existing rows keep their prices and volume when a fixed grid grows at either edge.

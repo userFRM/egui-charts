@@ -36,9 +36,9 @@ instructions() {
     [[ $count =~ ^[0-9]+$ ]] || { cat "$log" >&2; exit 1; }
     echo "$count"
 }
-scenarios=(frame-1000 frame-100000 frame-1000000 heikin tick tick-studies append append-studies bar-limit studies drawings depth bubbles tpo-400 tpo-1600 trade-replay session-resample markers events comparisons-1 comparisons-2 comparisons-5)
+scenarios=(frame-1000 frame-100000 frame-1000000 heikin tick tick-studies append append-studies bar-limit studies drawings depth bubbles tpo-400 tpo-1600 trade-replay session-resample markers events comparisons-1 comparisons-2 comparisons-5 profiles-tick-1000 profiles-tick-4000 profiles-calculate-1000 profiles-calculate-4000)
 # A replay already looks up 100,000 ids; one measured frame is enough.
-samples_of() { if [[ $1 == trade-replay ]]; then echo 1; else echo 20; fi; }
+samples_of() { if [[ $1 == trade-replay || $1 == profiles-* ]]; then echo 1; else echo 20; fi; }
 if [[ $mode == --measure ]]; then
     measure() {
         local zero measured
@@ -49,6 +49,7 @@ if [[ $mode == --measure ]]; then
     # Cachegrind counts instructions, not time, so the scenarios run side by side, one per processor.
     # A failed scenario leaves no counts file and fails below.
     slots=$(nproc)
+    if [[ ${CARGO_BUILD_JOBS:-} =~ ^[1-9][0-9]*$ ]]; then slots=$CARGO_BUILD_JOBS; fi
     for scenario in "${scenarios[@]}"; do
         while (( $(jobs -pr | wc -l) >= slots )); do wait -n || true; done
         measure "$scenario" &
@@ -81,16 +82,40 @@ for scenario in "${scenarios[@]}"; do
     head=$(( head_measured - head0 ))
     (( base > 0 && head > 0 )) || { echo "::error::Invalid instruction delta for $scenario" >&2; exit 1; }
     change=$(awk -v b="$base" -v h="$head" 'BEGIN { printf "%+.2f%%", (h-b)*100/b }')
-    printf '| %s | %s | %s | %s | +5%% |\n' "$scenario" "$(( base / samples ))" "$(( head / samples ))" "$change"
+    limit=$base
+    tolerance='+5%'
+    if [[ $scenario == profiles-* ]]; then
+        # This workload adds developing plots that the base library did not calculate.
+        # Keep an explicit accepted budget for them, as well as the scaling checks below.
+        limit=$(awk -v s="$scenario" '$1 == s { print $2 }' "$(dirname "$0")/profiles.baseline")
+        [[ $limit =~ ^[0-9]+$ ]] || { echo "::error::Missing profile budget for $scenario" >&2; exit 1; }
+        limit=$(( limit * samples ))
+        tolerance='+5% of profile baseline'
+    fi
+    printf '| %s | %s | %s | %s | %s |\n' "$scenario" "$(( base / samples ))" "$(( head / samples ))" "$change" "$tolerance"
     # Compare unrounded counts so a value just above the threshold still fails.
-    if (( head * 100 > base * 105 )); then
-        echo "::error title=Performance regression::$scenario grew by $change (tolerance +5%)" >&2
+    if (( head * 100 > limit * 105 )); then
+        if [[ $scenario == profiles-* ]]; then
+            echo "::error title=Performance regression::$scenario exceeded its profile instruction budget (tolerance +5%)" >&2
+        else
+            echo "::error title=Performance regression::$scenario grew by $change (tolerance +5%)" >&2
+        fi
         fail=1
     fi
     if [[ $scenario == tpo-400 ]]; then
         tpo400=$head
     elif [[ $scenario == tpo-1600 ]] && (( head * 100 > tpo400 * 4 * 105 )); then
         echo "::error title=TPO scaling regression::Instructions per session grew by more than 5% from 400 to 1,600 sessions" >&2
+        fail=1
+    elif [[ $scenario == profiles-tick-1000 ]]; then
+        profiles_tick=$head
+    elif [[ $scenario == profiles-tick-4000 ]] && (( head * 100 > profiles_tick * 150 )); then
+        echo "::error title=Profile scaling regression::Tail updates grew by more than 50% from 1,000 to 4,000 bars" >&2
+        fail=1
+    elif [[ $scenario == profiles-calculate-1000 ]]; then
+        profiles_calculate=$head
+    elif [[ $scenario == profiles-calculate-4000 ]] && (( head * 100 > profiles_calculate * 4 * 115 )); then
+        echo "::error title=Profile scaling regression::Calculation grew by more than linear growth plus 15% from 1,000 to 4,000 bars" >&2
         fail=1
     fi
 done

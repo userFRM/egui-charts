@@ -23,6 +23,8 @@
 //! foreground colour until a line colour is chosen.
 //! Colours list the three developing plots before POC and the four row colours. Setting five
 //! colours edits the profile colours; other lengths start with the developing plots.
+//! Developing plots retain the running estimate and redistribute its rows when its grid
+//! changes. The displayed histogram continues to distribute the original source bars.
 
 use super::AutoAnchor;
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
@@ -134,6 +136,8 @@ struct ProfileStudy {
     /// Levels of finished profiles, kept while their bars and row layout hold.
     levels: RefCell<LevelCache>,
     values: IndicatorValues,
+    developing: BTreeMap<usize, DevelopingRange>,
+    developing_start: Option<usize>,
     colors: Vec<Color32>,
     show_rows: bool,
     /// Point of control, value area high and low visibility.
@@ -150,6 +154,20 @@ struct CachedProfile {
     opening: Option<VolumeProfile>,
     coverage: f64,
     dirty: bool,
+}
+
+#[derive(Clone, Debug)]
+struct DevelopingProfile {
+    end: usize,
+    span: Option<(f64, f64)>,
+    input_span: Option<(f64, f64)>,
+    profile: Option<VolumeProfile>,
+}
+
+#[derive(Clone, Debug)]
+struct DevelopingRange {
+    before: DevelopingProfile,
+    after: DevelopingProfile,
 }
 
 /// The kinds of level the extend inputs carry, in their order.
@@ -342,6 +360,8 @@ impl ProfileStudy {
             cache: RefCell::new(Vec::new()),
             levels: RefCell::default(),
             values: IndicatorValues::new(),
+            developing: BTreeMap::new(),
+            developing_start: None,
             colors: vec![
                 crate::studies::palette::WARM_ORANGE,
                 crate::studies::palette::LIGHT_BLUE,
@@ -843,6 +863,7 @@ impl ProfileStudy {
     /// Takes the finer bars, replacing all of them from bar 0 and from the first changed chart
     /// bar on otherwise, so a reply for another interval is dropped.
     fn update_data(&mut self, data: &[Bar], from: usize, sources: &[StudyData<'_>]) {
+        let had_finer = !self.fine.is_empty();
         let wanted = self.finer();
         match sources
             .iter()
@@ -858,7 +879,14 @@ impl ProfileStudy {
             Some(source) => self.fine = source.bars.to_vec(),
             None => self.fine.clear(),
         }
-        self.update(data, from);
+        self.update(
+            data,
+            if had_finer && self.fine.is_empty() {
+                0
+            } else {
+                from
+            },
+        );
     }
 
     /// What each profile in `visible` was built from.
@@ -1000,6 +1028,8 @@ impl ProfileStudy {
     fn calculate(&mut self, data: &[Bar]) {
         self.data = data.to_vec();
         self.values = IndicatorValues::missing(data.len());
+        self.developing.clear();
+        self.developing_start = None;
         self.cache.get_mut().clear();
         *self.levels.get_mut() = LevelCache::default();
         self.refresh_ranges();
@@ -1050,12 +1080,30 @@ impl ProfileStudy {
         {
             self.refresh_ranges();
         }
-        self.refresh_developing(from);
+        // Finer inputs of the previous bar stop at the changed bar's open.
+        let developing_from = if times_changed && self.finer().is_some() {
+            from.saturating_sub(1)
+        } else {
+            from
+        };
+        self.refresh_developing(developing_from);
     }
 
-    /// Refresh ranges reaching `from`; viewport and moving anchors recompute their whole span.
+    /// Resume each affected range before its changing bar; moving starts discard their prefix.
     fn refresh_developing(&mut self, from: usize) {
         let moving = matches!(self.kind, Kind::Visible | Kind::Auto);
+        let start = if self.kind == Kind::Visible {
+            Some(self.view.start.min(self.data.len()))
+        } else {
+            self.ranges.first().map(|range| range.start)
+        };
+        let keep = if moving && self.developing_start != start {
+            0
+        } else {
+            from
+        };
+        self.developing_start = start;
+        self.developing.split_off(&keep);
         let ranges: Vec<_> = if self.kind == Kind::Visible {
             let range = self.view.start.min(self.data.len())..self.view.end.min(self.data.len());
             if range.is_empty() {
@@ -1064,15 +1112,8 @@ impl ProfileStudy {
                 vec![range]
             }
         } else {
-            self.ranges.clone()
-        };
-        let keep = if moving {
-            0
-        } else {
-            ranges
-                .iter()
-                .find(|range| range.end > from)
-                .map_or(from, |range| from.min(range.start))
+            let first = self.ranges.partition_point(|range| range.end <= keep);
+            self.ranges[first..].to_vec()
         };
         self.values.truncate(keep);
         self.values.resize(self.data.len(), IndicatorValue::None);
@@ -1082,15 +1123,38 @@ impl ProfileStudy {
         };
         let finer = self.finer().is_some() && !self.fine.is_empty();
         for range in ranges.into_iter().filter(|range| range.end > keep) {
-            let mut previous: Option<VolumeProfile> = None;
-            let mut layout = None;
-            let mut span = crate::data::price_span(&self.data[range.start..range.start.max(keep)]);
-            for i in range.start.max(keep)..range.end {
+            let mut state = self
+                .developing
+                .remove(&range.start)
+                .and_then(|cached| {
+                    if cached.after.end <= keep {
+                        Some(cached.after)
+                    } else if cached.before.end <= keep {
+                        Some(cached.before)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(DevelopingProfile {
+                    end: range.start,
+                    span: None,
+                    input_span: None,
+                    profile: None,
+                });
+            let mut before = state.clone();
+            for i in state.end..range.end {
+                if i + 1 == range.end {
+                    before = state.clone();
+                }
                 let bar_span = crate::data::price_span(&self.data[i..=i]);
                 if let Some((low, high)) = bar_span {
-                    span = Some(span.map_or((low, high), |(lo, hi)| (lo.min(low), hi.max(high))));
+                    state.span = Some(
+                        state
+                            .span
+                            .map_or((low, high), |(lo, hi)| (lo.min(low), hi.max(high))),
+                    );
                 }
-                let config = self.range_config(span, base, false);
+                let config = self.range_config(state.span, base, false);
                 let end = self
                     .data
                     .get(i + 1)
@@ -1108,15 +1172,29 @@ impl ProfileStudy {
                 } else {
                     inside
                 };
-                let profile = previous
-                    .filter(|_| layout == Some(config))
-                    .and_then(|profile| {
-                        added
-                            .iter()
-                            .try_fold(profile, |profile, bar| profile.with_bar(bar))
-                    })
-                    .or_else(|| {
-                        if finer {
+                let previous_span = state.input_span;
+                if let Some((low, high)) = crate::data::price_span(added) {
+                    state.input_span = Some(
+                        state
+                            .input_span
+                            .map_or((low, high), |(lo, hi)| (lo.min(low), hi.max(high))),
+                    );
+                }
+                if let Some(span) = state.input_span {
+                    if let Some(profile) = &mut state.profile {
+                        if profile
+                            .extend_developing(span, config.rows(), config.row_size(), added)
+                            .is_none()
+                        {
+                            state.profile = None;
+                        }
+                    } else if previous_span.is_none() {
+                        state.profile = VolumeProfile::from_bars(added, config);
+                    } else if VolumeProfile::empty(span.0, span.1, config.rows(), config.row_size())
+                        .is_some()
+                    {
+                        // A grid that was unrepresentable may become usable at a coarser height.
+                        state.profile = if finer {
                             VolumeProfile::of_finer(
                                 &self.data[range.start..=i],
                                 end,
@@ -1127,10 +1205,12 @@ impl ProfileStudy {
                             .0
                         } else {
                             VolumeProfile::from_bars(&self.data[range.start..=i], config)
-                        }
-                    });
-                if bar_span.is_some()
-                    && let Some(profile) = &profile
+                        };
+                    }
+                }
+                if i >= keep
+                    && bar_span.is_some()
+                    && let Some(profile) = &state.profile
                     && let Some((poc, (low, high))) = profile.poc_and_value_area(self.value_area)
                 {
                     for (line, row) in [poc as f64 + 0.5, high as f64 + 1.0, low as f64]
@@ -1141,9 +1221,15 @@ impl ProfileStudy {
                             .set_value(line, i, profile.low() + row * profile.row_height());
                     }
                 }
-                previous = profile;
-                layout = Some(config);
+                state.end = i + 1;
             }
+            self.developing.insert(
+                range.start,
+                DevelopingRange {
+                    before,
+                    after: state,
+                },
+            );
         }
     }
 
@@ -1849,9 +1935,15 @@ macro_rules! profile_study {
             }
             fn set_visible_range(&mut self, range: Range<usize>) -> bool {
                 if self.profile.view != range {
+                    let from = if self.profile.view.start == range.start {
+                        self.profile.view.end.min(range.end)
+                    } else {
+                        0
+                    };
                     self.profile.view = range;
                     if self.profile.kind == Kind::Visible {
-                        self.profile.refresh_developing(0);
+                        self.profile
+                            .refresh_developing(from.min(self.profile.data.len()));
                     }
                 }
                 false
@@ -4907,6 +4999,16 @@ mod rendering_tests {
                     coverage: 0.5
                 }]
             );
+        }
+
+        // Losing the finer source changes the whole estimate, even on a tail update.
+        let mut tail = source(&fine, Timeframe::Min30, false);
+        tail.update_data(&chart, 1, &[]);
+        let fresh = source(&[], Timeframe::Min30, false);
+        for line in 0..3 {
+            for i in 0..chart.len() {
+                assert_eq!(tail.values().value(line, i), fresh.values().value(line, i));
+            }
         }
 
         // A longer source interval is not requested, and another interval's reply is dropped.
