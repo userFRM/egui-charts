@@ -393,6 +393,22 @@ pub trait Indicator: Send {
         self.values().value(line, source)
     }
 
+    /// Names of the declared alert conditions, in the order
+    /// [`alert_condition`](Self::alert_condition) numbers them, such as `"Trend change"`.
+    /// The alert dialog lists them after the outputs as `"{study}: {condition}"`, translating
+    /// the condition when shown. Keep indices stable across settings changes and releases.
+    /// None by default.
+    fn alert_conditions(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Whether a declared condition holds at a source bar, independent of plot displacement.
+    /// Returns `None` for an unknown condition, a missing bar or an undefined condition,
+    /// including warm-up. An alert counts `None` as not holding.
+    fn alert_condition(&self, _condition: usize, _bar: usize) -> Option<bool> {
+        None
+    }
+
     /// Current applied presentation, initialized from the study's own defaults.
     fn settings(&self) -> super::StudySettings {
         let (levels, fill_between_levels, level_fill_color) =

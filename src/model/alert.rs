@@ -685,6 +685,9 @@ pub enum AlertCondition {
         /// Number of preceding bars in the mean, at least one.
         bars: u32,
     },
+    /// The [`AlertSource::StudyCondition`] named by the source holds on this bar.
+    /// It tests only that source, which takes no other condition. An undefined value does not hold.
+    Holds,
 }
 
 /// A host-resolved value on a bar. Identifiers remain meaningful to the host across sessions.
@@ -700,6 +703,16 @@ pub enum AlertSource {
         id: String,
         /// Zero-based output line within the study.
         output: usize,
+    },
+    /// A study's declared condition, indexed by
+    /// [`Indicator::alert_conditions`](crate::studies::Indicator::alert_conditions).
+    /// Reads 1 where it holds, 0 where it does not, and no value where undefined;
+    /// `{{value}}` writes it as `1` or `0`. Only [`AlertCondition::Holds`] tests it.
+    StudyCondition {
+        /// Host's stable identifier for the study instance.
+        id: String,
+        /// Zero-based condition within the study.
+        condition: usize,
     },
     /// A drawing's price at the bar's time, resolved by the host.
     Drawing(String),
@@ -931,7 +944,9 @@ impl AlertRule {
 impl AlertSource {
     fn is_valid(&self) -> bool {
         match self {
-            Self::Study { id, .. } | Self::Drawing(id) => !id.trim().is_empty(),
+            Self::Study { id, .. } | Self::StudyCondition { id, .. } | Self::Drawing(id) => {
+                !id.trim().is_empty()
+            }
             _ => true,
         }
     }
@@ -957,9 +972,15 @@ impl AlertCondition {
         )
     }
 
+    /// A declared study condition takes only `Holds`, which tests nothing else.
+    pub(crate) fn pairs_with(&self, source: &AlertSource) -> bool {
+        matches!(source, AlertSource::StudyCondition { .. }) == matches!(self, Self::Holds)
+    }
+
     /// Whether levels are finite and ordered, lookbacks positive, and referenced ids nonempty.
     pub fn is_valid(&self) -> bool {
         match self {
+            Self::Holds => true,
             Self::StrategyFills(name) | Self::DetectorSignals(name) | Self::CustomEvents(name) => {
                 !name.trim().is_empty()
             }
@@ -1010,6 +1031,7 @@ impl AlertCondition {
 impl std::fmt::Display for AlertCondition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Holds => f.write_str("Condition met"),
             Self::StrategyFills(run) => write!(f, "Fills of strategy {run}"),
             Self::DetectorSignals(detector) => write!(f, "Signals of detector {detector}"),
             Self::CustomEvents(source) => write!(f, "Events of {source}"),
@@ -1072,6 +1094,14 @@ impl Alert {
                 let intervals = self.timeframes();
                 intervals.len() == 1 || intervals.iter().all(|interval| !interval.is_trade_based())
             }
+            && self.rules().all(|(source, condition, _)| {
+                condition.pairs_with(source)
+                    && !condition
+                        .partners()
+                        .into_iter()
+                        .flatten()
+                        .any(|source| matches!(source, AlertSource::StudyCondition { .. }))
+            })
             && self.source.is_valid()
             && self.condition.is_valid()
             && self
@@ -1439,7 +1469,61 @@ mod tests {
                 progress: AlertPositionProgress::AwaitingEntry,
             }
         }
-        let rows: [(Edit, bool); 41] = [
+        let rows: [(Edit, bool); 47] = [
+            (
+                |a| {
+                    a.source = AlertSource::StudyCondition {
+                        id: "3".into(),
+                        condition: 0,
+                    };
+                    a.condition = AlertCondition::Holds;
+                },
+                true,
+            ),
+            (|a| a.condition = AlertCondition::Holds, false),
+            (
+                |a| {
+                    a.source = AlertSource::StudyCondition {
+                        id: "3".into(),
+                        condition: 0,
+                    }
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.condition = AlertCondition::Compare {
+                        other: AlertSource::StudyCondition {
+                            id: "3".into(),
+                            condition: 0,
+                        },
+                        comparison: AlertComparison::Above,
+                    }
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.source = AlertSource::StudyCondition {
+                        id: " ".into(),
+                        condition: 0,
+                    };
+                    a.condition = AlertCondition::Holds;
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.additional_conditions.push(AlertRule::new(
+                        AlertSource::StudyCondition {
+                            id: "3".into(),
+                            condition: 1,
+                        },
+                        AlertCondition::Holds,
+                    ))
+                },
+                true,
+            ),
             (|a| a.condition = position(), true),
             (
                 |a| {

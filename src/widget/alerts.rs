@@ -127,8 +127,9 @@ impl Chart {
     /// its `value` function and any other evaluator can use: the close for
     /// [`Price`](AlertSource::Price), the volume for [`Volume`](AlertSource::Volume), the value of
     /// the study output at that bar for a [`Study`](AlertSource::Study) named by its [`SeriesId`]
-    /// in decimal, and the value of the drawing's level at that bar, on the scale of the pane that
-    /// paints the drawing, an anchored VWAP counting the executions the chart holds, for a
+    /// in decimal, `1` or `0` for a [`StudyCondition`](AlertSource::StudyCondition) that holds or
+    /// does not at that bar, and the value of the drawing's level at that bar, on the scale of
+    /// the pane that paints the drawing, an anchored VWAP counting the executions the chart holds, for a
     /// [`Drawing`](AlertSource::Drawing) named as
     /// [`Drawing::alert_source`] does.
     ///
@@ -146,6 +147,18 @@ impl Chart {
                 .find(|(study, _)| study.0.to_string() == *id)?
                 .1
                 .plot_value(*output, bar)?,
+            AlertSource::StudyCondition { id, condition } => {
+                if self
+                    .indicators()
+                    .find(|(study, _)| study.0.to_string() == *id)?
+                    .1
+                    .alert_condition(*condition, bar)?
+                {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
             AlertSource::Drawing(_) => self.drawings().drawings.iter().find_map(|d| {
                 let level = d.alert_level(source)?;
                 let (scale, ..) = self.drawing_subject(d.id);
@@ -163,8 +176,8 @@ impl Chart {
         value.is_finite().then_some(value)
     }
 
-    /// Every output of every study and every level of every completed drawing whose pane marks
-    /// the price or a study, as [`Self::alert_value`] resolves it, with the name the alert dialog
+    /// Every output and declared condition of every study and every level of every completed
+    /// drawing whose pane marks the price or a study, as [`Self::alert_value`] resolves it, with the name the alert dialog
     /// shows, for `AlertDialog::sources`. Drawing levels are those at the newest bar. A name keeps
     /// the study's name, the drawing's number and a fork level's value as given and translates the
     /// study output, the drawing tool and the level when shown. A level in a study pane is named
@@ -189,6 +202,21 @@ impl Chart {
                         ),
                     )
                 })
+                .chain(study.alert_conditions().into_iter().enumerate().map(
+                    move |(condition, name)| {
+                        (
+                            AlertSource::StudyCondition {
+                                id: id.0.to_string(),
+                                condition,
+                            },
+                            AlertSourceName::new(
+                                "{study}: {condition}",
+                                &[("study", study.name())],
+                                &[("condition", name.as_str())],
+                            ),
+                        )
+                    },
+                ))
         });
         let drawings = self
             .drawings()
@@ -292,6 +320,159 @@ mod tests {
     use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
     use crate::model::{Bar, BarData};
     use chrono::DateTime;
+
+    /// Hand-calculated flips, crosses and changes of histogram direction, read through the
+    /// chart's configured studies. Plot offsets never displace a calculated condition.
+    #[test]
+    fn study_conditions_read_one_where_they_hold() {
+        use crate::studies::{AwesomeOscillator, Indicator, InputValue, MACD, SuperTrend};
+        type Case = (
+            Box<dyn Indicator>,
+            Vec<f64>,
+            Vec<(&'static str, Vec<Option<f64>>)>,
+        );
+        let rows: Vec<Case> = vec![
+            (
+                Box::new(SuperTrend::new(1, 1.0)),
+                vec![100., 101., 105., 106., 100., 99., 103.],
+                vec![
+                    (
+                        "SuperTrend: Trend turns up",
+                        vec![
+                            None,
+                            Some(0.),
+                            Some(1.),
+                            Some(0.),
+                            Some(0.),
+                            Some(0.),
+                            Some(1.),
+                        ],
+                    ),
+                    (
+                        "SuperTrend: Trend turns down",
+                        vec![
+                            None,
+                            Some(0.),
+                            Some(0.),
+                            Some(0.),
+                            Some(1.),
+                            Some(0.),
+                            Some(0.),
+                        ],
+                    ),
+                    (
+                        "SuperTrend: Trend change",
+                        vec![
+                            None,
+                            Some(0.),
+                            Some(1.),
+                            Some(0.),
+                            Some(1.),
+                            Some(0.),
+                            Some(1.),
+                        ],
+                    ),
+                ],
+            ),
+            (
+                Box::new(MACD::new(1, 2, 2)),
+                vec![30., 60., 50., 80.],
+                vec![
+                    (
+                        "MACD: Crosses above signal line",
+                        vec![None, Some(0.), Some(0.), Some(1.)],
+                    ),
+                    (
+                        "MACD: Crosses below signal line",
+                        vec![None, Some(0.), Some(1.), Some(0.)],
+                    ),
+                ],
+            ),
+            (
+                Box::new(AwesomeOscillator::new(1, 2)),
+                vec![10., 20., 40., 50., 40., 60.],
+                vec![
+                    (
+                        "Awesome Oscillator: Changes to increasing bars",
+                        vec![None, None, None, Some(0.), Some(0.), Some(1.)],
+                    ),
+                    (
+                        "Awesome Oscillator: Changes to decreasing bars",
+                        vec![None, None, None, Some(1.), Some(0.), Some(0.)],
+                    ),
+                ],
+            ),
+        ];
+        for (study, closes, conditions) in rows {
+            let bars = closes
+                .into_iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    Bar::new(
+                        DateTime::from_timestamp(i as i64 * 60, 0).unwrap(),
+                        c,
+                        c + 1.,
+                        c - 1.,
+                        c,
+                        1.,
+                    )
+                })
+                .collect();
+            let mut chart = Chart::new(BarData::from_bars(bars));
+            let id = chart.add_indicator(study);
+            let sources = chart.alert_sources();
+            for (condition, (name, expected)) in conditions.iter().enumerate() {
+                let source = AlertSource::StudyCondition {
+                    id: id.0.to_string(),
+                    condition,
+                };
+                assert!(
+                    sources
+                        .iter()
+                        .any(|(s, n)| *s == source && n.to_string() == *name),
+                    "{name}"
+                );
+                for (bar, expected) in expected.iter().enumerate() {
+                    assert_eq!(
+                        chart.alert_value(&source, bar),
+                        *expected,
+                        "{name} at {bar}"
+                    );
+                }
+                assert_eq!(chart.alert_value(&source, expected.len()), None);
+            }
+            assert_eq!(
+                chart.alert_value(
+                    &AlertSource::StudyCondition {
+                        id: id.0.to_string(),
+                        condition: conditions.len()
+                    },
+                    2
+                ),
+                None
+            );
+            let study = chart.indicator_mut(id).unwrap();
+            if study.inputs().iter().any(|input| input.id == "plot_offset") {
+                study
+                    .set_input("plot_offset", InputValue::Integer(2))
+                    .unwrap();
+                for (condition, (_, expected)) in conditions.iter().enumerate() {
+                    for (bar, expected) in expected.iter().enumerate() {
+                        assert_eq!(
+                            chart.alert_value(
+                                &AlertSource::StudyCondition {
+                                    id: id.0.to_string(),
+                                    condition
+                                },
+                                bar
+                            ),
+                            *expected
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     /// A moving average and a trend line resolve at a bar to the values drawn there.
     #[test]

@@ -1265,6 +1265,9 @@ fn source_picker(
                 ui.selectable_value(source, AlertSource::Volume, l10n::text(ui.ctx(), "Volume"));
             }
             for (value, name) in sources {
+                if id != "source" && matches!(value, AlertSource::StudyCondition { .. }) {
+                    continue;
+                }
                 ui.selectable_value(source, value.clone(), name.text(ui.ctx()));
             }
         })
@@ -1372,6 +1375,13 @@ pub(crate) fn rule_form(
         !matches!(condition, AlertCondition::VolumeAboveAverage { .. }) && !condition.is_event(),
         |ui| source_picker(ui, "source", source, sources),
     );
+    if !condition.pairs_with(source) {
+        *condition = if matches!(source, AlertSource::StudyCondition { .. }) {
+            AlertCondition::Holds
+        } else {
+            AlertCondition::Crossing(0.0)
+        };
+    }
     let level = condition.level().unwrap_or(0.0);
     let channel = drawing_channel(source, condition, sources);
     let position = offer_position
@@ -1441,6 +1451,12 @@ pub(crate) fn rule_form(
         ),
     ]
     .into_iter()
+    .chain(
+        sources
+            .iter()
+            .any(|(source, _)| matches!(source, AlertSource::StudyCondition { .. }))
+            .then_some((AlertCondition::Holds, "Study condition")),
+    )
     .chain(channel.map(|c| (c, "Drawing channel")))
     .chain(position.map(|c| (c, "Position entry and exit")))
     .chain(
@@ -1469,7 +1485,17 @@ pub(crate) fn rule_form(
                 {
                     if matches!(value, AlertCondition::VolumeAboveAverage { .. }) {
                         *source = AlertSource::Volume;
-                    } else if value.is_event() {
+                    } else if matches!(value, AlertCondition::Holds) {
+                        if !matches!(source, AlertSource::StudyCondition { .. })
+                            && let Some((first, _)) = sources
+                                .iter()
+                                .find(|(s, _)| matches!(s, AlertSource::StudyCondition { .. }))
+                        {
+                            *source = first.clone();
+                        }
+                    } else if value.is_event()
+                        || matches!(source, AlertSource::StudyCondition { .. })
+                    {
                         *source = AlertSource::Price;
                     }
                     *condition = value;
@@ -1479,6 +1505,7 @@ pub(crate) fn rule_form(
         .response
         .accessible_name(l10n::text(ui.ctx(), "Condition"));
     ui.horizontal_wrapped(|ui| match condition {
+        AlertCondition::Holds => {}
         AlertCondition::Position { progress, .. } => {
             ui.label(l10n::text(ui.ctx(), progress.to_string()));
         }
