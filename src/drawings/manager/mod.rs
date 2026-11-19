@@ -489,9 +489,9 @@ impl DrawingManager {
         }
     }
 
-    /// Apply a style edit to every selected drawing that accepts user edits as one undo step. An edit after which
-    /// saving would refuse one of them, as [`Self::edit_drawing`] describes, changes none of them,
-    /// records no undo step and returns the reason.
+    /// Apply a style edit to every selected drawing that accepts user edits as one undo step.
+    /// An edit after which saving would refuse one of them, as [`Self::edit_drawing`] describes,
+    /// changes none of them, records no undo step and returns the reason.
     pub fn edit_selected(
         &mut self,
         mut edit: impl FnMut(&mut Drawing),

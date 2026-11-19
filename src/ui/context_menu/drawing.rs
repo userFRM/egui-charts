@@ -535,10 +535,12 @@ mod tests {
             menu.open_on(&Context::default(), &chart, Pos2::ZERO, 7);
             let items =
                 menu.build_menu_items(&Context::default(), &crate::widget::ShortcutMap::default());
-            assert!(items.iter().any(|entry| matches!(entry, MenuEntry::Item(item) if item.action == DrawingContextMenuAction::Lock && item.enabled == user_edit)));
-            let enabled = menu
-                .build_menu_items(&Context::default(), &crate::widget::ShortcutMap::default())
-                .into_iter()
+            assert!(items.iter().any(|entry| {
+                matches!(entry, MenuEntry::Item(item)
+                    if item.action == DrawingContextMenuAction::Lock && item.enabled == user_edit)
+            }));
+            let enabled = items
+                .iter()
                 .find_map(|entry| match entry {
                     MenuEntry::Item(item) if item.action == DrawingContextMenuAction::Delete => {
                         Some(item.enabled)

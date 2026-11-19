@@ -118,7 +118,8 @@ pub fn handle_selection<F1, F2, F3>(
                 }
                 return;
             }
-            // A locked drawing, or one whose user edits are off, cannot be erased, so it is not offered.
+            // A locked drawing, or one whose user edits are off, cannot be erased, so it is
+            // not offered.
             let hit = drawing_manager.hit_test(pos).filter(|&id| {
                 drawing_manager
                     .drawings

@@ -2,8 +2,9 @@
 
 /// Drawing properties without anchors or record identity. Apply to an existing drawing of the
 /// same tool. Its coordinates, closed outline, name, notes, layer, post link and persistence
-/// identity stay intact. So do its lock, user edit permission, visibility, modification time and image frame size, and,
-/// on a tool that shows no text, the picture, sticker or icon its text holds.
+/// identity stay intact. So do its lock, user edit permission, visibility, modification time
+/// and image frame size, and, on a tool that shows no text, the picture, sticker or icon its
+/// text holds.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct DrawingTemplate {

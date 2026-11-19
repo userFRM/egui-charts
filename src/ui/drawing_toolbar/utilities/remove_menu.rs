@@ -56,7 +56,9 @@ impl RemoveMenu {
             .show()
     }
 
-    /// Resolve a bulk drawing removal against the saved preference. Call this with whether a drawing the user can edit is locked before changing either drawings or studies. A pending request changes neither.
+    /// Resolve a bulk drawing removal against the saved preference. Call this with whether a
+    /// drawing the user can edit is locked before changing either drawings or studies. A
+    /// pending request changes neither.
     pub fn request(
         action: DrawingToolbarAction,
         has_locked: bool,

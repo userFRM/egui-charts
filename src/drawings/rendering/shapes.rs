@@ -11,7 +11,8 @@ use egui::{Color32, Pos2, Rect, Shape, Stroke};
 impl Drawing {
     /// Paints "Add text" where a selected rectangle, circle or ellipse without text would write
     /// it, in the muted colour the on-chart editor gives an empty draft, so that its text field
-    /// can be found and clicked. A drawing that is locked, unselectable or closed to user edits has no field to offer.
+    /// can be found and clicked. A drawing that is locked, unselectable or closed to user edits
+    /// has no field to offer.
     pub(super) fn render_text_hint(&self, painter: &egui::Painter) {
         let center = match (self.tool_type, self.points.as_slice()) {
             (DrawingToolType::Rect, &[a, b, ..]) => Rect::from_two_pos(a, b).center(),
