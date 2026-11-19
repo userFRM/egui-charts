@@ -44,12 +44,19 @@ pub enum VolatilityIndexSmoothing {
     Wilder,
 }
 
-impl std::fmt::Debug for VolatilityIndexSmoothing {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+impl VolatilityIndexSmoothing {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
             Self::Exponential => "Exponential",
             Self::Wilder => "Wilder Smoothing",
-        })
+        }
+    }
+}
+
+impl std::fmt::Debug for VolatilityIndexSmoothing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
     }
 }
 
