@@ -718,12 +718,11 @@ fn degenerate_lengths_and_hostile_bars_are_survivable() {
         IndicatorValue::Multiple(xs) => xs.iter().filter(|x| x.is_finite()).count(),
         IndicatorValue::None => 0,
     };
-    // A Zig Zag deviation of 0 filters nothing, so it has no values by design.
+    // Automatic drawings hold values only on their anchors, which a smaller deviation moves.
     for (study, conventional) in bottom.iter().zip(&conventional).filter(|(study, _)| {
         !matches!(
             study.name(),
-            "ZigZag"
-                | "Auto Trend Line"
+            "Auto Trend Line"
                 | "Auto Parallel Channel"
                 | "Auto Fibonacci Retracement"
                 | "Auto Fibonacci Extension"

@@ -69,7 +69,6 @@ pub struct ZigZagPivot {
 ///   `depth`, as if it were not in the series. A bar whose prices are not positive is skipped:
 ///   it is never a pivot and never confirms one, and a leg is drawn across it. A series with no
 ///   positive prices has no values, because the percentage filter needs positive prices.
-///   A deviation of 0 filters nothing, so it gives no values either.
 /// - Until the first reversal the study tracks the highest high and the lowest low. A rise
 ///   of `deviation_percent` from the lowest low confirms that low as the first pivot; a fall
 ///   from the highest high confirms that high. When one bar confirms both, the earlier
@@ -133,10 +132,19 @@ struct Checkpoint {
 }
 
 impl ZigZag {
-    /// `deviation_percent` is clamped into 0 to `f64::MAX`, NaN to 0; at 0 there are no values.
+    /// The smallest deviation in percent that [`new`](Self::new) and the input accept.
+    pub(crate) const MIN_DEVIATION: f64 = 0.000_01;
+    /// The largest deviation in percent.
+    pub(crate) const MAX_DEVIATION: f64 = 100.0;
+
+    /// `deviation_percent` is clamped into 0.00001 to 100, NaN to 0.00001.
     pub fn new(deviation_percent: f64, depth: usize) -> Self {
         Self {
-            deviation_percent: clamp_param(deviation_percent, 0.0, f64::MAX),
+            deviation_percent: clamp_param(
+                deviation_percent,
+                Self::MIN_DEVIATION,
+                Self::MAX_DEVIATION,
+            ),
             depth: depth.max(1),
             mode: ZigZagMode::HighLow,
             values: IndicatorValues::new(),
@@ -435,7 +443,7 @@ impl Indicator for ZigZag {
     }
 
     crate::studies::inputs::study_inputs!(self;
-        deviation_percent: number("Deviation percent", 0.0, f64::MAX),
+        deviation_percent: number("Deviation percent", Self::MIN_DEVIATION, Self::MAX_DEVIATION),
         depth: length("Depth", 1, usize::MAX),
         mode: choice("Mode", [ZigZagMode::HighLow, ZigZagMode::Close, ZigZagMode::Typical]),
         price_labels: toggle("Show price"),
@@ -552,7 +560,7 @@ impl Indicator for ZigZag {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!(
-            "ZigZag({:.1}%, {})",
+            "ZigZag({}%, {})",
             self.deviation_percent, self.depth
         )]
     }
@@ -746,7 +754,7 @@ mod tests {
                 ],
             ),
             (
-                // A deviation of 0 filters nothing, so there are no swings to draw.
+                // A deviation of 0 is raised to 0.00001, so the 3% rise from bar 0 confirms its low.
                 "deviation 0",
                 ZigZag::new(0.0, 1),
                 &[
@@ -755,7 +763,12 @@ mod tests {
                     (106.0, 105.0),
                     (110.0, 109.0),
                 ],
-                &[None; 4],
+                &[
+                    Some(100.0),
+                    Some(103.333_333_333_333_33),
+                    Some(106.666_666_666_666_67),
+                    Some(110.0),
+                ],
             ),
             (
                 // The first leg starts at the low of bar 0, not at the first high.
@@ -874,12 +887,13 @@ mod tests {
                     &[(0, false), (3, true), (5, false), (9, true)]
                 }
                 "rises from the first bar" => &[(0, false), (3, true), (4, false)],
+                "deviation 0" => &[(0, false), (3, true)],
                 "outside bar" => &[(0, false), (4, true)],
                 "high before the low" => &[(1, false), (2, true)],
                 "touches zero" => &[(0, true), (3, false)],
                 "NaN bar inside a leg" => &[(0, false), (1, true)],
                 "NaN first bar" => &[(2, true), (7, false), (11, true), (16, false), (19, true)],
-                "flat" | "deviation 0" | "negative prices" => &[],
+                "flat" | "negative prices" => &[],
                 _ => unreachable!("case needs its pivot expectations"),
             };
             assert_eq!(zz.pivots().len(), extremes.len(), "{name}");
@@ -909,13 +923,33 @@ mod tests {
                     _ => panic!("{name} bar {i}: got {g:?}, expected {e:?}\n  got {got:?}"),
                 }
             }
-            zz.set_input("deviation_percent", crate::studies::InputValue::Number(0.0))
-                .unwrap();
-            zz.calculate(&data);
-            for _ in 0..2 {
-                zz.update(&data, data.len().saturating_sub(1));
-                assert!(zz.pivots().is_empty(), "{name}: disabled swings");
-                assert!((0..data.len()).all(|bar| zz.values().value(0, bar).is_none()));
+            let before = format!("{:?}", (zz.inputs(), zz.pivots(), zz.values().to_rows()));
+            for (deviation, accepted) in [
+                (0.0, false),
+                (0.000_01, true),
+                (100.0, true),
+                (150.0, false),
+            ] {
+                let mut edited = zz.clone();
+                let result = edited.set_input(
+                    "deviation_percent",
+                    crate::studies::InputValue::Number(deviation),
+                );
+                assert_eq!(result.is_ok(), accepted, "{name} {deviation}");
+                if !accepted {
+                    assert!(
+                        matches!(result, Err(crate::studies::StudyError::InvalidInput { .. })),
+                        "{name} {deviation}"
+                    );
+                    assert_eq!(
+                        format!(
+                            "{:?}",
+                            (edited.inputs(), edited.pivots(), edited.values().to_rows())
+                        ),
+                        before,
+                        "{name} {deviation}"
+                    );
+                }
             }
         }
     }

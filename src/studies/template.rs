@@ -416,6 +416,17 @@ impl StudyTemplate {
         let shared_smoothing = declares("smoothing")
             && value("smooth1").is_some()
             && value("smooth1") == value("smooth2");
+        // A saved Zig Zag deviation that the study declares but now refuses.
+        let refused_deviation = value("deviation_percent").and_then(|saved| match saved {
+            InputValue::Number(deviation)
+                if own
+                    .iter()
+                    .any(|input| input.id == "deviation_percent" && !input.accepts(saved)) =>
+            {
+                Some(*deviation)
+            }
+            _ => None,
+        });
         let mut template = self.clone();
         match study {
             // Older Knoxville saves drew only momentum and its confirmation marks, and saves
@@ -810,6 +821,26 @@ impl StudyTemplate {
                 // Older panes showed all groups; now they show the rating selected by the basis.
                 for plot in template.settings.plots.iter_mut().take(2) {
                     plot.visible = false;
+                }
+            }
+            // Zig Zag took deviations from 0 up; the automatic drawings share its input.
+            "ZigZag"
+            | "Auto Trend Line"
+            | "Auto Parallel Channel"
+            | "Auto Fibonacci Retracement"
+            | "Auto Fibonacci Extension"
+            | "Auto Pitchfork"
+                if refused_deviation.is_some() =>
+            {
+                if let Some(deviation) = refused_deviation {
+                    for (id, value) in &mut template.inputs {
+                        if id == "deviation_percent" {
+                            *value = InputValue::Number(deviation.clamp(
+                                crate::studies::ZigZag::MIN_DEVIATION,
+                                crate::studies::ZigZag::MAX_DEVIATION,
+                            ));
+                        }
+                    }
                 }
             }
             _ => return None,
@@ -1318,6 +1349,23 @@ mod tests {
                     ("hours_only", Toggle(false)),
                     ("row_ticks", Length(0)),
                 ],
+            ),
+            // Saved when the deviation took any number from 0 up: restored at the nearer bound.
+            (
+                "ZigZag",
+                vec![("deviation_percent", Number(0.0))],
+                vec![("deviation_percent", Number(0.000_01))],
+            ),
+            (
+                "ZigZag",
+                vec![("deviation_percent", Number(150.0))],
+                vec![("deviation_percent", Number(100.0))],
+            ),
+            #[cfg(feature = "drawings")]
+            (
+                "Auto Pitchfork",
+                vec![("deviation_percent", Number(0.0))],
+                vec![("deviation_percent", Number(0.000_01))],
             ),
             // Saved before the twelve lengths were inputs.
             (
