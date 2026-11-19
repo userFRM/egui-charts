@@ -354,9 +354,9 @@ fn count_bars_follow_accepted_trades_across_frames() {
     }
 }
 
-/// Hidden streams bound bars independently of raw fills and report every evicted slot.
+/// Hidden streams bound bars independently of raw fills and ask for a reload on eviction.
 #[test]
-fn undrained_bars_are_bounded_and_overflow_is_reported() {
+fn undrained_bars_are_bounded_and_overflow_asks_for_a_reload() {
     for pushed_bars in [false, true] {
         let inbox = Arc::new(Inbox::default());
         let sink = inbox.subscribe(
@@ -381,10 +381,15 @@ fn undrained_bars_are_bounded_and_overflow_is_reported() {
             updates.bars.first_key_value().unwrap().0,
             &(at(0, 0) + TimeDelta::nanoseconds(2))
         );
-        assert!(matches!(updates.error, Some(FeedError::InvalidData(_))));
-        assert_eq!(updates.rejected, 2);
+        assert!(updates.reload);
+        assert_eq!(
+            updates.error,
+            Some(FeedError::Network("another failure".into()))
+        );
+        assert_eq!(updates.rejected, 0);
         sink.push_tick(tick(at(0, 0) + TimeDelta::nanoseconds(100_003), 101.0, 1.0));
         let (_, next) = inbox.drain().updates.pop().unwrap();
+        assert!(!next.reload);
         assert_eq!(next.bars.len(), 1);
         assert_eq!(next.error, None);
         assert_eq!(next.rejected, 0);
