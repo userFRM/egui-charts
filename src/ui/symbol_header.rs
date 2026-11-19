@@ -355,7 +355,10 @@ impl SymbolHeader {
                     let vol_text = l10n::format_text(
                         ui.ctx(),
                         "Vol {volume}",
-                        &[("volume", self.format_volume(self.ohlc.volume))],
+                        &[(
+                            "volume",
+                            crate::scales::StudyFormat::Volume.format(self.ohlc.volume, None),
+                        )],
                     );
                     let vol_galley = painter.layout_no_wrap(
                         vol_text,
@@ -428,18 +431,6 @@ impl SymbolHeader {
         );
 
         box_rect
-    }
-
-    fn format_volume(&self, vol: f64) -> String {
-        if vol >= 1_000_000_000.0 {
-            format!("{:.2}B", vol / 1_000_000_000.0)
-        } else if vol >= 1_000_000.0 {
-            format!("{:.2}M", vol / 1_000_000.0)
-        } else if vol >= 1_000.0 {
-            format!("{:.2}K", vol / 1_000.0)
-        } else {
-            format!("{vol:.0}")
-        }
     }
 }
 
