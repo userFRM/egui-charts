@@ -1272,10 +1272,11 @@ mod tests {
             options.order_appearance = &looks;
             options.position_appearance = &positions;
             let mut at = [Pos2::ZERO; 2];
-            for frame in 0..7 {
+            for frame in 0..8 {
                 let events = match frame {
                     3 | 4 => vec![egui::Event::PointerMoved(at[0])],
-                    5 | 6 => vec![egui::Event::PointerMoved(at[1])],
+                    5 => vec![egui::Event::PointerGone],
+                    6 | 7 => vec![egui::Event::PointerMoved(at[1])],
                     _ => vec![],
                 };
                 let mut ys = [0.0; 3];
@@ -1360,7 +1361,7 @@ mod tests {
                 if frame == 4 {
                     assert!(text("Planned entry").is_some());
                 }
-                if frame == 6 {
+                if frame == 7 {
                     assert!(text("Hedge position").is_some());
                 }
                 output.drop_without_applying_deltas();
