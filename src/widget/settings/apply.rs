@@ -3118,19 +3118,22 @@ mod tests {
             settings.precision
         );
 
-        let saved = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
-        let mut restored = crate::widget::test_frames::chart(&[1234.0], &[1234.5]);
-        restored.set_instrument(Some(Instrument::new("ZB").with_price_decimals(2)));
-        restored
-            .restore(&serde_json::from_str(&saved).unwrap())
-            .unwrap();
-        shapes(&ctx, &mut restored, 0.1, vec![]);
-        assert_eq!(
+        #[cfg(feature = "ui")]
+        {
+            let saved = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
+            let mut restored = crate::widget::test_frames::chart(&[1234.0], &[1234.5]);
+            restored.set_instrument(Some(Instrument::new("ZB").with_price_decimals(2)));
             restored
-                .format_series_price(SeriesId::MAIN, 1234.5)
-                .as_deref(),
-            Some("1,234'16")
-        );
+                .restore(&serde_json::from_str(&saved).unwrap())
+                .unwrap();
+            shapes(&ctx, &mut restored, 0.1, vec![]);
+            assert_eq!(
+                restored
+                    .format_series_price(SeriesId::MAIN, 1234.5)
+                    .as_deref(),
+                Some("1,234'16")
+            );
+        }
 
         chart.config_mut().thousands_sep = Some('\'');
         shapes(&ctx, &mut chart, 0.2, vec![]);
