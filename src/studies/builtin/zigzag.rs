@@ -144,6 +144,11 @@ impl ZigZag {
         &self.pivots
     }
 
+    /// The minimum number of bars from a pivot to the bar that confirms the next reversal.
+    pub(super) fn depth(&self) -> usize {
+        self.depth
+    }
+
     /// Select high/low, close or typical prices for reversal detection.
     pub fn with_mode(mut self, mode: ZigZagMode) -> Self {
         self.mode = mode;
