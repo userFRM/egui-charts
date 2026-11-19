@@ -369,6 +369,14 @@ pub trait Indicator: Send {
         None
     }
 
+    /// Optional text shown while the pointer is over the shape a circle, cross or triangle plot
+    /// draws at a source bar, or over that shape's [`plot_text`](Self::plot_text). `None`, the
+    /// default, shows nothing.
+    fn plot_tooltip(&self, line: usize, bar: usize) -> Option<String> {
+        let _ = (line, bar);
+        None
+    }
+
     /// Filled bands, painted beneath this study's plots. Missing endpoints break a band.
     fn fills(&self) -> Vec<super::StudyFill> {
         Vec::new()
@@ -711,7 +719,8 @@ pub trait Indicator: Send {
     /// then; otherwise it has no values until then. The default keeps nothing. The chart's
     /// presentation wrapper, which holds every study whose
     /// [`has_settings`](Indicator::has_settings) is `false`, keeps the values of a study that
-    /// draws no candles, zones, markers, labels, projections, provisional segments or drawings.
+    /// draws no candles, zones, markers, labels, price segments, projections, provisional segments
+    /// or drawings.
     fn remove_oldest_bars(&mut self, count: usize) -> bool {
         let _ = count;
         false
@@ -778,6 +787,8 @@ pub trait Indicator: Send {
     /// [`drawings_use_plot_style`](Self::drawings_use_plot_style) says. Empty by default.
     /// Calculations belong in `calculate`; use tools whose renderer needs only their anchors
     /// and settings, such as trend lines, parallel channels, Fibonacci levels and pitchforks.
+    /// A drawing with a [`label`](crate::drawings::Drawing::label) shows it while the pointer is
+    /// over the drawing.
     #[cfg(feature = "drawings")]
     fn drawings(&self) -> &[crate::drawings::Drawing] {
         &[]
@@ -837,6 +848,15 @@ pub trait Indicator: Send {
     /// own pane. Label prices use the main series' scale. Off by default.
     fn labels_on_price(&self) -> bool {
         false
+    }
+
+    /// Straight lines on the main price chart, in the main series' price scale, also when the
+    /// study has its own pane. Each uses the colour, width and pattern of its
+    /// [`plot`](super::StudySegment::plot) while that output is visible. Empty by default. Keep
+    /// lines from the last calculation: they are drawn every frame. A study calculated on
+    /// another interval or symbol draws none, as its bars and prices are not the chart's.
+    fn price_segments(&self) -> &[super::StudySegment] {
+        &[]
     }
 
     /// The decimal places the study's presentation settings set for the prices in

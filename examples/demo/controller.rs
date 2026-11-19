@@ -633,6 +633,10 @@ impl DemoApp {
         top_toolbar.timeframe_selector.current = Timeframe::Min1;
         // A host's own call to action sits at the right end; the demo only reports it.
         top_toolbar.call_to_action = Some(("upgrade".into(), "Upgrade".into()));
+        top_toolbar.builtin_indicator_templates = StudyTemplateSet::builtin()
+            .into_iter()
+            .map(|(name, _)| (name.to_owned(), name.to_owned()))
+            .collect();
         let mut menus = ChartMenus::default();
         menus.host_entries.extend([
             HostMenuEntry::new("research", "Open in research")
@@ -1816,7 +1820,18 @@ impl eframe::App for DemoApp {
                 ctx.request_repaint_after(delay);
             }
         }
-        self.order_flow.set_service(self.live.detectors());
+        let detectors = self.live.detectors();
+        let mut settings = detectors.settings();
+        let before = settings.clone();
+        // Footprint alerts read the imbalances the active chart shows.
+        settings
+            .footprint
+            .rule
+            .follow_chart(self.chart.chart_type_params());
+        if settings != before {
+            detectors.set_settings(settings);
+        }
+        self.order_flow.set_service(detectors);
         self.notification_host
             .watch_detectors(self.live.detectors());
         let sounds = self.order_flow.poll(&ctx, &mut self.toasts);
@@ -2380,6 +2395,14 @@ impl DemoApp {
             }
             TopToolbarAction::ApplyIndicatorTemplate(id) => {
                 if let Some(template) = self.study_templates.templates.entries().get(&id).cloned() {
+                    self.load_study_template(&template);
+                }
+            }
+            TopToolbarAction::ApplyBuiltinIndicatorTemplate(id) => {
+                if let Some((_, template)) = StudyTemplateSet::builtin()
+                    .into_iter()
+                    .find(|(name, _)| *name == id)
+                {
                     self.load_study_template(&template);
                 }
             }
@@ -6220,6 +6243,29 @@ mod tests {
     }
 
     #[test]
+    fn footprint_alerts_follow_the_active_chart() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let mut params = app.chart.chart_type_params().clone();
+        params.footprint_imbalance_ratio = 4.0;
+        params.footprint_diagonal = false;
+        params.footprint_imbalance_min_volume = 5.0;
+        params.footprint_stack = 2;
+        app.chart.set_chart_type_params(params);
+        settle(&mut app, &ctx);
+        let rule = app.live.detectors().settings().footprint.rule;
+        assert_eq!(
+            (
+                rule.imbalance_ratio,
+                rule.diagonal,
+                rule.imbalance_min_volume,
+                rule.stack
+            ),
+            (4.0, false, 5.0, 2)
+        );
+    }
+
+    #[test]
     fn opening_state_is_quiet_and_saved_features_restore() {
         use eframe::App;
         use egui_charts::services::{DetectionCounts, DetectionKind};
@@ -6453,6 +6499,45 @@ mod tests {
                 assert_eq!(chart.config().text_color, app.theme.chart.axis_text);
             }
         }
+    }
+
+    /// The template menu offers the library's built-in sets apart from the saved ones, and
+    /// choosing one replaces the chart's studies in a single undo step.
+    #[test]
+    fn built_in_study_sets_apply_from_the_template_menu_in_one_undo_step() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let builtin = StudyTemplateSet::builtin();
+        assert_eq!(
+            app.top_toolbar.builtin_indicator_templates,
+            builtin
+                .iter()
+                .map(|(name, _)| ((*name).to_owned(), (*name).to_owned()))
+                .collect::<Vec<_>>()
+        );
+        app.chart
+            .add_indicator(Box::new(egui_charts::studies::EMA::new(5)));
+        let names = |app: &DemoApp| {
+            app.chart
+                .indicators()
+                .map(|(_, study)| study.name().to_owned())
+                .collect::<Vec<_>>()
+        };
+        let before = names(&app);
+        let (name, set) = &builtin[3];
+        app.handle_top_toolbar(
+            &ctx,
+            TopToolbarAction::ApplyBuiltinIndicatorTemplate((*name).to_owned()),
+        );
+        assert_eq!(
+            names(&app),
+            set.studies
+                .iter()
+                .map(|study| study.name.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(app.chart.undo());
+        assert_eq!(names(&app), before);
     }
 
     #[test]

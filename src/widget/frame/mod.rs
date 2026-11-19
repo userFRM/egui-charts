@@ -707,6 +707,9 @@ impl Chart {
             || self.drawings.dragging_handle.is_some()
             || self.drawings.text_editor.is_some()
             || self.drawings.curr_drawing.is_some()
+            || self.drawings.partial_erase.is_some()
+            // A modified eraser press owns the drag even when it starts beside a stroke.
+            || (self.drawings.eraser_mode && ui.input(|i| i.modifiers.ctrl || i.modifiers.command))
             || ui
                 .input(|i| i.pointer.press_origin().or_else(|| i.pointer.hover_pos()))
                 .is_some_and(|origin| {
@@ -2463,14 +2466,22 @@ impl Chart {
         for study in studies
             .indicators()
             .iter()
-            .filter(|study| self.shows_study(study.as_ref()) && study.labels_on_price())
+            .filter(|study| self.shows_study(study.as_ref()))
         {
-            crate::chart::indicators::plots::paint_labels(
+            crate::chart::indicators::plots::paint_price_segments(
                 &clipped_painter,
                 study.as_ref(),
                 &price_map,
                 &coords,
             );
+            if study.labels_on_price() {
+                crate::chart::indicators::plots::paint_labels(
+                    &clipped_painter,
+                    study.as_ref(),
+                    &price_map,
+                    &coords,
+                );
+            }
         }
         self.paint_signals(ui, &coords);
         let target_lines = self
