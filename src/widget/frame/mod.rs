@@ -3674,7 +3674,7 @@ impl Chart {
                             ("VAL", profile.value_area_low),
                         ]);
                     }
-                    let widest = profile.price_tpo_count.values().max().copied().unwrap_or(0);
+                    let widest = rendering::candles::tpo::profile_columns(profile, config);
                     self.paint_profile_context(
                         ui,
                         &coords,

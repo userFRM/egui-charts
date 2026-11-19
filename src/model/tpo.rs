@@ -108,6 +108,9 @@ pub struct TPOConfig {
     pub value_area_pct: f64,
     /// Show letters or blocks
     pub display_mode: TPODisplayMode,
+    /// Draw periods side by side in time order, each in its own column, instead of packing each
+    /// row from the left edge. The value area, point of control and statistics stay the same.
+    pub split_periods: bool,
     /// Color mode for TPO letters
     pub color_mode: TPOColorMode,
     /// Colours of the entries under [`TPOColorMode::ByPeriod`]: the first pair covers the first
@@ -175,6 +178,7 @@ impl Default for TPOConfig {
             initial_balance_minutes: 60,
             value_area_pct: 0.70,
             display_mode: TPODisplayMode::Letters,
+            split_periods: false,
             color_mode: TPOColorMode::ByPeriod,
             period_colors: [
                 egui::Color32::from_rgb(214, 56, 100),

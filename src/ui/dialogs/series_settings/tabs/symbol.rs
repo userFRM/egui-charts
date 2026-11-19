@@ -869,6 +869,10 @@ impl SymbolTab {
                 )
                 .labelled_by(label.id);
                 ui.end_row();
+                let label = ui.label(l10n::text(ui.ctx(), "Split display"));
+                ui.checkbox(&mut params.tpo_split_periods, "")
+                    .labelled_by(label.id);
+                ui.end_row();
                 let label = ui.label(l10n::text(ui.ctx(), "Statistics"));
                 ui.checkbox(&mut params.tpo_statistics, "")
                     .labelled_by(label.id);

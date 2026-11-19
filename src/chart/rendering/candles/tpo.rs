@@ -541,7 +541,7 @@ fn place_profiles(
             let open_x = idx_to_coord(span[0]);
             // Leave the extension strokes inside the plot when the session opens out of view.
             let anchor_x = open_x.max(price_rect.left() + balance_room);
-            let widest = profile.price_tpo_count.values().max().copied().unwrap_or(0);
+            let widest = profile_columns(profile, config);
             if end_x > anchor_x && widest > 0 {
                 placed.push((
                     profile,
@@ -588,6 +588,24 @@ fn place_profiles(
     }
 }
 
+/// Columns a profile spans: one per period in split display, otherwise its widest row.
+pub(crate) fn profile_columns(profile: &TPOProfile, config: &TPOConfig) -> usize {
+    if config.split_periods {
+        profile.letters.chunk_by(|a, b| a.ts == b.ts).count()
+    } else {
+        profile.price_tpo_count.values().max().copied().unwrap_or(0)
+    }
+}
+
+/// First bar time of each period, in the order of the split display's columns.
+fn period_starts(profile: &TPOProfile) -> Vec<chrono::DateTime<chrono::Utc>> {
+    profile
+        .letters
+        .chunk_by(|a, b| a.ts == b.ts)
+        .map(|period| period[0].ts)
+        .collect()
+}
+
 /// The displayed profile at a menu click, including one anchored at the plot's edge: its first
 /// bar time and, when a letter or block is clicked, the first bar time of that period.
 #[cfg(feature = "ui")]
@@ -631,21 +649,34 @@ pub(crate) fn profile_at(
             let column = column.min(profile_row_height(profile, &mapping.price));
             let price = mapping.y_to_price(pos.y);
             let row = profile.row_price(price);
-            let count = if config.show_value_area && profile.is_in_value_area(row) {
-                profile.price_tpo_count.values().max().copied().unwrap_or(0)
+            let mut letters = profile.letters_at(row);
+            letters.sort_by_key(|letter| letter.ts);
+            let starts = config.split_periods.then(|| period_starts(profile));
+            let reach = if config.show_value_area && profile.is_in_value_area(row) {
+                profile_columns(profile, &config)
+            } else if let Some(starts) = &starts {
+                letters
+                    .iter()
+                    .map(|letter| starts.partition_point(|ts| *ts < letter.ts) + 1)
+                    .max()
+                    .unwrap_or(0)
             } else {
-                profile.tpo_count_at(row)
+                letters.len()
             };
             // Keep the gutter beside occupied rows in the profile's context-menu target.
             let left = anchor - if labels { LABEL_ROOM_PX } else { 0.0 };
-            if count > 0 && pos.x >= left && pos.x < anchor + count as f32 * column {
-                // Each row's letters are left-justified in time order, as painted.
+            if reach > 0 && pos.x >= left && pos.x < anchor + reach as f32 * column {
                 let period = (pos.x >= anchor)
                     .then(|| ((pos.x - anchor) / column) as usize)
                     .and_then(|col| {
-                        let mut letters = profile.letters_at(row);
-                        letters.sort_by_key(|letter| letter.ts);
-                        letters.get(col).map(|letter| letter.ts)
+                        if let Some(starts) = &starts {
+                            starts
+                                .get(col)
+                                .copied()
+                                .filter(|ts| letters.iter().any(|letter| letter.ts == *ts))
+                        } else {
+                            letters.get(col).map(|letter| letter.ts)
+                        }
                     });
                 hit = Some((profile.session_date, period));
             }
@@ -672,7 +703,7 @@ fn draw_session_profile(
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
-    let Some(&widest) = profile.price_tpo_count.values().max() else {
+    let Some(_) = profile.price_tpo_count.values().max() else {
         return;
     };
 
@@ -694,7 +725,8 @@ fn draw_session_profile(
     let pixels_per_point = painter.ctx().pixels_per_point();
     let gap = 1.0 / pixels_per_point;
     let levels = profile.price_levels();
-    let max_right = anchor_x + widest as f32 * column_width;
+    let columns = profile_columns(profile, config);
+    let max_right = anchor_x + columns as f32 * column_width;
     let block_width = (column_width - gap).max(gap);
     let block_height = (row_height - gap).max(gap);
     // About 9 px of cap height in a 20 px cell, shrinking with the cell to the bare letters' size.
@@ -707,6 +739,8 @@ fn draw_session_profile(
         if use_letters { 4.5 } else { 3.0 },
     );
 
+    let starts = config.split_periods.then(|| period_starts(profile));
+
     // Single-print rows are highlighted behind their letter; hovering one names its price.
     if config.show_single_prints {
         let decimals = crate::scales::decimals(profile.instrument_tick);
@@ -714,8 +748,19 @@ fn draw_session_profile(
             let (low, high) = profile.row_span(price);
             let top = coords.price_to_y(high);
             let bottom = coords.price_to_y(low);
+            let left = anchor_x
+                + starts
+                    .as_ref()
+                    .and_then(|starts| {
+                        profile
+                            .letters_at(price)
+                            .first()
+                            .map(|letter| starts.partition_point(|ts| *ts < letter.ts))
+                    })
+                    .unwrap_or(0) as f32
+                    * column_width;
             let row = Rect::from_x_y_ranges(
-                anchor_x..=anchor_x + column_width,
+                left..=left + column_width,
                 top.min(bottom)..=top.max(bottom),
             )
             .intersect(price_rect);
@@ -802,6 +847,9 @@ fn draw_session_profile(
         letters_at_price.sort_by_key(|l| l.ts);
 
         for (col, letter) in letters_at_price.iter().enumerate() {
+            let col = starts
+                .as_ref()
+                .map_or(col, |starts| starts.partition_point(|ts| *ts < letter.ts));
             let x = anchor_x + col as f32 * column_width + column_width * 0.5;
 
             let color = row_tone.unwrap_or_else(|| period_tones[letter.period_idx]);
@@ -850,7 +898,18 @@ fn draw_session_profile(
         ] {
             let y = row_y(price);
             if poor && price_rect.y_range().contains(y) {
-                let right = anchor_x + profile.tpo_count_at(price) as f32 * column_width;
+                let reach = starts.as_ref().map_or_else(
+                    || profile.tpo_count_at(price),
+                    |starts| {
+                        profile
+                            .letters_at(price)
+                            .iter()
+                            .map(|letter| starts.partition_point(|ts| *ts < letter.ts) + 1)
+                            .max()
+                            .unwrap_or(0)
+                    },
+                );
+                let right = anchor_x + reach as f32 * column_width;
                 painter.line_segment(
                     [Pos2::new(right + 4.0, y), Pos2::new(right + 12.0, y)],
                     Stroke::new(DESIGN_TOKENS.stroke.medium, chart.axis_text),
@@ -1258,6 +1317,154 @@ mod tests {
     use super::*;
     use crate::model::{Bar, Timeframe, to_tpo_profiles};
     use chrono::{Duration, Utc};
+
+    #[test]
+    fn split_display_draws_each_period_in_its_own_column() {
+        let bars: Vec<_> = [
+            (100.0, 102.0),
+            (101.0, 103.0),
+            (100.0, 100.0),
+            (102.0, 104.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (low, high))| {
+            Bar::new(
+                chrono::DateTime::UNIX_EPOCH + Duration::minutes(i as i64 * 30),
+                low,
+                high,
+                low,
+                high,
+                1.0,
+            )
+        })
+        .collect();
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0));
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(90.0, 115.0),
+            0.0,
+            400.0,
+            false,
+        );
+        let mut previous = None;
+        for split in [false, true] {
+            let params: crate::model::ChartTypeParams = serde_json::from_value(
+                serde_json::json!({"tpo_row_ticks": 1, "tpo_split_periods": split}),
+            )
+            .unwrap();
+            let config = TPOConfig {
+                display_mode: TPODisplayMode::Blocks,
+                value_area_pct: 0.5,
+                show_statistics: true,
+                show_initial_balance: false,
+                show_opening_range: false,
+                ..params.tpo_config(Some(1.0))
+            };
+            let profile = to_tpo_profiles(&bars, &config, &Timeframe::Min30.into()).remove(0);
+            // Counts 2,2,3,2,1: POC 102 and its lower neighbour reach five TPOs.
+            assert_eq!(
+                (
+                    profile.poc_price,
+                    profile.value_area_low,
+                    profile.value_area_high
+                ),
+                (102.0, 101.0, 102.0)
+            );
+            let ctx = egui::Context::default();
+            ctx.begin_pass(egui::RawInput::default());
+            draw_session_profile(
+                &ctx.layer_painter(egui::LayerId::background()),
+                rect,
+                &coords,
+                &profile,
+                &config,
+                &TpoRenderConfig::default(),
+                10.25,
+                12.0,
+                f32::INFINITY,
+                false,
+                Color32::GREEN,
+                Color32::RED,
+            );
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+            let cells: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Rect(r) if r.rect.width() < 12.0 => {
+                        let price = (100..=104)
+                            .min_by(|a, b| {
+                                (coords.price_to_y(*a as f64) - r.rect.center().y)
+                                    .abs()
+                                    .total_cmp(
+                                        &(coords.price_to_y(*b as f64) - r.rect.center().y).abs(),
+                                    )
+                            })
+                            .unwrap();
+                        Some((
+                            price,
+                            ((r.rect.center().x - 10.25) / 12.0 - 0.5).round() as i32,
+                            r.fill,
+                        ))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let expected = if split {
+                vec![
+                    (104, 3),
+                    (103, 1),
+                    (103, 3),
+                    (102, 0),
+                    (102, 1),
+                    (102, 3),
+                    (101, 0),
+                    (101, 1),
+                    (100, 0),
+                    (100, 2),
+                ]
+            } else {
+                vec![
+                    (104, 0),
+                    (103, 0),
+                    (103, 1),
+                    (102, 0),
+                    (102, 1),
+                    (102, 2),
+                    (101, 0),
+                    (101, 1),
+                    (100, 0),
+                    (100, 1),
+                ]
+            };
+            assert_eq!(
+                cells
+                    .iter()
+                    .map(|&(price, col, _)| (price, col))
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            let fills: Vec<_> = cells
+                .iter()
+                .map(|&(price, _, fill)| (price, fill))
+                .collect();
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Text(t) => Some(t.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            if let Some((old_fills, old_texts)) = previous {
+                assert_eq!(fills, old_fills);
+                assert_eq!(texts, old_texts);
+            }
+            previous = Some((fills, texts));
+        }
+    }
 
     #[test]
     fn block_colours_follow_the_colour_settings_in_both_themes() {
