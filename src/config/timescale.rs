@@ -4,8 +4,13 @@
 //! fixing, crosshair index eligibility, time-label visibility and spacing, the axis size and
 //! border, and the [`TimezoneMode`] used to convert UTC timestamps before rendering axis labels.
 
-use crate::scales::TimezoneMode;
+use crate::scales::{TimezoneMode, WeekdayNames};
 use egui::Color32;
+
+/// Layouts saved before the clock choice keep their 24-hour labels.
+fn twenty_four_hour_clock() -> bool {
+    true
+}
 
 /// Time Scale Options.
 /// Controls bar spacing, scrolling constraints, and time display.
@@ -85,6 +90,21 @@ pub struct TimeScaleOptions {
     /// Default: true
     pub seconds_visible: bool,
 
+    /// Write time scale and crosshair clocks in 24 hours, `14:30`, or in 12 hours with an
+    /// AM/PM marker, `02:30 PM`. Locales without their own marker use the English one.
+    /// A millisecond mark in 12 hours, `02:30:45.123 PM`, takes 15 characters: raise
+    /// [`tick_mark_max_character_length`](Self::tick_mark_max_character_length) to keep them
+    /// apart. Layouts saved without this field keep the default.
+    /// Default: true
+    #[serde(default = "twenty_four_hour_clock")]
+    pub use_24_hour: bool,
+
+    /// Whether crosshair, tooltip and forecast dates name the weekday; see [`WeekdayNames`].
+    /// Layouts saved without this field keep the default.
+    /// Default: [`WeekdayNames::Default`]
+    #[serde(default)]
+    pub weekday_names: WeekdayNames,
+
     /// Draw small vertical line on time axis labels.
     /// Default: false
     pub ticks_visible: bool,
@@ -142,6 +162,8 @@ impl Default for TimeScaleOptions {
             ignore_hidden_indices: false,
             time_visible: true,
             seconds_visible: true,
+            use_24_hour: true,
+            weekday_names: WeekdayNames::Default,
             ticks_visible: false,
             uniform_distribution: false,
             allow_bold_labels: true,
