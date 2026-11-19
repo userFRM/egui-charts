@@ -377,6 +377,20 @@ impl DepthHistory {
         (newest.time + newest.span).checked_sub_signed(self.config.retention?)
     }
 
+    /// First cadence period that a historical page can still contribute to.
+    #[cfg(feature = "widget")]
+    pub(crate) fn retention_start(&self) -> Option<DateTime<Utc>> {
+        start(self.retention_cutoff()?, self.config.cadence)
+    }
+
+    /// Reconfigures the tiers and immediately removes columns outside the chosen retention.
+    #[cfg(feature = "widget")]
+    pub(crate) fn set_retention(&mut self, retention: Option<TimeDelta>) {
+        self.config = self.config.clone().with_retention(retention);
+        self.compact();
+        self.retain_recent();
+    }
+
     fn retain_recent(&mut self) {
         let Some(cutoff) = self.retention_cutoff() else {
             return;
