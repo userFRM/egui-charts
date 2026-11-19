@@ -1,7 +1,10 @@
 //! Market Profile letters of each session drawn beside the session's bars.
 
-use crate::model::{Bar, Instrument, TPOConfig, TPODisplayMode};
+use crate::model::{
+    Bar, CustomProfileSession, Instrument, ProfileSession, TPOConfig, TPODisplayMode, TimezoneId,
+};
 use crate::studies::{Indicator, IndicatorValues, InputKind, InputValue, StudyInput};
+use chrono::{NaiveTime, TimeDelta};
 use egui::Color32;
 
 /// Display choices of the study, in input order. Saved choices are indices, so new ones go last.
@@ -21,12 +24,19 @@ fn display_choice(mode: TPODisplayMode) -> InputValue {
 ///
 /// The chart builds the profiles of the whole sessions it shows from its bars and calendar with
 /// [`to_tpo_profiles`](crate::model::to_tpo_profiles), through the same code and cache as the
-/// TPO chart type, so the study's profile of a session equals the chart type's under the same
-/// settings. [`Indicator::tpo`] exposes those settings; the study has no plotted values.
+/// TPO chart type, so on the unsplit trading day the study's profile of a session equals the chart
+/// type's under the same settings. [`Indicator::tpo`] exposes those settings; the study has no
+/// plotted values.
+///
+/// Its Hours input keeps each profile to the trading day, the regular hours, custom hours, or the
+/// pre-market or post-market alone, counting only the bars of those hours, and Split extended
+/// hours divides the trading day into its pre-market, regular and post-market profiles.
 #[derive(Clone, Debug)]
 pub struct TimePriceOpportunity {
     row_ticks: usize,
     instrument_tick: Option<f64>,
+    hours: usize,
+    custom: CustomProfileSession,
     config: TPOConfig,
     values: IndicatorValues,
     visible: bool,
@@ -38,6 +48,8 @@ impl TimePriceOpportunity {
         Self {
             row_ticks: 0,
             instrument_tick: None,
+            hours: 0,
+            custom: CustomProfileSession::new(NaiveTime::MIN, NaiveTime::MIN),
             config: TPOConfig {
                 // A zero row lets the chart fit the rows to the visible range.
                 tick_size: 0.0,
@@ -54,6 +66,19 @@ impl TimePriceOpportunity {
             .instrument_tick
             .map_or(0.0, |tick| tick * self.row_ticks as f64);
         self.config.instrument_tick = self.instrument_tick;
+    }
+
+    /// The bars the profiles keep: those of the Hours choice, or each segment of the trading day
+    /// when Split extended hours divides it.
+    fn update_session(&mut self) {
+        self.config.session = match self.hours {
+            0 if self.config.split_sessions => ProfileSession::Segments,
+            1 => ProfileSession::Regular,
+            2 => ProfileSession::Custom(self.custom.clone()),
+            3 => ProfileSession::PreMarket,
+            4 => ProfileSession::PostMarket,
+            _ => ProfileSession::Chart,
+        };
     }
 }
 
@@ -72,6 +97,9 @@ impl Indicator for TimePriceOpportunity {
     }
     fn inputs(&self) -> Vec<StudyInput> {
         let defaults = TPOConfig::default();
+        // Study inputs have no time of day, so custom hours take minutes after midnight.
+        let minutes = |time: NaiveTime| (time - NaiveTime::MIN).num_minutes() as usize;
+        let zone = self.custom.zone.as_ref().map_or("", TimezoneId::name);
         vec![
             StudyInput::new(
                 "period",
@@ -95,12 +123,50 @@ impl Indicator for TimePriceOpportunity {
             )
             .with_default(InputValue::Number(defaults.value_area_pct * 100.0)),
             StudyInput::new(
+                "hours",
+                "Hours",
+                InputValue::Choice(self.hours),
+                InputKind::Choice(vec![
+                    "Trading day".into(),
+                    "Regular hours".into(),
+                    "Custom hours".into(),
+                    "Pre-market only".into(),
+                    "Post-market only".into(),
+                ]),
+            )
+            .with_default(InputValue::Choice(0)),
+            StudyInput::new(
+                "session_start",
+                "Session start, minutes after midnight",
+                InputValue::Length(minutes(self.custom.start)),
+                InputKind::Length(0, 1439),
+            )
+            .with_default(InputValue::Length(0))
+            .shown_when("hours", [2]),
+            StudyInput::new(
+                "session_end",
+                "Session end, minutes after midnight",
+                InputValue::Length(minutes(self.custom.end)),
+                InputKind::Length(0, 1439),
+            )
+            .with_default(InputValue::Length(0))
+            .shown_when("hours", [2]),
+            StudyInput::new(
+                "session_zone",
+                "Session time zone (empty = exchange)",
+                InputValue::Text(zone.into()),
+                InputKind::Text,
+            )
+            .with_default(InputValue::Text(String::new()))
+            .shown_when("hours", [2]),
+            StudyInput::new(
                 "split_sessions",
                 "Split extended hours",
                 InputValue::Toggle(self.config.split_sessions),
                 InputKind::Toggle,
             )
-            .with_default(InputValue::Toggle(defaults.split_sessions)),
+            .with_default(InputValue::Toggle(defaults.split_sessions))
+            .shown_when("hours", [0]),
             StudyInput::new(
                 "single_prints",
                 "Single prints",
@@ -156,7 +222,35 @@ impl Indicator for TimePriceOpportunity {
             ("value_area", InputValue::Number(percent)) if (1.0..=100.0).contains(&percent) => {
                 self.config.value_area_pct = percent / 100.0
             }
-            ("split_sessions", InputValue::Toggle(split)) => self.config.split_sessions = split,
+            ("hours", InputValue::Choice(choice @ 0..=4)) => {
+                self.hours = choice;
+                self.update_session();
+            }
+            ("session_start", InputValue::Length(minutes @ 0..=1439)) => {
+                self.custom.start = NaiveTime::MIN + TimeDelta::minutes(minutes as i64);
+                self.update_session();
+            }
+            ("session_end", InputValue::Length(minutes @ 0..=1439)) => {
+                self.custom.end = NaiveTime::MIN + TimeDelta::minutes(minutes as i64);
+                self.update_session();
+            }
+            ("session_zone", InputValue::Text(text)) => {
+                self.custom.zone = if text.is_empty() {
+                    None
+                } else {
+                    Some(TimezoneId::named(&text).ok_or_else(|| {
+                        crate::studies::StudyError::InvalidInput {
+                            id: id.into(),
+                            reason: "names no known time zone".into(),
+                        }
+                    })?)
+                };
+                self.update_session();
+            }
+            ("split_sessions", InputValue::Toggle(split)) => {
+                self.config.split_sessions = split;
+                self.update_session();
+            }
             ("single_prints", InputValue::Toggle(show)) => self.config.show_single_prints = show,
             ("midpoint", InputValue::Toggle(show)) => self.config.show_midpoint = show,
             ("statistics", InputValue::Toggle(show)) => self.config.show_statistics = show,
