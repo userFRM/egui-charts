@@ -9,7 +9,7 @@ use super::widgets::grouped;
 /// keep their own text. Return `None` to keep the built-in text: the symbol's price decimals for
 /// prices, spreads and pip values, and for quantities the decimals of the quantity step in the
 /// ticket and the depth ladder, or the quantity's own decimals, up to eight, in the account
-/// tables and notifications.
+/// tables, notifications and confirmations.
 /// Install it with [`Trading::set_formatter`](super::Trading::set_formatter).
 pub trait TradingFormatter: Send + Sync {
     /// A price, such as a limit price, a bid or an average price.
