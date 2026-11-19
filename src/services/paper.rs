@@ -341,8 +341,9 @@ impl PaperAccount {
     /// its symbols with [`set_price`](Self::set_price): until then its orders cannot be placed or
     /// changed, and the first price fills the working orders it reaches. Settings out of range count
     /// as their builders say, rules that are not valid are left out, and only the newest 1,000
-    /// entries of each history are kept. Returns `None` when the saved balance or starting balance
-    /// is not finite.
+    /// entries of each history are kept. Positions and account figures retain their saved marks
+    /// until a host price arrives. Returns `None` when the saved balance or starting balance is
+    /// not finite.
     pub fn restore(mut saved: SavedPaperAccount) -> Option<Self> {
         if !saved.initial.is_finite() || !saved.balance.is_finite() {
             return None;
@@ -473,7 +474,7 @@ impl State {
             .last
             .get(&position.symbol)
             .copied()
-            .unwrap_or(position.average_price);
+            .unwrap_or(position.last_price.unwrap_or(position.average_price));
         let (pv, lev) = self.terms_of(terms, &position.symbol);
         let size = position.quantity.abs();
         position.last_price = Some(last);
@@ -519,7 +520,7 @@ impl State {
                 .last
                 .get(&position.symbol)
                 .copied()
-                .unwrap_or(position.average_price);
+                .unwrap_or(position.last_price.unwrap_or(position.average_price));
             let (pv, lev) = self.terms_of(terms, &position.symbol);
             equity += (price - position.average_price) * position.quantity * pv;
             margin += position.quantity.abs() * price.abs() * pv / lev;
@@ -1414,10 +1415,12 @@ mod tests {
         let mut limit = OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Limit(90.0));
         limit.time_in_force = TimeInForce::GoodTillCancelled;
         let id = place(&paper, limit.clone()).unwrap();
+        paper.set_price("ES", 101.0);
         let json = serde_json::to_string(&paper.save()).unwrap();
         let saved: SavedPaperAccount = serde_json::from_str(&json).unwrap();
         let restored = PaperAccount::restore(saved).unwrap();
         assert_eq!(serde_json::to_string(&restored.save()).unwrap(), json);
+        assert_eq!(snapshot(&restored), snapshot(&paper));
         let inbox = Arc::new(Inbox::default());
         limit.order_type = OrderType::Limit(91.0);
         restored.modify(id, limit, inbox.reply(0));
@@ -1433,7 +1436,7 @@ mod tests {
             Err(FeedError::SymbolNotFound("ES".into()))
         );
         restored.set_replay_time(Some(time));
-        restored.set_price("ES", 100.0);
+        restored.set_price("ES", 101.0);
         assert_eq!(snapshot(&restored), snapshot(&paper));
         assert_eq!(rules_of(&restored, "ES"), rules_of(&paper, "ES"));
         for account in [&paper, &restored] {
