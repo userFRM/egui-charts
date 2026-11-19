@@ -29,6 +29,7 @@ use crate::model::{
     OrderType, Position, Quote, TradingRules,
 };
 use crate::services::{Broker, HistoryKind, Listener};
+use crate::ui::drawing_toolbar::{DrawingToolbarAction, ToolbarState};
 use crate::ui::model::ConnectionState;
 use crate::widget::settings::TradingSettings;
 use format::Numbers;
@@ -121,7 +122,8 @@ pub struct Trading {
     /// The chart settings' trading options: what [`show`](Self::show) draws, whether Buy and
     /// Sell trade at once, which events raise notifications and whether fills ask for a sound.
     /// Copy the chart settings' [`trading`](crate::widget::settings::ChartSettingsState::trading)
-    /// options here when the user applies them.
+    /// options here when the user applies them, and read them back when opening the dialog or
+    /// saving: [`apply_hide_action`](Self::apply_hide_action) changes them from the Hide menu.
     pub display: TradingSettings,
     /// The sound asked for by fills since the host last took it.
     sound: Option<String>,
@@ -383,6 +385,37 @@ impl Trading {
             .as_ref()
             .map(|account| account.capabilities)
             .unwrap_or_default()
+    }
+
+    /// Refresh the Hide menu's position, order and execution checks from [`display`](Self::display).
+    /// Call this before each
+    /// [`DrawingToolbar::show_with_action`](crate::ui::drawing_toolbar::DrawingToolbar::show_with_action),
+    /// then pass its returned action to [`apply_hide_action`](Self::apply_hide_action).
+    pub fn sync_hide_menu(&self, state: &mut ToolbarState) {
+        state.hide_positions = !self.display.show_positions;
+        state.hide_orders = !self.display.show_orders;
+        state.hide_executions = !self.display.show_executions;
+    }
+
+    /// Apply the visibility requested by the toolbar after a Hide menu click to
+    /// [`display`](Self::display): [`HideAllPoss`](DrawingToolbarAction::HideAllPoss) changes
+    /// positions, [`HideAllOrders`](DrawingToolbarAction::HideAllOrders) orders,
+    /// [`HideAllExecutions`](DrawingToolbarAction::HideAllExecutions) execution marks, and
+    /// [`HideAll`](DrawingToolbarAction::HideAll) all three. Other actions leave it unchanged.
+    /// Refresh `state` with [`sync_hide_menu`](Self::sync_hide_menu) before showing the toolbar
+    /// so its flags hold the requested visibility after the click.
+    pub fn apply_hide_action(&mut self, action: &DrawingToolbarAction, state: &ToolbarState) {
+        use DrawingToolbarAction as A;
+        let all = matches!(action, A::HideAll);
+        if all || matches!(action, A::HideAllPoss) {
+            self.display.show_positions = !state.hide_positions;
+        }
+        if all || matches!(action, A::HideAllOrders) {
+            self.display.show_orders = !state.hide_orders;
+        }
+        if all || matches!(action, A::HideAllExecutions) {
+            self.display.show_executions = !state.hide_executions;
+        }
     }
 
     /// Opens the order ticket filled from `request`, for the user to check and submit.
