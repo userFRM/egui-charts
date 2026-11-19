@@ -18,6 +18,7 @@ use crate::scales::{decimals, to_step};
 use crate::theme::ThemeExt;
 use crate::ui::connection_status::{show_connection_status, show_connection_status_with_label};
 use crate::ui::top_toolbar::buttons::rule_color;
+use crate::ui::trading::format::Numbers;
 use crate::ui::trading::ticket::{order_quantity, round_down};
 use crate::ui::trading::widgets::{grouped, semibold, side_color};
 use crate::ui_kit::buttons::ButtonSize;
@@ -912,6 +913,11 @@ impl Trading {
         let level_stops = self.capabilities().take_profit_level_stops;
         let rules_ready = self.rules_ready && self.rules.symbol == symbol;
         let step = self.rules.quantity_step;
+        let numbers = Numbers {
+            symbol: &symbol,
+            decimals: price_decimals,
+            formatter: self.formatter.as_deref(),
+        };
         let Some((order, request)) = &mut self.account_panel.editing else {
             return;
         };
@@ -1038,7 +1044,7 @@ impl Trading {
                 None
             } else {
                 match order_quantity(request.quantity, rules) {
-                    Err(limit) => Some(limit.message(ctx)),
+                    Err(limit) => Some(limit.message(ctx, &numbers, decimals(step))),
                     Ok(quantity) if quantity != request.quantity => Some(step_text()),
                     Ok(_) if request.quantity < order.filled => {
                         let filled = [("filled", order.filled.to_string())];

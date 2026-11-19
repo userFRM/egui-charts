@@ -695,7 +695,7 @@ mod tests {
             (
                 30.0,
                 31.0,
-                Some("[The quantity is above the maximum of 10]"),
+                Some("[The quantity is above the maximum of 10.0]"),
             ),
         ] {
             harness.state_mut().account_panel.editing =
