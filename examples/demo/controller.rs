@@ -132,6 +132,7 @@ fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
         // source goes below.
         .filter(|input| {
             input.is_shown(&inputs)
+                && !input.style
                 && !matches!(input.id.as_str(), "band_count" | "event_count" | "width")
                 && !matches!(input.kind, InputKind::Length(0, 1439))
                 && (source.is_none() || input.id != "source")
@@ -2457,6 +2458,7 @@ impl DemoApp {
         self.drawing_toolbar
             .sync_from_domain_state(&DrawingToolbarDomainState {
                 sel_tool: dm.active_tool(),
+                sel_custom_tool: dm.active_custom_tool().map(str::to_owned),
                 magnet_mode: dm.options.magnet_mode,
                 snap_to_indicators: dm.options.snap_to_indicators,
                 magnet_type,
