@@ -416,6 +416,17 @@ impl StudyTemplate {
         let shared_smoothing = declares("smoothing")
             && value("smooth1").is_some()
             && value("smooth1") == value("smooth2");
+        // A saved Zig Zag deviation that the study declares but now refuses.
+        let refused_deviation = value("deviation_percent").and_then(|saved| match saved {
+            InputValue::Number(deviation)
+                if own
+                    .iter()
+                    .any(|input| input.id == "deviation_percent" && !input.accepts(saved)) =>
+            {
+                Some(*deviation)
+            }
+            _ => None,
+        });
         let mut template = self.clone();
         match study {
             // Older Knoxville saves drew only momentum and its confirmation marks, and saves
@@ -833,6 +844,41 @@ impl StudyTemplate {
                     plot.visible = false;
                 }
             }
+            // Zig Zag took deviations from 0 up, and drew no labels and stopped at its last pivot
+            // before either had a setting; the automatic drawings share its deviation.
+            "ZigZag"
+            | "Auto Trend Line"
+            | "Auto Parallel Channel"
+            | "Auto Fibonacci Retracement"
+            | "Auto Fibonacci Extension"
+            | "Auto Pitchfork"
+                if refused_deviation.is_some()
+                    || (study == "ZigZag" && !has("extend_to_last_bar")) =>
+            {
+                if let Some(deviation) = refused_deviation {
+                    for (id, value) in &mut template.inputs {
+                        if id == "deviation_percent" {
+                            *value = InputValue::Number(deviation.clamp(
+                                crate::studies::ZigZag::MIN_DEVIATION,
+                                crate::studies::ZigZag::MAX_DEVIATION,
+                            ));
+                        }
+                    }
+                }
+                if study == "ZigZag" && !has("extend_to_last_bar") {
+                    for (id, value) in [
+                        ("extend_to_last_bar", InputValue::Toggle(false)),
+                        ("price_labels", InputValue::Toggle(false)),
+                        ("change_labels", InputValue::Toggle(false)),
+                        ("change_mode", InputValue::Choice(1)),
+                        ("volume_labels", InputValue::Toggle(false)),
+                    ] {
+                        if !has(id) {
+                            template.inputs.push((id.to_owned(), value));
+                        }
+                    }
+                }
+            }
             // The former Zig Zag construction's inputs and single plot give way to the
             // defaults and separate support/resistance styles of the breakout study.
             #[cfg(feature = "drawings")]
@@ -1076,6 +1122,91 @@ mod tests {
                     .with_fibonacci_config(fibonacci),
             )
         }));
+        let mut tpo = crate::studies::TimePriceOpportunity::default();
+        // A literal save from before these controls keeps its palette, levels and boundaries.
+        let legacy: StudyTemplate = serde_json::from_str(r#"{"name":"Time Price Opportunity","inputs":[["period",{"Length":30}],["row_ticks",{"Length":0}],["value_area",{"Number":70.0}],["split_sessions",{"Toggle":false}],["single_prints",{"Toggle":false}],["midpoint",{"Toggle":false}],["statistics",{"Toggle":false}],["display",{"Choice":0}],["sessions",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TimePriceOpportunity.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[16,16,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        let restored = legacy.create().unwrap();
+        assert_eq!(restored.settings(), legacy.settings);
+        let before = crate::model::TPOConfig {
+            tick_size: 0.0,
+            period_minutes: 30,
+            initial_balance_minutes: 60,
+            value_area_pct: 0.70,
+            display_mode: crate::model::TPODisplayMode::Letters,
+            split_periods: false,
+            color_mode: crate::model::TPOColorMode::ByPeriod,
+            period_colors: [
+                Color32::from_rgb(214, 56, 100),
+                Color32::from_rgb(90, 197, 97),
+                Color32::from_rgb(84, 185, 209),
+                Color32::from_rgb(93, 36, 245),
+            ],
+            solid_color: Color32::from_rgb(189, 189, 189),
+            outside_value_area_opacity: 0.45,
+            show_poc: true,
+            show_value_area: true,
+            show_midpoint: false,
+            show_initial_balance: true,
+            show_initial_balance_extensions: false,
+            show_poor_high: false,
+            show_poor_low: false,
+            extend_poor_extremes: false,
+            show_single_prints: false,
+            show_statistics: false,
+            show_opening_range: true,
+            show_closing_price: false,
+            show_volume_profile: false,
+            split_sessions: false,
+            session: crate::model::ProfileSession::Chart,
+            profile_period: crate::model::TPOProfilePeriod::Session,
+            custom_letters: None,
+            composites: Vec::new(),
+            splits: Vec::new(),
+            latest_session_only: false,
+            instrument_tick: None,
+        };
+        assert_eq!(
+            format!("{:?}", restored.tpo()),
+            format!("{:?}", Some(&before))
+        );
+        for (id, value) in [
+            ("split_periods", InputValue::Toggle(true)),
+            ("coloring", InputValue::Choice(1)),
+            ("period_color_1", InputValue::Color(Color32::RED)),
+            ("period_color_2", InputValue::Color(Color32::GREEN)),
+            ("period_color_3", InputValue::Color(Color32::BLUE)),
+            ("period_color_4", InputValue::Color(Color32::YELLOW)),
+            ("block_color", InputValue::Color(Color32::GOLD)),
+            ("outside_value_area_opacity", InputValue::Length(80)),
+            ("poc", InputValue::Toggle(false)),
+            ("value_area_levels", InputValue::Toggle(false)),
+            ("initial_balance", InputValue::Toggle(false)),
+            ("initial_balance_minutes", InputValue::Length(30)),
+            ("initial_balance_extensions", InputValue::Toggle(true)),
+            ("open_price", InputValue::Toggle(false)),
+            ("close_price", InputValue::Toggle(true)),
+            ("poor_high", InputValue::Toggle(true)),
+            ("poor_low", InputValue::Toggle(true)),
+            ("extend_poor", InputValue::Toggle(true)),
+            ("volume_profile", InputValue::Toggle(true)),
+            (
+                "composites",
+                InputValue::Text("1970-01-01T00:00:00Z/1970-01-02T00:00:00Z".into()),
+            ),
+            ("splits", InputValue::Text("1970-01-02T01:00:00Z".into())),
+        ] {
+            tpo.set_input(id, value.clone()).unwrap();
+            assert_eq!(
+                tpo.inputs()
+                    .iter()
+                    .find(|input| input.id == id)
+                    .unwrap()
+                    .value,
+                value,
+                "{id}"
+            );
+        }
+        studies.push(ConfiguredStudy::new(Box::new(tpo)));
         let mut scaled = ConfiguredStudy::new(Box::new(RSI::new(14)));
         scaled.set_scale(crate::studies::StudyScale::Shared(SeriesScale::Left));
         studies.push(scaled);
@@ -1088,6 +1219,12 @@ mod tests {
                 Ok(mut restored) => {
                     study.calculate(&bars);
                     restored.calculate(&bars);
+                    if study.tpo().is_some() {
+                        assert_eq!(
+                            format!("{:?}", restored.tpo()),
+                            format!("{:?}", study.tpo())
+                        );
+                    }
                     if shown(restored.as_ref()) != shown(&study) {
                         differing.push(format!("{row} {}", study.name()));
                     }
@@ -1443,6 +1580,44 @@ mod tests {
                     ("row_ticks", Length(0)),
                 ],
             ),
+            // Saved when the deviation took any number from 0 up: restored at the nearer bound.
+            (
+                "ZigZag",
+                vec![("deviation_percent", Number(0.0))],
+                vec![("deviation_percent", Number(0.000_01))],
+            ),
+            (
+                "ZigZag",
+                vec![("deviation_percent", Number(150.0))],
+                vec![("deviation_percent", Number(100.0))],
+            ),
+            #[cfg(feature = "drawings")]
+            (
+                "Auto Pitchfork",
+                vec![("deviation_percent", Number(0.0))],
+                vec![("deviation_percent", Number(0.000_01))],
+            ),
+            // Saved before labels and the extension to the last bar, both on by default since.
+            (
+                "ZigZag",
+                vec![("deviation_percent", Number(3.0))],
+                vec![
+                    ("deviation_percent", Number(3.0)),
+                    ("price_labels", Toggle(false)),
+                    ("change_labels", Toggle(false)),
+                    ("change_mode", Choice(1)),
+                    ("volume_labels", Toggle(false)),
+                    ("extend_to_last_bar", Toggle(false)),
+                ],
+            ),
+            (
+                "ZigZag",
+                vec![("extend_to_last_bar", Toggle(true))],
+                vec![
+                    ("extend_to_last_bar", Toggle(true)),
+                    ("price_labels", Toggle(true)),
+                ],
+            ),
             // Saved before the twelve lengths were inputs.
             (
                 "GMMA",
@@ -1601,6 +1776,26 @@ mod tests {
         }
         assert_eq!(value("row_ticks"), Some(&Length(0)));
         assert_eq!(value("width"), Some(&Number(30.0)));
+
+        // A Zig Zag as a chart saved it before the extension and the new label defaults.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"ZigZag","inputs":[["deviation_percent",{"Number":3.0}],["depth",{"Length":10}],["mode",{"Choice":0}],["price_labels",{"Toggle":true}],["change_labels",{"Toggle":true}],["change_mode",{"Choice":1}],["volume_labels",{"Toggle":false}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ZigZag.html","plots":[{"color":[41,98,255,255],"width":2.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+        )
+        .unwrap();
+        let study = saved.create().unwrap();
+        assert_eq!(study.settings(), saved.settings);
+        let inputs = study.inputs();
+        for (id, kept) in [
+            ("deviation_percent", Number(3.0)),
+            ("price_labels", Toggle(true)),
+            ("change_labels", Toggle(true)),
+            ("change_mode", Choice(1)),
+            ("volume_labels", Toggle(false)),
+            ("extend_to_last_bar", Toggle(false)),
+        ] {
+            let input = inputs.iter().find(|input| input.id == id);
+            assert_eq!(input.map(|input| &input.value), Some(&kept), "ZigZag {id}");
+        }
     }
 
     /// A Correlation Coefficient as a chart saved it before it opened as an area: a line with its

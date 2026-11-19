@@ -29,6 +29,32 @@ pub(super) fn format_decimal(value: f64, precision: usize) -> String {
     formatted
 }
 
+/// Rounds once to the fraction's step, with halfway values away from zero. Zero has no sign;
+/// non-finite values and values whose step count overflows retain Rust's decimal spelling.
+fn format_fraction(value: f64, fraction: crate::model::PriceFraction) -> String {
+    use crate::model::PriceFraction as F;
+    let per_unit = f64::from(fraction.steps_per_unit());
+    // Scaling by a power of two is exact until overflow.
+    let steps = (value.abs() * per_unit).round();
+    if !steps.is_finite() {
+        return format_decimal(value, 0);
+    }
+    let whole = (steps / per_unit).floor();
+    let count = (steps - whole * per_unit) as u32;
+    let sign = if value < 0.0 && steps > 0.0 { "-" } else { "" };
+    let part = match fraction {
+        F::Halves | F::Quarters | F::Eighths => count.to_string(),
+        F::Sixteenths | F::ThirtySeconds | F::SixtyFourths => format!("{count:02}"),
+        F::HalfThirtySeconds | F::QuarterThirtySeconds | F::EighthThirtySeconds => {
+            // Steps per thirty-second, written as the first decimal of the part: 2/8 is 2.
+            let parts = u32::from(fraction.steps_per_unit()) / 32;
+            format!("{:02}{}", count / parts, count % parts * 10 / parts)
+        }
+        F::OneTwentyEighths | F::TwoFiftySixths => format!("{count:03}"),
+    };
+    format!("{sign}{whole:.0}'{part}")
+}
+
 /// `value` as the whole multiple of `step` that `round` picks from `value / step`, written at the
 /// step's decimals.
 #[cfg(feature = "widget")]
@@ -155,6 +181,9 @@ pub trait PriceFormatter: Send + Sync {
 
 impl PriceFormatter for SeriesDisplayFormat {
     fn format(&self, value: f64) -> String {
+        if let SeriesFormat::Fraction(fraction) = self.kind {
+            return format_fraction(value, fraction);
+        }
         let step = self.min_move;
         let rounded = (value / step).round() * step;
         let value = if step.is_finite() && step > 0.0 && rounded.is_finite() {
@@ -164,7 +193,10 @@ impl PriceFormatter for SeriesDisplayFormat {
         };
         let precision = usize::from(self.precision);
         match self.kind {
-            SeriesFormat::Price => DefaultPriceFormatter::with_precision(precision).format(value),
+            // Fractions returned above.
+            SeriesFormat::Price | SeriesFormat::Fraction(_) => {
+                DefaultPriceFormatter::with_precision(precision).format(value)
+            }
             SeriesFormat::Volume => VolumeFormatter { precision }.format(value),
             SeriesFormat::Percentage => format!("{}%", format_decimal(value, precision)),
         }
@@ -590,6 +622,47 @@ mod tests {
         }
         let explicit = Instrument::new("T").with_price_decimals(255);
         assert_eq!(instrument_price_precision(&explicit), Some(12));
+    }
+
+    /// Fractional counts are padded by denominator, half-32nds use 0/5, and rounding happens
+    /// once to the fraction, with ties away from zero, carry and no minus on rounded zero.
+    #[test]
+    fn fractions_write_whole_part_and_padded_count() {
+        use crate::model::PriceFraction::*;
+        // Counts by hand: .4375 * 16 = 7; .515625 * 64 = 33; .5078125 * 128 = 65 (16 1/4
+        // thirty-seconds); .5234375 * 128 = 67 (16 3/4); .51171875 * 256 = 131 (16 3/8);
+        // .52734375 * 256 = 135 (16 7/8).
+        // 99.984375 * 32 = 3199.5 carries to 3200; 100.0154 * 32 = 3200.4928 stays 3200.
+        for (fraction, value, expected) in [
+            (Halves, 101.5, "101'1"),
+            (Quarters, 101.75, "101'3"),
+            (Eighths, 101.625, "101'5"),
+            (Sixteenths, 101.4375, "101'07"),
+            (ThirtySeconds, 112.5, "112'16"),
+            (ThirtySeconds, 0.03125, "0'01"),
+            (ThirtySeconds, 100.0154, "100'00"),
+            (ThirtySeconds, 99.984375, "100'00"),
+            (ThirtySeconds, -99.984375, "-100'00"),
+            (ThirtySeconds, -0.001, "0'00"),
+            (HalfThirtySeconds, 112.515625, "112'165"),
+            (HalfThirtySeconds, 112.5, "112'160"),
+            (QuarterThirtySeconds, 112.5078125, "112'162"),
+            (QuarterThirtySeconds, 112.5234375, "112'167"),
+            (EighthThirtySeconds, 112.51171875, "112'163"),
+            (EighthThirtySeconds, 112.52734375, "112'168"),
+            (SixtyFourths, 112.515625, "112'33"),
+            (OneTwentyEighths, 112.5078125, "112'065"),
+            (TwoFiftySixths, 112.51171875, "112'131"),
+            (ThirtySeconds, f64::NAN, "NaN"),
+            (ThirtySeconds, f64::INFINITY, "inf"),
+            (ThirtySeconds, f64::NEG_INFINITY, "-inf"),
+        ] {
+            let format = SeriesDisplayFormat {
+                kind: SeriesFormat::Fraction(fraction),
+                ..Default::default()
+            };
+            assert_eq!(format.format(value), expected, "{fraction:?}: {value}");
+        }
     }
 
     #[test]
