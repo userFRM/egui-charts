@@ -400,6 +400,8 @@ pub struct Chart {
     /// Current quote, independent of the historical readout.
     quote: Option<crate::model::Level1Quote>,
     quote_action: Option<QuoteSide>,
+    /// The quote panel's place as shares of its available horizontal and vertical room.
+    quote_panel_at: Option<[f32; 2]>,
     server_time_offset: Option<chrono::TimeDelta>,
     bar_close_time: Option<chrono::DateTime<chrono::Utc>>,
     pub(crate) indicator_settings_request: Option<SeriesId>,
@@ -540,6 +542,9 @@ pub struct Chart {
     /// the next frame only, so the box goes when trading stops drawing.
     #[cfg(feature = "ui")]
     pub(crate) order_quantity: Option<f64>,
+    /// The host's text for `order_quantity`, set with it for the next frame only.
+    #[cfg(feature = "ui")]
+    pub(crate) order_quantity_text: Option<String>,
     /// The legend's quantity box, when the user clicked it, for trading to open its calculator.
     #[cfg(feature = "ui")]
     pub(crate) quantity_clicked: Option<egui::Rect>,
