@@ -13,6 +13,9 @@ use crate::model::{
     OrderSide, OrderStatus, OrderType, Position, PositionBracket, TimeInForce, TradingRules,
 };
 
+/// The most take-profit levels an order may carry.
+const MAX_TAKE_PROFIT_LEVELS: usize = 4;
+
 /// A paper account: a [`Broker`] that fills orders against the prices the host feeds it, so the
 /// order ticket, the chart's order and position lines and the account panel work as they do with
 /// a real account.
@@ -25,8 +28,11 @@ use crate::model::{
 /// a triggered stop-limit works on as a limit order. An order's take profits and stop loss become
 /// exit orders once it fills, for the quantity the fill opened: take-profit levels each close their
 /// own quantity, the first ones first when the fill opened less than the order's quantity, as after
-/// closing an opposite position. When a take profit fills, the stop loss shrinks by its quantity
-/// and is cancelled once nothing is left; when the stop loss fills, the take profits are cancelled.
+/// closing an opposite position. A level's own stop loss closes the same quantity as its take
+/// profit, and whichever fills cancels the other. The order's stop loss closes the quantity of
+/// the levels without one: when one of their take profits fills, it shrinks by that quantity
+/// and is cancelled once nothing is left; when it fills, those take profits are cancelled.
+/// An order carries at most 4 levels.
 /// Each symbol has one net position with its average
 /// price: a fill against it books the realised profit or loss of the closed quantity, and a fill
 /// beyond it opens the other side at the fill price. A position holds its market value divided by
@@ -76,8 +82,10 @@ struct State {
     working: Vec<Order>,
     finished: Vec<Order>,
     executions: Vec<Execution>,
-    /// Every bracket exit, and the exits of the same order it acts on when it fills: a take
-    /// profit's stop loss, which it shrinks, and a stop loss's take profits, which it cancels.
+    /// Every bracket exit, and the exits of the same group it acts on when it fills: a take
+    /// profit's stop loss, which it shrinks or cancels, and a stop loss's take profits, which it
+    /// cancels. A level with its own stop loss is a group of two; the order's stop loss and the
+    /// take profits without their own form the other.
     exits: HashMap<OrderId, Vec<OrderId>>,
     positions: HashMap<String, Position>,
     last: HashMap<String, f64>,
@@ -241,6 +249,8 @@ impl State {
                 stop_limit: true,
                 brackets: true,
                 take_profit_levels: true,
+                take_profit_level_stops: true,
+                max_take_profit_levels: Some(MAX_TAKE_PROFIT_LEVELS),
                 close: true,
                 reverse: true,
                 preview: false,
@@ -500,48 +510,72 @@ impl State {
             });
             exit
         };
-        // Levels close their own quantity, the first ones first when less than the order opened.
+        // Levels close their own quantity, the first ones first when less than the order
+        // opened. Own stops close the same share; the order's stop closes the other shares.
         let mut left = protected;
-        let take_profits = request
+        let mut shares: Vec<_> = request
             .take_profit_levels
             .iter()
             .map(|level| {
                 let share = level.quantity.min(left);
                 left -= share;
-                (level.price, share)
-            })
-            .chain(request.take_profit.map(|price| (price, protected)))
-            .filter(|(_, quantity)| *quantity > rounding_tolerance(protected, 1e-9))
-            .map(|(price, quantity)| exit(price, quantity, OrderType::Limit));
-        let stop_loss = request
-            .stop_loss
-            .filter(|_| protected > 0.0)
-            .map(|price| exit(price, protected, OrderType::Stop));
-        let exits: Vec<_> = take_profits
-            .chain(stop_loss)
-            .map(|exit| {
-                let id = self.id();
-                let mut order = Order::new(id, exit, OrderStatus::Working);
-                order.placed = Some(self.now());
-                order
+                (level.price, share, level.stop_loss)
             })
             .collect();
-        let ids = |bracket| {
-            exits
+        if let Some(price) = request.take_profit {
+            shares.push((price, protected, None));
+        }
+        let shared_stop = if request.take_profit_levels.is_empty() {
+            protected
+        } else {
+            shares
                 .iter()
-                .filter(|exit| exit.request.position_bracket == Some(bracket))
-                .map(|exit| exit.id.clone())
-                .collect::<Vec<_>>()
+                .filter(|(.., stop)| stop.is_none())
+                .map(|(_, share, _)| share)
+                .sum()
         };
-        let (take_profits, stop_losses) = (
-            ids(PositionBracket::TakeProfit),
-            ids(PositionBracket::StopLoss),
-        );
-        for exit in exits {
-            let partners = match exit.request.position_bracket {
-                Some(PositionBracket::StopLoss) => take_profits.clone(),
-                _ => stop_losses.clone(),
-            };
+        let tolerance = rounding_tolerance(protected, 1e-9);
+        // Only exits in the same group act on each other. None is the order's shared stop.
+        let mut planned = Vec::new();
+        for (index, &(price, share, stop)) in shares.iter().enumerate() {
+            if share > tolerance {
+                planned.push((exit(price, share, OrderType::Limit), stop.map(|_| index)));
+            }
+        }
+        for (index, &(_, share, stop)) in shares.iter().enumerate() {
+            if let Some(stop) = stop
+                && share > tolerance
+            {
+                planned.push((exit(stop, share, OrderType::Stop), Some(index)));
+            }
+        }
+        if let Some(price) = request.stop_loss
+            && shared_stop > tolerance
+        {
+            planned.push((exit(price, shared_stop, OrderType::Stop), None));
+        }
+        let exits: Vec<_> = planned
+            .into_iter()
+            .map(|(exit, group)| {
+                let mut order = Order::new(self.id(), exit, OrderStatus::Working);
+                order.placed = Some(self.now());
+                (order, group)
+            })
+            .collect();
+        let partners: Vec<Vec<_>> = exits
+            .iter()
+            .map(|(exit, group)| {
+                exits
+                    .iter()
+                    .filter(|(other, other_group)| {
+                        group == other_group
+                            && exit.request.position_bracket != other.request.position_bracket
+                    })
+                    .map(|(other, _)| other.id.clone())
+                    .collect()
+            })
+            .collect();
+        for ((exit, _), partners) in exits.into_iter().zip(partners) {
             self.exits.insert(exit.id.clone(), partners);
             self.push(AccountEvent::Order(exit.clone()));
             self.log(format!(
@@ -623,23 +657,26 @@ fn validate(order: &OrderRequest, last: f64) -> Result<(), FeedError> {
     };
     let buy = order.side == OrderSide::Buy;
     let no_profit = |p: f64| !p.is_finite() || if buy { p <= price } else { p >= price };
+    let no_loss = |p: f64| !p.is_finite() || if buy { p >= price } else { p <= price };
     let levels = &order.take_profit_levels;
     let bad_levels = !levels.is_empty()
         && (order.take_profit.is_some()
             || levels.iter().any(|level| {
-                no_profit(level.price) || !level.quantity.is_finite() || level.quantity <= 0.0
+                no_profit(level.price)
+                    || !level.quantity.is_finite()
+                    || level.quantity <= 0.0
+                    || level.stop_loss.is_some_and(no_loss)
             })
             || (levels.iter().map(|level| level.quantity).sum::<f64>() - order.quantity).abs()
-                > rounding_tolerance(order.quantity, 1e-9));
+                > rounding_tolerance(order.quantity, 1e-9))
+        || levels.len() > MAX_TAKE_PROFIT_LEVELS;
     if !order.quantity.is_finite()
         || order.quantity <= 0.0
         || !price.is_finite()
         || !(order.quantity * price).is_finite()
         || order.take_profit.is_some_and(no_profit)
         || bad_levels
-        || order
-            .stop_loss
-            .is_some_and(|p| !p.is_finite() || if buy { p >= price } else { p <= price })
+        || order.stop_loss.is_some_and(no_loss)
     {
         return Err(FeedError::Other(
             "invalid quantity, price or brackets".into(),
@@ -1077,10 +1114,11 @@ mod tests {
         let limit = |price, quantity| (OrderType::Limit(price), quantity);
         let stop = |price, quantity| (OrderType::Stop(price), quantity);
         // (held before, exits, price, exits, price, exits, position, balance)
-        for (held, entered, first, partly, second, last, position, balance) in [
+        for (held, own_stop, entered, first, partly, second, last, position, balance) in [
             // 1 at 106 earns 6 and 2 at 94 lose 12.
             (
                 0.0_f64,
+                None,
                 vec![limit(105.0, 1.0), limit(110.0, 2.0), stop(95.0, 3.0)],
                 106.0,
                 vec![limit(110.0, 2.0), stop(95.0, 2.0)],
@@ -1092,6 +1130,7 @@ mod tests {
             // The same, on top of 5 units the order's exits must leave alone.
             (
                 5.0,
+                None,
                 vec![limit(105.0, 1.0), limit(110.0, 2.0), stop(95.0, 3.0)],
                 106.0,
                 vec![limit(110.0, 2.0), stop(95.0, 2.0)],
@@ -1103,7 +1142,59 @@ mod tests {
             // Closing a short of 1 opens 2 of the 3, which both levels close at 111 for 11 each.
             (
                 -1.0,
+                None,
                 vec![limit(105.0, 1.0), limit(110.0, 1.0), stop(95.0, 2.0)],
+                111.0,
+                vec![],
+                111.0,
+                vec![],
+                0.0,
+                10_022.0,
+            ),
+            // 1 at 106 earns 6; the second level's stop sells 2 at 96, losing 8.
+            (
+                0.0,
+                Some(97.0),
+                vec![
+                    limit(105.0, 1.0),
+                    limit(110.0, 2.0),
+                    stop(97.0, 2.0),
+                    stop(95.0, 1.0),
+                ],
+                106.0,
+                vec![limit(110.0, 2.0), stop(97.0, 2.0)],
+                96.0,
+                vec![],
+                0.0,
+                9_998.0,
+            ),
+            // The own stop cancels only its take profit: -8, then the shared stop loses 6.
+            (
+                0.0,
+                Some(97.0),
+                vec![
+                    limit(105.0, 1.0),
+                    limit(110.0, 2.0),
+                    stop(97.0, 2.0),
+                    stop(95.0, 1.0),
+                ],
+                96.0,
+                vec![limit(105.0, 1.0), stop(95.0, 1.0)],
+                94.0,
+                vec![],
+                0.0,
+                9_986.0,
+            ),
+            // Closing a short opens only 2 units: each level and its stop receives 1.
+            (
+                -1.0,
+                Some(97.0),
+                vec![
+                    limit(105.0, 1.0),
+                    limit(110.0, 1.0),
+                    stop(97.0, 1.0),
+                    stop(95.0, 1.0),
+                ],
                 111.0,
                 vec![],
                 111.0,
@@ -1129,6 +1220,7 @@ mod tests {
                 TakeProfitLevel::new(110.0, 2.0),
             ];
             entry.stop_loss = Some(95.0);
+            entry.take_profit_levels[1].stop_loss = own_stop;
             place(&paper, entry).unwrap();
             let exits = || {
                 let state = paper.lock();
@@ -1399,7 +1491,19 @@ mod tests {
             assert!(place(&paper, OrderRequest::new("SYM", OrderSide::Buy, 1.0, kind)).is_err());
         }
         let level = TakeProfitLevel::new;
+        let stopped = |mut level: TakeProfitLevel, stop| {
+            level.stop_loss = Some(stop);
+            level
+        };
         for (levels, take_profit) in [
+            (
+                vec![level(105.0, 1.0), stopped(level(110.0, 2.0), 101.0)],
+                None,
+            ),
+            (
+                vec![level(105.0, 1.0), stopped(level(110.0, 2.0), f64::NAN)],
+                None,
+            ),
             // They add up to 2 of 3.
             (vec![level(105.0, 1.0), level(110.0, 1.0)], None),
             (vec![level(95.0, 1.0), level(110.0, 2.0)], None),
@@ -1412,6 +1516,15 @@ mod tests {
             request.take_profit = take_profit;
             assert!(place(&paper, request).is_err());
             assert_eq!(snapshot(&paper).len(), 1);
+        }
+        let counted = PaperAccount::new("USD", 10_000.0);
+        counted.set_price("SYM", 100.0);
+        for (count, accepted) in [(4, true), (5, false)] {
+            let mut request =
+                OrderRequest::new("SYM", OrderSide::Buy, count as f64, OrderType::Market);
+            request.take_profit_levels =
+                (1..=count).map(|i| level(100.0 + i as f64, 1.0)).collect();
+            assert_eq!(place(&counted, request).is_ok(), accepted, "{count} levels");
         }
         let mut entry = OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Market);
         entry.take_profit = Some(110.0);

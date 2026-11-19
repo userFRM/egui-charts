@@ -14,6 +14,7 @@ mod ghost_feed;
 mod image;
 mod options;
 mod pitchfork;
+mod projection;
 mod template;
 mod vwap;
 
@@ -35,5 +36,6 @@ pub use options::{
     RegressionTrendConfig, TimeframeVisibility,
 };
 pub use pitchfork::{PitchforkConfig, PitchforkLevel};
+pub use projection::{ProjectionConfig, ProjectionLevel};
 pub use template::DrawingTemplate;
 pub use vwap::{VwapBand, VwapBandLine, VwapBandMode, VwapConfig, VwapFill, VwapPlotType};

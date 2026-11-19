@@ -16,7 +16,7 @@ use std::cell::Cell;
 ///
 /// Different tool types expose different handle layouts. Two-point tools use
 /// `Start` and `End`; rectangles use four corner and four edge handles;
-/// multi-point tools use indexed `Point(i)` handles.
+/// multi-point tools use indexed `Point(i)` handles; icons, emoji and stickers add `Rotate`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum HandlePos {
@@ -42,6 +42,8 @@ pub enum HandlePos {
     Left,
     /// Right edge midpoint.
     Right,
+    /// Rotation handle beyond the top edge of an icon, emoji or sticker.
+    Rotate,
     /// Indexed anchor point for multi-point drawings (e.g., `Point(2)` is the
     /// third point in an XABCD pattern).
     Point(usize),

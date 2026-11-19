@@ -12,7 +12,7 @@ use super::{
     AnnotationMarker, ArrowStyle, BarsPatternConfig, BarsPatternMode, ChartPoint, DrawingToolType,
     ElliottDegree, FibonacciConfig, FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig,
     ImageConfig, LineMeasurements, MiddleLineStyle, NoteTextStyle, PitchforkConfig,
-    PositionReadout, PositionSize, PositionSizing, PositionStyle, RangeSettings,
+    PositionReadout, PositionSize, PositionSizing, PositionStyle, ProjectionConfig, RangeSettings,
     RegressionTrendConfig, TimeframeVisibility, VwapConfig,
 };
 
@@ -356,13 +356,19 @@ pub struct Drawing {
     pub middle_line: MiddleLineStyle,
     /// Whether the tool's default line, level and text colours are drawn in the nearest shade
     /// that keeps 4:1 contrast on the active theme's chart and panel. New drawings start with
-    /// it on; drawings and saved defaults stored without it load with it off and draw in their
-    /// stored colours.
+    /// it on, except projections, which keep their specified greys until shading is enabled.
+    /// Drawings and saved defaults stored without it load with it off and draw in their stored
+    /// colours.
     #[serde(default)]
     pub theme_shade: bool,
     /// Frame size and opacity of the image tool; `None` uses the defaults.
     #[serde(default)]
     pub image: Option<ImageConfig>,
+    /// Clockwise rotation of an icon, emoji or sticker about its centre, in degrees; 0 is upright.
+    /// Its handles, selection frame and hit area rotate with it. Other tools ignore this field.
+    /// Drawings saved before this setting load upright.
+    #[serde(default)]
+    pub glyph_angle: f32,
     /// Whether a polyline joins its last anchor back to its first. Clicking the first anchor
     /// while placing a polyline closes it; older saved drawings are open.
     #[serde(default)]
@@ -383,6 +389,12 @@ pub struct Drawing {
     /// bars; `None` uses the defaults, OHLC bars, as drawings saved before this setting do.
     #[serde(default)]
     pub bars_pattern: Option<BarsPatternConfig>,
+    /// Levels, target zone backgrounds, coefficient labels and leg style of the projection
+    /// tool. New projections start from [`ProjectionConfig::default`]; `None`, as on projections
+    /// saved before these settings, draws one dashed level at the whole move in the drawing
+    /// colour with a zone in the fill colour and no coefficients. Other tools ignore it.
+    #[serde(default)]
+    pub projection: Option<ProjectionConfig>,
 
     // === Z-Order (rendering layer) ===
     /// Z-order among the drawings of the same `series_layer` (higher = drawn on top).
@@ -430,7 +442,7 @@ pub(crate) enum ColorSlot {
     Text,
     /// A level by list and value: Fibonacci levels (0) and time levels (1), pitchfork levels
     /// (2), Gann price levels (3), time levels (4), fan lines (5) and arcs (6), and the upper (7)
-    /// and lower (8) lines of the anchored VWAP bands by index.
+    /// and lower (8) lines of the anchored VWAP bands by index, and projection levels (9).
     Level(u8, f32),
 }
 
@@ -574,6 +586,7 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
             font_size: 12.0,
             ..LINE
         },
+        T::ProjectionTool => colored([156, 156, 156, 255]),
         T::CyclicLines => colored([144, 202, 249, 255]),
         T::TimeCycles => DefaultStyle {
             color: [21, 153, 128, 255],
@@ -796,8 +809,9 @@ impl Drawing {
             channel_midline: tool_type == DrawingToolType::ParallelChannel,
             anchor_price_style: None,
             middle_line: MiddleLineStyle::default(),
-            theme_shade: true,
+            theme_shade: tool_type != DrawingToolType::ProjectionTool,
             image: None,
+            glyph_angle: 0.0,
             closed: false,
             gann: None,
             ghost_feed: (tool_type == DrawingToolType::GhostFeed)
@@ -806,10 +820,28 @@ impl Drawing {
                 mode: BarsPatternMode::HighLowBars,
                 ..Default::default()
             }),
+            projection: (tool_type == DrawingToolType::ProjectionTool)
+                .then(ProjectionConfig::default),
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
             series_layer: None,
         }
+    }
+
+    /// Clockwise radians for painting; invalid host values draw upright and cannot be saved.
+    pub(crate) fn glyph_radians(&self) -> f32 {
+        if self.glyph_angle.is_finite() {
+            self.glyph_angle.to_radians()
+        } else {
+            0.0
+        }
+    }
+
+    /// Stores a clockwise angle in degrees in [0, 360).
+    pub(crate) fn set_glyph_angle(&mut self, degrees: f32) {
+        let degrees = degrees.rem_euclid(360.0);
+        // A negative value just below zero can round its remainder up to 360.
+        self.glyph_angle = if degrees < 360.0 { degrees } else { 0.0 };
     }
 
     /// Creates a host-defined drawing. The manager looks up `tool` in its registry; the
@@ -820,16 +852,16 @@ impl Drawing {
         drawing
     }
 
-    /// Create a new drawing with a specific line colour; fills, borders and pitchfork levels
-    /// sharing the tool's line colour take the new RGB at their own opacity.
+    /// Create a new drawing with a specific line colour; fills, borders, pitchfork levels and
+    /// projection levels sharing the tool's line colour take the new RGB at their own opacity.
     pub fn with_color(id: usize, tool_type: DrawingToolType, color: [u8; 4]) -> Self {
         let mut drawing = Self::new(id, tool_type);
         drawing.set_line_color(color);
         drawing
     }
 
-    /// Set the line colour and retint fills, borders and pitchfork levels sharing its current
-    /// RGB, keeping each one's opacity. Independently coloured fills, borders and levels keep
+    /// Set the line colour and retint fills, borders, pitchfork levels and projection levels
+    /// sharing its current RGB, keeping each one's opacity. Independently coloured levels keep
     /// their colours.
     pub fn set_line_color(&mut self, color: [u8; 4]) {
         for shared in [&mut self.fill_color, &mut self.border_color] {
@@ -846,7 +878,23 @@ impl Drawing {
                 }
             }
         }
+        if let Some(config) = &mut self.projection {
+            for level in &mut config.levels {
+                if level.color[..3] == self.color[..3] {
+                    level.color[..3].copy_from_slice(&color[..3]);
+                }
+            }
+        }
         self.color = color;
+    }
+
+    /// The projection settings this drawing is drawn with: its own, or for one saved without
+    /// them, the settings that draw it as it was drawn.
+    pub(crate) fn projection_config(&self) -> std::borrow::Cow<'_, ProjectionConfig> {
+        match &self.projection {
+            Some(config) => std::borrow::Cow::Borrowed(config),
+            None => std::borrow::Cow::Owned(ProjectionConfig::legacy(self)),
+        }
     }
 
     /// Set the colour picked in a colour control. A price label's badge stays one colour, so its
@@ -936,6 +984,11 @@ impl Drawing {
             }
             for level in config.time_levels.iter_mut().flatten() {
                 visit(ColorSlot::Level(1, level.value), &mut level.color);
+            }
+        }
+        if let Some(config) = &mut self.projection {
+            for level in &mut config.levels {
+                visit(ColorSlot::Level(9, level.coefficient), &mut level.color);
             }
         }
         if let Some(config) = &mut self.pitchfork {
