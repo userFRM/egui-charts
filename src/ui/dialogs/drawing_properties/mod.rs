@@ -9,7 +9,8 @@
 //!
 //! Open with [`DrawingPropertiesDialog::open_for_chart`] and call
 //! [`DrawingPropertiesDialog::show_and_apply`] each frame to apply validated edits in the library.
-//! Hosts persist [`crate::drawings::DrawingManager::tool_defaults`] and may attach storage to
+//! Hosts persist `tool_defaults` and `custom_tool_defaults` of [`crate::drawings::DrawingManager`]
+//! and may attach storage to
 //! [`DrawingPropertiesDialog::templates`]. Delete and Clone are in the drawing context menu.
 
 mod actions;
