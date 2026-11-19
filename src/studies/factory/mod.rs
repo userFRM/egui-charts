@@ -129,7 +129,7 @@ impl IndicatorFactory {
         // Exported studies outside the catalogue, resolved by name so that saved copies load.
         register_builtins!(@help self, "struct", CVD, HL2, HLC3, EhlersFisher, MACombination, OrderFlowStudy, ChartPatterns, OptionsVolumeProfile);
         #[cfg(feature = "drawings")]
-        register_builtins!(@help self, "struct", AutoDrawing);
+        register_builtins!(@help self, "struct", AutoDrawing, AutoTrendLines);
         let unlisted: [fn() -> Box<dyn Indicator>; 5] = [
             || Box::new(CVD::default()),
             || Box::new(HL2::default()),
@@ -449,6 +449,14 @@ impl IndicatorFactory {
                 ),
             );
         }
+        #[cfg(feature = "drawings")]
+        self.constructors.insert(
+            AutoTrendLines::new().name().to_owned(),
+            (
+                Some("Support and resistance"),
+                Box::new(|| Box::new(AutoTrendLines::new())),
+            ),
+        );
     }
 
     /// Register a named indicator constructor in the [`CUSTOM`](Self::CUSTOM) category.
