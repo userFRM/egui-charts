@@ -838,9 +838,8 @@ impl Indicator for ConfiguredStudy {
         self.registered = name.to_owned();
         true
     }
-    fn set_input_defaults(&mut self, defaults: &[(String, InputValue)]) -> bool {
+    fn set_input_defaults(&mut self, defaults: &[(String, InputValue)]) {
         self.input_defaults = defaults.to_vec();
-        true
     }
     fn metric(&self) -> Option<&crate::data::MetricSeries> {
         self.study.metric()

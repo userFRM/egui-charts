@@ -310,10 +310,9 @@ impl StudyTemplate {
             .flatten()
             .unwrap_or_default();
         defaults.retain(|(id, _)| inputs.iter().any(|(named, _)| named == id));
-        // Keep a host's presentation wrapper when it can retain the factory key and defaults too.
+        // Keep a host's presentation wrapper when it can retain the factory key too.
         let mut study = if study.has_settings()
             && (study.registered_name() == registered || study.set_registered_name(registered))
-            && (defaults.is_empty() || study.set_input_defaults(&defaults))
         {
             study
         } else {
