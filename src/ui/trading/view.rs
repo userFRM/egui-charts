@@ -2782,6 +2782,7 @@ mod tests {
             assert!(!texts.iter().any(|(text, _)| text.contains("NaN")));
             click(&mut trading, "Compact form");
             assert!(trading.display.compact_ticket);
+            frame(&mut trading, key(egui::Key::Escape));
             let texts = frame(&mut trading, vec![]).0;
             for wanted in ["Limit", "Price", "Units", reason] {
                 assert!(
