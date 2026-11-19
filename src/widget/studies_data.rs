@@ -117,7 +117,12 @@ fn resolved(
     }
 }
 
-fn clock(request: &StudyDataRequest, instrument: Option<&Instrument>, extended: bool) -> BarClock {
+fn clock(
+    request: &StudyDataRequest,
+    instrument: Option<&Instrument>,
+    extended: bool,
+    overnight: bool,
+) -> BarClock {
     if request.metric.is_some() {
         return BarClock::new(Timeframe::Ticks(std::num::NonZeroU64::MIN));
     }
@@ -132,7 +137,7 @@ fn clock(request: &StudyDataRequest, instrument: Option<&Instrument>, extended: 
             clock = clock.with_timezone(zone.clone());
         }
         if let Some(session) = &instrument.session {
-            clock = clock.with_session(zone, session.clone(), extended);
+            clock = clock.with_session_hours(zone, session.clone(), extended, overnight);
         }
     }
     clock
@@ -281,7 +286,12 @@ impl Chart {
         instrument: Option<Instrument>,
     ) {
         let request = resolved(&request, self.symbol(), self.timeframe());
-        let clock = clock(&request, instrument.as_ref(), self.extended_hours());
+        let clock = clock(
+            &request,
+            instrument.as_ref(),
+            self.extended_hours(),
+            self.overnight_hours(),
+        );
         let (bars, _) = super::series::clean(bars, &clock);
         // Bars that differ from the previous ones at most from the last of those on, as when the
         // host streams a history, leave the earlier values right.
@@ -437,7 +447,7 @@ impl Chart {
                     request: request.clone(),
                     bars: Vec::new(),
                     instrument: None,
-                    clock: clock(request, None, self.extended_hours()),
+                    clock: clock(request, None, self.extended_hours(), self.overnight_hours()),
                     error: None,
                     stream_error: None,
                     from_ticks: BTreeMap::new(),
@@ -460,12 +470,18 @@ impl Chart {
             }
         }
         let extended = self.extended_hours();
+        let overnight = self.overnight_hours();
         let adjusted = self.dividend_adjusted();
         let now = ctx.input(|input| input.time);
         let count = self.state.data().bars.len().max(300);
         for series in &mut self.study_data.series {
             let Some(stream) = &mut series.stream else {
-                let clock = clock(&series.request, series.instrument.as_ref(), extended);
+                let clock = clock(
+                    &series.request,
+                    series.instrument.as_ref(),
+                    extended,
+                    overnight,
+                );
                 if clock != series.clock {
                     series.clock = clock;
                     changes.note(&series.request, true);
@@ -499,7 +515,8 @@ impl Chart {
                                 series.error = Some(FeedError::NotSupported);
                                 continue;
                             }
-                            series.clock = clock(&series.request, Some(&instrument), extended);
+                            series.clock =
+                                clock(&series.request, Some(&instrument), extended, overnight);
                             series.instrument = Some(instrument);
                             series.error = None;
                             stream.failures = 0;
@@ -636,6 +653,7 @@ impl Chart {
                         timeframe: tf,
                         clock: series.clock.clone(),
                         extended_hours: extended,
+                        overnight_hours: overnight,
                         conversion: stream.conversion.clone(),
                         sink,
                     });
@@ -680,6 +698,7 @@ impl Chart {
                     since: None,
                     count,
                     extended_hours: extended,
+                    overnight_hours: overnight,
                     adjusted,
                     conversion: stream.conversion.clone(),
                 });
