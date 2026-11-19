@@ -353,6 +353,11 @@ pub struct Drawing {
     /// Frame size and opacity of the image tool; `None` uses the defaults.
     #[serde(default)]
     pub image: Option<ImageConfig>,
+    /// Clockwise rotation of an icon, emoji or sticker about its centre, in degrees; 0 is upright.
+    /// Its handles, selection frame and hit area rotate with it. Other tools ignore this field.
+    /// Drawings saved before this setting load upright.
+    #[serde(default)]
+    pub glyph_angle: f32,
     /// Whether a polyline joins its last anchor back to its first. Clicking the first anchor
     /// while placing a polyline closes it; older saved drawings are open.
     #[serde(default)]
@@ -720,6 +725,7 @@ impl Drawing {
             middle_line: MiddleLineStyle::default(),
             theme_shade: true,
             image: None,
+            glyph_angle: 0.0,
             closed: false,
             gann: None,
             ghost_feed: (tool_type == DrawingToolType::GhostFeed)
@@ -731,6 +737,22 @@ impl Drawing {
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
         }
+    }
+
+    /// Clockwise radians for painting; invalid host values draw upright and cannot be saved.
+    pub(crate) fn glyph_radians(&self) -> f32 {
+        if self.glyph_angle.is_finite() {
+            self.glyph_angle.to_radians()
+        } else {
+            0.0
+        }
+    }
+
+    /// Stores a clockwise angle in degrees in [0, 360).
+    pub(crate) fn set_glyph_angle(&mut self, degrees: f32) {
+        let degrees = degrees.rem_euclid(360.0);
+        // A negative value just below zero can round its remainder up to 360.
+        self.glyph_angle = if degrees < 360.0 { degrees } else { 0.0 };
     }
 
     /// Creates a host-defined drawing. The manager looks up `tool` in its registry; the
