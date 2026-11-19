@@ -1514,6 +1514,10 @@ mod tests {
             drawing.ghost_feed = Some(crate::drawings::GhostFeedConfig {
                 average_range_ticks: 2.5,
                 noise_ticks: 0.5,
+                show_wick: false,
+                border_down: [1, 2, 3, 4],
+                transparency: 80,
+                ..Default::default()
             });
             if tool == DrawingToolType::Image {
                 drawing.image = Some(crate::drawings::ImageConfig {
@@ -1522,7 +1526,7 @@ mod tests {
                 });
             }
             drawing.bars_pattern = Some(crate::drawings::BarsPatternConfig {
-                mode: crate::drawings::BarsPatternMode::Line,
+                mode: crate::drawings::BarsPatternMode::MidpointLine,
                 mirrored: true,
                 flipped: true,
             });

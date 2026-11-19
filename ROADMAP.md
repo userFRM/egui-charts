@@ -82,7 +82,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] The triangle pattern runs its two boundaries on to their apex and fills only the polygon they enclose.
 - [x] Three-drives ratios are measured in price.
 - [x] Elliott triangles collect an origin and waves A to E.
-- [x] Ghost Feed projects translucent candles along its clicked path, with configurable average range and noise in instrument ticks.
+- [x] Ghost Feed projects translucent candles along its clicked path, with configurable average range and noise in instrument ticks, body, border and wick colours, switches for the borders and the wicks, and transparency.
 - [x] Gann squares configure their fan direction, fan lines and arcs, and show or hide the fan and the arcs.
 - [x] Each drawing tool starts from a default style chosen for its role, and its default line, level and text colours are drawn in a shade that keeps 4:1 on the light, dark and high-contrast charts.
 - [ ] Complete the remaining on-chart text editing of horizontal rays and vertical lines.
@@ -139,7 +139,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Automatic chart-pattern, wedge and key-level detection studies. Studies paint their drawings beneath their plots, text and markers; chart patterns show a triangle and abbreviation at each confirmation, with boundaries styled and hidden by their Bullish, Bearish or Developing plot. Developing boundaries start grey and dashed, and older two-plot saves restore that style. Automatic drawing studies keep plot 0 as their construction style and visibility control.
 - [x] Composite technical ratings, rated on both groups or one, with higher-interval rows and a placed, sized and coloured table, and lunar phases.
 - [x] Volatility Index draws Wilder's stop and reverse a multiple of the average true range from the significant close, with editable periods, multiplier and Wilder or exponential smoothing.
-- [x] ADX-breakout, divergence, key-reversal, intraday and missed-pivot studies.
+- [x] ADX-breakout, divergence, key-reversal, intraday and missed-pivot studies. Knoxville Divergence joins the compared price lows or highs once the later pivot is confirmed, while momentum and confirmation marks keep their own pane. New studies show the price lines by default; older saves keep them off until enabled.
 - [ ] Add the remaining specialised reversal and ghost-pivot studies.
 - [ ] Complete the remaining style and calculation controls of the built-in studies, including shared style defaults and editor presentation for SMI, Stochastic and Stochastic RSI.
 - [x] Give session and periodic volume profile studies level extension, session hours, period lengths and rows in ticks.
