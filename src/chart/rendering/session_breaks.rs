@@ -1,5 +1,4 @@
-//! Session-break rendering: day/session boundary dividers and optional
-//! alternating session background shading.
+//! Session-break rendering: day and session boundary dividers, and extended-hours shading.
 //!
 //! Intraday charts (1-minute, hourly, …) show a thin vertical divider wherever
 //! the calendar day, or the configured trading session, changes between two
@@ -235,74 +234,6 @@ impl SessionBreakRenderer {
             SessionBreakType::Yearly => (base, self.config.line_width * 2.5),
             SessionBreakType::Custom => (base.gamma_multiply(0.7), self.config.line_width * 1.2),
         }
-    }
-}
-
-/// Renderer for alternating session background shading.
-///
-/// Fills each session span (the region between two consecutive boundaries) with
-/// one of two near-identical tints so adjacent trading days are subtly
-/// distinguishable without competing with the candles drawn on top. Intended to
-/// be drawn *behind* the candles, alongside the grid.
-pub struct SessionBackgroundRenderer {
-    /// The two alternating fill colors.
-    colors: (Color32, Color32),
-}
-
-impl SessionBackgroundRenderer {
-    /// Build a shading renderer from a base background color.
-    ///
-    /// The second tint is a faint darkening of the base so the alternation is
-    /// perceptible but unobtrusive.
-    pub fn from_background(background: Color32) -> Self {
-        Self {
-            colors: (Color32::TRANSPARENT, background.gamma_multiply(0.94)),
-        }
-    }
-
-    /// Fill alternating session spans across the visible range.
-    ///
-    /// Spans are delimited by the same boundaries the divider renderer uses, so
-    /// shading and dividers always agree. The leading partial span (before the
-    /// first visible boundary) and the trailing partial span (after the last)
-    /// are both filled so the alternation covers the whole chart rect.
-    pub fn render(
-        &self,
-        ctx: &RenderContext,
-        visible_data: &[Bar],
-        provider: &dyn SessionProvider,
-        mapping: &ChartMapping,
-        start_idx: usize,
-    ) {
-        let breaks = find_session_breaks(visible_data, provider);
-
-        let mut even = true;
-        let mut prev_x = ctx.rect.min.x;
-
-        for (local_idx, _) in breaks {
-            let x = mapping
-                .idx_to_x(start_idx + local_idx)
-                .clamp(ctx.rect.min.x, ctx.rect.max.x);
-            self.fill_span(ctx, prev_x, x, even);
-            even = !even;
-            prev_x = x;
-        }
-
-        // Trailing span up to the right edge.
-        self.fill_span(ctx, prev_x, ctx.rect.max.x, even);
-    }
-
-    fn fill_span(&self, ctx: &RenderContext, x0: f32, x1: f32, even: bool) {
-        if x1 <= x0 {
-            return;
-        }
-        let color = if even { self.colors.0 } else { self.colors.1 };
-        if color == Color32::TRANSPARENT {
-            return;
-        }
-        let rect =
-            egui::Rect::from_min_max(Pos2::new(x0, ctx.rect.min.y), Pos2::new(x1, ctx.rect.max.y));
-        ctx.painter.rect_filled(rect, 0.0, color);
     }
 }
 

@@ -1653,15 +1653,6 @@ impl Chart {
                 .session_provider
                 .as_deref()
                 .unwrap_or(&exchange_session);
-            let background =
-                rendering::SessionBackgroundRenderer::from_background(self.config.background_color);
-            background.render(
-                &session_ctx,
-                time_data,
-                provider,
-                &time_coords,
-                time_coords.start_idx,
-            );
             rendering::SessionBreakRenderer::new(rendering::SessionBreakRenderConfig {
                 line_color: self.config.session_break_color,
                 line_width: 1.0,

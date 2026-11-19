@@ -352,6 +352,34 @@ mod tests {
         }
     }
 
+    /// Session dividers do not add alternating fills over the chart background.
+    #[test]
+    fn session_breaks_paint_as_configured_without_shading() {
+        use crate::model::{Bar, BarData, Timeframe};
+        let start: chrono::DateTime<chrono::Utc> = "2024-01-01T00:00:00Z".parse().unwrap();
+        for (timeframe, step) in [
+            (Timeframe::Hour1, chrono::Duration::hours(1)),
+            (Timeframe::Day1, chrono::Duration::days(1)),
+        ] {
+            let bars = (0..120)
+                .map(|i| Bar::new(start + step * i, 100.0, 102.0, 99.0, 101.0, 1.0))
+                .collect();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.set_timeframe(timeframe);
+            chart.config.show_volume = false;
+            chart.config.show_grid = false;
+            chart.config.show_session_breaks = true;
+            let painted = shapes(&egui::Context::default(), &mut chart, 0.0, vec![]);
+            let shading = chart.config.background_color.gamma_multiply(0.94);
+            assert!(
+                !painted
+                    .iter()
+                    .any(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == shading)),
+                "{timeframe:?}"
+            );
+        }
+    }
+
     /// Session volume profiles sum whole sessions, from the first bar of a session that is only
     /// partly shown up to the open of the next one, and the last session holds the live bar.
     #[cfg(feature = "studies")]
