@@ -801,6 +801,16 @@ impl SettingsDialog {
                     .scales_and_lines
                     .thousands_sep
                     .or(scales.thousands_sep);
+                let date_format = template
+                    .scales_and_lines
+                    .date_format
+                    .clone()
+                    .or_else(|| scales.date_format.clone());
+                let use_24_hour = template.scales_and_lines.use_24_hour.or(scales.use_24_hour);
+                let weekday_names = template
+                    .scales_and_lines
+                    .weekday_names
+                    .or(scales.weekday_names);
                 let session_breaks = template
                     .show_session_breaks
                     .or(self.settings.show_session_breaks);
@@ -826,6 +836,9 @@ impl SettingsDialog {
                 self.settings.scales_and_lines.show_bid_ask_lines = bid_ask_lines;
                 self.settings.scales_and_lines.prev_close_line = prev_close_line;
                 self.settings.scales_and_lines.thousands_sep = separator;
+                self.settings.scales_and_lines.date_format = date_format;
+                self.settings.scales_and_lines.use_24_hour = use_24_hour;
+                self.settings.scales_and_lines.weekday_names = weekday_names;
                 self.settings.show_session_breaks = session_breaks;
                 self.settings.margins.right_bars = right_bars;
                 // A template saved before volume candles had a style shows what they drew, which
@@ -909,6 +922,10 @@ impl SettingsDialog {
             self.settings.scales_and_lines.prev_close_line = Some(Default::default());
             self.settings.scales_and_lines.thousands_sep =
                 Some(crate::widget::settings::ThousandsSeparator::Comma);
+            self.settings.scales_and_lines.date_format =
+                Some(crate::widget::settings::DateFormat::Default);
+            self.settings.scales_and_lines.use_24_hour = Some(true);
+            self.settings.scales_and_lines.weekday_names = Some(Default::default());
             let palette = crate::config::ChartConfig::default().with_theme(theme);
             // The default styles of the chart types hold the dark preset's candle colours.
             let params = self.settings.chart_type_params.get_or_insert_default();
@@ -985,6 +1002,11 @@ mod tests {
                 let mut chart = crate::ChartBuilder::new().with_theme(theme.clone()).build();
                 let expected = ChartSettingsState::from_chart(&chart);
                 chart.pane_options_mut().separator_color = Some(Color32::GREEN);
+                chart.set_date_format(Some("%d.%m.%Y".into()));
+                let mut options = chart.chart_options().clone();
+                options.time_scale.use_24_hour = false;
+                options.time_scale.weekday_names = crate::scales::WeekdayNames::Never;
+                chart.set_chart_options(options);
                 // A customised last price line, which Reset returns to a new chart's.
                 if let Some(style) = chart.series_style_mut(crate::widget::SeriesId::MAIN) {
                     style.price_line_width = 3.0;
@@ -1060,6 +1082,20 @@ mod tests {
                 assert_eq!(saved.crosshair.color, Color32::PLACEHOLDER);
                 settings.apply_to_chart(&mut chart).unwrap();
                 let actual = ChartSettingsState::from_chart(&chart);
+                let scales = &actual.scales_and_lines;
+                assert_eq!(
+                    (
+                        scales.date_format.clone(),
+                        scales.use_24_hour,
+                        scales.weekday_names
+                    ),
+                    (
+                        Some(crate::widget::settings::DateFormat::Default),
+                        Some(true),
+                        Some(crate::scales::WeekdayNames::Default)
+                    ),
+                    "{preset}"
+                );
                 assert_eq!(
                     (
                         actual.scales_and_lines.price_line_width,
@@ -2452,15 +2488,56 @@ mod tests {
         }
     }
 
-    /// A template saved before the right margin could hold part of a bar, and before the font
-    /// family, the thousands separator, session breaks and the bar of the last price could be
-    /// chosen, holds the whole bars of a margin and none of those choices. Loaded on a chart
-    /// with a margin in bars or in pixels, it shows what it can of the chart's and Ok keeps the
-    /// chart's margin and choices. Its pane separators follow the theme, as they did when such
-    /// a template was saved.
+    /// Time scale controls display a host pattern by its sample, and choose the date, clock and
+    /// weekday names. Invalid host patterns stay listed without a formatting panic.
+    #[test]
+    fn time_label_choices_are_made_in_the_dialog() {
+        use crate::scales::WeekdayNames;
+        use crate::widget::settings::DateFormat;
+        for (pattern, sample) in [("%A %d %B %Y", "Wednesday 13 March 2024"), ("%Q", "%Q")] {
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            chart.set_date_format(Some(pattern.into()));
+            let mut dialog = SettingsDialog::new();
+            dialog.open(ChartSettingsState::from_chart(&chart));
+            dialog.active_tab = SettingsTab::ScalesAndLines;
+            let labels = [
+                "scroll",
+                sample,
+                "13.03.2024",
+                "24-hour",
+                "12-hour",
+                "Default",
+                "Always",
+                "Ok",
+            ];
+            let SettingsAction::Apply(settings) = click_through(&mut dialog, &labels) else {
+                panic!("Ok must apply the settings");
+            };
+            let scales = &settings.scales_and_lines;
+            assert_eq!(
+                (
+                    scales.date_format.clone(),
+                    scales.use_24_hour,
+                    scales.weekday_names
+                ),
+                (
+                    Some(DateFormat::Pattern("%d.%m.%Y".into())),
+                    Some(false),
+                    Some(WeekdayNames::Always)
+                )
+            );
+        }
+    }
+
+    /// Templates saved before the fractional margin, font family, thousands separator, session
+    /// breaks, last price bar and time label choices keep the chart's choices. Their whole-bar
+    /// margin keeps the chart's fractional margin when it is the same margin unedited.
+    /// Their pane separators follow the theme, as they did when such a template was saved.
     #[test]
     fn old_templates_keep_the_right_margin_and_the_choices_they_lack() {
         use crate::model::PriceLineSource;
+        use crate::scales::WeekdayNames;
+        use crate::widget::settings::DateFormat;
         use crate::widget::{SeriesId, settings::ThousandsSeparator, test_frames::chart};
         use egui::FontFamily;
         // The margin of a new chart, and 60 pixels at the default bar spacing of 6 points; the
@@ -2479,6 +2556,9 @@ mod tests {
                 ("/scales_and_lines", "prev_close_line"),
                 ("/scales_and_lines", "show_bid_ask_lines"),
                 ("/scales_and_lines", "thousands_sep"),
+                ("/scales_and_lines", "date_format"),
+                ("/scales_and_lines", "use_24_hour"),
+                ("/scales_and_lines", "weekday_names"),
                 ("/scales_appearance", "font_family"),
             ] {
                 let group = saved.pointer_mut(group).unwrap().as_object_mut().unwrap();
@@ -2486,7 +2566,10 @@ mod tests {
             }
             let mut options = crate::config::ChartOptions::default();
             options.time_scale.right_offset_pixels = pixels;
+            options.time_scale.use_24_hour = false;
+            options.time_scale.weekday_names = WeekdayNames::Never;
             let mut chart = chart(&[100.0], &[110.0]).with_chart_options(options);
+            chart.set_date_format(Some("%d.%m.%Y".into()));
             chart.config_mut().axis_font_family = FontFamily::Monospace;
             chart.config_mut().thousands_sep = Some('\'');
             chart.config_mut().show_session_breaks = true;
@@ -2517,6 +2600,9 @@ mod tests {
                     shown.scales_and_lines.price_line_source,
                     shown.scales_and_lines.thousands_sep,
                     shown.pane_separator_color,
+                    shown.scales_and_lines.date_format.clone(),
+                    shown.scales_and_lines.use_24_hour,
+                    shown.scales_and_lines.weekday_names,
                 ),
                 (
                     Some(3.0),
@@ -2525,11 +2611,20 @@ mod tests {
                     Some(PriceLineSource::LastVisible),
                     Some(ThousandsSeparator::Apostrophe),
                     None,
+                    Some(DateFormat::Pattern("%d.%m.%Y".into())),
+                    Some(false),
+                    Some(WeekdayNames::Never),
                 ),
                 "{pixels:?}"
             );
             dialog.settings().apply_to_chart(&mut chart).unwrap();
             assert_eq!(chart.chart_options().time_scale, margin, "{pixels:?}");
+            assert_eq!(
+                ChartSettingsState::from_chart(&chart)
+                    .scales_and_lines
+                    .date_format,
+                Some(DateFormat::Pattern("%d.%m.%Y".into()))
+            );
             let config = chart.config();
             assert_eq!(config.axis_font_family, FontFamily::Monospace);
             assert_eq!(config.thousands_sep, Some('\''));

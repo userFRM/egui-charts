@@ -485,6 +485,12 @@ impl StudyTemplate {
                     .inputs
                     .push(("midpoint".to_owned(), InputValue::Toggle(true)));
             }
+            // Missed pivots were swings before they could follow a period.
+            "Missed Pivot Levels" if !has("period") => {
+                template
+                    .inputs
+                    .push(("period".to_owned(), InputValue::Choice(0)));
+            }
             // Higher-interval candles drew their saved interval before one could follow the chart's.
             "Higher Interval Candles" if !has("auto_interval") => {
                 template
@@ -1141,6 +1147,17 @@ mod tests {
             expected.plot_variants.push(Vec::new());
             assert_eq!(restored.settings(), expected, "{}", saved.name);
             let inputs = restored.inputs();
+            if saved.name == "Missed Pivot Levels" {
+                assert_eq!(
+                    inputs
+                        .iter()
+                        .find(|input| input.id == "period")
+                        .unwrap()
+                        .value,
+                    InputValue::Choice(0)
+                );
+                assert_eq!(Some(restored.scale()), saved.scale);
+            }
             for (id, value) in &saved.inputs {
                 assert_eq!(
                     inputs
@@ -1248,6 +1265,17 @@ mod tests {
                 "Time Price Opportunity",
                 vec![("midpoint", Toggle(false))],
                 vec![("midpoint", Toggle(false))],
+            ),
+            // Saved before levels could follow a period, when they were swings.
+            (
+                "Missed Pivot Levels",
+                vec![("left", Length(5))],
+                vec![("left", Length(5)), ("period", Choice(0))],
+            ),
+            (
+                "Missed Pivot Levels",
+                vec![("period", Choice(2))],
+                vec![("period", Choice(2))],
             ),
             // Saved before the interval could follow the chart's, as new studies do.
             (
@@ -1520,6 +1548,12 @@ mod tests {
         // Chart saves made before the input labels changed keep every saved id, value and
         // style while the editor describes the three study-local controls distinctly.
         for (saved, id, label) in [
+            // Literal default study captured on origin/main 04d6d16e7, before period pivots.
+            (
+                r#"{"name":"Missed Pivot Levels","inputs":[["left",{"Length":10}],["right",{"Length":10}],["tolerance",{"Number":0.1}],["max_levels",{"Length":20}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MissedPivots.html","plots":[{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[15,3,4,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                "left",
+                "Pivot left bars",
+            ),
             // Saved before Elliott Wave gained its swing and display inputs.
             (
                 r#"{"name":"Elliott Wave","inputs":[["left",{"Length":2}],["right",{"Length":3}],["history",{"Length":7}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ElliottWave.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Circles","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleUp","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
