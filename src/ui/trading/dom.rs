@@ -13,7 +13,7 @@ use super::widgets::{
     FIELD_HEIGHT, chevron, field, grouped, muted, number, side_color, side_fill, text,
     time_in_force_menu,
 };
-use crate::chart::{TradingLineAction, entry_price};
+use crate::chart::{TradingLineAction, entry_price, pnl_text};
 use crate::icons::icons;
 use crate::model::{Order, OrderId, OrderRequest, OrderSide, OrderType, Tick, TimeInForce};
 use crate::scales::{decimals, to_step};
@@ -264,6 +264,7 @@ impl DepthPanel {
                 .last()
                 .and_then(|trade| super::view::session_open(chart, trade.ts)),
             last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
         };
         ui.push_id("depth_panel", |ui| {
@@ -448,6 +449,7 @@ impl Ladder {
                 }
             }
         }
+        let last_price = last;
         let last = last.map(row_key);
         let middle = middle.map(ticks);
         let top = |centre: i64| centre.div_euclid(step).saturating_add(rows / 2);
@@ -1403,8 +1405,8 @@ impl Ladder {
                 "Spread: {spread}",
                 &[("spread", spread)],
             ));
-            let shortcut = Self::shortcut(ui);
-            if ui.button(l10n::text(ui.ctx(), "Center")).clicked() || shortcut {
+            let center = ui.button(l10n::text(ui.ctx(), "Center")).clicked();
+            if center || Self::shortcut(ui) {
                 self.centre = middle;
                 self.scroll = 0.0;
             }
@@ -1434,24 +1436,36 @@ impl Ladder {
                 None => (theme.ui.text_muted, "Flat".to_owned()),
             };
             boxed(&mut halves[0], &label, text_color);
-            let pnl = position
-                .and_then(|position| {
-                    position.unrealized_pnl.or_else(|| {
-                        market.last.map(|last| {
-                            (last - position.average_price)
-                                * position.quantity
-                                * market.rules.point_value
-                        })
-                    })
-                })
-                .unwrap_or_default();
-            let color = match pnl {
+            // Match the position line, including a money figure reported by the broker.
+            let (pnl, value) = match position {
+                Some(position) => {
+                    let per_point = position.quantity.abs() * market.rules.point_value;
+                    let gain = last_price
+                        .map(|last| (last - position.average_price) * position.quantity.signum())
+                        .or_else(|| position.unrealized_pnl.map(|pnl| pnl / per_point))
+                        .unwrap_or_default();
+                    let money = match (market.pnl_unit, position.unrealized_pnl) {
+                        (crate::chart::PnlUnit::Money, Some(pnl)) => pnl,
+                        _ => gain * per_point,
+                    };
+                    let options = crate::chart::TradingLineOptions::new(market.currency, tick);
+                    pnl_text(
+                        &ctx,
+                        market.pnl_unit,
+                        money,
+                        gain,
+                        position.average_price,
+                        &options,
+                    )
+                }
+                None => (String::new(), 0.0),
+            };
+            let color = match value {
                 pnl if pnl > 0.0 => theme.ui.success,
                 pnl if pnl < 0.0 => theme.ui.error,
                 _ => theme.ui.text_muted,
             };
-            let pnl = format!("{} {}", grouped(pnl, 2, false), market.currency);
-            boxed(&mut halves[1], pnl.trim_end(), color);
+            boxed(&mut halves[1], &pnl, color);
         });
 
         // Flatten, cancel all and reverse.
@@ -1676,6 +1690,7 @@ mod tests {
                     trades: &[],
                     session_open: None,
                     last_fill: None,
+                    pnl_unit: crate::chart::PnlUnit::Money,
                     logo: None,
                 };
                 let mut ladder = Ladder {
@@ -1782,6 +1797,7 @@ mod tests {
             trades: &trades,
             session_open: None,
             last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
         };
         let ctx = egui::Context::default();
@@ -2127,6 +2143,7 @@ mod tests {
                         trades: &trades,
                         session_open: None,
                         last_fill: None,
+                        pnl_unit: crate::chart::PnlUnit::Money,
                         logo: None,
                     };
                     let mut output = ctx.run_ui(
@@ -2410,6 +2427,7 @@ mod tests {
                 trades,
                 session_open: None,
                 last_fill: None,
+                pnl_unit: crate::chart::PnlUnit::Money,
                 logo: None,
             };
             let output = ctx.run_ui(
@@ -2565,6 +2583,7 @@ mod tests {
                             trades: &[],
                             session_open: None,
                             last_fill: None,
+                            pnl_unit: crate::chart::PnlUnit::Money,
                             logo: None,
                         };
                         let mut action = None;
@@ -2602,7 +2621,10 @@ mod tests {
                         20.0,
                         "price rows must stay 20 points apart"
                     );
-                    assert!(labels.contains_key("2.00 USD"), "mark an unpriced position");
+                    assert!(
+                        labels.contains_key("+2.00 USD"),
+                        "mark an unpriced position"
+                    );
                     let start = if gesture.starts_with("place") {
                         pos2(labels["Bid size"].x, labels["99.50"].y)
                     } else {
@@ -2650,9 +2672,9 @@ mod tests {
                     );
                     let (action, labels) = frame(vec![click(end, false)], 110.0);
                     let pnl = if gesture == "place-quote" {
-                        "2.00 USD"
+                        "+2.00 USD"
                     } else {
-                        "22.00 USD"
+                        "+22.00 USD"
                     };
                     assert!(labels.contains_key(pnl), "mark the moving position");
                     let original = &working[usize::from(stacked)];
@@ -2777,6 +2799,7 @@ mod tests {
                     trades: &[],
                     session_open: None,
                     last_fill: None,
+                    pnl_unit: crate::chart::PnlUnit::Money,
                     logo: None,
                 };
                 let output = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -2943,6 +2966,7 @@ mod tests {
             trades: &[],
             session_open: None,
             last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
         };
         let ctx = egui::Context::default();
@@ -3114,6 +3138,7 @@ mod tests {
             trades: &[],
             session_open: None,
             last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
         };
         for (over_ladder, focus_text, expected) in
@@ -3209,6 +3234,115 @@ mod tests {
                 "pointer on ladder {over_ladder}, text focused {focus_text}"
             );
             assert!(ladder.locked);
+        }
+    }
+    /// Both position displays write the same money, tick or percentage result, including below zero.
+    #[test]
+    fn ladder_position_profit_follows_the_position_line_unit() {
+        use crate::chart::{PnlUnit, TradingLineOptions, render_trading_lines};
+        use crate::model::{Capabilities, Position, TradingRules};
+        for (quantity, average, last, unit, broker_pnl, expected) in [
+            (2.0, 99.0, Some(100.0), PnlUnit::Money, None, "+2.00 USD"),
+            (2.0, 99.0, Some(100.0), PnlUnit::Ticks, None, "+4 ticks"),
+            (2.0, 99.0, Some(100.0), PnlUnit::Percent, None, "+1.01%"),
+            (-2.0, 99.0, Some(100.0), PnlUnit::Money, None, "-2.00 USD"),
+            (-2.0, 99.0, Some(100.0), PnlUnit::Ticks, None, "-4 ticks"),
+            (-2.0, 99.0, Some(100.0), PnlUnit::Percent, None, "-1.01%"),
+            (1.0, -10.0, Some(-9.0), PnlUnit::Money, None, "+1.00 USD"),
+            (1.0, -10.0, Some(-9.0), PnlUnit::Ticks, None, "+4 ticks"),
+            (1.0, -10.0, Some(-9.0), PnlUnit::Percent, None, "+10.00%"),
+            (1.0, 0.0, Some(0.25), PnlUnit::Percent, None, "-"),
+            (
+                2.0,
+                99.0,
+                Some(100.0),
+                PnlUnit::Money,
+                Some(12.5),
+                "+12.50 USD",
+            ),
+            (2.0, 99.0, None, PnlUnit::Ticks, Some(12.5), "+25 ticks"),
+        ] {
+            let mut position = Position::new("ES", quantity, average);
+            position.unrealized_pnl = broker_pnl;
+            let positions = [position];
+            let rules = TradingRules::new("ES");
+            let market = Market {
+                symbol: "ES",
+                formatter: None,
+                pip_value: None,
+                last,
+                bid: None,
+                ask: None,
+                tick: 0.25,
+                decimals: 2,
+                currency: "USD",
+                balance: None,
+                capabilities: Capabilities::default(),
+                rules: &rules,
+                rules_ready: true,
+                offline: None,
+                ladder: None,
+                ladder_unavailable: None,
+                highlights: Vec::new(),
+                orders: &[],
+                positions: &positions,
+                trades: &[],
+                session_open: None,
+                last_fill: None,
+                pnl_unit: unit,
+                logo: None,
+            };
+            let labels = |output: egui::FullOutput| {
+                let labels: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                labels
+            };
+            let ctx = egui::Context::default();
+            let input = || egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 700.0))),
+                ..Default::default()
+            };
+            let mut chart = crate::widget::test_frames::chart(&[average - 2.0], &[average + 2.0]);
+            ctx.run_ui(input(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+            let mut options = TradingLineOptions::new("USD", 0.25);
+            options.pnl = Some(unit);
+            options.last_price = last;
+            let line = labels(ctx.run_ui(input(), |ui| {
+                chart.show(ui);
+                render_trading_lines(
+                    ui,
+                    &chart.get_chart_mapping(),
+                    [],
+                    [&positions[0]],
+                    &options,
+                );
+            }));
+            assert!(
+                line.iter().any(|text| text == expected),
+                "line {quantity} @ {average} {unit:?}: {line:?}"
+            );
+            let ctx = egui::Context::default();
+            let ladder = labels(ctx.run_ui(input(), |ui| {
+                Ladder {
+                    centre: Some((average / 0.25).round() as i64),
+                    ..Default::default()
+                }
+                .draw(ui, "ES", &market, Some((&mut 1.0, &mut TimeInForce::Day)));
+            }));
+            assert!(
+                ladder.iter().any(|text| text == expected),
+                "ladder {quantity} @ {average} {unit:?}: {ladder:?}"
+            );
         }
     }
 }

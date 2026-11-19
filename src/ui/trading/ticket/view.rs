@@ -517,6 +517,7 @@ mod tests {
                     trades: &[],
                     session_open: None,
                     last_fill: None,
+                    pnl_unit: crate::chart::PnlUnit::Money,
                     logo: None,
                 };
                 ticket.tab = tab;
@@ -622,6 +623,7 @@ mod tests {
             trades: &[],
             session_open: None,
             last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
         };
         let cases = [
@@ -782,6 +784,16 @@ mod tests {
                 egui::Event::ModifiersChanged(modifiers),
                 egui::Event::PointerMoved(cell),
             ]);
+            frame(vec![]);
+            if expected.is_none() && matches!(gesture, "click" | "ctrl") && !row.is_empty() {
+                let labels = frame(vec![]).1;
+                let reason = if column == "Bid size" {
+                    "A buy stop must lie above the market"
+                } else {
+                    "A sell stop must lie below the market"
+                };
+                assert!(labels.iter().any(|(text, _)| text == reason), "{labels:?}");
+            }
             let button = |pos, button, pressed| egui::Event::PointerButton {
                 pos,
                 button,
@@ -816,14 +828,6 @@ mod tests {
                 frame(vec![egui::Event::PointerMoved(choice)]);
                 frame(vec![button(choice, egui::PointerButton::Primary, true)]);
                 action = frame(vec![button(choice, egui::PointerButton::Primary, false)]).0;
-            } else if expected.is_none() && !row.is_empty() {
-                let labels = frame(vec![]).1;
-                let reason = if column == "Bid size" {
-                    "A buy stop must lie above the market"
-                } else {
-                    "A sell stop must lie below the market"
-                };
-                assert!(labels.iter().any(|(text, _)| text == reason), "{labels:?}");
             }
             let expected =
                 expected.map(|(side, order_type)| OrderRequest::new("ES", side, 1.0, order_type));
@@ -894,6 +898,7 @@ mod tests {
                 trades: &[],
                 session_open: None,
                 last_fill: None,
+                pnl_unit: crate::chart::PnlUnit::Money,
                 logo: None,
             };
             let mut ticket = OrderTicket {
@@ -978,11 +983,13 @@ mod tests {
             if !modify || gesture == "menu" {
                 continue;
             }
+            frame(&mut ticket, &market, vec![]);
             let labels = frame(&mut ticket, &market, vec![]).1;
             assert!(
                 labels
                     .iter()
-                    .any(|(text, _)| text == "Change the order to modify it")
+                    .any(|(text, _)| text == "Change the order to modify it"),
+                "{labels:?}"
             );
             let send = find(&labels, "Modify order");
             frame(&mut ticket, &market, vec![egui::Event::PointerMoved(send)]);

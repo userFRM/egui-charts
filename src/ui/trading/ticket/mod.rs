@@ -236,6 +236,8 @@ pub(crate) struct Market<'a> {
     pub session_open: Option<chrono::DateTime<chrono::Utc>>,
     /// The latest account fill for this symbol.
     pub last_fill: Option<f64>,
+    /// The position profit unit, shared by its chart label and the depth ladder.
+    pub pnl_unit: crate::chart::PnlUnit,
     /// URI of the symbol logo, from the chart instrument or the host description of the symbol.
     pub logo: Option<&'a str>,
 }
@@ -889,6 +891,7 @@ mod tests {
             trades: &[],
             session_open: None,
             last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
         };
         for quantity in [0.0, f64::NAN, -1.0] {
@@ -1028,6 +1031,7 @@ mod tests {
             trades: &[],
             session_open: None,
             last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
         };
         let ticks = |value| {
@@ -1146,6 +1150,7 @@ mod tests {
             trades: &[],
             session_open: None,
             last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
         };
         let ticks = |value| Bracket {

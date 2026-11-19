@@ -485,7 +485,7 @@ fn direction(side: OrderSide) -> f64 {
 
 /// A profit or loss of `money` in the account's currency, or of `gain` in price from `entry`,
 /// written in `unit`, and the value written, whose sign colours it.
-fn pnl_text(
+pub(crate) fn pnl_text(
     ctx: &egui::Context,
     unit: PnlUnit,
     money: f64,

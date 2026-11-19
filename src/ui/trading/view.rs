@@ -93,6 +93,7 @@ impl Trading {
             trades: &[],
             session_open: None,
             last_fill: self.account_panel.fills.price(symbol),
+            pnl_unit: self.display.position_pnl_unit,
             logo: instrument.and_then(|instrument| instrument.logo.as_deref()),
         }
     }
