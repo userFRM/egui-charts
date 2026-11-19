@@ -1779,8 +1779,14 @@ mod tests {
                     let theme = ctx.active_theme();
                     for (color, width) in [(theme.ui.take_profit, 10.0), (theme.ui.stop_loss, 5.0)]
                     {
-                        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
-                            egui::Shape::Rect(rect) if rect.fill == color && rect.rect.height() == 3.0 && rect.rect.width() == width)));
+                        let bar = |rect: &egui::epaint::RectShape| {
+                            rect.fill == color
+                                && rect.rect.height() == 3.0
+                                && rect.rect.width() == width
+                        };
+                        assert!(output.shapes.iter().any(
+                            |shape| matches!(&shape.shape, egui::Shape::Rect(rect) if bar(rect))
+                        ));
                     }
                     output.drop_without_applying_deltas();
                 }
@@ -1835,7 +1841,14 @@ mod tests {
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 ticket.show(ui, &market, &mut vec![], &mut false);
             });
-            assert_eq!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Add level")), offered, "{extra} extra, maximum {max}");
+            let add_level = |text: &egui::epaint::TextShape| text.galley.text() == "Add level";
+            assert_eq!(
+                output.shapes.iter().any(
+                    |shape| matches!(&shape.shape, egui::Shape::Text(text) if add_level(text))
+                ),
+                offered,
+                "{extra} extra, maximum {max}"
+            );
             output.drop_without_applying_deltas();
         }
     }

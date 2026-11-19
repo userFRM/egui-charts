@@ -158,9 +158,9 @@ pub struct TradingLineOptions<'a> {
 
 impl<'a> TradingLineOptions<'a> {
     /// Orders and positions with their labels at the right edge, offering no buttons or drags,
-    /// with no profit or loss, no coverage marks, no last price and a [`point_value`](Self::point_value) of one.
-    /// `currency` names the account's currency and `tick_size` rounds dragged prices. Assign
-    /// the other fields to offer more.
+    /// with no profit or loss, no coverage marks, no last price and a
+    /// [`point_value`](Self::point_value) of one. `currency` names the account's currency and
+    /// `tick_size` rounds dragged prices. Assign the other fields to offer more.
     ///
     /// ```
     /// use egui_charts::chart::TradingLineOptions;
