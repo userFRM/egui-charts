@@ -5,10 +5,12 @@
 //! feed pushes. Trades wait in a store as bounded as the chart's, and depth updates apply to the
 //! subscription's book.
 
+mod reader;
 mod sink;
 
 pub(crate) use sink::TradeBars;
 
+pub use reader::{SinkReader, SinkUpdates};
 pub use sink::{Sink, aggregate_trades, aggregate_trades_with_tick_size};
 
 use super::depth::Book;
