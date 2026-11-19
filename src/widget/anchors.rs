@@ -788,14 +788,15 @@ mod tests {
     /// a host study under a built-in's name, which never had the renamed inputs, is matched as
     /// stored. An SMI record with equal `smooth1` and `smooth2`, as written before an equal pair
     /// shared one input, matches the SMI that lists them as `smoothing`. A study restored under
-    /// host defaults that set the missing input for new studies matches too. Loading and pasting
-    /// agree.
+    /// host defaults that set the missing input for new studies matches too. A Knoxville record
+    /// from before the window rule, with pivot sides, matches the study without them. Loading
+    /// and pasting agree.
     #[cfg(feature = "studies")]
     #[test]
     fn stored_pane_survives_a_new_study_input() {
         use crate::studies::{
-            CustomIndicator, Indicator, IndicatorFactory, IndicatorValue, InputValue, RSI,
-            StochasticMomentumIndex, StudyTemplate,
+            ConfiguredStudy, CustomIndicator, Indicator, IndicatorFactory, IndicatorValue,
+            InputValue, KnoxvilleDivergence, RSI, StochasticMomentumIndex, StudyTemplate,
         };
         let bars = [0, 60, 180]
             .map(|s| Bar::new(Utc.timestamp_opt(s, 0).unwrap(), 10.0, 11.0, 9.0, 10.0, 1.0))
@@ -811,6 +812,23 @@ mod tests {
             )
         };
         let smi: Study = || Box::new(StochasticMomentumIndex::new(10, 3, 3, 10));
+        let knoxville: Study = || {
+            // Layouts saved before the window rule keep the study in its own pane.
+            let mut study = ConfiguredStudy::new(Box::new(KnoxvilleDivergence::default()));
+            study.set_overlay(false);
+            Box::new(study)
+        };
+        let pivots = |inputs: &mut Vec<serde_json::Value>| {
+            inputs.retain(|input| input[0] != "left" && input[0] != "right");
+            let side = serde_json::to_value(InputValue::Length(5)).unwrap();
+            inputs.splice(
+                2..2,
+                [
+                    serde_json::json!(["left", side]),
+                    serde_json::json!(["right", side]),
+                ],
+            );
+        };
         // Saved without `wait_for_close`, then restored by a factory whose defaults turn it off.
         let restored: Study = || {
             let mut factory = IndicatorFactory::new();
@@ -894,13 +912,14 @@ mod tests {
             Option<(&'a str, InputValue)>,
             bool,
         );
-        let cases: [Case<'_>; 12] = [
+        let cases: [Case<'_>; 13] = [
             // From before an input existed: the last one, which the chart adds after the study's
             // own, or one of the study's own, which comes before the chart's.
             (rsi, &last, None, true),
             (rsi, &inner, None, true),
             (rsi, &last, wait(false), false),
             (restored, &last, None, true),
+            (knoxville, &pivots, None, true),
             (rsi, &other_period, None, false),
             // From before the RSI average took the shared smoothing inputs, where EMA was 2.
             (rsi, &sma, smoothing(1), true),

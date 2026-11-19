@@ -251,9 +251,9 @@ fn bollinger_basis_replaces_the_middle_and_keeps_the_deviation() {
 }
 
 /// The width of Bollinger Bands(2, 2) over closes 2, 4, 10, 10, 12 is 4 * deviation / mean:
-/// 400/3, 1200/7, 0 and 400/11 from bar 1. Its highest over 2 bars and lowest over 3 bars, each
-/// window ending at the bar, are read off by hand, and a bar with no close is skipped as if
-/// absent.
+/// 400/3, 1200/7, 0 and 400/11 from bar 1. Its highest and lowest over a lookback, each window
+/// ending at the bar, are read off by hand from bar `lookback - 1`, the first bar whose window
+/// spans the lookback, and a bar with no close is skipped as if absent.
 #[test]
 fn bollinger_width_extrema_match_hand_windows() {
     let (a, b, c) = (400.0 / 3.0, 1200.0 / 7.0, 400.0 / 11.0);
@@ -284,7 +284,7 @@ fn bollinger_width_extrema_match_hand_windows() {
         [
             [nan, a, b, 0.0, c],
             [nan, a, b, b, c],
-            [nan, a, a, 0.0, 0.0],
+            [nan, nan, a, 0.0, 0.0],
         ],
     );
     // A corrected bar 3 gives widths nan, a, b, c, 0.
@@ -292,7 +292,11 @@ fn bollinger_width_extrema_match_hand_windows() {
     study.update(&data, 3);
     check(
         &study,
-        [[nan, a, b, c, 0.0], [nan, a, b, b, c], [nan, a, a, c, 0.0]],
+        [
+            [nan, a, b, c, 0.0],
+            [nan, a, b, b, c],
+            [nan, nan, a, c, 0.0],
+        ],
     );
     // Without bar 2 the widths of the kept bars 0, 1, 3, 4 are nan, a, b, c.
     let skipped = bars([2.0, 4.0, nan, 10.0, 12.0]);
@@ -302,7 +306,18 @@ fn bollinger_width_extrema_match_hand_windows() {
         [
             [nan, a, nan, b, c],
             [nan, a, nan, b, b],
-            [nan, a, nan, a, c],
+            [nan, nan, nan, a, c],
+        ],
+    );
+    // With the lookbacks the other way round the highest waits for its 3 bars.
+    let mut swapped = BollingerBandsWidth::new(2, 2.0).with_lookbacks(3, 2);
+    swapped.calculate(&bars([2.0, 4.0, 10.0, 10.0, 12.0]));
+    check(
+        &swapped,
+        [
+            [nan, a, b, 0.0, c],
+            [nan, nan, b, b, b],
+            [nan, a, a, 0.0, 0.0],
         ],
     );
 }
@@ -646,7 +661,8 @@ fn staple_studies_match_published_definitions() {
         ("Stoch(14,3,3)", Box::new(Stochastic::default())),
         ("Stoch(14,1,3)", Box::new(Stochastic::new(14, 1, 3))),
         ("WilliamsR(14)", Box::new(WilliamsR::default())),
-        ("BoP(14)", Box::new(BalanceOfPower::default())),
+        ("BoP(14)", Box::new(BalanceOfPower::new(14))),
+        ("BoP", Box::new(BalanceOfPower::default())),
         ("PPO(12,26,9)", Box::new(PriceOscillator::default())),
         (
             "PVO(12,26,9)",

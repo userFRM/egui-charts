@@ -249,9 +249,10 @@ fn every_study_styles_a_line_past_its_last() {
 }
 
 /// Catalogue studies have distinct values except ADX and DMI, which expose the same Wilder
-/// components in a different order. Fixed profiles use a saved end.
+/// components in a different order, and Donchian and Price Channel, which draw the same highest
+/// high, lowest low and midpoint with their own colours and fill. Fixed profiles use a saved end.
 #[test]
-fn catalogue_studies_are_distinct_except_for_adx_and_dmi_components() {
+fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
     use crate::model::Bar;
     use chrono::{TimeZone, Utc};
 
@@ -334,7 +335,7 @@ fn catalogue_studies_are_distinct_except_for_adx_and_dmi_components() {
             duplicates.push(format!("{first} and {name}"));
         }
     }
-    assert_eq!(duplicates, ["ADX and DMI"]);
+    assert_eq!(duplicates, ["ADX and DMI", "Donchian and Price Channel"]);
 }
 
 /// The study browser opens these studies with the lengths most often used for them.
@@ -354,9 +355,18 @@ fn catalogue_studies_open_with_their_usual_lengths() {
         ("CMO", "period", 9),
         ("HV", "period", 10),
         ("TSI", "signal_period", 13),
+        ("Knoxville Divergence", "momentum_period", 20),
+        ("Knoxville Divergence", "rsi_period", 21),
+        ("Knoxville Divergence", "lookback", 150),
+        ("Advance/Decline", "period", 10),
     ];
+    let factory = IndicatorFactory::new();
     for (name, id, length) in rows {
-        let inputs = IndicatorFactory::new().create(name).unwrap().inputs();
+        assert!(
+            factory.list().iter().any(|listed| listed == name),
+            "{name} is not listed"
+        );
+        let inputs = factory.create(name).unwrap().inputs();
         let input = inputs.iter().find(|input| input.id == id);
         assert_eq!(
             input.map(|input| &input.value),
@@ -622,4 +632,153 @@ fn configured_studies_label_every_input_once() {
     }
     repeated.sort();
     assert_eq!(repeated, Vec::<(String, String)>::new());
+}
+
+/// Every choice of a catalogue study, configured as the chart configures it, reads in words
+/// under every value of its other choices, never as a code name with joined words such as
+/// `Sma50Sma200` or `PreviousClose`. A study saved with any of its choices restores that choice
+/// under the same label, and the indices saved before the labels changed keep their meaning.
+#[test]
+fn catalogue_choices_read_in_words_and_restore() {
+    use crate::studies::{ConfiguredStudy, InputKind, InputValue, StudyTemplate};
+
+    // A lower-case letter or a digit run into a capital that starts a word, as in
+    // `PreviousClose` or `Sma50Sma200`. Interval labels such as `12M` pass.
+    let joined = |label: &str| {
+        label.as_bytes().windows(3).any(|w| {
+            (w[0].is_ascii_lowercase() || w[0].is_ascii_digit())
+                && w[1].is_ascii_uppercase()
+                && w[2].is_ascii_lowercase()
+        })
+    };
+    let choice = |study: &dyn Indicator, id: &str| {
+        study
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == id)
+            .and_then(|input| match (input.kind, input.value) {
+                (InputKind::Choice(labels), InputValue::Choice(index)) => {
+                    Some((index, labels.get(index).cloned()))
+                }
+                _ => None,
+            })
+    };
+    let factory = IndicatorFactory::new();
+    let chosen = |name: &str, id: &str, index: usize| -> Box<dyn Indicator> {
+        let mut study = Box::new(ConfiguredStudy::new(factory.create(name).unwrap()));
+        study
+            .set_input(id, InputValue::Choice(index))
+            .unwrap_or_else(|error| panic!("{name} {id} {index}: {error}"));
+        study
+    };
+    let restored = |study: &dyn Indicator| {
+        let saved = serde_json::to_string(&StudyTemplate::from_study(study)).unwrap();
+        serde_json::from_str::<StudyTemplate>(&saved)
+            .unwrap()
+            .create_with(&factory)
+            .unwrap()
+    };
+    let mut names = factory.list();
+    // Left out of the catalogue but recreated from saved layouts.
+    names.extend(
+        [
+            "CVD",
+            "HL2",
+            "HLC3",
+            "Price Channel",
+            "Ehlers Fisher",
+            "MA Combination",
+        ]
+        .map(String::from),
+    );
+    names.sort();
+    names.dedup();
+    let (mut wrong, mut lost) = (Vec::new(), Vec::new());
+    for name in &names {
+        for input in ConfiguredStudy::new(factory.create(name).unwrap()).inputs() {
+            let InputKind::Choice(labels) = &input.kind else {
+                continue;
+            };
+            for index in 0..labels.len() {
+                let study = chosen(name, &input.id, index);
+                for shown in study.inputs() {
+                    if let InputKind::Choice(labels) = shown.kind {
+                        wrong.extend(
+                            labels
+                                .into_iter()
+                                .filter(|label| joined(label))
+                                .map(|label| format!("{name} {}: {label}", shown.id)),
+                        );
+                    }
+                }
+                let before = choice(study.as_ref(), &input.id);
+                let after = choice(restored(study.as_ref()).as_ref(), &input.id);
+                if before.as_ref().map(|(at, _)| *at) != Some(index) || after != before {
+                    lost.push(format!(
+                        "{name} {} {index}: {before:?} -> {after:?}",
+                        input.id
+                    ));
+                }
+            }
+        }
+    }
+    assert_eq!(lost, Vec::<String>::new());
+    wrong.sort();
+    wrong.dedup();
+    assert_eq!(wrong, Vec::<String>::new());
+
+    let saved = [
+        ("All Candlestick Patterns", "trend", 0, "SMA50"),
+        ("All Candlestick Patterns", "trend", 1, "SMA50, SMA200"),
+        ("All Candlestick Patterns", "trend", 2, "No detection"),
+        ("Pivot Points Standard", "timeframe", 6, "Biyearly"),
+        ("Pivot Points Standard", "timeframe", 9, "Decennially"),
+        ("VWAP Auto Anchored", "anchor", 1, "Highest High"),
+        ("VWAP Auto Anchored", "anchor", 3, "Highest Volume"),
+        ("Vol Profile Auto Anchored", "anchor", 2, "Lowest Low"),
+        ("BB", "basis", 4, "VWMA"),
+        ("Volume", "color_rule", 1, "Previous close"),
+        ("CVD", "mode", 0, "Close position"),
+        ("CVD", "mode", 1, "Body ratio"),
+        ("ZigZag", "mode", 0, "High/Low"),
+        ("Keltner", "band", 0, "Average True Range"),
+        ("Auto Key Levels", "start", 0, "Start of period"),
+        ("Auto Key Levels", "start", 1, "Current bar"),
+        ("Auto Key Levels", "anchor", 0, "Custom"),
+        ("Auto Key Levels", "anchor", 1, "Earnings"),
+        ("Auto Key Levels", "anchor", 2, "Split"),
+        ("Auto Key Levels", "anchor", 3, "Dividends"),
+        ("Auto Key Levels", "unit", 0, "Days"),
+        ("Auto Key Levels", "unit", 1, "Weeks"),
+        ("Auto Key Levels", "unit", 2, "Months"),
+        ("Missed Pivot Levels", "period", 0, "Swings"),
+        ("Missed Pivot Levels", "period", 1, "Daily"),
+        ("Missed Pivot Levels", "period", 2, "Weekly"),
+        ("Missed Pivot Levels", "period", 3, "Monthly"),
+    ];
+    let got: Vec<_> = saved
+        .iter()
+        .map(|&(name, id, index, _)| {
+            let label = choice(restored(chosen(name, id, index).as_ref()).as_ref(), id)
+                .filter(|(at, _)| *at == index)
+                .and_then(|(_, label)| label);
+            (name, id, index, label)
+        })
+        .collect();
+    let want: Vec<_> = saved
+        .iter()
+        .map(|&(name, id, index, label)| (name, id, index, Some(label.to_owned())))
+        .collect();
+    assert_eq!(got, want);
+
+    // A template saved before choice labels changed reads its basis in words.
+    let saved = r#"{"name":"BB","inputs":[["period",{"Length":20}],["basis",{"Choice":0}],["std_dev",{"Number":2.0}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.BollingerBands.html","plots":[{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":false},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[8,153,129,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":false}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[15,3,4,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[2,8,12,13],"inverted_color":null,"visible":true}],"gradients":[]},"visible":true,"scale":"Main"}"#;
+    let restored = serde_json::from_str::<StudyTemplate>(saved)
+        .unwrap()
+        .create_with(&factory)
+        .unwrap();
+    assert_eq!(
+        choice(restored.as_ref(), "basis"),
+        Some((0, Some("SMA".to_owned())))
+    );
 }

@@ -279,6 +279,7 @@ impl Poll {
             since: self.since,
             count: 500,
             extended_hours: self.subscription.extended_hours,
+            overnight_hours: self.subscription.overnight_hours,
             adjusted: false,
             conversion: self.subscription.conversion.clone(),
         };

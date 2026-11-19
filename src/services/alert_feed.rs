@@ -192,6 +192,7 @@ impl AlertFeed {
             && data.request.symbol == self.request.symbol
             && data.request.clock == self.request.clock.for_timeframe(data.request.timeframe)
             && data.request.extended_hours == self.request.extended_hours
+            && data.request.overnight_hours == self.request.overnight_hours
             && data.request.adjusted == self.request.adjusted
             && data.request.conversion == self.request.conversion
     }
@@ -344,13 +345,14 @@ impl AlertFeed {
                     if let Some(session) = &instrument.session
                         && self.metric.is_none()
                     {
-                        self.request.clock = self.request.clock.clone().with_session(
+                        self.request.clock = self.request.clock.clone().with_session_hours(
                             instrument
                                 .time_zone
                                 .clone()
                                 .unwrap_or_else(crate::model::TimezoneId::utc),
                             session.clone(),
                             self.request.extended_hours,
+                            self.request.overnight_hours,
                         );
                     }
                     self.instrument = Some(instrument);
@@ -503,6 +505,7 @@ impl AlertFeed {
                             timeframe: self.request.timeframe,
                             clock: self.request.clock.clone(),
                             extended_hours: self.request.extended_hours,
+                            overnight_hours: self.request.overnight_hours,
                             conversion: self.request.conversion.clone(),
                             sink,
                         });

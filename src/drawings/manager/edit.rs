@@ -182,41 +182,68 @@ impl DrawingManager {
 
     // === Layer ordering ===
     //
-    // `Drawing::z_order` decides the layering: drawings are drawn in ascending z-order and hit
-    // from the highest down, in list order where it is the same.
+    // Drawings paint by ascending series layer (`None` last), then z-order, with list order
+    // breaking ties. Hit testing walks that order from the top down.
 
-    /// Bring a drawing to the front (drawn last, on top), above the highest z-order
+    /// Bring a drawing to the front: over the series and studies of its pane and above the
+    /// highest z-order.
     pub fn bring_to_front(&mut self, id: usize) {
         if let Some(drawing) = self.drawings.iter().find(|drawing| drawing.id == id) {
             self.history.push_modify(id, drawing.clone());
             ZOrderService::bring_to_front(&mut self.drawings, id);
+            self.drawings
+                .iter_mut()
+                .find(|d| d.id == id)
+                .unwrap()
+                .series_layer = None;
             self.queue_update(id);
         }
     }
 
-    /// Send a drawing to the back (drawn first, behind others), below the lowest z-order
+    /// Send a drawing to the back: under the series and studies of its pane and below the
+    /// lowest z-order.
     pub fn send_to_back(&mut self, id: usize) {
         if let Some(drawing) = self.drawings.iter().find(|drawing| drawing.id == id) {
             self.history.push_modify(id, drawing.clone());
             ZOrderService::send_to_back(&mut self.drawings, id);
+            self.drawings
+                .iter_mut()
+                .find(|d| d.id == id)
+                .unwrap()
+                .series_layer = Some(0);
             self.queue_update(id);
         }
     }
 
     /// Apply a layer move as one undo step, saving each changed drawing.
     pub fn reorder_drawings(&mut self, id: usize, layers: &[(usize, i32)]) {
+        let layers: Vec<_> = layers
+            .iter()
+            .filter_map(|&(id, z)| {
+                self.drawings
+                    .iter()
+                    .find(|d| d.id == id)
+                    .map(|d| (id, d.series_layer, z))
+            })
+            .collect();
+        self.reorder_layers(id, &layers);
+    }
+
+    /// Apply a move among the pane's drawings, series and studies as one undo step.
+    pub(crate) fn reorder_layers(&mut self, id: usize, layers: &[(usize, Option<usize>, i32)]) {
         let edited = self
             .drawings
             .iter()
             .find(|d| d.id == id)
             .and_then(|d| d.modified_at);
         let mut previous = Vec::new();
-        for &(id, layer) in layers {
+        for &(id, series_layer, z_order) in layers {
             if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id)
-                && drawing.z_order != layer
+                && (drawing.series_layer, drawing.z_order) != (series_layer, z_order)
             {
-                previous.push((id, drawing.z_order));
-                drawing.z_order = layer;
+                previous.push((id, drawing.series_layer, drawing.z_order));
+                drawing.series_layer = series_layer;
+                drawing.z_order = z_order;
                 // Only the moved drawing is edited; tied layers around it are just renumbered.
                 self.notify(DrawingSyncAction::UpdateDrawing(id));
             }
@@ -267,6 +294,7 @@ impl DrawingManager {
             }
             copy.id = self.take_id();
             copy.z_order = self.top_z_order();
+            copy.series_layer = None;
             ids.push(copy.id);
             let id = copy.id;
             self.drawings.push(copy);
@@ -285,16 +313,38 @@ impl DrawingManager {
 
     /// Replaces every saveable drawing with `drawings`, restored from storage, as one undo step.
     /// Each keeps its stored identity (`stored_id`, `created_at`, `notes`) and layer and gets a
-    /// new id; drawings that are never saved stay. Queues a `Delete` for each drawing it removes
-    /// and a save for each it adds.
+    /// new id; drawings that are never saved stay, and so do those in a top-level folder kept on
+    /// one chart or in one layout, which storage does not hold, unless `drawings` holds one of
+    /// them again. Queues a `Delete` for each drawing it removes and a save for each it adds.
     pub(crate) fn replace_saved_drawings(&mut self, drawings: Vec<Drawing>) {
+        let replaced = |drawing: &Drawing| {
+            drawing.saveable
+                && (!drawing.confined()
+                    || drawings
+                        .iter()
+                        .any(|other| super::read_again(drawing, other)))
+        };
         let removed: Vec<_> = self
             .drawings
             .iter()
             .enumerate()
-            .filter(|(_, drawing)| drawing.saveable)
+            .filter(|(_, drawing)| replaced(drawing))
             .map(|(index, drawing)| (index, drawing.clone()))
             .collect();
+        // A confined drawing that stays keeps a stored id of its own beside the copy's.
+        let mut taken: HashSet<String> = drawings.iter().map(sync_id).collect();
+        for drawing in self
+            .drawings
+            .iter_mut()
+            .filter(|d| d.saveable && d.confined())
+        {
+            if !removed.iter().any(|(_, gone)| gone.id == drawing.id)
+                && taken.contains(&sync_id(drawing))
+            {
+                drawing.stored_id = Some(super::free_stored_id(drawing, &taken));
+                taken.insert(sync_id(drawing));
+            }
+        }
         if removed.is_empty() && drawings.is_empty() {
             return;
         }
@@ -309,7 +359,8 @@ impl DrawingManager {
         for (_, drawing) in &removed {
             self.queue(DrawingSyncAction::Delete(sync_id(drawing)));
         }
-        self.drawings.retain(|drawing| !drawing.saveable);
+        let gone: HashSet<usize> = removed.iter().map(|(_, drawing)| drawing.id).collect();
+        self.drawings.retain(|drawing| !gone.contains(&drawing.id));
         for drawing in added {
             let id = drawing.id;
             self.drawings.push(drawing);
