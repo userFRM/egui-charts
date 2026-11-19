@@ -27,7 +27,8 @@ pub enum TradingLineAction {
     /// Cancel the working order.
     Cancel(Order),
     /// Replace the working order with the request: the user dragged its price, the limit
-    /// price of a stop-limit order, a take profit or its stop loss, removed one of them, or dragged a take profit or stop loss out of its label.
+    /// price of a stop-limit order, a take profit or its stop loss, removed one of them, or
+    /// dragged a take profit or stop loss out of its label.
     Modify(Order, OrderRequest),
     /// Close the position at the market.
     Close(Position),
@@ -203,8 +204,8 @@ pub struct TradingLineOptions<'a> {
 }
 
 impl<'a> TradingLineOptions<'a> {
-    /// Orders and positions with their labels at the right edge, offering no buttons, drags or menus,
-    /// with no profit or loss, no coverage marks, no last price and a
+    /// Orders and positions with their labels at the right edge, offering no buttons, drags or
+    /// menus, with no profit or loss, no coverage marks, no last price and a
     /// [`point_value`](Self::point_value) of one. `currency` names the account's currency and
     /// `tick_size` rounds dragged prices. Assign the other fields to offer more.
     ///

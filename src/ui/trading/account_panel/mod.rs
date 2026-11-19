@@ -190,6 +190,7 @@ pub struct AccountPanel {
     paging: HashMap<HistoryKind, Paging>,
     /// The order whose edit dialog is open, and its changed request.
     pub(super) editing: Option<(Order, OrderRequest)>,
+    /// The pass that last drew the edit dialog, which the chart and the account panel share.
     pub(super) editor_pass: Option<u64>,
 }
 
