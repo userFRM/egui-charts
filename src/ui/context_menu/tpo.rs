@@ -28,6 +28,7 @@ pub(super) struct TpoMenu {
     previous: Option<(RangeInclusive<DateTime<Utc>>, bool)>,
     next: Option<(RangeInclusive<DateTime<Utc>>, bool)>,
     /// Merges and splits after dividing at a selected period after the profile's first.
+    #[allow(clippy::type_complexity)]
     split: Option<(Vec<RangeInclusive<DateTime<Utc>>>, Vec<DateTime<Utc>>)>,
 }
 
