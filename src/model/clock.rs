@@ -65,7 +65,7 @@ impl BarClock {
         extended_hours: bool,
         overnight_hours: bool,
     ) -> Self {
-        session.select_hours(extended_hours, overnight_hours);
+        session.select_hours(extended_hours, extended_hours && overnight_hours);
         let provider = super::ExchangeSessionProvider::new(zone, Some(session));
         self.session = Some(Arc::new(provider));
         self
