@@ -1563,6 +1563,31 @@ mod tests {
     /// input labels retain the ids, values and styles of the saved studies.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
+        // A metric descriptor saved before plot declarations and the Symbol input keeps its look.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"Open interest","inputs":[],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":null,"plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent","metric":{"id":"oi","name":"Open interest","unit":"","format":"Volume"}}"#,
+        ).unwrap();
+        let restored = saved.create().unwrap();
+        assert_eq!(restored.settings(), saved.settings);
+        assert_eq!(Some(restored.scale()), saved.scale);
+        assert_eq!(
+            restored.metric().unwrap().plot,
+            crate::data::MetricPlot::StepLine
+        );
+        assert_eq!(restored.metric().unwrap().colors, None);
+        assert_eq!(restored.data_requests()[0].symbol, "");
+        let symbol = restored
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == "symbol")
+            .unwrap();
+        assert_eq!(symbol.value, InputValue::Symbol(String::new()));
+        assert_eq!(symbol.default, symbol.value);
+        let again = StudyTemplate::from_study(restored.as_ref())
+            .create()
+            .unwrap();
+        assert_eq!(again.settings(), saved.settings);
+
         // This Knoxville template was saved before price lines and before the window rule. It
         // keeps its inputs and styles, without pivot sides and on the price scale, with lines
         // off; enabling them and saving again retains that choice.

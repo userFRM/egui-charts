@@ -19,6 +19,8 @@ use egui::Color32;
 #[derive(Debug, Clone)]
 pub struct MetricStudy {
     metric: MetricSeries,
+    /// Host symbol whose metric is shown, or empty for the chart's.
+    symbol: String,
     values: IndicatorValues,
     candles: Vec<StudyCandle>,
     color: Color32,
@@ -41,6 +43,7 @@ impl MetricStudy {
         };
         Self {
             metric,
+            symbol: String::new(),
             values: IndicatorValues::new(),
             candles: Vec::new(),
             color,
@@ -92,10 +95,36 @@ impl Indicator for MetricStudy {
     }
     fn data_requests(&self) -> Vec<StudyDataRequest> {
         vec![StudyDataRequest {
-            symbol: String::new(),
+            symbol: self.symbol.clone(),
             timeframe: None,
             metric: Some(self.metric.id.clone()),
         }]
+    }
+    fn inputs(&self) -> Vec<super::StudyInput> {
+        vec![
+            super::StudyInput::new(
+                "symbol",
+                "Symbol",
+                super::InputValue::Symbol(self.symbol.clone()),
+                super::InputKind::Symbol,
+            )
+            .with_default(super::InputValue::Symbol(String::new())),
+        ]
+    }
+    fn set_input(&mut self, id: &str, value: super::InputValue) -> Result<(), super::StudyError> {
+        if id != "symbol" {
+            return Err(super::StudyError::UnknownInput(id.into()));
+        }
+        if !self.inputs()[0].accepts(&value) {
+            return Err(super::StudyError::invalid_input(id));
+        }
+        if let super::InputValue::Symbol(symbol) = value {
+            self.symbol = symbol;
+        }
+        self.values.clear();
+        self.candles.clear();
+        self.alternate.clear();
+        Ok(())
     }
     fn calculate(&mut self, data: &[Bar]) {
         self.update_data(data, 0, &[]);
@@ -362,7 +391,7 @@ mod tests {
     fn candle_metrics_paint_the_points_of_each_bar() {
         use crate::widget::{ChartBuilder, SeriesId, test_frames::shapes};
         use egui::{Shape, epaint::ColorMode};
-        let hours = |h| DateTime::from_timestamp(1_704_067_200 + 3_600 * h, 0).unwrap();
+        let hours = |h: i64| DateTime::from_timestamp(1_704_067_200 + 3_600 * h, 0).unwrap();
         let rising = Color32::from_rgb(20, 120, 240);
         let falling = Color32::from_rgb(250, 150, 10);
         let line = Color32::from_rgb(140, 40, 200);

@@ -796,6 +796,7 @@ pub(super) mod tests {
         sinks: Mutex<Vec<(String, Sink)>>,
         correction: Mutex<f64>,
         metrics: Mutex<Vec<MetricSubscription>>,
+        metric_symbols: Mutex<Vec<String>>,
     }
     impl Datafeed for Feed {
         fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
@@ -809,7 +810,8 @@ pub(super) mod tests {
             };
             reply.send(Ok(HistoryPage::new(bars(&prices, minutes), true)));
         }
-        fn metric_history(&self, _: MetricRequest, reply: Reply<MetricPage>) {
+        fn metric_history(&self, request: MetricRequest, reply: Reply<MetricPage>) {
+            self.metric_symbols.lock().unwrap().push(request.symbol);
             reply.send(Ok(MetricPage {
                 points: [(15, 10.0), (75, 20.0)]
                     .into_iter()
@@ -1503,6 +1505,38 @@ pub(super) mod tests {
         chart.set_symbol("OTHER");
         settle(&mut chart);
         assert!(!sink.is_active());
+        for (symbol, requested) in [("PERP", "PERP"), ("", "OTHER")] {
+            feed.metric_symbols.lock().unwrap().clear();
+            chart
+                .indicator_mut(metric)
+                .unwrap()
+                .set_input("symbol", InputValue::Symbol(symbol.into()))
+                .unwrap();
+            settle(&mut chart);
+            assert_eq!(*feed.metric_symbols.lock().unwrap(), [requested]);
+            assert_eq!(
+                feed.metrics
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|sub| sub.sink.is_active())
+                    .map(|sub| sub.symbol.clone())
+                    .collect::<Vec<_>>(),
+                [requested]
+            );
+            let saved =
+                serde_json::from_str(&serde_json::to_string(&chart.snapshot().unwrap()).unwrap())
+                    .unwrap();
+            let mut restored = ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol("OTHER")
+                .with_timeframe(Timeframe::Min30)
+                .build();
+            restored.restore(&saved).unwrap();
+            feed.metric_symbols.lock().unwrap().clear();
+            settle(&mut restored);
+            assert_eq!(*feed.metric_symbols.lock().unwrap(), [requested]);
+        }
         drop(chart);
         assert!(
             feed.metrics
