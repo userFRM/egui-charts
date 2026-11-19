@@ -156,7 +156,7 @@ impl DemoApp {
                 .then(|| self.notification_host.clone()),
             times: Default::default(),
         })));
-        chart.set_post_source(Some(Arc::new(super::feeds::DemoPosts)));
+        chart.set_post_source(Some(Arc::new(super::feeds::DemoPosts(live.clone()))));
         if let Some(scale) = source.series_scale(SeriesId::MAIN) {
             chart.set_series_scale(SeriesId::MAIN, scale);
         } else {

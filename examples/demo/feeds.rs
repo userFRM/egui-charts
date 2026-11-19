@@ -347,12 +347,13 @@ fn stories(symbols: &[String], highlights: bool, now: DateTime<Utc>) -> Vec<News
 }
 
 /// Resolves the links of post and idea cards that name a demo news story into that story, as a
-/// host would from its own feed. The demo has no content for other links.
-pub(super) struct DemoPosts;
+/// host would from its own feed, published on the hours before the clock of the chart's feed.
+/// The demo has no content for other links.
+pub(super) struct DemoPosts(pub(super) Arc<LiveFeed>);
 
 impl Posts for DemoPosts {
     fn resolve(&self, link: &str, reply: Reply<PostContent>) {
-        let story = stories(&[], false, Utc::now())
+        let story = stories(&[], false, self.0.now())
             .into_iter()
             .find(|story| story.url.as_deref() == Some(link));
         reply.send(

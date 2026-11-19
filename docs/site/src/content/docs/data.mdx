@@ -56,6 +56,11 @@ end the old subscription. Implement [`unsubscribe`](https://userfrm.github.io/eg
 cleanup. Never wait for a worker that may be waking the chart from inside
 [`unsubscribe`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#method.unsubscribe): dropping a chart may happen while an egui context lock is held.
 
+When the feed discovers missing or incorrect bars, such as after a stream gap it
+cannot fill, call [`Sink::reload_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html#method.reload_history).
+The chart drops the subscription's data, loads the latest history again and
+subscribes with a new sink.
+
 ## Surface failures in your application
 
 Read [`Chart::feed_state`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.feed_state) for loading, failures and rejected updates. Feed methods
