@@ -31,7 +31,9 @@ use crate::model::{Alert, AlertId};
 /// chart's interval. An alert's [`schedule`](crate::model::Alert::schedule) allows triggers only when
 /// [`NotificationSchedule::allows`](crate::model::NotificationSchedule::allows) accepts the
 /// trigger time. Outside it, keep observing values for crossings without consuming an occurrence
-/// or disarming an alert that fires once.
+/// or disarming an alert that fires once. A [`Position`](crate::model::AlertCondition::Position)
+/// fires on its entry and its first exit and keeps its progress in the condition: push it with
+/// its new progress along with each trigger, also outside the schedule, where progress still moves.
 ///
 /// A [`StrategyFills`](crate::model::AlertCondition::StrategyFills) alert receives each execution
 /// of a host-named run through `AlertEngine::strategy_fills`, with `strategies` and `alert-engine`.
@@ -173,7 +175,8 @@ pub enum AlertEvent {
     },
     /// The alert's conditions held outside its notification schedule. Log it, marked as silent,
     /// without a popup, sound or delivery. It leaves the alert's status and firing time as they
-    /// are, so a once alert stays armed.
+    /// are, so a once alert stays armed, except that a position alert
+    /// still moves on and ends at its exit.
     SilentTriggered {
         /// Identifier of the alert whose conditions held.
         id: AlertId,
