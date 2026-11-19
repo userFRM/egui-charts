@@ -401,6 +401,10 @@ impl Chart {
             }
             ui.ctx().request_discard("Chart measured its axis labels");
         }
+        // The pass that is shown ends the refits of a range set before the first layout.
+        if self.prev_width.is_some() && !ui.ctx().will_discard() {
+            self.pending_visible_range = None;
+        }
         self.record_host_events(ui);
         let needs_info = response.clicked()
             || response.double_clicked()
