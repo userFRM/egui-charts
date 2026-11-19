@@ -4194,11 +4194,12 @@ fn check_history_only_trade_rate(interval: &str, tape: &[Tick], bars: &[Bar], wa
     use crate::studies::OrderFlowStudy;
 
     for (trades_first, complete, mismatch, grid) in [
-        (false, true, false, Some(0.125)),
-        (true, true, false, Some(0.125)),
-        (false, false, false, Some(0.125)),
-        (true, true, true, Some(0.125)),
-        (true, true, false, None),
+        (false, true, None, Some(0.125)),
+        (true, true, None, Some(0.125)),
+        (false, false, None, Some(0.125)),
+        (true, true, Some(1), Some(0.125)),
+        (true, true, Some(bars.len() - 1), Some(0.125)),
+        (true, true, None, None),
     ] {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
@@ -4216,8 +4217,8 @@ fn check_history_only_trade_rate(interval: &str, tape: &[Tick], bars: &[Bar], wa
         frames.run(&mut chart);
         let candles = || {
             let mut bars = bars.to_vec();
-            if mismatch {
-                bars.last_mut().unwrap().volume += 1.0;
+            if let Some(i) = mismatch {
+                bars[i].volume += 1.0;
             }
             feed.page().send(page(bars, true));
         };
@@ -4243,7 +4244,7 @@ fn check_history_only_trade_rate(interval: &str, tape: &[Tick], bars: &[Bar], wa
         frames.run(&mut chart);
         let study = chart.indicators().find(|(id, _)| *id == rate).unwrap().1;
         let values = |i| [0, 1, 2].map(|line| study.values().value(line, i));
-        if complete && !mismatch && (interval == "2t" || grid.is_some()) {
+        if complete && mismatch.is_none() && (interval == "2t" || grid.is_some()) {
             // Window rates use provider times through the last receipt of this bar,
             // not the allocated bar open or later receipts sharing that timestamp.
             for (i, row) in want.iter().enumerate() {
@@ -4263,7 +4264,11 @@ fn check_history_only_trade_rate(interval: &str, tape: &[Tick], bars: &[Bar], wa
         } else {
             // A truncated tape, mismatched candle or missing range grid proves no run.
             for i in 0..bars.len() {
-                assert_eq!(values(i), [None; 3]);
+                assert_eq!(
+                    values(i),
+                    [None; 3],
+                    "{interval} bar {i}, mismatch {mismatch:?}"
+                );
             }
         }
     }
