@@ -389,7 +389,7 @@ fn catalogue_accepts_host_strategies_and_validates_typed_inputs() {
 #[cfg(feature = "studies")]
 #[test]
 fn study_entries_match_hand_placed_crossings_without_lookahead() {
-    use InputValue::{Choice, Length, Number};
+    use InputValue::{Choice, Length, Number, Toggle};
     use OrderSide::{Buy, Sell};
     struct Case {
         name: &'static str,
@@ -513,6 +513,19 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             inputs: vec![("period", Length(1))],
             expected: vec![(3, Buy, 12.), (5, Sell, 8.), (7, Buy, 10.)],
         },
+        // A saved state may still set the study's smoothing and divergence; no trade changes.
+        Case {
+            name: "RSI",
+            prices: closes(),
+            inputs: vec![
+                ("period", Length(1)),
+                ("smoothing", Choice(2)),
+                ("smoothing_length", Length(3)),
+                ("smoothing_deviation", Number(1.)),
+                ("divergence", Toggle(true)),
+            ],
+            expected: vec![(3, Buy, 12.), (5, Sell, 8.), (7, Buy, 10.)],
+        },
         // Range 0..100 makes K the close. K/D at 1,2 = 5/7.5,10/7.5;
         // at 4,5 = 95/92.5,90/92.5. Both crossings are inside their zones.
         Case {
@@ -541,12 +554,21 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
                 (6, Buy, 15.),
             ],
         },
-        // Only the six EMAs vote: scores 0, -1, +1, +1, -1, -1, +1, +1.
+        // Only the six EMAs vote: scores 0, -1, +1, +1, -1, -1, +1, +1. Every bar after 0 is
+        // strong; the repeats at 3 and 5 add nothing at pyramiding 1.
         Case {
             name: "Technical Ratings",
             prices: closes(),
             inputs: vec![],
             expected: vec![(2, Sell, 10.), (3, Buy, 12.), (5, Sell, 8.), (7, Buy, 10.)],
+        },
+        // Each EMA votes by the close against its previous value: summaries 0, -1, 1/3, 2/3,
+        // -2/3, -2/3. Only -1, 2/3 and -2/3 are strong; each fills at the next open.
+        Case {
+            name: "Technical Ratings",
+            prices: points(&[10., 8., 9.94, 9.97, 9.8, 9.8]),
+            inputs: vec![],
+            expected: vec![(2, Sell, 9.94), (4, Buy, 9.8), (5, Sell, 9.8)],
         },
     ];
     for case in cases {
@@ -560,6 +582,15 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
         let rerun = backtest.run(strategy.as_mut(), &bars, &[]);
         assert_eq!(entries(&rerun), case.expected, "{} reused", case.name);
     }
+    // The RSI signals read only the RSI line, so its smoothing and divergence are not inputs.
+    let ids: Vec<_> = StrategyFactory::new()
+        .create("RSI")
+        .unwrap()
+        .study_inputs()
+        .into_iter()
+        .map(|input| input.id)
+        .collect();
+    assert_eq!(ids, ["period", "oversold", "overbought"]);
 }
 
 #[cfg(feature = "studies")]
