@@ -10,8 +10,9 @@ use egui::{Color32, Pos2, Stroke, vec2};
 impl Drawing {
     /// Renders Bars Pattern: a copy of the bars between the first two anchors, drawn from the
     /// third anchor's bar and moved by its price distance from the first anchor, in the
-    /// drawing's colour, width and line style. Without a third anchor, as while it is placed,
-    /// the copy lies over its source.
+    /// drawing's colour, width and line style. Its mode draws OHLC bars, high to low or open to
+    /// close ranges, or a line through one price of each copied bar. Without a third anchor, as
+    /// while it is placed, the copy lies over its source.
     pub(crate) fn render_bars_pattern(&self, painter: &egui::Painter, view: &ChartView) {
         let &[from, to, ..] = self.chart_points.as_slice() else {
             return;
@@ -26,35 +27,45 @@ impl Drawing {
         if let Some(copy) = projected_bars(view.bars, [from, to, at], config) {
             let stroke = self.stroke();
             let tick = ((view.bar_to_x)(1.0) - (view.bar_to_x)(0.0)).abs() * 0.3;
-            // A close with no line to a neighbour, such as the only bar, is a flat tick.
+            // A mark at a single price, such as a lone point of the line or a range whose ends
+            // meet, is a flat tick.
+            let flat = |point: Pos2| {
+                painter.line_segment([point - vec2(tick, 0.0), point + vec2(tick, 0.0)], stroke);
+            };
             let lone = |last: Option<(Pos2, bool)>| {
                 if let Some((point, false)) = last {
-                    painter
-                        .line_segment([point - vec2(tick, 0.0), point + vec2(tick, 0.0)], stroke);
+                    flat(point);
                 }
             };
-            // The previous close of the line, and whether a segment reaches it.
+            // The previous point of the line, and whether a segment reaches it.
             let mut last: Option<(Pos2, bool)> = None;
-            for (index, prices) in copy {
-                // Whitespace bars, and prices past the range of f64, leave a gap.
-                if !prices.iter().all(|price| price.is_finite()) {
-                    lone(last.take());
-                    continue;
-                }
-                let [open, high, low, close] = prices.map(|price| (view.price_to_y)(price));
+            for (index, mark) in copy {
                 let x = (view.bar_to_x)(index);
-                match config.mode {
-                    BarsPatternMode::Bars => {
-                        painter.line_segment([Pos2::new(x, high), Pos2::new(x, low)], stroke);
-                        painter
-                            .line_segment([Pos2::new(x - tick, open), Pos2::new(x, open)], stroke);
-                        painter.line_segment(
-                            [Pos2::new(x, close), Pos2::new(x + tick, close)],
-                            stroke,
-                        );
+                let at = |price| Pos2::new(x, (view.price_to_y)(price));
+                // Whitespace bars, and prices beyond the screen's coordinates, leave a gap.
+                let finite = |points: &[Pos2]| points.iter().all(|p| p.is_finite());
+                match mark {
+                    Mark::Bar(prices) => {
+                        let [open, high, low, close] = prices.map(at);
+                        if finite(&[open, high, low, close]) {
+                            painter.line_segment([high, low], stroke);
+                            painter.line_segment([open - vec2(tick, 0.0), open], stroke);
+                            painter.line_segment([close, close + vec2(tick, 0.0)], stroke);
+                        }
                     }
-                    BarsPatternMode::Line => {
-                        let point = Pos2::new(x, close);
+                    Mark::Range(prices) => match prices.map(at) {
+                        ends if !finite(&ends) => {}
+                        [start, end] if start == end => flat(start),
+                        ends => {
+                            painter.line_segment(ends, stroke);
+                        }
+                    },
+                    Mark::Point(price) => {
+                        let point = at(price);
+                        if !finite(&[point]) {
+                            lone(last.take());
+                            continue;
+                        }
                         if let Some((previous, _)) = last {
                             painter.line_segment([previous, point], stroke);
                         }
@@ -78,15 +89,27 @@ impl Drawing {
     }
 }
 
+/// What one copied bar draws, in prices.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Mark {
+    /// The open, high, low and close of an OHLC bar.
+    Bar([f64; 4]),
+    /// The two ends of a range bar.
+    Range([f64; 2]),
+    /// The price a line passes through.
+    Point(f64),
+}
+
 /// The bars between the first two anchors as the copy draws them, in source order: the bar
-/// index each is drawn at and its open, high, low and close. Source bar `j` is drawn at
+/// index each is drawn at and what it draws. Source bar `j` is drawn at
 /// `j + round(at) - round(min(from, to))`, or mirrored about the middle of the anchors' bars,
-/// and moved by `at.price - from.price`. `None` when no bar lies between the anchors.
+/// moved by `at.price - from.price`, then reduced to what `config.mode` draws of it. `None`
+/// when no bar lies between the anchors.
 fn projected_bars(
     bars: &[Bar],
     [from, to, at]: [ChartPoint; 3],
     config: BarsPatternConfig,
-) -> Option<impl Iterator<Item = (f32, [f64; 4])> + '_> {
+) -> Option<impl Iterator<Item = (f32, Mark)> + '_> {
     let (first, source) = bars_between(bars, from.bar_idx, to.bar_idx)?;
     let (left, right) = (
         from.bar_idx.min(to.bar_idx).round(),
@@ -119,10 +142,19 @@ fn projected_bars(
         if let Some(twice) = flip {
             (open, high, low, close) = (twice - open, twice - low, twice - high, twice - close);
         }
-        (
-            index,
-            [open + shift, high + shift, low + shift, close + shift],
-        )
+        let [open, high, low, close] = [open, high, low, close].map(|price| price + shift);
+        let mark = match config.mode {
+            BarsPatternMode::Bars => Mark::Bar([open, high, low, close]),
+            BarsPatternMode::HighLowBars => Mark::Range([high, low]),
+            BarsPatternMode::OpenCloseBars => Mark::Range([open, close]),
+            BarsPatternMode::Line => Mark::Point(close),
+            BarsPatternMode::OpenLine => Mark::Point(open),
+            BarsPatternMode::HighLine => Mark::Point(high),
+            BarsPatternMode::LowLine => Mark::Point(low),
+            // Halves, so that two prices near the limit of f64 cannot overflow their sum.
+            BarsPatternMode::MidpointLine => Mark::Point(high / 2.0 + low / 2.0),
+        };
+        (index, mark)
     }))
 }
 
@@ -132,8 +164,26 @@ mod tests {
     use crate::drawings::rendering::sample_bars;
 
     /// Prices and indices worked out by hand: bars 1..=3 shift by +2; a flip uses 10 + 14 = 24.
+    /// Each mode draws its own price of the copied bar, after the mirror and the flip.
     #[test]
     fn projected_bars_copy_source_bars() {
+        type Draws = fn([f64; 4]) -> Mark;
+        let modes: [(BarsPatternMode, Draws); 8] = [
+            (BarsPatternMode::Bars, Mark::Bar),
+            (BarsPatternMode::HighLowBars, |[_, high, low, _]| {
+                Mark::Range([high, low])
+            }),
+            (BarsPatternMode::OpenCloseBars, |[open, _, _, close]| {
+                Mark::Range([open, close])
+            }),
+            (BarsPatternMode::Line, |[.., close]| Mark::Point(close)),
+            (BarsPatternMode::OpenLine, |[open, ..]| Mark::Point(open)),
+            (BarsPatternMode::HighLine, |[_, high, ..]| Mark::Point(high)),
+            (BarsPatternMode::LowLine, |[_, _, low, _]| Mark::Point(low)),
+            (BarsPatternMode::MidpointLine, |[_, high, low, _]| {
+                Mark::Point((high + low) / 2.0)
+            }),
+        ];
         let anchors = [
             ChartPoint::new(0.6, 12.0),
             ChartPoint::new(3.4, 13.0),
@@ -207,28 +257,58 @@ mod tests {
         ];
         let bars = sample_bars();
         for (row, (anchors, mirrored, flipped, expected)) in cases.into_iter().enumerate() {
-            let config = BarsPatternConfig {
-                mirrored,
-                flipped,
-                ..Default::default()
-            };
-            let copy: Vec<_> = projected_bars(&bars, anchors, config).unwrap().collect();
-            assert_eq!(copy, expected, "row {}", row + 1);
+            for (mode, draws) in modes {
+                let config = BarsPatternConfig {
+                    mode,
+                    mirrored,
+                    flipped,
+                };
+                let copy: Vec<_> = projected_bars(&bars, anchors, config).unwrap().collect();
+                let expected: Vec<_> = expected
+                    .iter()
+                    .map(|&(index, prices)| (index, draws(prices)))
+                    .collect();
+                assert_eq!(copy, expected, "row {}, {mode:?}", row + 1);
+            }
         }
     }
 
-    /// A finished copy paints only opaque strokes; close lines break at whitespace and keep
-    /// isolated closes visible as flat ticks. Overflowing transformations paint nothing.
+    /// A finished copy paints only opaque strokes in each mode, from the copied bar's prices.
+    /// Lines break at whitespace and keep isolated points visible as flat ticks, as is a range
+    /// whose ends meet; bars and ranges skip whitespace. Prices beyond the screen's coordinates
+    /// paint nothing. A pattern saved without a config draws OHLC bars, and saved modes keep
+    /// their names.
     #[test]
     fn copied_bars_and_close_lines_paint_only_finite_strokes() {
         use crate::drawings::DrawingToolType;
+        for (saved, mode) in [
+            ("{}", BarsPatternMode::Bars),
+            (
+                r#"{"mode":"Bars","mirrored":false,"flipped":true}"#,
+                BarsPatternMode::Bars,
+            ),
+            (
+                r#"{"mode":"Line","mirrored":true,"flipped":false}"#,
+                BarsPatternMode::Line,
+            ),
+        ] {
+            let config: BarsPatternConfig = serde_json::from_str(saved).unwrap();
+            assert_eq!(config.mode, mode, "{saved}");
+        }
+        assert_eq!(
+            Drawing::new(0, DrawingToolType::BarsPattern).bars_pattern,
+            Some(BarsPatternConfig {
+                mode: BarsPatternMode::HighLowBars,
+                ..Default::default()
+            })
+        );
         let bars = sample_bars();
         let mut gapped = bars[..5].to_vec();
         gapped[1] = Bar::whitespace(gapped[1].time);
         gapped[3] = Bar::whitespace(gapped[3].time);
         for (mode, source, end, price, expected) in [
             (
-                BarsPatternMode::Bars,
+                None,
                 &bars[..],
                 2.,
                 12.,
@@ -245,7 +325,7 @@ mod tests {
                 ],
             ),
             (
-                BarsPatternMode::Line,
+                Some(BarsPatternMode::Line),
                 &bars[..],
                 2.,
                 12.,
@@ -255,14 +335,14 @@ mod tests {
                 ],
             ),
             (
-                BarsPatternMode::Line,
+                Some(BarsPatternMode::Line),
                 &bars[..],
                 0.,
                 12.,
                 vec![[egui::pos2(77., 110.), egui::pos2(83., 110.)]],
             ),
             (
-                BarsPatternMode::Line,
+                Some(BarsPatternMode::Line),
                 &gapped[..],
                 4.,
                 12.,
@@ -272,14 +352,98 @@ mod tests {
                     [egui::pos2(117., 140.), egui::pos2(123., 140.)],
                 ],
             ),
-            (BarsPatternMode::Line, &bars[..0], 2., 12., vec![]),
-            (BarsPatternMode::Bars, &bars[..], 2., f64::MAX, vec![]),
+            (Some(BarsPatternMode::Line), &bars[..0], 2., 12., vec![]),
+            (Some(BarsPatternMode::Bars), &bars[..], 2., f64::MAX, vec![]),
+            // Finite prices whose y does not fit in an f32.
+            (Some(BarsPatternMode::Bars), &bars[..], 2., 1e39, vec![]),
+            (
+                Some(BarsPatternMode::HighLowBars),
+                &bars[..],
+                2.,
+                12.,
+                vec![
+                    [egui::pos2(80., 120.), egui::pos2(80., 90.)],
+                    [egui::pos2(90., 130.), egui::pos2(90., 100.)],
+                    [egui::pos2(100., 125.), egui::pos2(100., 110.)],
+                ],
+            ),
+            (
+                Some(BarsPatternMode::HighLowBars),
+                &gapped[..],
+                4.,
+                12.,
+                vec![
+                    [egui::pos2(80., 120.), egui::pos2(80., 90.)],
+                    [egui::pos2(100., 125.), egui::pos2(100., 110.)],
+                    [egui::pos2(120., 150.), egui::pos2(120., 130.)],
+                ],
+            ),
+            (
+                Some(BarsPatternMode::OpenCloseBars),
+                &bars[..],
+                2.,
+                12.,
+                vec![
+                    [egui::pos2(80., 100.), egui::pos2(80., 110.)],
+                    [egui::pos2(90., 110.), egui::pos2(90., 120.)],
+                    [egui::pos2(100., 120.), egui::pos2(100., 110.)],
+                ],
+            ),
+            // A doji opens and closes at 13.
+            (
+                Some(BarsPatternMode::OpenCloseBars),
+                &bars[6..],
+                0.,
+                12.,
+                vec![[egui::pos2(77., 130.), egui::pos2(83., 130.)]],
+            ),
+            (
+                Some(BarsPatternMode::OpenLine),
+                &bars[..],
+                2.,
+                12.,
+                vec![
+                    [egui::pos2(80., 100.), egui::pos2(90., 110.)],
+                    [egui::pos2(90., 110.), egui::pos2(100., 120.)],
+                ],
+            ),
+            (
+                Some(BarsPatternMode::HighLine),
+                &bars[..],
+                2.,
+                12.,
+                vec![
+                    [egui::pos2(80., 120.), egui::pos2(90., 130.)],
+                    [egui::pos2(90., 130.), egui::pos2(100., 125.)],
+                ],
+            ),
+            (
+                Some(BarsPatternMode::LowLine),
+                &bars[..],
+                2.,
+                12.,
+                vec![
+                    [egui::pos2(80., 90.), egui::pos2(90., 100.)],
+                    [egui::pos2(90., 100.), egui::pos2(100., 110.)],
+                ],
+            ),
+            // Midpoints 10.5, 11.5 and 11.75.
+            (
+                Some(BarsPatternMode::MidpointLine),
+                &bars[..],
+                2.,
+                12.,
+                vec![
+                    [egui::pos2(80., 105.), egui::pos2(90., 115.)],
+                    [egui::pos2(90., 115.), egui::pos2(100., 117.5)],
+                ],
+            ),
         ] {
             let mut drawing = Drawing::new(0, DrawingToolType::BarsPattern);
             drawing.completed = true;
             drawing.color = [30, 70, 210, 255];
             drawing.stroke_width = 4.0;
-            drawing.bars_pattern = Some(BarsPatternConfig {
+            drawing.bars_pattern = mode.map(|mode| BarsPatternConfig {
                 mode,
                 ..Default::default()
             });
