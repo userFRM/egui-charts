@@ -1831,6 +1831,24 @@ mod tests {
         restored.apply_synced_time_scale(99.0, 4.0);
         assert_eq!(restored.get_time_scale_state(), (12.0, 4.0));
         restored.apply_synced_time_scale(0.25, 4.0);
+        // Older layouts used the shared fill for both phases and carried no background settings.
+        let mut older: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let saved = &mut older["charts"][0];
+        saved["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("session_background");
+        saved["config"]["premarket_color"] = serde_json::Value::Null;
+        saved["config"]["postmarket_color"] = serde_json::Value::Null;
+        let older: SavedLayout = serde_json::from_value(older).unwrap();
+        let mut legacy = Chart::new(BarData::new());
+        legacy.restore(&older.charts[0]).unwrap();
+        assert_eq!(legacy.config().premarket_color, None);
+        assert_eq!(legacy.config().postmarket_color, None);
+        assert_eq!(
+            legacy.config().extended_hours_color,
+            chart.config().extended_hours_color
+        );
         assert_eq!(restored.config(), chart.config());
         assert_eq!(restored.chart_options(), chart.chart_options());
         assert_eq!(

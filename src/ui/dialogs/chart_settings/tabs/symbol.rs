@@ -7,8 +7,8 @@ use crate::scales::TimezoneMode;
 use crate::theme::Theme;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use crate::widget::settings::PrecisionMode;
 use crate::ui::timeframe_toolbar::SessionType;
+use crate::widget::settings::PrecisionMode;
 use egui::{Color32, RichText, Ui};
 
 /// Height of a candle part row, giving a 50 point pitch with the spacing below it.
@@ -315,6 +315,88 @@ impl SettingsDialog {
                 }
                 ui.add_space(ui.active_theme().spacing.xxl);
 
+                if self.hours_offered.0 {
+                    self.draw_section_header(ui, "SESSION BACKGROUNDS", theme);
+                    let mut background =
+                        self.settings.session_background.clone().unwrap_or_default();
+                    let before = background.clone();
+                    styled_checkbox(
+                        ui,
+                        &mut background.show_extended_hours,
+                        "Highlight extended sessions",
+                        theme.ui.text,
+                    );
+                    let fallback = |color, opacity| {
+                        if color == Color32::PLACEHOLDER {
+                            theme.ui.accent.linear_multiply(opacity)
+                        } else {
+                            color
+                        }
+                    };
+                    let shared = background.extended_hours_color;
+                    ui.add_enabled_ui(background.show_extended_hours, |ui| {
+                        for (index, label, mut color) in [
+                            (0, "Extended session", shared),
+                            (
+                                1,
+                                "Pre-market",
+                                background.premarket_color.unwrap_or(shared),
+                            ),
+                            (
+                                2,
+                                "Post-market",
+                                background.postmarket_color.unwrap_or(shared),
+                            ),
+                            (3, "Overnight", background.overnight_hours_color),
+                        ] {
+                            self.draw_setting_row_with_controls(ui, label, theme, |ui, dialog| {
+                                let shown = match index {
+                                    1 => {
+                                        checkbox(
+                                            ui,
+                                            &mut background.shade_premarket,
+                                            l10n::text(ui.ctx(), "Show pre-market").into(),
+                                        );
+                                        background.shade_premarket
+                                    }
+                                    2 => {
+                                        checkbox(
+                                            ui,
+                                            &mut background.shade_postmarket,
+                                            l10n::text(ui.ctx(), "Show post-market").into(),
+                                        );
+                                        background.shade_postmarket
+                                    }
+                                    _ => true,
+                                };
+                                ui.add_enabled_ui(shown, |ui| {
+                                    let picker =
+                                        &mut dialog.color_picker_states.session_background[index];
+                                    picker.sel_color =
+                                        fallback(color, if index == 3 { 0.16 } else { 0.08 });
+                                    if pick_color(
+                                        ui,
+                                        picker,
+                                        &format!("session_background_{index}"),
+                                        &mut color,
+                                    ) {
+                                        match index {
+                                            0 => background.extended_hours_color = color,
+                                            1 => background.premarket_color = Some(color),
+                                            2 => background.postmarket_color = Some(color),
+                                            _ => background.overnight_hours_color = color,
+                                        }
+                                    }
+                                });
+                            });
+                        }
+                    });
+                    if background != before {
+                        self.settings.session_background = Some(background);
+                    }
+                    ui.add_space(ui.active_theme().spacing.xxl);
+                }
+
                 // PRECISION
                 self.draw_section_header(ui, "PRECISION", theme);
 
@@ -601,22 +683,37 @@ mod tests {
         impl crate::data::Datafeed for Hours {
             fn resolve(&self, symbol: &str, reply: crate::data::Reply<Instrument>) {
                 let at = |hour| chrono::NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
-                let mut session = Session::new([SessionWindow::new(
-                    [chrono::Weekday::Mon], at(9), at(16),
-                )]);
+                let mut session =
+                    Session::new([SessionWindow::new([chrono::Weekday::Mon], at(9), at(16))]);
                 if self.overnight_windows {
                     session = session.with_overnight_windows([SessionWindow::new(
-                        [chrono::Weekday::Mon], at(20), at(4),
+                        [chrono::Weekday::Mon],
+                        at(20),
+                        at(4),
                     )]);
                 }
                 reply.send(Ok(Instrument::new(symbol).with_session(session)));
             }
-            fn history(&self, request: crate::data::HistoryRequest,
-                reply: crate::data::Reply<crate::data::HistoryPage>) {
-                self.requests.lock().unwrap().push((request.extended_hours, request.overnight_hours));
-                reply.send(Ok(crate::data::HistoryPage::new(vec![Bar::new(
-                    chrono::DateTime::UNIX_EPOCH, 100.0, 110.0, 90.0, 105.0, 1.0,
-                )], true)));
+            fn history(
+                &self,
+                request: crate::data::HistoryRequest,
+                reply: crate::data::Reply<crate::data::HistoryPage>,
+            ) {
+                self.requests
+                    .lock()
+                    .unwrap()
+                    .push((request.extended_hours, request.overnight_hours));
+                reply.send(Ok(crate::data::HistoryPage::new(
+                    vec![Bar::new(
+                        chrono::DateTime::UNIX_EPOCH,
+                        100.0,
+                        110.0,
+                        90.0,
+                        105.0,
+                        1.0,
+                    )],
+                    true,
+                )));
             }
             fn subscribe(&self, _: crate::data::Subscription) {}
         }
@@ -625,21 +722,38 @@ mod tests {
             (true, "Overnight trading hours", (true, true)),
         ] {
             let feed = std::sync::Arc::new(Hours {
-                overnight_windows, requests: Default::default(),
+                overnight_windows,
+                requests: Default::default(),
             });
-            let mut chart = crate::ChartBuilder::new().with_feed(feed.clone())
-                .with_symbol("A").with_timeframe(Timeframe::Min1).build();
+            let mut chart = crate::ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol("A")
+                .with_timeframe(Timeframe::Min1)
+                .build();
             let ctx = Context::default();
             let theme = Theme::dark();
             crate::theme::apply_to_egui(&ctx, &theme);
             let mut dialog = SettingsDialog::new();
-            for _ in 0..4 { frame(&ctx, &mut chart, &mut dialog, &theme, vec![], &[]); }
+            for _ in 0..4 {
+                frame(&ctx, &mut chart, &mut dialog, &theme, vec![], &[]);
+            }
             assert_eq!(feed.requests.lock().unwrap().last(), Some(&(false, false)));
-            dialog.set_control_visible(crate::ui::dialogs::chart_settings::Control::Templates, false);
+            dialog.set_control_visible(
+                crate::ui::dialogs::chart_settings::Control::Templates,
+                false,
+            );
             dialog.set_feed_capabilities(chart.feed_capabilities(), chart.instrument());
             dialog.open(ChartSettingsState::from_chart(&chart));
-            for _ in 0..3 { frame(&ctx, &mut chart, &mut dialog, &theme, vec![], &[]); }
-            click(&ctx, &mut chart, &mut dialog, &theme, "Regular trading hours");
+            for _ in 0..3 {
+                frame(&ctx, &mut chart, &mut dialog, &theme, vec![], &[]);
+            }
+            click(
+                &ctx,
+                &mut chart,
+                &mut dialog,
+                &theme,
+                "Regular trading hours",
+            );
             click(&ctx, &mut chart, &mut dialog, &theme, label);
             click(&ctx, &mut chart, &mut dialog, &theme, "Ok");
             assert_eq!((chart.extended_hours(), chart.overnight_hours()), expected);
@@ -647,17 +761,27 @@ mod tests {
             assert_eq!(feed.requests.lock().unwrap().last(), Some(&expected));
             assert!(chart.undo());
             frame(&ctx, &mut chart, &mut dialog, &theme, vec![], &[]);
-            assert_eq!((chart.extended_hours(), chart.overnight_hours()), (false, false));
+            assert_eq!(
+                (chart.extended_hours(), chart.overnight_hours()),
+                (false, false)
+            );
             assert_eq!(feed.requests.lock().unwrap().last(), Some(&(false, false)));
             assert!(!chart.can_undo());
 
             dialog.set_feed_capabilities(None, Some(&Instrument::new("BTC")));
             dialog.open(ChartSettingsState::from_chart(&chart));
             for _ in 0..2 {
-                let output = ctx.run_ui(RawInput::default(), |ui| { dialog.show(ui.ctx(), &theme); });
-                let texts: Vec<_> = output.shapes.iter().filter_map(|s| match &s.shape {
-                    Shape::Text(text) => Some(text.galley.text()), _ => None,
-                }).collect();
+                let output = ctx.run_ui(RawInput::default(), |ui| {
+                    dialog.show(ui.ctx(), &theme);
+                });
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        Shape::Text(text) => Some(text.galley.text()),
+                        _ => None,
+                    })
+                    .collect();
                 assert!(!texts.contains(&"Session"));
                 assert!(texts.contains(&"Adjust data for dividends"));
                 output.drop_without_applying_deltas();

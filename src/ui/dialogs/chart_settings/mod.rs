@@ -108,6 +108,7 @@ struct ColorPickerStates {
     price_target_positive: ColorPickerState,
     price_target_negative: ColorPickerState,
     prev_close_line: ColorPickerState,
+    session_background: [ColorPickerState; 4],
 }
 
 impl Default for SettingsDialog {
@@ -146,6 +147,7 @@ impl SettingsDialog {
                 scales_lines: ColorPickerState::new(settings.scales_appearance.lines_color),
                 alert: ColorPickerState::new(settings.alerts.alert_color),
                 prev_close_line: ColorPickerState::new(Color32::PLACEHOLDER),
+                session_background: Default::default(),
                 symbol_value: ColorPickerState::new(
                     settings
                         .scales_and_lines
@@ -854,6 +856,10 @@ impl SettingsDialog {
                     .or(scales.thousands_sep);
                 let extended_hours = template.extended_hours.or(self.settings.extended_hours);
                 let overnight_hours = template.overnight_hours.or(self.settings.overnight_hours);
+                let session_background = template
+                    .session_background
+                    .clone()
+                    .or_else(|| self.settings.session_background.clone());
                 let date_format = template
                     .scales_and_lines
                     .date_format
@@ -902,6 +908,7 @@ impl SettingsDialog {
                 self.settings.show_session_breaks = session_breaks;
                 self.settings.extended_hours = extended_hours;
                 self.settings.overnight_hours = overnight_hours;
+                self.settings.session_background = session_background;
                 self.settings.price_target_positive_color = positive;
                 self.settings.price_target_negative_color = negative;
                 self.settings.margins.right_bars = right_bars;
@@ -980,6 +987,7 @@ impl SettingsDialog {
             };
             // What a new chart holds, where the default settings hold no choice.
             self.settings.extended_hours = Some(false);
+            self.settings.session_background = Some(Default::default());
             self.settings.scales_appearance.font_family = Some(Default::default());
             self.settings.scales_and_lines.price_line_source = Some(Default::default());
             let style = crate::model::SeriesStyle::default();
@@ -2663,6 +2671,112 @@ mod tests {
         assert_eq!(chart.pane_options().separator_color, Some(chosen));
     }
 
+    /// Background edits wait for acceptance, retain opacity in templates and reach every chart
+    /// through the settings copy used by Apply to all. Cancel keeps the original backgrounds.
+    #[test]
+    fn session_background_edits_accept_cancel_save_and_copy() {
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        for accept in [false, true] {
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            chart.set_chart_type(crate::model::ChartType::Line);
+            chart.config_mut().premarket_color =
+                Some(Color32::from_rgba_unmultiplied(255, 0, 255, 128));
+            let before = ChartSettingsState::from_chart(&chart).session_background;
+            let mut dialog = SettingsDialog::new();
+            dialog.offer_apply_to_all(true);
+            dialog.set_control_visible(Control::Templates, false);
+            dialog.set_feed_capabilities(None, None);
+            dialog.open(ChartSettingsState::from_chart(&chart));
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(1440.0, 900.0))
+                .allow_missing_glyphs()
+                .with_context_setup(|ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &Theme::light());
+                })
+                .build_ui_state(
+                    move |ui, (dialog, action): &mut (SettingsDialog, _)| {
+                        let next = dialog.show(ui.ctx(), &Theme::light());
+                        if !matches!(next, SettingsAction::None) {
+                            *action = next;
+                        }
+                    },
+                    (dialog, SettingsAction::None),
+                );
+            harness.run();
+            harness.hover_at(Pos2::new(900.0, 450.0));
+            harness.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                source: egui::MouseWheelSource::Wheel,
+                phase: egui::TouchPhase::Move,
+                delta: Vec2::new(0.0, -250.0),
+                modifiers: Default::default(),
+            });
+            harness.run();
+            harness
+                .get_by_role_and_label(Role::ColorWell, "#FF00FF")
+                .click();
+            harness.run();
+            harness
+                .get_by_role_and_label(Role::ColorWell, "#311B92")
+                .click();
+            harness.run();
+            harness.get_by_label("Show post-market").click();
+            harness.run();
+            harness.get_by_label("Highlight extended sessions").click();
+            harness.run();
+            assert_eq!(
+                ChartSettingsState::from_chart(&chart).session_background,
+                before
+            );
+            if !accept {
+                harness.get_by_label("Cancel").click();
+                harness.run();
+                assert_eq!(
+                    ChartSettingsState::from_chart(&chart).session_background,
+                    before
+                );
+                continue;
+            }
+            harness.get_by_label("Apply to all").click();
+            harness.run();
+            let SettingsAction::ApplyToAll(settings) = &harness.state().1 else {
+                panic!("Apply to all must carry the edited settings");
+            };
+            let saved: ChartSettingsState =
+                serde_json::from_value(serde_json::to_value(settings).unwrap()).unwrap();
+            let chosen = saved.session_background.as_ref().unwrap();
+            assert!(!chosen.show_extended_hours);
+            assert!(!chosen.shade_postmarket);
+            assert_eq!(
+                chosen.premarket_color,
+                Some(Color32::from_rgba_unmultiplied(49, 27, 146, 128))
+            );
+            let mut second = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            // Every recipient receives this same settings value; layout copy calls apply_to_chart.
+            for target in [&mut chart, &mut second] {
+                saved.apply_to_chart(target).unwrap();
+            }
+            assert_eq!(
+                ChartSettingsState::from_chart(&chart).session_background,
+                Some(chosen.clone())
+            );
+            assert_eq!(
+                ChartSettingsState::from_chart(&second).session_background,
+                Some(chosen.clone())
+            );
+            harness.state_mut().0.open(saved.clone());
+            harness.run();
+            harness.get_by_label("Ok").click();
+            harness.run();
+            let SettingsAction::Apply(settings) = &harness.state().1 else {
+                panic!("Ok must accept");
+            };
+            assert_eq!(settings.session_background, saved.session_background);
+        }
+    }
+
     /// Choosing a thousands separator on the Scales and lines tab groups the digits of the last
     /// price tag with it, or leaves them plain.
     #[test]
@@ -2838,6 +2952,7 @@ mod tests {
                 ("", "show_session_breaks"),
                 ("", "extended_hours"),
                 ("", "overnight_hours"),
+                ("", "session_background"),
                 ("", "back_adjust_futures"),
                 ("", "settlement_as_close"),
                 ("", "price_target_positive_color"),
@@ -2868,6 +2983,8 @@ mod tests {
             chart.config_mut().thousands_sep = Some('\'');
             chart.config_mut().show_session_breaks = true;
             chart.set_overnight_hours(true);
+            chart.config_mut().show_extended_hours = false;
+            chart.config_mut().premarket_color = Some(Color32::GOLD);
             chart.config_mut().price_target_positive_color = Color32::BLUE;
             chart.config_mut().price_target_negative_color = Color32::YELLOW;
             chart.pane_options_mut().separator_color = Some(Color32::RED);
@@ -2893,6 +3010,9 @@ mod tests {
             assert!(!shown.back_adjust_futures);
             assert_eq!(shown.extended_hours, Some(true), "{pixels:?}");
             assert_eq!(shown.overnight_hours, Some(true), "{pixels:?}");
+            let backgrounds = shown.session_background.as_ref().unwrap();
+            assert!(!backgrounds.show_extended_hours);
+            assert_eq!(backgrounds.premarket_color, Some(Color32::GOLD));
             assert_eq!(shown.margins.right_bars, row, "{pixels:?}");
             assert_eq!(dialog.margin_right_str, row.to_string(), "{pixels:?}");
             assert_eq!(
@@ -2943,6 +3063,8 @@ mod tests {
             assert!(config.show_session_breaks);
             assert!(chart.extended_hours());
             assert!(chart.overnight_hours());
+            assert!(!config.show_extended_hours);
+            assert_eq!(config.premarket_color, Some(Color32::GOLD));
             assert_eq!(
                 (
                     config.price_target_positive_color,

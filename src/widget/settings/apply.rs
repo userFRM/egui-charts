@@ -173,6 +173,15 @@ impl ChartSettingsState {
             show_session_breaks: Some(config.show_session_breaks),
             extended_hours: Some(chart.extended_hours()),
             overnight_hours: Some(chart.overnight_hours()),
+            session_background: Some(super::SessionBackgroundSettings {
+                show_extended_hours: config.show_extended_hours,
+                extended_hours_color: config.extended_hours_color,
+                premarket_color: config.premarket_color,
+                postmarket_color: config.postmarket_color,
+                shade_premarket: config.shade_premarket,
+                shade_postmarket: config.shade_postmarket,
+                overnight_hours_color: config.overnight_hours_color,
+            }),
             order_flow: super::OrderFlowSettings {
                 show_heatmap: chart
                     .feed_link
@@ -528,6 +537,16 @@ impl ChartSettingsState {
         }
         if let Some(extended) = self.extended_hours {
             chart.set_extended_hours(extended);
+        }
+        if let Some(background) = &self.session_background {
+            let config = chart.config_mut();
+            config.show_extended_hours = background.show_extended_hours;
+            config.extended_hours_color = background.extended_hours_color;
+            config.premarket_color = background.premarket_color;
+            config.postmarket_color = background.postmarket_color;
+            config.shade_premarket = background.shade_premarket;
+            config.shade_postmarket = background.shade_postmarket;
+            config.overnight_hours_color = background.overnight_hours_color;
         }
         chart.chart_options.time_scale.timezone = timezone;
         let scales = &self.scales_and_lines;
@@ -3387,7 +3406,10 @@ mod tests {
         settings.extended_hours = Some(false);
         settings.overnight_hours = Some(true);
         settings.apply_to_chart(&mut chart).unwrap();
-        assert_eq!((chart.extended_hours(), chart.overnight_hours()), (false, false));
+        assert_eq!(
+            (chart.extended_hours(), chart.overnight_hours()),
+            (false, false)
+        );
     }
 
     /// The right margin row shows the margin the view keeps: part of a bar as it is, and a margin
