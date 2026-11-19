@@ -62,6 +62,7 @@ struct Action {
     drawings_hidden: Option<bool>,
     event_visibility: Option<crate::model::EventVisibility>,
     options: Option<ChartOptions>,
+    date_format: Option<Option<String>>,
     order_flow: Option<FeedDisplay>,
     view: Option<(f32, f32)>,
     scale: Option<PriceScale>,
@@ -71,6 +72,8 @@ struct Action {
     chart_type: Option<(ChartType, ChartTypeParams)>,
     interval: Option<Option<Timeframe>>,
     hours: Option<(bool, bool)>,
+    /// The pane separator colour, `None` inside while the separators follow the theme.
+    pane_separator_color: Option<Option<egui::Color32>>,
     /// Execution profile merges and splits, including the symbol and calendar they belong to.
     #[cfg(feature = "studies")]
     trade_profiles: Option<super::trade_profile::TradeProfiles>,
@@ -114,6 +117,7 @@ impl Action {
             && self.price_targets_visible.is_none()
             && self.event_visibility.is_none()
             && self.options.is_none()
+            && self.date_format.is_none()
             && self.order_flow.is_none()
             && self.scale.is_none()
             && self.series_scales.is_empty()
@@ -121,6 +125,7 @@ impl Action {
             && self.chart_type.is_none()
             && self.interval.is_none()
             && self.hours.is_none()
+            && self.pane_separator_color.is_none()
             && self.studies.is_empty()
             && !drawings_changed
             && !profiles_changed
@@ -488,6 +493,7 @@ impl Chart {
                 drawings_hidden: Some(self.drawings.is_hidden()),
                 event_visibility: Some(self.event_visibility.clone()),
                 options: Some(self.chart_options.clone()),
+                date_format: Some(self.date_format.clone()),
                 order_flow: FeedDisplay::capture(self),
                 view: Some(self.get_time_scale_state()),
                 scale: Some(self.state.price_scale().clone()),
@@ -500,6 +506,7 @@ impl Chart {
                 chart_type: Some((self.chart_type, self.chart_type_params.clone())),
                 interval: Some(self.timeframe),
                 hours: Some((self.extended_hours, self.overnight_hours)),
+                pane_separator_color: Some(self.pane_options.separator_color),
                 #[cfg(feature = "studies")]
                 trade_profiles: Some(self.trade_profiles.clone()),
                 ..Action::default()
@@ -592,6 +599,9 @@ impl Chart {
         if action.options.as_ref() == Some(&self.chart_options) {
             action.options = None;
         }
+        if action.date_format.as_ref() == Some(&self.date_format) {
+            action.date_format = None;
+        }
         if action.order_flow == FeedDisplay::capture(self) {
             action.order_flow = None;
         }
@@ -603,6 +613,9 @@ impl Chart {
         }
         if action.hours == Some((self.extended_hours, self.overnight_hours)) {
             action.hours = None;
+        }
+        if action.pane_separator_color == Some(self.pane_options.separator_color) {
+            action.pane_separator_color = None;
         }
         #[cfg(feature = "studies")]
         if action.trade_profiles.as_ref() == Some(&self.trade_profiles) {
@@ -1099,6 +1112,9 @@ impl Chart {
             self.set_overnight_hours(hours.1);
             *hours = current;
         }
+        if let Some(color) = &mut action.pane_separator_color {
+            std::mem::swap(&mut self.pane_options.separator_color, color);
+        }
         if let Some(config) = &mut action.config {
             std::mem::swap(&mut self.config, config);
             // This configured mode was applied when the state was recorded, and the scale is
@@ -1152,6 +1168,9 @@ impl Chart {
                 offset,
                 None,
             );
+        }
+        if let Some(date_format) = &mut action.date_format {
+            std::mem::swap(&mut self.date_format, date_format);
         }
         if let Some(view) = &mut action.view {
             self.apply_synced_time_scale(view.0, view.1);

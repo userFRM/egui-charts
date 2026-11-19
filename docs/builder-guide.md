@@ -79,8 +79,10 @@ A symbol object requires `name` (`symbol` is also accepted). Optional `ticker`
 is the identifier used for subsequent requests. Metadata fields are `description`,
 `exchange`, `country`, `sector`, `source`, `root`, `logo`, `exchange_logo`,
 `type` (lowercase model symbol type), `minmov`, `pricescale`,
-`volume_precision`, `currency_code`, `timezone`, `session`, `supported_resolutions`
-and `data_status` (`streaming`, `delayed_streaming` or `endofday`). Price tick size
+`volume_precision`, `currency_code`, `unit` (the price unit shown beside the
+currency above the price scale, such as `barrel`), `timezone`, `session`,
+`supported_resolutions` and `data_status` (`streaming`, `delayed_streaming` or
+`endofday`). Price tick size
 is `minmov / pricescale`, with `minmov` defaulting to one. Time zones use the
 library's [`TimezoneId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.TimezoneId.html) parser. Sessions accept `24x7` or
 `HHMM-HHMM[,HHMM-HHMM]:days` windows (one day suffix for all windows), where 1 is Sunday and 7 is Saturday; an overnight
@@ -94,7 +96,8 @@ reported as unavailable: this adapter supplies bars and symbol search. Resolutio
 strings are minutes (`1`, `15`, `240`), seconds (`1S`, `45S`), days (`1D`), weeks
 (`1W`, `2W`) or calendar months (`1M`, `3M`). Subsecond and execution-based bars
 are not supported by this seconds-based endpoint contract. [`resolve_converted`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#method.resolve_converted)
-passes the chosen conversion to `/symbols` so metadata and bars share the same unit.
+passes the chosen conversion to `/symbols` so metadata and bars share the same unit:
+answer with the converted `currency_code` and `unit`.
 
 History timestamps and bounds are Unix seconds in UTC; bounds may include a
 fraction. `from` is inclusive and `to` exclusive, and an omitted bound is
@@ -138,7 +141,8 @@ with the latest 500 bars and then including the newest received timestamp so the
 forming bar can change. Each response replaces full bars, including volume;
 no trades are synthesized. The server must return the complete requested window
 within 500 bars between refreshes. If a full response no longer overlaps the
-previous refresh, the adapter reports invalid data and stops; reload history.
+previous refresh, the adapter stops and asks the chart to reload its history,
+which subscribes again.
 Recoverable live failures back off to 60 seconds and respect a longer
 `Retry-After`; permanent failures stop the subscription. Unsubscribe and chart
 drop cancel further requests and discard any pending response.
