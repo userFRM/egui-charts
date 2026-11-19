@@ -144,3 +144,64 @@ fn equity_curve_uses_the_full_width_at_every_time_resolution() {
         assert!(points[1].x - points[0].x > 200.0, "{step}");
     }
 }
+
+#[test]
+fn margin_figures_and_chart_follow_margin_data() {
+    let hour = |h| DateTime::UNIX_EPOCH + chrono::TimeDelta::hours(h);
+    let mut plain = StrategyReport::new("Leveraged", "LEV", Timeframe::Hour1, 1000.0);
+    let mut trade = StrategyTrade::new(OrderSide::Buy, 15.0, hour(2), 100.0);
+    trade.exit = Some(StrategyExit::new(hour(3), 200.0 / 3.0, -500.0));
+    trade.label = Some("A / Margin call".into());
+    plain.trades = vec![trade];
+    let curve = |values: [f64; 4]| {
+        values
+            .into_iter()
+            .enumerate()
+            .map(|(i, value)| (hour(i as i64), value))
+            .collect()
+    };
+    plain.equity = curve([1000.0, 1000.0, 1000.0, 500.0]);
+    let mut leveraged = plain.clone();
+    leveraged.margin = curve([0.0, 0.0, 750.0, 0.0]);
+    leveraged.peak_margin = curve([0.0, 0.0, 750.0, 750.0]);
+    leveraged.margin_calls = vec![(hour(3), 15.0)];
+    for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+        let mut unavailable = Vec::new();
+        for (report, with_margin) in [(&leveraged, true), (&plain, false)] {
+            let mut panel = StrategyReportPanel::default();
+            panel.set_report(Some(report.clone()), &[]);
+            let theme = theme.clone();
+            let color = theme.ui.info;
+            let mut h = Harness::builder()
+                .with_size(Vec2::new(1440.0, 1600.0))
+                .with_context_setup(move |ctx| crate::theme::apply_to_egui(ctx, &theme))
+                .build_ui_state(
+                    |ui, panel: &mut StrategyReportPanel| {
+                        panel.show(ui);
+                    },
+                    panel,
+                );
+            h.run();
+            h.get_by_label("Margin calls");
+            if with_margin {
+                // Peak 750 + drawdown 500; average (0 + 0 + 750 + 0) / 4; -500 / 1250.
+                h.get_by_label("1250.00");
+                h.get_by_label("187.50");
+                h.get_by_label("-40.00%");
+            }
+            assert_eq!(h.query_by_label("Margin used").is_some(), with_margin);
+            unavailable.push(h.query_all_by_label("N/A").count());
+            let paths = h
+                .output()
+                .shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(&shape.shape, egui::Shape::Path(path)
+                    if path.stroke.color == egui::epaint::ColorMode::Solid(color))
+                })
+                .count();
+            assert_eq!(paths > 0, with_margin);
+        }
+        assert_eq!(unavailable[1], unavailable[0] + 8);
+    }
+}

@@ -92,11 +92,17 @@ at its open. For example, capital 1,000 and 15 long units entered at 100 with le
 equity `15p - 500` and margin `7.5p` at positive price `p`; a decline crosses at `p = 200/3`,
 leaving equity 500 before exit costs, even if the bar later recovers.
 
-The report records each filled margin call's time and closed quantity in
-[`StrategyReport::margin_calls`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#structfield.margin_calls), independently of trade labels and FIFO lot splits.
-The summary and summary CSV show the number of calls, total liquidated quantity and largest
-quantity closed by one call. These figures are unavailable when the report has no margin data,
-including reports saved before margin recording was available.
+A report records the margin a run uses.
+[`StrategyReport::margin`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#structfield.margin)
+holds the position's absolute market value times its side's funding fraction at each equity mark,
+zero while flat or with a fraction of zero.
+[`StrategyReport::peak_margin`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#structfield.peak_margin)
+holds the largest such value at any observed price point of each bar, including before each fill.
+[`StrategyReport::margin_calls`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#structfield.margin_calls)
+records each filled call's time and closed quantity, independently of labels and FIFO lot splits.
+In the whole-position example above, the entry uses 750, one call closes all 15 units and the bar
+closes flat. With `long_funding = Some(0.5)`, the call closes 4 units at 60 and its close at 70
+leaves 11 units using 385.
 
 The report properties *Long margin calls* and *Short margin calls* name each side's rule:
 `Four times the shortfall at price points`, `Whole position at the margin crossing`, or `Off`
@@ -196,8 +202,10 @@ An open trade has no exit boundary. The host owns navigation, highlighting, repo
 placement, data loading and CSV storage. Chart entry/exit markers use the signals service.
 The assembled terminal and its demo mounting remain separate integration work.
 
-The Summary tab shows all performance metrics, equity and drawdown in account units,
-and an optional fee-free buy-and-hold comparison on the same equity scale. Curve positions
+The Summary tab shows all performance metrics, equity, drawdown and, for reports with margin
+data, margin used in account units, and an optional fee-free buy-and-hold comparison on the
+same equity scale. Engine margin points use the equity timestamps; host margin points use their
+own time span. Without usable margin points the margin chart takes no space. Curve positions
 and hover values retain submillisecond timestamps. Hover a curve
 for timestamped values. The virtualized trade list uses entry-time order, keeps equal-time
 trades in input order, and shows fill prices, net profit, fees, labels and excursions.
@@ -233,6 +241,21 @@ and losses use exit-time order, ties retaining input order. Breakeven trades bre
 runs; invalid and open trades do not participate. For profits `5, 3, -1, -7, -2, 0, 4, 4, 0, 2`,
 net profit is 8, gross profit 18, gross loss 10, largest winner 5, largest loser -7, and the
 longest winning and losing runs are 2 and 3.
+
+Margin figures need margin data: when `margin` is empty, as in a host report without it or
+one saved before it existed, all eight figures show N/A. Margin calls count finite positive
+quantities in `margin_calls`; liquidated quantity is their sum and largest liquidation their
+largest value. These are instrument units. Average margin used is the mean of finite `margin`
+values, including flat marks and the initial zero. Largest margin used is the largest finite
+`peak_margin` value. Account size required adds maximum drawdown between equity marks to the
+largest margin used; it does not yet include intrabar drawdown. Return on account size is net
+profit divided by that required size; margin efficiency divides net profit by average margin
+used. Each quotient is unavailable unless its divisor is positive. Non-finite results are
+unavailable. Summary CSV includes these same eight figures, with `quantity` for instrument units.
+
+For the whole-position example, marks 0, 0, 750 and 0 give one call of 15 units, average margin
+187.5, largest margin 750, account size 750 + 500 = 1,250, return -40%, and margin efficiency
+-500 / 187.5, about -2.67. A run with zero funding uses zero margin and has no calls.
 
 [`StrategyReport::comparison(source)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.comparison) takes the complete source bars of this run's symbol
 and interval, with timestamps denoting bar opens. The host must supply exactly the run's

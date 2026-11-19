@@ -91,10 +91,11 @@ struct ReportData {
     comparison: StrategyComparison,
     equity: Vec<(DateTime<Utc>, f64)>,
     drawdown: Vec<(DateTime<Utc>, f64)>,
+    margin: Vec<(DateTime<Utc>, f64)>,
     trades: Vec<usize>,
 }
 
-/// Standalone summary, equity/drawdown charts, trade list and run properties.
+/// Standalone summary, equity, drawdown and margin charts, trade list and run properties.
 ///
 /// Call [`Self::set_report`] once when the host supplies or replaces a run. Metrics and display
 /// ordering are cached there. Mount [`Self::show`] in the host's panel below the chart; without a
@@ -118,6 +119,7 @@ impl StrategyReportPanel {
             let performance = report.performance();
             let comparison = report.comparison(bars);
             let equity = report.equity_curve();
+            let margin = report.margin_curve();
             let mut peak = equity.first().map_or(0.0, |p| p.1);
             let drawdown = equity
                 .iter()
@@ -141,6 +143,7 @@ impl StrategyReportPanel {
                 comparison,
                 equity,
                 drawdown,
+                margin,
                 trades,
             }
         });
@@ -340,6 +343,14 @@ fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
         ),
         ("Liquidated quantity", quantity(p.liquidated_quantity)),
         ("Largest liquidation", quantity(p.largest_liquidation)),
+        ("Average margin used", money(p.average_margin, report)),
+        ("Largest margin used", money(p.largest_margin, report)),
+        (
+            "Account size required",
+            money(p.account_size_required, report),
+        ),
+        ("Return on account size", percent(p.account_size_return)),
+        ("Margin efficiency", number(p.margin_efficiency)),
         ("Consecutive wins", p.max_consecutive_wins.to_string()),
         ("Consecutive losses", p.max_consecutive_losses.to_string()),
         (
@@ -394,6 +405,10 @@ fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
     );
     ui.label(RichText::new(l10n::text(ui.ctx(), "Drawdown from peak")).strong());
     plot::show(ui, &data.drawdown, &[], theme.ui.error, 125.0);
+    if !data.margin.is_empty() {
+        ui.label(RichText::new(l10n::text(ui.ctx(), "Margin used")).strong());
+        plot::show(ui, &data.margin, &[], theme.ui.info, 125.0);
+    }
 }
 
 fn trades(ui: &mut Ui, data: &ReportData, selected: &mut Option<usize>) -> Option<usize> {

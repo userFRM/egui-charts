@@ -41,6 +41,20 @@ fn curve_null_as_nan<'de, D: Deserializer<'de>>(
         .collect())
 }
 
+/// Finite points in strictly increasing time order; empty if the finite points are out of order.
+fn usable_curve(points: &[(DateTime<Utc>, f64)]) -> Vec<(DateTime<Utc>, f64)> {
+    let curve: Vec<_> = points
+        .iter()
+        .copied()
+        .filter(|(_, value)| value.is_finite())
+        .collect();
+    if curve.windows(2).any(|w| w[1].0 <= w[0].0) {
+        Vec::new()
+    } else {
+        curve
+    }
+}
+
 /// The result of one strategy run, from any source: a backtest the host runs against the headless
 /// engine, a forward test, or the host's own analytics. Build it with [`StrategyReport::new`] and set
 /// the remaining fields directly; [`StrategyReport::performance`] computes the metrics.
@@ -109,6 +123,10 @@ pub struct StrategyReport {
     /// unavailable.
     #[serde(default, deserialize_with = "curve_null_as_nan")]
     pub margin: Vec<(DateTime<Utc>, f64)>,
+    /// Largest margin used along each bar's observed price path, including before each fill
+    /// and at the close, at the times of [`Self::margin`].
+    #[serde(default, deserialize_with = "curve_null_as_nan")]
+    pub peak_margin: Vec<(DateTime<Utc>, f64)>,
     /// Time and quantity closed of each margin call, in fill order.
     #[serde(default, deserialize_with = "curve_null_as_nan")]
     pub margin_calls: Vec<(DateTime<Utc>, f64)>,
@@ -170,8 +188,8 @@ pub struct StrategyExit {
 /// Trade metrics use the closed valid trades, with `p` the net profit of each. Curve metrics use the
 /// usable equity curve: the points with a finite value, provided they are in strictly increasing time
 /// order. A curve out of order is unusable as a whole, so the curve metrics are `None` rather than
-/// computed on part of it. Margin metrics use [`StrategyReport::margin`] and
-/// [`StrategyReport::margin_calls`], and are all `None` when `margin` is empty.
+/// computed on part of it. Margin metrics use [`StrategyReport::margin`],
+/// [`StrategyReport::peak_margin`] and [`StrategyReport::margin_calls`], and are all `None` when `margin` is empty.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct StrategyPerformance {
@@ -251,6 +269,19 @@ pub struct StrategyPerformance {
     pub liquidated_quantity: Option<f64>,
     /// Largest quantity one margin call closed. `None` without a margin call.
     pub largest_liquidation: Option<f64>,
+    /// Mean of finite [`StrategyReport::margin`] values, flat marks counting as zero.
+    /// `None` without a finite mark.
+    pub average_margin: Option<f64>,
+    /// Largest finite [`StrategyReport::peak_margin`] value. `None` without margin data or a
+    /// finite peak.
+    pub largest_margin: Option<f64>,
+    /// `largest_margin + max_drawdown`: capital to fund the largest margin and survive the
+    /// largest drawdown between equity marks. `None` when either is unavailable.
+    pub account_size_required: Option<f64>,
+    /// `net_profit / account_size_required`. `None` unless the required size is positive.
+    pub account_size_return: Option<f64>,
+    /// `net_profit / average_margin`. `None` unless the average margin is positive.
+    pub margin_efficiency: Option<f64>,
 }
 
 /// Source-bar comparison of a run, from [`StrategyReport::comparison`].
@@ -363,6 +394,7 @@ impl StrategyReport {
             trades: Vec::new(),
             equity: Vec::new(),
             margin: Vec::new(),
+            peak_margin: Vec::new(),
             margin_calls: Vec::new(),
         }
     }
@@ -429,6 +461,25 @@ impl StrategyReport {
             p.margin_calls = Some(calls.len());
             p.liquidated_quantity = finite(calls.iter().sum());
             p.largest_liquidation = calls.iter().copied().reduce(f64::max);
+            let margins: Vec<_> = self
+                .margin
+                .iter()
+                .map(|&(_, m)| m)
+                .filter(|m| m.is_finite())
+                .collect();
+            p.average_margin = (!margins.is_empty())
+                .then(|| margins.iter().sum::<f64>() / margins.len() as f64)
+                .and_then(finite);
+            p.largest_margin = self
+                .peak_margin
+                .iter()
+                .map(|&(_, m)| m)
+                .filter(|m| m.is_finite())
+                .reduce(f64::max);
+            p.margin_efficiency = p
+                .average_margin
+                .filter(|m| *m > 0.0)
+                .and_then(|m| finite(p.net_profit / m));
         }
 
         let curve = self.equity_curve();
@@ -444,6 +495,14 @@ impl StrategyReport {
         }
         p.max_drawdown = finite(drawdown);
         p.max_drawdown_fraction = (first > 0.0).then_some(fraction).and_then(finite);
+        p.account_size_required = p
+            .largest_margin
+            .zip(p.max_drawdown)
+            .and_then(|(margin, drawdown)| finite(margin + drawdown));
+        p.account_size_return = p
+            .account_size_required
+            .filter(|size| *size > 0.0)
+            .and_then(|size| finite(p.net_profit / size));
 
         let steps = curve.len() - 1;
         if end - start < TimeDelta::weeks(13) {
@@ -482,17 +541,13 @@ impl StrategyReport {
     /// Finite equity points in strictly increasing time order, using the same validation as
     /// [`Self::performance`]. Empty if the finite points are out of order.
     pub fn equity_curve(&self) -> Vec<(DateTime<Utc>, f64)> {
-        let curve: Vec<_> = self
-            .equity
-            .iter()
-            .copied()
-            .filter(|(_, e)| e.is_finite())
-            .collect();
-        if curve.windows(2).any(|w| w[1].0 <= w[0].0) {
-            Vec::new()
-        } else {
-            curve
-        }
+        usable_curve(&self.equity)
+    }
+
+    /// [`Self::margin`] validated as [`Self::equity_curve`] validates equity, for the panel.
+    #[cfg(feature = "ui")]
+    pub(crate) fn margin_curve(&self) -> Vec<(DateTime<Utc>, f64)> {
+        usable_curve(&self.margin)
     }
 
     /// Computes buy-and-hold and excursions from the complete source bars of this run's symbol and
@@ -758,6 +813,11 @@ impl StrategyReport {
             ("Margin calls", p.margin_calls.map(|n| n as f64), "count"),
             ("Liquidated quantity", p.liquidated_quantity, "quantity"),
             ("Largest liquidation", p.largest_liquidation, "quantity"),
+            ("Average margin used", p.average_margin, "money"),
+            ("Largest margin used", p.largest_margin, "money"),
+            ("Account size required", p.account_size_required, "money"),
+            ("Return on account size", p.account_size_return, "percent"),
+            ("Margin efficiency", p.margin_efficiency, "ratio"),
         ] {
             row("summary", name, number(value, unit == "percent"), unit);
         }
@@ -1025,6 +1085,11 @@ mod tests {
                 p.largest_losing_trade,
                 p.liquidated_quantity,
                 p.largest_liquidation,
+                p.average_margin,
+                p.largest_margin,
+                p.account_size_required,
+                p.account_size_return,
+                p.margin_efficiency,
             ]
         };
         let same = counts(actual) == counts(expected)
@@ -1129,6 +1194,10 @@ mod tests {
         // Only finite positive calls count: 3 + 1.5 = 4.5 units, largest 3.
         let mut margin = fixture_a();
         margin.margin = curve(&[0.0, 400.0, f64::NAN, 200.0], TimeDelta::hours(1));
+        margin.peak_margin = curve(
+            &[0.0, 450.0, 600.0, 250.0, f64::INFINITY],
+            TimeDelta::hours(1),
+        );
         let at = |h| t0() + TimeDelta::hours(h);
         margin.margin_calls = vec![
             (at(2), 3.0),
@@ -1139,15 +1208,53 @@ mod tests {
             (at(3), -1.0),
         ];
         let saved_margin = margin.clone();
+        let mut no_margin_marks = margin.clone();
+        no_margin_marks.margin.clear();
+        let mut unfunded = fixture_a();
+        unfunded.margin = curve(&[0.0; 4], TimeDelta::hours(1));
+        unfunded.peak_margin = unfunded.margin.clone();
+        let mut margin_without_equity = margin.clone();
+        margin_without_equity.equity.clear();
+        let margin_metrics = StrategyPerformance {
+            margin_calls: Some(2),
+            liquidated_quantity: Some(4.5),
+            largest_liquidation: Some(3.0),
+            average_margin: Some(200.0),
+            largest_margin: Some(600.0),
+            account_size_required: Some(690.0),
+            account_size_return: Some(0.0644927536231884),
+            margin_efficiency: Some(0.2225),
+            ..expected_a()
+        };
         let rows = [
+            ("margin data", margin, margin_metrics.clone()),
             (
-                "margin data",
-                margin,
+                "calls and peaks without margin marks",
+                no_margin_marks,
+                expected_a(),
+            ),
+            (
+                "zero margin without calls",
+                unfunded,
                 StrategyPerformance {
-                    margin_calls: Some(2),
-                    liquidated_quantity: Some(4.5),
-                    largest_liquidation: Some(3.0),
+                    margin_calls: Some(0),
+                    liquidated_quantity: Some(0.0),
+                    average_margin: Some(0.0),
+                    largest_margin: Some(0.0),
+                    account_size_required: Some(90.0),
+                    account_size_return: Some(0.49444444444444446),
                     ..expected_a()
+                },
+            ),
+            (
+                "margin without equity",
+                margin_without_equity,
+                StrategyPerformance {
+                    max_drawdown: None,
+                    max_drawdown_fraction: None,
+                    account_size_required: None,
+                    account_size_return: None,
+                    ..margin_metrics
                 },
             ),
             (
@@ -1315,7 +1422,7 @@ mod tests {
         }
         // Reports saved before margin fields existed retain unavailable margin metrics.
         let mut saved = serde_json::to_value(&saved_margin).unwrap();
-        for key in ["margin", "margin_calls"] {
+        for key in ["margin", "peak_margin", "margin_calls"] {
             saved.as_object_mut().unwrap().remove(key);
         }
         let old: StrategyReport = serde_json::from_value(saved).unwrap();
@@ -1615,6 +1722,11 @@ mod tests {
              summary,Margin calls,,count,\n\
              summary,Liquidated quantity,,quantity,\n\
              summary,Largest liquidation,,quantity,\n\
+             summary,Average margin used,,money,USD\n\
+             summary,Largest margin used,,money,USD\n\
+             summary,Account size required,,money,USD\n\
+             summary,Return on account size,,percent,\n\
+             summary,Margin efficiency,,ratio,\n\
              summary,Consecutive wins,1,count,\n\
              summary,Consecutive losses,1,count,\n\
              summary,Closed trades,5,count,\n\
@@ -1685,6 +1797,7 @@ mod tests {
             p.net_profit_fraction = Some(fraction);
             p.win_rate = Some(fraction);
             p.max_drawdown_fraction = Some(fraction);
+            p.account_size_return = Some(fraction);
             let mut c = r.comparison(&[]);
             c.buy_and_hold_return = Some(fraction);
             let csv = r.summary_csv(&p, &c);
@@ -1707,6 +1820,10 @@ mod tests {
         assert_eq!(rate[2].parse::<f64>().unwrap(), f64::MAX);
         r.initial_capital = -0.0;
         let p = StrategyPerformance {
+            average_margin: Some(-0.0),
+            largest_margin: Some(-0.0),
+            account_size_required: Some(-0.0),
+            margin_efficiency: Some(-0.0),
             net_profit: -0.0,
             gross_profit: -0.0,
             gross_loss: -0.0,

@@ -40,6 +40,7 @@ pub(super) struct LiveState {
     rejected: usize,
     tick: u64,
     margin_calls: Vec<(DateTime<Utc>, f64)>,
+    peak_margin: f64,
 }
 
 // Compare bits so unchanged invalid feed values do not cause an endless rebuild.
@@ -150,6 +151,7 @@ impl Backtest {
                 rejected: 0,
                 tick: 0,
                 margin_calls: Vec::new(),
+                peak_margin: 0.0,
             })
         } else {
             previous.expect("an existing live run")
@@ -206,6 +208,7 @@ impl Backtest {
             fills: Some(&mut fills),
             forming: false,
             margin_calls: std::mem::take(&mut live.margin_calls),
+            peak_margin: live.peak_margin,
         };
         let mut finer: Vec<_> = lower.iter().filter(|bar| valid_bar(bar)).collect();
         finer.sort_by_key(|bar| bar.time);
@@ -219,6 +222,9 @@ impl Backtest {
         {
             mark.0 = bars[live.processed].time;
             if let Some(mark) = live.report.margin.last_mut() {
+                mark.0 = bars[live.processed].time;
+            }
+            if let Some(mark) = live.report.peak_margin.last_mut() {
                 mark.0 = bars[live.processed].time;
             }
         }
@@ -294,6 +300,7 @@ impl Backtest {
         live.rejected = run.rejected;
         live.tick = run.tick;
         live.margin_calls = run.margin_calls;
+        live.peak_margin = run.peak_margin;
         for fill in &mut fills {
             live.sequence += 1;
             fill.sequence = live.sequence;
@@ -579,6 +586,13 @@ mod tests {
                 .profit,
             4.
         );
+        // Two units reached the target at 110 during bar 1, using 220 at full funding,
+        // before it closed flat in a later update.
+        bars.push(bar(2, 112.));
+        engine.update(&mut strategy, &bars, &[]);
+        let report = engine.report().unwrap();
+        assert_eq!(report.margin.last(), Some(&(bars[1].time, 0.)));
+        assert_eq!(report.peak_margin.last(), Some(&(bars[1].time, 220.)));
         // A historical rebuild must not announce the observed forming-bar executions again.
         bars[0].high = 121.;
         assert!(engine.update(&mut strategy, &bars, &[]).is_empty());

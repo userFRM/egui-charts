@@ -725,6 +725,7 @@ impl Backtest {
             fills: None,
             forming: false,
             margin_calls: Vec::new(),
+            peak_margin: 0.0,
         };
         run.start_equity(self.timeframe, &bars[..last], &mut report);
         let mut processed = cooperative.then_some(0);
@@ -944,6 +945,8 @@ struct Run<'a> {
     forming: bool,
     /// Time and quantity of each filled margin call.
     margin_calls: Vec<(DateTime<Utc>, f64)>,
+    /// Largest margin used since the last equity mark.
+    peak_margin: f64,
 }
 
 impl<'a> Run<'a> {
@@ -961,6 +964,7 @@ impl<'a> Run<'a> {
                 .unwrap_or(before.unwrap_or(DateTime::<Utc>::MIN_UTC));
             report.equity.push((time, self.settings.initial_capital));
             report.margin.push((time, 0.0));
+            report.peak_margin.push((time, 0.0));
         }
     }
 
@@ -1089,14 +1093,15 @@ impl<'a> Run<'a> {
                 f64::NAN
             },
         ));
-        report.margin.push((
-            mark_time,
-            if valid {
-                self.margin_used(execution.close)
-            } else {
-                f64::NAN
-            },
-        ));
+        let (margin, peak) = if valid {
+            let margin = self.margin_used(execution.close);
+            (margin, self.peak_margin.max(margin))
+        } else {
+            (f64::NAN, f64::NAN)
+        };
+        report.margin.push((mark_time, margin));
+        report.peak_margin.push((mark_time, peak));
+        self.peak_margin = 0.0;
     }
 
     fn report_trades(&self, report: &mut StrategyReport) {
@@ -1137,6 +1142,11 @@ impl<'a> Run<'a> {
         self.lots.first().map_or(0.0, |lot| {
             self.position().abs() * price.abs() * self.settings.funding(lot.side)
         })
+    }
+
+    /// Include the margin at this observed market price in the current bar's peak.
+    fn note_margin(&mut self, price: f64) {
+        self.peak_margin = self.peak_margin.max(self.margin_used(price));
     }
 
     fn decide(&mut self, price: f64, after_fill: bool) {
@@ -1442,6 +1452,7 @@ impl<'a> Run<'a> {
     /// Fills orders and margin calls in price order along a bar segment.
     fn fill_along(&mut self, start: f64, end: f64, time: DateTime<Utc>) {
         self.fill_segment(start, end, time, true);
+        self.note_margin(end);
         self.pass_delays();
     }
 
@@ -1465,6 +1476,7 @@ impl<'a> Run<'a> {
     }
 
     fn fill_segment(&mut self, mut start: f64, end: f64, time: DateTime<Utc>, advance: bool) {
+        self.note_margin(start);
         let mut at_end = !advance;
         loop {
             let mut next: Option<(usize, f64, Pricing)> = None;
@@ -1542,6 +1554,7 @@ impl<'a> Run<'a> {
     }
 
     fn fill(&mut self, order: Working, mark: f64, pricing: Pricing, time: DateTime<Utc>) {
+        self.note_margin(mark);
         let side = match order.kind {
             Kind::Entry(side, _) => side,
             Kind::RelativeExit(_, _, side) => {
@@ -1636,6 +1649,7 @@ impl<'a> Run<'a> {
                 }
             }
         }
+        self.note_margin(mark);
         let position = self.position();
         if let Some(fills) = &mut self.fills {
             fills.push(StrategyFill {
@@ -2925,30 +2939,35 @@ mod tests {
         // the call is at p=200/3, equity=500, even if the bar later recovers to 100.
         // At 2x leverage 15 units at 100 use 750. At half funding a deficit of 50 at 60
         // buys 50 / 0.5 / 60 units of funding: truncate to 1, close 4, leave 11 * 70 / 2 = 385.
-        type MarginRow = (&'static str, [f64; 4], &'static [(i64, f64)]);
+        type MarginRow = (&'static str, [f64; 4], [f64; 4], &'static [(i64, f64)]);
         let margins: [MarginRow; 5] = [
             (
                 "leverage alone closes the whole position at the margin crossing",
                 [0.0, 0.0, 750.0, 0.0],
+                [0.0, 0.0, 750.0, 750.0],
                 &[(2, 15.0)],
             ),
             (
                 "funding at that leverage closes four times the shortfall at a price point",
                 [0.0, 0.0, 750.0, 385.0],
+                [0.0, 0.0, 750.0, 750.0],
                 &[(2, 4.0)],
             ),
             (
                 "intrabar long margin call",
                 [0.0, 0.0, 750.0, 0.0],
+                [0.0, 0.0, 750.0, 787.5],
                 &[(2, 15.0)],
             ),
             (
                 "intrabar short margin call",
                 [0.0, 0.0, 500.0, 0.0],
+                [0.0, 0.0, 500.0, 2000.0 / 3.0],
                 &[(2, 10.0)],
             ),
             (
                 "zero long funding disables both entry and liquidation checks",
+                [0.0; 4],
                 [0.0; 4],
                 &[],
             ),
@@ -4178,14 +4197,17 @@ mod tests {
             let times =
                 |curve: &[(DateTime<Utc>, f64)]| curve.iter().map(|p| p.0).collect::<Vec<_>>();
             assert_eq!(times(&report.margin), times(&report.equity), "{name}");
-            if let Some((_, margin, calls)) = margins.iter().find(|row| row.0 == name) {
+            assert_eq!(times(&report.peak_margin), times(&report.equity), "{name}");
+            if let Some((_, margin, peak, calls)) = margins.iter().find(|row| row.0 == name) {
                 margin_rows += 1;
-                assert_eq!(report.margin.len(), margin.len(), "{name}");
-                for (&(_, actual), expected) in report.margin.iter().zip(margin) {
-                    assert!(
-                        (actual - expected).abs() < 1e-9,
-                        "{name}: {actual} != {expected}"
-                    );
+                for (curve, expected) in [(&report.margin, margin), (&report.peak_margin, peak)] {
+                    assert_eq!(curve.len(), expected.len(), "{name}");
+                    for (&(_, actual), expected) in curve.iter().zip(expected) {
+                        assert!(
+                            (actual - expected).abs() < 1e-9,
+                            "{name}: {actual} != {expected}"
+                        );
+                    }
                 }
                 assert_eq!(report.margin_calls.len(), calls.len(), "{name}");
                 for (&(time, actual), &(bar, expected)) in report.margin_calls.iter().zip(*calls) {
@@ -4193,6 +4215,8 @@ mod tests {
                     assert!((actual - expected).abs() < 1e-10, "{name}");
                 }
                 let p = report.performance();
+                let largest = peak.iter().copied().fold(0.0, f64::max);
+                assert!((p.largest_margin.unwrap() - largest).abs() < 1e-9, "{name}");
                 assert_eq!(p.margin_calls, Some(calls.len()), "{name}");
                 assert_eq!(
                     p.liquidated_quantity,
