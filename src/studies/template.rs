@@ -698,6 +698,12 @@ impl StudyTemplate {
                     })
                     .collect();
             }
+            // A CCI drew no average before it opened with one.
+            "CCI" if !has("smoothing") => {
+                template
+                    .inputs
+                    .push(("smoothing".to_owned(), InputValue::Choice(0)));
+            }
             // A Rank Correlation had no average, and drew no levels, before it opened with an
             // average, three levels and the band between them filled.
             "RankCorr" if !has("smoothing") || self.settings.levels.is_empty() => {
@@ -1285,6 +1291,11 @@ mod tests {
     fn templates_saved_before_split_lengths_restore_their_values() {
         use InputValue::{Choice, Length, Number, Text, Toggle};
         let rows = [
+            (
+                "CCI",
+                vec![("period", Length(20))],
+                vec![("period", Length(20)), ("smoothing", Choice(0))],
+            ),
             (
                 "%B",
                 vec![("multiplier", Number(0.0))],

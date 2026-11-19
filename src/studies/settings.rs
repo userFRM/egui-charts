@@ -3565,7 +3565,7 @@ mod tests {
                 true,
                 Some([0, 1]),
                 None,
-                blue,
+                Color32::from_rgba_unmultiplied(33, 150, 243, 26),
                 vec![],
             ),
             (
