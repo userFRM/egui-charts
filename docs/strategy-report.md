@@ -72,6 +72,13 @@ their unallocated entry fees, already deducted from equity. Market and stop orde
 against their side once per fill, by ticks times tick size, ticks of the price increment or an
 absolute-price fraction. Limits, including the limit execution of a stop-limit order, never slip.
 
+[`StrategyContext::exit_trailing`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.StrategyContext.html#method.exit_trailing)
+protects a position with an optional fixed stop from its average fill price and a trailing stop.
+The trail starts at an activation distance in the position's favour and follows the best price
+the bar path reaches at an offset. It can activate and fill within one bar, and fills and slips
+like other stops. Requesting it with new distances keeps the best price; closing the position
+forgets it.
+
 A report is in `settings.currency`, or in [`Backtest::instrument_currency`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#structfield.instrument_currency), the currency of the
 prices, when that is unset. When the settings name another currency, the engine converts what it
 derives from prices into it: sizing, funding, margin and liquidation, fraction commissions,
