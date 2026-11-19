@@ -16,6 +16,9 @@
 //! Mean Deviation = Avg of |TP - SMA|
 //! CCI = (TP - SMA) / (0.015 * Mean Deviation)
 //!
+//! A window whose typical prices are all equal has no mean deviation, so its ratio divides zero
+//! by zero and the bar has no value.
+//!
 //! # Example
 //! ```
 //! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
@@ -99,7 +102,7 @@ impl CCI {
 
                 // Calculate CCI
                 if mean_dev == 0.0 {
-                    values.push(IndicatorValue::Single(0.0));
+                    values.push(IndicatorValue::None);
                 } else {
                     // Lambert's constant 0.015 ensures ~70-80% of values fall between -100 and +100
                     let cci = (tp[i] - sma) / (0.015 * mean_dev);
@@ -213,7 +216,7 @@ mod tests {
 
     #[test]
     fn test_cci_flat_prices() {
-        // A zero mean deviation is reported as 0 rather than dividing by zero.
+        // A window without deviation divides zero by zero and has no value.
         let start = Utc::now();
         let mut bars: Vec<Bar> = (0..30)
             .map(|i| Bar {
@@ -237,10 +240,10 @@ mod tests {
             }
             let mut cci = CCI::new(20);
             cci.calculate(&bars);
-            for value in cci.values().to_rows().iter().skip(19) {
+            for value in cci.values().to_rows() {
                 assert!(
-                    matches!(value, IndicatorValue::Single(v) if *v == 0.0),
-                    "a window without deviation reads 0, got {value:?} at {price}"
+                    matches!(value, IndicatorValue::None),
+                    "a window without deviation has no value, got {value:?} at {price}"
                 );
             }
         }
