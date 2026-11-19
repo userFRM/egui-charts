@@ -107,6 +107,8 @@ symbols, series names and legend input captions, is shown as given.
 
 Calendar language and UI translation are separate. `set_locale(Some("de-DE".into()))`
 names months and weekdays in German when `locales` is enabled (on by default).
+A language code alone, such as `"de"`, uses its most common region, and both
+parts match in any letter case.
 A widget-only build, including this scene, keeps English calendar names unless
 the host enables that feature. Locale selection does not change numeric
 separators. Use formatters for host-specific number conventions.
