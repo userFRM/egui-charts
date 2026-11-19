@@ -272,8 +272,14 @@ impl Chart {
         }
 
         let mut resnapshot = false;
+        let mut reload = false;
         for (id, updates) in drained.updates {
             if link.subscription != Some(id) {
+                continue;
+            }
+            // Reload replaces this subscription's history and everything it pushed in this drain.
+            if updates.reload {
+                reload = true;
                 continue;
             }
             // A seek empties the bars and rebuilds them through its position: the view follows
@@ -462,6 +468,10 @@ impl Chart {
                     .for_each(|c| history.push(c));
             }
             resnapshot |= updates.resnapshot;
+        }
+        if reload {
+            let clock = link.clock.clone();
+            self.reload(&mut link, clock);
         }
         if resnapshot && let Some(id) = link.subscription {
             link.feed.request_depth_snapshot(id);

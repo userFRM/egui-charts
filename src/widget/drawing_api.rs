@@ -727,13 +727,19 @@ impl Chart {
                 if !price.is_finite() {
                     return Err(DrawingError::NonFinitePrice { point });
                 }
-                Ok(self.drawing_point_at(time, price).unwrap_or_else(|| {
-                    let mut point = ChartPoint::new(0.0, price);
-                    point.time_anchor = Some((time, 0.0));
-                    point
-                }))
+                Ok(self.anchor_at_time(time, price))
             })
             .collect()
+    }
+
+    /// The anchor at `time` and the finite `price`, also before the loaded history or without
+    /// bars, where it keeps `time` until the bars arrive.
+    pub(super) fn anchor_at_time(&self, time: DateTime<Utc>, price: f64) -> ChartPoint {
+        self.drawing_point_at(time, price).unwrap_or_else(|| {
+            let mut point = ChartPoint::new(0.0, price);
+            point.time_anchor = Some((time, 0.0));
+            point
+        })
     }
 }
 

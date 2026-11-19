@@ -135,8 +135,9 @@ pub(crate) struct Updates {
     /// Bars and ticks that failed validation or were stamped too far ahead of the feed's clock,
     /// dropped.
     pub(crate) rejected: u64,
-    /// Bar slots evicted before a drain, reported as data loss even after another stream error.
-    dropped_bars: u64,
+    /// The held history is incomplete, either reported by the feed or after pending bar eviction.
+    /// The reader loads it again through a new subscription.
+    pub(crate) reload: bool,
     /// Depth snapshots and deltas that failed validation, dropped.
     pub(crate) rejected_depth: u64,
 }
@@ -162,7 +163,7 @@ impl Updates {
             late_ticks: 0,
             repeated_ticks: 0,
             rejected: 0,
-            dropped_bars: 0,
+            reload: false,
             rejected_depth: 0,
         }
     }
@@ -254,13 +255,6 @@ impl Inbox {
                 live.queued_from = Some(live.grouping());
                 if live.rebuilt_bars != usize::MAX {
                     live.rebuilt_bars = 0;
-                }
-                if updates.dropped_bars > 0 {
-                    updates.rejected += updates.dropped_bars;
-                    updates.error = Some(FeedError::InvalidData(format!(
-                        "pending bar limit exceeded: {} bars dropped; reload history",
-                        updates.dropped_bars,
-                    )));
                 }
                 updates.depth = live.book.take_changed();
                 updates.orders_changed = std::mem::take(&mut live.orders_changed);
