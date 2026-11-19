@@ -328,7 +328,7 @@ Drawings,Drawings,Disjoint channel,incomplete,library,src/drawings/rendering/cha
 Drawings,Drawings,Double curve,incomplete,library,src/drawings/rendering/shapes.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/mod.rs;src/drawings/manager/interaction.rs;src/drawings/validation.rs;src/drawings/rendering/style.rs;src/drawings/rendering/outline.rs,
 Drawings,Drawings,Drawing anchor access,incomplete,library,src/widget/drawing_api.rs;src/widget/anchors.rs;src/model/bar/time.rs;src/widget/time_scale.rs;src/drawings/manager/interaction.rs;src/drawings/domain/drawing.rs,3438;3486
 Drawings,Drawings,Drawing attachment to a study or pane,unverified,library,src/drawings/domain/drawing.rs;src/widget/drawing_api.rs;src/widget/pane/render/mod.rs;src/widget/tool_interaction/mod.rs;src/widget/series/mod.rs;src/drawings/manager/edit.rs;src/widget/pane/mod.rs,3221;3465
-Drawings,Drawings,Drawing events,incomplete,library,src/drawings/manager/mod.rs,3230
+Drawings,Drawings,Drawing events,unverified,library,src/drawings/manager/mod.rs;src/drawings/manager/edit.rs;src/drawings/manager/interaction.rs;src/drawings/services/history.rs;src/widget/events.rs,3230
 Drawings,Drawings,Drawing groups,verified,library,src/drawings/domain/drawing.rs;src/drawings/persistence.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs,
 Drawings,Drawings,Drawing listing and lookup,verified,library,src/widget/drawing_api.rs;src/drawings/manager/mod.rs;src/drawings/manager/edit.rs,
 Drawings,Drawings,Drawing persistence,verified,library,src/widget/anchors.rs;src/drawings/persistence.rs;src/model/bar/time.rs;src/widget/time_scale.rs,2444;2447;2708

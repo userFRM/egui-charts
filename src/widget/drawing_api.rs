@@ -578,8 +578,7 @@ impl Chart {
             .count();
         self.drawings.delete_drawings(ids);
         if kept > 0 {
-            self.host_events
-                .push(super::ChartEvent::LockedDrawingsKept(kept));
+            self.push_event(super::ChartEvent::LockedDrawingsKept(kept));
         }
     }
 

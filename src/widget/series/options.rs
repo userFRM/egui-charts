@@ -469,8 +469,7 @@ impl Chart {
         if !self.panes().contains(&PaneId::MAIN) {
             self.sync_panes();
         }
-        self.host_events
-            .push(crate::widget::ChartEvent::SeriesAdded(id));
+        self.push_event(crate::widget::ChartEvent::SeriesAdded(id));
         id
     }
 

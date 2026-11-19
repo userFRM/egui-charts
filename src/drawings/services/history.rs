@@ -50,6 +50,8 @@ pub(crate) enum DrawingCommand {
         drawings: Vec<(usize, Drawing)>,
         /// Drawings owned by this edit; later host loads remain independent of it.
         ids: Vec<usize>,
+        /// The edit moved its drawings as a whole, so undo and redo report them moved.
+        moved: bool,
     },
     /// A drawing was added
     Add(Drawing),
@@ -75,6 +77,8 @@ pub(crate) enum DrawingCommand {
         id: usize,
         /// State before modification
         old_state: Drawing,
+        /// The edit moved its drawing as a whole, so undo and redo report it moved.
+        moved: bool,
     },
 }
 
@@ -186,7 +190,11 @@ impl HistoryService {
     pub fn push_snapshot(&mut self, drawings: Vec<(usize, Drawing)>) {
         if !drawings.is_empty() {
             let ids = drawings.iter().map(|(_, drawing)| drawing.id).collect();
-            self.push_command(DrawingCommand::Snapshot { drawings, ids });
+            self.push_command(DrawingCommand::Snapshot {
+                drawings,
+                ids,
+                moved: false,
+            });
         }
     }
 
@@ -196,13 +204,24 @@ impl HistoryService {
     }
 
     fn track_affected(&mut self, command: &DrawingCommand) {
-        self.affected_ids = match command {
-            DrawingCommand::Snapshot { ids, .. } => ids.clone(),
-            DrawingCommand::Reorder { layers, .. } => layers.iter().map(|(id, _)| *id).collect(),
-            _ => vec![command.drawing_id()],
+        self.affected_ids = affected(command);
+    }
+
+    /// The drawings the next undo, or redo, changes, by ascending id, and whether that step
+    /// moves them as a whole.
+    pub(crate) fn peek(&self, redo: bool) -> Option<(Vec<usize>, bool)> {
+        let stack = if redo {
+            &self.redo_stack
+        } else {
+            &self.undo_stack
         };
-        self.affected_ids.sort_unstable();
-        self.affected_ids.dedup();
+        let command = stack.last()?;
+        let moved = matches!(
+            command,
+            DrawingCommand::Snapshot { moved: true, .. }
+                | DrawingCommand::Modify { moved: true, .. }
+        );
+        Some((affected(command), moved))
     }
 
     /// Record that a drawing was added
@@ -248,7 +267,32 @@ impl HistoryService {
 
     /// Record that a drawing was modified
     pub fn push_modify(&mut self, id: usize, old_state: Drawing) {
-        self.push_command(DrawingCommand::Modify { id, old_state });
+        self.push_command(DrawingCommand::Modify {
+            id,
+            old_state,
+            moved: false,
+        });
+    }
+
+    /// [`Self::push_modify`] for a move of the drawing as a whole.
+    pub(crate) fn push_moved(&mut self, id: usize, old_state: Drawing) {
+        self.push_command(DrawingCommand::Modify {
+            id,
+            old_state,
+            moved: true,
+        });
+    }
+
+    /// [`Self::push_snapshot`] for a move of the drawings as a whole.
+    pub(crate) fn push_moved_snapshot(&mut self, drawings: Vec<(usize, Drawing)>) {
+        if !drawings.is_empty() {
+            let ids = drawings.iter().map(|(_, drawing)| drawing.id).collect();
+            self.push_command(DrawingCommand::Snapshot {
+                drawings,
+                ids,
+                moved: true,
+            });
+        }
     }
 
     /// Record a layer move, including the neighbours whose layers changed.
@@ -290,11 +334,13 @@ impl HistoryService {
             DrawingCommand::Snapshot {
                 drawings: before,
                 ids,
+                moved,
             } => {
                 let current = restore_snapshot(drawings, before, &ids);
                 self.redo_stack.push(DrawingCommand::Snapshot {
                     drawings: current,
                     ids,
+                    moved,
                 });
             }
             DrawingCommand::Reorder {
@@ -323,7 +369,11 @@ impl HistoryService {
                 self.redo_stack
                     .push(DrawingCommand::Delete { drawing, index });
             }
-            DrawingCommand::Modify { id, old_state } => {
+            DrawingCommand::Modify {
+                id,
+                old_state,
+                moved,
+            } => {
                 // Undo modify = restore old state
                 if let Some(current) = drawings.iter_mut().find(|d| d.id == id) {
                     let current_state = current.clone();
@@ -331,6 +381,7 @@ impl HistoryService {
                     self.redo_stack.push(DrawingCommand::Modify {
                         id,
                         old_state: current_state,
+                        moved,
                     });
                 }
             }
@@ -351,11 +402,13 @@ impl HistoryService {
             DrawingCommand::Snapshot {
                 drawings: before,
                 ids,
+                moved,
             } => {
                 let current = restore_snapshot(drawings, before, &ids);
                 self.undo_stack.push(DrawingCommand::Snapshot {
                     drawings: current,
                     ids,
+                    moved,
                 });
             }
             DrawingCommand::Reorder {
@@ -384,7 +437,11 @@ impl HistoryService {
                 self.undo_stack
                     .push(DrawingCommand::Delete { drawing, index });
             }
-            DrawingCommand::Modify { id, old_state } => {
+            DrawingCommand::Modify {
+                id,
+                old_state,
+                moved,
+            } => {
                 // Redo modify = apply the modification again
                 if let Some(current) = drawings.iter_mut().find(|d| d.id == id) {
                     let current_state = current.clone();
@@ -392,6 +449,7 @@ impl HistoryService {
                     self.undo_stack.push(DrawingCommand::Modify {
                         id,
                         old_state: current_state,
+                        moved,
                     });
                 }
             }
@@ -479,6 +537,18 @@ impl HistoryService {
             DrawingCommand::Reorder { .. } => "Reorder Drawings",
         })
     }
+}
+
+/// The drawings owned by a command, by ascending id, once each.
+fn affected(command: &DrawingCommand) -> Vec<usize> {
+    let mut ids = match command {
+        DrawingCommand::Snapshot { ids, .. } => ids.clone(),
+        DrawingCommand::Reorder { layers, .. } => layers.iter().map(|(id, _)| *id).collect(),
+        _ => vec![command.drawing_id()],
+    };
+    ids.sort_unstable();
+    ids.dedup();
+    ids
 }
 
 /// Takes a layer move through an undo or redo: each drawing's layer and the moved drawing's edit
@@ -577,6 +647,7 @@ mod tests {
                     h.push_command(DrawingCommand::Snapshot {
                         drawings: Vec::new(),
                         ids: vec![1],
+                        moved: false,
                     })
                 },
             ),

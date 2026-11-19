@@ -1,6 +1,6 @@
 //! Editing the drawing collection: add, delete, layer, group, file, edit, show, hide and lock.
 
-use super::{DrawingManager, DrawingSyncAction, queue_sync, sync_id};
+use super::{DrawingEventKind, DrawingManager, DrawingSyncAction, queue_sync, sync_id};
 use crate::drawings::domain::{Drawing, DrawingToolType, FolderSync};
 use crate::drawings::services::{ZOrderService, in_z_order};
 use crate::model::PostContent;
@@ -24,6 +24,7 @@ impl DrawingManager {
             if drawing.saveable {
                 self.queue(DrawingSyncAction::Delete(sync_id(&drawing)));
             }
+            self.report(id, DrawingEventKind::Removed);
             self.history.push_delete(drawing, index);
         }
         self.selection.deselect(id);
@@ -48,15 +49,20 @@ impl DrawingManager {
         }
         match text {
             Some(text) => {
+                let changed = self.drawings[index].text.as_deref() != Some(text.as_str());
                 self.drawings[index].text = Some(text);
                 self.history.push_add(self.drawings[index].clone());
                 self.queue_update(id);
+                if changed {
+                    self.report(id, DrawingEventKind::PropertiesChanged);
+                }
             }
             None => {
                 let drawing = self.drawings.remove(index);
                 if drawing.saveable {
                     self.queue(DrawingSyncAction::Delete(sync_id(&drawing)));
                 }
+                self.report(id, DrawingEventKind::Removed);
                 self.selection.deselect(id);
             }
         }
@@ -126,6 +132,7 @@ impl DrawingManager {
             if drawing.saveable {
                 self.queue(DrawingSyncAction::Delete(sync_id(drawing)));
             }
+            self.report(drawing.id, DrawingEventKind::Removed);
         }
         self.drawings
             .retain(|d| !before.iter().any(|(_, old)| old.id == d.id));
@@ -146,6 +153,7 @@ impl DrawingManager {
         }
         for (_, old) in &before {
             self.queue_update(old.id);
+            self.report_change(old.id, Some(old), false);
         }
         self.history.push_snapshot(before);
     }
@@ -170,10 +178,15 @@ impl DrawingManager {
                 .map(|(index, drawing)| (index, drawing.clone()))
                 .collect(),
         );
+        let mut removed = Vec::new();
         for drawing in self.drawings.iter().filter(|d| include_locked || !d.locked) {
             if drawing.saveable {
                 self.notify(DrawingSyncAction::Delete(sync_id(drawing)));
             }
+            removed.push(drawing.id);
+        }
+        for id in removed {
+            self.report(id, DrawingEventKind::Removed);
         }
         self.drawings.retain(|d| d.locked && !include_locked);
         self.cancel_curr_drawing();
@@ -188,18 +201,22 @@ impl DrawingManager {
     /// Bring a drawing to the front (drawn last, on top), above the highest z-order
     pub fn bring_to_front(&mut self, id: usize) {
         if let Some(drawing) = self.drawings.iter().find(|drawing| drawing.id == id) {
-            self.history.push_modify(id, drawing.clone());
+            let old = drawing.clone();
+            self.history.push_modify(id, old.clone());
             ZOrderService::bring_to_front(&mut self.drawings, id);
             self.queue_update(id);
+            self.report_change(id, Some(&old), false);
         }
     }
 
     /// Send a drawing to the back (drawn first, behind others), below the lowest z-order
     pub fn send_to_back(&mut self, id: usize) {
         if let Some(drawing) = self.drawings.iter().find(|drawing| drawing.id == id) {
-            self.history.push_modify(id, drawing.clone());
+            let old = drawing.clone();
+            self.history.push_modify(id, old.clone());
             ZOrderService::send_to_back(&mut self.drawings, id);
             self.queue_update(id);
+            self.report_change(id, Some(&old), false);
         }
     }
 
@@ -219,6 +236,7 @@ impl DrawingManager {
                 drawing.z_order = layer;
                 // Only the moved drawing is edited; tied layers around it are just renumbered.
                 self.notify(DrawingSyncAction::UpdateDrawing(id));
+                self.report(id, DrawingEventKind::PropertiesChanged);
             }
         }
         if !previous.is_empty() {
@@ -271,6 +289,7 @@ impl DrawingManager {
             let id = copy.id;
             self.drawings.push(copy);
             self.queue(DrawingSyncAction::SaveDrawing(id));
+            self.report(id, DrawingEventKind::Created);
         }
         if ids.is_empty() {
             return;
@@ -280,6 +299,7 @@ impl DrawingManager {
             .push_command(crate::drawings::services::DrawingCommand::Snapshot {
                 drawings: Vec::new(),
                 ids,
+                moved: false,
             });
     }
 
@@ -330,6 +350,7 @@ impl DrawingManager {
         }
         for (_, drawing) in &removed {
             self.queue(DrawingSyncAction::Delete(sync_id(drawing)));
+            self.report(drawing.id, DrawingEventKind::Removed);
         }
         let gone: HashSet<usize> = removed.iter().map(|(_, drawing)| drawing.id).collect();
         self.drawings.retain(|drawing| !gone.contains(&drawing.id));
@@ -337,6 +358,7 @@ impl DrawingManager {
             let id = drawing.id;
             self.drawings.push(drawing);
             self.queue(DrawingSyncAction::SaveDrawing(id));
+            self.report(id, DrawingEventKind::Created);
         }
         self.selection
             .prune(&self.drawings.iter().map(|d| d.id).collect());
@@ -344,6 +366,7 @@ impl DrawingManager {
             .push_command(crate::drawings::services::DrawingCommand::Snapshot {
                 drawings: removed,
                 ids,
+                moved: false,
             });
     }
 
@@ -436,6 +459,7 @@ impl DrawingManager {
         }
         for &id in &updated {
             self.queue_update(id);
+            self.report(id, DrawingEventKind::PropertiesChanged);
         }
         !updated.is_empty()
     }
@@ -739,6 +763,7 @@ impl DrawingManager {
         }
         for (_, drawing) in &before {
             self.stamp(drawing.id);
+            self.report_change(drawing.id, Some(drawing), false);
         }
         self.history.push_snapshot(before);
     }
@@ -761,6 +786,7 @@ impl DrawingManager {
         self.history.push_add(drawing.clone());
         self.drawings.push(drawing);
         self.queue(DrawingSyncAction::SaveDrawing(id));
+        self.report(id, DrawingEventKind::Created);
         Ok(id)
     }
 
@@ -841,6 +867,7 @@ impl DrawingManager {
         }
         for (_, old) in &before {
             self.queue_update(old.id);
+            self.report_change(old.id, Some(old), false);
         }
         self.history.push_snapshot(before);
     }
@@ -975,7 +1002,11 @@ impl DrawingManager {
             }
             self.history.push_add(drawing.clone());
         }
+        let created = drawing.stored_id.is_none();
         self.drawings.push(drawing);
+        if created {
+            self.report(id, DrawingEventKind::Created);
+        }
         if stamp {
             self.stamp(id);
         }

@@ -896,12 +896,13 @@ impl Chart {
         // `now.props` lists the series shown before the exchange, in draw order.
         for (id, ..) in &now.props {
             if self.price_series.iter().all(|item| item.id != *id) {
-                self.host_events.push(ChartEvent::SeriesRemoved(*id));
+                self.push_event(ChartEvent::SeriesRemoved(*id));
             }
         }
-        for item in &self.price_series {
-            if now.props.iter().all(|(id, ..)| *id != item.id) {
-                self.host_events.push(ChartEvent::SeriesAdded(item.id));
+        for index in 0..self.price_series.len() {
+            let id = self.price_series[index].id;
+            if now.props.iter().all(|(current, ..)| *current != id) {
+                self.push_event(ChartEvent::SeriesAdded(id));
             }
         }
         now.props

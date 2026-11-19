@@ -105,7 +105,7 @@ impl Chart {
             && let Some(post) = &drawing.post
             && drawing.open_row(ctx).is_some_and(|row| row.contains(pos))
         {
-            self.host_events.push(ChartEvent::LinkClick {
+            self.push_event(ChartEvent::LinkClick {
                 drawing: id,
                 link: post.link.clone(),
             });

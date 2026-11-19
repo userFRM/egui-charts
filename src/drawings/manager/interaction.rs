@@ -1,6 +1,6 @@
 //! Pointer interaction: handles and drags, tool selection and drawing creation.
 
-use super::{DrawingManager, DrawingSyncAction, sync_id};
+use super::{DrawingEventKind, DrawingManager, DrawingSyncAction, sync_id};
 use crate::drawings::domain::{
     ChartPoint, Drawing, DrawingInteractionMode, DrawingToolType, HandlePos,
 };
@@ -290,13 +290,17 @@ impl DrawingManager {
         for old in &erase.before {
             if self.drawings.iter().any(|d| d.id == old.id) {
                 self.queue_edit(old);
-            } else if old.saveable {
-                self.queue(DrawingSyncAction::Delete(sync_id(old)));
+            } else {
+                if old.saveable {
+                    self.queue(DrawingSyncAction::Delete(sync_id(old)));
+                }
+                self.report(old.id, DrawingEventKind::Removed);
             }
         }
         for id in &erase.added {
             if self.drawings.iter().any(|d| d.id == *id) {
                 self.queue(DrawingSyncAction::SaveDrawing(*id));
+                self.report(*id, DrawingEventKind::Created);
             }
         }
         let ids = erase
@@ -315,8 +319,11 @@ impl DrawingManager {
             })
             .collect();
         drawings.sort_by_key(|(index, _)| *index);
-        self.history
-            .push_command(DrawingCommand::Snapshot { drawings, ids });
+        self.history.push_command(DrawingCommand::Snapshot {
+            drawings,
+            ids,
+            moved: false,
+        });
     }
 
     // === Handle delegation ===
@@ -789,6 +796,9 @@ impl DrawingManager {
         }
         for id in converted {
             self.queue_update(id);
+            if self.drawings.iter().any(|d| d.id == id) {
+                self.report(id, DrawingEventKind::AnchorsChanged);
+            }
         }
     }
 
@@ -797,6 +807,7 @@ impl DrawingManager {
     /// A copy drag records the additions instead, so undo removes every copy.
     pub fn end_drag_handle(&mut self) {
         self.end_partial_erase();
+        let moved = self.drag_origin.is_some();
         if let Some(old_state) = self.drag_old_state.take() {
             if std::mem::take(&mut self.drag_copy) {
                 let mut ids: Vec<_> = std::mem::take(&mut self.drag_group)
@@ -807,23 +818,29 @@ impl DrawingManager {
                 ids.sort_by_key(|id| self.drawings.iter().position(|d| d.id == *id));
                 for &id in &ids {
                     self.queue(DrawingSyncAction::SaveDrawing(id));
+                    self.report(id, DrawingEventKind::Created);
                 }
                 self.history
                     .push_command(crate::drawings::services::DrawingCommand::Snapshot {
                         drawings: Vec::new(),
                         ids,
+                        moved: false,
                     });
                 self.dragging_handle = None;
                 self.drag_origin = None;
                 return;
             }
-            self.queue_edit(&old_state);
+            self.queue_change(&old_state, moved);
             if self.drag_group.is_empty() {
-                self.history.push_modify(old_state.id, old_state);
+                if moved {
+                    self.history.push_moved(old_state.id, old_state);
+                } else {
+                    self.history.push_modify(old_state.id, old_state);
+                }
             } else {
                 let mut before = std::mem::take(&mut self.drag_group);
                 for drawing in &before {
-                    self.queue_update(drawing.id);
+                    self.queue_change(drawing, true);
                 }
                 before.push(old_state);
                 let snapshot = self
@@ -835,7 +852,7 @@ impl DrawingManager {
                         Some((index, old.clone()))
                     })
                     .collect();
-                self.history.push_snapshot(snapshot);
+                self.history.push_moved_snapshot(snapshot);
             }
         }
         self.dragging_handle = None;
@@ -1241,6 +1258,7 @@ impl DrawingManager {
             self.drawings.push(drawing);
             self.select(id);
             self.queue(DrawingSyncAction::SaveDrawing(id));
+            self.report(id, DrawingEventKind::Created);
             if !self.stay_in_drawing_mode {
                 self.active_tool = None;
                 self.active_custom_tool = None;
