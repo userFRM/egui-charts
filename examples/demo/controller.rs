@@ -2464,8 +2464,11 @@ impl DemoApp {
         self.drawing_toolbar.state.hide_indicators = self.chart.indicators_hidden();
         self.drawing_toolbar.state.hide_drawings = self.chart.drawings().is_hidden();
         let drawings = &self.chart.drawings().drawings;
-        self.drawing_toolbar.state.lock_all =
-            !drawings.is_empty() && drawings.iter().all(|d| d.locked);
+        self.drawing_toolbar.state.lock_all = drawings.iter().any(|d| d.user_edit_enabled)
+            && drawings
+                .iter()
+                .filter(|d| d.user_edit_enabled)
+                .all(|d| d.locked);
         if self.drawing_toolbar.state.preferences.hidden {
             let action = self.drawing_toolbar.show_with_action(ui);
             self.handle_drawing_toolbar(action);
@@ -2502,7 +2505,7 @@ impl DemoApp {
                 .drawings()
                 .drawings
                 .iter()
-                .any(|drawing| drawing.locked),
+                .any(|drawing| drawing.locked && drawing.user_edit_enabled),
             &mut self.drawing_toolbar.state,
         );
         match action {
@@ -2955,6 +2958,7 @@ impl DemoApp {
                 SourceItem::drawing(d.id, d.tool_type, d.color32()).with_panes(&self.chart);
             item.visible = d.visible;
             item.locked = d.locked;
+            item.user_edit_enabled = d.user_edit_enabled;
             item.z_index = d.z_order;
             item.label = d.label.clone();
             item.folder = d.folder.clone();
@@ -3003,7 +3007,12 @@ impl DemoApp {
                             chart.set_series_options(study, options);
                         }
                     }
-                } else {
+                } else if chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .any(|d| d.id == id && d.accepts_user_edits())
+                {
                     let _ = chart
                         .drawings_mut()
                         .drag_edit_drawing(id, |d| d.color = color.to_srgba_unmultiplied());
@@ -3786,12 +3795,9 @@ impl DemoApp {
         }
         if let Some(id) = drawing_settings
             && !self.replay_selecting
-            && self
-                .chart
-                .drawings()
-                .drawings
-                .iter()
-                .any(|d| d.id == id && (d.locked || !d.tool_type.edits_text_inline()))
+            && self.chart.drawings().drawings.iter().any(|d| {
+                d.id == id && (!d.accepts_user_edits() || !d.tool_type.edits_text_inline())
+            })
         {
             self.open_drawing_props_for(id);
         }
@@ -4019,7 +4025,13 @@ impl DemoApp {
             DrawingContextMenuAction::BringToFront => dm.bring_to_front(id),
             DrawingContextMenuAction::SendToBack => dm.send_to_back(id),
             DrawingContextMenuAction::MoveTo(pane) => {
-                self.chart.move_drawing_to_pane(id, pane);
+                if dm
+                    .drawings
+                    .iter()
+                    .any(|d| d.id == id && d.accepts_user_edits())
+                {
+                    self.chart.move_drawing_to_pane(id, pane);
+                }
             }
             DrawingContextMenuAction::AddAlert(mut alert) => {
                 self.list_alert_sources();
@@ -9257,6 +9269,10 @@ mod tests {
         );
         assert_eq!(app.chart.drawings().drawings[0].color, [51, 102, 153, 85]);
         app.chart.drawings_mut().end_drag_handle();
+        app.chart.drawings_mut().drawings[0].user_edit_enabled = false;
+        app.handle_object_tree(ObjectTreeAction::ChangeColor(7, egui::Color32::RED), &[]);
+        assert_eq!(app.chart.drawings().drawings[0].color, [51, 102, 153, 85]);
+        app.chart.drawings_mut().drawings[0].user_edit_enabled = true;
         app.chart
             .drawings_mut()
             .edit_drawing(7, |d| d.locked = true)
