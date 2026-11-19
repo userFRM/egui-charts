@@ -40,6 +40,10 @@ pub(super) struct LiveState {
     rejected: usize,
     tick: u64,
     range: Option<EquityRange>,
+    instrument_currency: Option<String>,
+    exchange_rates: Vec<Bar>,
+    rate: f64,
+    unconverted: bool,
 }
 
 // Compare bits so unchanged invalid feed values do not cause an endless rebuild.
@@ -85,11 +89,13 @@ impl Backtest {
     /// again with that forming bar included in the context. Its fills and orders are retained
     /// when the bar closes; unseen intrabar extremes are never replayed over observed ticks.
     /// Identical snapshots do nothing. Live fill callbacks exclude the unfinished bar;
-    /// historical tick callbacks see their developing candle.
+    /// historical tick callbacks see their developing candle. `settings.end_time` does not apply
+    /// to a live run.
     ///
-    /// A correction before the previous forming bar, removed history, changed settings or inputs
-    /// rebuilds from the start using `Strategy::prepare` to reset decision state. Replayed fills
-    /// before the previous forming bar are not returned again. An observed forming bar can be
+    /// A correction before the previous forming bar, removed history, changed settings, inputs or
+    /// instrument currency, or changed exchange rates while amounts convert, rebuilds from the
+    /// start using `Strategy::prepare` to reset decision state. Replayed fills before the previous
+    /// forming bar are not returned again. An observed forming bar can be
     /// revised freely without a rebuild. Start a new `Backtest` for a different strategy instance.
     ///
     /// # Panics
@@ -130,6 +136,9 @@ impl Backtest {
                 || live.report.name != self.name
                 || live.report.symbol != self.symbol
                 || live.report.timeframe != self.timeframe
+                || live.instrument_currency != self.instrument_currency
+                || (self.conversion().is_some()
+                    && !same_bars(&live.exchange_rates, &self.exchange_rates))
                 || !same_lower(&live.lower, lower, replay_before)
         });
         let mut live = if rebuild {
@@ -149,6 +158,14 @@ impl Backtest {
                 rejected: 0,
                 tick: 0,
                 range: None,
+                instrument_currency: self.instrument_currency.clone(),
+                exchange_rates: self.exchange_rates.clone(),
+                rate: if self.conversion().is_some() {
+                    f64::NAN
+                } else {
+                    1.0
+                },
+                unconverted: false,
             })
         } else {
             previous.expect("an existing live run")
@@ -205,6 +222,9 @@ impl Backtest {
             fills: Some(&mut fills),
             forming: false,
             range: live.range,
+            rates: self.rates(),
+            rate: live.rate,
+            unconverted: Cell::new(live.unconverted),
         };
         let mut finer: Vec<_> = lower.iter().filter(|bar| valid_bar(bar)).collect();
         finer.sort_by_key(|bar| bar.time);
@@ -290,6 +310,11 @@ impl Backtest {
         live.rejected = run.rejected;
         live.tick = run.tick;
         live.range = run.range;
+        live.rate = run.rate;
+        live.unconverted = run.unconverted.get();
+        if live.unconverted {
+            self.withhold(&mut live.report);
+        }
         for fill in &mut fills {
             live.sequence += 1;
             fill.sequence = live.sequence;
@@ -435,6 +460,9 @@ mod tests {
                 tick_size: 0.25,
             };
             engine.settings.recalculate_after_fills = true;
+            engine.settings.currency = Some("EUR".into());
+            engine.instrument_currency = Some("USD".into());
+            engine.exchange_rates = vec![bar(0, 0.9), bar(4, 0.8)];
             let mut script = Script::default();
             let mut sequence = 0;
             for count in 0..=bars.len() {
@@ -493,6 +521,29 @@ mod tests {
                 engine.report(),
                 Some(&engine.run(&mut Script::default(), &corrected[..8], &[]))
             );
+            // New rates rebuild the run at them.
+            engine.exchange_rates = vec![bar(0, 0.5)];
+            engine.update(&mut script, &corrected, &[]);
+            assert_eq!(
+                engine.report(),
+                Some(&engine.run(&mut Script::default(), &corrected[..8], &[]))
+            );
+        }
+        // A rate missing at minute 3 alone withholds every later report, as it does the run's.
+        let mut engine = Backtest::new("Live", "SYM", Timeframe::Min1, 10_000.0);
+        engine.settings.currency = Some("EUR".into());
+        engine.instrument_currency = Some("USD".into());
+        engine.exchange_rates = vec![bar(0, 0.9), bar(3, f64::NAN), bar(4, 0.8)];
+        let mut script = Script::default();
+        for count in 0..=bars.len() {
+            engine.update(&mut script, &bars[..count], &[]);
+            let full = engine.run(
+                &mut Script::default(),
+                &bars[..count.saturating_sub(1)],
+                &[],
+            );
+            assert_eq!(full.unavailable.is_some(), count > 4, "prefix {count}");
+            assert_eq!(engine.report(), Some(&full), "prefix {count}");
         }
         // Every built-in refreshes its calculations while retaining its decision state.
         let factory = StrategyFactory::new();

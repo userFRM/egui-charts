@@ -354,6 +354,22 @@ impl DrawingProps {
                     line_measurements.text_vertical_align,
                     line_measurements.text_orientation,
                     line_measurements.across_panes,
+                    range_settings.price_change,
+                    range_settings.percent_change,
+                    range_settings.pip_change,
+                    range_settings.bar_count,
+                    range_settings.elapsed_time,
+                    range_settings.volume,
+                    range_settings.text_color,
+                    range_settings.font_size,
+                    range_settings.background,
+                    range_settings.background_color,
+                    range_settings.border,
+                    range_settings.border_color,
+                    range_settings.border_width,
+                    range_settings.border_style,
+                    range_settings.extend_top,
+                    range_settings.extend_bottom,
                     price_axis_label,
                     time_axis_label,
                     elliott_degree,
@@ -375,6 +391,7 @@ impl DrawingProps {
                     gann => |d: &Drawing| d.gann_config().clone(),
                     ghost_feed => |d: &Drawing| d.ghost_feed.unwrap_or_default(),
                     bars_pattern => |d: &Drawing| d.bars_pattern.unwrap_or_default(),
+                    projection => |d: &Drawing| d.projection_config().into_owned(),
                     volume_profile => |d: &Drawing| d.volume_profile.unwrap_or_default(),
                     regression_trend => |d: &Drawing| d.regression_trend.unwrap_or_default(),
                     vwap => |d: &Drawing| d.vwap.unwrap_or_default(),
@@ -489,6 +506,11 @@ impl DrawingProps {
             }) {
                 return Err("Pitchfork widths must be above 0 and at most 100");
             }
+            if settings.projection.as_ref().is_some_and(|c| !c.is_valid()) {
+                return Err(
+                    "Projection coefficients must be between 0 and 100, widths above 0 and at most 100",
+                );
+            }
             if let Some(c) = settings.gann.as_ref() {
                 let square = matches!(
                     settings.tool_type,
@@ -540,6 +562,11 @@ impl DrawingProps {
             }
             if !settings.position_style.is_valid() {
                 return Err("Position line width must be 1 to 100 and font size 1 to 256");
+            }
+            if !settings.range_settings.is_valid() {
+                return Err(
+                    "Range label size must be 1 to 256 and border width above 0 and at most 100",
+                );
             }
             if !settings.marker.is_valid() {
                 return Err("Glyph must be 1 to 32 bytes");
@@ -824,6 +851,10 @@ mod tests {
                 reverse: true,
                 ..Default::default()
             });
+            settings.projection = Some(crate::drawings::ProjectionConfig {
+                show_background: false,
+                ..Default::default()
+            });
             settings.pitchfork = Some(PitchforkConfig {
                 background_opacity: 75,
                 ..Default::default()
@@ -911,6 +942,7 @@ mod tests {
             let saved = &chart.drawings().drawings[0];
             assert_eq!(format!("{:?}", saved.fib_config), expected);
             assert_eq!(saved.pitchfork.as_ref().unwrap().background_opacity, 75);
+            assert!(!saved.projection.as_ref().unwrap().show_background);
             assert_eq!(
                 saved
                     .gann

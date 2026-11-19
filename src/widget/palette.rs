@@ -83,6 +83,21 @@ pub(crate) fn follow_candle_colors(
             *color = new.bearish_color;
         }
     }
+    // So do the Kagi lines and the Point and Figure columns.
+    for (up, down) in [
+        (&mut styles.kagi.up_color, &mut styles.kagi.down_color),
+        (
+            &mut styles.point_figure.up_color,
+            &mut styles.point_figure.down_color,
+        ),
+    ] {
+        if old.iter().any(|old| *up == old.bullish_color) {
+            *up = new.bullish_color;
+        }
+        if old.iter().any(|old| *down == old.bearish_color) {
+            *down = new.bearish_color;
+        }
+    }
     // So do the HLC area's high and low lines and fills; a fill keeps its opacity.
     let style = &mut styles.hlc_area;
     for (line, fill, side) in [
@@ -207,7 +222,7 @@ mod tests {
                         if edited {
                             egui::Color32::BLUE
                         } else {
-                            to.chart.grid_line_major
+                            to.chart.session_break
                         }
                     );
                     assert_eq!(
@@ -253,7 +268,7 @@ mod tests {
             assert_eq!(shared.config().bullish_color, theme.chart.candle_up);
             assert_eq!(
                 shared.config().session_break_color,
-                theme.chart.grid_line_major
+                theme.chart.session_break
             );
             assert_eq!(shared.config().watermark_color, watermark);
             assert_eq!(shared.config().bearish_color, egui::Color32::RED);
@@ -342,7 +357,7 @@ mod tests {
     /// Both calls follow unedited chart type style colours as a theme change through the context
     /// does, and keep edited ones. The light preset's colours go to the high contrast preset's.
     #[test]
-    fn set_theme_recolours_unedited_hlc_area_colours() {
+    fn set_theme_recolours_unedited_chart_type_colours() {
         use egui::Color32;
         const EDITED: Color32 = Color32::from_rgb(1, 2, 3);
         let up = Color32::from_rgb(0, 220, 130);
@@ -359,6 +374,7 @@ mod tests {
                     let styles = &mut chart.chart_type_params.styles;
                     styles.hlc_area.high_line.color = EDITED;
                     styles.volume_candles.wick_up = EDITED;
+                    styles.kagi.down_color = EDITED;
                 }
                 if via_override {
                     chart.set_theme_override(Some(to.clone()));
@@ -382,6 +398,11 @@ mod tests {
                 assert_eq!(volume_candles.body_up, up);
                 assert_eq!(volume_candles.wick_up, if edited { EDITED } else { up });
                 assert_eq!(volume_candles.wick_down, down);
+                let kagi = &chart.chart_type_params.styles.kagi;
+                assert_eq!(kagi.up_color, up);
+                assert_eq!(kagi.down_color, if edited { EDITED } else { down });
+                let point_figure = &chart.chart_type_params.styles.point_figure;
+                assert_eq!((point_figure.up_color, point_figure.down_color), (up, down));
             }
         }
     }

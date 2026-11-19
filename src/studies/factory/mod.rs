@@ -122,14 +122,15 @@ impl IndicatorFactory {
     /// Register every built-in indicator under its canonical name.
     ///
     /// Types use their defaults; automatic drawings select a construction kind and
-    /// stream studies select aggregation parameters. Names come from each study.
+    /// stream studies select aggregation parameters, and each candlestick pattern is also
+    /// registered alone under its label. Names come from each study.
     /// Exported studies outside the catalogue are registered first, without a category, so a
     /// listed study of the same name would replace them.
     fn register_builtin(&mut self) {
         // Exported studies outside the catalogue, resolved by name so that saved copies load.
         register_builtins!(@help self, "struct", CVD, HL2, HLC3, EhlersFisher, MACombination, OrderFlowStudy, ChartPatterns, OptionsVolumeProfile);
         #[cfg(feature = "drawings")]
-        register_builtins!(@help self, "struct", AutoDrawing);
+        register_builtins!(@help self, "struct", AutoDrawing, AutoTrendLines);
         let unlisted: [fn() -> Box<dyn Indicator>; 5] = [
             || Box::new(CVD::default()),
             || Box::new(HL2::default()),
@@ -313,6 +314,7 @@ impl IndicatorFactory {
                 FallingWedge,
                 MissedPivots,
                 KeyLevels,
+                AutoKeyLevels,
                 IntradayPivotPoints,
                 ProjectedPivotPoints,
                 WilliamsFractals,
@@ -360,6 +362,16 @@ impl IndicatorFactory {
                 CandlestickPatterns,
             ],
         );
+        // Individual patterns are found and saved under the same labels as their toggles.
+        for index in 0..CandlestickPatterns::PATTERN_COUNT {
+            self.constructors.insert(
+                CandlestickPatterns::only(index).name().to_owned(),
+                (
+                    Some(Self::PATTERNS),
+                    Box::new(move || Box::new(CandlestickPatterns::only(index))),
+                ),
+            );
+        }
         for kind in [
             OrderFlowKind::Spread,
             OrderFlowKind::BookSize {
@@ -421,6 +433,22 @@ impl IndicatorFactory {
                 ),
             );
         }
+        self.constructors.insert(
+            ChartPatterns::all().name().to_owned(),
+            (
+                Some(Self::PATTERNS),
+                Box::new(|| Box::new(ChartPatterns::all())),
+            ),
+        );
+        for &kind in PatternFamily::ALL.iter().flat_map(|family| family.kinds()) {
+            self.constructors.insert(
+                ChartPatterns::only(kind).name().to_owned(),
+                (
+                    Some(Self::PATTERNS),
+                    Box::new(move || Box::new(ChartPatterns::only(kind))),
+                ),
+            );
+        }
         #[cfg(feature = "drawings")]
         for kind in AutoDrawingKind::ALL {
             let name = AutoDrawing::new(kind, 5.0, 10).name().to_owned();
@@ -432,6 +460,14 @@ impl IndicatorFactory {
                 ),
             );
         }
+        #[cfg(feature = "drawings")]
+        self.constructors.insert(
+            AutoTrendLines::new().name().to_owned(),
+            (
+                Some("Support and resistance"),
+                Box::new(|| Box::new(AutoTrendLines::new())),
+            ),
+        );
     }
 
     /// Register a named indicator constructor in the [`CUSTOM`](Self::CUSTOM) category.

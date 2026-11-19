@@ -18,6 +18,10 @@ pub(crate) const MAX_TEXT_WRAP_WIDTH: f32 = 10_000.0;
 /// drawn. Larger levels lie far outside the chart, and near `f32::MAX` overflow its geometry.
 pub(crate) const MAX_PITCHFORK_LEVEL: f32 = 100.0;
 
+/// The largest projection coefficient, as a multiple of the measured move, that is drawn.
+/// Larger levels lie far outside the chart.
+pub(crate) const MAX_PROJECTION_LEVEL: f32 = 100.0;
+
 /// The distance from bar 0 at which no chart with fewer than 2^35 bars maps a bar index to a
 /// time: even one nanosecond shared by every bar puts it more than `i64::MAX` nanoseconds past
 /// the outermost bar, and a calendar interval more than `u32::MAX` months. Saving refuses such

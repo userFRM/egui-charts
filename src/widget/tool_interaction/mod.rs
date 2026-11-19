@@ -438,11 +438,7 @@ impl Chart {
                 == DrawingInteractionMode::ContinuousDraw
                 || (ui.input(|i| i.modifiers.shift)
                     && (DrawingManager::constrains_angle(active_tool)
-                        || matches!(
-                            active_tool,
-                            crate::drawings::DrawingToolType::Rect
-                                | crate::drawings::DrawingToolType::Ellipse
-                        )));
+                        || DrawingManager::squares_box(active_tool)));
             if uses_precise {
                 interaction::handle_active_tool(
                     ui,
@@ -478,6 +474,13 @@ impl Chart {
             );
         }
 
+        // A card placed this frame stands at the time its content was published.
+        if drawing_manager.drawings.len() > count_before
+            && drawing_manager.dragging_handle.is_none()
+            && let Some(id) = drawing_manager.drawings.last().map(|d| d.id)
+        {
+            self.place_new_post(drawing_manager, id);
+        }
         let edit_id = if drawing_manager.text_editor.is_some() {
             None
         } else if drawing_manager.drawings.len() > count_before
@@ -1318,22 +1321,26 @@ mod tests {
 
     /// A square has equal screen sides in any quadrant, including against a pane edge.
     #[test]
-    fn shift_rectangle_creation_is_square_in_preview_and_after_release() {
+    fn shift_box_creation_is_square_in_preview_and_after_release() {
+        use DrawingToolType as T;
         use egui::{pos2, vec2};
-        for (shift, delta) in [
-            (true, vec2(240.0, 60.0)),
-            (false, vec2(240.0, 60.0)),
-            (true, vec2(-240.0, 60.0)),
-            (true, vec2(240.0, -60.0)),
-            (true, vec2(-240.0, -60.0)),
-            (true, vec2(1000.0, 60.0)),
+        for (tool, shift, delta) in [
+            (T::Rect, true, vec2(240.0, 60.0)),
+            (T::Rect, false, vec2(240.0, 60.0)),
+            (T::Rect, true, vec2(-240.0, 60.0)),
+            (T::Rect, true, vec2(240.0, -60.0)),
+            (T::Rect, true, vec2(-240.0, -60.0)),
+            (T::Rect, true, vec2(1000.0, 60.0)),
+            (T::FibonacciCircles, true, vec2(1000.0, 60.0)),
+            (T::GannBox, true, vec2(1000.0, 60.0)),
+            (T::GannSquare, true, vec2(1000.0, 60.0)),
+            (T::GannFixed, true, vec2(1000.0, 60.0)),
+            (T::GannFan, true, vec2(1000.0, 60.0)),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
             frame(&ctx, &mut chart, 0.0, vec![]);
-            chart
-                .drawings_mut()
-                .set_active_tool(Some(DrawingToolType::Rect));
+            chart.drawings_mut().set_active_tool(Some(tool));
             let map = chart.get_chart_mapping();
             let center = chart.get_rendered_price_rect().center();
             let a = pos2(map.idx_to_x(map.x_to_idx(center.x)), center.y);
@@ -1371,11 +1378,11 @@ mod tests {
                 let d = points[1] - points[0];
                 assert!(
                     (d.x.abs() - expected_side).abs() < 0.01,
-                    "{delta:?}: {points:?}"
+                    "{tool:?} {delta:?}: {points:?}"
                 );
                 assert!(
                     (d.x.abs() - d.y.abs()).abs() < 0.01,
-                    "{delta:?}: {points:?}"
+                    "{tool:?} {delta:?}: {points:?}"
                 );
             };
             if shift {

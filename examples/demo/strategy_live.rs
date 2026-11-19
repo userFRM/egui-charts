@@ -21,9 +21,9 @@ impl Strategy for Momentum {
             return;
         };
         if bar.close > previous.close && context.position() <= 0.0 {
-            context.entry("Long", OrderSide::Buy, 2.0, OrderType::Market);
+            context.entry("Long", OrderSide::Buy, None, OrderType::Market);
         } else if bar.close < previous.close && context.position() >= 0.0 {
-            context.entry("Short", OrderSide::Sell, 2.0, OrderType::Market);
+            context.entry("Short", OrderSide::Sell, None, OrderType::Market);
         }
     }
 }
@@ -36,15 +36,18 @@ impl DemoApp {
             return;
         };
         let id = format!("Live momentum {}", chrono::Utc::now().to_rfc3339());
+        let settings = self.strategy_report.settings().clone();
         let mut run = Backtest::new(
             "Live momentum (synthetic data)",
             self.chart.symbol(),
             self.state.timeframe,
-            10_000.0,
+            settings.initial_capital,
         );
+        run.settings = settings;
+        // A forward test primes on the latest 121 bars and runs on without an end.
         run.settings.start_time = Some(first.time);
-        run.settings.recalculate_on_every_update = true;
-        run.settings.currency = self
+        run.settings.end_time = None;
+        run.instrument_currency = self
             .chart
             .instrument()
             .and_then(|instrument| instrument.currency.clone());
@@ -154,6 +157,7 @@ impl DemoApp {
 mod tests {
     use super::*;
     use egui_charts::model::{BarClock, Timeframe};
+    use egui_charts::strategies::Commission;
 
     #[test]
     fn demo_live_feed_delivers_one_alert_for_each_strategy_fill() {
@@ -173,6 +177,10 @@ mod tests {
             )
         };
         app.chart.set_data(SeriesId::MAIN, snapshot(&app));
+        let mut settings = app.strategy_report.settings().clone();
+        settings.commission = Commission::PerOrder(2.5);
+        settings.recalculate_on_every_update = true;
+        app.strategy_report.set_settings(settings).unwrap();
         app.start_live_strategy();
         let id = app.live_strategy.as_ref().unwrap().1.clone();
         app.chart.set_feed_paused(true);
@@ -203,6 +211,12 @@ mod tests {
             assert_eq!(fills, expected, "second {second}");
         }
         assert!(expected > 0, "the live feed must exercise executions");
+        let report = reference.report().unwrap();
+        // A reversal splits one order's fee between its closed and newly opened trades.
+        assert_eq!(
+            report.trades.iter().map(|trade| trade.fees).sum::<f64>(),
+            2.5 * report.trades.len() as f64
+        );
         // The momentum run takes the side of each bar's move, so its fills turn the position
         // and every turn is an alert call of its own after the fill it follows.
         let turns: Vec<_> = app
@@ -223,5 +237,19 @@ mod tests {
         let alerts = app.alert_host.engine().alerts();
         assert_eq!(alerts.len(), 2);
         assert!(alerts.iter().all(|a| a.status == AlertStatus::Disabled));
+
+        let mut settings = app.strategy_report.settings().clone();
+        settings.currency = Some("EUR".into());
+        app.strategy_report.set_settings(settings).unwrap();
+        app.start_live_strategy();
+        let run = &app.live_strategy.as_ref().unwrap().0;
+        let report = run.report().unwrap();
+        assert_eq!(run.instrument_currency.as_deref(), Some("USD"));
+        assert_eq!(report.currency.as_deref(), Some("EUR"));
+        assert_eq!(
+            report.unavailable.as_deref(),
+            Some("Exchange rates from USD to EUR are unavailable")
+        );
+        assert!(report.trades.is_empty() && report.equity.is_empty());
     }
 }

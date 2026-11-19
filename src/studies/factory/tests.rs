@@ -251,6 +251,7 @@ fn every_study_styles_a_line_past_its_last() {
 /// Catalogue studies have distinct values except ADX and DMI, which expose the same Wilder
 /// components in a different order, and Donchian and Price Channel, which draw the same highest
 /// high, lowest low and midpoint with their own colours and fill. Fixed profiles use a saved end.
+/// Single candlestick patterns are left out.
 #[test]
 fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
     use crate::model::Bar;
@@ -284,6 +285,21 @@ fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
     for name in names {
         let mut study = factory.create(&name).unwrap();
         if study.needs_order_flow() {
+            continue;
+        }
+        // Many single patterns never complete on this fixture; their definition table tests
+        // distinguish them and their factory names instead.
+        if (0..CandlestickPatterns::PATTERN_COUNT)
+            .any(|k| CandlestickPatterns::only(k).name() == name)
+        {
+            continue;
+        }
+        // A single chart formation repeats its family's study with the other formations off.
+        if PatternFamily::ALL
+            .iter()
+            .flat_map(|family| family.kinds())
+            .any(|&kind| ChartPatterns::only(kind).name() == name)
+        {
             continue;
         }
         // External series have no values until the host supplies their distinct inputs.
@@ -742,6 +758,19 @@ fn catalogue_choices_read_in_words_and_restore() {
         ("CVD", "mode", 1, "Body ratio"),
         ("ZigZag", "mode", 0, "High/Low"),
         ("Keltner", "band", 0, "Average True Range"),
+        ("Auto Key Levels", "start", 0, "Start of period"),
+        ("Auto Key Levels", "start", 1, "Current bar"),
+        ("Auto Key Levels", "anchor", 0, "Custom"),
+        ("Auto Key Levels", "anchor", 1, "Earnings"),
+        ("Auto Key Levels", "anchor", 2, "Split"),
+        ("Auto Key Levels", "anchor", 3, "Dividends"),
+        ("Auto Key Levels", "unit", 0, "Days"),
+        ("Auto Key Levels", "unit", 1, "Weeks"),
+        ("Auto Key Levels", "unit", 2, "Months"),
+        ("Missed Pivot Levels", "period", 0, "Swings"),
+        ("Missed Pivot Levels", "period", 1, "Daily"),
+        ("Missed Pivot Levels", "period", 2, "Weekly"),
+        ("Missed Pivot Levels", "period", 3, "Monthly"),
     ];
     let got: Vec<_> = saved
         .iter()

@@ -183,6 +183,11 @@ impl DemoApp {
         if self.strategy_report.report().is_none() {
             return;
         }
+        self.strategy_report.set_instrument_currency(
+            self.chart
+                .instrument()
+                .and_then(|instrument| instrument.currency.clone()),
+        );
         let chart_type = self.chart.chart_type();
         if self.live_strategy.is_none() && self.strategy_report.settings().chart_type != chart_type
         {
@@ -770,10 +775,12 @@ mod tests {
                 let export = text_at(&output, "Export trades CSV");
                 output.drop_without_applying_deltas();
                 click(&mut app, export);
+                let comparison = report.comparison(&bars[bars.len() - 122..bars.len() - 1]);
+                assert!(comparison.excursions.iter().any(Option::is_some));
                 assert_eq!(
                     std::fs::read_to_string(std::env::temp_dir().join("strategy-trades.csv"))
                         .unwrap(),
-                    report.trades_csv()
+                    report.trades_csv_with_excursions(&comparison)
                 );
                 app.execute_search_command(&ctx, "backtest");
                 assert!(app.strategy_trade.is_none());

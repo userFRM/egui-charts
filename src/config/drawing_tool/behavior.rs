@@ -56,6 +56,8 @@ impl DrawingToolType {
                 | Self::FibonacciSpiral
                 | Self::FibonacciSpeedResistanceArcs
                 | Self::FibonacciWedge
+                // Projections fill their target zones from their own settings.
+                | Self::ProjectionTool
                 // Forks fill their bands from their level settings.
                 | Self::Pitchfork
                 | Self::SchiffPitchfork
@@ -152,6 +154,8 @@ impl DrawingToolType {
                     | Self::Rect
                     | Self::Circle
                     | Self::Ellipse
+                    | Self::DateRange
+                    | Self::DateAndPriceRange
                     | Self::Arrow
                     | Self::ArrowMarker
                     | Self::ArrowMarkUp
@@ -201,7 +205,8 @@ impl DrawingToolType {
     }
 
     /// Whether the renderer draws the drawing's line style, so the Style tab and the floating
-    /// toolbar offer it. Pitchfork levels and the regression trend's lines set their own.
+    /// toolbar offer it. Pitchfork levels, the regression trend's lines and the projection's leg
+    /// and levels set their own.
     pub fn supports_line_style(&self) -> bool {
         self.draws_line()
             && !matches!(
@@ -212,6 +217,7 @@ impl DrawingToolType {
                     | Self::InsidePitchfork
                     | Self::Pitchfan
                     | Self::RegressionTrend
+                    | Self::ProjectionTool
             )
     }
 
@@ -247,6 +253,25 @@ impl DrawingToolType {
                 | Self::FibonacciSpeedFan
                 | Self::LongPos
                 | Self::ShortPos
+        )
+    }
+
+    /// Whether the drawing's text follows the Show text switch, `marker.show_text`: a horizontal
+    /// line, a horizontal ray, an arrow mark and the parallel, flat top/bottom and disjoint
+    /// channels. A pin's popup reads the same switch itself; other tools always show their text.
+    #[cfg(feature = "drawings")]
+    pub(crate) fn has_text_switch(&self) -> bool {
+        matches!(
+            self,
+            Self::HorizontalLine
+                | Self::HorizontalRay
+                | Self::ArrowMarkUp
+                | Self::ArrowMarkDown
+                | Self::ArrowMarkLeft
+                | Self::ArrowMarkRight
+                | Self::ParallelChannel
+                | Self::FlatTopBottom
+                | Self::DisjointChannel
         )
     }
 

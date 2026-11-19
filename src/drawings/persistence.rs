@@ -158,8 +158,8 @@ impl StoredDrawing {
         (self.points.len() < needed).then_some((needed, self.points.len()))
     }
 
-    /// The first field holding NaN or an infinity, which JSON cannot store, or a size or
-    /// pitchfork level outside the range drawings are drawn at.
+    /// The first field holding NaN or an infinity, which JSON cannot store, or a size,
+    /// pitchfork level or projection level outside the range drawings are drawn at.
     pub(super) fn invalid_field(&self) -> Option<String> {
         use super::validation::{
             MAX_IMAGE_SIDE, MAX_PITCHFORK_LEVEL, MAX_STROKE_WIDTH, MAX_TEXT_WRAP_WIDTH,
@@ -218,11 +218,17 @@ impl StoredDrawing {
         if d.ghost_feed.is_some_and(|c| !c.is_valid()) {
             return Some("ghost_feed".into());
         }
+        if d.projection.as_ref().is_some_and(|c| !c.is_valid()) {
+            return Some("projection".into());
+        }
         if !d.position_readout.is_valid() {
             return Some("position_readout".into());
         }
         if !d.position_style.is_valid() {
             return Some("position_style".into());
+        }
+        if !d.range_settings.is_valid() {
+            return Some("range_settings".into());
         }
         if !d.marker.is_valid() {
             return Some("marker".into());
@@ -1190,12 +1196,19 @@ mod v1 {
             _ => drawing.font_size,
         };
         drawing.font_weight = FontWeight::Normal;
+        // Released measuring readouts used the fixed size above.
+        drawing.range_settings.font_size = drawing.font_size;
         drawing.text_color = None;
         drawing.background = true;
         drawing.border = true;
         drawing.border_color = None;
         drawing.channel_midline = false;
         drawing.theme_shade = false;
+        drawing.regression_trend = None;
+        drawing.position_size = None;
+        drawing.position_target_color = None;
+        drawing.position_stop_color = None;
+        drawing.elliott_degree = crate::drawings::ElliottDegree::default();
         // Info lines already displayed readouts; other lines keep their old text placement.
         drawing.line_measurements = if tool_type == DrawingToolType::InfoLine {
             LineMeasurements::for_tool(tool_type)
@@ -1470,6 +1483,24 @@ mod tests {
             show_glyph: true,
             glyph_color: Some([21, 22, 23, 24]),
         };
+        d.range_settings = crate::drawings::RangeSettings {
+            price_change: false,
+            percent_change: false,
+            pip_change: false,
+            bar_count: false,
+            elapsed_time: false,
+            volume: false,
+            text_color: Some([25, 26, 27, 28]),
+            font_size: 18.0,
+            background: false,
+            background_color: Some([29, 30, 31, 32]),
+            border: false,
+            border_color: Some([33, 34, 35, 36]),
+            border_width: Some(2.5),
+            border_style: Some(LineStyle::Dashed),
+            extend_top: true,
+            extend_bottom: true,
+        };
         d.z_order = -3;
         d.update_screen_coords(bar_to_x, price_to_y);
         d
@@ -1540,6 +1571,19 @@ mod tests {
             fork.levels[1].visible = false;
             fork.show_background = false;
             drawing.pitchfork = Some(fork);
+            drawing.projection = Some(crate::drawings::ProjectionConfig {
+                show_coefficients: false,
+                background_colors: [[1, 2, 3, 4], [5, 6, 7, 8]],
+                trend_line_style: LineStyle::Dotted,
+                levels: vec![crate::drawings::ProjectionLevel {
+                    coefficient: 1.618,
+                    visible: false,
+                    color: [9, 8, 7, 6],
+                    line_style: LineStyle::SparseDotted,
+                    width: Some(3.5),
+                }],
+                ..Default::default()
+            });
             drawing.channel_midline = true;
             drawing.closed = true;
             drawing.elliott_degree = ElliottDegree::Submicro;
@@ -1741,6 +1785,8 @@ mod tests {
             want.line_style = LineStyle::Solid;
             // Only the text label rendered text here, in a fixed 14 pt font.
             want.font_size = 14.0;
+            want.elliott_degree = ElliottDegree::default(); // Version 1 waves read at Minor.
+            want.range_settings.font_size = 14.0;
             want.text_color = None;
             want.background = true;
             want.border = true;
@@ -1790,6 +1836,17 @@ mod tests {
             (DrawingToolType::ElliottImpulse, ElliottDegree::Cycle, true)
         );
 
+        value["drawings"][0]["drawing"]
+            .as_object_mut()
+            .unwrap()
+            .remove("elliott_degree");
+        let (loaded, skipped) = DrawingStorage::from_json(&value.to_string()).unwrap();
+        assert!(skipped.is_empty());
+        assert_eq!(
+            loaded.drawings[0].drawing.elliott_degree,
+            ElliottDegree::Minor
+        );
+
         // A version 10 sticker saved before glyph angles still loads upright.
         let mut value: serde_json::Value =
             serde_json::from_str(include_str!("fixtures/storage_v10_channels.json")).unwrap();
@@ -1813,6 +1870,9 @@ mod tests {
             let mut want = non_default_drawing(tool);
             want.label = None; // Earlier files have no object name.
             want.position_sizing = PositionSizing::default(); // Earlier files use unit sizing.
+            // Earlier positions keep their greyed zones when no colours were stored.
+            want.position_target_color = None;
+            want.position_stop_color = None;
             want.position_readout.persistent = true; // Earlier files always showed statistics.
             want.vwap = None; // Earlier files use the default bands.
             want.theme_shade = false; // Earlier files draw their stored colours on every theme.
@@ -1833,6 +1893,11 @@ mod tests {
             // Earlier files draw no channel prices and the default middle line.
             want.anchor_price_style = None;
             want.middle_line = crate::drawings::MiddleLineStyle::default();
+            // Earlier files draw every readout at their saved font size.
+            want.range_settings = crate::drawings::RangeSettings {
+                font_size: want.font_size,
+                ..Default::default()
+            };
             // Earlier files show a pin's text and carry no glyph on a signpost.
             want.marker = crate::drawings::AnnotationMarker {
                 show_text: true,
@@ -2474,6 +2539,23 @@ mod tests {
             assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
             let (twice, skipped) = DrawingStorage::from_json(&once.to_json().unwrap()).unwrap();
             assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
+            if matches!(tool, T::DateRange | T::DateAndPriceRange) {
+                let mut saved: serde_json::Value =
+                    serde_json::from_str(&once.to_json().unwrap()).unwrap();
+                saved["drawings"][0]["drawing"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("range_settings");
+                let (loaded, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+                assert!(skipped.is_empty());
+                assert_eq!(
+                    loaded.drawings[0].drawing.range_settings,
+                    crate::drawings::RangeSettings {
+                        font_size: font.unwrap(),
+                        ..Default::default()
+                    }
+                );
+            }
             for storage in [&once, &twice] {
                 let drawing = &storage.drawings[0].drawing;
                 let tint = if prices[1] < prices[0] {
@@ -2768,6 +2850,25 @@ mod tests {
         }
     }
 
+    /// Missing settings restore the old single target and uniform fill, with no coefficient.
+    #[test]
+    fn projections_saved_before_their_settings_keep_their_look() {
+        let saved = r#"{"version":10,"symbol":"LEGACY","timeframe":null,"drawings":[{"id":"7","points":[{"ts_ms":1704067380000,"price":101.25},{"ts_ms":1704067830000,"price":99.5},{"ts_ms":1704067080000,"price":120.0}],"drawing":{"label":"Support","pane":null,"selectable":true,"saveable":true,"listed":true,"group":null,"folder":[],"custom_tool":null,"custom_settings":null,"tool_type":"ProjectionTool","screen_anchor":null,"color":[1,2,3,4],"stroke_width":3.5,"text":"note","post":null,"line_style":"Dotted","fill_color":null,"locked":true,"visible":false,"font_size":18.0,"font_weight":"Bold","italic":true,"text_color":[13,14,15,16],"background":false,"border":false,"border_color":[17,18,19,20],"text_wrap":true,"text_wrap_width":120.0,"text_follows_zoom":true,"text_zoom_spacing":6.5,"note_text_style":{"color":[21,22,23,24],"font_size":18.0,"bold":true,"italic":true},"extend_left":true,"extend_right":true,"arrow_start_style":"Diamond","arrow_end_style":"Circle","timeframe_visibility":{"show_on_all":false,"visible_timeframes":["1h"]},"price_axis_label":false,"time_axis_label":false,"line_measurements":{"persistent":false,"price_change":false,"percent_change":false,"pip_change":false,"bar_count":false,"elapsed_time":false,"length":false,"inclination":false,"midpoint":false,"price_labels":false,"position":"Right","text_horizontal_align":"Center","text_vertical_align":"Bottom","text_orientation":"Vertical","across_panes":false},"position_size":{"RiskPercent":{"account_size":25000.0,"percent":1.5}},"position_sizing":{"point_value":50.0,"lot_size":10.0,"quantity_step":0.25,"leverage":5.0},"position_readout":{"persistent":false,"condensed":false,"account_currency":null,"conversion_rate":null,"quantity_decimals":null},"position_target_color":null,"position_stop_color":null,"position_style":{"line_color":null,"line_width":1.0,"text_color":null,"font_size":12.0,"label_background":true,"label_color":null,"fill":true,"border":false,"border_color":[102,123,139,255]},"marker":{"show_text":false,"glyph":"\ud83d\ude80","show_glyph":true,"glyph_color":[21,22,23,24]},"fib_config":{"levels":[{"value":1.618,"label":"golden","color":[9,10,11,12],"visible":false,"show_price":false}],"level_width":3.5,"level_style":"Dashed","show_background":true,"background_opacity":77,"extend_left":true,"extend_right":true,"reverse":true,"show_prices":null,"show_levels":null,"levels_as_percent":false,"labels_on_left":true,"label_size":12.0,"label_vertical":"Middle","time_label_vertical":"Bottom","show_text":true,"text_position":"Center","text_vertical":"Middle","trend_visible":true,"close_arcs":false,"spiral_counterclockwise":false,"logarithmic":true,"grid_visible":true,"grid_color":[21,56,153,204],"grid_width":1.0,"grid_style":"Solid","left_labels":true,"right_labels":true,"top_labels":true,"bottom_labels":true},"volume_profile":{"row_size":null,"rows":50,"value_area":0.68,"display":"Total","up_color":[38,166,154,180],"down_color":[239,83,80,180],"value_area_colors":null,"show_value_area_lines":false,"extend_right":false},"regression_trend":{"upper":1.5,"lower":1.5,"use_upper":true,"use_lower":true,"source":"Close","line_style":"Dashed","show_base_line":true,"upper_line":{"visible":true,"color":[41,98,255,255],"line_style":"Solid","width":null},"lower_line":{"visible":true,"color":[41,98,255,255],"line_style":"Solid","width":null},"show_correlation":true,"precision":null},"vwap":{"bands":[{"enabled":false,"multiplier":1.0,"upper":{"visible":true,"color":[76,175,80,255],"line_style":"Solid","width":1.0,"plot_type":"Line","track_price":false,"opacity":1.0},"lower":{"visible":true,"color":[76,175,80,255],"line_style":"Solid","width":1.0,"plot_type":"Line","track_price":false,"opacity":1.0}},{"enabled":true,"multiplier":2.5,"upper":{"visible":true,"color":[76,175,80,255],"line_style":"Solid","width":1.0,"plot_type":"Line","track_price":false,"opacity":1.0},"lower":{"visible":true,"color":[76,175,80,255],"line_style":"Solid","width":1.0,"plot_type":"Line","track_price":false,"opacity":1.0}},{"enabled":false,"multiplier":3.0,"upper":{"visible":true,"color":[0,137,123,255],"line_style":"Solid","width":1.0,"plot_type":"Line","track_price":false,"opacity":1.0},"lower":{"visible":false,"color":[21,22,23,24],"line_style":"LargeDashed","width":2.5,"plot_type":"Crosses","track_price":true,"opacity":0.25}}],"source":"HLC3","band_mode":"Deviation","show_line":true,"plot_type":"Line","track_price":false,"precision":null,"band_fill":{"visible":true,"color":[76,175,80,255],"opacity":0.05},"background":{"visible":false,"color":[76,175,80,255],"opacity":0.05}},"gann":null,"ghost_feed":null,"channel_midline":false,"anchor_price_style":{"color":[25,26,27,28],"font_size":16.0,"bold":false,"italic":false},"middle_line":{"color":[29,30,31,32],"width":2.5,"line_style":"Dotted"},"theme_shade":true,"image":null,"closed":false,"pitchfork":null,"elliott_degree":"Minor","bars_pattern":null,"z_order":-3},"created_at":1795038715475,"modified_at":1795038715475,"notes":null}],"metadata":{"created_at":1795038715475,"modified_at":1795038715475,"app_version":null}}"#;
+        let (loaded, skipped) = DrawingStorage::from_json(saved).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let drawing = restore(&loaded.drawings[0], 7);
+        assert_eq!(drawing.projection, None);
+        let [r, g, b, _] = drawing.color;
+        let config = drawing.projection_config();
+        assert_eq!(config.levels.len(), 1);
+        assert_eq!(config.levels[0].coefficient, 1.0);
+        assert_eq!(config.levels[0].color, [r, g, b, 150]);
+        assert_eq!(config.background_colors, [[r, g, b, 30]; 2]);
+        assert!(config.show_background && config.trend_visible);
+        assert!(!config.show_coefficients);
+        assert_eq!(config.trend_line_style, drawing.line_style);
+    }
+
     /// Before version 10 a position filled its zones with the target and stop colours at 20% on a
     /// dark theme, and a palette pick saved alpha 255: such a zone loads at alpha 51, and 128 at
     /// 25.6, rounded to 26, also once saved again. Version 10 alphas are the zone opacity.
@@ -2942,7 +3043,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 42] = [
+        let cases: [(Spoil, &str); 44] = [
             (
                 |s| {
                     first(s)
@@ -2996,6 +3097,14 @@ mod tests {
             (
                 |s| first(s).drawing.position_style.font_size = f32::NAN,
                 "invalid position_style",
+            ),
+            (
+                |s| first(s).drawing.range_settings.font_size = f32::NAN,
+                "invalid range_settings",
+            ),
+            (
+                |s| first(s).drawing.range_settings.border_width = Some(0.0),
+                "invalid range_settings",
             ),
             (|s| first(s).drawing.marker.glyph.clear(), "invalid marker"),
             (

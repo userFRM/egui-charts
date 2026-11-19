@@ -74,6 +74,9 @@ pub enum StudyError {
     /// The chart holds as many studies as its study cap allows. The refused study comes back
     /// unchanged.
     StudyLimitReached(RefusedStudy),
+    /// The chart holds as many studies reading another study's output as its chained study cap
+    /// allows. The refused study comes back unchanged.
+    ChainedStudyLimitReached(RefusedStudy),
     /// The text is not study clipboard text.
     NotClipboard,
     /// The copied study cannot be read.
@@ -100,7 +103,7 @@ impl StudyError {
     }
 }
 
-/// A study the chart refused at its study cap, handed back unchanged by
+/// A study the chart refused at one of its study caps, handed back unchanged by
 /// [`into_inner`](Self::into_inner).
 // The lock only makes the error `Sync`, which `Indicator` is not; nothing else locks it.
 pub struct RefusedStudy(Mutex<Box<dyn Indicator>>);
@@ -157,6 +160,7 @@ impl fmt::Display for StudyError {
             Self::UnknownSourcePlot { id, plot } => write!(f, "study {id} has no plot {plot}"),
             Self::CyclicSource => f.write_str("the study would read its own output"),
             Self::StudyLimitReached(_) => f.write_str("study limit reached"),
+            Self::ChainedStudyLimitReached(_) => f.write_str("chained study limit reached"),
             Self::NotClipboard => f.write_str("not a study clipboard"),
             Self::Clipboard(error) => write!(f, "cannot read the copied study: {error}"),
         }
