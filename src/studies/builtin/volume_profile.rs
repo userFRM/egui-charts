@@ -28,8 +28,8 @@ use crate::data::{
     ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile, VolumeProfileConfig, grid_row,
 };
 use crate::model::{
-    Bar, BarClock, CustomProfileSession, Instrument, ProfileResolution, ProfileSession, Session,
-    SessionProvider, Timeframe, TimezoneId,
+    Bar, BarClock, CustomProfileSession, EventKind, Instrument, ProfileResolution, ProfileSession,
+    Session, SessionProvider, TimeScaleEvent, Timeframe, TimezoneId,
 };
 use crate::studies::{
     Indicator, IndicatorValues, InputKind, InputValue, StudyData, StudyDataRequest, StudyInput,
@@ -71,10 +71,9 @@ struct ProfileStudy {
     rows: usize,
     value_area: f64,
     row_size: f64,
-    /// Instrument ticks per row of a session or periodic profile, in place of `row_size`; 0 for
-    /// `row_size`.
+    /// Instrument ticks per row, in place of `row_size`; 0 for `row_size`.
     row_ticks: usize,
-    /// Share of a session's or period's width that its widest row takes.
+    /// Share of a profile's span that its widest row takes; a visible profile fills its strip.
     width: f64,
     extend: [bool; 3],
     display: ProfileDisplay,
@@ -87,7 +86,9 @@ struct ProfileStudy {
     period_start: Option<DateTime<Utc>>,
     /// Start the periods again at the first bar of each trading year.
     restart: bool,
-    anchor: AutoAnchor,
+    anchor: Anchor,
+    /// The chart's earnings, dividend and split events, from `set_time_scale_events`.
+    events: Vec<(EventKind, DateTime<Utc>)>,
     length: usize,
     interval: Timeframe,
     /// Bar calendar, from `set_bar_clock`, by which each bar's executions are found.
@@ -219,18 +220,32 @@ const PERIOD_UNITS: [PeriodUnit; 10] = [
     PeriodUnit::Minute,
     PeriodUnit::Hour,
 ];
-const ANCHORS: [AutoAnchor; 11] = [
-    AutoAnchor::Auto,
-    AutoAnchor::HighestHigh,
-    AutoAnchor::LowestLow,
-    AutoAnchor::HighestVolume,
-    AutoAnchor::Session,
-    AutoAnchor::Week,
-    AutoAnchor::Month,
-    AutoAnchor::Quarter,
-    AutoAnchor::Year,
-    AutoAnchor::Decade,
-    AutoAnchor::Century,
+/// Where an auto anchored profile starts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Anchor {
+    /// Found in the bars, as the auto anchored VWAP finds its anchor.
+    Bars(AutoAnchor),
+    /// The first bar at or after the latest chart event of this kind that a bar has reached.
+    Event(EventKind),
+}
+
+/// The Anchor choices with their labels, in their saved order: the anchors found in the bars,
+/// then the chart events.
+const ANCHORS: [(Anchor, &str); 14] = [
+    (Anchor::Bars(AutoAnchor::Auto), "Auto"),
+    (Anchor::Bars(AutoAnchor::HighestHigh), "HighestHigh"),
+    (Anchor::Bars(AutoAnchor::LowestLow), "LowestLow"),
+    (Anchor::Bars(AutoAnchor::HighestVolume), "HighestVolume"),
+    (Anchor::Bars(AutoAnchor::Session), "Session"),
+    (Anchor::Bars(AutoAnchor::Week), "Week"),
+    (Anchor::Bars(AutoAnchor::Month), "Month"),
+    (Anchor::Bars(AutoAnchor::Quarter), "Quarter"),
+    (Anchor::Bars(AutoAnchor::Year), "Year"),
+    (Anchor::Bars(AutoAnchor::Decade), "Decade"),
+    (Anchor::Bars(AutoAnchor::Century), "Century"),
+    (Anchor::Event(EventKind::Earnings), "Earnings"),
+    (Anchor::Event(EventKind::Dividend), "Dividends"),
+    (Anchor::Event(EventKind::Split), "Splits"),
 ];
 const DISPLAYS: [ProfileDisplay; 3] = [
     ProfileDisplay::Total,
@@ -278,7 +293,8 @@ impl ProfileStudy {
             period_count: 1,
             period_start: None,
             restart: false,
-            anchor: AutoAnchor::Auto,
+            anchor: Anchor::Bars(AutoAnchor::Auto),
+            events: Vec::new(),
             length: 100,
             interval: Timeframe::Min1,
             clock: BarClock::new(Timeframe::Min1),
@@ -337,6 +353,12 @@ impl ProfileStudy {
                 InputKind::Number(0.0, f64::MAX),
             ),
             StudyInput::new(
+                "row_ticks",
+                "Height in ticks (0 = Height)",
+                InputValue::Length(self.row_ticks),
+                InputKind::Length(0, 100_000),
+            ),
+            StudyInput::new(
                 "display",
                 "Volume",
                 InputValue::Choice(DISPLAYS.iter().position(|d| *d == self.display).unwrap()),
@@ -355,15 +377,6 @@ impl ProfileStudy {
                 InputKind::Toggle,
             ),
         ];
-        if matches!(self.kind, Kind::Session | Kind::Periodic) {
-            let ticks = StudyInput::new(
-                "row_ticks",
-                "Height in ticks (0 = Height)",
-                InputValue::Length(self.row_ticks),
-                InputKind::Length(0, 100_000),
-            );
-            inputs.insert(3, ticks);
-        }
         if matches!(self.kind, Kind::Fixed | Kind::Anchored) {
             inputs.push(StudyInput::new(
                 "start_time",
@@ -414,8 +427,13 @@ impl ProfileStudy {
             inputs.push(StudyInput::new(
                 "anchor",
                 "Anchor",
-                InputValue::Choice(ANCHORS.iter().position(|a| *a == self.anchor).unwrap()),
-                InputKind::Choice(ANCHORS.iter().map(|a| format!("{a:?}")).collect()),
+                InputValue::Choice(
+                    ANCHORS
+                        .iter()
+                        .position(|(anchor, _)| *anchor == self.anchor)
+                        .unwrap(),
+                ),
+                InputKind::Choice(ANCHORS.iter().map(|(_, label)| (*label).into()).collect()),
             ));
             inputs.push(StudyInput::new(
                 "length",
@@ -489,13 +507,15 @@ impl ProfileStudy {
                 .shown_when("sessions", [1, 2, 3]),
             );
         }
-        if matches!(self.kind, Kind::Session | Kind::Periodic) {
+        if self.kind != Kind::Visible {
             inputs.push(StudyInput::new(
                 "width",
                 "Width (%)",
                 InputValue::Number(self.width * 100.0),
                 InputKind::Number(1.0, 100.0),
             ));
+        }
+        if matches!(self.kind, Kind::Session | Kind::Periodic) {
             for (i, (id, label)) in [
                 ("extend_poc", "Extend POC right"),
                 ("extend_vah", "Extend VAH right"),
@@ -571,7 +591,7 @@ impl ProfileStudy {
             ("period", InputValue::Choice(v)) => self.period = PERIOD_UNITS[v],
             ("period_count", InputValue::Length(v)) => self.period_count = v,
             ("restart_yearly", InputValue::Toggle(v)) => self.restart = v,
-            ("anchor", InputValue::Choice(v)) => self.anchor = ANCHORS[v],
+            ("anchor", InputValue::Choice(v)) => self.anchor = ANCHORS[v].0,
             ("length", InputValue::Length(v)) => self.length = v,
             ("width", InputValue::Number(v)) => self.width = v / 100.0,
             ("extend_poc", InputValue::Toggle(v)) => self.extend[0] = v,
@@ -854,11 +874,16 @@ impl ProfileStudy {
             }
             level.searched = level.searched.min(from);
         }
+        // A change of instrument, bar calendar or events reaches the study as an update from bar 0
+        // over the same bars.
         if times_changed
+            || from == 0
             || (self.kind == Kind::Auto
                 && matches!(
                     self.anchor,
-                    AutoAnchor::HighestHigh | AutoAnchor::LowestLow | AutoAnchor::HighestVolume
+                    Anchor::Bars(
+                        AutoAnchor::HighestHigh | AutoAnchor::LowestLow | AutoAnchor::HighestVolume
+                    )
                 ))
         {
             self.refresh_ranges();
@@ -953,42 +978,57 @@ impl ProfileStudy {
                     runs(data.iter().map(|bar| clock.bar_open(bar.time)))
                 }
             },
-            Kind::Auto => {
-                let period = match self.anchor {
-                    AutoAnchor::Auto => {
-                        let day = Timeframe::Day1.duration_ms();
-                        Some(match self.interval.duration_ms() {
-                            ms if ms < day => AnchorPeriod::Session,
-                            ms if ms <= day => AnchorPeriod::Month,
-                            ms if ms <= 10 * day => AnchorPeriod::Quarter,
-                            ms if ms <= 60 * day => AnchorPeriod::Year,
-                            _ => AnchorPeriod::Decade,
-                        })
-                    }
-                    AutoAnchor::HighestHigh | AutoAnchor::LowestLow | AutoAnchor::HighestVolume => {
-                        None
-                    }
-                    _ => ANCHORS
+            Kind::Auto => match self.anchor {
+                // A later event, such as an announced earnings date, waits for its bar.
+                Anchor::Event(kind) => match data.last() {
+                    Some(last) => self
+                        .events
                         .iter()
-                        .position(|a| *a == self.anchor)
-                        .map(|i| PERIODS[i - 4]),
-                };
-                if let Some(period) = period {
-                    self.period_ranges(period).pop().into_iter().collect()
-                } else {
-                    let metric = |bar: &Bar| match self.anchor {
-                        AutoAnchor::HighestHigh => bar.high,
-                        AutoAnchor::LowestLow => -bar.low,
-                        _ => bar.volume,
-                    };
-                    (data.len().saturating_sub(self.length)..data.len())
-                        .filter(|&i| metric(&data[i]).is_finite())
-                        .max_by(|&a, &b| metric(&data[a]).total_cmp(&metric(&data[b])))
-                        .map(|start| start..data.len())
+                        .filter(|(event, time)| *event == kind && *time <= last.time)
+                        .map(|(_, time)| *time)
+                        .max()
+                        .map(|time| data.partition_point(|bar| bar.time < time)..data.len())
                         .into_iter()
-                        .collect()
+                        .collect(),
+                    None => Vec::new(),
+                },
+                Anchor::Bars(anchor) => {
+                    let period = match anchor {
+                        AutoAnchor::Auto => {
+                            let day = Timeframe::Day1.duration_ms();
+                            Some(match self.interval.duration_ms() {
+                                ms if ms < day => AnchorPeriod::Session,
+                                ms if ms <= day => AnchorPeriod::Month,
+                                ms if ms <= 10 * day => AnchorPeriod::Quarter,
+                                ms if ms <= 60 * day => AnchorPeriod::Year,
+                                _ => AnchorPeriod::Decade,
+                            })
+                        }
+                        AutoAnchor::HighestHigh
+                        | AutoAnchor::LowestLow
+                        | AutoAnchor::HighestVolume => None,
+                        _ => ANCHORS
+                            .iter()
+                            .position(|(choice, _)| *choice == self.anchor)
+                            .map(|i| PERIODS[i - 4]),
+                    };
+                    if let Some(period) = period {
+                        self.period_ranges(period).pop().into_iter().collect()
+                    } else {
+                        let metric = |bar: &Bar| match anchor {
+                            AutoAnchor::HighestHigh => bar.high,
+                            AutoAnchor::LowestLow => -bar.low,
+                            _ => bar.volume,
+                        };
+                        (data.len().saturating_sub(self.length)..data.len())
+                            .filter(|&i| metric(&data[i]).is_finite())
+                            .max_by(|&a, &b| metric(&data[a]).total_cmp(&metric(&data[b])))
+                            .map(|start| start..data.len())
+                            .into_iter()
+                            .collect()
+                    }
                 }
-            }
+            },
         };
         // A profile whose range changed holds no levels.
         let ranges = &self.ranges;
@@ -997,6 +1037,28 @@ impl ProfileStudy {
                 .binary_search_by_key(start, |range| range.start)
                 .is_ok_and(|i| ranges[i].end == *end)
         });
+    }
+
+    /// Keeps the chart's earnings, dividend and split events. Returns `true` when they changed
+    /// under an event anchor, whose profile must then be found again from bar 0.
+    fn set_events(&mut self, events: &[TimeScaleEvent]) -> bool {
+        let corporate = || {
+            events
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event.kind,
+                        EventKind::Earnings | EventKind::Dividend | EventKind::Split
+                    )
+                })
+                .map(|event| (event.kind, event.time))
+        };
+        // Called every frame: no allocation while the events are unchanged.
+        if self.events.iter().copied().eq(corporate()) {
+            return false;
+        }
+        self.events = corporate().collect();
+        matches!(self.anchor, Anchor::Event(_))
     }
 
     /// One row height for the chart-bar envelope of every session in view, rounded up
@@ -1060,10 +1122,11 @@ impl ProfileStudy {
         ranges: Vec<Range<usize>>,
         config: VolumeProfileConfig,
     ) -> Vec<StudyProfile> {
-        let width = match self.kind {
-            Kind::Visible => 1.0,
-            Kind::Session | Kind::Periodic => self.width as f32,
-            Kind::Fixed | Kind::Anchored | Kind::Auto => 0.9,
+        // A visible profile fills its strip at the right of the view.
+        let width = if self.kind == Kind::Visible {
+            1.0
+        } else {
+            self.width as f32
         };
         let mut cache = self.cache.borrow_mut();
         let mut profiles = Vec::new();
@@ -1445,6 +1508,11 @@ macro_rules! profile_study {
             fn needs_order_flow(&self) -> bool {
                 false
             }
+            // The finer bars are chosen below the interval the profile is calculated on, so they
+            // apply on any Interval.
+            fn requests_allow_other_intervals(&self) -> bool {
+                true
+            }
             fn volume_profiles(&self, visible: Range<usize>) -> Vec<StudyProfile> {
                 self.profile.profiles(visible)
             }
@@ -1474,6 +1542,9 @@ macro_rules! profile_study {
             fn set_timeframe(&mut self, timeframe: Timeframe) {
                 self.profile.interval = timeframe;
                 self.profile.clock = self.profile.clock.for_timeframe(timeframe);
+            }
+            fn set_time_scale_events(&mut self, events: &[TimeScaleEvent]) -> bool {
+                self.profile.set_events(events)
             }
             fn set_bar_clock(&mut self, clock: &BarClock) -> bool {
                 let changed = self.profile.clock != *clock;
@@ -1550,7 +1621,7 @@ profile_study!(
     VolProfileAutoAnchored,
     Auto,
     "Vol Profile Auto Anchored",
-    "Volume from the latest calendar anchor or an extreme in the chosen lookback."
+    "Volume from the latest calendar anchor, an extreme in the chosen lookback, or the latest earnings, dividend or split the chart holds."
 );
 
 impl VolProfileFixed {
@@ -3014,8 +3085,8 @@ mod tests {
         }
     }
 
-    /// Height in ticks sizes session and periodic rows in whole ticks of the instrument's tick
-    /// size, in place of Height, which holds at 0 ticks and without a tick size.
+    /// Height in ticks sizes the rows of every profile kind in whole ticks of the instrument's
+    /// tick size, in place of Height, which holds at 0 ticks and without a tick size.
     #[test]
     fn session_rows_follow_whole_ticks_of_the_instrument() {
         let at = "2026-03-05T15:00:00Z".parse().unwrap();
@@ -3030,6 +3101,34 @@ mod tests {
             (session(), None, 4, 0.0, None),
             (
                 Box::new(VolProfilePeriodic::new(24)) as Box<dyn Indicator>,
+                Some(0.25),
+                4,
+                0.0,
+                Some(1.0),
+            ),
+            (
+                Box::new(VolProfileVisible::new(24)) as Box<dyn Indicator>,
+                Some(0.25),
+                4,
+                0.0,
+                Some(1.0),
+            ),
+            (
+                Box::new(VolProfileFixed::new(24)) as Box<dyn Indicator>,
+                Some(0.25),
+                4,
+                0.0,
+                Some(1.0),
+            ),
+            (
+                Box::new(VolProfileAnchored::new(24)) as Box<dyn Indicator>,
+                Some(0.25),
+                4,
+                0.0,
+                Some(1.0),
+            ),
+            (
+                Box::new(VolProfileAutoAnchored::new(24)) as Box<dyn Indicator>,
                 Some(0.25),
                 4,
                 0.0,
@@ -3053,6 +3152,108 @@ mod tests {
                 "{} tick {tick:?} ticks {row_ticks} height {height}",
                 study.name()
             );
+        }
+    }
+
+    /// A session profile finds its sessions again when the chart's instrument arrives after the
+    /// bars, without new bars: hourly bars from 20:00 UTC on 5 March to 03:00 on 6 March span
+    /// two UTC days and one day at UTC-5.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn session_profiles_follow_an_instrument_given_after_the_bars() {
+        use crate::model::BarData;
+        use crate::widget::{Chart, test_frames::shapes};
+        let first: DateTime<Utc> = "2026-03-05T20:00:00Z".parse().unwrap();
+        let bars: Vec<_> = (0..8)
+            .map(|hour| Bar::new(first + TimeDelta::hours(hour), 10.0, 11.0, 9.0, 10.0, 100.0))
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.add_indicator(Box::new(VolProfileSession::new(24)));
+        let ctx = egui::Context::default();
+        let ranges = |chart: &Chart| -> Vec<Range<usize>> {
+            let study = chart.indicators().next().unwrap().1;
+            study
+                .volume_profiles(0..8)
+                .into_iter()
+                .map(|profile| profile.bars)
+                .collect()
+        };
+        shapes(&ctx, &mut chart, 1.0, Vec::new());
+        assert_eq!(ranges(&chart), [0..4, 4..8]);
+        let zone = TimezoneId::fixed_offset(-5 * 3600).unwrap();
+        chart.set_instrument(Some(Instrument::new("X").with_time_zone(zone)));
+        shapes(&ctx, &mut chart, 2.0, Vec::new());
+        assert_eq!(ranges(&chart), std::iter::once(0..8).collect::<Vec<_>>());
+    }
+
+    /// The Earnings, Dividends and Splits anchors start the auto anchored profile at the first
+    /// bar at or after the latest chart event of their kind that a bar has reached, and draw
+    /// nothing without one. Daily bars open on 2 to 6 March. Of the dividends on 3 March and at
+    /// noon on 4 March the later one starts the profile on 5 March, the earnings on 6 March start
+    /// it on 6 March. A dividend on 6 March moves it there, one on 9 March waits for its bar, and
+    /// without events the profile goes.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn auto_anchored_profiles_start_at_the_latest_chart_event() {
+        use crate::model::{BarData, EventKind, TimeScaleEvent};
+        use crate::widget::{Chart, test_frames::shapes};
+        let at = |day: i64, hour: i64| {
+            "2026-03-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap()
+                + TimeDelta::days(day - 1)
+                + TimeDelta::hours(hour)
+        };
+        let bars: Vec<_> = (2..=6)
+            .map(|day| Bar::new(at(day, 0), 10.0, 11.0, 9.0, 10.0, 100.0))
+            .collect();
+        let event = |kind: EventKind, time: DateTime<Utc>| {
+            TimeScaleEvent::new(format!("{kind:?} {time}"), time, kind, "")
+        };
+        let first = vec![
+            event(EventKind::Dividend, at(3, 0)),
+            event(EventKind::Dividend, at(4, 12)),
+            event(EventKind::Earnings, at(6, 0)),
+        ];
+        let later = [first.clone(), vec![event(EventKind::Dividend, at(6, 0))]].concat();
+        let future = [later.clone(), vec![event(EventKind::Dividend, at(9, 0))]].concat();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        let id = chart.add_indicator(Box::new(VolProfileAutoAnchored::new(24)));
+        let ctx = egui::Context::default();
+        let span = |start| std::iter::once(start..5).collect::<Vec<_>>();
+        // The Anchor choice when it changes, the chart's events and the profiles' bars. Without a
+        // new choice only the events change, which must find the profile again by themselves.
+        for (now, (anchor, events, expected)) in (1..).zip([
+            (Some(13), first.clone(), vec![]),
+            (Some(11), first.clone(), span(4)),
+            (Some(12), first, span(3)),
+            (None, later, span(4)),
+            (None, future, span(4)),
+            (None, Vec::new(), vec![]),
+            // An event before loaded history starts at its first bar; other kinds do not move it.
+            (
+                Some(13),
+                vec![
+                    event(EventKind::Split, at(1, 0)),
+                    event(EventKind::News, at(6, 0)),
+                ],
+                span(0),
+            ),
+        ]) {
+            chart.set_time_scale_events(events);
+            if let Some(anchor) = anchor {
+                chart
+                    .indicator_mut(id)
+                    .unwrap()
+                    .set_input("anchor", InputValue::Choice(anchor))
+                    .unwrap();
+            }
+            shapes(&ctx, &mut chart, f64::from(now), Vec::new());
+            let study = chart.indicators().next().unwrap().1;
+            let got: Vec<_> = study
+                .volume_profiles(0..5)
+                .into_iter()
+                .map(|profile| profile.bars)
+                .collect();
+            assert_eq!(got, expected, "anchor {anchor:?} at {now}");
         }
     }
 }
@@ -3461,7 +3662,8 @@ mod rendering_tests {
 
     /// A new session profile paints cyan and pink rows, stronger in the value area, under a 2 px
     /// point of control in the foreground colour of either theme. Saved colours keep theirs. Its
-    /// widest row takes 30% of a session that fills the plot, or the share its width input sets.
+    /// widest row takes 30% of a session that fills the plot, or the share its width input sets,
+    /// as do fixed range, anchored and auto anchored profiles of the same bars.
     #[test]
     fn session_profile_paints_its_default_and_saved_colours() {
         let time = |minute| chrono::DateTime::UNIX_EPOCH + TimeDelta::minutes(minute);
@@ -3492,15 +3694,67 @@ mod rendering_tests {
         ];
         let light = crate::theme::Theme::light();
         let dark = crate::theme::Theme::dark();
-        // Theme, saved colours, the rows outside and inside the value area, the line colour, the
-        // width input and where the widest row ends: the session spans the plot, 0 to 400.
-        for (theme, colors, rows, poc, width, right_edge) in [
-            (&light, None, defaults, light.ui.text, None, 120.0),
-            (&dark, None, defaults, dark.ui.text, None, 120.0),
-            (&light, Some(saved.clone()), stored, saved[0], None, 120.0),
-            (&light, None, defaults, light.ui.text, Some(90.0), 360.0),
+        // Study, theme, saved colours, the rows outside and inside the value area, the line
+        // colour, the width input and where the widest row ends: each profile spans the plot,
+        // 0 to 400.
+        let session = || Box::new(VolProfileSession::new(10)) as Box<dyn Indicator>;
+        for (mut study, theme, colors, rows, poc, width, right_edge) in [
+            (
+                session(),
+                &light,
+                None,
+                defaults,
+                light.ui.text,
+                None,
+                120.0,
+            ),
+            (session(), &dark, None, defaults, dark.ui.text, None, 120.0),
+            (
+                session(),
+                &light,
+                Some(saved.clone()),
+                stored,
+                saved[0],
+                None,
+                120.0,
+            ),
+            (
+                session(),
+                &light,
+                None,
+                defaults,
+                light.ui.text,
+                Some(90.0),
+                360.0,
+            ),
+            (
+                Box::new(VolProfileAutoAnchored::new(10)) as Box<dyn Indicator>,
+                &light,
+                None,
+                defaults,
+                light.ui.text,
+                None,
+                120.0,
+            ),
+            (
+                Box::new(VolProfileAnchored::new(10)) as Box<dyn Indicator>,
+                &dark,
+                None,
+                defaults,
+                dark.ui.text,
+                Some(50.0),
+                200.0,
+            ),
+            (
+                Box::new(VolProfileFixed::new(10)) as Box<dyn Indicator>,
+                &light,
+                None,
+                defaults,
+                light.ui.text,
+                None,
+                120.0,
+            ),
         ] {
-            let mut study = VolProfileSession::new(10);
             if let Some(colors) = colors {
                 study.set_colors(colors);
             }
@@ -3510,7 +3764,7 @@ mod rendering_tests {
                     .expect("width");
             }
             study.calculate(&bars);
-            let indicators: Vec<Box<dyn Indicator>> = vec![Box::new(study)];
+            let indicators = vec![study];
             let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 200.0));
             let price = PriceMap::new(
                 PriceTransform::default(),

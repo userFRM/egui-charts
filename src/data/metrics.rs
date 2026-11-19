@@ -133,6 +133,47 @@ pub struct MetricSubscription {
     pub sink: Sink,
 }
 
+impl MetricSubscription {
+    /// Points of `metric` for `symbol`, pushed into `sink` with [`Sink::push_metric`]. Its
+    /// [`id`](Self::id) is the sink's. A [`SinkReader`](super::SinkReader) builds a sink outside
+    /// a chart, to test [`Datafeed::subscribe_metric`](super::Datafeed::subscribe_metric).
+    ///
+    /// ```
+    /// use egui_charts::data::{
+    ///     Datafeed, HistoryPage, HistoryRequest, MetricPoint, MetricSubscription, Reply, SinkReader,
+    /// };
+    /// use egui_charts::model::Timeframe;
+    ///
+    /// /// Publishes the open interest of the subscribed symbol.
+    /// struct OpenInterest;
+    ///
+    /// impl Datafeed for OpenInterest {
+    ///     fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+    ///         reply.send(Ok(HistoryPage::default()));
+    ///     }
+    ///
+    ///     fn subscribe_metric(&self, subscription: MetricSubscription) {
+    ///         let at = "2026-01-05T15:00:00Z".parse().expect("a valid time");
+    ///         subscription.sink.push_metric(MetricPoint::new(at, 41_250.0));
+    ///     }
+    /// }
+    ///
+    /// let (reader, sink) = SinkReader::new("BTCUSD", Timeframe::Min1, None);
+    /// OpenInterest.subscribe_metric(MetricSubscription::new("BTCUSD", "open_interest", sink));
+    /// let bars = reader.take().bars;
+    /// assert_eq!(bars.len(), 1);
+    /// assert_eq!((bars[0].close, bars[0].volume), (41_250.0, 0.0));
+    /// ```
+    pub fn new(symbol: impl Into<String>, metric: impl Into<String>, sink: Sink) -> Self {
+        Self {
+            id: sink.id,
+            symbol: symbol.into(),
+            metric: metric.into(),
+            sink,
+        }
+    }
+}
+
 impl Sink {
     /// Publish or correct a metric point. Its value is held until the next point;
     /// an inactive subscription ignores pushes, like [`Self::push_bar`].

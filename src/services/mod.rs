@@ -28,7 +28,10 @@ mod detectors;
 pub(crate) mod document;
 #[cfg_attr(
     not(any(test, feature = "widget")),
-    expect(dead_code, reason = "only the terminal consumes the listener")
+    expect(
+        dead_code,
+        reason = "only the terminal reads whether its stream lagged"
+    )
 )]
 mod events;
 mod marks;
@@ -65,12 +68,12 @@ pub use chats::{
 #[cfg_attr(docsrs, doc(cfg(feature = "detectors")))]
 pub use detectors::{
     AbsorptionRule, BigTradeRule, CountAlert, CountWindow, DetectionAlert, DetectionCounts,
-    DetectionKind, Detector, DetectorSettings, IcebergRule, LiquidityRule, OrderFlowDetectors,
-    StopRunRule, StopSweepRule, Threshold,
+    DetectionKind, Detector, DetectorSettings, FootprintRule, IcebergRule, LiquidityRule,
+    OrderFlowDetectors, StopRunRule, StopSweepRule, Threshold,
 };
-pub use events::Events;
 #[cfg(feature = "widget")]
 pub(crate) use events::Listener;
+pub use events::{Events, EventsReader};
 pub use marks::{Marks, MarksPage, MarksRequest};
 pub use notifications::{Notification, NotificationTarget, Notifications};
 pub use paper::PaperAccount;

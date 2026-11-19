@@ -221,6 +221,8 @@ impl Chart {
                 rect,
                 last.close,
                 last,
+                // Added series draw their lines in one colour.
+                0.0,
             )
             && let Some(index) = crate::model::index_at(main, last.time)
         {
@@ -312,6 +314,8 @@ impl Chart {
             rect,
             bar.close,
             bar,
+            // Added series draw their lines in one colour.
+            0.0,
         ) {
             let x = self.state.time_scale().idx_to_coord_precise(
                 index as f64,

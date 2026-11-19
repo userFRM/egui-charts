@@ -9,11 +9,11 @@
 //! This keeps the domain layer pure and testable.
 
 use super::{
-    AnnotationMarker, ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree,
-    FibonacciConfig, FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig,
-    LineMeasurements, MiddleLineStyle, NoteTextStyle, PitchforkConfig, PositionReadout,
-    PositionSize, PositionSizing, PositionStyle, RegressionTrendConfig, TimeframeVisibility,
-    VwapConfig,
+    AnnotationMarker, ArrowStyle, BarsPatternConfig, BarsPatternMode, ChartPoint, DrawingToolType,
+    ElliottDegree, FibonacciConfig, FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig,
+    ImageConfig, LineMeasurements, MiddleLineStyle, NoteTextStyle, PitchforkConfig,
+    PositionReadout, PositionSize, PositionSizing, PositionStyle, RegressionTrendConfig,
+    TimeframeVisibility, VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -25,11 +25,19 @@ use serde::{Deserialize, Serialize};
 /// with other layouts.
 ///
 /// Leaving it unset follows [`ChartSyncOptions::sync_drawings`](crate::widget::ChartSyncOptions)
-/// within a layout. Charts on one drawing storage read each other's saved drawings whichever is
-/// set. A saved layout opened on a chart with drawing storage shows each drawing as stored, and
-/// one deleted from storage stays deleted, except that a drawing the layout holds in a folder set
-/// to [`Chart`](Self::Chart) or [`Layout`](Self::Layout) comes back as the layout holds it,
-/// unless storage holds it outside such a folder.
+/// within a layout. With drawing storage
+/// ([`Chart::set_storage`](crate::widget::Chart::set_storage)), the stored drawings of a symbol
+/// show on every chart of that storage, in every layout. Drawings in a folder set to
+/// [`Chart`](Self::Chart) or [`Layout`](Self::Layout) stay out of storage, on their chart or on
+/// the charts of their layout, and come back with a saved layout that holds them. Moving a
+/// drawing into such a folder takes it out of storage and off the other charts; moving it out
+/// stores it again. A drawing that a stored document already holds in such a folder, as earlier
+/// versions stored them, shows as stored until a chart changes it; that chart then keeps it.
+///
+/// A saved layout opened on a chart with drawing storage shows each drawing as stored, and one
+/// deleted from storage stays deleted, except that a drawing the layout holds in a folder set to
+/// [`Chart`](Self::Chart) or [`Layout`](Self::Layout) comes back as the layout holds it, unless
+/// storage holds it outside such a folder.
 ///
 /// ```
 /// use egui_charts::drawings::{ChartPoint, Drawing, DrawingManager, DrawingToolType, FolderSync};
@@ -46,9 +54,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum FolderSync {
-    /// Keep the drawings on this chart, even with layout-wide drawing sync on.
+    /// Keep the drawings on this chart, even with layout-wide drawing sync on or with drawing
+    /// storage shared with other charts.
     Chart,
-    /// Mirror the drawings across the layout, even with layout-wide drawing sync off.
+    /// Mirror the drawings across the layout, even with layout-wide drawing sync off, and keep
+    /// them off the charts of other layouts, also on the same drawing storage.
     Layout,
     /// Mirror the drawings across the layout as [`Layout`](Self::Layout) does, and show them as
     /// stored in every layout of their symbol, also in layouts saved before they were drawn.
@@ -83,8 +93,9 @@ pub enum FolderSync {
 ///
 /// let mut arrow = Drawing::new(1, DrawingToolType::TrendLine);
 /// arrow.arrow_end_style = ArrowStyle::Arrow;
-/// let mut feed = GhostFeedConfig::default();
+/// let mut feed = GhostFeedConfig::drawing_default();
 /// feed.noise_ticks = 2.0;
+/// feed.show_wick = false;
 /// let mut ghost = Drawing::new(2, DrawingToolType::GhostFeed);
 /// ghost.ghost_feed = Some(feed);
 /// let mut fib = Drawing::new(3, DrawingToolType::FibonacciRetracement);
@@ -164,8 +175,11 @@ pub struct Drawing {
     /// by [`Self::update_screen_coords`]
     #[serde(skip)]
     pub level_ys: Vec<f32>,
-    /// Position as fractions of the pane width and height for anchored text.
-    /// `None` adopts the first displayed position, including for older saved drawings.
+    /// Position as fractions of the pane width and height for anchored text, which keeps its
+    /// place in the pane while the chart scrolls and zooms. The chart keeps
+    /// [`chart_points`](Self::chart_points) on the bar and price under it.
+    /// `None` takes the first position the text is drawn at inside its pane, including for older
+    /// saved drawings; until then the text stays on its bar and price.
     /// A pin saved with one takes the bar and price under it the first time a chart draws it,
     /// and the chart then clears it.
     #[serde(default)]
@@ -311,7 +325,9 @@ pub struct Drawing {
     /// [`GannConfig::for_tool`].
     #[serde(default)]
     pub gann: Option<GannConfig>,
-    /// Average range and noise, in ticks, of the candles a Ghost Feed projects.
+    /// Average range and noise, in ticks, and colours of the candles a Ghost Feed projects. New
+    /// feeds start from [`GhostFeedConfig::drawing_default`]; `None` uses the defaults, the
+    /// colours of feeds saved before these settings.
     #[serde(default)]
     pub ghost_feed: Option<GhostFeedConfig>,
     /// Whether a rectangle or parallel channel draws its halfway line; a channel's takes
@@ -353,8 +369,8 @@ pub struct Drawing {
     #[serde(default = "enabled")]
     pub elliott_show_wave: bool,
 
-    /// Draw mode, mirroring and flipping of a bars pattern's copy. `None` uses the defaults,
-    /// as drawings saved before this setting do.
+    /// Draw mode, mirroring and flipping of a bars pattern's copy. New patterns draw high-low
+    /// bars; `None` uses the defaults, OHLC bars, as drawings saved before this setting do.
     #[serde(default)]
     pub bars_pattern: Option<BarsPatternConfig>,
 
@@ -572,6 +588,15 @@ impl Drawing {
         self.folder_sync.first().copied().flatten()
     }
 
+    /// Whether the top-level folder of this drawing keeps it on one chart or in one layout,
+    /// which drawing storage does not hold.
+    pub(crate) fn confined(&self) -> bool {
+        matches!(
+            self.folder_sync_mode(),
+            Some(FolderSync::Chart | FolderSync::Layout)
+        )
+    }
+
     /// Create a new drawing with default properties
     pub fn new(id: usize, tool_type: DrawingToolType) -> Self {
         let style = default_style(tool_type);
@@ -704,8 +729,12 @@ impl Drawing {
             image: None,
             closed: false,
             gann: None,
-            ghost_feed: None,
-            bars_pattern: None,
+            ghost_feed: (tool_type == DrawingToolType::GhostFeed)
+                .then(GhostFeedConfig::drawing_default),
+            bars_pattern: (tool_type == DrawingToolType::BarsPattern).then(|| BarsPatternConfig {
+                mode: BarsPatternMode::HighLowBars,
+                ..Default::default()
+            }),
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
             series_layer: None,
@@ -905,8 +934,10 @@ impl Drawing {
     }
 
     /// Rebuilds anchored text coordinates relative to the pane. Call after
-    /// `update_screen_coords`; other tools retain their chart coordinates. Older drawings
-    /// adopt their first displayed position. Resizing preserves the width and height fractions.
+    /// `update_screen_coords`; other tools retain their chart coordinates. A text without a pane
+    /// position, such as an older drawing or one just moved, takes one the first time its point
+    /// is drawn inside `pane`, and stays on its bar and price until then. Resizing preserves the
+    /// width and height fractions.
     pub fn update_pane_coords(&mut self, pane: egui::Rect) {
         if self.tool_type != DrawingToolType::AnchoredText
             || !pane.is_finite()
@@ -915,7 +946,11 @@ impl Drawing {
         {
             return;
         }
-        if let Some(pos) = self.points.first_mut() {
+        // A position taken outside the pane would keep the text out of view whatever the
+        // chart scrolls to; until it is drawn inside, the text stays on its bar and price.
+        if let Some(pos) = self.points.first_mut()
+            && (self.screen_anchor.is_some() || pane.contains(*pos))
+        {
             let anchor = self.screen_anchor.get_or_insert_with(|| {
                 [
                     (pos.x - pane.left()) / pane.width(),

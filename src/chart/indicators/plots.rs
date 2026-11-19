@@ -307,6 +307,46 @@ pub(crate) fn paint_labels(
     }
 }
 
+/// A study's straight lines on the main price chart, in the style of their outputs.
+pub(crate) fn paint_price_segments(
+    painter: &egui::Painter,
+    study: &dyn crate::studies::Indicator,
+    price: &crate::scales::PriceMap,
+    coords: &crate::chart::coords::ChartMapping,
+) {
+    let clip = painter.clip_rect();
+    for segment in study.price_segments() {
+        let style = study.plot_style(segment.plot);
+        let points = [
+            egui::pos2(
+                coords.idx_to_x(segment.start_bar),
+                price.price_to_y(segment.start_price),
+            ),
+            egui::pos2(
+                coords.idx_to_x(segment.end_bar),
+                price.price_to_y(segment.end_price),
+            ),
+        ];
+        if !style.visible
+            || !segment.start_price.is_finite()
+            || !segment.end_price.is_finite()
+            || !points.iter().all(|point| point.is_finite())
+            || !egui::Rect::from_two_pos(points[0], points[1]).intersects(clip.expand(style.width))
+        {
+            continue;
+        }
+        crate::chart::rendering::paint_study_plot(
+            painter,
+            &points,
+            crate::studies::PlotStyle {
+                plot_type: crate::studies::PlotType::Line,
+                ..style
+            },
+            f32::NAN,
+        );
+    }
+}
+
 /// Anchor and level prices of drawings reaching the visible bars, for all study scales.
 #[cfg(feature = "drawings")]
 pub(crate) fn mapped_drawings(
@@ -365,12 +405,39 @@ pub(crate) fn paint_drawings(
         timeframe: None,
         finer: &[],
     };
-    for drawing in mapped_drawings(study, coords, price_to_y) {
+    let drawings = mapped_drawings(study, coords, price_to_y);
+    for drawing in &drawings {
         drawing.render(
             &context.painter.with_clip_rect(context.rect),
             context.rect,
             &view,
         );
+    }
+    let ctx = context.painter.ctx();
+    // Pattern boundaries share ids, so hit-test each drawing on its own, topmost first.
+    if let Some(pos) = ctx.pointer_hover_pos().filter(|&pos| {
+        context.rect.contains(pos) && ctx.layer_id_at(pos) == Some(context.painter.layer_id())
+    }) && let Some(label) = drawings.iter().rev().find_map(|drawing| {
+        let label = drawing.label.as_deref()?;
+        crate::drawings::services::DrawingInteraction::new()
+            .hit_test(pos, std::slice::from_ref(drawing), "")
+            .map(|_| label)
+    }) {
+        // One id per pane, shared with the marks, so egui stacks the tooltips of every study
+        // under the pointer instead of painting them over each other.
+        egui::Tooltip::always_open(
+            ctx.clone(),
+            context.painter.layer_id(),
+            egui::Id::unique((
+                "study-mark",
+                context.rect.min.x.to_bits(),
+                context.rect.min.y.to_bits(),
+            )),
+            egui::Rect::from_center_size(pos, egui::Vec2::splat(10.0)),
+        )
+        .show(|ui| {
+            ui.label(label);
+        });
     }
 }
 
