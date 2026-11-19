@@ -25,6 +25,7 @@ pub(crate) mod utils {
     pub(crate) use crate::painting::dashed_line::draw_dashed_line;
 }
 
+pub(crate) use gann::ratio_label as gann_ratio_label;
 pub(crate) use outline::Outline;
 pub(crate) use trading::anchored_vwap_through;
 pub use traits::DrawingRenderer;

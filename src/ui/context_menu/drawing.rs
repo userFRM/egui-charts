@@ -580,6 +580,45 @@ mod tests {
         }
     }
 
+    /// Channels and fans offer an alert at the newest bar once their lines have started.
+    #[test]
+    fn channels_and_fans_offer_an_alert_from_where_their_lines_start() {
+        use DrawingToolType as T;
+        for (tool, points, offered) in [
+            (
+                T::FibonacciChannel,
+                vec![(0.0, 100.0), (10.0, 120.0), (0.0, 130.0)],
+                true,
+            ),
+            (
+                T::FibonacciSpeedFan,
+                vec![(0.0, 100.0), (10.0, 200.0)],
+                true,
+            ),
+            (T::GannFan, vec![(0.0, 100.0), (10.0, 120.0)], true),
+            (T::GannFan, vec![(5.0, 100.0), (10.0, 120.0)], false),
+        ] {
+            let mut chart = Chart::new(BarData::default());
+            chart.symbol = "SAMPLE".into();
+            let mut drawing = Drawing::new(7, tool);
+            drawing.chart_points = points
+                .into_iter()
+                .map(|(bar, price)| ChartPoint::new(bar, price))
+                .collect();
+            chart.drawings_mut().drawings.push(drawing);
+            let mut menu = DrawingContextMenu::new();
+            menu.open_on(&Context::default(), &chart, Pos2::ZERO, 7);
+            assert_eq!(
+                menu.alert.map(|a| a.condition),
+                offered.then(|| AlertCondition::Compare {
+                    other: AlertSource::Drawing("7".into()),
+                    comparison: AlertComparison::Crossing,
+                }),
+                "{tool:?}"
+            );
+        }
+    }
+
     /// Delete and Move to follow editing permission; Lock also respects the host flag.
     #[test]
     fn delete_lock_and_move_to_follow_the_lock_and_user_edits() {

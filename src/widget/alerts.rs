@@ -166,7 +166,7 @@ impl Chart {
     /// Every output of every study and every level of every completed drawing whose pane marks
     /// the price or a study, as [`Self::alert_value`] resolves it, with the name the alert dialog
     /// shows, for `AlertDialog::sources`. Drawing levels are those at the newest bar. A name keeps
-    /// the study's name, the drawing's number and a fork level's value as given and translates the
+    /// the study's name, the drawing's number and a fork or fan level's value as given and translates the
     /// study output, the drawing tool and the level when shown. A level in a study pane is named
     /// after the study first in its pane, as in `RSI: Horizontal Line 7`.
     pub fn alert_sources(&self) -> Vec<(AlertSource, AlertSourceName)> {
@@ -219,7 +219,7 @@ impl Chart {
                         };
                     let name = if single {
                         named("{tool} {id}", &[("id", id.as_str())], &[tool])
-                    } else if let Some((line, value)) = d.fork_line(level) {
+                    } else if let Some((line, value)) = d.level_line(level) {
                         named(
                             line,
                             &[("id", id.as_str()), ("value", value.as_str())],
@@ -320,6 +320,17 @@ mod tests {
         fork.pitchfork = None;
         fork.completed = true;
         chart.drawings_mut().drawings.push(fork);
+        let mut fan = Drawing::new(11, DrawingToolType::FibonacciSpeedFan);
+        fan.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(2.0, 120.0)];
+        fan.completed = true;
+        let level = crate::drawings::FibonacciLevel::new(0.5, "", [0; 4]);
+        fan.fib_config = Some(crate::drawings::FibonacciConfig {
+            levels: vec![level.clone()],
+            time_levels: Some(vec![level]),
+            levels_as_percent: true,
+            ..crate::drawings::FibonacciConfig::legacy()
+        });
+        chart.drawings_mut().drawings.push(fan);
         let average = AlertSource::Study {
             id: study.0.to_string(),
             output: 0,
@@ -374,7 +385,20 @@ mod tests {
                 (fork("#5"), "Pitchfork 9: 1: second line".into()),
                 (fork("#6"), "Pitchfork 9: 1.5: first line".into()),
                 (fork("#7"), "Pitchfork 9: 1.5: second line".into()),
+                (
+                    AlertSource::Drawing("11".into()),
+                    "Fib Speed Resistance Fan 11: 50%: price level".into()
+                ),
+                (
+                    AlertSource::Drawing("11#1".into()),
+                    "Fib Speed Resistance Fan 11: 50%: time level".into()
+                ),
             ]
+        );
+        let (_, name) = chart.alert_sources().pop().unwrap();
+        assert_eq!(
+            serde_json::to_value(name).unwrap()["template"],
+            "{tool} {id}: {value}: time level"
         );
     }
 
