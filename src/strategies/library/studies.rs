@@ -120,6 +120,11 @@ impl Strategy for StudyStrategy {
                 if matches!(self.rule, Rule::Rating) && input.id.starts_with("table_") {
                     continue;
                 }
+                // The signals read only the RSI line, so the study's smoothing, bands and
+                // divergence are not inputs here; `set_input` still passes them to the study.
+                if matches!(self.rule, Rule::Rsi) && input.id != "period" {
+                    continue;
+                }
                 if matches!(self.rule, Rule::TwoAverages) {
                     let prefix = if index == 0 { "fast" } else { "slow" };
                     input.id = format!("{prefix}.{}", input.id);
@@ -264,13 +269,12 @@ impl Strategy for StudyStrategy {
                         market(value(0).is_some() && before(1).is_some()),
                         market(value(1).is_some() && before(0).is_some()),
                     ],
-                    Rule::Rating => {
-                        let pair = value(2).zip(before(2));
-                        [
-                            market(pair.is_some_and(|(now, prev)| now >= 0.1 && prev < 0.1)),
-                            market(pair.is_some_and(|(now, prev)| now <= -0.1 && prev > -0.1)),
-                        ]
-                    }
+                    // Strong Buy and Strong Sell, strictly beyond 0.5. Every such bar places the
+                    // entry; the pyramiding limit keeps a held position from growing.
+                    Rule::Rating => [
+                        market(value(2).is_some_and(|rating| rating > 0.5)),
+                        market(value(2).is_some_and(|rating| rating < -0.5)),
+                    ],
                 }
             })
             .collect();
