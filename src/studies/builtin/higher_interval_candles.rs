@@ -15,8 +15,10 @@ use std::ops::Range;
 ///
 /// The chart supplies its input interval and instrument metadata. Direct callers set them through
 /// [`Indicator::set_timeframe`] and [`Indicator::set_instrument`] before calculating, and
-/// [`Indicator::set_bar_clock`] when their calendar differs from UTC. Input bars
-/// must be chronological. The last period is rebuilt on every update, including corrections to
+/// [`Indicator::set_bar_clock`] when their calendar differs from UTC. A bar clock with a session,
+/// as the chart's, also sets the hours: the candles keep to the hours it selects, and turning
+/// Include extended hours off keeps them to regular hours. Input bars must be chronological.
+/// The last period is rebuilt on every update, including corrections to
 /// its opening bar. Bars longer than a day join the period they open in. Incompatible intervals
 /// have no output. No external data is requested.
 ///
@@ -101,12 +103,18 @@ impl HigherIntervalCandles {
         let periods = if source.duration_ms() > Timeframe::Day1.duration_ms() {
             calendar_periods(&bars, &target)
         } else {
+            // A chart's clock keeps only the hours the chart shows.
+            let instrument = match self.clock.session() {
+                Some(session) => self.instrument.clone().with_session(session.clone()),
+                None => self.instrument.clone(),
+            };
             crate::data::resample_periods(
                 &bars,
                 self.clock.clone(),
                 target,
-                &self.instrument,
+                &instrument,
                 self.extended_hours,
+                true,
             )
         };
         let Some(periods) = periods else {
@@ -725,6 +733,70 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// The intraday periods keep to the hours of the chart's clock: extended hours without the
+    /// overnight session count from the 04:00 pre-market open, not from 20:00 the day before.
+    #[test]
+    fn intraday_periods_keep_to_the_chart_hours() {
+        use chrono::Weekday::*;
+        let at = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        let days = [Mon, Tue, Wed, Thu, Fri];
+        let session = Session::new([SessionWindow::new(days, at(9, 30), at(16, 0))])
+            .with_extended_windows([
+                SessionWindow::new(days, at(4, 0), at(9, 30)),
+                SessionWindow::new(days, at(16, 0), at(20, 0)),
+            ])
+            .with_overnight_windows([SessionWindow::new(days, at(20, 0), at(4, 0))]);
+        let instrument = Instrument::new("OVERNIGHT")
+            .with_time_zone(TimezoneId::utc())
+            .with_session(session.clone());
+        let data: Vec<Bar> = ["04:00", "04:44", "04:45", "05:30", "10:00", "19:59"]
+            .into_iter()
+            .map(|time| {
+                let time = format!("2024-03-11T{time}:00Z").parse().unwrap();
+                Bar::new(time, 1.0, 1.0, 1.0, 1.0, 1.0)
+            })
+            .collect();
+        let min45: Timeframe = "45min".parse().unwrap();
+        // Chart hours, study input and the resulting 45-minute opens.
+        type Row = ((bool, bool), bool, &'static [&'static str]);
+        let rows: [Row; 6] = [
+            (
+                (true, false),
+                true,
+                &["04:00", "04:45", "05:30", "10:00", "19:45"],
+            ),
+            ((true, false), false, &["09:30"]),
+            ((false, false), true, &["09:30"]),
+            ((false, false), false, &["09:30"]),
+            (
+                (true, true),
+                true,
+                &["03:30", "04:15", "05:00", "09:30", "19:15"],
+            ),
+            ((true, true), false, &["09:30"]),
+        ];
+        let mut study = HigherIntervalCandles::new(min45);
+        study.set_instrument(Some(&instrument));
+        for ((extended, overnight), input, expected) in rows {
+            study
+                .set_input("extended_hours", InputValue::Toggle(input))
+                .unwrap();
+            study.set_bar_clock(&BarClock::new(Timeframe::Min1).with_session_hours(
+                TimezoneId::utc(),
+                session.clone(),
+                extended,
+                overnight,
+            ));
+            study.calculate(&data);
+            let opens: Vec<_> = study.candles().iter().map(|c| c.bar.time).collect();
+            let expected: Vec<DateTime<Utc>> = expected
+                .iter()
+                .map(|time| format!("2024-03-11T{time}:00Z").parse().unwrap())
+                .collect();
+            assert_eq!(opens, expected, "{extended} {overnight} {input}");
         }
     }
 }

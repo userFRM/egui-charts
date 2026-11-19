@@ -17,10 +17,11 @@ use crate::model::{
 /// Methods are called on the UI thread and must return at once. Talk to the broker elsewhere and
 /// answer or push from any thread, runtime or browser task.
 ///
-/// Every price and quantity pushed must be finite. Quantities are positive, except a position's,
-/// which is signed, and an order's filled quantity, which runs from 0 to the requested quantity;
-/// the terminal skips events that break this. Prices are in the symbol's price units and
-/// quantities in its trading units.
+/// Every price and quantity pushed must be finite, including each take-profit level's
+/// [`stop_loss`](crate::model::TakeProfitLevel::stop_loss). Quantities are positive, except a
+/// position's, which is signed, and an order's filled quantity, which runs from 0 to the requested
+/// quantity; the terminal skips events that break this. Prices are in the symbol's price units
+/// and quantities in its trading units.
 ///
 /// A paper account that trades one symbol and fills market orders at a fixed price:
 ///
@@ -97,6 +98,9 @@ pub trait Broker: MaybeSend + 'static {
     /// The terminal calls it when it starts and again, with a new stream, after the stream lagged;
     /// each stream starts from nothing, so push the whole current state again. The old stream is
     /// inactive from then on: push into the newest one only.
+    /// A position order the user confirmed on the old stream that still waits for its
+    /// [`rules`](Self::rules) is reported as refused, as while the broker is not live, and is not
+    /// sent, also when the answer arrives later.
     ///
     /// The terminal announces, with a notification and the execution sound for fills, a working
     /// limit or stop order it has not seen on the stream, a rejected order and each execution,

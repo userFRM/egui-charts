@@ -135,6 +135,64 @@ impl CombinedTrade {
     }
 }
 
+/// What a trade-size filter measures. A matching engine fills an aggressive order against the
+/// book at once, so the fills of one aggressive order share its exchange timestamp.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SizeBasis {
+    /// Each fill by its own size.
+    #[default]
+    Fill,
+    /// Each fill by the combined size of its aggressive order: the fills with its
+    /// [`aggressor_order_id`](crate::model::Tick::aggressor_order_id) at one exchange timestamp,
+    /// whatever fills of other orders come between them. A fill without an aggressor order id
+    /// is an order of its own, and fills of one id at another timestamp are another order. The
+    /// fills of an order that the filter accepts count at their own prices and sizes. Until a fill
+    /// at a later timestamp arrives, a further fill of an order of the newest timestamp can bring
+    /// all of its fills into the filter or take them out.
+    AggressiveOrder,
+}
+
+/// Combined size of each aggressive order of one exchange timestamp, for size filters that
+/// measure [`SizeBasis::AggressiveOrder`].
+#[derive(Clone, Debug, Default)]
+pub(crate) struct OrderSizes {
+    at: Option<DateTime<Utc>>,
+    sizes: HashMap<u64, f64>,
+}
+
+impl OrderSizes {
+    /// Whether `fill` is at the timestamp of the orders held.
+    pub(crate) fn holds(&self, fill: &Tick) -> bool {
+        self.at == Some(fill.ts)
+    }
+
+    /// Adds `fill` to its order, after forgetting the orders of another timestamp, and returns
+    /// the order's size before and after it, saturating at the largest finite value. A fill
+    /// without an aggressor order id is an order of its own, of size zero before it.
+    pub(crate) fn add(&mut self, fill: &Tick) -> (f64, f64) {
+        if !self.holds(fill) {
+            self.at = Some(fill.ts);
+            self.sizes.clear();
+        }
+        let Some(id) = fill.aggressor_order_id else {
+            return (0.0, fill.size);
+        };
+        let size = self.sizes.entry(id).or_default();
+        let before = *size;
+        *size = (*size + fill.size).min(f64::MAX);
+        (before, *size)
+    }
+
+    /// The size so far of `fill`'s order: its own size without an aggressor order id.
+    pub(crate) fn of(&self, fill: &Tick) -> f64 {
+        (fill.aggressor_order_id)
+            .and_then(|id| self.sizes.get(&id))
+            .copied()
+            .unwrap_or(fill.size)
+    }
+}
+
 /// Trades in arrival order, at most `capacity` of them: the oldest go first.
 pub(crate) struct Trades {
     trades: VecDeque<Tick>,
