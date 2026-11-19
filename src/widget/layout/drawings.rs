@@ -1401,7 +1401,8 @@ impl ChartLayout {
     }
 
     /// Deletes the drawings [`Self::drawing_inventory`] lists under `symbol`, locked ones
-    /// included, and leaves those of other symbols. Stored drawings are written without them.
+    /// included, and leaves those whose user edits are off and those of other symbols. Stored
+    /// drawings are written without them.
     /// Undoing the edit on the active chart or any chart it changed restores them on all of
     /// them. Returns whether the symbol had drawings. Call it outside [`Chart::user_action`]:
     /// each chart records its part as its own action.
@@ -1414,6 +1415,23 @@ impl ChartLayout {
             .collect();
         if keys.is_empty() {
             return false;
+        }
+        // A symbol with only protected drawings has no deletion to record on any chart.
+        let editable = |d: &Drawing| inventoried(d) && d.user_edit_enabled;
+        if !charts.iter().any(|chart| {
+            (chart.symbol() == symbol && chart.drawings().drawings.iter().any(editable))
+                || chart
+                    .symbol_drawings
+                    .get(symbol)
+                    .is_some_and(|(manager, _)| manager.drawings.iter().any(editable))
+                || chart.stored_symbol_drawings(symbol).is_some_and(|stored| {
+                    stored
+                        .drawings()
+                        .iter()
+                        .any(|record| editable(&record.drawing))
+                })
+        }) {
+            return true;
         }
         let active = self.active.min(charts.len().saturating_sub(1));
         // Charts on one storage read each other's writes, so that one of them deletes what they
@@ -1444,6 +1462,9 @@ impl ChartLayout {
         for slot in slots {
             let writes = writes[slot];
             let doomed = |chart: &Chart, drawing: &Drawing| {
+                if !drawing.user_edit_enabled {
+                    return false;
+                }
                 if writes && inventoried(drawing) {
                     return true;
                 }
@@ -1513,11 +1534,18 @@ impl Chart {
         }
         let stored = self
             .stored_symbol_drawings(symbol)
-            .filter(|_| writes)
+            .filter(|stored| {
+                writes
+                    && stored
+                        .drawings()
+                        .iter()
+                        .any(|record| record.drawing.listed && record.drawing.user_edit_enabled)
+            })
             .cloned();
         if let Some(stored) = &stored {
             let mut left = stored.clone();
-            left.drawings.retain(|record| !record.drawing.listed);
+            left.drawings
+                .retain(|record| !record.drawing.listed || !record.drawing.user_edit_enabled);
             self.write_unshown_drawings(symbol, left);
         }
         if retained.is_empty() && stored.is_none() {
@@ -1692,6 +1720,33 @@ mod tests {
                 ((*symbol).to_owned(), rows)
             })
             .collect()
+    }
+
+    /// Symbol deletion leaves protected drawings on both the shown and retained symbol paths.
+    #[test]
+    fn deleting_a_symbol_keeps_drawings_without_user_edits() {
+        for shown in [true, false] {
+            for free in [true, false] {
+                let mut a = bars(60);
+                a.set_symbol("AAA");
+                let mut held = line("Held");
+                held.user_edit_enabled = false;
+                // Initial host data is outside the user's undo history.
+                a.drawings_mut().drawings.push(held);
+                if free {
+                    let mut drawing = line("Free");
+                    drawing.id = 1;
+                    a.drawings_mut().drawings.push(drawing);
+                }
+                if !shown {
+                    a.set_symbol("BBB");
+                }
+                let mut layout = ChartLayout::default();
+                assert!(layout.delete_symbol_drawings(&mut [&mut a], "AAA"));
+                assert_eq!(names(&layout, &[&mut a]), listed(&[("AAA", &["Held"])]));
+                assert_eq!(a.can_undo(), free, "shown {shown}, free {free}");
+            }
+        }
     }
 
     /// A symbol-wide deletion stays one edit when a clone replaces its layout.
