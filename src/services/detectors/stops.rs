@@ -1,10 +1,10 @@
 //! Same-side execution bursts and bars that sweep through diagonal imbalances.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use chrono::{DateTime, TimeDelta, Utc};
 
-use super::{DetectionKind, Detector};
+use super::{DetectionKind, DetectorSettings, footprint};
 use crate::data::{Footprint, meets_threshold};
 use crate::model::{
     BarClock, Direction, OrderSide, Placement, Signal, SignalId, SignalShape, Tick,
@@ -150,6 +150,14 @@ pub(super) struct StopSweeps {
     /// The bar of the last trade evicted from `trades`, kept apart so that eviction and the live
     /// fills do not displace each other's date.
     evicted: Placement,
+    /// The feed time of the first live event since tracking.
+    live: Option<DateTime<Utc>>,
+    /// The open of that event's bar on the current clock. Footprint conditions of bars that
+    /// open earlier are history and raise no alert.
+    pub(super) live_open: Option<DateTime<Utc>>,
+    /// The latest bar of each footprint condition counted on the current clock, independent of
+    /// chart marker retention.
+    pub(super) conditions: HashMap<String, DateTime<Utc>>,
 }
 
 struct Prices {
@@ -173,16 +181,32 @@ impl StopSweeps {
             last_time: None,
             placement: Placement::default(),
             evicted: Placement::default(),
+            live: None,
+            live_open: None,
+            conditions: HashMap::new(),
+        }
+    }
+
+    /// Notes feed time `time` of a live event; only the first one since tracking counts.
+    pub(super) fn go_live(&mut self, time: DateTime<Utc>) {
+        if self.live.is_none() {
+            self.live = Some(time);
+            self.live_open = self.clock.as_ref().map(|clock| clock.instant_open(time));
         }
     }
 
     pub(super) fn set_clock(
         &mut self,
         clock: Option<BarClock>,
-        settings: &Detector<StopSweepRule>,
+        settings: &DetectorSettings,
         out: &mut Vec<SignalEvent>,
     ) {
         self.clock = clock;
+        self.live_open = self
+            .live
+            .zip(self.clock.as_ref())
+            .map(|(time, clock)| clock.instant_open(time));
+        self.conditions.clear();
         self.footprint = self.clock.clone().map(|clock| {
             let mut footprint = Footprint::new(clock, self.tick, 1).unwrap();
             footprint.set_budget(12, 100_000);
@@ -194,18 +218,18 @@ impl StopSweeps {
         self.volumes.clear();
         let trades = std::mem::take(&mut self.trades);
         for trade in &trades {
-            self.aggregate(trade, settings.enabled, out);
+            self.aggregate(trade, settings, out);
         }
         self.trades = trades;
         if let Some(time) = self.last_time {
-            self.advance(time, settings.enabled, out);
+            self.advance(time, settings, out);
         }
     }
 
     pub(super) fn trade(
         &mut self,
         fill: &Tick,
-        settings: &Detector<StopSweepRule>,
+        settings: &DetectorSettings,
         out: &mut Vec<SignalEvent>,
     ) {
         if fill.side.is_none()
@@ -231,18 +255,35 @@ impl StopSweeps {
                 }
             }
         }
-        self.aggregate(fill, settings.enabled, out);
+        self.aggregate(fill, settings, out);
     }
 
-    fn aggregate(&mut self, fill: &Tick, enabled: bool, out: &mut Vec<SignalEvent>) {
-        self.advance(fill.ts, enabled, out);
+    fn aggregate(&mut self, fill: &Tick, settings: &DetectorSettings, out: &mut Vec<SignalEvent>) {
+        self.advance(fill.ts, settings, out);
         let (Some(clock), Some(footprint)) = (&self.clock, &mut self.footprint) else {
             return;
         };
         let open = self.placement.open(clock, fill.ts);
         let first = *self.first.get_or_insert(open);
-        if open <= first || !matches!(footprint.push(fill), Ok(true)) {
+        if open <= first {
             return;
+        }
+        let totals = |bar: &crate::data::FootprintBar| [bar.ask, bar.bid, bar.delta()];
+        let before = footprint.bar_at(open).map_or([0.0; 3], totals);
+        if !matches!(footprint.push(fill), Ok(true)) {
+            return;
+        }
+        if settings.footprint.enabled
+            && let Some(bar) = footprint.bar_at(open)
+        {
+            footprint::forming(
+                before,
+                totals(bar),
+                open,
+                fill.price,
+                &settings.footprint.rule,
+                out,
+            );
         }
         let bar = self.bars.entry(open).or_insert(Prices {
             open: fill.price,
@@ -261,9 +302,10 @@ impl StopSweeps {
     pub(super) fn advance(
         &mut self,
         time: DateTime<Utc>,
-        enabled: bool,
+        settings: &DetectorSettings,
         out: &mut Vec<SignalEvent>,
     ) {
+        let enabled = settings.stop_sweeps.enabled;
         self.last_time = Some(self.last_time.map_or(time, |last| last.max(time)));
         let (Some(clock), Some(footprint)) = (&self.clock, &self.footprint) else {
             return;
@@ -280,6 +322,9 @@ impl StopSweeps {
             let Some(bar) = footprint.bar_at(at) else {
                 continue;
             };
+            if settings.footprint.enabled {
+                footprint::closed(bar, at, prices.close, &settings.footprint.rule, out);
+            }
             let volume = bar.volume();
             let buy = prices.close > prices.open;
             let delta = if buy { bar.delta() } else { -bar.delta() };
