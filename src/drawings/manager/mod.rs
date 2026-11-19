@@ -299,6 +299,10 @@ pub struct DrawingManager {
     pub(crate) finished_text_placement: Option<usize>,
     /// A newly placed image waiting for a host file request at the end of this frame.
     pub(crate) image_request: Option<usize>,
+    /// Post and idea cards the user placed before their content was known, with the time of the
+    /// anchor they were placed at and that anchor. The chart moves each to the time its content
+    /// was published once the content arrives, unless the card was moved or locked first.
+    pub(crate) unplaced_posts: Vec<(usize, Option<chrono::DateTime<chrono::Utc>>, ChartPoint)>,
     /// The frame of the last primary click the active tool took. The chart reports no double
     /// click either of whose clicks a tool took, such as the one that finishes a path.
     pub(crate) placement_click: Option<u64>,
@@ -419,6 +423,7 @@ impl DrawingManager {
             text_editor: None,
             finished_text_placement: None,
             image_request: None,
+            unplaced_posts: Vec::new(),
             placement_click: None,
             selection: SelectionService::new(),
             history: HistoryService::new(),
