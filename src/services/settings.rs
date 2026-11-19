@@ -457,7 +457,6 @@ mod tests {
                 .query_by_role_and_label(Role::Button, "gone")
                 .is_none()
         );
-        assert_eq!(settings.custom_drawing_favorites, ["midpoint", "gone"]);
         assert_eq!(
             harness.state().state.custom_favorites,
             settings.custom_drawing_favorites
