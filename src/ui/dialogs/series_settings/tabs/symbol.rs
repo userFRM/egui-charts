@@ -849,7 +849,7 @@ impl SymbolTab {
                 ui.end_row();
                 ui.checkbox(
                     &mut params.tpo_colored_blocks,
-                    l10n::text(ui.ctx(), "Colored blocks"),
+                    l10n::text(ui.ctx(), "Coloured blocks"),
                 );
                 let colored = params.tpo_colored_blocks;
                 ui.add_enabled_ui(colored, |ui| {
@@ -860,7 +860,7 @@ impl SymbolTab {
                     })
                 });
                 ui.end_row();
-                ui.label(l10n::text(ui.ctx(), "Block color"));
+                ui.label(l10n::text(ui.ctx(), "Block colour"));
                 ui.add_enabled_ui(!colored, |ui| {
                     Self::color_picker(ui, &mut params.tpo_block_color)
                 });
