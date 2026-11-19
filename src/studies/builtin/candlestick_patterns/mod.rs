@@ -115,6 +115,17 @@ pub enum PatternTrend {
     NoDetection,
 }
 
+impl PatternTrend {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Sma50 => "SMA50",
+            Self::Sma50Sma200 => "SMA50, SMA200",
+            Self::NoDetection => "No detection",
+        }
+    }
+}
+
 /// Which signals [`CandlestickPatterns`] marks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PatternType {
@@ -125,6 +136,17 @@ pub enum PatternType {
     Bullish,
     /// Bearish patterns only.
     Bearish,
+}
+
+impl PatternType {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Both => "Both",
+            Self::Bullish => "Bullish",
+            Self::Bearish => "Bearish",
+        }
+    }
 }
 
 mod rules;

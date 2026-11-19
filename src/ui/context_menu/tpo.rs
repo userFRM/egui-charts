@@ -45,29 +45,36 @@ impl TpoMenu {
         )?;
         let composite = |time| params.tpo_composites.iter().position(|r| r.contains(&time));
         let sessions = clock.sessions();
+        let opens: Vec<_> =
+            crate::model::tpo::session_starts(bars, &sessions, config.split_hours(), &[])
+                .into_iter()
+                .map(|i| bars[i].time)
+                .collect();
         let mut groups: Vec<RangeInclusive<DateTime<Utc>>> = Vec::new();
         for i in crate::model::tpo::session_starts(
             bars,
             &sessions,
-            params.tpo_split_sessions,
+            config.split_hours(),
             &params.tpo_splits,
         ) {
             let time = bars[i].time;
             match groups.last_mut() {
                 Some(last)
-                    if composite(*last.start()).is_some()
-                        && composite(*last.start()) == composite(time) =>
+                    if (composite(*last.start()).is_some()
+                        && composite(*last.start()) == composite(time))
+                        || (opens.binary_search(&time).is_ok()
+                            && config
+                                .profile_period
+                                .key(&sessions, *last.start())
+                                .is_some()
+                            && config.profile_period.key(&sessions, *last.start())
+                                == config.profile_period.key(&sessions, time)) =>
                 {
                     *last = *last.start()..=time;
                 }
                 _ => groups.push(time..=time),
             }
         }
-        let opens: Vec<_> =
-            crate::model::tpo::session_starts(bars, &sessions, params.tpo_split_sessions, &[])
-                .into_iter()
-                .map(|i| bars[i].time)
-                .collect();
         let at = groups.iter().position(|r| *r.start() == open)?;
         let range = |i: usize| {
             let group = &groups[i];
@@ -85,7 +92,9 @@ impl TpoMenu {
         Some(Self {
             previous: at.checked_sub(1).map(|i| merge(i, at)),
             next: (at + 1 < groups.len()).then(|| merge(at, at + 1)),
-            split: (groups[at].start() != groups[at].end()).then_some(current),
+            split: (composite(*groups[at].start()).is_some()
+                && groups[at].start() != groups[at].end())
+            .then_some(current),
             split_at: period.filter(|time| !in_composite && *time > open),
             composite: in_composite,
             params,

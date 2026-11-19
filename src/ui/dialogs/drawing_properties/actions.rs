@@ -312,6 +312,7 @@ impl DrawingProps {
                 edited!(
                     font_weight,
                     italic,
+                    glyph_angle,
                     text_color,
                     background,
                     border,
@@ -374,6 +375,7 @@ impl DrawingProps {
                     gann => |d: &Drawing| d.gann_config().clone(),
                     ghost_feed => |d: &Drawing| d.ghost_feed.unwrap_or_default(),
                     bars_pattern => |d: &Drawing| d.bars_pattern.unwrap_or_default(),
+                    projection => |d: &Drawing| d.projection_config().into_owned(),
                     volume_profile => |d: &Drawing| d.volume_profile.unwrap_or_default(),
                     regression_trend => |d: &Drawing| d.regression_trend.unwrap_or_default(),
                     vwap => |d: &Drawing| d.vwap.unwrap_or_default(),
@@ -487,6 +489,11 @@ impl DrawingProps {
                     .any(|l| l.width.is_some_and(|w| !(w > 0.0 && w <= MAX_STROKE_WIDTH)))
             }) {
                 return Err("Pitchfork widths must be above 0 and at most 100");
+            }
+            if settings.projection.as_ref().is_some_and(|c| !c.is_valid()) {
+                return Err(
+                    "Projection coefficients must be between 0 and 100, widths above 0 and at most 100",
+                );
             }
             if let Some(c) = settings.gann.as_ref() {
                 let square = matches!(
@@ -823,6 +830,10 @@ mod tests {
                 reverse: true,
                 ..Default::default()
             });
+            settings.projection = Some(crate::drawings::ProjectionConfig {
+                show_background: false,
+                ..Default::default()
+            });
             settings.pitchfork = Some(PitchforkConfig {
                 background_opacity: 75,
                 ..Default::default()
@@ -910,6 +921,7 @@ mod tests {
             let saved = &chart.drawings().drawings[0];
             assert_eq!(format!("{:?}", saved.fib_config), expected);
             assert_eq!(saved.pitchfork.as_ref().unwrap().background_opacity, 75);
+            assert!(!saved.projection.as_ref().unwrap().show_background);
             assert_eq!(
                 saved
                     .gann
