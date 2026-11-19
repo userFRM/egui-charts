@@ -818,7 +818,9 @@ impl Chart {
     /// Returns `false` for the current symbol or while local drawing edits await a storage
     /// read or write acknowledgement. Otherwise returns `true`, also for an uncached symbol.
     /// Stored documents are left in host storage and read again on the next visit. Without
-    /// storage, forgotten drawings and markers are lost, including pending sync notifications.
+    /// storage, forgotten drawings and markers are lost, including pending sync notifications;
+    /// with it, so are the drawings kept on the chart or in the layout, which storage does not
+    /// hold.
     pub fn forget_symbol(&mut self, symbol: &str) -> bool {
         if symbol == self.symbol {
             return false;
