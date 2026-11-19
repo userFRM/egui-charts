@@ -793,13 +793,18 @@ impl Chart {
         merged
     }
 
-    /// Removes a bar series or study and clears its selection. Removing the main series retains
-    /// the time axis for the remaining series and drawings and pauses its feed; on a chart without
-    /// the original pane its bars stay live instead, as [`remove_pane`](Self::remove_pane)
-    /// describes. Undo of the [`user_action`](Self::user_action) that removed a bar series
-    /// restores it with its markers, price lines, formatter and bar limit, and for the main
-    /// series the feed follows [`set_feed_paused`](Self::set_feed_paused) again. Returns `false`
-    /// for an unknown or already removed id.
+    /// Removes a bar series or study and clears its selection. Removing a study also removes the
+    /// studies that read its output ([`StudySource::Study`](crate::model::StudySource::Study)),
+    /// directly or through other studies, except a study whose
+    /// [user edits](Self::set_indicator_user_edit_enabled) are off: it keeps the removed id as its
+    /// source and shows no values until the host removes it or gives it another source. Removing
+    /// the main series retains the time axis for the remaining series and drawings and pauses its
+    /// feed; on a chart without the original pane its bars stay live instead, as
+    /// [`remove_pane`](Self::remove_pane) describes. Undo of the [`user_action`](Self::user_action)
+    /// that removed a bar series restores it with its markers, price lines, formatter and bar
+    /// limit, and for the main series the feed follows [`set_feed_paused`](Self::set_feed_paused)
+    /// again; undo of one that removed studies restores all of them, each reading its source
+    /// again. Returns `false` for an unknown or already removed id.
     ///
     /// The drawings that an added series or a study owns stay drawn in its pane, which takes
     /// them over as it takes a drawing moved into it. When the pane goes with the series or
@@ -807,6 +812,18 @@ impl Chart {
     /// [`remove_pane`](Self::remove_pane) deletes them, and undo of the user action brings them
     /// back.
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
+        let dependents = self.study_dependents(id);
+        let removed = self.remove_one_series(id);
+        if removed {
+            for dependent in dependents {
+                self.remove_one_series(dependent);
+            }
+        }
+        removed
+    }
+
+    /// Removes `id` alone and releases the drawings it owned.
+    fn remove_one_series(&mut self, id: SeriesId) -> bool {
         #[cfg(feature = "drawings")]
         let pane = self.series_pane(id).filter(|_| id != SeriesId::MAIN);
         let removed = self.remove_series_keeping_drawings(id);

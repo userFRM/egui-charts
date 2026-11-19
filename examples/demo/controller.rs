@@ -10615,16 +10615,22 @@ mod tests {
                 let child = app
                     .chart
                     .add_indicator(Box::new(egui_charts::studies::SMA::new(2)));
+                app.chart.remove_series(parent);
+                // Removing a source removes its readers, so name the removed parent afterwards,
+                // as a layout saved with a missing source does.
                 app.chart
-                    .set_indicator_source(
-                        child,
-                        egui_charts::studies::StudySource::Study {
-                            id: parent.0,
-                            plot: 0,
-                        },
+                    .indicator_mut(child)
+                    .unwrap()
+                    .set_input(
+                        "source",
+                        egui_charts::studies::InputValue::Source(
+                            egui_charts::studies::StudySource::Study {
+                                id: parent.0,
+                                plot: 0,
+                            },
+                        ),
                     )
                     .unwrap();
-                app.chart.remove_series(parent);
                 let mut missing = Alert::new("FOREXA", AlertCondition::Above(0.0));
                 missing.frequency = egui_charts::model::AlertFrequency::OncePerBarClose;
                 missing.source = egui_charts::model::AlertSource::Study {
