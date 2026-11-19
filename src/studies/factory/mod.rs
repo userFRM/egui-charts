@@ -394,6 +394,7 @@ impl IndicatorFactory {
                 near_distance: 0.0,
                 far_distance: 0.0,
             },
+            OrderFlowKind::PriceRange { seconds: 60 },
         ] {
             let name = OrderFlowStudy::new(kind).name().to_owned();
             self.constructors.insert(
