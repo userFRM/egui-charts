@@ -398,7 +398,7 @@ impl Execution {
 /// let mut position = ClosedPosition::new("AAPL", OrderSide::Buy, 3.0, 110.0, 125.0, 45.0, closed);
 /// position.opened = Some(opened);
 /// ```
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct ClosedPosition {
     /// The symbol as the feed knows it.

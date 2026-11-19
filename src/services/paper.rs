@@ -21,8 +21,8 @@ const TIMES_IN_FORCE: [TimeInForce; 3] = [
     TimeInForce::FillOrKill,
 ];
 
-/// Finished orders, executions, balance changes and journal entries kept, which keeps a
-/// reconnect snapshot below the event stream's burst limit.
+/// Finished orders, executions, closed positions, balance changes and journal entries kept, which
+/// keeps a reconnect snapshot below the event stream's burst limit.
 const HISTORY: usize = 1_000;
 
 /// The most take-profit levels an order may carry.
@@ -106,6 +106,10 @@ pub struct SavedPaperAccount {
     executions: Vec<Execution>,
     balance_history: Vec<BalanceChange>,
     journal: Vec<JournalEntry>,
+    #[serde(default)]
+    trips: Vec<(String, Trip)>,
+    #[serde(default)]
+    closed_positions: Vec<ClosedPosition>,
 }
 
 impl std::fmt::Debug for PaperAccount {
@@ -155,9 +159,10 @@ fn cost(value: f64) -> f64 {
 }
 
 /// Accumulates a symbol's entries and partial closes until it becomes flat or reverses.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 struct Trip {
     side: OrderSide,
-    opened: DateTime<Utc>,
+    opened: Option<DateTime<Utc>>,
     /// Total entry quantity and the sum of its fill values.
     entered: f64,
     entry_value: f64,
@@ -352,6 +357,12 @@ impl PaperAccount {
         rules.sort_by(|a, b| a.symbol.cmp(&b.symbol));
         let mut positions: Vec<_> = state.positions.values().cloned().collect();
         positions.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+        let mut trips: Vec<_> = state
+            .trips
+            .iter()
+            .map(|(symbol, trip)| (symbol.clone(), trip.clone()))
+            .collect();
+        trips.sort_by(|a, b| a.0.cmp(&b.0));
         let exits = state
             .working
             .iter()
@@ -374,6 +385,8 @@ impl PaperAccount {
             executions: state.executions.clone(),
             balance_history: state.balance_history.clone(),
             journal: state.journal.clone(),
+            trips,
+            closed_positions: state.closed_positions.clone(),
         }
     }
 
@@ -384,7 +397,8 @@ impl PaperAccount {
     /// count as their builders say, rules that are not valid are left out, and only the newest
     /// 1,000 entries of each history are kept. Positions and account figures retain their saved
     /// marks until a host price arrives. Returns `None` when the saved balance or starting balance
-    /// is not finite.
+    /// is not finite. Older saves without round-trip tracking start it from the saved position's
+    /// quantity and average price, with no reported opening time or earlier partial closes.
     pub fn restore(mut saved: SavedPaperAccount) -> Option<Self> {
         if !saved.initial.is_finite() || !saved.balance.is_finite() {
             return None;
@@ -404,6 +418,9 @@ impl PaperAccount {
             .executions
             .drain(..saved.executions.len().saturating_sub(HISTORY));
         saved
+            .closed_positions
+            .drain(..saved.closed_positions.len().saturating_sub(HISTORY));
+        saved
             .balance_history
             .drain(..saved.balance_history.len().saturating_sub(HISTORY));
         saved
@@ -415,6 +432,26 @@ impl PaperAccount {
             state.next_id = saved.next_id;
             state.working = saved.working;
             state.exits = saved.exits.into_iter().collect();
+            state.trips = saved.trips.into_iter().collect();
+            for position in &saved.positions {
+                // Earlier saves have no trip totals or opening time; retain their known cost basis.
+                state
+                    .trips
+                    .entry(position.symbol.clone())
+                    .or_insert_with(|| Trip {
+                        side: if position.quantity > 0.0 {
+                            OrderSide::Buy
+                        } else {
+                            OrderSide::Sell
+                        },
+                        opened: None,
+                        entered: position.quantity.abs(),
+                        entry_value: position.quantity.abs() * position.average_price,
+                        exited: 0.0,
+                        exit_value: 0.0,
+                        realized: 0.0,
+                    });
+            }
             state.positions = saved
                 .positions
                 .into_iter()
@@ -422,6 +459,7 @@ impl PaperAccount {
                 .collect();
             state.finished = saved.finished;
             state.executions = saved.executions;
+            state.closed_positions = saved.closed_positions;
             state.balance_history = saved.balance_history;
             state.journal = saved.journal;
         }
@@ -704,7 +742,7 @@ impl State {
         let now = self.now();
         let open = |quantity: f64| Trip {
             side: request.side,
-            opened: now,
+            opened: Some(now),
             entered: quantity,
             entry_value: quantity * price,
             exited: 0.0,
@@ -740,7 +778,7 @@ impl State {
                 trip.realized,
                 now,
             );
-            closed.opened = Some(trip.opened);
+            closed.opened = trip.opened;
             Some(closed)
         } else {
             if let Some(trip) = self.trips.get_mut(symbol) {
@@ -809,7 +847,7 @@ impl State {
         self.push(AccountEvent::Position(position.clone()));
         if let Some(closed) = closed {
             self.push(AccountEvent::ClosedPosition(closed.clone()));
-            if self.closed_positions.len() == 1_000 {
+            if self.closed_positions.len() == HISTORY {
                 self.closed_positions.remove(0);
             }
             self.closed_positions.push(closed);
@@ -1786,6 +1824,21 @@ mod tests {
             ),
             Ok(OrderId::new("5"))
         );
+        paper.set_price("ES", 104.0);
+        place(
+            &paper,
+            OrderRequest::new("ES", OrderSide::Sell, 3.0, OrderType::Market),
+        )
+        .unwrap();
+        let saved = paper.save();
+        assert_eq!(saved.closed_positions.len(), 1);
+        let closed = &saved.closed_positions[0];
+        assert_eq!(closed.opened, None);
+        assert_eq!(closed.side, OrderSide::Buy);
+        assert_eq!(closed.quantity, 3.0);
+        assert!((closed.average_price - 301.0 / 3.0).abs() < 1e-9);
+        assert_eq!(closed.exit_price, 104.0);
+        assert!((closed.realized_pnl - 550.0).abs() < 1e-9);
     }
 
     /// A JSON round trip preserves terms, history, working exits and the next id. Restored orders
@@ -1901,6 +1954,7 @@ mod tests {
     #[test]
     fn closed_positions_span_a_round_trip_from_its_opening_fill_to_the_close_or_reversal() {
         let paper = PaperAccount::new("USD", 100_000.0);
+        let mut restored = PaperAccount::restore(paper.save()).unwrap();
         let at = |minute: i64| DateTime::from_timestamp(1_704_067_200 + 60 * minute, 0).unwrap();
         let inbox = Arc::new(Inbox::default());
         let (_listener, events) = Listener::new(&inbox, 2);
@@ -1916,13 +1970,19 @@ mod tests {
             (6, 100.0, Buy, 0.2),
             (7, 100.0, Sell, 0.3),
         ] {
-            paper.set_replay_time(Some(at(minute)));
-            paper.set_price("SYM", price);
-            place(
-                &paper,
-                OrderRequest::new("SYM", side, quantity, OrderType::Market),
-            )
-            .unwrap();
+            for account in [&paper, &restored] {
+                account.set_replay_time(Some(at(minute)));
+                account.set_price("SYM", price);
+                place(
+                    account,
+                    OrderRequest::new("SYM", side, quantity, OrderType::Market),
+                )
+                .unwrap();
+            }
+            assert_eq!(restored.save(), paper.save());
+            let json = serde_json::to_string(&restored.save()).unwrap();
+            restored = PaperAccount::restore(serde_json::from_str(&json).unwrap()).unwrap();
+            assert_eq!(serde_json::to_string(&restored.save()).unwrap(), json);
         }
         let live = inbox
             .drain()
@@ -1930,7 +1990,7 @@ mod tests {
             .into_iter()
             .map(|(_, event)| *event.downcast::<AccountEvent>().unwrap())
             .collect();
-        for events in [live, snapshot(&paper)] {
+        for events in [live, snapshot(&paper), snapshot(&restored)] {
             let closed: Vec<_> = events
                 .into_iter()
                 .filter_map(|event| match event {
@@ -1962,6 +2022,10 @@ mod tests {
                 }
             }
         }
+        let mut saved = restored.save();
+        saved.closed_positions = vec![saved.closed_positions[0].clone(); HISTORY + 3];
+        let restored = PaperAccount::restore(saved).unwrap();
+        assert_eq!(restored.save().closed_positions.len(), HISTORY);
     }
 
     #[test]
