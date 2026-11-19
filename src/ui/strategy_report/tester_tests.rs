@@ -143,6 +143,7 @@ fn a_run_continues_on_new_bars_and_rebuilds_after_corrections() {
     h.state_mut().1.truncate(99);
     h.run();
     assert!(h.state().0.is_stale());
+    h.get_by_label("Result is stale. Run again to update.");
     assert_eq!(h.state().0.report(), Some(&before));
     h.state_mut().1 = corrected;
     h.run();

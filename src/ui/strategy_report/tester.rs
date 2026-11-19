@@ -1020,8 +1020,12 @@ impl StrategyTester {
             self.undo_settings.push(before);
             self.redo_settings.clear();
         }
+        let stale = self.stale;
         if let Some(action) = self.follow_chart(bars) {
             actions.push(action);
+        }
+        if self.stale != stale {
+            ui.ctx().request_repaint();
         }
         if let Some(job) = &mut self.job {
             match job.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
