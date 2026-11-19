@@ -433,6 +433,50 @@ mod tests {
         }
     }
 
+    /// A chart of the closes 100, 102 and 101.5 with the colours `up` and `down` as its candle
+    /// body colours and no last price line: one thin Kagi line from 100 to 102, or one column of
+    /// Xs from 100 to 102.
+    fn price_based_chart(kind: ChartType, [up, down]: [egui::Color32; 2]) -> crate::Chart {
+        use crate::model::{Bar, BarData};
+        let time = chrono::DateTime::UNIX_EPOCH;
+        let bars = [100.0, 102.0, 101.5]
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| Bar::new(time + chrono::Duration::days(i as i64), c, c, c, c, 0.0))
+            .collect();
+        let mut chart = crate::Chart::new(BarData::from_bars(bars));
+        chart.config_mut().show_volume = false;
+        chart.config_mut().bullish_color = up;
+        chart.config_mut().bearish_color = down;
+        chart.set_chart_type(kind);
+        // The last price line takes the colours too; only the elements are read.
+        let style = chart
+            .series_style_mut(crate::widget::SeriesId::MAIN)
+            .unwrap();
+        style.price_line_visible = false;
+        chart
+    }
+
+    /// Every setting of the price-based chart types accepted in the dialog comes back from a
+    /// saved layout.
+    #[test]
+    fn price_based_settings_survive_a_layout() {
+        let mut chart = price_based_chart(ChartType::Renko, [egui::Color32::GREEN; 2]);
+        let mut settings = chart.series_settings();
+        let params = &mut settings.chart_type_params;
+        params.renko_real_price = false;
+        params.kagi_real_price = false;
+        params.line_break_real_price = false;
+        params.pnf_real_price = false;
+        chart.apply_series_settings(&settings);
+        let json = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
+        let mut restored = price_based_chart(ChartType::Candles, [egui::Color32::RED; 2]);
+        restored
+            .restore(&serde_json::from_str(&json).unwrap())
+            .unwrap();
+        assert_eq!(restored.chart_type_params(), &settings.chart_type_params);
+    }
+
     #[test]
     fn type_controls_leave_the_footer_inside_short_and_narrow_windows() {
         for dark in [false, true] {

@@ -14,6 +14,10 @@ use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid};
 use chrono::{NaiveTime, Timelike};
 use egui::{Color32, RichText, Ui};
 
+/// The row that chooses between the last real price and the newest element's close on the
+/// price scale of a price-based chart type.
+const REAL_PRICE: &str = "Real price";
+
 /// Symbol tab renderer - shows chart type and style settings
 #[derive(Debug)]
 pub struct SymbolTab;
@@ -730,10 +734,12 @@ impl SymbolTab {
                 ui.checkbox(&mut params.renko_wicks, "")
                     .labelled_by(label.id);
                 ui.end_row();
+                Self::switch(ui, REAL_PRICE, &mut params.renko_real_price);
             }
             ChartType::Kagi => {
                 Self::box_size(ui, &mut params.kagi_size_method, &mut params.kagi_reversal);
                 Self::transform_source(ui, &mut params.kagi_source);
+                Self::switch(ui, REAL_PRICE, &mut params.kagi_real_price);
             }
             ChartType::Range => {
                 Self::box_size(ui, &mut params.range_size_method, &mut params.range_size)
@@ -745,6 +751,7 @@ impl SymbolTab {
                 ui.add(egui::DragValue::new(&mut params.pnf_reversal).range(1..=100))
                     .labelled_by(label.id);
                 ui.end_row();
+                Self::switch(ui, REAL_PRICE, &mut params.pnf_real_price);
             }
             ChartType::LineBreak => {
                 let label = ui.label(l10n::text(ui.ctx(), "Number of lines"));
@@ -752,6 +759,7 @@ impl SymbolTab {
                     .labelled_by(label.id);
                 ui.end_row();
                 Self::transform_source(ui, &mut params.line_break_source);
+                Self::switch(ui, REAL_PRICE, &mut params.line_break_real_price);
             }
             ChartType::TimePriceOpportunity => {
                 let label = ui.label(l10n::text(ui.ctx(), "Period"));
