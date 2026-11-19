@@ -3656,7 +3656,7 @@ impl Chart {
                                     price_rect.shrink(8.0),
                                     self.quote_panel_at.unwrap_or([0.5, 0.0]),
                                     prices,
-                                    ui.id().with("quote_panel"),
+                                    ui.scope_id().with("quote_panel"),
                                 )
                             });
                         (result, panel)
