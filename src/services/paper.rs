@@ -14,7 +14,7 @@ use crate::model::{
 };
 
 /// The most take-profit levels an order may carry.
-const MAX_TAKE_PROFIT_LEVELS: usize = 8;
+const MAX_TAKE_PROFIT_LEVELS: usize = 4;
 
 /// A paper account: a [`Broker`] that fills orders against the prices the host feeds it, so the
 /// order ticket, the chart's order and position lines and the account panel work as they do with
@@ -32,7 +32,7 @@ const MAX_TAKE_PROFIT_LEVELS: usize = 8;
 /// profit, and whichever fills cancels the other. The order's stop loss closes the quantity of
 /// the levels without one: when one of their take profits fills, it shrinks by that quantity
 /// and is cancelled once nothing is left; when it fills, those take profits are cancelled.
-/// An order carries at most 8 levels.
+/// An order carries at most 4 levels.
 /// Each symbol has one net position with its average
 /// price: a fill against it books the realised profit or loss of the closed quantity, and a fill
 /// beyond it opens the other side at the fill price. A position holds its market value divided by
@@ -1519,7 +1519,7 @@ mod tests {
         }
         let counted = PaperAccount::new("USD", 10_000.0);
         counted.set_price("SYM", 100.0);
-        for (count, accepted) in [(8, true), (9, false)] {
+        for (count, accepted) in [(4, true), (5, false)] {
             let mut request =
                 OrderRequest::new("SYM", OrderSide::Buy, count as f64, OrderType::Market);
             request.take_profit_levels =
