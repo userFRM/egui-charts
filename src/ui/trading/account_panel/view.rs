@@ -872,9 +872,7 @@ impl Trading {
                 self.pending = Some(TradingLineAction::Cancel(order.clone()));
             }
             Some((RowAction::Order(order), true)) => {
-                self.ticket.open = false;
-                self.load_rules(&order.request.symbol);
-                self.account_panel.editing = Some((order.clone(), order.request.clone()));
+                self.edit_order(order.clone(), order.request.clone());
             }
             None => {}
         }
@@ -884,12 +882,22 @@ impl Trading {
 
     /// The edit dialog of a working order: its quantity, prices and brackets. Saving sends the
     /// change to the broker; the dialog is the user's confirmation.
-    fn show_order_editor(&mut self, ctx: &egui::Context, chart_symbol: &str) {
+    pub(in crate::ui::trading) fn show_order_editor(
+        &mut self,
+        ctx: &egui::Context,
+        chart_symbol: &str,
+    ) {
         let Some(symbol) =
             (self.account_panel.editing.as_ref()).map(|(order, _)| order.request.symbol.clone())
         else {
             return;
         };
+        // The chart and the account panel both draw the dialog; it shows once a pass.
+        let pass = ctx.cumulative_pass_nr();
+        if self.account_panel.editor_pass == Some(pass) {
+            return;
+        }
+        self.account_panel.editor_pass = Some(pass);
         let decimals = self.numbers(&symbol, chart_symbol).decimals;
         let brackets = self.capabilities().brackets;
         let Some((order, request)) = &mut self.account_panel.editing else {

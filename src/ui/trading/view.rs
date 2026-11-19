@@ -6,10 +6,13 @@ use super::format::Numbers;
 use super::ticket::{self, Action, Market};
 use super::{Preview, Trading, executions};
 use crate::chart::selection::SeriesId;
-use crate::chart::{TradingLineAction, TradingLineOptions, render_trading_lines};
+use crate::chart::{
+    TradingLineAction, TradingLineOptions, exit_request, held_exits, render_trading_lines,
+};
 use crate::localization as l10n;
 use crate::model::{
-    Order, OrderId, OrderRequest, OrderSide, OrderStatus, OrderType, Position, TradingRules,
+    Order, OrderId, OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket,
+    TradingRules,
 };
 use crate::scales::to_step;
 use crate::theme::ThemeExt;
@@ -197,6 +200,7 @@ impl Trading {
             take_profit: capabilities.limit,
             stop_loss: capabilities.stop,
             order_exits: capabilities.brackets && capabilities.modify,
+            menu: Some(capabilities),
             pnl: display.position_pnl.then_some(display.position_pnl_unit),
             bracket_pnl: display.bracket_pnl.then_some(display.bracket_pnl_unit),
             last_price: last,
@@ -327,21 +331,26 @@ impl Trading {
             let lines = self.draw_overlays(ui, chart);
             chart.trading_tags = lines.tags;
             chart.trading_outlined = lines.outlined;
-            if self.display.instant_orders {
-                self.execute(lines.action);
-            } else {
-                self.pending = self.pending.take().or(lines.action);
+            match lines.action {
+                // Each dialog is the user's confirmation.
+                Some(TradingLineAction::Edit(order, request)) => self.edit_order(order, request),
+                Some(TradingLineAction::Protect(position)) => {
+                    self.protecting = Some((position, None, None))
+                }
+                action if self.display.instant_orders => self.execute(action),
+                action => self.pending = self.pending.take().or(action),
             }
         }
         if let Some(action) = &self.pending {
             // A row of the account panel may ask about another symbol than the chart's.
             let action_symbol = match action {
-                TradingLineAction::Cancel(order) | TradingLineAction::Modify(order, _) => {
-                    &order.request.symbol
-                }
+                TradingLineAction::Cancel(order)
+                | TradingLineAction::Modify(order, _)
+                | TradingLineAction::Edit(order, _) => &order.request.symbol,
                 TradingLineAction::Close(position)
                 | TradingLineAction::Reverse(position)
-                | TradingLineAction::Exit(position, _) => &position.symbol,
+                | TradingLineAction::Exit(position, _)
+                | TradingLineAction::Protect(position) => &position.symbol,
             };
             let numbers = self.numbers(action_symbol, symbol);
             let (title, message, confirm) = describe(ui.ctx(), action, &numbers);
@@ -357,6 +366,9 @@ impl Trading {
                 self.pending = None;
             }
         }
+
+        self.show_order_editor(ui.ctx(), symbol);
+        self.show_protect(ui.ctx(), symbol);
 
         if let Some(Preview {
             request,
@@ -442,6 +454,7 @@ impl Trading {
                 take_profit: false,
                 stop_loss: false,
                 order_exits: self.capabilities().brackets,
+                menu: None,
                 pnl: None,
                 bracket_pnl: self
                     .display
@@ -479,6 +492,94 @@ impl Trading {
                 self.ticket.open = false;
                 self.place(request);
             }
+        }
+    }
+
+    /// Opens the Modify order dialog for `order`, starting from `request`.
+    pub(super) fn edit_order(&mut self, order: Order, request: OrderRequest) {
+        self.ticket.open = false;
+        self.load_rules(&order.request.symbol);
+        self.account_panel.editing = Some((order, request));
+    }
+
+    fn show_protect(&mut self, ctx: &egui::Context, chart_symbol: &str) {
+        let Some((position, _, _)) = &self.protecting else {
+            return;
+        };
+        let held = held_exits(position, &self.orders);
+        let capabilities = self.capabilities();
+        let offers = [capabilities.limit && !held.0, capabilities.stop && !held.1];
+        if !offers[0] && !offers[1] {
+            self.protecting = None;
+            return;
+        }
+        let decimals = self.numbers(&position.symbol, chart_symbol).decimals;
+        let Some((position, take_profit, stop_loss)) = &mut self.protecting else {
+            return;
+        };
+        let mut open = true;
+        let mut save = false;
+        egui::Window::new(l10n::text(ctx, "Protect position"))
+            .id(egui::Id::unique("trading_protect"))
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                egui::Grid::new("trading_protect_grid")
+                    .num_columns(2)
+                    .spacing([12.0, 8.0])
+                    .show(ui, |ui| {
+                        for (offered, label, bracket) in [
+                            (offers[0], "Take profit", &mut *take_profit),
+                            (offers[1], "Stop loss", &mut *stop_loss),
+                        ] {
+                            if !offered {
+                                *bracket = None;
+                                continue;
+                            }
+                            let mut on = bracket.is_some();
+                            let toggle = ui.checkbox(&mut on, l10n::text(ctx, label));
+                            if on {
+                                let value = bracket.get_or_insert(position.average_price);
+                                ui.add(
+                                    egui::DragValue::new(value)
+                                        .range(0.0..=f64::MAX)
+                                        .max_decimals(decimals)
+                                        .speed(10f64.powi(-(decimals as i32))),
+                                )
+                                .labelled_by(toggle.id);
+                            } else {
+                                *bracket = None;
+                            }
+                            ui.end_row();
+                        }
+                    });
+                let valid = (take_profit.is_some() || stop_loss.is_some())
+                    && take_profit.iter().chain(stop_loss.iter()).all(|price| {
+                        price.is_finite() && *price > 0.0 && *price != position.average_price
+                    });
+                save = ui
+                    .add_enabled(
+                        valid,
+                        egui::Button::new(l10n::text(ctx, "Protect position")),
+                    )
+                    .clicked();
+            });
+        if save {
+            let (position, take_profit, stop_loss) = self.protecting.take().expect("protecting");
+            for (bracket, price) in [
+                (PositionBracket::TakeProfit, take_profit),
+                (PositionBracket::StopLoss, stop_loss),
+            ] {
+                if let Some(price) = price {
+                    self.execute(Some(TradingLineAction::Exit(
+                        position.clone(),
+                        exit_request(&position, bracket, price),
+                    )));
+                }
+            }
+        } else if !open {
+            self.protecting = None;
         }
     }
 
@@ -690,6 +791,7 @@ fn describe(
         )
     };
     match action {
+        TradingLineAction::Protect(_) => unreachable!("show opens a dialog for it"),
         TradingLineAction::Cancel(working) => (
             "Cancel order",
             l10n::format_text(
@@ -699,7 +801,7 @@ fn describe(
             ),
             "Cancel order",
         ),
-        TradingLineAction::Modify(_, changed) => (
+        TradingLineAction::Modify(_, changed) | TradingLineAction::Edit(_, changed) => (
             "Modify order",
             l10n::format_text(
                 ctx,
@@ -765,6 +867,151 @@ mod tests {
     use crate::ui_kit::notifications::Toasts;
     use crate::widget::settings::TradingSettings;
     use std::sync::Arc;
+
+    /// Chart menus open their dialogs without an account panel and send each confirmation once.
+    #[test]
+    fn chart_menus_open_the_order_and_position_dialogs() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        for (protect, both, panel) in [
+            (false, false, false),
+            (true, false, false),
+            (true, true, false),
+            (false, false, true),
+        ] {
+            let order = Order::new(
+                OrderId::new("7"),
+                OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(95.0)),
+                OrderStatus::Working,
+            );
+            let position = Position::new("SYM", 2.0, 105.0);
+            let broker = Arc::new(Recorder {
+                brackets: true,
+                state: vec![
+                    AccountEvent::Order(order.clone()),
+                    AccountEvent::Position(position),
+                ],
+                ..Recorder::default()
+            });
+            let mut trading = Trading::default();
+            trading.set_service(broker.clone());
+            trading.poll(&egui::Context::default(), &mut Toasts::new());
+            trading.display.label_alignment = crate::chart::TradingLabelAlignment::Left;
+            let mut chart = crate::widget::test_frames::chart(&[90.0], &[115.0]);
+            chart.symbol = "SYM".into();
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(1000.0, 800.0))
+                .with_context_setup(egui_extras::install_image_loaders)
+                .build_ui_state(
+                    |ui, (trading, chart): &mut (Trading, Chart)| {
+                        trading.poll(ui.ctx(), &mut Toasts::new());
+                        chart.show(ui);
+                        trading.show(ui, chart);
+                        if panel {
+                            trading.show_account_panel(ui, "SYM");
+                        }
+                    },
+                    (trading, chart),
+                );
+            harness.run();
+            broker
+                .rules
+                .lock()
+                .unwrap()
+                .pop()
+                .expect("symbol rules")
+                .1
+                .send(Ok(TradingRules::new("SYM")));
+            harness.run();
+            let name = if protect { "2" } else { "Limit" };
+            let point = harness
+                .output()
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == name => {
+                        Some(text.visual_bounding_rect().center())
+                    }
+                    _ => None,
+                })
+                .expect("chart label");
+            harness.hover_at(point);
+            harness.run_steps(1);
+            for pressed in [true, false] {
+                harness.event(egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            harness.run();
+            let label = if protect {
+                "Protect position"
+            } else {
+                "Modify order"
+            };
+            harness
+                .get_by_role_and_label(egui::Role::Button, label)
+                .click();
+            harness.run();
+            assert!(harness.state().0.pending.is_none());
+            if protect {
+                harness
+                    .get_by_role_and_label(egui::Role::CheckBox, "Take profit")
+                    .click();
+                harness.run();
+                harness
+                    .get_by_role_and_label(egui::Role::SpinButton, "Take profit")
+                    .set_value_accesskit(110.0);
+            } else {
+                harness
+                    .get_by_role_and_label(egui::Role::SpinButton, "Limit price")
+                    .set_value_accesskit(96.0);
+            }
+            harness.run();
+            if both {
+                harness
+                    .get_by_role_and_label(egui::Role::CheckBox, "Stop loss")
+                    .click();
+                harness.run();
+                harness
+                    .get_by_role_and_label(egui::Role::SpinButton, "Stop loss")
+                    .set_value_accesskit(100.0);
+                harness.run();
+            }
+            harness
+                .get_by_role_and_label(egui::Role::Button, label)
+                .click();
+            harness.run();
+            assert!(harness.state().0.pending.is_none());
+            if protect {
+                let mut exit =
+                    OrderRequest::new("SYM", OrderSide::Sell, 2.0, OrderType::Limit(110.0));
+                exit.position_bracket = Some(PositionBracket::TakeProfit);
+                let mut expected = vec![exit];
+                if both {
+                    let mut stop =
+                        OrderRequest::new("SYM", OrderSide::Sell, 2.0, OrderType::Stop(100.0));
+                    stop.position_bracket = Some(PositionBracket::StopLoss);
+                    expected.push(stop);
+                }
+                assert_eq!(*broker.placed.lock().unwrap(), expected);
+                assert!(
+                    harness
+                        .query_by_role_and_label(egui::Role::SpinButton, "Take profit")
+                        .is_none()
+                );
+            } else {
+                let mut changed = order.request;
+                changed.order_type = OrderType::Limit(96.0);
+                assert_eq!(
+                    *broker.modified.lock().unwrap(),
+                    [(OrderId::new("7"), changed)]
+                );
+                assert!(harness.state().0.account_panel.editing.is_none());
+            }
+        }
+    }
 
     /// Confirmation sentences use template keys and the symbol's quantity text for orders,
     /// levels and positions.

@@ -3,6 +3,8 @@
 
 mod position;
 
+#[cfg(feature = "ui")]
+pub(crate) use position::exit_request;
 use position::show_position;
 
 use egui::{Color32, CursorIcon, FontId, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
@@ -11,13 +13,14 @@ use crate::chart::coords::ChartMapping;
 use crate::chart::rendering::{draw_dashed_polyline, render_price_line};
 use crate::localization as l10n;
 use crate::model::{
-    LineStyle, Order, OrderRequest, OrderSide, OrderType, Position, PositionBracket, PriceLine,
+    Capabilities, LineStyle, Order, OrderRequest, OrderSide, OrderType, Position, PositionBracket,
+    PriceLine,
 };
 use crate::scales::{decimals, to_step};
 use crate::theme::{Theme, ThemeExt};
 
-/// What the user asked for on a trading line. Confirm it with the user, then send it to the
-/// broker.
+/// What the user asked for on a trading line. Confirm a change with the user, then send it to
+/// the broker; [`Edit`](Self::Edit) and [`Protect`](Self::Protect) ask for a dialog first.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum TradingLineAction {
@@ -34,6 +37,12 @@ pub enum TradingLineAction {
     /// for a take profit or a stop order for a stop loss, on the other side for the position's
     /// size.
     Exit(Position, OrderRequest),
+    /// Open the working order's Modify order dialog with this request, including any exit
+    /// added from its menu. Send the confirmed request as a [`Modify`](Self::Modify).
+    Edit(Order, OrderRequest),
+    /// Ask for a take profit, a stop loss or both for the position, then place each confirmed
+    /// exit as the order an [`Exit`](Self::Exit) asks for.
+    Protect(Position),
 }
 
 /// What a profit or loss on the trading lines is written in.
@@ -138,6 +147,9 @@ pub struct TradingLineOptions<'a> {
     /// places that exit at the pointer's price and asks for it as a
     /// [`TradingLineAction::Modify`].
     pub order_exits: bool,
+    /// The account's capabilities for secondary-click menus on order and position labels.
+    /// Unsupported entries are disabled and explain why. `None` offers no menus.
+    pub menu: Option<Capabilities>,
     /// A position's label gives its profit or loss in this unit, or none.
     pub pnl: Option<PnlUnit>,
     /// A take profit or stop loss gives, in this unit, the profit or loss its order makes if
@@ -154,7 +166,7 @@ pub struct TradingLineOptions<'a> {
 }
 
 impl<'a> TradingLineOptions<'a> {
-    /// Orders and positions with their labels at the right edge, offering no buttons or drags,
+    /// Orders and positions with their labels at the right edge, offering no buttons, drags or menus,
     /// with no profit or loss, no last price and a [`point_value`](Self::point_value) of one.
     /// `currency` names the account's currency and `tick_size` rounds dragged prices. Assign
     /// the other fields to offer more.
@@ -178,6 +190,7 @@ impl<'a> TradingLineOptions<'a> {
             take_profit: false,
             stop_loss: false,
             order_exits: false,
+            menu: None,
             pnl: None,
             bracket_pnl: None,
             last_price: None,
@@ -232,18 +245,10 @@ pub fn render_trading_lines<'a>(
 
     for position in positions.iter().filter(|_| options.show_positions) {
         let mut position_options = options.clone();
-        for order in &orders {
-            if order.request.symbol == position.symbol
-                && (order.request.side == OrderSide::Buy) != (position.quantity > 0.0)
-            {
-                match order.request.position_bracket {
-                    Some(PositionBracket::TakeProfit) => position_options.take_profit = false,
-                    Some(PositionBracket::StopLoss) => position_options.stop_loss = false,
-                    None => {}
-                }
-            }
-        }
-        let pressed = show_position(ui, mapping, &position_options, position, &mut tags);
+        let held = held_exits(position, orders.iter().copied());
+        position_options.take_profit &= !held.0;
+        position_options.stop_loss &= !held.1;
+        let pressed = show_position(ui, mapping, &position_options, position, held, &mut tags);
         action = action.or(pressed);
     }
 
@@ -365,6 +370,8 @@ pub fn render_trading_lines<'a>(
             } else {
                 &[]
             };
+            let menu =
+                |ui: &mut Ui| order_menu(ui, order, options.menu.expect("menu capabilities"));
             let label = Label {
                 id: ("trading_order", &order.id.0),
                 body: &body,
@@ -375,9 +382,13 @@ pub fn render_trading_lines<'a>(
                 submit: (options.submit && level == Level::Entry).then_some(request.side),
                 exits,
                 exit_pnl: &exit_pnl,
+                menu: (options.menu.is_some()
+                    && !options.submit
+                    && matches!(level, Level::Entry | Level::Limit))
+                .then_some(&menu as &dyn Fn(&mut Ui) -> Option<TradingLineAction>),
             };
             let first_tag = tags.len();
-            let (dragged, pressed, released) = ui
+            let (dragged, pressed, released, chosen) = ui
                 .push_id((level as u8, index), |ui| {
                     label.show(ui, mapping, options, &line, &mut tags)
                 })
@@ -411,6 +422,10 @@ pub fn render_trading_lines<'a>(
                 connector(ui, mapping, entry, drawn, side_color(request.side));
             }
             if tags.len() == first_tag {
+                continue;
+            }
+            if let Some(chosen) = chosen {
+                action = action.or(Some(chosen));
                 continue;
             }
             if let Some((exit, price)) = released {
@@ -484,6 +499,84 @@ pub fn render_trading_lines<'a>(
         outlined,
         submitted,
     }
+}
+
+/// Whether the position already has a working take profit and stop loss.
+pub(crate) fn held_exits<'a>(
+    position: &Position,
+    orders: impl IntoIterator<Item = &'a Order>,
+) -> (bool, bool) {
+    let mut held = (false, false);
+    for order in orders {
+        if order.request.symbol == position.symbol
+            && (order.request.side == OrderSide::Buy) != (position.quantity > 0.0)
+        {
+            match order.request.position_bracket {
+                Some(PositionBracket::TakeProfit) => held.0 = true,
+                Some(PositionBracket::StopLoss) => held.1 = true,
+                None => {}
+            }
+        }
+    }
+    held
+}
+
+/// One menu entry, with the account's reason when unavailable.
+fn menu_entry(ui: &mut Ui, label: &str, enabled: bool, why: &str) -> bool {
+    ui.add_enabled(enabled, egui::Button::new(l10n::text(ui.ctx(), label)))
+        .on_disabled_hover_text(l10n::text(ui.ctx(), why))
+        .clicked()
+}
+
+fn order_menu(ui: &mut Ui, order: &Order, capabilities: Capabilities) -> Option<TradingLineAction> {
+    if menu_entry(
+        ui,
+        "Modify order",
+        capabilities.modify,
+        "The account does not support modifying orders",
+    ) {
+        return Some(TradingLineAction::Edit(
+            order.clone(),
+            order.request.clone(),
+        ));
+    }
+    if menu_entry(ui, "Cancel order", true, "") {
+        return Some(TradingLineAction::Cancel(order.clone()));
+    }
+    let request = &order.request;
+    let reference = match request.order_type {
+        OrderType::Limit(price) | OrderType::Stop(price) => price,
+        OrderType::StopLimit { limit, .. } => limit,
+        _ => return None,
+    };
+    if request.position_bracket.is_none() {
+        for (label, offered, profit) in [
+            (
+                "Add take profit",
+                request.take_profit.is_none() && request.take_profit_levels.is_empty(),
+                true,
+            ),
+            ("Add stop loss", request.stop_loss.is_none(), false),
+        ] {
+            if offered
+                && menu_entry(
+                    ui,
+                    label,
+                    capabilities.brackets && capabilities.modify,
+                    "The account does not support adding exits to orders",
+                )
+            {
+                let mut changed = request.clone();
+                if profit {
+                    changed.take_profit = Some(reference);
+                } else {
+                    changed.stop_loss = Some(reference);
+                }
+                return Some(TradingLineAction::Edit(order.clone(), changed));
+            }
+        }
+    }
+    None
 }
 
 /// Removes a take-profit level, adding its quantity to the level before it, or after it for the
@@ -768,11 +861,19 @@ struct Label<'a> {
     exits: &'a [Level],
     /// The text after the name on a label of an exit dragged out of `exits`, from its price.
     exit_pnl: &'a dyn Fn(PnlUnit, f64) -> String,
+    menu: Option<&'a dyn Fn(&mut Ui) -> Option<TradingLineAction>>,
 }
+
+type LabelResponse = (
+    Option<f64>,
+    Option<Button>,
+    Option<(Level, f64)>,
+    Option<TradingLineAction>,
+);
 
 impl Label<'_> {
     /// Draws the line and its label. Returns the price a finished drag ended at, the button the
-    /// user clicked, and the exit dragged out of the label with its price.
+    /// user clicked, the exit dragged out of the label with its price, and the menu action.
     fn show(
         &self,
         ui: &mut Ui,
@@ -780,7 +881,7 @@ impl Label<'_> {
         options: &TradingLineOptions<'_>,
         line: &PriceLine,
         tags: &mut Vec<(f64, Color32)>,
-    ) -> (Option<f64>, Option<Button>, Option<(Level, f64)>) {
+    ) -> LabelResponse {
         let key = ui.scope_id().with(self.id);
         if !self.draggable {
             ui.ctx().data_mut(|data| data.remove::<f64>(key));
@@ -788,7 +889,7 @@ impl Label<'_> {
         let staged = ui.ctx().data(|data| data.get_temp::<f64>(key));
         let y = mapping.price_to_y(staged.unwrap_or(line.price));
         if !y.is_finite() || (staged.is_none() && !mapping.is_y_visible(y)) {
-            return (None, None, None);
+            return (None, None, None, None);
         }
         // A tick can snap beyond the pane; keep its drag target reachable until release.
         let y = y.clamp(mapping.rect.top(), mapping.rect.bottom());
@@ -893,6 +994,15 @@ impl Label<'_> {
             .price_to_y(value)
             .clamp(mapping.rect.top(), mapping.rect.bottom());
         let rect = rect.translate(vec2(0.0, y - rect.center().y));
+        let mut chosen = None;
+        if let Some(menu) = self.menu {
+            ui.interact(
+                rect.intersect(mapping.rect),
+                key.with("menu"),
+                Sense::click(),
+            )
+            .context_menu(|ui| chosen = menu(ui));
+        }
         let stroke = Stroke::new(1.0, line.color);
         clipped.rect(
             rect,
@@ -991,7 +1101,7 @@ impl Label<'_> {
                 pressed = Some(Button::Submit);
             }
         }
-        (dragged, pressed, released)
+        (dragged, pressed, released, chosen)
     }
 }
 
@@ -1045,6 +1155,199 @@ fn connector(ui: &Ui, mapping: &ChartMapping, entry: f64, exit: f64, color: Colo
 mod tests {
     use super::*;
     use crate::model::{OrderId, OrderStatus};
+
+    /// Label menus keep their actions, capability gates and explanations independent of buttons.
+    #[test]
+    fn label_menus_offer_what_the_account_supports() {
+        use crate::model::Capabilities;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        struct State {
+            chart: crate::Chart,
+            orders: Vec<Order>,
+            position: Position,
+            capabilities: Option<Capabilities>,
+            point: Pos2,
+            position_menu: bool,
+            action: Option<TradingLineAction>,
+        }
+        let full = Capabilities {
+            limit: true,
+            stop: true,
+            modify: true,
+            brackets: true,
+            close: true,
+            reverse: true,
+            ..Capabilities::default()
+        };
+        for row in 0..18 {
+            let mut capabilities = full;
+            match row {
+                5 => capabilities.modify = false,
+                6 => capabilities.brackets = false,
+                11 => capabilities.close = false,
+                12 => capabilities.reverse = false,
+                13 => {
+                    capabilities.limit = false;
+                    capabilities.stop = false;
+                }
+                _ => {}
+            }
+            let mut request = OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(95.0));
+            if row == 7 {
+                request.take_profit = Some(100.0);
+                request.stop_loss = Some(90.0);
+            }
+            if row == 15 {
+                request.order_type = OrderType::StopLimit {
+                    stop: 94.0,
+                    limit: 95.0,
+                };
+            }
+            if row == 16 {
+                request.order_type = OrderType::Market;
+            }
+            if row == 17 {
+                request.position_bracket = Some(PositionBracket::TakeProfit);
+            }
+            let order = Order::new(OrderId::new("7"), request, OrderStatus::Working);
+            let position = Position::new("SYM", 2.0, 105.0);
+            let mut orders = vec![order.clone()];
+            if row == 14 {
+                for (id, kind, bracket) in [
+                    ("TP", OrderType::Limit(110.0), PositionBracket::TakeProfit),
+                    ("SL", OrderType::Stop(100.0), PositionBracket::StopLoss),
+                ] {
+                    let mut request = OrderRequest::new("SYM", OrderSide::Sell, 2.0, kind);
+                    request.position_bracket = Some(bracket);
+                    orders.push(Order::new(OrderId::new(id), request, OrderStatus::Working));
+                }
+            }
+            let state = State {
+                chart: crate::widget::test_frames::chart(&[90.0], &[115.0]),
+                orders,
+                position: position.clone(),
+                capabilities: (row != 0).then_some(capabilities),
+                point: Pos2::ZERO,
+                position_menu: (8..=14).contains(&row),
+                action: None,
+            };
+            let mut harness = Harness::builder()
+                .with_size(vec2(1000.0, 800.0))
+                .build_ui_state(
+                    |ui, state: &mut State| {
+                        ui.ctx().all_styles_mut(|style| {
+                            style.interaction.tooltip_delay = 0.0;
+                            style.interaction.show_tooltips_only_when_still = false;
+                        });
+                        state.chart.show(ui);
+                        let mapping = state.chart.get_chart_mapping();
+                        let mut options = TradingLineOptions::new("USD", 0.01);
+                        options.label_alignment = TradingLabelAlignment::Left;
+                        options.menu = state.capabilities;
+                        let price = if state.position_menu {
+                            105.0
+                        } else if row == 15 {
+                            94.0
+                        } else {
+                            95.0
+                        };
+                        state.point = pos2(mapping.rect.left() + 12.0, mapping.price_to_y(price));
+                        let lines = render_trading_lines(
+                            ui,
+                            &mapping,
+                            &state.orders,
+                            [&state.position],
+                            &options,
+                        );
+                        state.action = state.action.take().or(lines.action);
+                    },
+                    state,
+                );
+            harness.run();
+            let point = harness.state().point;
+            harness.hover_at(point);
+            harness.run_steps(1);
+            for pressed in [true, false] {
+                harness.event(egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            harness.run();
+            let (label, why) = match row {
+                0 => ("Cancel order", None),
+                1 | 5 => (
+                    "Modify order",
+                    (row == 5).then_some("The account does not support modifying orders"),
+                ),
+                2 => ("Cancel order", None),
+                3 | 6 | 7 | 15 | 16 | 17 => (
+                    "Add take profit",
+                    (row == 6).then_some("The account does not support adding exits to orders"),
+                ),
+                4 => ("Add stop loss", None),
+                8 | 11 => (
+                    "Close position",
+                    (row == 11).then_some("The account does not support closing positions"),
+                ),
+                9 | 12 => (
+                    "Reverse position",
+                    (row == 12).then_some("The account does not support reversing positions"),
+                ),
+                10 => ("Protect position", None),
+                13 => (
+                    "Protect position",
+                    Some("The account does not support take-profit or stop-loss orders"),
+                ),
+                14 => (
+                    "Protect position",
+                    Some("The position has every exit the account supports"),
+                ),
+                _ => unreachable!(),
+            };
+            if [0, 7, 16, 17].contains(&row) {
+                assert!(harness.query_by_label(label).is_none(), "row {row}");
+                if row == 7 {
+                    assert!(harness.query_by_label("Add stop loss").is_none());
+                }
+                continue;
+            }
+            let node = harness.get_by_label(label);
+            if let Some(why) = why {
+                assert!(node.accesskit_node().is_disabled(), "row {row}");
+                node.hover();
+                harness.run();
+                harness.get_by_label(why);
+                assert!(harness.state().action.is_none());
+            } else {
+                node.click();
+                harness.run();
+                let mut changed = order.request.clone();
+                let expected = match row {
+                    1 => TradingLineAction::Edit(order.clone(), changed),
+                    2 => TradingLineAction::Cancel(order.clone()),
+                    3 | 15 => {
+                        changed.take_profit = Some(95.0);
+                        TradingLineAction::Edit(order.clone(), changed)
+                    }
+                    4 => {
+                        changed.stop_loss = Some(95.0);
+                        TradingLineAction::Edit(order.clone(), changed)
+                    }
+                    8 => TradingLineAction::Close(position.clone()),
+                    9 => TradingLineAction::Reverse(position.clone()),
+                    10 => TradingLineAction::Protect(position.clone()),
+                    _ => unreachable!(),
+                };
+                assert_eq!(harness.state().action, Some(expected), "row {row}");
+            }
+        }
+    }
 
     /// Both stop-limit prices are visible and independent; exits keep following the stop.
     #[test]
@@ -1184,6 +1487,7 @@ mod tests {
                     take_profit: false,
                     stop_loss: false,
                     order_exits: false,
+                    menu: None,
                     pnl: None,
                     bracket_pnl: None,
                     last_price: None,

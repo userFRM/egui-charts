@@ -181,6 +181,9 @@ impl Trading {
                 {
                     self.pending = None;
                 }
+                if !account.capabilities.limit && !account.capabilities.stop {
+                    self.protecting = None;
+                }
                 self.account = Some(account);
             }
             AccountEvent::Order(order) => {
@@ -244,6 +247,13 @@ impl Trading {
                         && (old.quantity != position.quantity || old.average_price != position.average_price))
                 {
                     self.pending = None;
+                }
+                if self.protecting.as_ref().is_some_and(|(old, _, _)| {
+                    old.symbol == position.symbol
+                        && (old.quantity != position.quantity
+                            || old.average_price != position.average_price)
+                }) {
+                    self.protecting = None;
                 }
                 self.positions.retain(|open| open.symbol != position.symbol);
                 if position.quantity != 0.0 {
