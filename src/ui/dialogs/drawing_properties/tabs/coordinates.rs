@@ -228,4 +228,47 @@ mod tests {
             );
         }
     }
+
+    /// An anchored text keeps its place in the pane through a scroll, and its coordinates
+    /// follow it: the chart and the Coordinates tab report the bar under it, and points set
+    /// through the chart move it there as one undoable edit.
+    #[test]
+    fn anchored_text_coordinates_follow_where_it_is_drawn() {
+        use crate::widget::test_frames::{chart, frame};
+        let day = |bar: i64| DateTime::from_timestamp(1_700_000_000 + bar * 86_400, 0).unwrap();
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        let mut text = Drawing::new(0, DrawingToolType::AnchoredText);
+        text.text = Some("Anchored".into());
+        let id = chart.create_drawing(text, &[(day(50), 15.0)]).unwrap();
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let drawn = chart.drawings().drawings[0].points[0];
+        let spacing = chart.state.time_scale().bar_spacing();
+        let offset = chart.state.time_scale().right_offset_precise() as f32;
+        // Ten more bars of space on the right move every bar ten slots to the left.
+        chart.scroll_to_position(offset + 10.0, false);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        assert_eq!(chart.drawings().drawings[0].points[0], drawn);
+        assert_eq!(chart.drawing_points(id), Some(vec![(day(60), 15.0)]));
+        let tab = CoordinatesState::from_drawing(&chart.drawings().drawings[0], &chart);
+        let point = &tab.points[0];
+        assert_eq!(
+            [&point.date, &point.time, &point.price],
+            ["2024-01-13", "22:13:20", "15"]
+        );
+
+        chart.set_drawing_points(id, &[(day(80), 18.0)]).unwrap();
+        frame(&ctx, &mut chart, 0.2, vec![]);
+        let moved = chart.drawings().drawings[0].points[0];
+        // Bar 60 is under the old x, so bar 80 is twenty slots to the right; 18 is above 15.
+        assert!(
+            (moved.x - drawn.x - 20.0 * spacing).abs() < 0.5 && moved.y < drawn.y,
+            "{moved:?}"
+        );
+        assert_eq!(chart.drawing_points(id), Some(vec![(day(80), 18.0)]));
+        assert!(chart.drawings_mut().undo());
+        frame(&ctx, &mut chart, 0.3, vec![]);
+        assert_eq!(chart.drawings().drawings[0].points[0], drawn);
+        assert_eq!(chart.drawing_points(id), Some(vec![(day(60), 15.0)]));
+    }
 }
