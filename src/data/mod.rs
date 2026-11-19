@@ -117,7 +117,7 @@ pub use recording::{RecordingReader, RecordingWriter};
 pub use replay::{MarketEvent, ReplayClock, ReplayDriver, ReplayEvent};
 #[cfg(feature = "studies")]
 pub(crate) use resample::resample_periods;
-pub use resample::{resample, resample_with_session};
+pub use resample::{resample, resample_with_session, resample_with_session_hours};
 pub use study::{StudyData, StudyDataRequest};
 pub use targets::PriceTargets;
 pub use trades::{CombinedTrade, ConsumedOrder, SizeBasis, combine_trades};
@@ -548,6 +548,8 @@ pub struct HistoryRequest {
     /// Include [`Session::overnight_windows`](crate::model::Session::overnight_windows) too.
     /// With `extended_hours`, this selects all hours. Without it, requests select regular hours.
     /// The chart requests regular, extended or all hours and never overnight hours alone.
+    /// A host that builds the bars from finer ones passes `extended_hours` and `overnight_hours`
+    /// to [`resample_with_session_hours`].
     pub overnight_hours: bool,
     /// Request dividend-adjusted bars when the instrument supports them. An unsupported feed
     /// returns unadjusted bars; [`Instrument::dividend_adjustment`] advertises the choice.
