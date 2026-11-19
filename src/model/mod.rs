@@ -85,7 +85,7 @@ pub use clock::BarClock;
 pub(crate) use clock::Placement;
 pub use color::ColorType;
 pub use date_range::DateRange;
-#[cfg(any(feature = "studies", feature = "drawings"))]
+#[cfg(any(feature = "studies", feature = "drawings", feature = "strategies"))]
 pub(crate) use instrument::same_currency;
 pub use instrument::{
     DataStatus, FeedService, Instrument, OverrideWindow, ProfileResolution, Session,
@@ -146,9 +146,9 @@ pub use tpo::{
 };
 pub(crate) use trading::rounding_tolerance;
 pub use trading::{
-    Account, BalanceChange, Capabilities, Execution, JournalEntry, Order, OrderId, OrderPreview,
-    OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket, TakeProfitLevel,
-    TimeInForce, TradingRules,
+    Account, BalanceChange, Capabilities, ClosedPosition, Execution, JournalEntry, Order, OrderId,
+    OrderPreview, OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket,
+    TakeProfitLevel, TimeInForce, TradingRules,
 };
 
 pub use watchlist::{Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem};

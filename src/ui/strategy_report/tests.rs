@@ -98,12 +98,20 @@ fn report_replacement_selection_export_and_clear() {
         h.get_by_role_and_label(Role::Tab, "Properties").click();
         h.run();
         assert!(h.query_by_label("inf%").is_none());
-        let replacement = StrategyReport::new("Second run", "SECOND", Timeframe::Day1, 2000.0);
+        let mut replacement = StrategyReport::new("Second run", "SECOND", Timeframe::Day1, 2000.0);
+        replacement.unavailable = Some("Exchange rates from USD to EUR are unavailable".into());
         h.state_mut().0.set_report(Some(replacement), &[]);
         h.run();
         assert_eq!(h.state().0.report().unwrap().symbol, "SECOND");
         assert!(h.state().0.selected.is_none());
         assert!(matches!(h.state().0.tab, Tab::Summary));
+        // A report without figures says why instead of showing zero metrics or exports.
+        h.get_by_label("Exchange rates from USD to EUR are unavailable");
+        assert!(h.query_by_label("Net profit").is_none());
+        assert!(
+            h.query_by_role_and_label(Role::Button, "Export summary CSV")
+                .is_none()
+        );
         h.state_mut().0.set_report(None, &[]);
         h.run();
         assert!(h.state().0.report().is_none());

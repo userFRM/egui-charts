@@ -3,7 +3,7 @@
 
 use super::account_panel::quantity_decimals;
 use super::widgets::side_name;
-use super::{Numbers, Sent, Trading, valid};
+use super::{Numbers, Sent, Trading};
 use crate::chart::TradingLineAction;
 use crate::data::FeedError;
 use crate::localization as l10n;
@@ -42,7 +42,7 @@ impl Trading {
                 let (_, _, mut order) = self.placing.remove(index);
                 if let Ok(answer) = answer.downcast::<Result<TradingRules, FeedError>>() {
                     match *answer {
-                        Ok(rules) if rules.symbol == order.symbol && valid(&rules) => {
+                        Ok(rules) if rules.symbol == order.symbol && rules.is_valid() => {
                             order.time_in_force = rules.time_in_force[0];
                             self.place(order);
                         }
@@ -100,7 +100,7 @@ impl Trading {
             if key == self.rules_key {
                 if let Ok(answer) = answer.downcast::<Result<TradingRules, FeedError>>() {
                     match *answer {
-                        Ok(rules) if rules.symbol == self.rules.symbol && valid(&rules) => {
+                        Ok(rules) if rules.symbol == self.rules.symbol && rules.is_valid() => {
                             self.rules = rules;
                             self.rules_ready = true;
                         }
@@ -176,7 +176,8 @@ impl Trading {
                 if matches!(self.pending, Some(TradingLineAction::Modify(_, _)))
                     && !account.capabilities.modify
                     || matches!(self.pending, Some(TradingLineAction::Close(_)))
-                        && !account.capabilities.close
+                        && (!account.capabilities.close
+                            || self.close_quantity.is_some() && !account.capabilities.partial_close)
                     || matches!(self.pending, Some(TradingLineAction::Reverse(_)))
                         && !account.capabilities.reverse
                     || matches!(&self.pending,
@@ -517,6 +518,7 @@ fn valid_event(event: &AccountEvent) -> bool {
                     account.equity,
                     account.realized_pnl,
                     account.margin,
+                    account.margin_buffer,
                     account.orders_margin,
                     account.available_funds,
                 ]
@@ -555,6 +557,12 @@ fn valid_event(event: &AccountEvent) -> bool {
                 .all(finite)
         }
         AccountEvent::Execution(fill) => positive(fill.quantity) && fill.price.is_finite(),
+        AccountEvent::ClosedPosition(closed) => {
+            positive(closed.quantity)
+                && closed.average_price.is_finite()
+                && closed.exit_price.is_finite()
+                && closed.realized_pnl.is_finite()
+        }
         AccountEvent::Balance(change) => change.balance.is_finite() && change.amount.is_finite(),
         _ => true,
     }
@@ -1402,6 +1410,55 @@ mod tests {
         );
     }
 
+    /// Resetting a connected account clears the old orders, positions and fills at the next poll,
+    /// and later fills reach both the account panel and the chart's positions.
+    #[test]
+    fn a_reset_paper_account_restates_itself_on_the_next_poll() {
+        use crate::data::inbox::Inbox;
+        use crate::model::{TimeInForce, TradingRules};
+        use crate::services::{Broker, PaperAccount};
+        let ctx = egui::Context::default();
+        let paper = Arc::new(PaperAccount::new("USD", 100_000.0));
+        let mut rules = TradingRules::new("SYM");
+        (rules.quantity_step, rules.min_quantity) = (0.01, 0.01);
+        rules.time_in_force = vec![TimeInForce::GoodTillCancelled];
+        assert!(paper.set_rules(rules));
+        paper.set_price("SYM", 100.0);
+        let mut trading = Trading::default();
+        (trading.display.instant_orders, trading.quantity) = (true, 0.5);
+        trading.set_service(paper.clone());
+        trading.poll(&ctx, &mut Toasts::new());
+        trading.trade("SYM".into(), OrderSide::Buy);
+        trading.poll(&ctx, &mut Toasts::new());
+        let held = |trading: &Trading| -> Vec<(String, f64)> {
+            (trading.positions.iter())
+                .map(|p| (p.symbol.clone(), p.quantity))
+                .collect()
+        };
+        trading.trade("SYM".into(), OrderSide::Buy);
+        let mut limit = OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(90.0));
+        limit.time_in_force = TimeInForce::GoodTillCancelled;
+        paper.place(limit, Arc::new(Inbox::default()).reply(0));
+        trading.poll(&ctx, &mut Toasts::new());
+        assert_eq!(
+            (held(&trading), trading.orders.len()),
+            (vec![("SYM".into(), 0.5)], 1)
+        );
+
+        let old_id = trading.account_panel.fills.executions[0].order.clone();
+        paper.reset();
+        trading.poll(&ctx, &mut Toasts::new());
+        assert_eq!((held(&trading), trading.orders.len()), (vec![], 0));
+        assert!(trading.account_panel.fills.executions.is_empty());
+        assert_eq!(trading.account.as_ref().map(|a| a.balance), Some(100_000.0));
+
+        trading.trade("SYM".into(), OrderSide::Buy);
+        trading.poll(&ctx, &mut Toasts::new());
+        assert_eq!(held(&trading), vec![("SYM".into(), 0.5)]);
+        assert_eq!(trading.account_panel.fills.executions.len(), 1);
+        assert_ne!(trading.account_panel.fills.executions[0].order, old_id);
+    }
+
     /// A close the user confirmed waits for the trading rules of its symbol; when the stream lags
     /// before their answer is read, the close is reported as refused, as when the broker stops
     /// being live, and never sent, so the position stays open. A regression drops the close
@@ -1616,6 +1673,11 @@ mod tests {
             for event in [
                 AccountEvent::Order(invalid_stop),
                 AccountEvent::Account(Account::new("USD", bad, Capabilities::default())),
+                AccountEvent::Account({
+                    let mut invalid = account.clone();
+                    invalid.margin_buffer = Some(bad);
+                    invalid
+                }),
                 AccountEvent::Order(invalid_order),
                 AccountEvent::Order(invalid_level),
                 AccountEvent::Position(Position::new("SYM", bad, 100.0)),
@@ -1627,6 +1689,31 @@ mod tests {
                     trading.positions.as_slice(),
                     std::slice::from_ref(&position)
                 );
+            }
+        }
+        let closed = |quantity, entry, exit, pnl| {
+            AccountEvent::ClosedPosition(crate::model::ClosedPosition::new(
+                "SYM",
+                OrderSide::Sell,
+                quantity,
+                entry,
+                exit,
+                pnl,
+                chrono::Utc::now(),
+            ))
+        };
+        // A short of 1 from -5 to -7.5 earns 2.5; prices need not be positive.
+        assert!(valid_event(&closed(1.0, -5.0, -7.5, 2.5)));
+        for quantity in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(!valid_event(&closed(quantity, -5.0, -7.5, 2.5)));
+        }
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for event in [
+                closed(1.0, bad, -7.5, 2.5),
+                closed(1.0, -5.0, bad, 2.5),
+                closed(1.0, -5.0, -7.5, bad),
+            ] {
+                assert!(!valid_event(&event));
             }
         }
     }
