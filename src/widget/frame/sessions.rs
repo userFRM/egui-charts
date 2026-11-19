@@ -273,32 +273,25 @@ mod tests {
                     continue;
                 }
                 tag_rects.retain(|tag| !baseline.contains(tag));
-                assert_eq!(
-                    tag_rects.len(),
-                    3,
-                    "tags={tags}, background {:?}",
-                    theme.chart.bg
-                );
-                if tags {
-                    let map = chart.series_price_map(SeriesId::MAIN).unwrap();
-                    for (price, color) in [
-                        (111.0, theme.chart.axis_text),
-                        (112.0, theme.chart.axis_text_secondary),
-                        (110.0, theme.chart.axis_text_secondary),
-                    ] {
-                        assert!(
-                            tag_rects.iter().any(|(r, fill)| *fill == color
-                                && r.y_range().contains(map.price_to_y(price))),
-                            "missing {price}"
-                        );
-                    }
-                    for price in [100.0, 101.0] {
-                        assert!(
-                            tag_rects
-                                .iter()
-                                .all(|(r, _)| !r.y_range().contains(map.price_to_y(price)))
-                        );
-                    }
+                assert_eq!(tag_rects.len(), 3, "background {:?}", theme.chart.bg);
+                let map = chart.series_price_map(SeriesId::MAIN).unwrap();
+                for (price, color) in [
+                    (111.0, theme.chart.axis_text),
+                    (112.0, theme.chart.axis_text_secondary),
+                    (110.0, theme.chart.axis_text_secondary),
+                ] {
+                    assert!(
+                        tag_rects.iter().any(|(r, fill)| *fill == color
+                            && r.y_range().contains(map.price_to_y(price))),
+                        "missing {price}"
+                    );
+                }
+                for price in [100.0, 101.0] {
+                    assert!(
+                        tag_rects
+                            .iter()
+                            .all(|(r, _)| !r.y_range().contains(map.price_to_y(price)))
+                    );
                 }
             }
         }
