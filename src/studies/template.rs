@@ -809,12 +809,20 @@ impl StudyTemplate {
                 | "Vol Profile Periodic"
                 | "Vol Profile Anchored"
                 | "Vol Profile Auto Anchored"
-        ) && !has("whole_tick_rows")
+        ) && declares("show_rows")
         {
-            template
-                .inputs
-                .push(("whole_tick_rows".to_owned(), InputValue::Toggle(false)));
-            changed = true;
+            if declares("whole_tick_rows") && !has("whole_tick_rows") {
+                template
+                    .inputs
+                    .push(("whole_tick_rows".to_owned(), InputValue::Toggle(false)));
+                changed = true;
+            }
+            if self.settings.plots.is_empty() {
+                let declared = crate::studies::VolProfileSession::default();
+                template.settings.plots = (0..3).map(|line| declared.plot_style(line)).collect();
+                template.settings.untagged_plots.clear();
+                changed = true;
+            }
         }
         changed.then_some(template)
     }
@@ -1413,7 +1421,12 @@ mod tests {
         // keeps its settings and inputs and takes the defaults of both.
         let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Vol Profile Session","inputs":[["row_count",{"Length":30}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":null}],["feed_source",{"Toggle":true}],["adaptive_rows",{"Toggle":false}],["sessions",{"Choice":0}],["session_start",{"Length":0}],["session_end",{"Length":0}],["session_zone",{"Text":""}],["hours_only",{"Toggle":false}],["width",{"Number":30.0}],["extend_poc",{"Toggle":false}],["extend_vah",{"Toggle":false}],["extend_val",{"Toggle":false}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileSession.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
         let restored = saved.create().unwrap();
-        assert_eq!(restored.settings(), saved.settings);
+        let mut expected = saved.settings.clone();
+        expected.plots = (0..3)
+            .map(|line| crate::studies::VolProfileSession::default().plot_style(line))
+            .collect();
+        expected.plot_variants = vec![vec![]; 3];
+        assert_eq!(restored.settings(), expected);
         for (id, value) in &saved.inputs {
             assert_eq!(
                 restored
@@ -1439,7 +1452,13 @@ mod tests {
         )
         .unwrap();
         let study = saved.create().unwrap();
-        assert_eq!(study.settings(), saved.settings);
+        let mut expected_settings = saved.settings.clone();
+        expected_settings.plots = (0..3)
+            .map(|line| crate::studies::VolProfileSession::default().plot_style(line))
+            .collect();
+        expected_settings.plot_variants = vec![vec![]; 3];
+        assert_eq!(study.settings(), expected_settings);
+        assert!(study.settings().plots.iter().all(|plot| !plot.visible));
         let inputs = study.inputs();
         let value = |id: &str| {
             inputs
@@ -1468,6 +1487,9 @@ mod tests {
         edited
             .set_input("up_color", InputValue::Color(Color32::BLUE))
             .unwrap();
+        let mut settings = edited.settings();
+        settings.plots[0].visible = true;
+        edited.apply_settings(&[], settings).unwrap();
         let template = StudyTemplate::from_study(edited.as_ref());
         let encoded = serde_json::to_string(&template).unwrap();
         let restored = serde_json::from_str::<StudyTemplate>(&encoded)

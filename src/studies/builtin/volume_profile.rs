@@ -21,6 +21,8 @@
 //! Row fills stay translucent so price bars remain readable: the painter limits saved opaque colours
 //! to the opacity of the default value area rows. The point of control is a 2 px line in the theme's
 //! foreground colour until a line colour is chosen.
+//! Colours list the three developing plots before POC and the four row colours. Setting five
+//! colours edits the profile colours; other lengths start with the developing plots.
 
 use super::AutoAnchor;
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
@@ -33,7 +35,8 @@ use crate::model::{
     Session, SessionProvider, TimeScaleEvent, Timeframe, TimezoneId,
 };
 use crate::studies::{
-    Indicator, IndicatorValues, InputKind, InputValue, StudyData, StudyDataRequest, StudyInput,
+    Indicator, IndicatorValue, IndicatorValues, InputKind, InputValue, PlotStyle, PlotType,
+    StudyData, StudyDataRequest, StudyInput,
 };
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, TimeDelta, Utc};
 use egui::Color32;
@@ -336,6 +339,9 @@ impl ProfileStudy {
             levels: RefCell::default(),
             values: IndicatorValues::new(),
             colors: vec![
+                crate::studies::palette::WARM_ORANGE,
+                crate::studies::palette::LIGHT_BLUE,
+                crate::studies::palette::LIGHT_BLUE,
                 Color32::PLACEHOLDER,
                 Color32::from_rgba_unmultiplied(0, 188, 212, 110),
                 Color32::from_rgba_unmultiplied(233, 30, 99, 110),
@@ -563,25 +569,25 @@ impl ProfileStudy {
             (
                 "up_color",
                 "Up",
-                InputValue::Color(self.colors[1]),
+                InputValue::Color(self.colors[4]),
                 InputKind::Color,
             ),
             (
                 "down_color",
                 "Down",
-                InputValue::Color(self.colors[2]),
+                InputValue::Color(self.colors[5]),
                 InputKind::Color,
             ),
             (
                 "va_up_color",
                 "Value area up",
-                InputValue::Color(self.colors[3]),
+                InputValue::Color(self.colors[6]),
                 InputKind::Color,
             ),
             (
                 "va_down_color",
                 "Value area down",
-                InputValue::Color(self.colors[4]),
+                InputValue::Color(self.colors[7]),
                 InputKind::Color,
             ),
             (
@@ -593,7 +599,7 @@ impl ProfileStudy {
             (
                 "poc_color",
                 "POC colour",
-                InputValue::Color(self.colors[0]),
+                InputValue::Color(self.colors[3]),
                 InputKind::Color,
             ),
             (
@@ -656,12 +662,12 @@ impl ProfileStudy {
             ("show_rows", InputValue::Toggle(v)) => self.show_rows = v,
             ("show_values", InputValue::Toggle(v)) => self.show_values = v,
             ("placement", InputValue::Choice(v)) => self.right = v == 1,
-            ("up_color", InputValue::Color(v)) => self.colors[1] = v,
-            ("down_color", InputValue::Color(v)) => self.colors[2] = v,
-            ("va_up_color", InputValue::Color(v)) => self.colors[3] = v,
-            ("va_down_color", InputValue::Color(v)) => self.colors[4] = v,
+            ("up_color", InputValue::Color(v)) => self.colors[4] = v,
+            ("down_color", InputValue::Color(v)) => self.colors[5] = v,
+            ("va_up_color", InputValue::Color(v)) => self.colors[6] = v,
+            ("va_down_color", InputValue::Color(v)) => self.colors[7] = v,
             ("show_poc", InputValue::Toggle(v)) => self.lines[0] = v,
-            ("poc_color", InputValue::Color(v)) => self.colors[0] = v,
+            ("poc_color", InputValue::Color(v)) => self.colors[3] = v,
             ("show_vah", InputValue::Toggle(v)) => self.lines[1] = v,
             ("vah_color", InputValue::Color(v)) => self.line_colors[0] = v,
             ("show_val", InputValue::Toggle(v)) => self.lines[2] = v,
@@ -976,6 +982,7 @@ impl ProfileStudy {
         self.cache.get_mut().clear();
         *self.levels.get_mut() = LevelCache::default();
         self.refresh_ranges();
+        self.refresh_developing(0);
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
@@ -991,7 +998,6 @@ impl ProfileStudy {
                 .any(|(a, b)| a.time != b.time);
         self.data.truncate(from);
         self.data.extend_from_slice(&data[from..]);
-        self.values = IndicatorValues::missing(data.len());
         self.cache.get_mut().retain_mut(|cached| {
             if cached.plot.bars.end.saturating_sub(1) > from {
                 return false;
@@ -1022,6 +1028,99 @@ impl ProfileStudy {
                 ))
         {
             self.refresh_ranges();
+        }
+        self.refresh_developing(from);
+    }
+
+    /// Refresh ranges reaching `from`; viewport and moving anchors recompute their whole span.
+    fn refresh_developing(&mut self, from: usize) {
+        let moving = matches!(self.kind, Kind::Visible | Kind::Auto);
+        let ranges: Vec<_> = if self.kind == Kind::Visible {
+            let range = self.view.start.min(self.data.len())..self.view.end.min(self.data.len());
+            if range.is_empty() {
+                Vec::new()
+            } else {
+                vec![range]
+            }
+        } else {
+            self.ranges.clone()
+        };
+        let keep = if moving {
+            0
+        } else {
+            ranges
+                .iter()
+                .find(|range| range.end > from)
+                .map_or(from, |range| from.min(range.start))
+        };
+        self.values.truncate(keep);
+        self.values.resize(self.data.len(), IndicatorValue::None);
+        // Empty ranges cannot set a zoom-adapted height.
+        let Some(base) = self.config(&[]) else {
+            return;
+        };
+        let finer = self.finer().is_some() && !self.fine.is_empty();
+        for range in ranges.into_iter().filter(|range| range.end > keep) {
+            let mut previous: Option<VolumeProfile> = None;
+            let mut layout = None;
+            let mut span = crate::data::price_span(&self.data[range.start..range.start.max(keep)]);
+            for i in range.start.max(keep)..range.end {
+                if let Some((low, high)) = crate::data::price_span(&self.data[i..=i]) {
+                    span = Some(span.map_or((low, high), |(lo, hi)| (lo.min(low), hi.max(high))));
+                }
+                let config = self.range_config(span, base, false);
+                let end = self
+                    .data
+                    .get(i + 1)
+                    .map_or_else(|| self.close(self.data[i].time), |bar| bar.time);
+                let inside = if finer {
+                    &self.fine[self
+                        .fine
+                        .partition_point(|bar| bar.time < self.data[i].time)
+                        ..self.fine.partition_point(|bar| bar.time < end)]
+                } else {
+                    &[]
+                };
+                let added = if inside.is_empty() {
+                    &self.data[i..=i]
+                } else {
+                    inside
+                };
+                let profile = previous
+                    .filter(|_| layout == Some(config))
+                    .and_then(|profile| {
+                        added
+                            .iter()
+                            .try_fold(profile, |profile, bar| profile.with_bar(bar))
+                    })
+                    .or_else(|| {
+                        if finer {
+                            VolumeProfile::of_finer(
+                                &self.data[range.start..=i],
+                                end,
+                                &self.fine,
+                                config.rows(),
+                                config.row_size(),
+                            )
+                            .0
+                        } else {
+                            VolumeProfile::from_bars(&self.data[range.start..=i], config)
+                        }
+                    });
+                if let Some(profile) = &profile
+                    && let Some((poc, (low, high))) = profile.poc_and_value_area(self.value_area)
+                {
+                    for (line, row) in [poc as f64 + 0.5, high as f64 + 1.0, low as f64]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        self.values
+                            .set_value(line, i, profile.low() + row * profile.row_height());
+                    }
+                }
+                previous = profile;
+                layout = Some(config);
+            }
         }
     }
 
@@ -1248,22 +1347,27 @@ impl ProfileStudy {
         config.show_value_area_low = self.lines[2];
         config.value_area_line_colors = self.line_colors.map(|color| color.to_srgba_unmultiplied());
         config.display = self.display;
-        config.up_color = self.colors[1].to_srgba_unmultiplied();
-        config.down_color = self.colors[2].to_srgba_unmultiplied();
+        config.up_color = self.colors[4].to_srgba_unmultiplied();
+        config.down_color = self.colors[5].to_srgba_unmultiplied();
         config.value_area_colors = Some([
-            self.colors[3].to_srgba_unmultiplied(),
-            self.colors[4].to_srgba_unmultiplied(),
+            self.colors[6].to_srgba_unmultiplied(),
+            self.colors[7].to_srgba_unmultiplied(),
         ]);
         Some(config)
     }
 
     /// Apply whole instrument ticks to Row count when neither height nor adaptation sets it.
-    fn range_config(&self, bars: &[Bar], config: VolumeProfileConfig) -> VolumeProfileConfig {
+    fn range_config(
+        &self,
+        span: Option<(f64, f64)>,
+        config: VolumeProfileConfig,
+        adaptive: bool,
+    ) -> VolumeProfileConfig {
         if self.whole_ticks
-            && !self.adaptive
+            && !adaptive
             && config.row_size().is_none()
             && let Some(tick) = self.tick_size
-            && let Some((low, high)) = crate::data::price_span(bars)
+            && let Some((low, high)) = span
             && let Some(ticks) =
                 crate::data::whole_tick_rows(low / tick, high / tick, config.rows())
         {
@@ -1291,7 +1395,11 @@ impl ProfileStudy {
         // Copied once, from the bar before the first profile built here on.
         let mut held: Option<Option<OrderFlowFootprints>> = None;
         for range in ranges {
-            let effective = self.range_config(&self.data[range.clone()], config);
+            let effective = self.range_config(
+                crate::data::price_span(&self.data[range.clone()]),
+                config,
+                self.adaptive,
+            );
             if let Some(plot) = cache.iter().find(|cached| {
                 cached.plot.bars == range && cached.layout == config && !cached.dirty
             }) {
@@ -1305,7 +1413,7 @@ impl ProfileStudy {
                     bars: range.clone(),
                     profile: Arc::new(profile),
                     config: effective,
-                    color: self.colors[0].to_srgba_unmultiplied(),
+                    color: self.colors[3].to_srgba_unmultiplied(),
                     right_aligned: self.right,
                     strip: (self.kind == Kind::Visible).then_some(self.width as f32),
                     width,
@@ -1339,7 +1447,7 @@ impl ProfileStudy {
                     bars: range.clone(),
                     profile: Arc::new(profile),
                     config: effective,
-                    color: self.colors[0].to_srgba_unmultiplied(),
+                    color: self.colors[3].to_srgba_unmultiplied(),
                     right_aligned: self.right,
                     strip: (self.kind == Kind::Visible).then_some(self.width as f32),
                     width,
@@ -1384,7 +1492,7 @@ impl ProfileStudy {
                     bars: range.clone(),
                     profile: Arc::new(profile),
                     config: effective,
-                    color: self.colors[0].to_srgba_unmultiplied(),
+                    color: self.colors[3].to_srgba_unmultiplied(),
                     right_aligned: self.right,
                     strip: (self.kind == Kind::Visible).then_some(self.width as f32),
                     width,
@@ -1455,7 +1563,7 @@ impl ProfileStudy {
                 cache.profiles.insert(range.start, (range.end, levels));
             }
         }
-        let color = self.colors[0].to_srgba_unmultiplied();
+        let color = self.colors[3].to_srgba_unmultiplied();
         let mut found = Vec::new();
         for (end, levels) in cache
             .profiles
@@ -1695,21 +1803,28 @@ macro_rules! profile_study {
             fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {
                 self.profile.resolutions =
                     instrument.map_or_else(Vec::new, |i| i.profile_resolutions.clone());
-                self.profile.tick_size = instrument
+                let tick_size = instrument
                     .and_then(|i| i.tick_size)
                     .filter(|t| t.is_finite() && *t > 0.0);
+                let tick_changed = self.profile.tick_size != tick_size;
+                self.profile.tick_size = tick_size;
                 let hours = instrument.map_or((TimezoneId::utc(), None), |i| {
                     let zone = i.time_zone.clone().unwrap_or_else(TimezoneId::utc);
                     (zone, i.session.clone())
                 });
                 // Sessions of regular or extended hours read what the trading day ignores: the
                 // extended windows, holidays and date-specific hours.
-                let changed = self.profile.hours != hours;
+                let changed = tick_changed || self.profile.hours != hours;
                 self.profile.hours = hours;
                 self.profile.days.set(instrument) || changed
             }
             fn set_visible_range(&mut self, range: Range<usize>) -> bool {
-                self.profile.view = range;
+                if self.profile.view != range {
+                    self.profile.view = range;
+                    if self.profile.kind == Kind::Visible {
+                        self.profile.refresh_developing(0);
+                    }
+                }
                 false
             }
             fn set_timeframe(&mut self, timeframe: Timeframe) {
@@ -1731,17 +1846,34 @@ macro_rules! profile_study {
                 self.profile.colors.clone()
             }
             fn set_colors(&mut self, colors: Vec<Color32>) {
-                if colors.len() == 3 {
-                    self.profile.colors[3] = colors[1];
-                    self.profile.colors[4] = colors[2];
-                }
-                for (stored, color) in self.profile.colors.iter_mut().zip(colors) {
+                let offset = if colors.len() == 5 { 3 } else { 0 };
+                for (stored, color) in self.profile.colors.iter_mut().skip(offset).zip(colors) {
                     *stored = color;
                 }
                 self.profile.cache.get_mut().clear();
             }
             fn line_names(&self) -> Vec<String> {
-                Vec::new()
+                ["Developing POC", "Developing VA High", "Developing VA Low"]
+                    .map(str::to_owned)
+                    .to_vec()
+            }
+            fn plot_style(&self, line: usize) -> PlotStyle {
+                PlotStyle {
+                    color: self
+                        .profile
+                        .colors
+                        .get(line)
+                        .copied()
+                        .unwrap_or(Color32::WHITE),
+                    width: self.line_style(line).width,
+                    pattern: crate::model::LineStyle::Solid,
+                    plot_type: if line < 3 {
+                        PlotType::StepLine
+                    } else {
+                        PlotType::Line
+                    },
+                    visible: line >= 3,
+                }
             }
             fn is_visible(&self) -> bool {
                 self.profile.visible
@@ -3300,6 +3432,100 @@ mod tests {
         }
     }
 
+    /// Prefix volumes set the developing levels, restarting at the session, view or anchor.
+    #[test]
+    fn developing_levels_restart_with_each_profile() {
+        let start = "2026-03-05T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let bars: Vec<_> = [
+            (0, 10.0, 100.0),
+            (1, 12.0, 300.0),
+            (2, 11.0, 200.0),
+            (24, 20.0, 50.0),
+        ]
+        .into_iter()
+        .map(|(hour, price, volume)| {
+            Bar::new(
+                start + TimeDelta::hours(hour),
+                price,
+                price,
+                price,
+                price,
+                volume,
+            )
+        })
+        .collect();
+        let instrument = Instrument::new("X").with_tick_size(1.0);
+        let session = [
+            Some([10.5, 11.0, 10.0]),
+            Some([12.5, 13.0, 12.0]),
+            Some([12.5, 13.0, 11.0]),
+            Some([20.5, 21.0, 20.0]),
+        ];
+        let mut auto = VolProfileAutoAnchored::default();
+        auto.set_input("anchor", InputValue::Choice(4)).unwrap();
+        let mut periodic = VolProfilePeriodic::default();
+        periodic.set_input("period", InputValue::Choice(0)).unwrap();
+        type Case = (Box<dyn Indicator>, Range<usize>, [Option<[f64; 3]>; 4]);
+        let cases: Vec<Case> = vec![
+            (Box::new(periodic), 0..4, session),
+            (Box::new(VolProfileSession::default()), 0..4, session),
+            (Box::new(auto), 0..4, [None, None, None, session[3]]),
+            (
+                Box::new(VolProfileVisible::default()),
+                1..3,
+                [None, session[1], session[2], None],
+            ),
+            (
+                Box::new(VolProfileFixed::default()),
+                0..4,
+                [session[0], session[1], session[2], Some([12.5, 13.0, 11.0])],
+            ),
+            (
+                Box::new(VolProfileAnchored::default()),
+                0..4,
+                [session[0], session[1], session[2], Some([12.5, 13.0, 11.0])],
+            ),
+        ];
+        for (mut study, view, expected) in cases {
+            study.set_instrument(Some(&instrument));
+            study.set_timeframe(Timeframe::Hour1);
+            study.set_visible_range(view);
+            study.calculate(&bars);
+            assert_eq!(
+                study.line_names(),
+                ["Developing POC", "Developing VA High", "Developing VA Low"]
+            );
+            for line in 0..3 {
+                let style = study.plot_style(line);
+                assert_eq!(style.plot_type, crate::studies::PlotType::StepLine);
+                assert!(!style.visible);
+                for (i, values) in expected.iter().enumerate() {
+                    assert_eq!(
+                        study.values().value(line, i),
+                        values.map(|values| values[line]),
+                        "{} {line} bar {i}",
+                        study.name()
+                    );
+                }
+            }
+            if study.name() == "Vol Profile VR" {
+                assert!(!study.set_visible_range(0..3));
+                for (i, values) in session.iter().enumerate() {
+                    for line in 0..3 {
+                        assert_eq!(
+                            study.values().value(line, i),
+                            if i == 3 {
+                                None
+                            } else {
+                                values.map(|v| v[line])
+                            }
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// Height in ticks sizes the rows of every profile kind in whole ticks of the instrument's
     /// tick size, in place of Height, which holds at 0 ticks and without a tick size.
     #[test]
@@ -3454,7 +3680,8 @@ mod tests {
                 .set_input("row_size", InputValue::Number(height))
                 .unwrap();
             let (low, high) = (1000.0 * tick.unwrap_or(0.01), 1100.0 * tick.unwrap_or(0.01));
-            study.calculate(&[Bar::new(at, low, high, low, high, 1.0)]);
+            let bars = [Bar::new(at, low, high, low, high, 1.0)];
+            study.calculate(&bars);
             let profiles = study.volume_profiles(0..1);
             if let Some(count) = count {
                 assert_eq!(
@@ -3470,6 +3697,15 @@ mod tests {
                 "{} tick {tick:?} ticks {row_ticks} height {height}",
                 study.name()
             );
+            if tick == Some(0.01) && row_ticks == 0 && height == 0.0 && whole && rows == 30 {
+                instrument.tick_size = Some(0.02);
+                assert!(
+                    study.set_instrument(Some(&instrument)),
+                    "tick changes refresh the study"
+                );
+                study.update(&bars, 0);
+                assert_eq!(study.volume_profiles(0..1)[0].config.row_size(), Some(0.04));
+            }
         }
     }
 
@@ -3778,7 +4014,9 @@ mod rendering_tests {
                 study.set_input(id, InputValue::Toggle(true)).unwrap();
             }
             if let Some(color) = color {
-                study.set_colors(vec![color]);
+                study
+                    .set_input("poc_color", InputValue::Color(color))
+                    .unwrap();
             }
             study.calculate(&bars);
             let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(plot_width, 200.0));
