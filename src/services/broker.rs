@@ -5,8 +5,8 @@ use chrono::{DateTime, Utc};
 use super::Events;
 use crate::data::{FeedError, FeedStatus, MaybeSend, Reply};
 use crate::model::{
-    Account, BalanceChange, Execution, JournalEntry, Order, OrderId, OrderPreview, OrderRequest,
-    Position, TradingRules,
+    Account, BalanceChange, ClosedPosition, Execution, JournalEntry, Order, OrderId, OrderPreview,
+    OrderRequest, Position, TradingRules,
 };
 
 /// One trading account at the host's broker, real or simulated. The library holds no balances or
@@ -94,7 +94,8 @@ pub trait Broker: MaybeSend + 'static {
     /// Pushes the account (balance, currency, capabilities) first, then the working orders and
     /// open positions, then orders, positions, executions and connection status as they change.
     /// A broker that keeps history pushes it after the open state: the finished orders, the
-    /// balance changes and the journal, oldest first, which the account panel lists.
+    /// closed positions, the balance changes and the journal, oldest first, which the account
+    /// panel lists.
     /// The terminal calls it when it starts and again, with a new stream, after the stream lagged;
     /// each stream starts from nothing, so push the whole current state again. The old stream is
     /// inactive from then on: push into the newest one only.
@@ -171,23 +172,23 @@ pub trait Broker: MaybeSend + 'static {
     /// only the pushed history exists.
     ///
     /// A page holds [`AccountEvent::Order`] with a finished status, [`AccountEvent::Execution`],
-    /// [`AccountEvent::Balance`] or [`AccountEvent::Journal`] events, as the request's
-    /// [`HistoryKind`] says, oldest first, and never working orders or positions: those come only
-    /// from the pushed stream. The first page of a request holds the newest entries of its range
-    /// and each page after it, asked for with the [`next`](HistoryPage::next) cursor, the entries
-    /// before the previous one. Entries that were pushed live may appear again in a page: an order
+    /// [`AccountEvent::ClosedPosition`], [`AccountEvent::Balance`] or [`AccountEvent::Journal`]
+    /// events, as the request's [`HistoryKind`] says, oldest first, and never working orders or
+    /// positions: those come only from the pushed stream. The first page of a request holds the
+    /// newest entries of its range and each page after it, asked for with the
+    /// [`next`](HistoryPage::next) cursor, the entries before the previous one. Entries that were pushed live may appear again in a page: an order
     /// is matched by its id and other events by value, so repeat them unchanged. Answer for the
     /// account `connect` last served; a consumer drops an answer that arrives after the account
     /// changed.
     ///
     /// The account panel asks once the account arrived, while the broker is live, and the user
     /// scrolls to the end of a history: first for the range that ends one second after the oldest
-    /// entry it lists (for an order, when it closed), so that entries sharing that time are not
-    /// skipped, then for each `next` until it is `None` or the history lists 1,000 entries. After
-    /// an error, which it shows unless it is `NotSupported`, it asks for that history again only
-    /// after the next `connect`; after a [recoverable](FeedError::is_recoverable) error or one that
-    /// arrives while the broker reports that it is not live, it asks again once the broker
-    /// reports that it is live again.
+    /// entry it lists (for an order or closed position, when it closed), so entries sharing that
+    /// time are not skipped, then for each `next` until it is `None` or the history lists 1,000
+    /// entries. After an error, which it shows unless it is `NotSupported`, it asks for that
+    /// history again only after the next `connect`; after a
+    /// [recoverable](FeedError::is_recoverable) error or one that arrives while the broker reports
+    /// that it is not live, it asks again once the broker reports that it is live again.
     fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
         let _ = request;
         reply.send(Err(FeedError::NotSupported));
@@ -202,6 +203,8 @@ pub enum HistoryKind {
     Orders,
     /// Fills, as [`AccountEvent::Execution`].
     Executions,
+    /// Closed positions, as [`AccountEvent::ClosedPosition`].
+    ClosedPositions,
     /// Changes of the cash balance, as [`AccountEvent::Balance`].
     Balance,
     /// Lines of the trading journal, as [`AccountEvent::Journal`].
@@ -267,6 +270,8 @@ pub enum AccountEvent {
     Position(Position),
     /// One fill, drawn on charts of its order's symbol: push the order first.
     Execution(Execution),
+    /// A completed position, closed or reversed, for the closed positions history.
+    ClosedPosition(ClosedPosition),
     /// The connection to the broker; a stream starts as [`FeedStatus::Live`]. See
     /// [`Broker::connect`].
     Status(FeedStatus),
