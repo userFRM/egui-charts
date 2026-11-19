@@ -1,8 +1,9 @@
 //! Volume classified by the direction of host-supplied lower-timeframe candles.
 //!
 //! A rising candle contributes to up volume; a falling candle to down volume. When open
-//! equals close, a close at or above the previous intrabar close counts as up, otherwise
-//! down. Up volume is positive, down volume negative and delta their sum. Missing intrabar
+//! equals close, a close above the previous intrabar close counts as up, one below it as down,
+//! and one at it takes the side of the intrabar before; a first intrabar at its open counts as
+//! up. Up volume is positive, down volume negative and delta their sum. Missing intrabar
 //! history has no value; the parent candle's volume is never substituted for it. The Lower
 //! interval input chooses the candles' interval; one that is not shorter than the chart's or
 //! does not divide it reads the automatic one.
@@ -65,9 +66,10 @@ impl UpDownVolume {
             return;
         };
         let ranges = lower_interval::nest(&self.clock, lower, data, intrabars, from);
+        let mut sides = lower_interval::Sides::new(intrabars);
         for (i, range) in (from..).zip(ranges) {
             if !range.is_empty() && data[i].close.is_finite() {
-                let flow = lower_interval::flow(intrabars, range);
+                let flow = sides.flow(range);
                 for (line, value) in [flow.up, flow.down, flow.up + flow.down]
                     .into_iter()
                     .enumerate()
@@ -273,10 +275,11 @@ mod tests {
         })
         .collect();
         update(&mut study, &bars, Timeframe::Min1, &intrabars);
-        // First parent: up=10+30, down=-20, delta=20. Next: -40+50=10.
+        // First parent: up=10, down=-20-30 (the doji at the previous close stays falling),
+        // delta=-40. Next: -40-50=-90.
         for (i, want) in [
-            [Some(40.0), Some(-20.0), Some(20.0)],
-            [Some(50.0), Some(-40.0), Some(10.0)],
+            [Some(10.0), Some(-50.0), Some(-40.0)],
+            [Some(0.0), Some(-90.0), Some(-90.0)],
             [None; 3],
             [Some(0.0); 3],
         ]
@@ -313,12 +316,12 @@ mod tests {
             },
         ] {
             update(&mut study, &bars, Timeframe::Min1, &invalid);
-            assert_eq!(study.values().value(2, 0), Some(20.0));
+            assert_eq!(study.values().value(2, 0), Some(-40.0));
         }
         let mut corrected = intrabars;
         corrected[0].volume = 15.0;
         update(&mut study, &bars, Timeframe::Min1, &corrected);
-        assert_eq!(study.values().value(2, 0), Some(25.0));
+        assert_eq!(study.values().value(2, 0), Some(-35.0));
         update(&mut study, &bars, Timeframe::Min1, &[]);
         assert_eq!(study.values().value(0, 0), None);
         // Custom intervals must nest their intrabars without rounding long bars to dates.
