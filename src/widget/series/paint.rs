@@ -584,11 +584,13 @@ impl Chart {
         rect: Rect,
     ) {
         for (key, axis) in self.secondary_axes(widget, rect) {
-            let response = ui.interact(
-                axis,
-                ui.scope_id().with(("series_axis", key)),
-                egui::Sense::click_and_drag(),
-            );
+            let response = ui
+                .interact(
+                    axis,
+                    ui.scope_id().with(("series_axis", key)),
+                    egui::Sense::click_and_drag(),
+                )
+                .on_hover_cursor(self.price_axis_cursor());
             let gestures = self.price_axis_gestures(ui, &response, Rect::EVERYTHING);
             let scale = self.pane_price_scale_mut(self.main_series_pane(), key);
             if gestures.reset {

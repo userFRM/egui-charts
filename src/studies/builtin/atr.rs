@@ -39,6 +39,18 @@ pub enum AtrSmoothing {
     Weighted,
 }
 
+impl AtrSmoothing {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Wilder => "Wilder",
+            Self::Simple => "Simple",
+            Self::Exponential => "Exponential",
+            Self::Weighted => "Weighted",
+        }
+    }
+}
+
 /// Average True Range indicator
 #[derive(Clone, Debug)]
 pub struct ATR {
