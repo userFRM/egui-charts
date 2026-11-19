@@ -1,11 +1,12 @@
 //! Symbol tab - chart type, price source, and line/candle style settings.
 
+use crate::chart::overlays::SessionColors;
 use crate::chart::series::SeriesSettings;
 use crate::localization as l10n;
 use crate::model::{
     BaselineLevel, BoxSizeMethod, ChartType, ChartTypeParams, FootprintColor, FootprintMode,
     FootprintStatistic, HighLowStyle, LinePlotStyle, LineStyle, PriceBasedSource, PriceSource,
-    ProfileRows, ProfileSession, TPOProfilePeriod, TimezoneId,
+    ProfileRows, ProfileSession, TPOProfilePeriod, TimezoneId, TradeProfileSettings,
 };
 use crate::theme::ThemeExt;
 use crate::ui_kit::color_picker::keep_opacity;
@@ -344,7 +345,14 @@ impl SymbolTab {
             .into_iter()
             .enumerate()
             {
-                Self::followed_color(ui, name, &mut params.footprint_colors[i], default, "Auto");
+                Self::followed_color(
+                    ui,
+                    name,
+                    None,
+                    &mut params.footprint_colors[i],
+                    default,
+                    "Auto",
+                );
             }
         });
         Self::section(ui, "Rows", true, |ui| {
@@ -430,7 +438,7 @@ impl SymbolTab {
                 .enumerate()
             {
                 let color = &mut params.footprint_imbalance_colors[i];
-                Self::followed_color(ui, name, color, sides[i], "Same as cells");
+                Self::followed_color(ui, name, None, color, sides[i], "Same as cells");
             }
         });
         Self::section(ui, "Annotations", false, |ui| {
@@ -537,15 +545,21 @@ impl SymbolTab {
         });
     }
 
-    /// A colour row whose `reset` button returns the colour to following `default`.
+    /// A colour row whose `reset` button returns the colour to following `default`; with
+    /// `visible`, its name is a checkbox for what the colour paints.
     fn followed_color(
         ui: &mut Ui,
         name: &str,
+        visible: Option<&mut bool>,
         color: &mut Option<Color32>,
         default: Color32,
         reset: &str,
     ) {
-        let label = ui.label(l10n::text(ui.ctx(), name));
+        let text = l10n::text(ui.ctx(), name);
+        let label = match visible {
+            Some(visible) => ui.checkbox(visible, text),
+            None => ui.label(text),
+        };
         ui.horizontal(|ui| {
             let mut selected = color.unwrap_or(default);
             if Self::color_picker(ui, &mut selected) {
@@ -591,7 +605,54 @@ impl SymbolTab {
             Self::profile_session(ui, &mut profile.session);
             Self::profile_rows(ui, &mut profile.rows);
             Self::value_area(ui, &mut profile.value_area);
+            let colors = SessionColors::new(&TradeProfileSettings::default(), &ui.active_theme());
+            Self::followed_color(
+                ui,
+                "Point of control",
+                Some(&mut profile.poc),
+                &mut profile.poc_color,
+                colors.poc,
+                "Auto",
+            );
             Self::switch(ui, "Value area guides", &mut profile.value_area_guides);
+            // Without guides, the edge colours still paint their extensions.
+            let guides = profile.value_area_guides;
+            Self::followed_color(
+                ui,
+                "Value area high",
+                guides.then_some(&mut profile.value_area_high),
+                &mut profile.value_area_high_color,
+                colors.value_area_high,
+                "Auto",
+            );
+            Self::followed_color(
+                ui,
+                "Value area low",
+                guides.then_some(&mut profile.value_area_low),
+                &mut profile.value_area_low_color,
+                colors.value_area_low,
+                "Auto",
+            );
+            for (name, color, default) in [
+                ("Up volume", &mut profile.up_volume_color, colors.volume[0]),
+                (
+                    "Down volume",
+                    &mut profile.down_volume_color,
+                    colors.volume[1],
+                ),
+                (
+                    "Up volume in value area",
+                    &mut profile.value_area_up_color,
+                    colors.value_area_volume[0],
+                ),
+                (
+                    "Down volume in value area",
+                    &mut profile.value_area_down_color,
+                    colors.value_area_volume[1],
+                ),
+            ] {
+                Self::followed_color(ui, name, None, color, default, "Auto");
+            }
             Self::switch(ui, "Developing POC", &mut profile.developing_poc);
             Self::switch(
                 ui,
