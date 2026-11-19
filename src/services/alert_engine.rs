@@ -574,7 +574,7 @@ impl AlertEngine {
     /// the bar before the newest of each chart it is lent, so a formation confirmed as its bar
     /// closes still fires, while one reported later counts as history. Empty messages are the
     /// detector's name and the signal's tooltip or label; custom messages expand as for
-    /// [`strategy_fills`](Self::strategy_fills).
+    /// `strategy_fills`.
     pub fn detector_signals<'a>(
         &self,
         symbol: &str,
@@ -653,7 +653,7 @@ impl AlertEngine {
     /// Events numbered at or below one an alert already received are ignored, including after
     /// edits or rearming the alert. A trigger reports the event's time and finite price, and the
     /// event's message when the alert has none; custom messages expand as for
-    /// [`strategy_fills`](Self::strategy_fills).
+    /// `strategy_fills`.
     pub fn custom_events(
         &self,
         source: &str,
