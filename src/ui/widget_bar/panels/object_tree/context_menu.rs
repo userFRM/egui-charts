@@ -148,7 +148,11 @@ pub(super) fn render_item_menu(
     if item.source_type == SourceType::Drawing {
         let lock_label = if item.locked { "Unlock" } else { "Lock" };
         if ui
-            .selectable_label(false, l10n::text(ui.ctx(), lock_label))
+            .add_enabled(
+                item.user_edit_enabled,
+                egui::Button::selectable(false, l10n::text(ui.ctx(), lock_label)),
+            )
+            .on_disabled_hover_text(l10n::text(ui.ctx(), "This drawing cannot be edited"))
             .clicked()
         {
             action = ObjectTreeAction::ToggleLock(id);
@@ -177,13 +181,20 @@ pub(super) fn render_item_menu(
         "Delete"
     };
     if item.source_type != SourceType::DataSource || item.is_added_series() {
-        let locked = item.is_drawing() && item.locked;
+        let locked = item.is_drawing() && (item.locked || !item.user_edit_enabled);
         let response = ui
             .add_enabled(
                 !locked,
                 egui::Button::selectable(false, l10n::text(ui.ctx(), delete_label)),
             )
-            .on_disabled_hover_text(l10n::text(ui.ctx(), "Unlock the drawing to delete it"));
+            .on_disabled_hover_text(l10n::text(
+                ui.ctx(),
+                if !item.user_edit_enabled {
+                    "This drawing cannot be edited"
+                } else {
+                    "Unlock the drawing to delete it"
+                },
+            ));
         if response.clicked() {
             action = if item.source_type == SourceType::Indicator {
                 ObjectTreeAction::RemoveIndicator(id)
