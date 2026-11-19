@@ -72,8 +72,8 @@ fn pixel_conflation_threshold() -> Option<f32> {
     Some(1.0)
 }
 
-/// Older saved configurations use the theme for overnight shading.
-fn follow_the_theme() -> Color32 {
+/// Older saved configurations use the theme for analyst targets and overnight shading.
+fn theme_color() -> Color32 {
     Color32::PLACEHOLDER
 }
 
@@ -577,6 +577,17 @@ pub struct ChartConfig {
     /// Fill of the pre-market and the post-market where they set no colour of their own.
     /// `PLACEHOLDER` uses the active theme accent at low opacity.
     pub extended_hours_color: Color32,
+    /// Analyst targets above the close on their publication date: their lines and labels, drawn
+    /// opaque, and the area between those lines and that close, filled at this colour's
+    /// opacity. `PLACEHOLDER` uses the active theme's up candle colour, filled at 20% opacity. A
+    /// fully transparent colour fills nothing and draws the lines in the theme's colour.
+    #[serde(default = "theme_color")]
+    pub price_target_positive_color: Color32,
+    /// Analyst targets below the close on their publication date, as
+    /// [`price_target_positive_color`](Self::price_target_positive_color) with the theme's down
+    /// candle colour.
+    #[serde(default = "theme_color")]
+    pub price_target_negative_color: Color32,
     /// Fill of the pre-market: extended hours that regular hours of the same trading date
     /// follow. `None` uses [`extended_hours_color`](Self::extended_hours_color).
     /// Default: None
@@ -599,7 +610,7 @@ pub struct ChartConfig {
     pub shade_postmarket: bool,
     /// Fill for overnight windows. `PLACEHOLDER` follows the active theme accent at twice
     /// the extended-hours opacity. Older saved charts use that theme default.
-    #[serde(default = "follow_the_theme")]
+    #[serde(default = "theme_color")]
     pub overnight_hours_color: Color32,
     /// Whether to show the symbol watermark.
     pub show_watermark: bool,
@@ -766,6 +777,8 @@ impl Default for ChartConfig {
             session_config: None,
             show_extended_hours: true,
             extended_hours_color: Color32::PLACEHOLDER,
+            price_target_positive_color: Color32::PLACEHOLDER,
+            price_target_negative_color: Color32::PLACEHOLDER,
             premarket_color: None,
             postmarket_color: None,
             shade_premarket: true,
@@ -785,6 +798,19 @@ impl Default for ChartConfig {
 }
 
 impl ChartConfig {
+    /// The line and fill colours on one side of the publication close, using that side's theme
+    /// candle colour until a colour is chosen.
+    pub(crate) fn price_target_colors(color: Color32, themed: Color32) -> (Color32, Color32) {
+        if color == Color32::PLACEHOLDER {
+            (themed, crate::model::HlcAreaStyle::fill_tint(themed, 51))
+        } else if color.a() == 0 {
+            // A fully transparent colour holds no RGB, so it has no opaque form.
+            (themed, Color32::TRANSPARENT)
+        } else {
+            (color.to_opaque(), color)
+        }
+    }
+
     /// Apply the theme's background, grid, axis text, candle, session break and watermark
     /// colours to this configuration.
     ///
