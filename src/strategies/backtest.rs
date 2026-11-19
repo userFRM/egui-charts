@@ -1327,6 +1327,7 @@ impl<'a> Run<'a> {
             }
             if self.trading {
                 self.fill_segment(previous, price, bar.time, point != 0);
+                self.note_margin(price);
                 if point != 0 {
                     self.pass_delays();
                 }
@@ -2014,6 +2015,36 @@ mod tests {
             };
             assert_eq!(asynchronous, report);
         }
+        struct AtLow;
+        impl Strategy for AtLow {
+            fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
+                if context.position() == 0.0 {
+                    context.entry("Low", OrderSide::Buy, 1.0, OrderType::Limit(50.0));
+                }
+            }
+        }
+        let gapped_source = [Bar::new(hour(0), 100.0, 110.0, 50.0, 60.0, 10.0)];
+        let gapped = [
+            Bar::new(hour(0), 100.0, 110.0, 50.0, 100.0, 4.0),
+            Bar::new(
+                hour(0) + TimeDelta::minutes(30),
+                60.0,
+                60.0,
+                60.0,
+                60.0,
+                6.0,
+            ),
+        ];
+        // The high occurs before entry at the low. One unit then uses 100 at the finer close,
+        // before the next finer bar gaps to 60; the chart path alone holds it only from 50 to 60.
+        for (finer, peak) in [(&[][..], 60.0), (&gapped[..], 100.0)] {
+            let mut engine = Backtest::new("Ticks", "TEST", Timeframe::Hour1, 1000.0);
+            engine.settings.recalculate_on_history = true;
+            let report = engine.run(&mut AtLow, &gapped_source, finer);
+            assert_eq!(report.margin.last(), Some(&(hour(0), 60.0)));
+            assert_eq!(report.peak_margin.last(), Some(&(hour(0), peak)));
+        }
+
         struct ClosedOnly(usize);
         impl Strategy for ClosedOnly {
             fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
