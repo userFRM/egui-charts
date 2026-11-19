@@ -1014,10 +1014,10 @@ impl Label<'_> {
             grab
         };
         if self.draggable {
-            if grab.hovered() || grab.dragged() {
+            if grab.hovered() || grab.dragged_by(egui::PointerButton::Primary) {
                 ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
             }
-            if grab.dragged()
+            if grab.dragged_by(egui::PointerButton::Primary)
                 && let Some(pointer) = grab.interact_pointer_pos()
             {
                 let price =
@@ -1027,7 +1027,7 @@ impl Label<'_> {
                     ui.ctx().data_mut(|data| data.insert_temp(key, value));
                 }
             }
-            if grab.drag_stopped() {
+            if grab.drag_stopped_by(egui::PointerButton::Primary) {
                 ui.ctx().data_mut(|data| data.remove::<f64>(key));
                 if value.is_finite() && value != line.price {
                     dragged = Some(value);
