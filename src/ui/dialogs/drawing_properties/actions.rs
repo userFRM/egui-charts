@@ -28,8 +28,8 @@ pub struct DrawingProps {
     pub tick_size: Option<f64>,
     /// Staged anchor edits, applied only to the drawing whose dialog was opened.
     pub coordinates: CoordinatesState,
-    /// Save these properties as the default for new drawings of this tool. Built-in tools only:
-    /// a host-registered tool has no default of its own, so the flag is ignored for one.
+    /// Save these properties as the default for new drawings of this tool, under its registered
+    /// id in `DrawingManager::custom_tool_defaults` or its built-in type.
     pub save_as_default: bool,
     /// Primary color
     pub color: Color32,
@@ -166,11 +166,8 @@ impl DrawingProps {
             })?;
             if self.save_as_default
                 && let Some(drawing) = manager.drawings.iter().find(|d| d.id == id.0)
-                && drawing.custom_tool.is_none()
             {
-                let mut defaults = DrawingTemplate::from_drawing(drawing);
-                defaults.settings.visible = true;
-                manager.tool_defaults.insert(drawing.tool_type, defaults);
+                manager.save_tool_default(DrawingTemplate::from_drawing(drawing));
             }
             Ok(())
         })

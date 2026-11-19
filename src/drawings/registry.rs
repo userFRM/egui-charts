@@ -230,6 +230,71 @@ pub(crate) mod tests {
         );
     }
 
+    /// A saved polyline default leaves registered tools in their own starting style.
+    #[test]
+    fn registered_tools_keep_their_own_default_style() {
+        let mut manager = DrawingManager::new();
+        manager.registry.register("midpoint", midpoint()).unwrap();
+        let mut polyline = Drawing::new(0, DrawingToolType::Polyline);
+        polyline.stroke_width = 7.0;
+        polyline.color = [1, 2, 3, 255];
+        manager.tool_defaults.insert(
+            DrawingToolType::Polyline,
+            crate::drawings::DrawingTemplate::from_drawing(&polyline),
+        );
+        let place = |manager: &mut DrawingManager| {
+            manager.set_custom_tool("midpoint").unwrap();
+            manager.start_drawing_with_coords(
+                DrawingToolType::Polyline,
+                egui::pos2(100., 100.),
+                |x| x,
+                f64::from,
+            );
+            manager.add_point_with_coords(egui::pos2(200., 100.), |x| x, f64::from);
+            manager.drawings.last().unwrap().clone()
+        };
+        let first = place(&mut manager);
+        assert_eq!(
+            (first.color, first.stroke_width, first.fill_color),
+            ([0, 188, 212, 255], 2.0, Some([0, 188, 212, 51]))
+        );
+        let mut own = first.clone();
+        own.stroke_width = 4.0;
+        own.custom_settings = serde_json::json!({"radius": 3});
+        manager.save_tool_default(crate::drawings::DrawingTemplate::from_drawing(&own));
+        let second = place(&mut manager);
+        assert_eq!(
+            (second.stroke_width, second.custom_settings),
+            (4.0, serde_json::json!({"radius": 3}))
+        );
+        assert_eq!(
+            manager
+                .new_drawing(0, DrawingToolType::Polyline)
+                .stroke_width,
+            7.0
+        );
+        // Templates are checked against their identity even if the host used the wrong key.
+        manager.custom_tool_defaults.insert(
+            "other".into(),
+            crate::drawings::DrawingTemplate::from_drawing(&own),
+        );
+        assert_eq!(manager.new_custom_drawing(0, "other").stroke_width, 2.0);
+        let mut chart = crate::ChartBuilder::new()
+            .with_drawing_registry(manager.registry.clone())
+            .build();
+        chart.drawings_mut().custom_tool_defaults = manager.custom_tool_defaults.clone();
+        chart.set_symbol("A");
+        chart.set_symbol("B");
+        chart.load_drawings(Vec::new());
+        assert_eq!(
+            chart
+                .drawings()
+                .new_custom_drawing(0, "midpoint")
+                .stroke_width,
+            4.0
+        );
+    }
+
     #[test]
     fn registered_tools_use_host_geometry_and_retain_settings_through_history_and_storage() {
         let mut manager = DrawingManager::new();

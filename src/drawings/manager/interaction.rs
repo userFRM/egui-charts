@@ -1154,7 +1154,10 @@ impl DrawingManager {
             }
             _ => {
                 let id = self.take_id();
-                self.new_drawing(id, tool_type)
+                match self.active_custom_tool.clone() {
+                    Some(tool) => self.new_custom_drawing(id, &tool),
+                    None => self.new_drawing(id, tool_type),
+                }
             }
         };
         if let Some(id) = &self.active_custom_tool {

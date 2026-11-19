@@ -96,15 +96,14 @@ impl DrawingPropertiesDialog {
             chart.drawings().registry.tool_name(drawing).into(),
             DrawingProps::from_drawing(drawing, chart),
         );
-        self.default_template = Some(DrawingTemplate::from_drawing(
-            &chart.drawings().new_drawing(0, drawing.tool_type),
-        ));
-        // The built-in factory cannot apply a template carrying a custom tool's identity.
-        if drawing.custom_tool.is_some()
-            && let Some(defaults) = chart.drawings().tool_defaults.get(&drawing.tool_type)
+        let manager = chart.drawings();
+        self.default_template = Some(DrawingTemplate::from_drawing(&match drawing
+            .custom_tool
+            .as_deref()
         {
-            self.default_template = Some(defaults.clone());
-        }
+            Some(tool) => manager.new_custom_drawing(0, tool),
+            None => manager.new_drawing(0, drawing.tool_type),
+        }));
         true
     }
 
@@ -134,13 +133,9 @@ impl DrawingPropertiesDialog {
                 Ok(edits) => {
                     if self.props.save_as_default
                         && let Some(mut template) = self.current_template()
-                        && template.settings.custom_tool.is_none()
                     {
                         template.settings.visible = true;
-                        chart
-                            .drawings_mut()
-                            .tool_defaults
-                            .insert(template.settings.tool_type, template.clone());
+                        chart.drawings_mut().save_tool_default(template.clone());
                         self.default_template = Some(template);
                         self.props.save_as_default = false;
                     }
@@ -378,14 +373,12 @@ impl DrawingPropertiesDialog {
                 ui.close();
             }
             let tool = self.props.tool_settings.as_ref().map(|t| &t.settings);
-            // A host-registered tool has no default of its own.
-            let built_in = tool.is_some_and(|tool| tool.custom_tool.is_none());
             // The check `load_template` makes: another tool's default would not load.
             let defaults = self.default_template.as_ref().map(|t| &t.settings);
             let resets = tool.zip(defaults).is_some_and(|(tool, defaults)| {
                 tool.tool_type == defaults.tool_type && tool.custom_tool == defaults.custom_tool
             });
-            if built_in
+            if tool.is_some()
                 && ui
                     .button(l10n::text(ui.ctx(), "Save as default for this tool"))
                     .clicked()
@@ -1071,14 +1064,13 @@ mod tests {
                     defaults.custom_tool = Some("host-path".into());
                 }
                 defaults.stroke_width = 3.0;
-                manager
-                    .tool_defaults
-                    .insert(tool, DrawingTemplate::from_drawing(&defaults));
+                manager.save_tool_default(DrawingTemplate::from_drawing(&defaults));
             }
-            let mut drawing = manager.new_drawing(7, tool);
-            if custom {
-                drawing.custom_tool = Some("host-path".into());
-            }
+            let mut drawing = if custom {
+                manager.new_custom_drawing(7, "host-path")
+            } else {
+                manager.new_drawing(7, tool)
+            };
             drawing.stroke_width = 5.0;
             drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
             let anchors = drawing.chart_points.clone();
@@ -1169,7 +1161,7 @@ mod tests {
         );
         assert!(chart.undo());
         assert_eq!(chart.drawings().drawings[0].stroke_width, 2.0);
-        // A host tool has no default of its own: saving one keeps the built-in polyline's.
+        // A host tool saves its default under its id and leaves the polyline's alone.
         let polyline =
             DrawingTemplate::from_drawing(&chart.drawings().new_drawing(0, Tool::Polyline));
         chart
@@ -1189,6 +1181,12 @@ mod tests {
             serde_json::to_value(&polyline).unwrap()
         );
         assert_eq!(chart.drawings().drawings[1].stroke_width, 5.0);
+        assert_eq!(
+            chart.drawings().custom_tool_defaults["host-path"]
+                .settings
+                .stroke_width,
+            5.0
+        );
     }
 
     /// Several tools keep a template of one name apart in the host's storage, and each lists and

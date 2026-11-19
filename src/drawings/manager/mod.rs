@@ -275,6 +275,9 @@ pub struct DrawingManager {
     /// Per-tool defaults, exportable with serde for host-owned application storage.
     /// New drawings use these properties without copying geometry, identity or layer.
     pub tool_defaults: std::collections::HashMap<DrawingToolType, super::DrawingTemplate>,
+    /// Defaults of registered tools by tool id, exported beside [`Self::tool_defaults`].
+    /// A template naming another tool in `settings.custom_tool` never applies.
+    pub custom_tool_defaults: std::collections::HashMap<String, super::DrawingTemplate>,
     /// All completed drawings on the chart.
     pub drawings: Vec<Drawing>,
     /// Currently active drawing tool, or `None` for selection/pointer mode.
@@ -411,6 +414,7 @@ impl DrawingManager {
             active_custom_tool: None,
             drawings: Vec::new(),
             tool_defaults: Default::default(),
+            custom_tool_defaults: Default::default(),
             active_tool: None,
             curr_drawing: None,
             preview_point: false,
@@ -926,14 +930,44 @@ impl DrawingManager {
     /// A new drawing of `tool` in its default style: the tool's own, recoloured by
     /// [`DrawingManagerOptions::default_color`] when set, then the default saved for the tool.
     pub fn new_drawing(&self, id: usize, tool: DrawingToolType) -> Drawing {
-        let mut drawing = match self.options.default_color {
-            Some(color) => Drawing::with_color(id, tool, color),
-            None => Drawing::new(id, tool),
-        };
+        let mut drawing = self.base_drawing(id, tool);
         if let Some(defaults) = self.tool_defaults.get(&tool) {
             let _ = defaults.apply_to(&mut drawing);
         }
         drawing
+    }
+
+    /// A new registered drawing in the polyline's original style, recoloured by
+    /// [`DrawingManagerOptions::default_color`] when set, then styled by the default saved for
+    /// `tool` in [`Self::custom_tool_defaults`]. The polyline's saved default never applies.
+    pub fn new_custom_drawing(&self, id: usize, tool: &str) -> Drawing {
+        let mut drawing = self.base_drawing(id, DrawingToolType::Polyline);
+        drawing.custom_tool = Some(tool.to_owned());
+        if let Some(defaults) = self.custom_tool_defaults.get(tool) {
+            let _ = defaults.apply_to(&mut drawing);
+        }
+        drawing
+    }
+
+    fn base_drawing(&self, id: usize, tool: DrawingToolType) -> Drawing {
+        match self.options.default_color {
+            Some(color) => Drawing::with_color(id, tool, color),
+            None => Drawing::new(id, tool),
+        }
+    }
+
+    /// Saves a visible default under its registered tool id or built-in tool type.
+    pub(crate) fn save_tool_default(&mut self, mut template: super::DrawingTemplate) {
+        template.settings.visible = true;
+        match template.settings.custom_tool.clone() {
+            Some(id) => {
+                self.custom_tool_defaults.insert(id, template);
+            }
+            None => {
+                self.tool_defaults
+                    .insert(template.settings.tool_type, template);
+            }
+        }
     }
 
     /// The z-order that puts a drawing added now on top of the others.
