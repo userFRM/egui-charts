@@ -193,8 +193,12 @@ impl Search {
             {
                 Ok(rows) => {
                     let limit = self.query.as_ref().expect("search request").limit;
-                    self.more = rows.len() >= limit && limit > 0;
-                    self.offset += rows.len();
+                    let partial = self
+                        .source
+                        .as_ref()
+                        .is_some_and(|source| source.leaves_results_out());
+                    self.more = limit > 0 && (rows.len() >= limit || partial && !rows.is_empty());
+                    self.offset += limit;
                     for instrument in rows.into_iter().take(limit) {
                         if self.rows.iter().any(|row| {
                             row.symbol == instrument.symbol
@@ -486,6 +490,106 @@ mod tests {
             assert!(search.error.is_none());
         }
     }
+    /// Guards paging through a service that leaves out results it cannot read: a page of
+    /// `limit` server results with one unreadable keeps paging, the next request starts `limit`
+    /// past the previous one, an empty page ends the results, and a full page of unreadable
+    /// results reports why instead of passing for the end.
+    #[cfg(feature = "http")]
+    #[test]
+    fn unreadable_http_results_keep_paging_at_the_server_offset() {
+        use std::io::{BufRead as _, BufReader, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let mut targets = Vec::new();
+            for body in [
+                r#"[{"symbol":"BAD","timezone":"Mars/Olympus_Mons"},{"symbol":"A1"}]"#,
+                r#"[{"symbol":"A2"},{"symbol":"A3"}]"#,
+                "[]",
+                r#"[{"symbol":"B1","timezone":"Mars/Olympus_Mons"},{"symbol":""}]"#,
+            ] {
+                let (mut connection, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(&connection);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                targets.push(line.split_whitespace().nth(1).unwrap().to_owned());
+                loop {
+                    line.clear();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                write!(
+                    connection,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+            targets
+        });
+        let ctx = egui::Context::default();
+        let mut search = Search::default();
+        search.set_service(Some(Arc::new(crate::data::http::HttpDatafeed::new(base))));
+        let answer = |search: &mut Search| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while search.loading {
+                assert!(std::time::Instant::now() < deadline, "search answer");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                search.poll(&ctx);
+            }
+        };
+        search.query(&ctx, "A", None, 2);
+        for _ in 0..3 {
+            answer(&mut search);
+            search.next_page();
+        }
+        assert!(!search.loading, "an empty page ends the results");
+        assert_eq!(
+            search
+                .rows
+                .iter()
+                .map(|row| row.symbol.as_str())
+                .collect::<Vec<_>>(),
+            ["A1", "A2", "A3"]
+        );
+        assert!(search.error.is_none());
+        search.query(&ctx, "B", None, 2);
+        answer(&mut search);
+        search.next_page();
+        assert!(!search.loading, "an unreadable page ends paging");
+        assert!(search.rows.is_empty());
+        let error = search.error.clone().expect("the reason is reported");
+        assert!(error.contains("Mars/Olympus_Mons"), "{error}");
+        let offsets: Vec<_> = server
+            .join()
+            .unwrap()
+            .iter()
+            .map(|target| {
+                let param = |name: &str| {
+                    target
+                        .split(['?', '&'])
+                        .find_map(|pair| pair.strip_prefix(name))
+                        .unwrap()
+                        .to_owned()
+                };
+                (param("query="), param("offset="), param("limit="))
+            })
+            .collect();
+        let page =
+            |query: &str, offset: &str| (query.to_owned(), offset.to_owned(), "2".to_owned());
+        assert_eq!(
+            offsets,
+            [
+                page("A", "0"),
+                page("A", "2"),
+                page("A", "4"),
+                page("B", "0")
+            ]
+        );
+    }
+
     #[test]
     fn spread_lookup_reports_service_errors_without_claiming_the_symbol_is_unknown() {
         let ctx = egui::Context::default();
