@@ -70,7 +70,9 @@ negative value in the window, the quote amount is missing. A study calculated on
 Interval requests that Interval's bars first and, once they are supplied, the candles and
 exchange rates it reads with them, as on a chart of that interval, so read the request again
 after supplying them. Supply
-the same symbol and session as the chart. A study such as Ratio, Spread or Correlation
+the same symbol and session as the chart. A study set to another Symbol, with or without a
+price source, requests that symbol's bars instead. Its additional histories of the chart's
+symbol, such as Technical Ratings' table intervals, also use the chosen symbol. A study such as Ratio, Spread or Correlation
 Coefficient that names another symbol also requests that symbol's bars on the Interval, with
 the Interval's bars. Read the request again after a symbol, interval or input change:
 
