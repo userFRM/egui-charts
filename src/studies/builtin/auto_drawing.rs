@@ -1,16 +1,20 @@
 //! Drawing studies anchored on the shared Zig Zag swings.
 
-use super::{ATR, ZigZag};
+use super::swings::Swings;
+use super::{ATR, ZigZag, ZigZagPivot};
 use crate::drawings::{ChartPoint, Drawing, DrawingToolType, FibonacciConfig, FibonacciLevel};
 use crate::model::Bar;
 use crate::studies::{
-    Indicator, IndicatorValue, IndicatorValues, InputKind, InputValue, StudyInput,
+    Indicator, IndicatorValue, IndicatorValues, InputKind, InputValue, Stepper, StudyInput,
 };
 use egui::Color32;
 
 /// The study catalogue's swing size: a multiple of the average true range over a period.
 const ATR_MULTIPLE: f64 = 3.0;
 const ATR_PERIOD: usize = 10;
+
+/// The least share of the leg before it that an extension's last leg takes back.
+const MIN_RETRACEMENT: f64 = 0.236;
 
 /// The most Fibonacci levels that the study inputs can hold.
 const MAX_FIB_LEVELS: usize = 24;
@@ -42,7 +46,9 @@ pub enum AutoDrawingKind {
     ParallelChannel,
     /// Last two confirmed pivots; the current, unfinished swing is excluded.
     FibonacciRetracement,
-    /// Latest completed swing projected from the current leg's moving extreme.
+    /// Latest three confirmed pivots whose last leg takes back 23.6% to 100% of the leg before
+    /// it, stepping back one pivot at a time until three qualify; the levels project the first
+    /// leg from the third pivot.
     FibonacciExtension,
     /// Last three pivots, with the median from the first to the midpoint of the other two.
     Pitchfork,
@@ -69,6 +75,15 @@ impl AutoDrawingKind {
         }
     }
 
+    /// How the catalogue's study of this kind finds its swings.
+    fn default_swing_size(self) -> SwingSize {
+        if self == Self::FibonacciExtension {
+            SwingSize::Bars
+        } else {
+            SwingSize::Atr
+        }
+    }
+
     fn tool(self) -> DrawingToolType {
         match self {
             Self::ParallelChannel => DrawingToolType::ParallelChannel,
@@ -79,14 +94,49 @@ impl AutoDrawingKind {
     }
 }
 
+/// How the swings an automatic drawing is anchored on are found, in the order of the
+/// `swing_size` choices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SwingSize {
+    /// Zig Zag reversals of a multiple of the average true range, as a percentage of the close.
+    Atr,
+    /// Zig Zag reversals of the fixed deviation percentage.
+    Percent,
+    /// Highs and lows found by half the depth of bars on each side, as the pattern studies find
+    /// them; offered for the extension only.
+    Bars,
+}
+
+/// The latest three consecutive alternating pivots, oldest first, whose last leg takes back
+/// between 23.6% and 100% of the leg before it, stepping back one pivot at a time.
+fn extension_anchors(
+    count: usize,
+    pivot: impl Fn(usize) -> ZigZagPivot,
+) -> Option<[ZigZagPivot; 3]> {
+    (2..count)
+        .rev()
+        .map(|c| [pivot(c - 2), pivot(c - 1), pivot(c)])
+        .find(|[a, b, c]| {
+            // Measured towards the second pivot, so both moves are positive for a valid leg.
+            let sign = if a.is_high { 1.0 } else { -1.0 };
+            let (leg, back) = (sign * (a.price - b.price), sign * (c.price - b.price));
+            leg > 0.0 && back >= MIN_RETRACEMENT * leg && back <= leg
+        })
+}
+
 /// A drawing recalculated from host bars with the same pivots as [`ZigZag`]. Swings use the
 /// fixed Zig Zag percentage unless [`with_atr`](Self::with_atr) sizes them by the average true
-/// range.
+/// range. The catalogue's extension finds its swings by bars instead (`swing_size` choice 2,
+/// "Bars"): a high or low beyond those of the bars within half the depth before it and not
+/// passed by those within half the depth after it, so confirmed half the depth later; of
+/// consecutive ones of a kind, the more extreme counts.
 ///
 /// Add through the normal study API or calculate directly and read [`Indicator::drawings`].
-/// No drawing is emitted until enough pivots exist. A channel includes the moving
-/// last extreme; a retracement uses the latest completed swing, an extension projects that
-/// swing from the current leg's extreme. A pitchfork follows the latest three pivots. Updating or replacing bars
+/// No drawing is emitted until enough pivots exist. A channel includes the moving last extreme;
+/// a retracement uses the latest completed swing. An extension uses the latest three confirmed
+/// pivots whose last leg takes back 23.6% to 100% of the leg before it, steps back one pivot at a
+/// time until three qualify and draws nothing when none do; its levels project the first leg
+/// from the third pivot. A pitchfork follows the latest three pivots. Updating or replacing bars
 /// rebuilds the anchors; generated drawings belong to the study, not the editable drawing list.
 /// Output 0 contains anchor prices for scaling and readouts; the drawing renderer paints the
 /// construction instead of joining these values. Its colour, width and visibility use plot 0.
@@ -94,14 +144,18 @@ impl AutoDrawingKind {
 pub struct AutoDrawing {
     kind: AutoDrawingKind,
     zigzag: ZigZag,
-    /// Size swings by the average true range instead of the Zig Zag's fixed percentage.
-    atr_swings: bool,
+    /// How the swings are found: by the average true range, the fixed percentage or bars.
+    swing_size: SwingSize,
     atr_multiple: f64,
     atr_period: usize,
     atr: ATR,
     fibonacci: FibonacciConfig,
     fork_colors: [Color32; 2],
     fork_transparency: usize,
+    /// The swings found by bars, for [`SwingSize::Bars`].
+    bar_swings: Stepper<Swings>,
+    /// Source bars whose values hold the drawn anchors.
+    anchors: Vec<usize>,
     drawings: Vec<Drawing>,
     values: IndicatorValues,
 }
@@ -121,7 +175,7 @@ impl AutoDrawing {
                     crate::studies::palette::BLUE
                 },
             ),
-            atr_swings: false,
+            swing_size: SwingSize::Percent,
             atr_multiple: ATR_MULTIPLE,
             atr_period: ATR_PERIOD,
             atr: ATR::new(ATR_PERIOD),
@@ -131,6 +185,8 @@ impl AutoDrawing {
                 crate::studies::palette::BLUE,
             ],
             fork_transparency: 85,
+            bar_swings: Stepper::default(),
+            anchors: Vec::new(),
             drawings: Vec::new(),
             values: IndicatorValues::new(),
         }
@@ -143,11 +199,19 @@ impl AutoDrawing {
     /// `multiple` is clamped into 0 to `f64::MAX`, NaN to 0, where no swing is found; `period`
     /// is at least 1.
     pub fn with_atr(mut self, multiple: f64, period: usize) -> Self {
-        self.atr_swings = true;
+        self.swing_size = SwingSize::Atr;
         self.atr_multiple = super::clamp_param(multiple, 0.0, f64::MAX);
         self.atr_period = period.max(1);
         self.atr = ATR::new(self.atr_period);
         self
+    }
+
+    /// The study the catalogue registers: swings of 3 times the 10-bar average true range and a
+    /// depth of 10, and for an extension, swings found by bars over that depth.
+    pub(crate) fn catalogue(kind: AutoDrawingKind) -> Self {
+        let mut study = Self::new(kind, 5.0, 10).with_atr(ATR_MULTIPLE, ATR_PERIOD);
+        study.swing_size = kind.default_swing_size();
+        study
     }
 
     fn fork_config(&self) -> crate::drawings::PitchforkConfig {
@@ -201,18 +265,23 @@ impl Indicator for AutoDrawing {
         "Drawing anchored on Zig Zag swing extremes"
     }
 
-    /// The swing size, ATR multiple and period, the Zig Zag deviation and depth and, for a
-    /// Fibonacci construction, its options, its number of levels and each level's visibility,
-    /// ratio, label, colour and price label, or the pitchfork's background transparency.
+    /// The swing size (for an extension also "Bars", which reads only the depth), ATR multiple
+    /// and period, the Zig Zag deviation and depth and, for a Fibonacci construction, its
+    /// options, its number of levels and each level's visibility, ratio, label, colour and price
+    /// label, or the pitchfork's background transparency.
     fn inputs(&self) -> Vec<StudyInput> {
+        let mut sizes = vec!["ATR multiple".to_owned(), "Percent".to_owned()];
+        if self.kind == AutoDrawingKind::FibonacciExtension {
+            sizes.push("Bars".to_owned());
+        }
         let mut inputs = vec![
             StudyInput::new(
                 "swing_size",
                 "Swing size",
-                InputValue::Choice(usize::from(!self.atr_swings)),
-                InputKind::Choice(["ATR multiple", "Percent"].map(str::to_owned).to_vec()),
+                InputValue::Choice(self.swing_size as usize),
+                InputKind::Choice(sizes),
             )
-            .with_default(InputValue::Choice(0)),
+            .with_default(InputValue::Choice(self.kind.default_swing_size() as usize)),
             StudyInput::new(
                 "atr_multiple",
                 "ATR multiple",
@@ -408,7 +477,9 @@ impl Indicator for AutoDrawing {
         }
         let config = &mut self.fibonacci;
         match (id, value) {
-            ("swing_size", InputValue::Choice(index)) => self.atr_swings = index == 0,
+            ("swing_size", InputValue::Choice(index)) => {
+                self.swing_size = [SwingSize::Atr, SwingSize::Percent, SwingSize::Bars][index];
+            }
             ("fork_transparency", InputValue::Length(transparency)) => {
                 self.fork_transparency = transparency;
             }
@@ -474,43 +545,77 @@ impl Indicator for AutoDrawing {
             self.values = IndicatorValues::missing(data.len());
         } else {
             // Clear the old anchors by their exact source indices before the swings move.
-            for pivot in self.zigzag.pivots().iter().rev().take(4) {
-                if pivot.bar_index < self.values.len() {
-                    self.values.set(pivot.bar_index, IndicatorValue::None);
+            for &bar in &self.anchors {
+                if bar < self.values.len() {
+                    self.values.set(bar, IndicatorValue::None);
                 }
             }
             self.values.resize(data.len(), IndicatorValue::None);
         }
-        if self.atr_swings {
-            self.atr.update(data, from);
-        }
-        let (atr, multiple) = (&self.atr, self.atr_multiple);
-        let by_atr = |source: usize| {
-            atr.values()
-                .value(0, source)
-                .map_or(f64::NAN, |atr| 100.0 * multiple * atr / data[source].close)
-        };
-        self.zigzag.update_swings(
-            data,
-            from,
-            self.atr_swings.then_some(&by_atr as &dyn Fn(usize) -> f64),
-        );
+        self.anchors.clear();
         self.drawings.clear();
-        let pivots = self.zigzag.pivots();
-        let pivots = if self.kind == AutoDrawingKind::FibonacciRetracement {
-            &pivots[..pivots.len().saturating_sub(1)]
+        let recent: Vec<ZigZagPivot> = if self.swing_size == SwingSize::Bars {
+            let half = (self.zigzag.depth() / 2).max(1);
+            // shortcut: the stepper copies every pivot on each update, about 50 bytes a pivot;
+            // keep a checkpoint of the newest pivot only if long histories make ticks slow.
+            self.bar_swings
+                .run(data, from, &mut IndicatorValues::new(), |swings, bar| {
+                    if bar.high.is_finite() && bar.low.is_finite() {
+                        swings.push(bar, half, half, usize::MAX);
+                    } else {
+                        swings.skip();
+                    }
+                    IndicatorValue::None
+                });
+            let pivots = &self.bar_swings.state().pivots;
+            let Some(anchors) = extension_anchors(pivots.len(), |i| ZigZagPivot {
+                bar_index: pivots[i].index,
+                price: pivots[i].price,
+                is_high: pivots[i].high,
+            }) else {
+                return;
+            };
+            anchors.to_vec()
         } else {
-            pivots
+            if self.swing_size == SwingSize::Atr {
+                self.atr.update(data, from);
+            }
+            let (atr, multiple) = (&self.atr, self.atr_multiple);
+            let by_atr = |source: usize| {
+                atr.values()
+                    .value(0, source)
+                    .map_or(f64::NAN, |atr| 100.0 * multiple * atr / data[source].close)
+            };
+            self.zigzag.update_swings(
+                data,
+                from,
+                (self.swing_size == SwingSize::Atr).then_some(&by_atr as &dyn Fn(usize) -> f64),
+            );
+            let pivots = self.zigzag.pivots();
+            // The retracement and extension leave out the last pivot, which still moves.
+            let pivots = match self.kind {
+                AutoDrawingKind::FibonacciRetracement | AutoDrawingKind::FibonacciExtension => {
+                    &pivots[..pivots.len().saturating_sub(1)]
+                }
+                _ => pivots,
+            };
+            if self.kind == AutoDrawingKind::FibonacciExtension {
+                let Some(anchors) = extension_anchors(pivots.len(), |i| pivots[i]) else {
+                    return;
+                };
+                anchors.to_vec()
+            } else {
+                let needed = if self.kind == AutoDrawingKind::FibonacciRetracement {
+                    2
+                } else {
+                    3
+                };
+                let Some(start) = pivots.len().checked_sub(needed) else {
+                    return;
+                };
+                pivots[start..].to_vec()
+            }
         };
-        let needed = if self.kind == AutoDrawingKind::FibonacciRetracement {
-            2
-        } else {
-            3
-        };
-        let Some(start) = pivots.len().checked_sub(needed) else {
-            return;
-        };
-        let recent = &pivots[start..];
         let order: &[usize] = match self.kind {
             AutoDrawingKind::ParallelChannel => &[0, 2, 1],
             AutoDrawingKind::FibonacciRetracement => &[0, 1],
@@ -524,6 +629,7 @@ impl Indicator for AutoDrawing {
             .map(|&i| {
                 let pivot = recent[i];
                 self.values.set_value(0, pivot.bar_index, pivot.price);
+                self.anchors.push(pivot.bar_index);
                 ChartPoint::new(pivot.bar_index as f32, pivot.price)
             })
             .collect();
@@ -640,11 +746,13 @@ mod tests {
                 vec![(3, 113.0), (5, 100.0)],
                 vec![(5, 100.0), (9, 122.0)],
             ),
+            // The moving high at bar 9 takes no part; once confirmed, its leg takes back 22 of
+            // 13 and the extension steps back to the swing before.
             (
                 AutoDrawingKind::FibonacciExtension,
                 DrawingToolType::FibonacciExtension,
-                vec![(3, 113.0), (5, 100.0), (9, 118.0)],
-                vec![(5, 100.0), (9, 122.0), (12, 93.0)],
+                vec![(0, 100.0), (3, 113.0), (5, 100.0)],
+                vec![(0, 100.0), (3, 113.0), (5, 100.0)],
             ),
             (
                 AutoDrawingKind::Pitchfork,
@@ -757,7 +865,8 @@ mod tests {
 
     /// The catalogue sizes swings by 3 times the 10-bar average true range as a percentage of
     /// the confirming close, so 0.3% minute swings draw and daily anchors match a hand count,
-    /// calculated at once or bar by bar.
+    /// calculated at once or bar by bar. Its extension finds the same swings by 5 bars on each
+    /// side, all confirmed: each last leg takes back 100% and 16 / 17 of the one before.
     #[test]
     fn automatic_drawings_size_swings_by_average_true_range() {
         let series = |count: usize, seconds: i64, h: f64, mid: &dyn Fn(usize) -> f64| {
@@ -931,14 +1040,15 @@ mod tests {
         let mut extension = AutoDrawing::new(AutoDrawingKind::FibonacciExtension, 5.0, 3);
         extension.calculate(&data);
         let prices: Vec<_> = crate::studies::plots::drawing_prices(&extension, 10..12).collect();
-        // C + 2.618*(B-A) = 118 + 2.618*(100-113) = 83.966.
-        assert!(prices.iter().any(|p| (p - 83.966).abs() < 1e-4));
+        // C + 2.618*(B-A) = 100 + 2.618*(113-100) = 134.034.
+        assert!(prices.iter().any(|p| (p - 134.034).abs() < 1e-4));
         let mut state = crate::studies::ChartState::new(crate::model::BarData::from_bars(data));
         state.time_scale_mut().set_width(400.0);
         let transform = state.fit_price_scale([&extension as &dyn Indicator]);
         let range = state.price_scale().range();
-        assert!(transform.to_price(range.min) <= 83.966);
-        assert!(transform.to_price(range.max) >= 118.0);
+        // The 4.236 level: 100 + 4.236*13 = 155.068.
+        assert!(transform.to_price(range.min) <= 100.0);
+        assert!(transform.to_price(range.max) >= 155.068);
         let mut extension = ConfiguredStudy::new(Box::new(extension));
         let mut hidden = extension.settings();
         hidden.plots[0].visible = false;
@@ -957,13 +1067,7 @@ mod tests {
                 ..FibonacciConfig::extension_default()
             });
         extension.calculate(&bars());
-        for (visible, reaches) in [
-            (0..3, false),
-            (3..5, true),
-            (5..6, true),
-            (6..9, false),
-            (9..10, false),
-        ] {
+        for (visible, reaches) in [(0..3, true), (3..5, true), (5..6, false), (6..9, false)] {
             assert_eq!(
                 crate::studies::plots::drawing_prices(&extension, visible.clone())
                     .next()
@@ -1025,5 +1129,114 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The extension anchors on the latest three confirmed pivots whose last leg takes back
+    /// 23.6% to 100% of the leg before it, which the catalogue's study finds by bars alone:
+    /// small regular swings draw, a leg past the start of the one before draws nothing, a new
+    /// extreme of the forming bar moves nothing, and a study saved with ATR swings keeps them.
+    #[test]
+    fn extension_anchors_on_confirmed_swings_that_retrace_their_leg() {
+        let series = |count: usize, close: &dyn Fn(usize) -> f64| {
+            (0..count)
+                .map(|i| {
+                    let c = close(i);
+                    let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+                    Bar::new(time, c, c + 0.5, c - 0.5, c, 1.0)
+                })
+                .collect::<Vec<_>>()
+        };
+        // Swing high 120.5 at bar 20, low 118 at 26 and high 119.9 at 32, each confirmed 5 bars
+        // later: the last leg takes back 1.9 of the first leg's 2.5, 76%.
+        let small = series(40, &|i| match i {
+            0..=20 => 100.0 + i as f64,
+            21..=26 => 120.0 - 0.25 * (i - 20) as f64,
+            27..=32 => 118.5 + 0.15 * (i - 26) as f64,
+            _ => 119.4 - 0.1 * (i - 32) as f64,
+        });
+        // Highs 130.5 at bar 15 and 140.5 at 45 around the low 109.5 at 30: the last leg takes
+        // back 31 of the first leg's 21. The low at bar 0 has no bars before it.
+        let overshoot = series(56, &|i| match i {
+            0..=15 => 100.0 + 2.0 * i as f64,
+            16..=30 => 130.0 - 4.0 * (i - 15) as f64 / 3.0,
+            31..=45 => 110.0 + 2.0 * (i - 30) as f64,
+            _ => 140.0 - 0.8 * (i - 45) as f64,
+        });
+        let anchors = |study: &dyn Indicator| -> Vec<(usize, f64)> {
+            study
+                .drawings()
+                .iter()
+                .flat_map(|drawing| &drawing.chart_points)
+                .map(|p| (p.bar_idx as usize, p.price))
+                .collect()
+        };
+        let near = |got: &[(usize, f64)], want: &[(usize, f64)]| {
+            got.len() == want.len()
+                && got
+                    .iter()
+                    .zip(want)
+                    .all(|(g, w)| g.0 == w.0 && (g.1 - w.1).abs() < 1e-9)
+        };
+        let expected = [(20, 120.5), (26, 118.0), (32, 119.9)];
+        let mut study = IndicatorFactory::new()
+            .create("Auto Fibonacci Extension")
+            .unwrap();
+        study.calculate(&overshoot);
+        assert_eq!(anchors(study.as_ref()), [], "overshoot");
+        study.calculate(&small);
+        assert!(
+            near(&anchors(study.as_ref()), &expected),
+            "{:?}",
+            anchors(study.as_ref())
+        );
+        let (config, prices) = study.drawings()[0].fib_levels().unwrap();
+        let one = config
+            .visible_levels()
+            .zip(prices)
+            .find(|(level, _)| level.value == 1.0)
+            .unwrap()
+            .1;
+        assert!((one - 117.4).abs() < 1e-9, "level 1 at {one}");
+        // A new high, then a new low, on the forming bar is not confirmed and moves nothing.
+        let mut forming = small.clone();
+        for low in [forming[39].low, 100.0] {
+            (forming[39].high, forming[39].low) = (130.0, low);
+            study.update(&forming, 39);
+            assert!(
+                near(&anchors(study.as_ref()), &expected),
+                "forming low {low}"
+            );
+        }
+        // New studies find swings by bars, and reset to it.
+        let swing_size = |study: &dyn Indicator| {
+            let input = study
+                .inputs()
+                .into_iter()
+                .find(|i| i.id == "swing_size")
+                .unwrap();
+            (input.value, input.default)
+        };
+        assert_eq!(
+            swing_size(study.as_ref()),
+            (InputValue::Choice(2), InputValue::Choice(2))
+        );
+        // Choice 0 is still the ATR multiple, so a study saved with it keeps Zig Zag swings,
+        // which three average true ranges filter out of the small swings.
+        study
+            .set_input("swing_size", InputValue::Choice(0))
+            .unwrap();
+        study.calculate(&small);
+        assert_eq!(anchors(study.as_ref()), []);
+        assert!(
+            study
+                .set_input("swing_size", InputValue::Choice(3))
+                .is_err()
+        );
+        let mut pitchfork = IndicatorFactory::new().create("Auto Pitchfork").unwrap();
+        assert!(
+            pitchfork
+                .set_input("swing_size", InputValue::Choice(2))
+                .is_err()
+        );
     }
 }
