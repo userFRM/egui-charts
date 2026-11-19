@@ -159,26 +159,232 @@ pub(super) struct Flow {
     pub(super) delta: f64,
 }
 
-/// The flow of `candles[range]`. A candle rises when it closes above its open, or at its open
-/// and not below the previous candle's close; the first candle of `candles` has none.
-pub(super) fn flow(candles: &[Bar], range: Range<usize>) -> Flow {
-    let mut flow = Flow::default();
-    for at in range {
-        let candle = &candles[at];
-        let rising = candle.close > candle.open
-            || (candle.close == candle.open
-                && at
-                    .checked_sub(1)
-                    .is_none_or(|before| candle.close >= candles[before].close));
-        if rising {
-            flow.up += candle.volume;
-            flow.delta += candle.volume;
-        } else {
-            flow.down -= candle.volume;
-            flow.delta -= candle.volume;
+/// The sides of lower-interval candles, read in time order. A candle buys when it closes above
+/// its open, or at its open above the previous candle's close, and sells when it closes below
+/// either; one at its open and at the previous close takes the side of the candle before it.
+/// The first candle, with none before it, buys when it closes at its open.
+pub(super) struct Sides<'a> {
+    candles: &'a [Bar],
+    /// The candles before this index have been read.
+    read: usize,
+    /// Whether the candle before `read` buys; true before the first candle.
+    buying: bool,
+}
+
+impl<'a> Sides<'a> {
+    /// Reads `candles`, which are sorted by time, from the first.
+    pub(super) fn new(candles: &'a [Bar]) -> Self {
+        Self {
+            candles,
+            read: 0,
+            buying: true,
         }
-        flow.high = flow.high.max(flow.delta);
-        flow.low = flow.low.min(flow.delta);
     }
-    flow
+
+    /// The flow of `candles[range]`, for ranges taken in time order. The candles skipped since
+    /// the previous range give the side of the candle before this one, back to the last that
+    /// closed away from its open or the previous close.
+    pub(super) fn flow(&mut self, range: Range<usize>) -> Flow {
+        debug_assert!(
+            range.start >= self.read,
+            "ranges must be taken in time order"
+        );
+        let mut buying = (self.read..range.start)
+            .rev()
+            .find_map(|at| side(self.candles, at))
+            .unwrap_or(self.buying);
+        let mut flow = Flow::default();
+        for at in range.clone() {
+            buying = side(self.candles, at).unwrap_or(buying);
+            let volume = self.candles[at].volume;
+            if buying {
+                flow.up += volume;
+                flow.delta += volume;
+            } else {
+                flow.down -= volume;
+                flow.delta -= volume;
+            }
+            flow.high = flow.high.max(flow.delta);
+            flow.low = flow.low.min(flow.delta);
+        }
+        self.read = range.end;
+        self.buying = buying;
+        flow
+    }
+}
+
+/// The side `candles[at]` takes by itself: buying when it closes above its open or, at its open,
+/// above the previous candle's close, selling when below; `None` when neither decides, as for a
+/// first candle at its open or a NaN close.
+fn side(candles: &[Bar], at: usize) -> Option<bool> {
+    let candle = &candles[at];
+    if candle.close > candle.open {
+        return Some(true);
+    }
+    if candle.close < candle.open {
+        return Some(false);
+    }
+    let before = candles[..at].last()?.close;
+    if candle.close > before {
+        Some(true)
+    } else if candle.close < before {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::model::{Bar, BarClock, Timeframe};
+    use crate::studies::{IndicatorFactory, StudyData};
+    use chrono::{TimeZone, Utc};
+
+    /// Chart bar times, candles as (time, open, close, volume) in seconds, and per chart bar the
+    /// Volume Delta and Cumulative Volume Delta candles (open, high, low, close) and the Up/Down
+    /// Volume values (up, down, delta).
+    type Row = (
+        &'static str,
+        &'static [i64],
+        &'static [(i64, f64, f64, f64)],
+        &'static [[f64; 4]],
+        &'static [[f64; 4]],
+        &'static [[f64; 3]],
+    );
+
+    /// A lower-interval candle that closes at its open and at the previous close takes the side
+    /// of the candle before it, inside a chart bar, across chart bars and from before the first
+    /// one, alike in the three studies that split volume by side and when only the last chart bar
+    /// is recomputed.
+    #[test]
+    fn flat_candles_take_the_side_of_the_candle_before() {
+        const ROWS: [Row; 6] = [
+            (
+                "falling, then two flat candles",
+                &[0],
+                &[
+                    (0, 10.0, 9.0, 5.0),
+                    (60, 9.0, 9.0, 3.0),
+                    (120, 9.0, 9.0, 2.0),
+                ],
+                &[[0.0, 0.0, -10.0, -10.0]],
+                &[[0.0, 0.0, -10.0, -10.0]],
+                &[[0.0, -10.0, -10.0]],
+            ),
+            (
+                "rising, then a flat candle",
+                &[0],
+                &[(0, 9.0, 10.0, 5.0), (60, 10.0, 10.0, 3.0)],
+                &[[0.0, 8.0, 0.0, 8.0]],
+                &[[0.0, 8.0, 0.0, 8.0]],
+                &[[8.0, 0.0, 8.0]],
+            ),
+            (
+                "a flat candle opens the bar after falling and flat ones",
+                &[0, 300],
+                &[
+                    (0, 10.0, 9.0, 5.0),
+                    (60, 9.0, 9.0, 2.0),
+                    (300, 9.0, 9.0, 3.0),
+                ],
+                &[[0.0, 0.0, -7.0, -7.0], [0.0, 0.0, -3.0, -3.0]],
+                &[[0.0, 0.0, -7.0, -7.0], [-7.0, -7.0, -10.0, -10.0]],
+                &[[0.0, -7.0, -7.0], [0.0, -3.0, -3.0]],
+            ),
+            (
+                "a flat first candle buys",
+                &[0],
+                &[(0, 9.0, 9.0, 4.0)],
+                &[[0.0, 4.0, 0.0, 4.0]],
+                &[[0.0, 4.0, 0.0, 4.0]],
+                &[[4.0, 0.0, 4.0]],
+            ),
+            (
+                "a falling candle before the first chart bar",
+                &[0],
+                &[(-60, 10.0, 9.0, 1.0), (0, 9.0, 9.0, 4.0)],
+                &[[0.0, 0.0, -4.0, -4.0]],
+                &[[0.0, 0.0, -4.0, -4.0]],
+                &[[0.0, -4.0, -4.0]],
+            ),
+            (
+                "flat candles away from the previous close",
+                &[0],
+                &[
+                    (0, 10.0, 9.0, 5.0),
+                    (60, 10.0, 10.0, 3.0),
+                    (120, 11.0, 12.0, 1.0),
+                    (180, 11.0, 11.0, 2.0),
+                ],
+                &[[0.0, 0.0, -5.0, -3.0]],
+                &[[0.0, 0.0, -5.0, -3.0]],
+                &[[4.0, -7.0, -3.0]],
+            ),
+        ];
+        let candle = |s: i64, o: f64, c: f64, v: f64| {
+            Bar::new(
+                Utc.timestamp_opt(s, 0).unwrap(),
+                o,
+                o.max(c),
+                o.min(c),
+                c,
+                v,
+            )
+        };
+        let factory = IndicatorFactory::new();
+        for (row, times, candles, delta, cumulative, up_down) in ROWS {
+            let chart: Vec<_> = times.iter().map(|&s| candle(s, 1.0, 1.0, 999.0)).collect();
+            let lower: Vec<_> = candles
+                .iter()
+                .map(|&(s, o, c, v)| candle(s, o, c, v))
+                .collect();
+            for (name, want) in [
+                (
+                    "Volume Delta",
+                    delta.iter().map(|r| r.to_vec()).collect::<Vec<_>>(),
+                ),
+                (
+                    "Cumulative Volume Delta",
+                    cumulative.iter().map(|r| r.to_vec()).collect(),
+                ),
+                (
+                    "Up/Down Volume",
+                    up_down.iter().map(|r| r.to_vec()).collect(),
+                ),
+            ] {
+                let mut study = factory.create(name).unwrap();
+                study.set_bar_clock(&BarClock::new(Timeframe::Min5));
+                // The whole history, then the last chart bar alone on the values before it.
+                for from in [0, chart.len() - 1] {
+                    study.update_data(
+                        &chart,
+                        from,
+                        &[StudyData {
+                            request: super::request(Timeframe::Min1),
+                            bars: &lower,
+                            clock: BarClock::new(Timeframe::Min1),
+                            instrument: None,
+                            timeframe: Timeframe::Min1,
+                        }],
+                    );
+                    let got: Vec<Vec<f64>> = if name == "Up/Down Volume" {
+                        (0..chart.len())
+                            .map(|i| {
+                                (0..3)
+                                    .map(|line| study.values().value(line, i).unwrap_or(f64::NAN))
+                                    .collect()
+                            })
+                            .collect()
+                    } else {
+                        study
+                            .candles()
+                            .iter()
+                            .map(|c| vec![c.bar.open, c.bar.high, c.bar.low, c.bar.close])
+                            .collect()
+                    };
+                    assert_eq!(got, want, "{row}: {name} from bar {from}");
+                }
+            }
+        }
+    }
 }
