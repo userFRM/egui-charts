@@ -1,6 +1,6 @@
 //! The strategy trait, the context it trades through and the engine that runs it over bars.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, cell::Cell};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
@@ -9,8 +9,10 @@ use serde::{Deserialize, Serialize};
 mod live;
 pub use live::StrategyFill;
 
+use crate::data::StudyDataRequest;
 use crate::model::range_bar::price_path;
 use crate::model::rounding_tolerance;
+use crate::model::same_currency;
 use crate::model::{
     Bar, ChartType, OrderSide, OrderType, StrategyExit, StrategyReport, StrategyTrade, Timeframe,
 };
@@ -33,9 +35,9 @@ pub enum OrderSize {
 pub enum Commission {
     /// A fraction of absolute fill value, such as 0.001 for 0.1%.
     Fraction(f64),
-    /// An amount per unit filled.
+    /// An amount per unit filled, in the account currency.
     PerUnit(f64),
-    /// An amount per filled order.
+    /// An amount per filled order, in the account currency.
     PerOrder(f64),
 }
 
@@ -66,9 +68,11 @@ pub enum Slippage {
 #[non_exhaustive]
 #[serde(default)]
 pub struct BacktestSettings {
-    /// Starting account value in `currency`. Must be finite.
+    /// Starting account value in the account currency. Must be finite.
     pub initial_capital: f64,
-    /// Currency of capital, equity and fees. Display only; no conversion is performed.
+    /// The account currency of capital, profits, fees and equity, such as "EUR". `None` or an
+    /// empty code uses [`Backtest::instrument_currency`]; another currency converts the run's
+    /// amounts at [`Backtest::exchange_rates`].
     pub currency: Option<String>,
     /// Annual risk-free fraction passed to the report's performance metrics.
     pub risk_free_rate: f64,
@@ -170,6 +174,11 @@ fn nonnegative(value: f64) -> f64 {
     } else {
         0.0
     }
+}
+
+/// A currency code, unless it is absent or empty.
+fn currency_code(code: Option<&str>) -> Option<&str> {
+    code.filter(|code| !code.is_empty())
 }
 
 impl BacktestSettings {
@@ -413,9 +422,9 @@ impl StrategyContext<'_> {
         self.price
     }
 
-    /// Account equity after fill commission, marked at the selected execution candle's close on
-    /// bar decisions and at [`Self::price`] on fill callbacks. Original-price execution can use
-    /// a different close from the strategy's smoothed decision candle.
+    /// Account equity after fill commission, in the account currency, marked at the selected
+    /// execution candle's close on bar decisions and at [`Self::price`] on fill callbacks.
+    /// Original-price execution can use a different close from the strategy's smoothed decision candle.
     pub fn equity(&self) -> f64 {
         self.equity
     }
@@ -599,7 +608,8 @@ struct Lot {
 /// Each entry is a trade, closed by exits and opposite entries first in first out; each partial
 /// exit is its own trade with its share of the entry. A trade's label names its entry and exit
 /// orders, such as "Long / Take profit", or the entry alone while open. Profit is the price
-/// difference times the quantity, less its allocated fees. Without a start time, the equity curve
+/// difference times the quantity, converted at the exit's exchange rate when the account currency
+/// differs from the instrument's, less its allocated fees. Without a start time, the equity curve
 /// holds the initial capital one interval before the first bar, then the account value at each
 /// bar's close, stamped with the bar's time. With a start time it begins there and subsequent
 /// marks use chart-bar closing times. Fills use the times of their chart or finer bars.
@@ -620,6 +630,17 @@ pub struct Backtest {
     pub timeframe: Timeframe,
     /// Account and execution assumptions, also recorded in the report's properties.
     pub settings: BacktestSettings,
+    /// Currency of the instrument's prices, such as
+    /// [`Instrument::currency`](crate::model::Instrument::currency). The report is in it when
+    /// `settings.currency` is unset; when that names another currency, amounts convert at
+    /// [`Self::exchange_rates`]. `None` converts nothing.
+    pub instrument_currency: Option<String>,
+    /// The host's answer to [`Self::exchange_rate_request`]: units of the account currency per
+    /// unit of `instrument_currency`, each point's close applying from its time until the next
+    /// point, in any order; of points with one time, the last applies. Used only while the
+    /// currencies differ. A run that needs a rate where none applies, or where it is not finite
+    /// and positive, reports [`StrategyReport::unavailable`] instead of trades and equity.
+    pub exchange_rates: Vec<Bar>,
     live: Option<Box<live::LiveState>>,
 }
 
@@ -636,11 +657,35 @@ impl Backtest {
             symbol: symbol.into(),
             timeframe,
             live: None,
+            instrument_currency: None,
+            exchange_rates: Vec::new(),
             settings: BacktestSettings {
                 initial_capital,
                 ..Default::default()
             },
         }
+    }
+
+    /// The exchange rates to supply in [`Self::exchange_rates`]: from the instrument's currency
+    /// into `settings.currency`, when both are known and differ.
+    ///
+    /// ```
+    /// use egui_charts::data::StudyDataRequest;
+    /// use egui_charts::model::Timeframe;
+    /// use egui_charts::strategies::Backtest;
+    ///
+    /// let mut backtest = Backtest::new("Run", "AAPL", Timeframe::Day1, 10_000.0);
+    /// backtest.instrument_currency = Some("USD".into());
+    /// assert_eq!(backtest.exchange_rate_request(), None);
+    /// backtest.settings.currency = Some("EUR".into());
+    /// assert_eq!(
+    ///     backtest.exchange_rate_request(),
+    ///     Some(StudyDataRequest::exchange_rate("USD", "EUR"))
+    /// );
+    /// ```
+    pub fn exchange_rate_request(&self) -> Option<StudyDataRequest> {
+        self.conversion()
+            .map(|(from, to)| StudyDataRequest::exchange_rate(from, to))
     }
 
     /// Runs `strategy` over `bars` and reports its trades, equity and assumptions.
@@ -709,6 +754,7 @@ impl Backtest {
                 &bars[..last]
             },
         );
+        let rates = self.rates();
         let mut run = Run {
             orders: Vec::new(),
             lots: Vec::new(),
@@ -726,6 +772,9 @@ impl Backtest {
             forming: false,
             margin_calls: Vec::new(),
             peak_margin: 0.0,
+            rate: if rates.is_some() { f64::NAN } else { 1.0 },
+            rates,
+            unconverted: Cell::new(false),
         };
         run.start_equity(self.timeframe, &bars[..last], &mut report);
         let mut processed = cooperative.then_some(0);
@@ -734,6 +783,9 @@ impl Backtest {
                 .await;
         }
         run.report_trades(&mut report);
+        if run.unconverted.get() {
+            self.withhold(&mut report);
+        }
         report
     }
 
@@ -749,7 +801,7 @@ impl Backtest {
             self.timeframe,
             settings.initial_capital,
         );
-        report.currency = settings.currency.clone();
+        report.currency = self.account_currency().map(str::to_owned);
         report.risk_free_rate = settings.risk_free_rate;
         let size = match settings.order_size {
             OrderSize::Fixed(value) => format!("Fixed units: {value}"),
@@ -853,6 +905,43 @@ impl Backtest {
         );
         report
     }
+
+    /// `settings.currency`, or the instrument's when that is unset.
+    fn account_currency(&self) -> Option<&str> {
+        currency_code(self.settings.currency.as_deref())
+            .or_else(|| currency_code(self.instrument_currency.as_deref()))
+    }
+
+    /// The instrument's and the account's currencies while amounts convert between them.
+    fn conversion(&self) -> Option<(&str, &str)> {
+        let from = currency_code(self.instrument_currency.as_deref())?;
+        let to = currency_code(self.settings.currency.as_deref())?;
+        (!same_currency(from, to)).then_some((from, to))
+    }
+
+    /// The exchange rates in time order while amounts convert. The sort is stable, so of the
+    /// points of one time the last supplied is found.
+    fn rates(&self) -> Option<Vec<Bar>> {
+        self.conversion()?;
+        let mut rates = self.exchange_rates.clone();
+        rates.sort_by_key(|rate| rate.time);
+        Some(rates)
+    }
+
+    /// Replaces the trades, equity and margin data of a run that needed a rate where none applied
+    /// with the reason. Its properties stay.
+    fn withhold(&self, report: &mut StrategyReport) {
+        if let Some((from, to)) = self.conversion() {
+            report.unavailable = Some(format!(
+                "Exchange rates from {from} to {to} are unavailable"
+            ));
+        }
+        report.trades.clear();
+        report.equity.clear();
+        report.margin.clear();
+        report.peak_margin.clear();
+        report.margin_calls.clear();
+    }
 }
 
 fn finish_now<T>(future: impl std::future::Future<Output = T>) -> T {
@@ -947,6 +1036,13 @@ struct Run<'a> {
     margin_calls: Vec<(DateTime<Utc>, f64)>,
     /// Largest margin used since the last equity mark.
     peak_margin: f64,
+    /// Exchange rates in time order while amounts convert into the account currency.
+    rates: Option<Vec<Bar>>,
+    /// Units of the account currency per unit of the instrument's at the current price point:
+    /// 1 without conversion, NaN where no rate applies.
+    rate: f64,
+    /// Whether an amount needed a rate where none applied.
+    unconverted: Cell<bool>,
 }
 
 impl<'a> Run<'a> {
@@ -1085,6 +1181,8 @@ impl<'a> Run<'a> {
         } else {
             bar.time
         };
+        // A trade-based mark's stamp is known only when the next bar closes; convert at its price.
+        self.set_rate(last_price_time);
         report.equity.push((
             mark_time,
             if valid {
@@ -1128,19 +1226,55 @@ impl<'a> Run<'a> {
     }
 
     fn equity(&self, price: f64) -> f64 {
-        self.settings.initial_capital
-            + self.realized
-            + self
-                .lots
-                .iter()
-                .map(|lot| sign(lot.side) * (price - lot.price) * lot.quantity)
-                .sum::<f64>()
+        let open = self
+            .lots
+            .iter()
+            .map(|lot| sign(lot.side) * (price - lot.price) * lot.quantity)
+            .sum::<f64>();
+        // A flat account needs no exchange rate.
+        let open = if self.lots.is_empty() {
+            open
+        } else {
+            self.convert(open)
+        };
+        self.settings.initial_capital + self.realized + open
+    }
+
+    /// Applies the exchange rate in force at `time`: the close of the last point at or before
+    /// it, when finite and positive.
+    fn set_rate(&mut self, time: DateTime<Utc>) {
+        if let Some(rates) = &self.rates {
+            let at = rates.partition_point(|rate| rate.time <= time);
+            self.rate = at
+                .checked_sub(1)
+                .map(|at| rates[at].close)
+                .filter(|rate| rate.is_finite() && *rate > 0.0)
+                .unwrap_or(f64::NAN);
+        }
+    }
+
+    /// `amount` of the instrument's currency in the account currency at the current rate.
+    fn convert(&self, amount: f64) -> f64 {
+        if self.rate.is_nan() {
+            self.unconverted.set(true);
+        }
+        amount * self.rate
+    }
+
+    /// The commission on a fill in the account currency; fixed amounts are already in it.
+    fn fee(&self, quantity: f64, price: f64) -> f64 {
+        let fee = self.settings.fee(quantity, price);
+        if matches!(self.settings.commission, Commission::Fraction(_)) {
+            self.convert(fee)
+        } else {
+            fee
+        }
     }
 
     /// Absolute position market value times the funding fraction of its side, zero while flat.
     fn margin_used(&self, price: f64) -> f64 {
         self.lots.first().map_or(0.0, |lot| {
-            self.position().abs() * price.abs() * self.settings.funding(lot.side)
+            self.convert(self.position().abs() * price.abs() * self.settings.funding(lot.side))
         })
     }
 
@@ -1439,7 +1573,7 @@ impl<'a> Run<'a> {
         if held < step && deficit > rounding_tolerance(required, 1e-9) {
             return held;
         }
-        let needed = deficit / fraction / price.abs();
+        let needed = deficit / fraction / self.convert(price.abs());
         let count = needed / step;
         let units = if count.is_finite() {
             count.floor() * step
@@ -1476,6 +1610,7 @@ impl<'a> Run<'a> {
     }
 
     fn fill_segment(&mut self, mut start: f64, end: f64, time: DateTime<Utc>, advance: bool) {
+        self.set_rate(time);
         self.note_margin(start);
         let mut at_end = !advance;
         loop {
@@ -1587,15 +1722,17 @@ impl<'a> Run<'a> {
                     .quantity
                     .unwrap_or_else(|| match self.settings.order_size {
                         OrderSize::Fixed(value) => value,
-                        OrderSize::EquityFraction(value) => self.equity(mark) * value / price.abs(),
-                        OrderSize::Cash(value) => value / price.abs(),
+                        OrderSize::EquityFraction(value) => {
+                            self.equity(mark) * value / self.convert(price.abs())
+                        }
+                        OrderSize::Cash(value) => value / self.convert(price.abs()),
                     });
                 let filled = quantity + if reversing { held } else { 0.0 };
-                let fee = self.settings.fee(filled, price);
+                let fee = self.fee(filled, price);
                 let after = quantity + if reversing { 0.0 } else { held };
-                let equity = self.equity(mark) + sign(side) * (mark - price) * filled;
+                let equity = self.equity(mark) + self.convert(sign(side) * (mark - price) * filled);
                 let funding = self.settings.funding(side);
-                let needed = after * mark.abs() * funding + fee;
+                let needed = self.convert(after * mark.abs() * funding) + fee;
                 if !quantity.is_finite()
                     || quantity <= 0.0
                     || !price.is_finite()
@@ -1626,7 +1763,7 @@ impl<'a> Run<'a> {
                 if quantity <= 0.0 {
                     return;
                 }
-                let fee = self.settings.fee(quantity, price);
+                let fee = self.fee(quantity, price);
                 if !price.is_finite() || !fee.is_finite() {
                     return;
                 }
@@ -1711,7 +1848,11 @@ impl<'a> Run<'a> {
                 lot.fees * (closed / lot.quantity)
             };
             let fees = entry_fee + fee * (closed / filled_quantity);
-            let gross = sign(lot.side) * (price - lot.price) * closed;
+            // `lot` borrows the lots, so convert through the fields `Self::convert` reads.
+            let gross = sign(lot.side) * (price - lot.price) * closed * self.rate;
+            if self.rate.is_nan() {
+                self.unconverted.set(true);
+            }
             let mut trade = StrategyTrade::new(lot.side, closed, lot.time, lot.price);
             trade.exit = Some(StrategyExit::new(time, price, gross - fees + 0.0));
             trade.fees = fees;
@@ -2933,6 +3074,20 @@ mod tests {
             result.fees = fees;
             result
         };
+        // An exchange rate point: its close applies from its hour.
+        let rate = |at: i64, value: f64| Bar::new(hour(at), value, value, value, value, 0.0);
+        let converted = BacktestSettings {
+            initial_capital: 190.0,
+            currency: Some("EUR".into()),
+            order_size: OrderSize::Cash(180.0),
+            commission: Commission::Fraction(0.01),
+            ..terms.clone()
+        };
+        let converted_prices = vec![
+            (100.0, 100.0, 100.0, 100.0),
+            (100.0, 105.0, 100.0, 105.0),
+            (110.0, 110.0, 110.0, 110.0),
+        ];
         // All amounts are in account units. For example, 2 units from 100 to 110 earn 20;
         // a 1% fee costs 2 + 2.2, and two ticks of 0.5 reduce that gross profit to 16.
         // At 2x leverage, 15 long from 100 have equity 15p-500 and margin 7.5p:
@@ -2940,7 +3095,7 @@ mod tests {
         // At 2x leverage 15 units at 100 use 750. At half funding a deficit of 50 at 60
         // buys 50 / 0.5 / 60 units of funding: truncate to 1, close 4, leave 11 * 70 / 2 = 385.
         type MarginRow = (&'static str, [f64; 4], [f64; 4], &'static [(i64, f64)]);
-        let margins: [MarginRow; 5] = [
+        let margins: [MarginRow; 7] = [
             (
                 "leverage alone closes the whole position at the margin crossing",
                 [0.0, 0.0, 750.0, 0.0],
@@ -2970,6 +3125,22 @@ mod tests {
                 [0.0; 4],
                 [0.0; 4],
                 &[],
+            ),
+            (
+                // Two units at 105 use 2 * 105 * 0.9 = 189 EUR. Before the next bar's exit,
+                // its 0.8 rate funds 2 * 110 * 0.8 = 176 EUR.
+                "an account currency converts sizing, funding, fees and profit at each fill's rate",
+                [0.0, 0.0, 189.0, 0.0],
+                [0.0, 0.0, 189.0, 176.0],
+                &[],
+            ),
+            (
+                // The rate changes before the gap: 10 * 68 * 0.5 * 0.8 = 272 before the call;
+                // six units remain, using 6 * 68 * 0.5 * 0.8 = 163.2 at the close.
+                "a converted funding deficit sells the units the rate in force needs",
+                [0.0, 0.0, 450.0, 163.2],
+                [0.0, 0.0, 450.0, 272.0],
+                &[(2, 4.0)],
             ),
         ];
         let mut margin_rows = 0;
@@ -4129,6 +4300,55 @@ mod tests {
                 vec![1000.0, 1000.0, 1010.0],
                 0,
             ),
+            (
+                // 180 EUR buys 180 / (100 * 0.9) = 2 units. The entry fee is 2 * 100 * 1% * 0.9
+                // = 1.8 and needs 2 * 100 * 0.9 + 1.8 = 181.8 of 190. At 105 equity is 188.2 +
+                // 10 * 0.9 = 197.2 against a margin of 189. The exit at 110 converts at 0.8: fee
+                // 1.76, profit 20 * 0.8 - 3.56 = 12.44, equity 202.44.
+                "an account currency converts sizing, funding, fees and profit at each fill's rate",
+                sized,
+                converted.clone(),
+                converted_prices.clone(),
+                vec![fee_trade(
+                    Buy,
+                    2.0,
+                    1,
+                    100.0,
+                    Some((2, 110.0, 12.44)),
+                    3.56,
+                    "A / X",
+                )],
+                vec![190.0, 190.0, 197.2, 202.44],
+                0,
+            ),
+            (
+                // At 68 and 0.8, equity 500 - 32 * 10 * 0.8 = 244 funds half of
+                // 10 * 68 * 0.8 = 544: a deficit of 28, or 28 / 0.5 / 54.4 = 1.03 units,
+                // truncated to 1 and quadrupled to 4. They lose 32 * 4 * 0.8 = 102.4.
+                "a converted funding deficit sells the units the rate in force needs",
+                hold,
+                BacktestSettings {
+                    initial_capital: 500.0,
+                    currency: Some("EUR".into()),
+                    order_size: OrderSize::Fixed(10.0),
+                    long_funding: Some(0.5),
+                    ..terms.clone()
+                },
+                flat(&[100.0, 100.0, 68.0]),
+                vec![
+                    trade(
+                        Buy,
+                        4.0,
+                        1,
+                        100.0,
+                        Some((2, 68.0, -102.4)),
+                        "A / Margin call",
+                    ),
+                    trade(Buy, 6.0, 1, 100.0, None, "A"),
+                ],
+                vec![500.0, 500.0, 500.0, 244.0],
+                0,
+            ),
         ] {
             let source: Vec<_> = prices
                 .into_iter()
@@ -4138,6 +4358,8 @@ mod tests {
             let mut engine =
                 Backtest::new("Terms", "TEST", Timeframe::Hour1, settings.initial_capital);
             engine.settings = settings;
+            engine.instrument_currency = Some("USD".into());
+            engine.exchange_rates = vec![rate(0, 0.9), rate(2, 0.8)];
             let report = engine.run(&mut Script(script), &source, &[]);
             run_properties.push((name, report.properties.clone()));
             let mut asynchronous_strategy = Script(script);
@@ -4157,7 +4379,7 @@ mod tests {
                 serde_json::to_value(&report).unwrap()
             );
 
-            assert_eq!(report.currency, Some("USD".into()), "{name}");
+            assert_eq!(report.currency, engine.settings.currency, "{name}");
             assert_eq!(report.risk_free_rate, 0.02, "{name}");
             assert!(
                 report
@@ -4232,6 +4454,47 @@ mod tests {
         }
 
         assert_eq!(margin_rows, margins.len());
+        // A run that needs a rate where none applies says so instead of reporting figures. A
+        // flat account needs none; rates apply in time order, the last of one time winning.
+        let source: Vec<_> = converted_prices
+            .into_iter()
+            .enumerate()
+            .map(|(i, (o, h, l, c))| Bar::new(hour(i as i64), o, h, l, c, 0.0))
+            .collect();
+        for (rates, available) in [
+            (vec![], false),
+            (vec![rate(2, 0.8)], false),
+            (vec![rate(0, 0.9), rate(1, 0.0)], false),
+            (vec![rate(1, 0.9), rate(2, 0.8)], true),
+            (vec![rate(2, 0.8), rate(0, 0.9)], true),
+            (vec![rate(0, 0.0), rate(0, 0.9), rate(2, 0.8)], true),
+        ] {
+            let mut engine = Backtest::new("Terms", "TEST", Timeframe::Hour1, 190.0);
+            engine.settings = converted.clone();
+            engine.instrument_currency = Some("USD".into());
+            engine.exchange_rates = rates.clone();
+            let report = engine.run(&mut Script(sized), &source, &[]);
+            assert_eq!(report.currency.as_deref(), Some("EUR"), "{rates:?}");
+            if available {
+                assert_eq!(report.unavailable, None, "{rates:?}");
+                let last = report.equity.last().unwrap().1;
+                assert!((last - 202.44).abs() < 1e-10, "{rates:?}: {last}");
+            } else {
+                assert_eq!(
+                    report.unavailable.as_deref(),
+                    Some("Exchange rates from USD to EUR are unavailable"),
+                    "{rates:?}"
+                );
+                assert!(
+                    report.trades.is_empty()
+                        && report.equity.is_empty()
+                        && report.margin.is_empty()
+                        && report.peak_margin.is_empty()
+                        && report.margin_calls.is_empty(),
+                    "{rates:?}"
+                );
+            }
+        }
 
         let [whole, partial] = [
             "leverage alone closes the whole position at the margin crossing",

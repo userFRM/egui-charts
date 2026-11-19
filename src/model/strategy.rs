@@ -99,7 +99,7 @@ pub struct StrategyReport {
     /// [`StrategyPerformance::net_profit_fraction`] is unavailable.
     #[serde(deserialize_with = "null_as_nan")]
     pub initial_capital: f64,
-    /// Currency of capital, profits, fees and equity, such as "USD". Display only.
+    /// Currency of capital, profits, fees, equity and margin, such as "USD". Display only.
     #[serde(default)]
     pub currency: Option<String>,
     /// Annual risk-free rate as a fraction (0.02 for 2%), used by the Sharpe and Sortino ratios.
@@ -118,7 +118,8 @@ pub struct StrategyReport {
     #[serde(default, deserialize_with = "curve_null_as_nan")]
     pub equity: Vec<(DateTime<Utc>, f64)>,
     /// Margin the open position used at each equity mark, at the times of [`Self::equity`]: its
-    /// absolute market value times its side's funding fraction, zero while flat or unfunded.
+    /// absolute market value times its side's funding fraction in the account currency, zero
+    /// while flat or unfunded.
     /// Empty when no margin was recorded, including older saved reports; margin metrics are then
     /// unavailable.
     #[serde(default, deserialize_with = "curve_null_as_nan")]
@@ -130,6 +131,11 @@ pub struct StrategyReport {
     /// Time and quantity closed of each margin call, in fill order.
     #[serde(default, deserialize_with = "curve_null_as_nan")]
     pub margin_calls: Vec<(DateTime<Utc>, f64)>,
+    /// Why the run has no figures, such as exchange rates into its currency that the host did
+    /// not supply. Such a report has no trades, equity or margin data, and its metrics describe nothing;
+    /// show the reason instead. Display only.
+    #[serde(default)]
+    pub unavailable: Option<String>,
 }
 
 /// One round trip. A host that scales out reports each partial exit as its own trade with its share
@@ -173,8 +179,9 @@ pub struct StrategyExit {
     /// Average fill price of the exit.
     #[serde(deserialize_with = "null_as_nan")]
     pub price: f64,
-    /// Net profit of the trade after fees, in the report's currency, as the host computed it: the
-    /// library does not model point values, inverse contracts or currency conversion.
+    /// Net profit of the trade after fees, in the report's currency, as the host or a backtest
+    /// computed it. A backtest converts price differences from the instrument's currency at each
+    /// exit's exchange rate; the library does not model point values or inverse contracts.
     #[serde(deserialize_with = "null_as_nan")]
     pub profit: f64,
 }
@@ -376,7 +383,8 @@ impl StrategyReport {
         signals
     }
 
-    /// A report with no trades, equity, margin data, properties or currency, and a risk-free rate of 0.
+    /// A report with no trades, equity, margin data, properties or currency, a risk-free rate
+    /// of zero and figures available.
     pub fn new(
         name: impl Into<String>,
         symbol: impl Into<String>,
@@ -396,6 +404,7 @@ impl StrategyReport {
             margin: Vec::new(),
             peak_margin: Vec::new(),
             margin_calls: Vec::new(),
+            unavailable: None,
         }
     }
 

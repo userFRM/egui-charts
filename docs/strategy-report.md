@@ -72,6 +72,16 @@ their unallocated entry fees, already deducted from equity. Market and stop orde
 against their side once per fill, by ticks times tick size, ticks of the price increment or an
 absolute-price fraction. Limits, including the limit execution of a stop-limit order, never slip.
 
+A report is in `settings.currency`, or in [`Backtest::instrument_currency`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#structfield.instrument_currency), the currency of the
+prices, when that is unset. When the settings name another currency, the engine converts what it
+derives from prices into it: sizing, funding, margin and liquidation, fraction commissions,
+profits and equity, at the rate in force at each fill and at the last price of each equity mark.
+Supply [`Backtest::exchange_rates`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#structfield.exchange_rates), the host's answer to [`Backtest::exchange_rate_request`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.exchange_rate_request); each
+point's close applies from its time until the next point. The initial capital, cash order sizes
+and per-unit and per-order commissions are account amounts already. A run that needs a rate where
+none applies, or where it is not finite and positive, reports [`StrategyReport::unavailable`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#structfield.unavailable)
+instead of trades and equity. Excursions and the buy-and-hold benchmark stay unconverted.
+
 Long and short exposure fund separately. [`long_funding`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.long_funding) and [`short_funding`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.short_funding)
 are the fractions of absolute position market value that equity must cover, one over leverage
 when unset. Zero disables that side's checks and values above one are accepted. An entry is
@@ -94,12 +104,15 @@ leaving equity 500 before exit costs, even if the bar later recovers.
 
 A report records the margin a run uses.
 [`StrategyReport::margin`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#structfield.margin)
-holds the position's absolute market value times its side's funding fraction at each equity mark,
+holds the position's absolute market value times its side's funding fraction in the account
+currency at each equity mark,
 zero while flat or with a fraction of zero.
 [`StrategyReport::peak_margin`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#structfield.peak_margin)
 holds the largest such value at any observed price point of each bar, including before each fill.
 [`StrategyReport::margin_calls`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#structfield.margin_calls)
 records each filled call's time and closed quantity, independently of labels and FIFO lot splits.
+Margin marks and peaks use the same dated exchange rates as the funding checks. A run missing
+required rates withholds its trades, equity, both margin series and margin calls together.
 In the whole-position example above, the entry uses 750, one call closes all 15 units and the bar
 closes flat. With `long_funding = Some(0.5)`, the call closes 4 units at 60 and its close at 70
 leaves 11 units using 385.

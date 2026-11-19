@@ -141,7 +141,18 @@ impl Drawing {
                     outline.areas.push(vec![a, b, c]);
                 }
             }
-            T::Measure | T::DateRange | T::GannBox => {
+            T::DateRange => {
+                let bounds = Rect::from_two_pos(first, second);
+                boxed(&mut outline, bounds);
+                if self.range_settings.border {
+                    let span = self.time_edge_span(rect, bounds);
+                    outline.lines.extend(
+                        [first.x, second.x]
+                            .map(|x| [Pos2::new(x, span.min), Pos2::new(x, span.max)]),
+                    );
+                }
+            }
+            T::Measure | T::GannBox => {
                 boxed(&mut outline, Rect::from_two_pos(first, second));
             }
             T::GannSquare | T::GannFixed => {
@@ -159,10 +170,12 @@ impl Drawing {
             T::PriceRange | T::DateAndPriceRange => {
                 boxed(&mut outline, Rect::from_two_pos(first, second));
                 let edges = self.rectangle_bounds(rect)?;
-                outline.lines.extend(
-                    [first.y, second.y]
-                        .map(|y| [Pos2::new(edges.min.x, y), Pos2::new(edges.max.x, y)]),
-                );
+                if self.drawn_range_settings().border {
+                    outline.lines.extend(
+                        [first.y, second.y]
+                            .map(|y| [Pos2::new(edges.min.x, y), Pos2::new(edges.max.x, y)]),
+                    );
+                }
             }
             T::Circle => {
                 let radius = first.distance(second);

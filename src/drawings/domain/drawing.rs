@@ -12,7 +12,7 @@ use super::{
     AnnotationMarker, ArrowStyle, BarsPatternConfig, BarsPatternMode, ChartPoint, DrawingToolType,
     ElliottDegree, FibonacciConfig, FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig,
     ImageConfig, LineMeasurements, MiddleLineStyle, NoteTextStyle, PitchforkConfig,
-    PositionReadout, PositionSize, PositionSizing, PositionStyle, ProjectionConfig,
+    PositionReadout, PositionSize, PositionSizing, PositionStyle, ProjectionConfig, RangeSettings,
     RegressionTrendConfig, TimeframeVisibility, VwapConfig,
 };
 
@@ -288,7 +288,13 @@ pub struct Drawing {
     /// line, and the reach of a vertical line. Other tools ignore these settings.
     #[serde(default = "LineMeasurements::left_out")]
     pub line_measurements: LineMeasurements,
-    /// Quantity of the long and short position tools
+    /// Readouts, card, box border and vertical reach of a date range or date and price range.
+    /// Other tools ignore these settings. Older drawings keep every readout in the theme's
+    /// colours at the drawing's saved font size.
+    #[serde(default = "RangeSettings::left_out")]
+    pub range_settings: RangeSettings,
+    /// Quantity of the long and short position tools. New positions risk 25% of an account of
+    /// 1,000; `None` sizes one unit, as positions saved without a size do.
     pub position_size: Option<PositionSize>,
     /// Instrument economics for long and short position sizing. Older drawings use unit sizing.
     #[serde(default)]
@@ -297,11 +303,13 @@ pub struct Drawing {
     #[serde(default = "PositionReadout::legacy")]
     pub position_readout: PositionReadout,
     /// Target zone and level colour of position tools, whose alpha is the zone's opacity while
-    /// labels and tags stay opaque; `None` keeps the default green at 20% opacity.
+    /// labels and tags stay opaque. New positions start green at 20% opacity; `None` draws
+    /// the greyed green of positions saved without a colour.
     #[serde(default)]
     pub position_target_color: Option<[u8; 4]>,
     /// Stop zone and level colour of position tools, whose alpha is the zone's opacity while
-    /// labels and tags stay opaque; `None` keeps the default red at 20% opacity.
+    /// labels and tags stay opaque. New positions start red at 20% opacity; `None` draws
+    /// the greyed red of positions saved without a colour.
     #[serde(default)]
     pub position_stop_color: Option<[u8; 4]>,
     /// Lines, labels, zone fill and border of position tools.
@@ -316,7 +324,9 @@ pub struct Drawing {
     pub fib_config: Option<FibonacciConfig>,
     /// Rows and value area of the volume profile tools
     pub volume_profile: Option<VolumeProfileConfig>,
-    /// Source, bounds, line styles and correlation label of the regression trend tool
+    /// Source, bounds, line styles and correlation label of the regression trend tool. New
+    /// trends take [`RegressionTrendConfig::drawing_default`]; `None` uses the defaults, as
+    /// trends saved without settings do.
     pub regression_trend: Option<RegressionTrendConfig>,
     /// Bands of the anchored VWAP. Older drawings use the defaults.
     #[serde(default)]
@@ -458,7 +468,7 @@ const LINE: DefaultStyle = DefaultStyle {
 };
 
 /// The default style of each tool, chosen for its role: areas start filled with a light tint
-/// (20%, 15% for chart patterns, 40% for date ranges), small labels take 12 px text.
+/// (20%, 15% for chart patterns, 40% for date ranges), small labels and chart pattern labels take 12 px text.
 fn default_style(tool: DrawingToolType) -> DefaultStyle {
     use DrawingToolType as T;
     let filled = |color: [u8; 4], alpha: u8| DefaultStyle {
@@ -473,18 +483,31 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
             ..LINE
         },
         T::ParallelChannel => filled(BLUE, 51),
-        // The centre line and lower band take the line colour, the upper band the fill.
+        // The fitted line is lighter than its text; bands carry their own style.
         T::RegressionTrend => DefaultStyle {
-            color: RED,
+            color: tint(RED, 77),
+            width: 1.0,
             fill: Some(tint(BLUE, 51)),
             ..LINE
         },
-        T::FlatTopBottom => filled(ORANGE, 51),
-        T::DisjointChannel | T::Triangle => filled(TEAL, 51),
-        T::DoubleCurve | T::ThreeDrivesPattern => colored(DEEP_PURPLE),
+        T::FlatTopBottom => DefaultStyle {
+            font_size: 12.0,
+            ..filled(ORANGE, 51)
+        },
+        T::DisjointChannel => DefaultStyle {
+            font_size: 12.0,
+            ..filled(TEAL, 51)
+        },
+        T::Triangle => filled(TEAL, 51),
+        T::DoubleCurve => colored(DEEP_PURPLE),
+        T::ThreeDrivesPattern => DefaultStyle {
+            font_size: 12.0,
+            ..colored(DEEP_PURPLE)
+        },
         T::Rect => filled(PURPLE, 51),
         T::RotatedRect => filled(GREEN, 51),
-        T::Circle | T::Ellipse => filled(RED, 51),
+        T::Circle => filled(ORANGE, 51),
+        T::Ellipse => filled(RED, 51),
         T::Polyline => filled(CYAN, 51),
         T::Brush => colored(CYAN),
         T::Arc => filled(PINK, 51),
@@ -542,15 +565,30 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
         T::AnchoredVWAP => DefaultStyle { width: 1.0, ..LINE },
         // The colour of the range tint, the same cyan as the rows of rising volume.
         T::FixedRangeVolumeProfile | T::AnchoredVolumeProfile => colored([83, 196, 216, 255]),
-        T::XABCDPattern | T::CypherPattern => filled(BLUE, 38),
-        T::HeadAndShoulders => filled(TEAL, 38),
-        T::ABCDPattern | T::SineLine => colored(TEAL),
-        T::TrianglePattern => filled(DEEP_PURPLE, 38),
-        T::ElliottImpulse
-        | T::ElliottCorrection
-        | T::ElliottTriangle
-        | T::ElliottDoubleCombo
-        | T::ElliottTripleCombo => colored([61, 133, 198, 255]),
+        T::XABCDPattern | T::CypherPattern => DefaultStyle {
+            font_size: 12.0,
+            ..filled(BLUE, 38)
+        },
+        T::HeadAndShoulders => DefaultStyle {
+            font_size: 12.0,
+            ..filled(TEAL, 38)
+        },
+        T::ABCDPattern => DefaultStyle {
+            font_size: 12.0,
+            ..colored(TEAL)
+        },
+        T::SineLine => colored([21, 153, 128, 255]),
+        T::TrianglePattern => DefaultStyle {
+            font_size: 12.0,
+            ..filled(DEEP_PURPLE, 38)
+        },
+        T::ElliottImpulse | T::ElliottCorrection => colored([61, 133, 198, 255]),
+        T::ElliottTriangle => colored(ORANGE),
+        T::ElliottDoubleCombo | T::ElliottTripleCombo => colored([106, 168, 79, 255]),
+        T::TrendAngle => DefaultStyle {
+            font_size: 12.0,
+            ..LINE
+        },
         T::ProjectionTool => colored([156, 156, 156, 255]),
         T::CyclicLines => colored([144, 202, 249, 255]),
         T::TimeCycles => DefaultStyle {
@@ -653,7 +691,10 @@ impl Drawing {
             locked: false,
             visible: true,
             font_size: style.font_size,
-            font_weight: if tool_type == DrawingToolType::ArrowMarker {
+            font_weight: if matches!(
+                tool_type,
+                DrawingToolType::ArrowMarker | DrawingToolType::PriceLabel
+            ) {
                 FontWeight::Bold
             } else {
                 FontWeight::Normal
@@ -673,6 +714,8 @@ impl Drawing {
                 DrawingToolType::Rect | DrawingToolType::Circle | DrawingToolType::Ellipse => {
                     Some(style.color)
                 }
+                // Opaque above its translucent line.
+                DrawingToolType::RegressionTrend => Some(RED),
                 _ => None,
             },
             background: !plain_text,
@@ -699,11 +742,27 @@ impl Drawing {
             price_axis_label: true,
             time_axis_label: true,
             line_measurements: LineMeasurements::for_tool(tool_type),
-            position_size: None,
+            range_settings: RangeSettings::default(),
+            position_size: matches!(
+                tool_type,
+                DrawingToolType::LongPos | DrawingToolType::ShortPos
+            )
+            .then_some(PositionSize::RiskPercent {
+                account_size: 1_000.0,
+                percent: 25.0,
+            }),
             position_sizing: PositionSizing::default(),
             position_readout: PositionReadout::default(),
-            position_target_color: None,
-            position_stop_color: None,
+            position_target_color: matches!(
+                tool_type,
+                DrawingToolType::LongPos | DrawingToolType::ShortPos
+            )
+            .then_some(tint(TEAL, 51)),
+            position_stop_color: matches!(
+                tool_type,
+                DrawingToolType::LongPos | DrawingToolType::ShortPos
+            )
+            .then_some(tint(RED, 51)),
             position_style: PositionStyle::default(),
             marker: AnnotationMarker::default(),
             fib_config: matches!(
@@ -725,7 +784,8 @@ impl Drawing {
                 DrawingToolType::FixedRangeVolumeProfile | DrawingToolType::AnchoredVolumeProfile
             )
             .then(VolumeProfileConfig::drawing_default),
-            regression_trend: None,
+            regression_trend: (tool_type == DrawingToolType::RegressionTrend)
+                .then(RegressionTrendConfig::drawing_default),
             vwap: None,
             pitchfork: matches!(
                 tool_type,
@@ -736,7 +796,18 @@ impl Drawing {
                     | DrawingToolType::Pitchfan
             )
             .then(|| PitchforkConfig::for_tool(tool_type)),
-            elliott_degree: ElliottDegree::default(),
+            elliott_degree: if matches!(
+                tool_type,
+                DrawingToolType::ElliottImpulse
+                    | DrawingToolType::ElliottCorrection
+                    | DrawingToolType::ElliottTriangle
+                    | DrawingToolType::ElliottDoubleCombo
+                    | DrawingToolType::ElliottTripleCombo
+            ) {
+                ElliottDegree::Intermediate
+            } else {
+                ElliottDegree::default()
+            },
             elliott_show_wave: true,
             channel_midline: tool_type == DrawingToolType::ParallelChannel,
             anchor_price_style: None,
@@ -863,6 +934,20 @@ impl Drawing {
     /// the theme, rather than one chosen for this drawing.
     pub(crate) fn has_default_color(&self) -> bool {
         self.color == default_style(self.tool_type).color
+            || Self::former_default_color(self.tool_type) == Some(self.color)
+    }
+
+    /// A tool's former creation colour, still shaded when held by a saved drawing.
+    pub(crate) fn former_default_color(tool: DrawingToolType) -> Option<[u8; 4]> {
+        use DrawingToolType as T;
+        match tool {
+            T::Circle | T::RegressionTrend => Some(RED),
+            T::SineLine => Some(TEAL),
+            T::ElliottTriangle | T::ElliottDoubleCombo | T::ElliottTripleCombo => {
+                Some([61, 133, 198, 255])
+            }
+            _ => None,
+        }
     }
 
     /// Calls `visit` with each line, text and level colour that rendering may shade for the
@@ -874,8 +959,12 @@ impl Drawing {
         if matches!(tool, T::FixedRangeVolumeProfile | T::AnchoredVolumeProfile) {
             return;
         }
-        let line = default_style(tool).color;
-        if let Some(text) = self.text_color.as_mut().filter(|text| **text == line) {
+        let defaults = [
+            Some(default_style(tool).color),
+            Self::former_default_color(tool),
+        ];
+        let default = |color: &[u8; 4]| defaults.contains(&Some(*color));
+        if let Some(text) = self.text_color.as_mut().filter(|text| default(text)) {
             visit(ColorSlot::Text, text);
         }
         visit(ColorSlot::Line, &mut self.color);
@@ -888,7 +977,7 @@ impl Drawing {
         ]
         .into_iter()
         .flatten()
-        .filter(|color| **color == line)
+        .filter(|color| default(color))
         {
             visit(ColorSlot::Line, color);
         }
@@ -1383,12 +1472,15 @@ impl Serialize for Drawing {
 
 impl<'de> Deserialize<'de> for Drawing {
     /// A saved `gann` object takes the fields it leaves out from [`GannConfig::for_tool`] of the
-    /// drawing's tool, which a drawing without one draws.
+    /// drawing's tool, which a drawing without one draws. Range settings it leaves out take
+    /// the drawing's font size for the readouts.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         GannConfig::forget_left_out();
         LineMeasurements::forget_left_out();
+        RangeSettings::forget_left_out();
         let mut drawing = Self::deserialize(deserializer)?;
         drawing.line_measurements.fill_left_out(drawing.tool_type);
+        drawing.range_settings.fill_left_out(drawing.font_size);
         if let Some(gann) = &mut drawing.gann {
             gann.fill_left_out(drawing.tool_type);
         }
@@ -1399,6 +1491,218 @@ impl<'de> Deserialize<'de> for Drawing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// New drawings start in their tool's style. Chart patterns, the flat top/bottom and
+    /// disjoint channels and the trend angle write 12 px text; a circle is orange with an orange
+    /// 20% fill and text; a sine line takes the green time cycles start in; each kind of
+    /// Elliott wave has its colour and starts at the Intermediate degree; a regression trend
+    /// draws a 1 px line in red at 30% opacity (77 of 255) under opaque red text, with 2 px bands
+    /// in blue at 30% opacity; a price label is bold; a position risks 25% of an account of
+    /// 1,000 in lots of 1, over a green target and a red stop zone at 20% opacity (51). The
+    /// triangle, ellipse and double curve keep the styles they shared before.
+    #[test]
+    fn new_drawings_start_in_their_tool_style() {
+        use DrawingToolType as T;
+        type Style = (T, [u8; 4], f32, Option<[u8; 4]>, f32, Option<[u8; 4]>);
+        let rows: [Style; 20] = [
+            (T::ABCDPattern, [8, 153, 129, 255], 2.0, None, 12.0, None),
+            (
+                T::XABCDPattern,
+                [41, 98, 255, 255],
+                2.0,
+                Some([41, 98, 255, 38]),
+                12.0,
+                None,
+            ),
+            (
+                T::CypherPattern,
+                [41, 98, 255, 255],
+                2.0,
+                Some([41, 98, 255, 38]),
+                12.0,
+                None,
+            ),
+            (
+                T::HeadAndShoulders,
+                [8, 153, 129, 255],
+                2.0,
+                Some([8, 153, 129, 38]),
+                12.0,
+                None,
+            ),
+            (
+                T::TrianglePattern,
+                [103, 58, 183, 255],
+                2.0,
+                Some([103, 58, 183, 38]),
+                12.0,
+                None,
+            ),
+            (
+                T::ThreeDrivesPattern,
+                [103, 58, 183, 255],
+                2.0,
+                None,
+                12.0,
+                None,
+            ),
+            (
+                T::Circle,
+                [255, 152, 0, 255],
+                2.0,
+                Some([255, 152, 0, 51]),
+                14.0,
+                Some([255, 152, 0, 255]),
+            ),
+            (T::SineLine, [21, 153, 128, 255], 2.0, None, 14.0, None),
+            (
+                T::FlatTopBottom,
+                [255, 152, 0, 255],
+                2.0,
+                Some([255, 152, 0, 51]),
+                12.0,
+                None,
+            ),
+            (
+                T::DisjointChannel,
+                [8, 153, 129, 255],
+                2.0,
+                Some([8, 153, 129, 51]),
+                12.0,
+                None,
+            ),
+            (T::TrendAngle, [41, 98, 255, 255], 2.0, None, 12.0, None),
+            (
+                T::ElliottImpulse,
+                [61, 133, 198, 255],
+                2.0,
+                None,
+                14.0,
+                None,
+            ),
+            (
+                T::ElliottCorrection,
+                [61, 133, 198, 255],
+                2.0,
+                None,
+                14.0,
+                None,
+            ),
+            (
+                T::ElliottTriangle,
+                [255, 152, 0, 255],
+                2.0,
+                None,
+                14.0,
+                None,
+            ),
+            (
+                T::ElliottDoubleCombo,
+                [106, 168, 79, 255],
+                2.0,
+                None,
+                14.0,
+                None,
+            ),
+            (
+                T::ElliottTripleCombo,
+                [106, 168, 79, 255],
+                2.0,
+                None,
+                14.0,
+                None,
+            ),
+            (
+                T::RegressionTrend,
+                [242, 54, 69, 77],
+                1.0,
+                Some([41, 98, 255, 51]),
+                14.0,
+                Some([242, 54, 69, 255]),
+            ),
+            (
+                T::Triangle,
+                [8, 153, 129, 255],
+                2.0,
+                Some([8, 153, 129, 51]),
+                14.0,
+                None,
+            ),
+            (
+                T::Ellipse,
+                [242, 54, 69, 255],
+                2.0,
+                Some([242, 54, 69, 51]),
+                14.0,
+                Some([242, 54, 69, 255]),
+            ),
+            (T::DoubleCurve, [103, 58, 183, 255], 2.0, None, 14.0, None),
+        ];
+        let wrong: Vec<String> = rows
+            .into_iter()
+            .filter_map(|want| {
+                let d = Drawing::new(1, want.0);
+                let got = (
+                    want.0,
+                    d.color,
+                    d.stroke_width,
+                    d.fill_color,
+                    d.font_size,
+                    d.text_color,
+                );
+                (got != want).then(|| format!("got {got:?}, want {want:?}"))
+            })
+            .collect();
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+        for tool in [
+            T::ElliottImpulse,
+            T::ElliottCorrection,
+            T::ElliottTriangle,
+            T::ElliottDoubleCombo,
+            T::ElliottTripleCombo,
+        ] {
+            assert_eq!(
+                Drawing::new(1, tool).elliott_degree,
+                ElliottDegree::Intermediate,
+                "{tool:?}"
+            );
+        }
+        assert_eq!(Drawing::new(1, T::PriceLabel).font_weight, FontWeight::Bold);
+        let config = Drawing::new(1, T::RegressionTrend)
+            .regression_trend
+            .unwrap();
+        for band in [config.upper_line, config.lower_line] {
+            assert_eq!(
+                (band.visible, band.color, band.width(), band.line_style),
+                (true, [41, 98, 255, 77], Some(2.0), LineStyle::Solid)
+            );
+        }
+        assert_eq!(
+            (config.line_style, config.show_base_line),
+            (LineStyle::Dashed, true)
+        );
+        for tool in [T::LongPos, T::ShortPos] {
+            let d = Drawing::new(1, tool);
+            assert_eq!(
+                (
+                    d.position_size,
+                    d.position_sizing.lot_size,
+                    d.position_target_color,
+                    d.position_stop_color
+                ),
+                (
+                    Some(PositionSize::RiskPercent {
+                        account_size: 1_000.0,
+                        percent: 25.0
+                    }),
+                    1.0,
+                    Some([8, 153, 129, 51]),
+                    Some([242, 54, 69, 51])
+                ),
+                "{tool:?}"
+            );
+        }
+    }
 
     /// Text and Anchored text keep the first positive bar spacing they are shown at and are drawn
     /// at the ratio of the current spacing to it; other tools record none.
