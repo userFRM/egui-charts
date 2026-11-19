@@ -410,6 +410,7 @@ pub trait Indicator: Send {
             levels,
             fill_between_levels,
             level_fill_color,
+            mfi_auto_range: false,
             untagged_plots: (0..self.line_count())
                 .filter(|&line| !self.plot_tagged(line))
                 .collect(),
@@ -584,10 +585,13 @@ pub trait Indicator: Send {
 
     /// Whether the histories this study requests still apply when it is calculated on another
     /// interval than the chart's. A [`ConfiguredStudy`](super::ConfiguredStudy) then offers it the
-    /// Interval and Wait for interval close inputs, otherwise offered to source-aware studies and
-    /// studies that request nothing. On another interval it passes every request on with the
+    /// Interval and Wait for interval close inputs, otherwise offered to source-aware studies,
+    /// studies that request nothing, and studies without an interval input of their own that
+    /// request only price bars of other symbols or of the chart's interval, which they read on the
+    /// Interval as on a chart of it. On another interval it passes every request on with the
     /// start [`data_start`](Indicator::data_start) states. The default, `false`, keeps a study
-    /// that requests data on the chart's interval.
+    /// that requests other histories, such as the chart symbol's bars of a stated interval or
+    /// metrics, on the chart's interval.
     fn requests_allow_other_intervals(&self) -> bool {
         false
     }
@@ -651,6 +655,16 @@ pub trait Indicator: Send {
     /// presentation wrapper does.
     fn set_registered_name(&mut self, _name: &str) -> bool {
         false
+    }
+
+    /// Report `defaults`, values keyed by input id, as the [`default`](super::StudyInput::default)
+    /// of the matching [`inputs`](Self::inputs) that accept them, so that resetting the inputs
+    /// restores them. `IndicatorFactory` passes the inputs a study it creates under the host's
+    /// defaults starts with. The chart's presentation wrapper reports them. A host study that
+    /// keeps its own presentation implements this to report them too; otherwise its inputs keep
+    /// their declared defaults.
+    fn set_input_defaults(&mut self, defaults: &[(String, super::InputValue)]) {
+        let _ = defaults;
     }
 
     /// The descriptor needed to restore a host metric without its catalogue registration.

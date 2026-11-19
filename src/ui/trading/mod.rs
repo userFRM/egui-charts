@@ -220,8 +220,8 @@ impl Trading {
     }
 
     /// Writes the prices, quantities, spreads and pip values of the ticket, the depth ladder and
-    /// the account tables with `formatter`, where it returns text. `None` restores the built-in
-    /// text.
+    /// the account tables, and the prices and quantities of order and fill notifications, with
+    /// `formatter`, where it returns text. `None` restores the built-in text.
     pub fn set_formatter(&mut self, formatter: Option<Arc<dyn TradingFormatter>>) {
         self.formatter = formatter;
     }
@@ -252,7 +252,8 @@ impl Trading {
         }
     }
 
-    /// Connects to `service`, dropping the previous account's state.
+    /// Connects to `service`, dropping the previous account's state. A position order that still
+    /// waits for its trading rules is reported as refused at the next [`poll`](Self::poll).
     pub fn set_service(&mut self, service: Arc<dyn Broker>) {
         self.listener = None;
         self.service = Some(service);
@@ -261,7 +262,8 @@ impl Trading {
         self.connect();
     }
 
-    /// Disconnects from the broker, dropping the account's state.
+    /// Disconnects from the broker, dropping the account's state. A position order that still
+    /// waits for its trading rules is reported as refused at the next [`poll`](Self::poll).
     pub fn disconnect(&mut self) {
         self.listener = None;
         self.service = None;
@@ -314,16 +316,21 @@ impl Trading {
     }
 
     /// Starts a new stream, on which the broker restates the account. What the old stream built
-    /// is dropped, and so are the changes to its orders and positions that wait for confirmation
-    /// or for trading rules, since those orders and positions may have changed unseen. The order
-    /// ticket, a previewed order, the quantity calculator and the trading rules stay.
+    /// is dropped, and so are the changes to its orders and positions that wait for
+    /// confirmation, since those orders and positions may have changed unseen. Confirmed
+    /// position orders that wait for trading rules lose their answer with the old stream and are
+    /// reported as refused. The order ticket, a previewed order, the quantity calculator and the
+    /// trading rules stay.
     fn listen(&mut self) {
+        // Their rules answers belong to the old stream, whose positions may have changed unseen.
+        for _ in std::mem::take(&mut self.placing) {
+            self.refuse(NOT_LIVE);
+        }
         self.pending = None;
         self.account = None;
         self.connection = None;
         self.orders.clear();
         self.positions.clear();
-        self.placing.clear();
         self.account_panel.clear();
         // Stream keys are even; rules, previews and history pages use odd keys, and order
         // replies use zero.
@@ -400,14 +407,14 @@ impl Trading {
         if self.is_connected() {
             return Some(service);
         }
-        self.refuse();
+        self.refuse(NOT_LIVE);
         None
     }
 
-    /// Reports an order, cancellation or change as refused because the broker is not live, the
-    /// way [`poll`](Self::poll) reports the broker's own refusals.
-    fn refuse(&self) {
-        let error = FeedError::Other("the broker is not connected".into());
+    /// Reports an order, cancellation or change as refused for `reason`, the way
+    /// [`poll`](Self::poll) reports the broker's own refusals.
+    fn refuse(&self, reason: &str) {
+        let error = FeedError::Other(reason.into());
         self.inbox.reply::<()>(0).send(Err(error));
     }
 
@@ -457,6 +464,9 @@ impl Trading {
         }
     }
 }
+
+/// Why an order is refused while the broker is not live.
+const NOT_LIVE: &str = "the broker is not connected";
 
 /// Whether every number of `rules` is positive and finite and a time in force is offered.
 fn valid(rules: &TradingRules) -> bool {
@@ -603,11 +613,21 @@ mod tests {
         assert!(trading.rules_ready);
     }
 
+    /// Position orders wait for their symbol's rules and are sent once they arrive; a failure,
+    /// invalid rules, a changed position or an order type the account stops accepting sends
+    /// nothing and says why. A regression sends a stale order or drops it without a word.
     #[test]
     fn position_actions_use_their_symbol_rules_before_placing() {
         use crate::model::{PositionBracket, TimeInForce};
         for operation in ["close", "reverse", "take profit", "stop loss"] {
-            for response in ["supported", "fallback", "failure", "invalid", "changed"] {
+            for response in [
+                "supported",
+                "fallback",
+                "failure",
+                "invalid",
+                "changed",
+                "withdrawn",
+            ] {
                 let broker = Arc::new(Recorder::default());
                 let mut trading = Trading::default();
                 trading.set_service(broker.clone());
@@ -653,6 +673,11 @@ mod tests {
                         &mut Toasts::new(),
                     );
                 }
+                if response == "withdrawn" {
+                    let account = Account::new("USD", 0.0, Capabilities::default());
+                    let event = AccountEvent::Account(account);
+                    trading.apply(&egui::Context::default(), event, &mut Toasts::new());
+                }
                 if response == "invalid" {
                     rules.time_in_force.clear();
                 }
@@ -661,7 +686,24 @@ mod tests {
                     "failure" => Err(FeedError::Network("offline".into())),
                     _ => Ok(rules),
                 });
-                trading.poll(&ctx, &mut Toasts::new());
+                let mut toasts = Toasts::new();
+                trading.poll(&ctx, &mut toasts);
+                let messages: Vec<_> = (toasts.toasts().iter())
+                    .map(|toast| toast.message.as_str())
+                    .collect();
+                let expected_messages: &[&str] = match response {
+                    "failure" => &["Trading rules unavailable: network error: offline"],
+                    "invalid" => &["The broker returned invalid trading rules"],
+                    "changed" => &["Order refused: the position changed before the order was sent"],
+                    "withdrawn" => {
+                        &["Order refused: the account no longer accepts this order type"]
+                    }
+                    _ => &[],
+                };
+                assert_eq!(
+                    messages, expected_messages,
+                    "{operation} with {response} rules"
+                );
                 let placed = std::mem::take(&mut *broker.placed.lock().unwrap());
                 if matches!(response, "supported" | "fallback") {
                     if response == "supported" {

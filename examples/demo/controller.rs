@@ -4000,11 +4000,14 @@ impl DemoApp {
                 self.object_tree
                     .apply_to_chart(&mut self.chart, &action, &[]);
             }
+            // The menu and the toolbar show the state of the drawing they opened on.
             DrawingContextMenuAction::Lock => {
-                let _ = dm.edit_drawing(id, |d| d.locked = !d.locked);
+                let locked = dm.drawings.iter().any(|d| d.id == id && d.locked);
+                dm.set_selected_locked(!locked);
             }
             DrawingContextMenuAction::Hide => {
-                let _ = dm.edit_drawing(id, |d| d.visible = !d.visible);
+                let visible = dm.drawings.iter().any(|d| d.id == id && d.visible);
+                dm.set_selected_visible(!visible);
             }
             DrawingContextMenuAction::BringToFront => dm.bring_to_front(id),
             DrawingContextMenuAction::SendToBack => dm.send_to_back(id),
@@ -6920,6 +6923,53 @@ mod tests {
             app.chart.drawings().drawings[0].chart_points[0],
             ChartPoint::new(10.0, 100.0)
         );
+    }
+
+    /// Lock and Hide from the drawing menu and toolbar set every selected drawing to the opposite
+    /// of the menu drawing's state, mixed selections included, and one undo restores them all.
+    #[test]
+    fn drawing_menu_hides_and_locks_every_selected_drawing() {
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.chart.drawings_mut().drawings.clear();
+        // (id, locked, visible): 7 plain, 8 locked, 9 hidden.
+        for (id, locked, visible) in [(7, false, true), (8, true, true), (9, false, false)] {
+            let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+            let price = 100.0 + id as f64;
+            drawing.chart_points = vec![ChartPoint::new(10.0, price), ChartPoint::new(20.0, price)];
+            drawing.completed = true;
+            drawing.locked = locked;
+            drawing.visible = visible;
+            app.chart.drawings_mut().drawings.push(drawing);
+        }
+        let state = |app: &DemoApp| {
+            [7, 8, 9].map(|id| {
+                let drawings = &app.chart.drawings().drawings;
+                let drawing = drawings.iter().find(|d| d.id == id).unwrap();
+                (drawing.locked, drawing.visible)
+            })
+        };
+        let initial = [(false, true), (true, true), (false, false)];
+        for (action, expected) in [
+            (
+                DrawingContextMenuAction::Lock,
+                [(true, true), (true, true), (true, false)],
+            ),
+            (
+                DrawingContextMenuAction::Hide,
+                [(false, false), (true, false), (false, false)],
+            ),
+        ] {
+            // The menu opens on 7, which a right-click within the selection makes primary.
+            app.chart.drawings_mut().select_drawings([7, 8, 9]);
+            assert_eq!(app.chart.drawings().sel_drawing(), Some(7));
+            app.handle_drawing_context(&ctx, action.clone());
+            assert_eq!(state(&app), expected, "{action:?}");
+            assert!(app.chart.undo(), "{action:?}");
+            assert_eq!(state(&app), initial, "{action:?}");
+        }
     }
 
     #[test]
@@ -10615,16 +10665,22 @@ mod tests {
                 let child = app
                     .chart
                     .add_indicator(Box::new(egui_charts::studies::SMA::new(2)));
+                app.chart.remove_series(parent);
+                // Removing a source removes its readers, so name the removed parent afterwards,
+                // as a layout saved with a missing source does.
                 app.chart
-                    .set_indicator_source(
-                        child,
-                        egui_charts::studies::StudySource::Study {
-                            id: parent.0,
-                            plot: 0,
-                        },
+                    .indicator_mut(child)
+                    .unwrap()
+                    .set_input(
+                        "source",
+                        egui_charts::studies::InputValue::Source(
+                            egui_charts::studies::StudySource::Study {
+                                id: parent.0,
+                                plot: 0,
+                            },
+                        ),
                     )
                     .unwrap();
-                app.chart.remove_series(parent);
                 let mut missing = Alert::new("FOREXA", AlertCondition::Above(0.0));
                 missing.frequency = egui_charts::model::AlertFrequency::OncePerBarClose;
                 missing.source = egui_charts::model::AlertSource::Study {

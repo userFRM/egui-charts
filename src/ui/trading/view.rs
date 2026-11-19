@@ -1,6 +1,7 @@
 //! The trading controller's chart view: the order ticket's panel, the orders, positions and fills
 //! drawn on the chart, the image exports, and the confirmations of what the user changes there.
 
+use super::account_panel::quantity_decimals;
 use super::format::Numbers;
 use super::ticket::{self, Action, Market};
 use super::{Preview, Trading, executions};
@@ -93,6 +94,7 @@ impl Trading {
             trades: &[],
             session_open: None,
             last_fill: self.account_panel.fills.price(symbol),
+            pnl_unit: self.display.position_pnl_unit,
             logo: instrument.and_then(|instrument| instrument.logo.as_deref()),
         }
     }
@@ -173,7 +175,8 @@ impl Trading {
                 }
             }
             Some(Action::Confirm(change)) => self.pending = Some(*change),
-            None => {}
+            // The ticket opens its own edits.
+            Some(Action::Edit(_)) | None => {}
         }
     }
 
@@ -344,8 +347,7 @@ impl Trading {
                 | TradingLineAction::Exit(position, _) => &position.symbol,
             };
             let numbers = self.numbers(action_symbol, symbol);
-            let money = |value: f64| numbers.price(value);
-            let (title, message, confirm) = describe(ui.ctx(), action, &money);
+            let (title, message, confirm) = describe(ui.ctx(), action, &numbers);
             let mut open = true;
             let result = ConfirmDialog::new("trading_confirm", title, message)
                 .confirm_text(confirm)
@@ -423,7 +425,8 @@ impl Trading {
             return;
         }
         let market = self.market(chart, &colors);
-        if let Ok(request) = self.ticket.request(ui.ctx(), &market)
+        if self.ticket.editing.is_none()
+            && let Ok(request) = self.ticket.request(ui.ctx(), &market)
             && request.order_type != OrderType::Market
         {
             let _theme = chart
@@ -603,14 +606,18 @@ fn calculator(ui: &mut egui::Ui, text: &mut String, quantity: &mut f64, rules: &
     }
 }
 
-/// The title, question and confirm button text of the confirmation for `action`.
+/// The title, question and confirm button text of the confirmation for `action`, with its
+/// numbers written by `numbers` and quantities at their own decimals, as the account tables
+/// write them.
 fn describe(
     ctx: &egui::Context,
     action: &TradingLineAction,
-    price: &dyn Fn(f64) -> String,
+    numbers: &Numbers<'_>,
 ) -> (&'static str, String, &'static str) {
+    let price = |value| numbers.price(value);
+    let quantity_text = |value: f64| numbers.quantity(value, quantity_decimals(value));
     let order = |request: &OrderRequest| {
-        let quantity = request.quantity.to_string();
+        let quantity = quantity_text(request.quantity);
         let values = [
             ("quantity", quantity.as_str()),
             ("symbol", request.symbol.as_str()),
@@ -657,7 +664,7 @@ fn describe(
         for level in &request.take_profit_levels {
             let mut values = vec![
                 ("price", price(level.price)),
-                ("quantity", level.quantity.to_string()),
+                ("quantity", quantity_text(level.quantity)),
             ];
             let key = if let Some(stop) = level.stop_loss {
                 values.push(("stop", price(stop)));
@@ -685,7 +692,7 @@ fn describe(
                 "the short position of {quantity} {symbol}"
             },
             &[
-                ("quantity", position.quantity.abs().to_string().as_str()),
+                ("quantity", quantity_text(position.quantity.abs()).as_str()),
                 ("symbol", position.symbol.as_str()),
             ],
         )
@@ -767,28 +774,40 @@ mod tests {
     use crate::widget::settings::TradingSettings;
     use std::sync::Arc;
 
-    /// Confirmation sentences and their side and order descriptions use template keys.
+    /// Confirmation sentences use template keys and the symbol's quantity text for orders,
+    /// levels and positions.
     #[test]
     fn confirmations_reach_the_translator() {
         let ctx = egui::Context::default();
         l10n::mark_keys(&ctx);
+        let numbers = |formatter: Option<&'static dyn TradingFormatter>| Numbers {
+            symbol: "1301",
+            decimals: 2,
+            formatter,
+        };
         let request = |side, kind| OrderRequest::new("1301", side, 2.0, kind);
         let mut bracketed = request(OrderSide::Buy, OrderType::Limit(101.0));
         bracketed.take_profit = Some(110.0);
         bracketed.stop_loss = Some(95.0);
         let working = Order::new(OrderId::new("7"), bracketed, OrderStatus::Working);
-        let mut levels = request(OrderSide::Buy, OrderType::Limit(101.0));
-        levels.take_profit_levels = vec![
+        let mut stopped_levels = request(OrderSide::Buy, OrderType::Limit(101.0));
+        stopped_levels.take_profit_levels = vec![
             TakeProfitLevel::new(110.0, 1.0),
             TakeProfitLevel::new(120.0, 1.0),
         ];
-        levels.take_profit_levels[0].stop_loss = Some(96.0);
-        levels.stop_loss = Some(95.0);
-        let levels = Order::new(OrderId::new("8"), levels, OrderStatus::Working);
+        stopped_levels.take_profit_levels[0].stop_loss = Some(96.0);
+        stopped_levels.stop_loss = Some(95.0);
+        let stopped_levels = Order::new(OrderId::new("8"), stopped_levels, OrderStatus::Working);
         let long = Position::new("1301", 2.0, 100.0);
+        let mut levels = OrderRequest::new("1301", OrderSide::Buy, 3_000.0, OrderType::Market);
+        levels.take_profit_levels = vec![
+            TakeProfitLevel::new(110.0, 1_000.0),
+            TakeProfitLevel::new(111.0, 2_000.0),
+        ];
+        let levels = Order::new(OrderId::new("levels"), levels, OrderStatus::Working);
         for (action, expected) in [
             (
-                TradingLineAction::Cancel(levels),
+                TradingLineAction::Cancel(stopped_levels),
                 "~~2~1301~101.00~~110.00~1~96.00~~120.00~1~~95.00~~",
             ),
             (
@@ -808,7 +827,28 @@ mod tests {
                 ),
                 "~~2~1301~99.00~98.00~~",
             ),
+            (
+                TradingLineAction::Cancel(levels.clone()),
+                "~~3,000~1301~~110.00~1,000~~111.00~2,000~~",
+            ),
             (TradingLineAction::Close(long.clone()), "~~2~1301~~"),
+            (
+                TradingLineAction::Close(Position::new("1301", 1e-8, 100.0)),
+                "~~0.00000001~1301~~",
+            ),
+            (
+                TradingLineAction::Close(Position::new("1301", 1.0000001, 100.0)),
+                "~~1.0000001~1301~~",
+            ),
+            (
+                TradingLineAction::Close(Position::new("1301", 0.1 + 0.2, 100.0)),
+                "~~0.3~1301~~",
+            ),
+            // Quantities are grouped as the account tables write them.
+            (
+                TradingLineAction::Close(Position::new("1301", 2_000.5, 100.0)),
+                "~~2,000.5~1301~~",
+            ),
             (
                 TradingLineAction::Reverse(Position::new("1301", -3.0, 100.0)),
                 "~~3~1301~~",
@@ -825,9 +865,28 @@ mod tests {
                 "~~2~1301~~~2~1301~95.00~~",
             ),
         ] {
-            let (_, message, _) = describe(&ctx, &action, &|v| format!("{v:.2}"));
+            let (_, message, _) = describe(&ctx, &action, &numbers(None));
             assert_eq!(message, expected, "{action:?}");
         }
+        // The host's quantity text replaces them.
+        struct Lots;
+        impl TradingFormatter for Lots {
+            fn quantity(&self, _: &str, quantity: f64) -> Option<String> {
+                Some(format!("{quantity} lots"))
+            }
+        }
+        let reverse = TradingLineAction::Reverse(Position::new("1301", -3.0, 100.0));
+        let (_, message, _) = describe(&ctx, &reverse, &numbers(Some(&Lots)));
+        assert_eq!(message, "~~3 lots~1301~~");
+        let (_, message, _) = describe(
+            &ctx,
+            &TradingLineAction::Cancel(levels),
+            &numbers(Some(&Lots)),
+        );
+        assert_eq!(
+            message,
+            "~~3000 lots~1301~~110.00~1000 lots~~111.00~2000 lots~~"
+        );
     }
 
     /// Rows of differently formatted symbols keep their own price decimals, host text and pip

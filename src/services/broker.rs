@@ -97,6 +97,9 @@ pub trait Broker: MaybeSend + 'static {
     /// The terminal calls it when it starts and again, with a new stream, after the stream lagged;
     /// each stream starts from nothing, so push the whole current state again. The old stream is
     /// inactive from then on: push into the newest one only.
+    /// A position order the user confirmed on the old stream that still waits for its
+    /// [`rules`](Self::rules) is reported as refused, as while the broker is not live, and is not
+    /// sent, also when the answer arrives later.
     ///
     /// The terminal announces, with a notification and the execution sound for fills, a working
     /// limit or stop order it has not seen on the stream, a rejected order and each execution,

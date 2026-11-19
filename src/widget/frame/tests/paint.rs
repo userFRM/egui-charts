@@ -1995,3 +1995,189 @@ fn unclassified_footprint_rows_do_not_look_like_the_poc() {
         "(unclassified row, POC row) sell cell fills, chart then host, light then dark: {fills:?}"
     );
 }
+
+/// Drawings cross series and studies one item at a time, keep that place through undo and
+/// storage, and yield the pointer to a series painted over them, in either theme and pane.
+#[cfg(all(feature = "drawings", feature = "studies"))]
+#[test]
+fn drawings_take_their_place_among_the_series_and_studies() {
+    use crate::drawings::{Drawing, DrawingToolType};
+    use crate::studies::{RSI, SMA};
+    use crate::widget::{Chart, SeriesId, VisualOrder};
+    use egui::{Color32, Event};
+    const FILL: Color32 = Color32::from_rgb(200, 0, 200);
+
+    let rect_at = |painted: &[Shape]| {
+        painted
+            .iter()
+            .position(|shape| match shape {
+                Shape::Rect(rect) => rect.fill == FILL,
+                Shape::Mesh(mesh) => mesh.vertices.iter().any(|v| v.color == FILL),
+                _ => false,
+            })
+            .expect("rectangle painted, including its cached mesh")
+    };
+    let line_at = |painted: &[Shape], color| {
+        let is_line = |shape: &Shape| match shape {
+            Shape::LineSegment { stroke, .. } => stroke.color == color,
+            Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(color),
+            _ => false,
+        };
+        (
+            painted.iter().position(is_line).unwrap(),
+            painted.iter().rposition(is_line).unwrap(),
+        )
+    };
+    let add_rect = |chart: &mut Chart, pane, prices: [f64; 2]| {
+        let bars = chart.bars(SeriesId::MAIN);
+        let anchors = [(bars[85].time, prices[0]), (bars[98].time, prices[1])];
+        let mut drawing = Drawing::new(0, DrawingToolType::Rect);
+        drawing.pane = pane;
+        drawing.fill_color = Some(FILL.to_array());
+        drawing.color = [201, 1, 201, 255];
+        drawing.theme_shade = false;
+        drawing.completed = true;
+        chart.create_drawing(drawing, &anchors).unwrap()
+    };
+    for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0, 100.0], &[110.0, 104.0]);
+        chart.set_theme_override(Some(theme));
+        chart.config.show_volume = false;
+        chart.set_visible_bars(20);
+        // Every pair of closes is 110 and 104, so SMA(2) is 107.
+        let sma = chart.add_indicator(Box::new(SMA::new(2)));
+        let color = chart
+            .indicators()
+            .find(|(id, _)| *id == sma)
+            .unwrap()
+            .1
+            .plot_style(0)
+            .color;
+        let mut id = add_rect(&mut chart, None, [109.0, 101.0]);
+        // The step between bars and SMA is a Reorder; the extreme is a Modify.
+        for (step, (order, layer)) in [
+            (None, None),
+            (Some(VisualOrder::SendBackward), Some(1)),
+            (None, None),    // undo the step across SMA
+            (None, Some(1)), // redo it
+            (Some(VisualOrder::BringForward), None),
+            (Some(VisualOrder::SendBackward), Some(1)),
+            (Some(VisualOrder::SendToBack), Some(0)),
+            (None, Some(1)), // undo the extreme
+            (None, Some(0)), // redo it
+            (None, Some(0)), // restore the saved drawing
+            (Some(VisualOrder::BringToFront), None),
+            (None, Some(2)), // a stored count at the pane's item count is also front
+            (None, Some(usize::MAX)),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            match step {
+                2 | 7 => assert!(chart.undo()),
+                3 | 8 => assert!(chart.redo()),
+                11 | 12 => chart
+                    .drawings_mut()
+                    .edit_drawing(id, |d| d.series_layer = layer)
+                    .unwrap(),
+                9 => {
+                    let saved = chart.save_drawings().unwrap().to_json().unwrap();
+                    chart.load_drawings(&saved).unwrap();
+                    id = chart.drawings().drawings[0].id;
+                }
+                _ => {
+                    if let Some(order) = order {
+                        chart.user_action(|chart| assert!(chart.reorder_drawing(id, order)));
+                    }
+                }
+            }
+            assert_eq!(
+                chart.drawings().drawings[0].series_layer,
+                layer,
+                "step {step}"
+            );
+            frame(&ctx, &mut chart, step as f64, vec![]);
+            let map = chart.get_chart_mapping();
+            // Even bar 96 covers 100..110; odd bar 95 ends at 104, below this point.
+            let on = Pos2::new(map.idx_to_x(96), map.price_to_y(105.0));
+            let off = Pos2::new(map.idx_to_x(95), map.price_to_y(105.5));
+            let painted = shapes(
+                &ctx,
+                &mut chart,
+                step as f64 + 0.1,
+                vec![Event::PointerMoved(on)],
+            );
+            let rect = rect_at(&painted);
+            let candles: Vec<_> = painted
+                .iter()
+                .enumerate()
+                .filter_map(|(at, shape)| {
+                    matches!(shape, Shape::Rect(r) if r.fill == chart.config().bullish_color
+                    && chart.get_rendered_price_rect().contains_rect(r.rect))
+                    .then_some(at)
+                })
+                .collect();
+            let sma = line_at(&painted, color);
+            match layer {
+                None => assert!(
+                    *candles.last().unwrap() < rect && sma.1 < rect,
+                    "step {step}"
+                ),
+                Some(1) => assert!(
+                    *candles.last().unwrap() < rect && rect < sma.0,
+                    "step {step}"
+                ),
+                Some(0) => assert!(rect < candles[0], "step {step}"),
+                Some(_) => assert!(
+                    *candles.last().unwrap() < rect && sma.1 < rect,
+                    "step {step}"
+                ),
+            }
+            assert_eq!(
+                chart.drawings().hit_test(on),
+                (layer != Some(0)).then_some(id),
+                "step {step}"
+            );
+            shapes(
+                &ctx,
+                &mut chart,
+                step as f64 + 0.2,
+                vec![Event::PointerMoved(off)],
+            );
+            assert_eq!(chart.drawings().hit_test(off), Some(id), "step {step}");
+        }
+    }
+
+    let ctx = egui::Context::default();
+    let mut chart = chart(&[100.0, 100.0], &[110.0, 104.0]);
+    chart.config.show_volume = false;
+    chart.set_visible_bars(20);
+    let rsi = chart.add_indicator(Box::new(RSI::new(14)));
+    let color = chart
+        .indicators()
+        .find(|(id, _)| *id == rsi)
+        .unwrap()
+        .1
+        .plot_style(0)
+        .color;
+    let id = add_rect(&mut chart, Some(rsi.0), [80.0, 20.0]);
+    for order in [
+        None,
+        Some(VisualOrder::SendToBack),
+        Some(VisualOrder::BringToFront),
+    ] {
+        if let Some(order) = order {
+            chart.user_action(|chart| assert!(chart.reorder_drawing(id, order)));
+        }
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+        let rect = rect_at(&painted);
+        let rsi = line_at(&painted, color);
+        if order == Some(VisualOrder::SendToBack) {
+            assert!(rect < rsi.0, "study covers rectangle");
+        } else {
+            assert!(rsi.1 < rect, "rectangle covers study");
+        }
+    }
+}

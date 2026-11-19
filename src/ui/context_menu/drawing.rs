@@ -7,7 +7,7 @@ use crate::config::KeyboardAction;
 use crate::drawings::TimeframeVisibility;
 use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
-use crate::model::{Alert, AlertComparison, AlertCondition, Timeframe};
+use crate::model::{Alert, AlertComparison, AlertCondition, AlertPositionProgress, Timeframe};
 use crate::theme::Theme;
 use crate::ui::Control;
 use crate::ui::context_menu::{MenuEntry, MenuItem, show_menu};
@@ -22,12 +22,20 @@ use std::collections::HashSet;
 pub(crate) const DRAWING_MENU_OFFSET: f32 = 6.0;
 
 /// The panes of `chart` other than the one drawing `drawing_id`, the price pane last, by their
-/// stable ids and titles.
+/// stable ids and titles. Empty for a locked drawing, which cannot move.
 pub(crate) fn move_targets(
     ctx: Option<&Context>,
     chart: &Chart,
     drawing_id: usize,
 ) -> Vec<(PaneId, String)> {
+    if chart
+        .drawings()
+        .drawings
+        .iter()
+        .any(|d| d.id == drawing_id && d.locked)
+    {
+        return Vec::new();
+    }
     let current = chart.drawing_pane(drawing_id);
     let mut panes = super::study::other_panes(ctx, chart, current);
     if current.is_some_and(|pane| pane != PaneId::MAIN) && chart.panes().contains(&PaneId::MAIN) {
@@ -49,7 +57,9 @@ pub enum DrawingContextMenuAction {
     /// No action requested.
     None,
     /// Open the alert dialog on this alert: the price, or the first output of the study leading a
-    /// study pane, crossing the drawing's first visible level, for example with [`AlertDialog::edit`](crate::ui::dialogs::AlertDialog::edit),
+    /// study pane, crossing the drawing's first visible level, or on a long or short position a
+    /// [`Position`](crate::model::AlertCondition::Position) alert on its entry, target and stop,
+    /// for example with [`AlertDialog::edit`](crate::ui::dialogs::AlertDialog::edit),
     /// listing the levels of [`Drawing::alert_levels_with_bars`](crate::drawings::Drawing::alert_levels_with_bars)
     /// as its sources.
     AddAlert(Box<Alert>),
@@ -70,9 +80,13 @@ pub enum DrawingContextMenuAction {
     /// Set the drawing's interval filter. Applied by `ChartMenus` and the floating toolbar
     /// as one undoable chart action; standalone menus call [`Self::apply_interval_visibility`].
     Intervals(IntervalRange),
-    /// Toggle drawing lock state
+    /// Lock the selected drawings, or unlock them when the drawing the menu opened on is
+    /// locked, for example with
+    /// [`DrawingManager::set_selected_locked`](crate::drawings::DrawingManager::set_selected_locked).
     Lock,
-    /// Toggle drawing visibility
+    /// Hide the selected drawings, or show them when the drawing the menu opened on is hidden,
+    /// for example with
+    /// [`DrawingManager::set_selected_visible`](crate::drawings::DrawingManager::set_selected_visible).
     Hide,
     /// Exchange a position's target and stop and switch between long and short.
     /// Applied by the mounted chart menu and floating toolbar through
@@ -183,13 +197,19 @@ impl DrawingContextMenu {
                     .alert_levels_with_bars(bars.len().saturating_sub(1) as f64, scale, bars)
                     .into_iter()
                     .next()?;
-                let mut alert = Alert::new(
-                    chart.symbol.clone(),
+                use crate::drawings::DrawingToolType as T;
+                let condition = if matches!(drawing.tool_type, T::LongPos | T::ShortPos) {
+                    AlertCondition::Position {
+                        levels: Box::new([0, 1, 2].map(|level| drawing.alert_source(level))),
+                        progress: AlertPositionProgress::AwaitingEntry,
+                    }
+                } else {
                     AlertCondition::Compare {
                         other: drawing.alert_source(level),
                         comparison: AlertComparison::Crossing,
-                    },
-                );
+                    }
+                };
+                let mut alert = Alert::new(chart.symbol.clone(), condition);
                 alert.source = source?;
                 Some(alert)
             });
@@ -499,6 +519,32 @@ mod tests {
         }
     }
 
+    #[test]
+    fn positions_offer_one_alert_from_entry_to_exit() {
+        for (tool, prices) in [
+            (DrawingToolType::LongPos, vec![100.0, 110.0, 95.0]),
+            (DrawingToolType::ShortPos, vec![100.0, 90.0]),
+        ] {
+            let mut chart = Chart::new(BarData::default());
+            chart.symbol = "SAMPLE".into();
+            let mut drawing = Drawing::new(7, tool);
+            drawing.chart_points = prices
+                .into_iter()
+                .map(|price| ChartPoint::new(0.0, price))
+                .collect();
+            chart.drawings_mut().drawings.push(drawing);
+            let mut menu = DrawingContextMenu::new();
+            menu.open_on(&Context::default(), &chart, Pos2::ZERO, 7);
+            assert_eq!(
+                menu.alert.map(|a| a.condition),
+                Some(AlertCondition::Position {
+                    levels: Box::new(["7", "7#1", "7#2"].map(|id| AlertSource::Drawing(id.into()))),
+                    progress: AlertPositionProgress::AwaitingEntry,
+                })
+            );
+        }
+    }
+
     /// The Delete entry is disabled exactly while the right-clicked drawing is locked.
     #[test]
     fn delete_follows_the_lock() {
@@ -507,6 +553,7 @@ mod tests {
         drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(1.0, 110.0)];
         drawing.completed = true;
         chart.drawings_mut().drawings.push(drawing);
+        let pane = chart.add_pane();
         let mut menu = DrawingContextMenu::new();
         for locked in [false, true, false] {
             chart.drawings_mut().drawings[0].locked = locked;
@@ -522,6 +569,11 @@ mod tests {
                 })
                 .expect("Delete row");
             assert_eq!(enabled, !locked, "locked {locked}");
+            assert_eq!(
+                menu.panes.iter().any(|(id, _)| *id == pane),
+                !locked,
+                "Move to, locked {locked}"
+            );
         }
     }
 

@@ -773,6 +773,7 @@ impl Chart {
         if !chart_width.is_finite() || chart_width < 2.0 {
             return;
         }
+        let pending_range = self.take_pending_range();
         if self.apply_visible_bars_once {
             self.state.time_scale_mut().set_width(chart_width);
             if let Some(desired) = self.desired_visible_bars
@@ -801,6 +802,9 @@ impl Chart {
             self.state.time_scale_mut().set_width(chart_width);
         }
         self.prev_width = Some(chart_width);
+        if let Some(range) = pending_range {
+            self.refit_pending_range(range);
+        }
 
         if let Some(time) = self.pending_scroll_time
             && let Some(first) = self.state.data().bars.first()
@@ -1913,6 +1917,83 @@ mod tests {
                     let reset = chart.chart_options.handle_scale.axis_double_click_reset;
                     assert_eq!(reset.time, individual);
                     assert_eq!(reset.price, individual);
+                }
+            }
+        }
+    }
+
+    /// Axes show their drag direction when both scale permissions allow it, otherwise the
+    /// plot's cursor for the crosshair style. The plot keeps its style cursor.
+    #[test]
+    fn axis_cursors_follow_axis_drag_permissions() {
+        use crate::config::CrosshairStyle;
+        use egui::CursorIcon;
+
+        let key = crate::model::SeriesScale::Separate(1);
+        for (style, plot) in [
+            (CrosshairStyle::Full, CursorIcon::Crosshair),
+            (CrosshairStyle::Dot, CursorIcon::Default),
+        ] {
+            for (enabled, drag) in [(true, true), (false, true), (true, false)] {
+                for (target, resize) in [
+                    ("plot", plot),
+                    ("time", CursorIcon::ResizeHorizontal),
+                    ("price", CursorIcon::ResizeVertical),
+                    ("pane", CursorIcon::ResizeVertical),
+                    ("series", CursorIcon::ResizeVertical),
+                ] {
+                    let ctx = egui::Context::default();
+                    let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                    if target == "pane" {
+                        chart.add_indicator(Box::new(
+                            crate::studies::CustomIndicator::new("Pane", |bars| {
+                                vec![crate::studies::IndicatorValue::Single(50.0); bars.len()]
+                            })
+                            .with_overlay(false),
+                        ));
+                    }
+                    if target == "series" {
+                        let series = chart.add_series(crate::widget::SeriesOptions {
+                            scale: key,
+                            ..Default::default()
+                        });
+                        chart.set_data(series, chart.state.data().bars.clone());
+                    }
+                    chart.chart_options.crosshair.style = style;
+                    chart.chart_options.handle_scale.enabled = enabled;
+                    chart
+                        .chart_options
+                        .handle_scale
+                        .axis_pressed_mouse_move
+                        .time = drag;
+                    chart
+                        .chart_options
+                        .handle_scale
+                        .axis_pressed_mouse_move
+                        .price = drag;
+                    frame(&ctx, &mut chart, 0.0, vec![]);
+                    let rect = chart.last_rendered_price_rect;
+                    let pos = match target {
+                        "plot" => rect.center(),
+                        "time" => Pos2::new(
+                            rect.center().x,
+                            rect.bottom().max(chart.last_rendered_volume_rect.bottom()) + 5.0,
+                        ),
+                        "price" => Pos2::new(rect.right() + 10.0, rect.center().y),
+                        "series" => Pos2::new(rect.left() - 10.0, rect.center().y),
+                        _ => {
+                            let pane = &chart.get_rendered_indicator_panes()[0];
+                            Pos2::new(pane.chart_rect.right() + 10.0, pane.panel_rect.center().y)
+                        }
+                    };
+                    // Hover is hit-tested against the widgets of the previous frame.
+                    frame(&ctx, &mut chart, 1.0, vec![Event::PointerMoved(pos)]);
+                    let cursor = frame(&ctx, &mut chart, 1.1, vec![Event::PointerMoved(pos)]);
+                    let expected = if enabled && drag { resize } else { plot };
+                    assert_eq!(
+                        cursor, expected,
+                        "{style:?}, enabled={enabled}, drag={drag}, {target}"
+                    );
                 }
             }
         }
