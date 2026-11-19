@@ -635,18 +635,22 @@ mod tests {
         }
     }
 
-    /// Session breaks paint their colour and width as set on every kind of boundary, days on an
-    /// hourly chart and weeks and months on a daily one, and shade no session.
+    /// Session breaks paint their colour and width as set at each new session of an hourly
+    /// chart, none on daily, weekly and monthly charts, and shade no session.
     #[test]
     fn session_breaks_paint_as_configured_without_shading() {
         use crate::model::{Bar, BarData, LineStyle, Timeframe};
         use egui::{Color32, Stroke};
         let start: chrono::DateTime<chrono::Utc> = "2024-01-01T00:00:00Z".parse().unwrap();
-        for (timeframe, step) in [
-            (Timeframe::Hour1, chrono::Duration::hours(1)),
-            (Timeframe::Day1, chrono::Duration::days(1)),
+        // Fifty bars stay in view. Days start at hourly bars 24 and 48; the longer charts cross
+        // weeks, months and years, which they drew before.
+        for (timeframe, step, expected) in [
+            (Timeframe::Hour1, chrono::Duration::hours(1), vec![24, 48]),
+            (Timeframe::Day1, chrono::Duration::days(1), vec![]),
+            (Timeframe::Week1, chrono::Duration::weeks(1), vec![]),
+            (Timeframe::Month1, chrono::Duration::days(30), vec![]),
         ] {
-            let bars = (0..120)
+            let bars = (0..50)
                 .map(|i| Bar::new(start + step * i, 100.0, 102.0, 99.0, 101.0, 1.0))
                 .collect();
             let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
@@ -659,6 +663,7 @@ mod tests {
             chart.config.session_break_width = 2.0;
             let painted = shapes(&egui::Context::default(), &mut chart, 0.0, vec![]);
             let plot = chart.last_rendered_price_rect;
+            let map = chart.get_chart_mapping();
             let breaks: Vec<_> = painted
                 .iter()
                 .filter_map(|shape| match shape {
@@ -667,15 +672,16 @@ mod tests {
                             && points[0].y == plot.top()
                             && points[1].y == plot.bottom() =>
                     {
-                        Some(*stroke)
+                        Some((points[0].x, *stroke))
                     }
                     _ => None,
                 })
                 .collect();
-            assert!(
-                !breaks.is_empty() && breaks.iter().all(|s| *s == Stroke::new(2.0, Color32::RED)),
-                "{timeframe:?}: {breaks:?}"
-            );
+            let expected: Vec<_> = expected
+                .iter()
+                .map(|index| (map.idx_to_x(*index), Stroke::new(2.0, Color32::RED)))
+                .collect();
+            assert_eq!(breaks, expected, "{timeframe:?}");
             let shading = chart.config.background_color.gamma_multiply(0.94);
             assert!(
                 !painted
