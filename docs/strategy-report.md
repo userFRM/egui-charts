@@ -181,7 +181,8 @@ placement, data loading and CSV storage. Chart entry/exit markers use the signal
 The assembled terminal and its demo mounting remain separate integration work.
 
 The Summary tab shows all performance metrics, equity and drawdown in account units,
-and an optional fee-free buy-and-hold comparison on the same equity scale. Curve positions
+and an optional fee-free buy-and-hold comparison on the same equity scale. The drawdown chart
+follows usable intrabar ranges, falling back to closes when ranges are unavailable. Curve positions
 and hover values retain submillisecond timestamps. Hover a curve
 for timestamped values. The virtualized trade list uses entry-time order, keeps equal-time
 trades in input order, and shows fill prices, net profit, fees, labels and excursions.
@@ -208,6 +209,26 @@ of downside excess returns over all steps, and both use the curve's actual steps
 365.25-day year and require at least 13 weeks. Non-finite equity points are skipped;
 unordered finite points invalidate the entire curve. [`equity_curve()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.equity_curve) exposes those same
 validated points for rendering.
+
+Drawdown is reported separately from closing marks and from equity inside each bar.
+Close-to-close drawdown is the largest fall below an earlier closing peak. Intrabar drawdown
+also uses `StrategyReport::equity_ranges`, one `EquityRange` per mark: its bar's low, high,
+largest fall and largest rise along the execution path, including finer bars and the close.
+Each bar's depth is the larger of the earlier peak less its low and its own fall. Peak-relative
+percentages take the larger of `(earlier peak - low) / earlier peak` and
+`fall / max(earlier peak, high)`. If the largest fall starts below both peaks, this second
+term understates that fall's own percentage. A separate percentage divides the maximum
+intrabar money drawdown by initial capital. Missing or unusable ranges make intrabar metrics
+unavailable; old saved reports load with empty ranges. Hosts knowing only the extremes can
+supply `high - low` for both fall and rise, yielding upper bounds.
+
+For capital 10,000 and 100 units bought at 100, a bar dipping to 70 and closing at 100 has
+close-to-close drawdown 0 and intrabar drawdown 3,000 (30%). Open profit reconciles equity with
+closed trades: last usable equity less initial capital and closed net profit, including entry
+fees already paid. It is exactly 0 without an open trade, or unavailable when an open trade
+has no usable equity mark. Holding those units at a final close of 90 gives open profit -1,000
+and closed net profit 0. The summary and summary CSV list open profit beside net profit and
+label both drawdown measures explicitly.
 
 The largest winner is the greatest positive net profit, and the largest loser is the most
 negative net profit. Either is unavailable without a trade of that sign. Consecutive wins

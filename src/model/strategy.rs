@@ -103,6 +103,12 @@ pub struct StrategyReport {
     /// strictly increasing time order.
     #[serde(default, deserialize_with = "curve_null_as_nan")]
     pub equity: Vec<(DateTime<Utc>, f64)>,
+    /// How equity moved inside each bar: one range per equity point in the same order, or empty
+    /// when unknown. Usable when lengths match and each finite point has four finite range values,
+    /// `low <= value <= high` and nonnegative fall and rise. Skipped points' ranges are ignored.
+    /// Otherwise the intrabar metrics are unavailable.
+    #[serde(default)]
+    pub equity_ranges: Vec<EquityRange>,
 }
 
 /// One round trip. A host that scales out reports each partial exit as its own trade with its share
@@ -177,6 +183,10 @@ pub struct StrategyPerformance {
     pub net_profit: f64,
     /// `net_profit / initial_capital`. `None` when the initial capital is not positive and finite.
     pub net_profit_fraction: Option<f64>,
+    /// Open trades' profit after their entry fees: last usable equity less initial capital and
+    /// closed net profit. Exactly 0 without a valid open trade. `None` with open trades but no
+    /// usable equity or a non-finite result.
+    pub open_profit: Option<f64>,
     /// Sum of `p` over the winners.
     pub gross_profit: f64,
     /// Sum of `-p` over the losers, a positive number.
@@ -199,13 +209,25 @@ pub struct StrategyPerformance {
     pub max_consecutive_wins: usize,
     /// Longest losing run, with the same ordering and breaks as `max_consecutive_wins`.
     pub max_consecutive_losses: usize,
-    /// The largest fall of equity from its highest earlier point, in money, over the curve from its
+    /// Largest close-to-close fall below an earlier equity peak, in money, from the curve's
     /// first point. `None` without a usable equity point.
     pub max_drawdown: Option<f64>,
-    /// The largest fall of equity as a fraction of its highest earlier point, found separately from
+    /// Largest close-to-close fall as a fraction of its earlier peak, found separately from
     /// `max_drawdown`, so the two can come from different points. Above 1 when equity falls below zero.
     /// `None` without a usable equity point or when the first point is not positive.
     pub max_drawdown_fraction: Option<f64>,
+    /// Largest fall using [`StrategyReport::equity_ranges`]: at each bar the larger of the earlier
+    /// peak less its low and its own [`EquityRange::fall`]. At least `max_drawdown`.
+    /// `None` without usable ranges.
+    pub intrabar_max_drawdown: Option<f64>,
+    /// Largest intrabar drawdown fraction, measured separately from its money maximum: the larger
+    /// of (earlier peak - low) / earlier peak and fall / max(earlier peak, high). A fall starting
+    /// below both peaks has a lower fraction than its own. `None` without usable ranges or when
+    /// the first usable range's high is not positive.
+    pub intrabar_max_drawdown_fraction: Option<f64>,
+    /// Intrabar maximum drawdown divided by initial capital. `None` without usable ranges or
+    /// positive finite capital, or if the result is not finite.
+    pub intrabar_max_drawdown_initial_capital_fraction: Option<f64>,
     /// Annualised Sharpe ratio: the mean excess return per step of the curve over the sample standard
     /// deviation of the returns, times the square root of `periods_per_year`. Returns are simple
     /// returns between consecutive usable points, and the excess is over the risk-free rate per step,
@@ -271,6 +293,56 @@ pub struct StrategyExcursion {
     pub favourable: f64,
 }
 
+/// Equity movements inside one bar, aligned with [`StrategyReport::equity`]. Backtests record
+/// the path their fills walk. Hosts may leave [`StrategyReport::equity_ranges`] empty.
+///
+/// If only the extremes are known, use `high - low` for fall and rise to obtain upper bounds.
+///
+/// # Example
+///
+/// ```
+/// use egui_charts::model::EquityRange;
+///
+/// // 100 units held from 100 through a dip to 70 and a recovery to 100.
+/// let range = EquityRange::new(7000.0, 10_000.0, 3000.0, 3000.0);
+/// assert_eq!((range.low, range.fall), (7000.0, 3000.0));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct EquityRange {
+    /// Lowest equity reached, including the close.
+    #[serde(deserialize_with = "null_as_nan")]
+    pub low: f64,
+    /// Highest equity reached, including the close.
+    #[serde(deserialize_with = "null_as_nan")]
+    pub high: f64,
+    /// Largest fall below an earlier value in this bar, nonnegative.
+    #[serde(deserialize_with = "null_as_nan")]
+    pub fall: f64,
+    /// Largest rise above an earlier value in this bar, nonnegative.
+    #[serde(deserialize_with = "null_as_nan")]
+    pub rise: f64,
+}
+
+impl EquityRange {
+    /// Supply a bar's extremes and the largest fall and rise inside it.
+    pub fn new(low: f64, high: f64, fall: f64, rise: f64) -> Self {
+        Self {
+            low,
+            high,
+            fall,
+            rise,
+        }
+    }
+}
+
+/// Drawdown of one usable equity point.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CurveExcursion {
+    pub(crate) drawdown: f64,
+    pub(crate) drawdown_fraction: f64,
+}
+
 impl StrategyReport {
     /// Labelled entry and exit markers for the host's signals service. Invalid trades are skipped;
     /// open trades have only an entry. Directions describe the fill side, including short exits.
@@ -329,7 +401,7 @@ impl StrategyReport {
         signals
     }
 
-    /// A report with no trades, no equity, no properties, no currency and a risk-free rate of 0.
+    /// A report with no trades, equity, equity ranges, properties or currency and a risk-free rate of 0.
     pub fn new(
         name: impl Into<String>,
         symbol: impl Into<String>,
@@ -346,6 +418,7 @@ impl StrategyReport {
             properties: Vec::new(),
             trades: Vec::new(),
             equity: Vec::new(),
+            equity_ranges: Vec::new(),
         }
     }
 
@@ -403,17 +476,31 @@ impl StrategyReport {
 
         let curve = self.equity_curve();
         p.skipped_equity_points = self.equity.len() - curve.len();
-        let (Some(&(start, first)), Some(&(end, _))) = (curve.first(), curve.last()) else {
+        p.open_profit = if p.open_trades == 0 {
+            Some(0.0)
+        } else {
+            curve
+                .last()
+                .and_then(|&(_, e)| finite(e - capital - p.net_profit))
+        };
+        let (Some(&(start, _)), Some(&(end, _))) = (curve.first(), curve.last()) else {
             return p;
         };
-        let (mut peak, mut drawdown, mut fraction) = (first, 0.0_f64, 0.0_f64);
-        for &(_, e) in &curve {
-            peak = peak.max(e);
-            drawdown = drawdown.max(peak - e);
-            fraction = fraction.max((peak - e) / peak);
+        let largest = |curve: &[(DateTime<Utc>, CurveExcursion)],
+                       value: fn(&CurveExcursion) -> f64| {
+            finite(curve.iter().map(|(_, x)| value(x)).fold(f64::NAN, f64::max))
+        };
+        let close = self.excursion_curve(false).unwrap_or_default();
+        p.max_drawdown = largest(&close, |x| x.drawdown);
+        p.max_drawdown_fraction = largest(&close, |x| x.drawdown_fraction);
+        if let Some(intrabar) = self.excursion_curve(true) {
+            p.intrabar_max_drawdown = largest(&intrabar, |x| x.drawdown);
+            p.intrabar_max_drawdown_fraction = largest(&intrabar, |x| x.drawdown_fraction);
+            p.intrabar_max_drawdown_initial_capital_fraction = p
+                .intrabar_max_drawdown
+                .filter(|_| capital.is_finite() && capital > 0.0)
+                .and_then(|amount| finite(amount / capital));
         }
-        p.max_drawdown = finite(drawdown);
-        p.max_drawdown_fraction = (first > 0.0).then_some(fraction).and_then(finite);
 
         let steps = curve.len() - 1;
         if end - start < TimeDelta::weeks(13) {
@@ -463,6 +550,64 @@ impl StrategyReport {
         } else {
             curve
         }
+    }
+
+    /// Composes per-point drawdown from closes or usable ranges. Shared by metrics and charts.
+    pub(crate) fn excursion_curve(
+        &self,
+        intrabar: bool,
+    ) -> Option<Vec<(DateTime<Utc>, CurveExcursion)>> {
+        let curve = self.equity_curve();
+        let ranges: Vec<_> = if !intrabar {
+            curve
+                .iter()
+                .map(|&(t, e)| (t, EquityRange::new(e, e, 0.0, 0.0)))
+                .collect()
+        } else if curve.is_empty() || self.equity_ranges.len() != self.equity.len() {
+            return None;
+        } else {
+            let mut ranges = Vec::with_capacity(curve.len());
+            for (&(time, value), range) in self.equity.iter().zip(&self.equity_ranges) {
+                if !value.is_finite() {
+                    continue;
+                }
+                if ![range.low, range.high, range.fall, range.rise]
+                    .iter()
+                    .all(|v| v.is_finite())
+                    || range.low > value
+                    || value > range.high
+                    || range.fall < 0.0
+                    || range.rise < 0.0
+                {
+                    return None;
+                }
+                ranges.push((time, *range));
+            }
+            ranges
+        };
+        let (_, first) = *ranges.first()?;
+        let positive = first.high > 0.0;
+        let mut peak = first.high;
+        let mut result = Vec::with_capacity(ranges.len());
+        for (index, &(time, r)) in ranges.iter().enumerate() {
+            let (drawdown, fraction) = if index == 0 {
+                (r.fall, r.fall / r.high)
+            } else {
+                (
+                    (peak - r.low).max(r.fall),
+                    ((peak - r.low) / peak).max(r.fall / peak.max(r.high)),
+                )
+            };
+            peak = peak.max(r.high);
+            result.push((
+                time,
+                CurveExcursion {
+                    drawdown,
+                    drawdown_fraction: if positive { fraction } else { f64::NAN },
+                },
+            ));
+        }
+        Some(result)
     }
 
     /// Computes buy-and-hold and excursions from the complete source bars of this run's symbol and
@@ -677,6 +822,7 @@ impl StrategyReport {
         let p = performance;
         for (name, value, unit) in [
             ("Net profit", Some(p.net_profit), "money"),
+            ("Open profit", p.open_profit, "money"),
             ("Net return", p.net_profit_fraction, "percent"),
             ("Gross profit", Some(p.gross_profit), "money"),
             ("Gross loss", Some(p.gross_loss), "money"),
@@ -684,8 +830,27 @@ impl StrategyReport {
             ("Win rate", p.win_rate, "percent"),
             ("Average trade", p.average_trade, "money"),
             ("Fees", Some(p.total_fees), "money"),
-            ("Maximum drawdown", p.max_drawdown, "money"),
-            ("Maximum drawdown %", p.max_drawdown_fraction, "percent"),
+            ("Maximum drawdown (close-to-close)", p.max_drawdown, "money"),
+            (
+                "Maximum drawdown % (close-to-close)",
+                p.max_drawdown_fraction,
+                "percent",
+            ),
+            (
+                "Maximum drawdown (intrabar)",
+                p.intrabar_max_drawdown,
+                "money",
+            ),
+            (
+                "Maximum drawdown % (intrabar)",
+                p.intrabar_max_drawdown_fraction,
+                "percent",
+            ),
+            (
+                "Maximum drawdown % of initial capital (intrabar)",
+                p.intrabar_max_drawdown_initial_capital_fraction,
+                "percent",
+            ),
             ("Sharpe ratio", p.sharpe_ratio, "ratio"),
             ("Sortino ratio", p.sortino_ratio, "ratio"),
             (
@@ -899,6 +1064,7 @@ mod tests {
             losing_trades: 2,
             net_profit: 44.5,
             net_profit_fraction: Some(0.00445),
+            open_profit: Some(45.5),
             gross_profit: 76.5,
             gross_loss: 32.0,
             total_fees: 5.0,
@@ -911,6 +1077,38 @@ mod tests {
             max_consecutive_losses: 1,
             max_drawdown: Some(90.0),
             max_drawdown_fraction: Some(0.008928571428571428),
+            ..Default::default()
+        }
+    }
+
+    /// 100 units entered at 100 dip to 70, recover to 100, then close at 90 while held.
+    fn fixture_d() -> StrategyReport {
+        let mut r = report(10_000.0);
+        r.trades.push(StrategyTrade::new(
+            OrderSide::Buy,
+            100.0,
+            t0() + TimeDelta::hours(1),
+            100.0,
+        ));
+        r.equity = curve(&[10_000.0, 10_000.0, 9_000.0], TimeDelta::hours(1));
+        r.equity_ranges = vec![
+            EquityRange::new(10_000.0, 10_000.0, 0.0, 0.0),
+            EquityRange::new(7_000.0, 10_000.0, 3_000.0, 3_000.0),
+            EquityRange::new(9_000.0, 10_000.0, 1_000.0, 0.0),
+        ];
+        r
+    }
+
+    fn expected_d() -> StrategyPerformance {
+        StrategyPerformance {
+            open_trades: 1,
+            net_profit_fraction: Some(0.0),
+            open_profit: Some(-1000.0),
+            max_drawdown: Some(1000.0),
+            max_drawdown_fraction: Some(0.1),
+            intrabar_max_drawdown: Some(3000.0),
+            intrabar_max_drawdown_fraction: Some(0.3),
+            intrabar_max_drawdown_initial_capital_fraction: Some(0.3),
             ..Default::default()
         }
     }
@@ -950,6 +1148,10 @@ mod tests {
         let options = |p: &StrategyPerformance| {
             [
                 p.net_profit_fraction,
+                p.open_profit,
+                p.intrabar_max_drawdown,
+                p.intrabar_max_drawdown_fraction,
+                p.intrabar_max_drawdown_initial_capital_fraction,
                 p.profit_factor,
                 p.win_rate,
                 p.average_trade,
@@ -1056,11 +1258,47 @@ mod tests {
         streaks.trades.push(invalid_streak);
 
         let no_curve = StrategyPerformance {
+            open_profit: None,
             max_drawdown: None,
             max_drawdown_fraction: None,
             ..expected_a()
         };
+        let no_intrabar = StrategyPerformance {
+            intrabar_max_drawdown: None,
+            intrabar_max_drawdown_fraction: None,
+            intrabar_max_drawdown_initial_capital_fraction: None,
+            ..expected_d()
+        };
+        let mut missing = fixture_d();
+        missing.equity_ranges.truncate(2);
+        let mut unbracketed = fixture_d();
+        unbracketed.equity_ranges[2] = EquityRange::new(9500.0, 10_000.0, 500.0, 0.0);
+        let mut nan_fall = fixture_d();
+        nan_fall.equity_ranges[1].fall = f64::NAN;
+        let mut skipped = fixture_d();
+        skipped
+            .equity
+            .insert(2, (t0() + TimeDelta::minutes(90), f64::NAN));
+        skipped
+            .equity_ranges
+            .insert(2, EquityRange::new(f64::NAN, f64::NAN, f64::NAN, f64::NAN));
         let rows = [
+            ("D", fixture_d(), expected_d()),
+            ("D with one range missing", missing, no_intrabar.clone()),
+            (
+                "D with a low above its close",
+                unbracketed,
+                no_intrabar.clone(),
+            ),
+            ("D with a NaN fall", nan_fall, no_intrabar),
+            (
+                "D with a skipped point",
+                skipped,
+                StrategyPerformance {
+                    skipped_equity_points: 1,
+                    ..expected_d()
+                },
+            ),
             (
                 "streaks ordered by exit, with breakevens, open and invalid trades",
                 streaks,
@@ -1109,6 +1347,7 @@ mod tests {
                     net_profit_fraction: Some(0.0),
                     max_drawdown: Some(100.0),
                     max_drawdown_fraction: Some(0.5),
+                    open_profit: Some(0.0),
                     ..Default::default()
                 },
             ),
@@ -1122,6 +1361,7 @@ mod tests {
                     periods_per_year: Some(8766.0),
                     sharpe_ratio: Some(5.864663773071857),
                     sortino_ratio: Some(7.742250169261054),
+                    open_profit: Some(0.0),
                     ..Default::default()
                 },
             ),
@@ -1135,6 +1375,7 @@ mod tests {
                     periods_per_year: Some(261.74591280653954),
                     sharpe_ratio: Some(1.08244877567277),
                     sortino_ratio: Some(1.433886945862868),
+                    open_profit: Some(0.0),
                     ..Default::default()
                 },
             ),
@@ -1146,6 +1387,7 @@ mod tests {
                     max_drawdown: Some(82.0),
                     max_drawdown_fraction: Some(0.008104368452263293),
                     periods_per_year: Some(8766.0),
+                    open_profit: Some(0.0),
                     ..Default::default()
                 },
             ),
@@ -1157,6 +1399,7 @@ mod tests {
                     max_drawdown: Some(150.0),
                     max_drawdown_fraction: Some(1.5),
                     periods_per_year: Some(2.9938524590163933),
+                    open_profit: Some(0.0),
                     ..Default::default()
                 },
             ),
@@ -1166,6 +1409,7 @@ mod tests {
                 StrategyPerformance {
                     net_profit_fraction: Some(0.0),
                     max_drawdown: Some(5.0),
+                    open_profit: Some(0.0),
                     ..Default::default()
                 },
             ),
@@ -1181,6 +1425,7 @@ mod tests {
                     average_trade: Some(5.0),
                     largest_winning_trade: Some(5.0),
                     max_consecutive_wins: 1,
+                    open_profit: Some(0.0),
                     ..Default::default()
                 },
             ),
@@ -1192,6 +1437,7 @@ mod tests {
                     max_drawdown: Some(0.0),
                     max_drawdown_fraction: Some(0.0),
                     periods_per_year: Some(8.908536585365853),
+                    open_profit: Some(0.0),
                     ..Default::default()
                 },
             ),
@@ -1201,6 +1447,7 @@ mod tests {
                 StrategyPerformance {
                     skipped_trades: 1,
                     skipped_equity_points: 1,
+                    open_profit: Some(0.0),
                     ..Default::default()
                 },
             ),
@@ -1209,6 +1456,7 @@ mod tests {
                 report(10_000.0),
                 StrategyPerformance {
                     net_profit_fraction: Some(0.0),
+                    open_profit: Some(0.0),
                     ..Default::default()
                 },
             ),
@@ -1224,6 +1472,24 @@ mod tests {
                 &expected,
             );
         }
+    }
+
+    #[test]
+    fn reports_saved_before_equity_ranges_load_without_intrabar_figures() {
+        // Literal report JSON in the format emitted before equity ranges existed.
+        let saved = r#"{"name":"Test","symbol":"TEST","timeframe":"Hour1","initial_capital":10000.0,"currency":null,"risk_free_rate":0.0,"properties":[],"trades":[{"side":"Buy","quantity":100.0,"entry_time":"2024-01-02T01:00:00Z","entry_price":100.0,"exit":null,"fees":0.0,"label":null}],"equity":[["2024-01-02T00:00:00Z",10000.0],["2024-01-02T01:00:00Z",10000.0],["2024-01-02T02:00:00Z",9000.0]]}"#;
+        let loaded: StrategyReport = serde_json::from_str(saved).unwrap();
+        assert!(loaded.equity_ranges.is_empty());
+        assert_matches(
+            "saved before equity ranges",
+            &loaded.performance(),
+            &StrategyPerformance {
+                intrabar_max_drawdown: None,
+                intrabar_max_drawdown_fraction: None,
+                intrabar_max_drawdown_initial_capital_fraction: None,
+                ..expected_d()
+            },
+        );
     }
 
     #[test]
@@ -1476,6 +1742,7 @@ mod tests {
             r.summary_csv(&r.performance(), &r.comparison(&[])),
             "section,name,value,unit,currency\n\
              summary,Net profit,44.5,money,USD\n\
+             summary,Open profit,45.5,money,USD\n\
              summary,Net return,0.445,percent,\n\
              summary,Gross profit,76.5,money,USD\n\
              summary,Gross loss,32,money,USD\n\
@@ -1483,8 +1750,11 @@ mod tests {
              summary,Win rate,40,percent,\n\
              summary,Average trade,8.9,money,USD\n\
              summary,Fees,5,money,USD\n\
-             summary,Maximum drawdown,90,money,USD\n\
-             summary,Maximum drawdown %,0.892857142857143,percent,\n\
+             summary,Maximum drawdown (close-to-close),90,money,USD\n\
+             summary,Maximum drawdown % (close-to-close),0.892857142857143,percent,\n\
+             summary,Maximum drawdown (intrabar),,money,USD\n\
+             summary,Maximum drawdown % (intrabar),,percent,\n\
+             summary,Maximum drawdown % of initial capital (intrabar),,percent,\n\
              summary,Sharpe ratio,,ratio,\n\
              summary,Sortino ratio,,ratio,\n\
              summary,Buy-and-hold return,,percent,\n\
@@ -1560,6 +1830,8 @@ mod tests {
             p.net_profit_fraction = Some(fraction);
             p.win_rate = Some(fraction);
             p.max_drawdown_fraction = Some(fraction);
+            p.intrabar_max_drawdown_fraction = Some(fraction);
+            p.intrabar_max_drawdown_initial_capital_fraction = Some(fraction);
             let mut c = r.comparison(&[]);
             c.buy_and_hold_return = Some(fraction);
             let csv = r.summary_csv(&p, &c);
@@ -1583,6 +1855,8 @@ mod tests {
         r.initial_capital = -0.0;
         let p = StrategyPerformance {
             net_profit: -0.0,
+            open_profit: Some(-0.0),
+            intrabar_max_drawdown: Some(-0.0),
             gross_profit: -0.0,
             gross_loss: -0.0,
             total_fees: -0.0,
@@ -1602,7 +1876,7 @@ mod tests {
                 assert_eq!(&row[2], "0", "{}", &row[1]);
             }
         }
-        // Nothing to compute from: counts are zero, everything else is an empty cell.
+        // Without trades, open profit and counts are zero; other metrics are unavailable.
         let empty = report(0.0);
         let csv = empty.summary_csv(&empty.performance(), &empty.comparison(&[]));
         assert!(csv.contains("summary,Win rate,,percent,\n"), "{csv}");

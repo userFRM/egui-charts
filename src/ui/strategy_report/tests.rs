@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{StrategyExit, StrategyTrade};
+use crate::model::{EquityRange, StrategyExit, StrategyTrade};
 use egui::{Role, Vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
@@ -143,4 +143,30 @@ fn equity_curve_uses_the_full_width_at_every_time_resolution() {
             .unwrap();
         assert!(points[1].x - points[0].x > 200.0, "{step}");
     }
+}
+
+#[test]
+fn summary_lists_open_profit() {
+    let hour = |h| DateTime::UNIX_EPOCH + chrono::TimeDelta::hours(h);
+    let mut report = StrategyReport::new("Held", "HELD", Timeframe::Hour1, 10_000.0);
+    report.trades = vec![StrategyTrade::new(OrderSide::Buy, 100.0, hour(1), 100.0)];
+    report.equity = vec![(hour(0), 10_000.0), (hour(1), 10_000.0), (hour(2), 9000.0)];
+    report.equity_ranges = vec![
+        EquityRange::new(10_000.0, 10_000.0, 0.0, 0.0),
+        EquityRange::new(7000.0, 10_000.0, 3000.0, 3000.0),
+        EquityRange::new(9000.0, 10_000.0, 1000.0, 0.0),
+    ];
+    let mut panel = StrategyReportPanel::default();
+    panel.set_report(Some(report), &[]);
+    let mut h = Harness::builder()
+        .with_size(Vec2::new(1440.0, 1800.0))
+        .build_ui_state(
+            |ui, panel: &mut StrategyReportPanel| {
+                panel.show(ui);
+            },
+            panel,
+        );
+    h.run();
+    h.get_by_label("Open profit");
+    h.get_by_label("-1000.00");
 }

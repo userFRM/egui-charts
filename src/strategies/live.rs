@@ -39,6 +39,7 @@ pub(super) struct LiveState {
     realized: f64,
     rejected: usize,
     tick: u64,
+    range: Option<EquityRange>,
 }
 
 // Compare bits so unchanged invalid feed values do not cause an endless rebuild.
@@ -147,6 +148,7 @@ impl Backtest {
                 realized: 0.0,
                 rejected: 0,
                 tick: 0,
+                range: None,
             })
         } else {
             previous.expect("an existing live run")
@@ -202,6 +204,7 @@ impl Backtest {
             open_tick: 0,
             fills: Some(&mut fills),
             forming: false,
+            range: live.range,
         };
         let mut finer: Vec<_> = lower.iter().filter(|bar| valid_bar(bar)).collect();
         finer.sort_by_key(|bar| bar.time);
@@ -286,6 +289,7 @@ impl Backtest {
         live.realized = run.realized;
         live.rejected = run.rejected;
         live.tick = run.tick;
+        live.range = run.range;
         for fill in &mut fills {
             live.sequence += 1;
             fill.sequence = live.sequence;
@@ -324,6 +328,7 @@ impl<'a> Run<'a> {
         };
         if self.trading {
             if previous.is_none() {
+                self.range = None;
                 self.open_bar();
             }
             self.fill_along(
@@ -549,6 +554,9 @@ mod tests {
         let report = engine.report().unwrap();
         assert_eq!(report.equity.last().unwrap().1, 10_000.);
         assert!(report.trades[0].exit.is_none());
+        bars[1].low = 104.;
+        bars[1].close = 104.;
+        assert!(engine.update(&mut strategy, &bars, &[]).is_empty());
         bars[1].high = 112.;
         bars[1].close = 112.;
         let fills = engine.update(&mut strategy, &bars, &[]);
@@ -570,6 +578,13 @@ mod tests {
                 .unwrap()
                 .profit,
             4.
+        );
+        bars.push(bar(2, 112.));
+        engine.update(&mut strategy, &bars, &[]);
+        // Two units from 108 fall to 104, then exit at 110: fall 8 and rise 12.
+        assert_eq!(
+            engine.report().unwrap().equity_ranges.last(),
+            Some(&EquityRange::new(9992.0, 10_004.0, 8.0, 12.0))
         );
         // A historical rebuild must not announce the observed forming-bar executions again.
         bars[0].high = 121.;

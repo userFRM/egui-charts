@@ -117,13 +117,13 @@ impl StrategyReportPanel {
             let performance = report.performance();
             let comparison = report.comparison(bars);
             let equity = report.equity_curve();
-            let mut peak = equity.first().map_or(0.0, |p| p.1);
-            let drawdown = equity
+            let excursions = report
+                .excursion_curve(true)
+                .or_else(|| report.excursion_curve(false))
+                .unwrap_or_default();
+            let drawdown = excursions
                 .iter()
-                .map(|&(t, e)| {
-                    peak = peak.max(e);
-                    (t, e - peak)
-                })
+                .map(|&(t, x)| (t, 0.0 - x.drawdown))
                 .filter(|(_, d)| d.is_finite())
                 .collect();
             let mut trades: Vec<_> = report
@@ -301,6 +301,7 @@ fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
     let theme = ui.active_theme();
     let metrics = [
         ("Net profit", money(Some(p.net_profit), report)),
+        ("Open profit", money(p.open_profit, report)),
         ("Net return", percent(p.net_profit_fraction)),
         ("Gross profit", money(Some(p.gross_profit), report)),
         ("Gross loss", money(Some(p.gross_loss), report)),
@@ -308,8 +309,26 @@ fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
         ("Win rate", percent(p.win_rate)),
         ("Average trade", money(p.average_trade, report)),
         ("Fees", money(Some(p.total_fees), report)),
-        ("Maximum drawdown", money(p.max_drawdown, report)),
-        ("Maximum drawdown %", percent(p.max_drawdown_fraction)),
+        (
+            "Maximum drawdown (close-to-close)",
+            money(p.max_drawdown, report),
+        ),
+        (
+            "Maximum drawdown % (close-to-close)",
+            percent(p.max_drawdown_fraction),
+        ),
+        (
+            "Maximum drawdown (intrabar)",
+            money(p.intrabar_max_drawdown, report),
+        ),
+        (
+            "Maximum drawdown % (intrabar)",
+            percent(p.intrabar_max_drawdown_fraction),
+        ),
+        (
+            "Maximum drawdown % of initial capital (intrabar)",
+            percent(p.intrabar_max_drawdown_initial_capital_fraction),
+        ),
         ("Sharpe ratio", number(p.sharpe_ratio)),
         ("Sortino ratio", number(p.sortino_ratio)),
         (

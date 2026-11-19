@@ -12,7 +12,8 @@ pub use live::StrategyFill;
 use crate::model::range_bar::price_path;
 use crate::model::rounding_tolerance;
 use crate::model::{
-    Bar, ChartType, OrderSide, OrderType, StrategyExit, StrategyReport, StrategyTrade, Timeframe,
+    Bar, ChartType, EquityRange, OrderSide, OrderType, StrategyExit, StrategyReport, StrategyTrade,
+    Timeframe,
 };
 
 /// The default entry size, converted to units at the execution price.
@@ -560,9 +561,12 @@ struct Lot {
 /// bar's close, stamped with the bar's time. With a start time it begins there and subsequent
 /// marks use chart-bar closing times. Fills use the times of their chart or finer bars.
 /// Close fills on trade-based bars use the last source time, which stays fixed as bars arrive.
+/// Each mark has an [`EquityRange`] recording the account extremes and largest fall and rise
+/// along the path its fills walk, including finer bars and the chart close.
 ///
 /// Bars are oldest first, in strictly increasing time order. A bar without finite prices, or
-/// whose high and low do not contain its open and close, fills no orders and has no equity value.
+/// whose high and low do not contain its open and close, fills no orders and has no equity
+/// value or range.
 /// Settings apply sizing, pyramiding, costs and funding at each execution; a funding deficit
 /// liquidates along the path. Optional finer bars determine fills within each chart bar.
 #[derive(Clone, Debug, PartialEq)]
@@ -677,6 +681,7 @@ impl Backtest {
             open_tick: 0,
             fills: None,
             forming: false,
+            range: None,
         };
         run.start_equity(self.timeframe, bars, &mut report);
         let mut processed = cooperative.then_some(0);
@@ -880,6 +885,8 @@ struct Run<'a> {
     open_tick: u64,
     fills: Option<&'a mut Vec<StrategyFill>>,
     forming: bool,
+    /// Equity movements reached along the current bar, retained across live updates.
+    range: Option<EquityRange>,
 }
 
 impl<'a> Run<'a> {
@@ -897,6 +904,10 @@ impl<'a> Run<'a> {
                     .unwrap_or(before.unwrap_or(DateTime::<Utc>::MIN_UTC)),
                 self.settings.initial_capital,
             ));
+            let capital = self.settings.initial_capital;
+            report
+                .equity_ranges
+                .push(EquityRange::new(capital, capital, 0.0, 0.0));
         }
     }
 
@@ -922,6 +933,9 @@ impl<'a> Run<'a> {
     ) {
         execution_step(processed).await;
         self.forming = false;
+        if walk {
+            self.range = None;
+        }
         let timeframe = report.timeframe;
         let bar = &bars[index];
         self.trading = self
@@ -1007,6 +1021,23 @@ impl<'a> Run<'a> {
             };
             self.fill_close(execution.close, close_time);
         }
+        let (equity, range) = if valid {
+            let equity = self.equity(execution.close);
+            // Include the chart close even when finer bars ended at a different price.
+            self.reach_equity(execution.close);
+            (
+                equity,
+                self.range
+                    .take()
+                    .unwrap_or(EquityRange::new(equity, equity, 0.0, 0.0)),
+            )
+        } else {
+            self.range = None;
+            (
+                f64::NAN,
+                EquityRange::new(f64::NAN, f64::NAN, f64::NAN, f64::NAN),
+            )
+        };
         report.equity.push((
             if self.settings.start_time.is_some() {
                 // A final execution bar has no known end; keep its mark after its last price.
@@ -1018,12 +1049,9 @@ impl<'a> Run<'a> {
             } else {
                 bar.time
             },
-            if valid {
-                self.equity(execution.close)
-            } else {
-                f64::NAN
-            },
+            equity,
         ));
+        report.equity_ranges.push(range);
     }
 
     fn report_trades(&self, report: &mut StrategyReport) {
@@ -1056,6 +1084,20 @@ impl<'a> Run<'a> {
                 .iter()
                 .map(|lot| sign(lot.side) * (price - lot.price) * lot.quantity)
                 .sum::<f64>()
+    }
+
+    /// Count the next account value reached along the fill path, including both sides of costs.
+    fn reach_equity(&mut self, price: f64) {
+        let equity = self.equity(price);
+        self.range = Some(match self.range {
+            None => EquityRange::new(equity, equity, 0.0, 0.0),
+            Some(range) => EquityRange::new(
+                range.low.min(equity),
+                range.high.max(equity),
+                range.fall.max(range.high - equity),
+                range.rise.max(equity - range.low),
+            ),
+        });
     }
 
     fn decide(&mut self, price: f64, after_fill: bool) {
@@ -1387,6 +1429,7 @@ impl<'a> Run<'a> {
     fn fill_segment(&mut self, mut start: f64, end: f64, time: DateTime<Utc>, advance: bool) {
         let mut at_end = !advance;
         loop {
+            self.reach_equity(start);
             let mut next: Option<(usize, f64, Pricing)> = None;
             for (index, order) in self.orders.iter().enumerate() {
                 if let Some((price, pricing)) = self.fill_price(order, start, end)
@@ -1411,6 +1454,7 @@ impl<'a> Run<'a> {
                     at_end = price == end;
                 }
                 start = price;
+                self.reach_equity(price);
                 let held = self.position().abs();
                 self.fill(
                     Working {
@@ -1427,6 +1471,7 @@ impl<'a> Run<'a> {
                     time,
                 );
                 if self.position().abs() == held {
+                    self.reach_equity(end);
                     return;
                 }
                 continue;
@@ -1446,6 +1491,7 @@ impl<'a> Run<'a> {
                 at_end = price == end;
             }
             start = price;
+            self.reach_equity(price);
             if let Kind::Entry(side, OrderType::StopLimit { limit, .. }) = self.orders[index].kind {
                 self.orders[index].triggered = Some(self.orders[index].kind);
                 self.orders[index].kind = Kind::Entry(side, OrderType::Limit(limit));
@@ -1642,6 +1688,104 @@ impl<'a> Run<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Hand calculations: long equity is 100 * price, short equity is 20,000 - 100 * price.
+    #[test]
+    fn equity_ranges_follow_the_fill_path() {
+        fn long(bar: usize, c: &mut StrategyContext<'_>) {
+            match bar {
+                0 => c.entry("A", OrderSide::Buy, 100.0, OrderType::Market),
+                1 => c.exit("X", None, None, None),
+                _ => {}
+            }
+        }
+        fn short(bar: usize, c: &mut StrategyContext<'_>) {
+            match bar {
+                0 => c.entry("A", OrderSide::Sell, 100.0, OrderType::Market),
+                1 => c.exit("X", None, None, None),
+                _ => {}
+            }
+        }
+        let bar = |time, (o, h, l, c)| Bar::new(time, o, h, l, c, 0.0);
+        let level = (100.0, 100.0, 100.0, 100.0);
+        let flat = EquityRange::new(10_000.0, 10_000.0, 0.0, 0.0);
+        let half = hour(1) + TimeDelta::minutes(30);
+        for (name, script, held, lower, range, drawdown, fraction) in [
+            (
+                "long falls 30% and closes level",
+                long as fn(usize, &mut StrategyContext<'_>),
+                (100.0, 100.0, 70.0, 100.0),
+                vec![],
+                EquityRange::new(7000.0, 10_000.0, 3000.0, 3000.0),
+                3000.0,
+                0.3,
+            ),
+            (
+                "long high before low",
+                long,
+                (100.0, 120.0, 70.0, 100.0),
+                vec![],
+                EquityRange::new(7000.0, 12_000.0, 5000.0, 3000.0),
+                5000.0,
+                5000.0 / 12_000.0,
+            ),
+            (
+                "short low before high",
+                short,
+                (100.0, 130.0, 80.0, 100.0),
+                vec![],
+                EquityRange::new(7000.0, 12_000.0, 5000.0, 3000.0),
+                5000.0,
+                5000.0 / 12_000.0,
+            ),
+            (
+                "finer bars set a long path",
+                long,
+                (100.0, 120.0, 70.0, 100.0),
+                vec![
+                    bar(hour(1), (100.0, 100.0, 70.0, 80.0)),
+                    bar(half, (80.0, 120.0, 80.0, 100.0)),
+                ],
+                EquityRange::new(7000.0, 12_000.0, 3000.0, 5000.0),
+                3000.0,
+                0.3,
+            ),
+            (
+                "finer bars set a short path",
+                short,
+                (100.0, 130.0, 80.0, 100.0),
+                vec![
+                    bar(hour(1), (100.0, 130.0, 100.0, 120.0)),
+                    bar(half, (120.0, 120.0, 80.0, 100.0)),
+                ],
+                EquityRange::new(7000.0, 12_000.0, 3000.0, 5000.0),
+                3000.0,
+                0.3,
+            ),
+        ] {
+            let bars = [bar(hour(0), level), bar(hour(1), held), bar(hour(2), level)];
+            let mut engine = Backtest::new("Ranges", "TEST", Timeframe::Hour1, 10_000.0);
+            engine.settings.long_funding = Some(0.0);
+            engine.settings.short_funding = Some(0.0);
+            let report = engine.run(&mut Script(script), &bars, &lower);
+            assert_eq!(report.equity_ranges, [flat, flat, range, flat], "{name}");
+            let p = report.performance();
+            assert_eq!(
+                (
+                    p.max_drawdown,
+                    p.intrabar_max_drawdown,
+                    p.intrabar_max_drawdown_fraction
+                ),
+                (Some(0.0), Some(drawdown), Some(fraction)),
+                "{name}"
+            );
+            assert_eq!(
+                p.intrabar_max_drawdown_initial_capital_fraction,
+                Some(drawdown / 10_000.0),
+                "{name}"
+            );
+        }
+    }
 
     #[test]
     fn historical_ticks_mask_unseen_prices_refresh_calculations_and_wait_for_the_next_point() {
@@ -4012,6 +4156,13 @@ mod tests {
                     "{name}: {actual} != {expected}"
                 );
             }
+            let p = report.performance();
+            assert_eq!(
+                p.intrabar_max_drawdown.is_some(),
+                p.max_drawdown.is_some(),
+                "{name}"
+            );
+            assert!(p.intrabar_max_drawdown >= p.max_drawdown, "{name}");
         }
 
         struct History {
