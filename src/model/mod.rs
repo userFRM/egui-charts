@@ -138,7 +138,7 @@ pub use timezone::{TimezoneId, TimezoneOffset};
 pub(crate) use timezone::{local_instant, local_time};
 pub use tpo::{
     ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLetter, TPOProfile,
-    derive_tick_size, to_tpo_profiles,
+    TPOProfilePeriod, derive_tick_size, to_tpo_profiles,
 };
 pub(crate) use trading::rounding_tolerance;
 pub use trading::{
