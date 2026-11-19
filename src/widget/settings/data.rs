@@ -433,8 +433,11 @@ pub struct ScalesAndLinesSettings {
     /// Whether to draw the bid and ask lines, apart from their tags. `None` keeps the chart's
     /// choice, as do settings saved without this field.
     pub show_bid_ask_lines: Option<bool>,
-    /// Whether to show high low.
+    /// Whether to show the high and low tags.
     pub show_high_low: bool,
+    /// Whether to draw the high and low lines, apart from their tags. `None` keeps the chart's
+    /// choice, as do settings saved without this field.
+    pub show_high_low_lines: Option<bool>,
     /// Whether to show prev close.
     pub show_prev_close: bool,
     /// Colour, width and pattern of the previous close line. `None` keeps the chart's, as do
@@ -482,6 +485,7 @@ impl Default for ScalesAndLinesSettings {
             show_bid_ask: false,
             show_bid_ask_lines: None,
             show_high_low: false,
+            show_high_low_lines: None,
             show_prev_close: false,
             prev_close_line: None,
         }

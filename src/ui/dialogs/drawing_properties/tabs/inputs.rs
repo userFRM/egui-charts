@@ -237,8 +237,8 @@ impl InputsTab {
                             0 => PositionSize::Quantity(1.0),
                             1 => PositionSize::RiskAmount(100.0),
                             _ => PositionSize::RiskPercent {
-                                account_size: 10_000.0,
-                                percent: 1.0,
+                                account_size: 1_000.0,
+                                percent: 25.0,
                             },
                         };
                     }

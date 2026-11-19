@@ -1435,6 +1435,68 @@ fn price_lines_paint_their_configured_styles() {
     }
 }
 
+/// Without a colour of its own the previous close line and its tag are mid grey #555555 in the
+/// light theme, apart from its black scale text, and take the secondary text colour of the dark
+/// and high contrast themes, rgb(184, 184, 184) and rgb(235, 235, 235). A colour set before the
+/// theme changes stays in every theme. Bar 98, the session before the last bar, closed at 110.
+#[test]
+fn previous_close_line_follows_the_theme_until_it_has_a_colour() {
+    use crate::theme::Theme;
+    use egui::Color32;
+    let set = Color32::from_rgb(11, 201, 201);
+    for (name, theme, color, expected) in [
+        ("light", Theme::light(), None, Color32::from_rgb(85, 85, 85)),
+        (
+            "dark",
+            Theme::dark(),
+            None,
+            Color32::from_rgb(184, 184, 184),
+        ),
+        (
+            "high contrast",
+            Theme::high_contrast(),
+            None,
+            Color32::from_rgb(235, 235, 235),
+        ),
+        ("light", Theme::light(), Some(set), set),
+        ("dark", Theme::dark(), Some(set), set),
+        ("high contrast", Theme::high_contrast(), Some(set), set),
+    ] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0, 120.0]);
+        chart.config.show_volume = false;
+        chart.config.show_quote_boxes = false;
+        chart.config.show_prev_close_line = true;
+        chart.config.show_symbol_prev_close = true;
+        chart.config.prev_close_line.color = color;
+        chart.set_theme(&ctx, &theme);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+        let plot = chart.last_rendered_price_rect;
+        let y = chart.last_price_map.price_to_y(110.0);
+        // The dotted line is segments or one mesh, as in the independence test above.
+        let line = painted.iter().any(|shape| match shape {
+            Shape::LineSegment { points, stroke } => {
+                stroke.color == expected && points.iter().all(|point| (point.y - y).abs() < 0.01)
+            }
+            Shape::Mesh(mesh) => {
+                mesh.vertices.len() > 8
+                    && mesh
+                        .vertices
+                        .iter()
+                        .all(|vertex| vertex.color == expected && (vertex.pos.y - y).abs() <= 1.5)
+            }
+            _ => false,
+        });
+        let tag = painted.iter().any(|shape| {
+            matches!(shape, Shape::Rect(tag) if tag.fill == expected
+                && tag.rect.left() >= plot.right()
+                && (tag.rect.center().y - y).abs() < 1.0)
+        });
+        assert!(line && tag, "{name} {color:?}: line {line}, tag {tag}");
+    }
+}
+
 /// The average close line and tag sit at the mean close of the bars in view and move with the
 /// view; bars without a value are left out. Bar i closes at 100 + i, so bars 10 to 19 average
 /// 114.5 and bars 50 to 59 154.5; without bar 15 bars 10 to 19 average (1145 - 115) / 9.
