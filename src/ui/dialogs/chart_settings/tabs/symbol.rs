@@ -8,7 +8,7 @@ use crate::theme::Theme;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::widget::settings::PrecisionMode;
-use egui::{RichText, Ui};
+use egui::{Color32, RichText, Ui};
 
 /// Height of a candle part row, giving a 50 point pitch with the spacing below it.
 const CANDLE_ROW_HEIGHT: f32 = 38.0;
@@ -25,6 +25,37 @@ impl SettingsDialog {
                         "Analyst price targets",
                         theme.ui.text,
                     );
+                    let targets_shown = self.settings.show_price_targets;
+                    ui.add_enabled_ui(targets_shown, |ui| {
+                        self.draw_setting_row_with_controls(ui, "Positive", theme, |ui, dialog| {
+                            let mut color = dialog
+                                .settings
+                                .price_target_positive_color
+                                .unwrap_or(Color32::PLACEHOLDER);
+                            if pick_color(
+                                ui,
+                                &mut dialog.color_picker_states.price_target_positive,
+                                "price_target_positive",
+                                &mut color,
+                            ) {
+                                dialog.settings.price_target_positive_color = Some(color);
+                            }
+                        });
+                        self.draw_setting_row_with_controls(ui, "Negative", theme, |ui, dialog| {
+                            let mut color = dialog
+                                .settings
+                                .price_target_negative_color
+                                .unwrap_or(Color32::PLACEHOLDER);
+                            if pick_color(
+                                ui,
+                                &mut dialog.color_picker_states.price_target_negative,
+                                "price_target_negative",
+                                &mut color,
+                            ) {
+                                dialog.settings.price_target_negative_color = Some(color);
+                            }
+                        });
+                    });
                 }
                 let kind = self.settings.chart_type;
                 if kind.is_time_independent()

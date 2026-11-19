@@ -511,20 +511,6 @@ impl Trading {
 /// Why an order is refused while the broker is not live.
 const NOT_LIVE: &str = "the broker is not connected";
 
-/// Whether every number of `rules` is positive and finite and a time in force is offered.
-fn valid(rules: &TradingRules) -> bool {
-    let positive = |value: f64| value.is_finite() && value > 0.0;
-    positive(rules.quantity_step)
-        && positive(rules.min_quantity)
-        && positive(rules.point_value)
-        && rules
-            .max_quantity
-            .is_none_or(|max| positive(max) && max >= rules.min_quantity)
-        && rules.leverage.is_none_or(positive)
-        && rules.pip_value.is_none_or(positive)
-        && !rules.time_in_force.is_empty()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -23,10 +23,34 @@ test('map labels end at word boundaries and retain their full group tooltip', ()
   }
   assert.ok(labels > 0);
   assert.equal([...map.matchAll(/<text\b/g)].length, labels + areas.length);
+  const headings = [...map.matchAll(/<text x="([\d.]+)" y="([\d.]+)"[^>]*>(.*?)<\/text>/g)]
+    .filter((match) => areas.some((area) => match[3].startsWith(`${area}: `)));
+  assert.deepEqual(headings.map((match) => match[3].split(':')[0]), areas);
+  assert.equal(new Set(headings.map((match) => match[1])).size, 2);
+  assert.equal(new Set(headings.map((match) => match[2])).size, 5);
   assert.ok(page.includes(map), 'the inline map exposes cell tooltips on the status page');
 });
 
 test('published group tables and badges count only independently verified features', () => {
+  assert.deepEqual(areas, ['Chart', 'Drawings', 'Studies', 'Order flow', 'Options', 'Trading', 'Alerts', 'Workspace', 'Builder API', 'Terminal']);
+  for (const [group, area] of [
+    ['Broker API', 'Trading'], ['Trading panel', 'Trading'], ['Alerts', 'Alerts'], ['Replay', 'Chart'],
+    ['Toolbars and panels', 'Workspace'], ['Templates and layouts', 'Workspace'], ['Watchlists and screeners', 'Workspace'],
+  ]) {
+    for (const feature of features.filter((feature) => feature.group === group)) {
+      const terminalOnly = feature.source && feature.source.split(';').every((source) => source.startsWith('terminal/'));
+      assert.equal(feature.area, terminalOnly ? 'Terminal' : area, feature.feature);
+    }
+  }
+  const chartMarks = ['Earnings, dividends and splits marked on the chart', 'Economic events on the chart', 'News headlines marked on the chart time scale'];
+  for (const feature of features.filter((feature) => feature.group === 'News, calendar and social')) {
+    assert.equal(feature.area, chartMarks.includes(feature.feature) ? 'Chart' : 'Workspace', feature.feature);
+  }
+  for (const feature of features.filter((feature) => feature.area === 'Terminal')) {
+    assert.ok(feature.source && feature.source.split(';').every((source) => source.startsWith('terminal/')), feature.feature);
+  }
+  const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8');
+  assert.deepEqual([...readme.matchAll(/\/progress\/badge-([a-z-]+)\.svg/g)].map((match) => match[1]), areas.map(slug));
   assert.deepEqual(statuses, ['verified', 'unverified', 'incomplete', 'missing']);
   const sample = statuses.map((status) => ({ ...features[0], status }));
   assert.deepEqual(counts(sample), { verified: 1, unverified: 1, incomplete: 1, missing: 1, total: 4 });
@@ -37,14 +61,14 @@ test('published group tables and badges count only independently verified featur
     const members = features.filter((feature) => feature.area === area);
     const summary = statuses.map((status) => members.filter((feature) => feature.status === status).length);
     const badge = readFileSync(new URL(`./dist/progress/badge-${slug(area)}.svg`, import.meta.url), 'utf8');
-    assert.ok(badge.includes(`aria-label="${area.toLowerCase()} verified: ${(summary[0] / members.length * 100).toFixed(1)}%"`), area);
+    assert.ok(badge.includes(`aria-label="${area.toLowerCase()} verified: ${percentage(members)}%"`), area);
     const groups = [...new Set(members.map((feature) => feature.group))];
     const expected = groups.map((group) => {
       const rows = members.filter((feature) => feature.group === group);
       const counts = statuses.map((status) => rows.filter((feature) => feature.status === status).length);
       return [escape(group), ...counts.map(String), String(rows.length), `${Math.round(counts[0] / rows.length * 100)}%`];
     });
-    expected.push(['Total', ...summary.map(String), String(members.length), `${(summary[0] / members.length * 100).toFixed(1)}%`]);
+    expected.push(['Total', ...summary.map(String), String(members.length), `${percentage(members)}%`]);
     const rows = [...sections[index].matchAll(/<tr\b[^>]*>(.*?)<\/tr>/gs)].slice(1);
     assert.deepEqual(rows.map((row) => [...row[1].matchAll(/<t[dh]\b[^>]*>(.*?)<\/t[dh]>/g)].map((cell) => cell[1])), expected, area);
   }
