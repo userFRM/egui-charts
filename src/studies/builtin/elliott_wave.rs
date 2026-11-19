@@ -70,6 +70,17 @@ enum SwingMode {
     Percent,
 }
 
+impl SwingMode {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Bars => "Bars",
+            Self::Price => "Price",
+            Self::Percent => "Percent",
+        }
+    }
+}
+
 /// Elliott Wave: five-wave impulses in confirmed swing pivots.
 #[derive(Clone, Debug)]
 pub struct ElliottWave {

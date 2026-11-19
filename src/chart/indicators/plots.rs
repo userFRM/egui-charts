@@ -438,12 +438,39 @@ pub(crate) fn paint_drawings(
         timeframe: None,
         finer: &[],
     };
-    for drawing in mapped_drawings(study, coords, price_to_y) {
+    let drawings = mapped_drawings(study, coords, price_to_y);
+    for drawing in &drawings {
         drawing.render(
             &context.painter.with_clip_rect(context.rect),
             context.rect,
             &view,
         );
+    }
+    let ctx = context.painter.ctx();
+    // Pattern boundaries share ids, so hit-test each drawing on its own, topmost first.
+    if let Some(pos) = ctx.pointer_hover_pos().filter(|&pos| {
+        context.rect.contains(pos) && ctx.layer_id_at(pos) == Some(context.painter.layer_id())
+    }) && let Some(label) = drawings.iter().rev().find_map(|drawing| {
+        let label = drawing.label.as_deref()?;
+        crate::drawings::services::DrawingInteraction::new()
+            .hit_test(pos, std::slice::from_ref(drawing), "")
+            .map(|_| label)
+    }) {
+        // One id per pane, shared with the marks, so egui stacks the tooltips of every study
+        // under the pointer instead of painting them over each other.
+        egui::Tooltip::always_open(
+            ctx.clone(),
+            context.painter.layer_id(),
+            egui::Id::unique((
+                "study-mark",
+                context.rect.min.x.to_bits(),
+                context.rect.min.y.to_bits(),
+            )),
+            egui::Rect::from_center_size(pos, egui::Vec2::splat(10.0)),
+        )
+        .show(|ui| {
+            ui.label(label);
+        });
     }
 }
 

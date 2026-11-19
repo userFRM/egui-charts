@@ -3,10 +3,10 @@
 use super::Chart;
 use crate::data::FeedError;
 use crate::data::inbox::Inbox;
+use crate::drawings::Drawing;
 use crate::drawings::persistence::{
     DrawingStorage, LoadError, SkipReason, SkippedDrawing, StorageError, StoredPane,
 };
-use crate::drawings::{Drawing, FolderSync};
 use crate::localization::format_text_or_english as message;
 use crate::services::document::{Received, StoredDocument, copy_number};
 use crate::services::{ConflictChoice, Revision, Storage, StoreKind};
@@ -100,6 +100,10 @@ pub(super) struct DrawingStore {
     /// The stored drawings of each symbol this chart read or wrote, from the first
     /// [`Chart::read_stored_symbols`] on.
     symbols: Option<HashMap<String, DrawingStorage>>,
+    /// Per symbol, the edit time by stored id of each drawing the document held, when this chart
+    /// last showed what it read, in a top-level folder kept on one chart or in one layout, as
+    /// earlier versions stored such drawings: written back while unchanged.
+    legacy: HashMap<String, HashMap<String, i64>>,
 }
 
 /// The drawings a restored layout showed of a symbol, until the stored ones are read again and
@@ -113,14 +117,6 @@ struct Restored {
     /// The stored document read since, with edits made before it was read merged in, and
     /// whether storage held the document.
     read: Option<(String, bool)>,
-}
-
-/// Whether the top-level folder of `drawing` keeps it on one chart or in one layout.
-fn confined(drawing: &Drawing) -> bool {
-    matches!(
-        drawing.folder_sync_mode(),
-        Some(FolderSync::Chart | FolderSync::Layout)
-    )
 }
 
 impl DrawingStore {
@@ -137,6 +133,7 @@ impl DrawingStore {
         self.documents.remove(symbol);
         self.loaded.remove(symbol);
         self.unshown_panes.remove(symbol);
+        self.legacy.remove(symbol);
         self.documents.shrink_to_fit();
         self.loaded.shrink_to_fit();
         true
@@ -406,6 +403,14 @@ impl Chart {
     /// revisions, the later write replaces the earlier one, including edits on two charts within
     /// the time one write takes.
     ///
+    /// Drawings in a top-level folder kept on the chart or in the layout
+    /// ([`FolderSync::Chart`](crate::drawings::FolderSync::Chart),
+    /// [`FolderSync::Layout`](crate::drawings::FolderSync::Layout)) are not written: they stay on
+    /// the chart through every read, come back with the chart's saved layout (`Chart::snapshot`),
+    /// also those of a symbol the chart showed before, and no other chart of `storage` shows
+    /// them. One that a document already holds in such a folder, as earlier versions stored them,
+    /// is written back while it is unchanged.
+    ///
     /// Per-drawing storage notifications are disabled and cleared. To consume them alongside
     /// automatic storage, call `chart.drawings_mut().set_sync_enabled(true)` after attaching it.
     pub fn set_storage(&mut self, storage: Arc<dyn Storage>) {
@@ -428,6 +433,7 @@ impl Chart {
             unshown_panes: HashMap::new(),
             copies: LocalCopies::default(),
             symbols: None,
+            legacy: HashMap::new(),
         });
     }
 
@@ -716,6 +722,138 @@ impl Chart {
         self.drawing_store.is_some()
     }
 
+    /// Whether this chart writes `drawing`, one of its drawings of `symbol`, to its storage: a
+    /// saveable drawing outside a top-level folder kept on one chart or in one layout, or one in
+    /// such a folder that the document held when the chart last read it and that is unchanged
+    /// since, as earlier versions stored such drawings.
+    pub(super) fn stores(&self, symbol: &str, drawing: &Drawing) -> bool {
+        let Some(store) = &self.drawing_store else {
+            return false;
+        };
+        drawing.saveable
+            && (!drawing.confined()
+                || drawing
+                    .stored_id
+                    .as_ref()
+                    .and_then(|id| store.legacy.get(symbol)?.get(id))
+                    .is_some_and(|edited| drawing.modified_at == Some(*edited)))
+    }
+
+    /// Notes which drawings of the shown symbol `stored` holds in a top-level folder kept on one
+    /// chart or in one layout, which [`Self::stores`] writes back while unchanged.
+    fn note_legacy(&mut self, stored: &DrawingStorage) {
+        let held: HashMap<String, i64> = stored
+            .drawings()
+            .iter()
+            .filter(|record| record.drawing.confined())
+            .map(|record| (record.id.clone(), record.modified_at))
+            .collect();
+        let store = self.drawing_store.as_mut().expect("drawing storage");
+        if held.is_empty() {
+            store.legacy.remove(&self.symbol);
+        } else {
+            store.legacy.insert(self.symbol.clone(), held);
+        }
+    }
+
+    /// The saveable drawings this chart keeps aside for each symbol it does not show that its
+    /// storage does not hold (see [`Self::stores`]), one document per symbol in symbol order, for
+    /// [`Chart::snapshot`]. Empty without storage. An anchor without the time it had on its
+    /// symbol's bars is refused, as [`Chart::save_drawings`] refuses one it cannot map.
+    #[cfg(feature = "ui")]
+    pub(super) fn kept_aside_drawings(
+        &self,
+    ) -> Result<Vec<DrawingStorage>, crate::drawings::persistence::SaveError> {
+        use crate::drawings::manager::sync_id;
+        use crate::drawings::persistence::SaveError;
+        if self.drawing_store.is_none() {
+            return Ok(Vec::new());
+        }
+        let mut symbols: Vec<_> = self.symbol_drawings.iter().collect();
+        symbols.sort_by_key(|(symbol, _)| *symbol);
+        let mut documents = Vec::new();
+        for (symbol, (manager, _)) in symbols {
+            let kept: Vec<&Drawing> = manager
+                .drawings
+                .iter()
+                .filter(|drawing| drawing.saveable && !self.stores(symbol, drawing))
+                .collect();
+            if kept.is_empty() {
+                continue;
+            }
+            for drawing in &kept {
+                // The shown bars are another symbol's: only a retained time places the point.
+                if let Some(point) = drawing.chart_points.iter().position(|point| {
+                    point
+                        .time_anchor
+                        .is_none_or(|(_, index)| index != point.bar_idx)
+                }) {
+                    return Err(SaveError::UnmappedAnchor {
+                        id: sync_id(drawing),
+                        point,
+                    });
+                }
+            }
+            let mut document = self.store_drawings(kept)?;
+            document.symbol.clone_from(symbol);
+            documents.push(document);
+        }
+        Ok(documents)
+    }
+
+    /// Puts aside the drawings of `documents`, a snapshot's
+    /// [`other_symbol_drawings`](super::ChartSnapshot::other_symbol_drawings), for their symbols,
+    /// in place of the drawings kept aside that storage does not hold: those belong to the state
+    /// the snapshot replaces. Does nothing without storage.
+    #[cfg(feature = "ui")]
+    pub(super) fn restore_aside_drawings(&mut self, documents: &[serde_json::Value]) {
+        if self.drawing_store.is_none() {
+            return;
+        }
+        let replaced: Vec<(String, Vec<usize>)> = self
+            .symbol_drawings
+            .iter()
+            .map(|(symbol, (manager, _))| {
+                let ids = manager
+                    .drawings
+                    .iter()
+                    .filter(|drawing| drawing.saveable && !self.stores(symbol, drawing))
+                    .map(|drawing| drawing.id)
+                    .collect();
+                (symbol.clone(), ids)
+            })
+            .collect();
+        for (symbol, ids) in replaced {
+            if let Some((manager, _)) = self.symbol_drawings.get_mut(&symbol) {
+                manager
+                    .drawings
+                    .retain(|drawing| !ids.contains(&drawing.id));
+            }
+        }
+        for document in documents {
+            // Checked before the restore changed the chart.
+            let Ok((stored, _)) = DrawingStorage::from_json(&document.to_string()) else {
+                continue;
+            };
+            if stored.symbol == self.symbol {
+                continue;
+            }
+            // Placed at their times once the chart shows the symbol and its bars.
+            let drawings: Vec<Drawing> = stored
+                .drawings()
+                .iter()
+                .map(|record| self.restored_drawing(record, true))
+                .collect();
+            let registry = self.drawings.registry.clone();
+            let (manager, _) = self.symbol_drawings.entry(stored.symbol).or_default();
+            manager.registry = registry;
+            for drawing in drawings {
+                // The check here accepted each when the saving chart kept it aside.
+                let _ = manager.add_synced_drawing(drawing);
+            }
+        }
+    }
+
     /// Tells each chart in `charts` which documents the others that keep drawings in the same
     /// storage wrote or read again since the last call, so that it reads them again. Returns
     /// whether any chart was told.
@@ -969,10 +1107,13 @@ impl Chart {
         let remap = stored
             .as_ref()
             .is_some_and(|stored| self.written_by_restored_chart(stored));
-        let previous = self.drawings.before_read();
+        let previous = self.drawings.before_read(true);
         let loaded = self.load_drawings_remapped(json, remap);
         if loaded.is_ok() {
             self.drawings.keep_across_read(previous);
+            if let Some(stored) = &stored {
+                self.note_legacy(stored);
+            }
         }
         let refused = match loaded {
             Ok(skipped) if skipped.is_empty() => None,
@@ -1004,7 +1145,7 @@ impl Chart {
             return;
         };
         let remap = self.written_by_restored_chart(&stored);
-        let previous = self.drawings.before_read();
+        let previous = self.drawings.before_read(false);
         // Drawings that are never stored come back through `keep_across_read`.
         let mut own: Vec<Option<Drawing>> = self
             .drawings
@@ -1024,11 +1165,21 @@ impl Chart {
         let mut records = HashMap::new();
         let mut changed = false;
         for (index, record) in stored.drawings().iter().enumerate() {
-            let mine = position.get(&record.id).and_then(|&at| own[at].take());
-            match (shown.get(&record.id), mine) {
+            // A confined drawing of the chart is another one than a stored drawing under its
+            // stored id that is not confined and was created at another time.
+            let at = position.get(&record.id).copied();
+            let other = at.is_some_and(|at| {
+                own[at].as_ref().is_some_and(|drawing| {
+                    drawing.confined()
+                        && !record.drawing.confined()
+                        && drawing.created_at != Some(record.created_at)
+                })
+            });
+            let mine = at.filter(|_| !other).and_then(|at| own[at].take());
+            match (shown.get(&record.id).filter(|_| !other), mine) {
                 (Some(edited_at), Some(drawing))
                     if drawing.modified_at != *edited_at
-                        || (confined(&drawing) && confined(&record.drawing)) =>
+                        || (drawing.confined() && record.drawing.confined()) =>
                 {
                     drawings.push(drawing);
                     changed = true;
@@ -1049,7 +1200,7 @@ impl Chart {
                 .and_then(|id| shown.get(id))
                 .is_some_and(|edited_at| *edited_at == drawing.modified_at);
             // Shown by the layout and deleted elsewhere since: it stays deleted.
-            if existed && unedited && !confined(&drawing) {
+            if existed && unedited && !drawing.confined() {
                 continue;
             }
             if drawing.stored_id.is_none() {
@@ -1066,6 +1217,7 @@ impl Chart {
         let refused = self.replace_drawings(drawings);
         self.drawings.keep_across_read(previous);
         self.keep_unshown_panes(Some(&stored));
+        self.note_legacy(&stored);
         // The chart's own drawings passed the same check when they were added.
         let skipped: Vec<SkippedDrawing> = refused
             .into_iter()
@@ -1134,7 +1286,13 @@ impl Chart {
         {
             return;
         }
-        let mut drawings = self.save_drawings();
+        // Drawings kept on one chart or in one layout stay with the chart and its snapshots.
+        let mut drawings = self.store_drawings(
+            self.drawings
+                .drawings
+                .iter()
+                .filter(|drawing| self.stores(&self.symbol, drawing)),
+        );
         let store = self.drawing_store.as_mut().expect("drawing storage");
         // A drawing whose study is not shown here stays in that study's pane for the charts
         // that show it.
@@ -1768,13 +1926,21 @@ mod tests {
                 let mut overlay = line_at(0.0, 9.0);
                 overlay.saveable = false;
                 draw_line(&mut mine, overlay);
+                // Nor do the drawings kept on the chart, which storage does not hold (#3436).
+                mine.user_action(|chart| {
+                    let id = chart.drawings_mut().add_drawing(line_at(0.0, 8.0)).unwrap();
+                    let folder = ["Mine".to_owned()];
+                    assert!(chart.drawings_mut().move_to_folder(&[id], &[], &folder));
+                    let sync = Some(crate::drawings::FolderSync::Chart);
+                    assert!(chart.drawings_mut().set_folder_sync(&folder, sync));
+                });
                 mine.load_local_copy("A (local copy)");
                 assert!(mine.flush_stored_drawings());
-                assert_eq!(shown_prices(&mine), [9.0, 10.0, 11.0]);
+                assert_eq!(shown_prices(&mine), [8.0, 9.0, 10.0, 11.0]);
                 assert_eq!(stored(&host, "A"), Some(vec![10.0, 11.0]));
                 assert!(mine.undo());
                 assert!(mine.flush_stored_drawings());
-                assert_eq!(shown_prices(&mine), [9.0, 10.0, 10.5]);
+                assert_eq!(shown_prices(&mine), [8.0, 9.0, 10.0, 10.5]);
                 assert_eq!(stored(&host, "A"), Some(vec![10.0, 10.5]));
                 // Only a listed copy is discarded.
                 mine.discard_local_copy("A (local copy 02)");
@@ -2018,6 +2184,69 @@ mod tests {
         draw_line(&mut a, line_at(4.0, 14.0));
         show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
         assert!(b.take_storage_error().is_some(), "a new run is reported");
+    }
+
+    /// Guards #3436: a drawing kept on its chart stays through a read of the stored drawings.
+    /// Read again as an earlier version stored it, it is the drawing read; drawn on the chart, it
+    /// is another drawing than one stored under the same id, and takes an id of its own, so that
+    /// the chart's saved layout holds both.
+    // Saving and opening a layout needs `ui`.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn a_drawing_kept_on_a_chart_stays_through_a_read_under_an_id_of_its_own() {
+        use crate::drawings::FolderSync;
+        let keep = |chart: &mut Chart| {
+            let id = chart.drawings().drawings[0].id;
+            let folder = ["Mine".to_owned()];
+            assert!(chart.drawings_mut().move_to_folder(&[id], &[], &folder));
+            assert!(
+                chart
+                    .drawings_mut()
+                    .set_folder_sync(&folder, Some(FolderSync::Chart))
+            );
+        };
+        for earlier in [true, false] {
+            let host = Arc::new(Host::default());
+            if earlier {
+                let mut stored = chart_on(None);
+                draw_line(&mut stored, line_at(4.0, 10.0));
+                keep(&mut stored);
+                let json = stored.save_drawings().unwrap().to_json().unwrap();
+                host.documents.lock().unwrap().insert("A".into(), json);
+            }
+            let storage: Arc<dyn Storage> = host.clone();
+            let (mut a, mut b) = (chart_on(Some(storage.clone())), chart_on(Some(storage)));
+            let mut layout = ChartLayout::default();
+            layout.mode = ChartLayoutMode::TwoHorizontal;
+            let ctx = egui::Context::default();
+            show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+            if !earlier {
+                // Kept on the chart from the start, so that no document ever holds it.
+                a.user_action(|chart| {
+                    chart
+                        .drawings_mut()
+                        .add_drawing(line_at(4.0, 10.0))
+                        .unwrap();
+                    keep(chart);
+                });
+                show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+            }
+            // The other chart's first drawing takes the id the kept one has on its own chart.
+            draw_line(&mut b, line_at(4.0, 11.0));
+            show_frames(&ctx, &mut layout, &mut [&mut a, &mut b], 0.1);
+            let stored = if earlier {
+                vec![10.0, 11.0]
+            } else {
+                vec![11.0]
+            };
+            assert_eq!(
+                (shown_prices(&a), stored_prices(&host)),
+                (vec![10.0, 11.0], stored),
+                "earlier {earlier}"
+            );
+            let saved = a.snapshot().unwrap().drawings.unwrap().to_string();
+            assert_eq!(prices_in(&saved), [10.0, 11.0], "earlier {earlier}");
+        }
     }
 
     /// Guards #1619 and #1650: with drawing sync on, a chart outside the charts' shared storage

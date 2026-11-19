@@ -92,6 +92,7 @@ pub fn resample(
 /// and the last output includes all available inputs even while its period is forming.
 /// Daily and longer inputs already carry their trading date as a calendar label. Pass timeframes
 /// for UTC labels, or matching source and target [`BarClock`] values to retain another calendar.
+/// With `extended_hours`, both extended and overnight windows participate.
 /// Exchange time determines the trading date; the target clock determines its output label.
 ///
 /// As with [`resample`], returns `None` if an input straddles target slots or folded volume
@@ -149,11 +150,7 @@ pub(crate) fn resample_periods(
     }
     let mut session = instrument.session.clone();
     if !extended_hours && let Some(session) = &mut session {
-        // Keep an empty regular schedule distinct from an explicitly continuous session.
-        if session.windows.is_empty() && !session.extended_windows.is_empty() {
-            return Some(Vec::new());
-        }
-        session.clear_extended_windows();
+        session.select_hours(false, false);
     }
     let provider = ExchangeSessionProvider::new(zone, session);
     let opens = provider.opens(bars.iter().map(|bar| bar.time));
@@ -271,6 +268,36 @@ mod tests {
                     extended
                 ),
                 Some(expected)
+            );
+        }
+        // Only the override opens regular hours; the weekly pre-market must stay closed.
+        let date = "2024-03-15".parse().unwrap();
+        let extended_only = Session::new([]).with_extended_windows([SessionWindow::new(
+            [Weekday::Fri],
+            clock(8, 30),
+            clock(9, 30),
+        )]);
+        for (session, expected) in [
+            (extended_only.clone(), vec![]),
+            (
+                extended_only.with_overrides([crate::model::SessionOverride::new(date)
+                    .with_windows([crate::model::OverrideWindow::new(
+                        clock(9, 30),
+                        clock(16, 0),
+                    )])]),
+                vec![bar("2024-03-15T00:00:00Z", [10.0, 16.0, 7.0, 8.0, 14.0])],
+            ),
+        ] {
+            let instrument = instrument.clone().with_session(session);
+            assert_eq!(
+                resample_with_session(
+                    &input,
+                    Timeframe::Hour1,
+                    Timeframe::Day1,
+                    &instrument,
+                    false
+                ),
+                Some(expected),
             );
         }
         let continuous = Instrument::new("CONTINUOUS")

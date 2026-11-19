@@ -1,4 +1,4 @@
-//! Avg True Range (ATR) Indicator
+//! Average True Range (ATR) Indicator
 //!
 //! ATR measures market volatility by decomposing the entire range of an asset price.
 //! It's commonly used for position sizing and stop-loss placement.
@@ -39,7 +39,19 @@ pub enum AtrSmoothing {
     Weighted,
 }
 
-/// Avg True Range indicator
+impl AtrSmoothing {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Wilder => "Wilder",
+            Self::Simple => "Simple",
+            Self::Exponential => "Exponential",
+            Self::Weighted => "Weighted",
+        }
+    }
+}
+
+/// Average True Range indicator
 #[derive(Clone, Debug)]
 pub struct ATR {
     period: usize,
@@ -130,7 +142,7 @@ impl Indicator for ATR {
     }
 
     fn desc(&self) -> &str {
-        "Avg True Range - Volatility indicator"
+        "Average True Range - Volatility indicator"
     }
 
     fn calculate(&mut self, data: &[Bar]) {
