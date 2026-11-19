@@ -167,23 +167,6 @@ const TYPES: [PatternType; 3] = [
     PatternType::Bearish,
 ];
 
-/// A choice named by each value's debug text, with its type's default kept for resetting.
-fn choice<T: Copy + Default + PartialEq + std::fmt::Debug>(
-    id: &str,
-    label: &str,
-    value: T,
-    choices: &[T],
-) -> StudyInput {
-    let at = |value: T| InputValue::Choice(choices.iter().position(|&v| v == value).unwrap_or(0));
-    StudyInput::new(
-        id,
-        label,
-        at(value),
-        InputKind::Choice(choices.iter().map(|v| format!("{v:?}")).collect()),
-    )
-    .with_default(at(T::default()))
-}
-
 /// All Candlestick Patterns: the common candlestick patterns, each with a toggle, marked
 /// and labelled at the bar that completes them.
 ///
@@ -293,20 +276,22 @@ impl Default for CandlestickPatterns {
 
 impl Indicator for CandlestickPatterns {
     fn inputs(&self) -> Vec<StudyInput> {
-        let mut inputs = vec![choice(
-            "trend",
-            "Detect trend based on",
-            self.trend,
-            &TRENDS,
-        )];
+        use crate::studies::inputs::input_spec;
+
+        let mut inputs = vec![
+            input_spec!("trend", self.trend, choice("Detect trend based on", TRENDS))
+                .with_default(InputValue::Choice(0)),
+        ];
         // The single study always marks its pattern, whatever its side.
         if self.only.is_none() {
-            inputs.push(choice(
-                "pattern_type",
-                "Pattern type",
-                self.pattern_type,
-                &TYPES,
-            ));
+            inputs.push(
+                input_spec!(
+                    "pattern_type",
+                    self.pattern_type,
+                    choice("Pattern type", TYPES)
+                )
+                .with_default(InputValue::Choice(0)),
+            );
             // These ids, including the space, are stored in existing charts and templates.
             inputs.extend(PATTERNS.iter().zip(self.patterns).enumerate().map(
                 |(k, (pattern, on))| {
