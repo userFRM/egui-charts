@@ -1056,17 +1056,6 @@ impl<'a> Run<'a> {
         }
     }
 
-    fn closed_bar(
-        &mut self,
-        bars: &'a [Bar],
-        index: usize,
-        lower: &[&Bar],
-        report: &mut StrategyReport,
-        walk: bool,
-    ) {
-        finish_now(self.closed_bar_inner(bars, index, lower, report, walk, &mut None));
-    }
-
     async fn closed_bar_inner(
         &mut self,
         bars: &'a [Bar],
