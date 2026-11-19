@@ -101,6 +101,7 @@ impl Chart {
             scroll_start_spacing: None,
             pending_start_idx: None,
             pending_scroll_time: None,
+            pending_visible_range: None,
             scroll_animation: None,
             time_axis_rect: egui::Rect::NOTHING,
             price_plot_double_click: false,
