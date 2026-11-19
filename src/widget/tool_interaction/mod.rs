@@ -129,6 +129,18 @@ impl Chart {
         .then_some(timeframe)
     }
 
+    /// The executions drawings read: the copy cut at candle replay's time, else the feed's
+    /// held executions; `None` without a feed or while the chart holds none.
+    pub(super) fn drawing_executions(&self) -> Option<crate::data::FootprintView<'_>> {
+        self.feed_link.as_ref().and_then(|link| {
+            if self.replay.is_some() {
+                link.replay_footprint.as_ref()?.1.as_ref().map(Into::into)
+            } else {
+                link.footprint.as_ref().map(|flow| flow.view())
+            }
+        })
+    }
+
     /// Suggested finer histories and first opens of the visible profile drawings' spans.
     pub(super) fn profile_histories(
         &self,
@@ -541,13 +553,7 @@ impl Chart {
             price_to_y: &price_to_y,
             y_to_price: &|y| price_map.y_to_price(y),
             time_axis: self.horizontal_scale.is_none(),
-            executions: self.feed_link.as_ref().and_then(|link| {
-                if self.replay.is_some() {
-                    link.replay_footprint.as_ref()?.1.as_ref().map(Into::into)
-                } else {
-                    link.footprint.as_ref().map(|flow| flow.view())
-                }
-            }),
+            executions: self.drawing_executions(),
             timeframe: self.drawing_timeframe(),
             finer: &finer,
         };
