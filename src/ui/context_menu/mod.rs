@@ -6,6 +6,7 @@
 mod axis;
 mod chart_menus;
 mod menu;
+mod rows;
 mod tpo;
 
 pub mod drawing;
@@ -13,9 +14,12 @@ pub mod series;
 pub mod study;
 pub(super) mod trade_profile;
 
-pub use chart_menus::{ChartContextAction, ChartMenus, HostMenuContext, HostMenuEntry};
+pub use chart_menus::{
+    ChartContextAction, ChartMenuKind, ChartMenus, HostMenuContext, HostMenuEntry,
+};
 pub use menu::MenuItem;
 pub(crate) use menu::{MenuEntry, POINTER_GAP, show_menu, trim_separators};
+pub use rows::{MenuRow, MenuRowId};
 
 use std::collections::HashSet;
 
@@ -95,6 +99,38 @@ pub enum ContextMenuAction {
     /// Draw a horizontal line at this price in the clicked pane, with the line tool's default
     /// style, and select it. Already applied by [`ChartMenus`].
     DrawHorizontalLine(f64),
+}
+
+impl ContextMenuAction {
+    fn row_id(&self) -> Option<MenuRowId> {
+        Some(match self {
+            Self::None => return None,
+            Self::CopyPrice(_) => MenuRowId::CopyPrice,
+            Self::AddAlert { .. } => MenuRowId::AddAlert,
+            Self::AddToWatchlist { list, .. } => MenuRowId::Watchlist(*list),
+            Self::Order(order) => match order.order_type {
+                OrderType::Limit(_) => MenuRowId::LimitOrder,
+                OrderType::Stop(_) => MenuRowId::StopOrder,
+                _ => return None,
+            },
+            Self::ObjectTree => MenuRowId::ObjectTree,
+            Self::RemoveAllIndicators => MenuRowId::RemoveIndicators,
+            Self::ApplyIndicatorsToLayout => MenuRowId::ApplyIndicatorsToLayout,
+            Self::OpenSettings => MenuRowId::ChartSettings,
+            Self::OpenSeriesSettings => MenuRowId::SeriesSettings,
+            Self::OpenDataTable => MenuRowId::ViewDataTable,
+            Self::ExportCsv => MenuRowId::ExportData,
+            Self::ResetChart => MenuRowId::ResetChartView,
+            Self::MergeTpoPrevious => MenuRowId::TpoMergePrevious,
+            Self::MergeTpoNext => MenuRowId::TpoMergeNext,
+            Self::SplitTpoProfile => MenuRowId::TpoSplit,
+            Self::MergeTradeProfilePrevious => MenuRowId::TradeProfileMergePrevious,
+            Self::MergeTradeProfileNext => MenuRowId::TradeProfileMergeNext,
+            Self::SplitTradeProfile => MenuRowId::TradeProfileSplit,
+            Self::ResetProfileEdits => MenuRowId::ResetProfileEdits,
+            Self::DrawHorizontalLine(_) => MenuRowId::DrawHorizontalLine,
+        })
+    }
 }
 
 /// Format a price with two decimals (more below 1) and thousands separators, for a menu shown
@@ -321,6 +357,7 @@ impl ChartContextMenu {
         }
         if !symbol.is_empty() && !self.watchlists.is_empty() {
             trading.push(MenuEntry::Submenu {
+                id: Some(MenuRowId::AddToWatchlist),
                 label: l10n::format_text(
                     ctx,
                     "Add {symbol} to watchlist",
