@@ -1341,6 +1341,10 @@ impl Indicator for ChartPatterns {
         vec![0, 1]
     }
 
+    fn alert_outputs(&self) -> Vec<(usize, String)> {
+        self.line_names().into_iter().take(2).enumerate().collect()
+    }
+
     fn is_visible(&self) -> bool {
         self.visible
     }
