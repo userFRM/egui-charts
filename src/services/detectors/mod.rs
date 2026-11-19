@@ -623,7 +623,7 @@ impl State {
             seen_ids: HashSet::new(),
             detections: VecDeque::new(),
             big_trades: BigTrades::new(tick, instrument.volume_decimals),
-            stop_runs: StopRuns::default(),
+            stop_runs: StopRuns::new(instrument.volume_decimals),
             stop_sweeps: StopSweeps::new(tick),
             counting: Counting::default(),
         };
@@ -985,18 +985,30 @@ mod tests {
         }
     }
 
-    fn time(seconds: i64) -> DateTime<Utc> {
+    pub(super) fn time(seconds: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(seconds, 0).unwrap()
     }
 
-    fn fill(seconds: i64, price: f64, size: f64, side: OrderSide, aggressor: Option<u64>) -> Tick {
+    pub(super) fn fill(
+        seconds: i64,
+        price: f64,
+        size: f64,
+        side: OrderSide,
+        aggressor: Option<u64>,
+    ) -> Tick {
         Tick {
             aggressor_order_id: aggressor,
             ..Tick::new(time(seconds), price, size, Some(side))
         }
     }
 
-    fn marker(number: u64, at: i64, price: f64, direction: Direction, size: &str) -> SignalEvent {
+    pub(super) fn marker(
+        number: u64,
+        at: i64,
+        price: f64,
+        direction: Direction,
+        size: &str,
+    ) -> SignalEvent {
         SignalEvent::Upsert(Signal {
             id: SignalId(format!("big-trade-{number}")),
             shape: SignalShape::Marker {
@@ -1010,7 +1022,13 @@ mod tests {
         })
     }
 
-    fn zone(number: u64, from: i64, to: Option<i64>, low: f64, high: f64) -> SignalEvent {
+    pub(super) fn zone(
+        number: u64,
+        from: i64,
+        to: Option<i64>,
+        low: f64,
+        high: f64,
+    ) -> SignalEvent {
         SignalEvent::Upsert(Signal {
             id: SignalId(format!("big-trade-zone-{number}")),
             shape: SignalShape::Zone {
@@ -1026,8 +1044,8 @@ mod tests {
     }
 
     /// A service tracking "ES", with a fixed big trade threshold of `threshold` unless `None`.
-    struct Host {
-        detectors: OrderFlowDetectors,
+    pub(super) struct Host {
+        pub(super) detectors: OrderFlowDetectors,
         inbox: Arc<Inbox>,
         listeners: Vec<Listener>,
         timeframe: Timeframe,
@@ -1042,7 +1060,11 @@ mod tests {
         }
 
         /// `instrument`, as "ES", subscribed at `timeframe`.
-        fn tracking(instrument: &Instrument, timeframe: Timeframe, threshold: Option<f64>) -> Self {
+        pub(super) fn tracking(
+            instrument: &Instrument,
+            timeframe: Timeframe,
+            threshold: Option<f64>,
+        ) -> Self {
             let detectors = OrderFlowDetectors::new();
             detectors.track(instrument).unwrap();
             let mut settings = DetectorSettings::default();
@@ -1068,7 +1090,7 @@ mod tests {
         }
 
         /// Pushes `event` and returns the signal events pushed since the last call.
-        fn push(&self, event: MarketEvent) -> Vec<SignalEvent> {
+        pub(super) fn push(&self, event: MarketEvent) -> Vec<SignalEvent> {
             self.detectors.push("ES", time(0), &event);
             self.events()
         }
@@ -1632,111 +1654,6 @@ mod tests {
                 usize::from(sequence == 3),
                 "only a new book update confirms the retained level"
             );
-        }
-    }
-
-    #[test]
-    fn stop_runs_require_a_fast_monotone_burst_and_distinct_known_aggressors() {
-        for (name, ids, gap, prices, known, expected) in [
-            (
-                "three aggressors",
-                vec![1, 1, 2, 2, 3],
-                20,
-                vec![400, 401, 401, 402, 403],
-                true,
-                true,
-            ),
-            (
-                "no ids",
-                vec![],
-                10,
-                vec![400, 401, 401, 402, 403],
-                true,
-                true,
-            ),
-            (
-                "one aggressor",
-                vec![1; 5],
-                10,
-                vec![400, 401, 401, 402, 403],
-                true,
-                false,
-            ),
-            (
-                "gap",
-                vec![],
-                21,
-                vec![400, 401, 401, 402, 403],
-                true,
-                false,
-            ),
-            (
-                "reversal",
-                vec![],
-                10,
-                vec![400, 401, 400, 402, 403],
-                true,
-                false,
-            ),
-            (
-                "unknown side",
-                vec![],
-                10,
-                vec![400, 401, 401, 402, 403],
-                false,
-                false,
-            ),
-        ] {
-            for side in [OrderSide::Buy, OrderSide::Sell] {
-                let host = Host::new(Some(1_000.0));
-                let mut settings = host.detectors.settings();
-                settings.stop_runs.enabled = true;
-                host.detectors.set_settings(settings);
-                let mut events = Vec::new();
-                for (i, price) in prices.iter().enumerate() {
-                    let price = if side == OrderSide::Buy {
-                        *price
-                    } else {
-                        800 - price
-                    };
-                    let mut fill = Tick::new(
-                        time(0) + chrono::TimeDelta::milliseconds(i as i64 * gap),
-                        price as f64 * 0.25,
-                        2.0,
-                        known.then_some(side),
-                    );
-                    fill.aggressor_order_id = ids.get(i).copied();
-                    events.extend(host.push(MarketEvent::Trade(fill)));
-                }
-                let signals: Vec<_> = events
-                    .into_iter()
-                    .filter_map(|event| match event {
-                        SignalEvent::Upsert(signal) if signal.category == "Stop runs" => {
-                            Some(signal)
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                assert_eq!(signals.len(), usize::from(expected), "{name} {side:?}");
-                if let Some(signal) = signals.first() {
-                    assert_eq!(
-                        signal.tooltip.as_deref(),
-                        Some(format!("5 fills, 3 ticks, size 10, {} ms", gap * 4).as_str())
-                    );
-                    assert_eq!(
-                        signal.shape,
-                        SignalShape::Marker {
-                            time: time(0) + chrono::TimeDelta::milliseconds(gap * 4),
-                            price: Some(if side == OrderSide::Buy {
-                                100.75
-                            } else {
-                                99.25
-                            }),
-                            direction: stops::direction(side),
-                        }
-                    );
-                }
-            }
         }
     }
 

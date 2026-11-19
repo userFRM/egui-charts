@@ -9,6 +9,7 @@ use crate::data::{Footprint, meets_threshold};
 use crate::model::{
     BarClock, Direction, OrderSide, Placement, Signal, SignalId, SignalShape, Tick,
 };
+use crate::scales::{PriceFormatter, VolumeFormatter};
 use crate::services::SignalEvent;
 
 /// A burst of at least five same-side fills, at most 20 ms apart, travelling at least three
@@ -35,6 +36,8 @@ pub struct StopSweepRule;
 
 #[derive(Default)]
 pub(super) struct StopRuns {
+    /// Writes the sizes in tooltips.
+    sizes_label: VolumeFormatter,
     burst: Option<Burst>,
     next: u64,
 }
@@ -53,6 +56,17 @@ struct Burst {
 }
 
 impl StopRuns {
+    /// The detector of a symbol whose sizes are written with `volume_decimals` decimals, or 2
+    /// like the chart's volume readouts.
+    pub(super) fn new(volume_decimals: Option<u8>) -> Self {
+        Self {
+            sizes_label: VolumeFormatter {
+                precision: volume_decimals.map_or(2, usize::from),
+            },
+            ..Self::default()
+        }
+    }
+
     pub(super) fn trade(
         &mut self,
         fill: &Tick,
@@ -121,7 +135,7 @@ impl StopRuns {
             tooltip: Some(format!(
                 "{} fills, {ticks} ticks, size {}, {} ms",
                 burst.fills,
-                burst.size,
+                self.sizes_label.format(burst.size),
                 (burst.last - burst.first).num_milliseconds()
             )),
         }));
@@ -368,6 +382,150 @@ impl StopSweeps {
             self.volumes.push_back(volume);
             if self.volumes.len() > 10 {
                 self.volumes.pop_front();
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::{Host, time};
+    use super::*;
+    use crate::data::MarketEvent;
+    use crate::model::{Instrument, Timeframe};
+
+    #[test]
+    fn stop_runs_follow_each_limit_of_their_rule() {
+        type Row = (
+            &'static str,
+            Vec<u64>,
+            i64,
+            Vec<i64>,
+            Vec<f64>,
+            bool,
+            Option<&'static str>,
+        );
+        let prices = vec![400, 401, 401, 402, 403];
+        let rows: Vec<Row> = vec![
+            (
+                "three aggressors",
+                vec![1, 1, 2, 2, 3],
+                20,
+                prices.clone(),
+                vec![2.0; 5],
+                true,
+                Some("5 fills, 3 ticks, size 10.0, 80 ms"),
+            ),
+            (
+                "no ids",
+                vec![],
+                10,
+                prices.clone(),
+                vec![2.0; 5],
+                true,
+                Some("5 fills, 3 ticks, size 10.0, 40 ms"),
+            ),
+            (
+                "one aggressor",
+                vec![1; 5],
+                10,
+                prices.clone(),
+                vec![2.0; 5],
+                true,
+                None,
+            ),
+            ("gap", vec![], 21, prices.clone(), vec![2.0; 5], true, None),
+            (
+                "reversal",
+                vec![],
+                10,
+                vec![400, 401, 400, 402, 403],
+                vec![2.0; 5],
+                true,
+                None,
+            ),
+            (
+                "unknown side",
+                vec![],
+                10,
+                prices.clone(),
+                vec![2.0; 5],
+                false,
+                None,
+            ),
+            (
+                "fractional sizes",
+                vec![],
+                10,
+                prices,
+                vec![0.1, 0.2, 0.1, 0.2, 0.1],
+                true,
+                Some("5 fills, 3 ticks, size 0.7, 40 ms"),
+            ),
+        ];
+        for (name, ids, gap, prices, sizes, known, expected) in rows {
+            for side in [OrderSide::Buy, OrderSide::Sell] {
+                let host = Host::tracking(
+                    &Instrument::new("ES")
+                        .with_tick_size(0.25)
+                        .with_volume_decimals(1),
+                    Timeframe::Min1,
+                    Some(1_000.0),
+                );
+                let mut settings = host.detectors.settings();
+                settings.stop_runs.enabled = true;
+                host.detectors.set_settings(settings);
+                let mut events = Vec::new();
+                for (i, price) in prices.iter().enumerate() {
+                    let price = if side == OrderSide::Buy {
+                        *price
+                    } else {
+                        800 - price
+                    };
+                    let mut fill = Tick::new(
+                        time(0) + TimeDelta::milliseconds(i as i64 * gap),
+                        price as f64 * 0.25,
+                        sizes[i],
+                        known.then_some(side),
+                    );
+                    fill.aggressor_order_id = ids.get(i).copied();
+                    events.extend(host.push(MarketEvent::Trade(fill)));
+                }
+                let signals: Vec<_> = events
+                    .into_iter()
+                    .filter_map(|event| match event {
+                        SignalEvent::Upsert(signal) if signal.category == "Stop runs" => {
+                            Some(signal)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    signals.len(),
+                    usize::from(expected.is_some()),
+                    "{name} {side:?}"
+                );
+                if let Some(signal) = signals.first() {
+                    assert_eq!(signal.tooltip.as_deref(), expected, "{name} {side:?}");
+                    let last = prices[prices.len() - 1];
+                    assert_eq!(
+                        signal.shape,
+                        SignalShape::Marker {
+                            time: time(0)
+                                + TimeDelta::milliseconds((prices.len() - 1) as i64 * gap),
+                            price: Some(
+                                if side == OrderSide::Buy {
+                                    last
+                                } else {
+                                    800 - last
+                                } as f64
+                                    * 0.25
+                            ),
+                            direction: direction(side),
+                        },
+                        "{name} {side:?}"
+                    );
+                }
             }
         }
     }

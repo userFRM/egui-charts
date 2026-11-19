@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use chrono::{DateTime, Utc};
 
 use super::Threshold;
+use crate::data::meets_threshold;
 use crate::model::{
     BarClock, Direction, OrderSide, Placement, Signal, SignalId, SignalShape, Tick,
 };
@@ -21,7 +22,8 @@ const CALIBRATE_EVERY: u64 = 100;
 /// What makes a trade large, and which of the zones of large trades are kept.
 ///
 /// Fills sharing an explicit aggressor order id, in a row, form one trade; fills without one
-/// stand alone. A trade is large once its combined size reaches the threshold. With
+/// stand alone. A trade is large once its combined size reaches the threshold, within one part in a billion,
+/// so that rounding in a sum of fractional sizes cannot hide it. With
 /// [`Threshold::Auto`] that is the 99th percentile, by nearest rank, of the combined sizes of
 /// the symbol's last 10,000 trades, recomputed every 100 trades and inactive until 1,000 trades
 /// have been seen; trades from loaded history count.
@@ -221,7 +223,7 @@ impl BigTrades {
             Threshold::Fixed(size) => Some(size),
             Threshold::Auto => self.threshold,
         };
-        if enabled && threshold.is_some_and(|threshold| trade.size >= threshold) {
+        if enabled && threshold.is_some_and(|threshold| meets_threshold(trade.size, threshold)) {
             let (low, high) = (trade.low, trade.high);
             let tick = self.tick;
             let (low, high) = if high - low < tick {
@@ -350,4 +352,48 @@ impl Zone {
 
 fn zone_id(number: u64) -> SignalId {
     SignalId(format!("big-trade-zone-{number}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::{Host, fill, marker, zone};
+    use super::*;
+    use crate::data::MarketEvent;
+    use crate::model::{Instrument, Timeframe};
+
+    #[test]
+    fn big_trades_reach_the_threshold_by_kind() {
+        type Edit = fn(&mut BigTradeRule);
+        let rows: Vec<(&str, u8, f64, Edit, Vec<Tick>, Vec<SignalEvent>)> = vec![(
+            "fractional sizes reach the threshold",
+            1,
+            0.8,
+            |_| {},
+            vec![
+                fill(1, 100.0, 0.7, OrderSide::Buy, Some(7)),
+                fill(2, 100.0, 0.1, OrderSide::Buy, Some(7)),
+            ],
+            vec![
+                marker(1, 1, 100.0, Direction::Up, "0.8"),
+                zone(1, 1, None, 99.875, 100.125),
+            ],
+        )];
+        for (name, decimals, threshold, edit, fills, expected) in rows {
+            let host = Host::tracking(
+                &Instrument::new("ES")
+                    .with_tick_size(0.25)
+                    .with_volume_decimals(decimals),
+                Timeframe::Min1,
+                Some(threshold),
+            );
+            let mut settings = host.detectors.settings();
+            edit(&mut settings.big_trades.rule);
+            host.detectors.set_settings(settings);
+            let events: Vec<_> = fills
+                .into_iter()
+                .flat_map(|fill| host.push(MarketEvent::Trade(fill)))
+                .collect();
+            assert_eq!(events, expected, "{name}");
+        }
+    }
 }
