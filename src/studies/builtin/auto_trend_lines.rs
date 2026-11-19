@@ -26,6 +26,14 @@ enum LineSize {
 }
 
 impl LineSize {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Small => "Small",
+            Self::Large => "Large",
+            Self::Both => "Both",
+        }
+    }
+
     /// Bars on each side of a pivot and the smallest swing in average true ranges, small first.
     fn swings(self) -> &'static [(usize, f64)] {
         match self {
