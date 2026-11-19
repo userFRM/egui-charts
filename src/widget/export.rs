@@ -862,6 +862,7 @@ mod tests {
             chart.chart_options.time_scale.timezone = zone;
             let mut instrument = Instrument::new("TEST");
             instrument.price_decimals = Some(2);
+            instrument.volume_decimals = Some(3);
             instrument.time_zone = crate::model::TimezoneId::named("America/New_York");
             chart.set_instrument(Some(instrument.clone()));
             let study = chart.add_indicator(Box::new(
@@ -905,6 +906,15 @@ mod tests {
             let mut settings = indicator.settings();
             settings.precision = Some(1);
             indicator.apply_settings(&[], settings).unwrap();
+            // Volume study columns keep the instrument's decimals without abbreviating.
+            chart.add_indicator(Box::new(
+                CustomIndicator::new("Volume", |bars| {
+                    bars.iter()
+                        .map(|bar| IndicatorValue::Single(bar.volume))
+                        .collect()
+                })
+                .with_value_format(StudyFormat::Volume),
+            ));
             instrument.price_decimals = Some(3);
             chart.set_instrument(Some(instrument));
             let mut last = bars[2].clone();
@@ -968,7 +978,8 @@ mod tests {
                     "Average, pair: mean",
                     "Average, pair: shifted",
                     "Fixed: Fixed",
-                    "Override: Override"
+                    "Override: Override",
+                    "Volume: Volume"
                 ]
             );
             let rows = reader.records().collect::<Result<Vec<_>, _>>().unwrap();
@@ -998,6 +1009,10 @@ mod tests {
             );
             assert_eq!(&rows[0][10], "1.2346");
             assert_eq!(&rows[0][11], "9.9");
+            assert_eq!(
+                rows.iter().map(|row| &row[12]).collect::<Vec<_>>(),
+                ["1234.500"; 3]
+            );
             // Export must not refresh or mutate the chart's scheduled study results.
             assert!(chart.pending_from[0].is_some());
         }
