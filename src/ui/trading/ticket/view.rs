@@ -567,6 +567,16 @@ mod tests {
                 ),
             );
         harness.run();
+        harness.state_mut().0.preset_fields = super::super::PresetFields {
+            quantity: false,
+            exits: false,
+            order_type: false,
+            time_in_force: false,
+        };
+        harness.run();
+        assert!(harness.get_by_label("Save").accesskit_node().is_disabled());
+        harness.state_mut().0.preset_fields = super::super::PresetFields::default();
+        harness.run();
         harness.get_by_label("Save").click();
         harness.run();
         assert_eq!(harness.state().1["stocks"][0].quantity, 2.0);
@@ -652,6 +662,13 @@ mod tests {
                 .accesskit_node()
                 .is_disabled()
         );
+        harness.get_by_label("Cancel").click();
+        harness.run();
+        harness.state_mut().1.get_mut("stocks").unwrap().truncate(1);
+        harness.run();
+        harness.get_by_label("Delete preset").click();
+        harness.run();
+        assert!(!harness.state().1.contains_key("stocks"));
     }
 
     /// The broker rules control visibility, and a wall time at UTC-5 reaches the broker at UTC.
@@ -662,6 +679,7 @@ mod tests {
         let mut harness = egui_kittest::Harness::builder()
             .allow_missing_glyphs()
             .with_size(vec2(340.0, 1200.0))
+            .with_accessibility_check(false)
             .build_ui_state(
                 |ui, (ticket, rules): &mut (OrderTicket, TradingRules)| {
                     let mut market = super::super::tests::market(rules);

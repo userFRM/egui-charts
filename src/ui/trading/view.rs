@@ -843,7 +843,7 @@ mod tests {
                 trading,
             );
         harness.run();
-        harness.get_by_label("Orders").click();
+        harness.get_by_label("Orders 1").click();
         harness.run();
         assert!(
             harness
