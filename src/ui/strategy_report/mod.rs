@@ -210,8 +210,7 @@ impl StrategyReportPanel {
                         .id_salt("summary")
                         .show(ui, |ui| {
                             summary(ui, data, &mut self.compare);
-                        })
-                        .inner;
+                        });
                 }
             }
             Tab::Trades => {
