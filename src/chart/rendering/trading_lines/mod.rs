@@ -1252,16 +1252,18 @@ mod tests {
             let position = Position::new("SYM", 2.0, 105.0);
             let purple = Color32::from_rgb(156, 39, 176);
             let cyan = Color32::from_rgb(0, 151, 167);
-            let mut plan = TradingLineAppearance::default();
-            plan.color = Some(purple);
-            plan.line_style = Some(LineStyle::Dashed);
-            plan.text = Some("Plan".into());
-            plan.hover_text = Some("Planned entry".into());
-            let mut hedge = TradingLineAppearance::default();
-            hedge.color = Some(cyan);
-            hedge.line_style = Some(LineStyle::Dotted);
-            hedge.text = Some("Hedge".into());
-            hedge.hover_text = Some("Hedge position".into());
+            let plan = TradingLineAppearance {
+                color: Some(purple),
+                line_style: Some(LineStyle::Dashed),
+                text: Some("Plan".into()),
+                hover_text: Some("Planned entry".into()),
+            };
+            let hedge = TradingLineAppearance {
+                color: Some(cyan),
+                line_style: Some(LineStyle::Dotted),
+                text: Some("Hedge".into()),
+                hover_text: Some("Hedge position".into()),
+            };
             let looks = [(OrderId::new("A"), plan)];
             let positions = [("SYM".to_owned(), hedge)];
             let mut options = TradingLineOptions::new("USD", 0.01);
