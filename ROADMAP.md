@@ -131,7 +131,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Woodies CCI reads the close, with separate neutral, transition and established histogram colours.
 - [x] PPO and PVO draw their histograms as columns and offer average-type inputs.
 - [ ] Give Net Volume's output a histogram default.
-- [x] Bollinger Bands select their basis average, and BandWidth has expansion and contraction lookbacks.
+- [x] Bollinger Bands select their basis average, and BandWidth has expansion and contraction lookbacks. Each BandWidth extremum starts only once its window spans the whole lookback, or with the width if that comes later.
 - [x] VWAP band multipliers and event dates are editable in applied-study settings.
 - [x] Request finer profile data, from a feed's suggestion or a chosen interval, and adapt session profile rows to the zoom.
 - [x] Spread, Ratio and Correlation Coefficient read their second symbol from the host; correlation also offers log returns. Correlation Coefficient opens as an area with a dashed guide at zero, with editable visibility, value, colour, style, width and latest value line; one saved as a line restores that way, and one saved with guides at 1 and -1 keeps them.
