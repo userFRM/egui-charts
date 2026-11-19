@@ -403,10 +403,10 @@ pub struct Drawing {
     /// bars; `None` uses the defaults, OHLC bars, as drawings saved before this setting do.
     #[serde(default)]
     pub bars_pattern: Option<BarsPatternConfig>,
-    /// Levels, target zone backgrounds, coefficient labels and leg style of the projection
+    /// Sector levels, gradient, coefficient labels and outline style of the projection
     /// tool. New projections start from [`ProjectionConfig::default`]; `None`, as on projections
-    /// saved before these settings, draws one dashed level at the whole move in the drawing
-    /// colour with a zone in the fill colour and no coefficients. Other tools ignore it.
+    /// saved before these settings, draws one dashed level at the sector's arc in the drawing
+    /// colour with a flat fill and no coefficients. Other tools ignore it.
     #[serde(default)]
     pub projection: Option<ProjectionConfig>,
 

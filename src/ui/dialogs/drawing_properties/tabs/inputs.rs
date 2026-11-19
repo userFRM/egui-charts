@@ -1396,10 +1396,7 @@ fn projection(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerS
     let mut config = drawing.projection_config().into_owned();
     let original = config.clone();
     ui.strong(l10n::text(ui.ctx(), "Projection levels"));
-    ui.label(l10n::text(
-        ui.ctx(),
-        "Multiples of the measured move, from the third point",
-    ));
+    ui.label(l10n::text(ui.ctx(), "Multiples of the sector's radius"));
     level_grid(
         ui,
         "Level",

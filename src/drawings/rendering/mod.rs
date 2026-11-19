@@ -308,7 +308,7 @@ impl Drawing {
             DrawingToolType::BarsPattern => self.render_bars_pattern(painter, view),
             // Candle colours and the neutral path are independent of the common drawing style.
             DrawingToolType::GhostFeed => return self.render_ghost_feed(painter, view),
-            DrawingToolType::ProjectionTool => self.render_projection_tool(painter, rect, view),
+            DrawingToolType::ProjectionTool => self.render_projection_tool(painter),
 
             // Volume (3 tools)
             DrawingToolType::AnchoredVWAP => self.render_anchored_vwap(painter, view),

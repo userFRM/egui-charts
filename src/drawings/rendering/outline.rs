@@ -17,7 +17,7 @@ impl Drawing {
     /// What this drawing draws, with lines that run to the chart's edge cut at
     /// the edge of `rect`. `None` for the tools not described here (text,
     /// media, the data-driven tools and the Fibonacci arcs, circles, spiral and
-    /// wedge, the cycles, the position and projection tools) and below the
+    /// wedge, the cycles, the position tools) and below the
     /// anchors a tool needs.
     pub(crate) fn outline(&self, rect: Rect) -> Option<Outline> {
         use DrawingToolType as T;
@@ -123,10 +123,19 @@ impl Drawing {
                 }
                 None => outline.lines = path(p.len() == 3),
             },
-            T::Sector => {
+            T::Sector | T::ProjectionTool => {
                 let points = self.sector_points(clip, 1.0)?;
-                outline.lines = edges(&points);
-                if filled {
+                let fill = if self.tool_type == T::ProjectionTool {
+                    let config = self.projection_config();
+                    if config.trend_visible {
+                        outline.lines = edges(&points);
+                    }
+                    config.show_background
+                } else {
+                    outline.lines = edges(&points);
+                    filled
+                };
+                if fill {
                     outline.areas.extend(
                         points[1..]
                             .windows(2)

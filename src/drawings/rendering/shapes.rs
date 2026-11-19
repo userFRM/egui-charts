@@ -36,14 +36,19 @@ impl Drawing {
         painter.galley(min, galley, color);
     }
 
-    /// The first anchor is the center, the second fixes the radius, and the third fixes
-    /// the end ray. The sweep takes the short arc in (-180°, 180°], clockwise at 180°.
-    pub(super) fn sector_points(&self, clip: Rect, ppp: f32) -> Option<Vec<Pos2>> {
+    /// The centre, radius and start/end angles in radians on the first three anchors. The first
+    /// is the centre, the second fixes the radius and start, and the third the end, over the
+    /// short arc in (-180°, 180°], clockwise at 180°. `None` for missing or non-finite anchors,
+    /// a radius below 1e-6 or a third anchor on the centre.
+    pub(super) fn sector_arc(&self) -> Option<(Pos2, f32, [f64; 2])> {
         let [center, start, end, ..] = *self.points else {
             return None;
         };
+        if [center, start, end].iter().any(|p| !p.is_finite()) {
+            return None;
+        }
         let radius = center.distance(start);
-        if radius < 1e-6 || center.distance_sq(end) < 1e-12 {
+        if !radius.is_finite() || radius < 1e-6 || center.distance_sq(end) < 1e-12 {
             return None;
         }
         let from = (start - center).angle();
@@ -53,11 +58,21 @@ impl Drawing {
         } else if sweep <= -std::f32::consts::PI {
             sweep += std::f32::consts::TAU;
         }
+        Some((
+            center,
+            radius,
+            [f64::from(from), f64::from(from) + f64::from(sweep)],
+        ))
+    }
+
+    /// The sector's centre followed by its sampled arc, shared with projection and selection.
+    pub(super) fn sector_points(&self, clip: Rect, ppp: f32) -> Option<Vec<Pos2>> {
+        let (center, radius, range) = self.sector_arc()?;
         let mut points = vec![center];
         points.extend(ellipse_arc(
             center,
             egui::Vec2::splat(radius),
-            [f64::from(from), f64::from(from) + f64::from(sweep)],
+            range,
             clip,
             ppp,
         ));
@@ -611,6 +626,11 @@ mod tests {
         for (tool, anchors, want) in [
             (
                 DrawingToolType::Sector,
+                vec![(100.0, 100.0), (200.0, 100.0), (100.0, 150.0)],
+                vec![(200.0, 100.0), (170.71068, 170.71068), (100.0, 200.0)],
+            ),
+            (
+                DrawingToolType::ProjectionTool,
                 vec![(100.0, 100.0), (200.0, 100.0), (100.0, 150.0)],
                 vec![(200.0, 100.0), (170.71068, 170.71068), (100.0, 200.0)],
             ),
