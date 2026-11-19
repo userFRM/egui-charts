@@ -324,7 +324,9 @@ mod tests {
         let data: Vec<Bar> = closes.into_iter().map(make_bar).collect();
         let mut curve = LinearRegression::new(1);
         curve.calculate(&data);
-        let got: Vec<_> = (0..data.len()).map(|i| curve.values().value(0, i)).collect();
+        let got: Vec<_> = (0..data.len())
+            .map(|i| curve.values().value(0, i))
+            .collect();
         assert_eq!(got, closes.map(Some));
     }
 }
