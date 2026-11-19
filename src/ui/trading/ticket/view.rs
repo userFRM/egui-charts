@@ -10,7 +10,7 @@ use crate::scales::decimals;
 use crate::theme::ThemeExt;
 use crate::ui::connection_status::show_connection_status_with_label;
 use crate::ui::trading::widgets::{SECTION_TITLE_SIZE, hit, side_fill, side_name, text, track};
-use crate::ui_kit::buttons::IconButton;
+use crate::ui_kit::buttons::{ButtonSize, IconButton};
 use crate::ui_kit::modal::dialogs::ConfirmDialog;
 use egui::{
     Align, Align2, ImageSource, Label, Layout, Rect, RichText, Role, Sense, Ui, UiBuilder,
@@ -271,17 +271,19 @@ impl OrderTicket {
                     if ui.selectable_label(false, preset.name.as_str()).clicked() {
                         self.apply(preset, market);
                     }
-                    if ui
-                        .small_button("✎")
-                        .on_hover_text(l10n::text(ui.ctx(), "Rename preset"))
+                    if IconButton::new(&icons::PENCIL)
+                        .size(ButtonSize::SM)
+                        .tooltip("Rename preset")
+                        .show(ui)
                         .accessible_name(l10n::text(ui.ctx(), "Rename preset"))
                         .clicked()
                     {
                         self.renaming = Some((preset.name.clone(), String::new()));
                     }
-                    if ui
-                        .small_button("✕")
-                        .on_hover_text(l10n::text(ui.ctx(), "Delete preset"))
+                    if IconButton::new(&icons::TRASH)
+                        .size(ButtonSize::SM)
+                        .tooltip("Delete preset")
+                        .show(ui)
                         .accessible_name(l10n::text(ui.ctx(), "Delete preset"))
                         .clicked()
                     {
@@ -518,7 +520,7 @@ mod tests {
         let rules = TradingRules::new("ES");
         let market = super::super::tests::market(&rules);
         let mut harness = egui_kittest::Harness::builder()
-            .allow_missing_glyphs()
+            .with_context_setup(egui_extras::install_image_loaders)
             .build_ui_state(
                 |ui, (ticket, presets): &mut (OrderTicket, BTreeMap<String, Vec<OrderPreset>>)| {
                     ticket.more(ui, &market, presets, &mut false);
@@ -543,7 +545,7 @@ mod tests {
         use super::super::{Bracket, BracketMode, Kind, PresetSizing};
         let rules = TradingRules::new("ES");
         let mut harness = egui_kittest::Harness::builder()
-            .allow_missing_glyphs()
+            .with_context_setup(egui_extras::install_image_loaders)
             .with_size(vec2(700.0, 900.0))
             .build_ui_state(
                 |ui,
