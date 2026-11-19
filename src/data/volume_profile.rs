@@ -384,6 +384,212 @@ pub(crate) fn price_span(bars: &[Bar]) -> Option<(f64, f64)> {
         .reduce(|(low, high), (lo, hi)| (low.min(lo), high.max(hi)))
 }
 
+/// Source-bar cumulative volume, independent of the histogram's row layout. Shared tree
+/// paths keep the prefix before a forming bar without copying the price history on each tick.
+#[cfg(feature = "studies")]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct DevelopingVolume {
+    origin: Option<f64>,
+    root: Option<Arc<VolumeEdge>>,
+    volume: f64,
+    density_total: f64,
+    density_min: f64,
+    unrepresentable: bool,
+}
+
+#[cfg(feature = "studies")]
+#[derive(Clone, Debug)]
+struct VolumeEdge {
+    price: f64,
+    height: usize,
+    changes: usize,
+    // Density change, its price moment, and point mass, respectively.
+    value: [f64; 3],
+    sum: [f64; 3],
+    children: [Option<Arc<Self>>; 2],
+}
+
+#[cfg(feature = "studies")]
+impl VolumeEdge {
+    fn height(root: &Option<Arc<Self>>) -> usize {
+        root.as_ref().map_or(0, |node| node.height)
+    }
+
+    fn refresh(&mut self) {
+        self.sum = self.value;
+        self.height = 1;
+        self.changes = usize::from(self.value[0] != 0.0 || self.value[1] != 0.0);
+        for child in self.children.iter().flatten() {
+            self.height = self.height.max(child.height + 1);
+            self.changes += child.changes;
+            for (sum, value) in self.sum.iter_mut().zip(child.sum) {
+                *sum += value;
+            }
+        }
+    }
+
+    fn insert(root: &mut Option<Arc<Self>>, price: f64, value: [f64; 3]) {
+        let Some(edge) = root else {
+            *root = Some(Arc::new(Self {
+                price,
+                height: 1,
+                changes: usize::from(value[0] != 0.0 || value[1] != 0.0),
+                value,
+                sum: value,
+                children: [None, None],
+            }));
+            return;
+        };
+        let node = Arc::make_mut(edge);
+        if price == node.price {
+            for (current, added) in node.value.iter_mut().zip(value) {
+                *current += added;
+            }
+        } else {
+            let side = usize::from(price > node.price);
+            Self::insert(&mut node.children[side], price, value);
+        }
+        node.refresh();
+        let [left, right] = node.children.each_ref().map(Self::height);
+        if left.abs_diff(right) > 1 {
+            let side = usize::from(right > left);
+            let child = node.children[side].as_ref().unwrap();
+            if Self::height(&child.children[1 - side]) > Self::height(&child.children[side]) {
+                Self::rotate(&mut node.children[side], 1 - side);
+            }
+            Self::rotate(root, side);
+        }
+    }
+
+    fn rotate(root: &mut Option<Arc<Self>>, side: usize) {
+        let mut old = root.take().unwrap();
+        let mut next = Arc::make_mut(&mut old).children[side].take().unwrap();
+        Arc::make_mut(&mut old).children[side] = Arc::make_mut(&mut next).children[1 - side].take();
+        Arc::make_mut(&mut old).refresh();
+        Arc::make_mut(&mut next).children[1 - side] = Some(old);
+        Arc::make_mut(&mut next).refresh();
+        *root = Some(next);
+    }
+}
+
+#[cfg(feature = "studies")]
+impl DevelopingVolume {
+    pub(crate) fn add(&mut self, bars: &[Bar]) {
+        for bar in bars.iter().filter(|bar| valid_bar(bar) && bar.volume > 0.0) {
+            let origin = *self.origin.get_or_insert(bar.low);
+            if bar.high == bar.low {
+                VolumeEdge::insert(&mut self.root, bar.low, [0.0, 0.0, bar.volume]);
+            } else {
+                let density = bar.volume / (bar.high - bar.low);
+                self.volume += bar.volume;
+                self.density_total += density;
+                self.density_min = if self.density_min == 0.0 {
+                    density
+                } else {
+                    self.density_min.min(density)
+                };
+                self.unrepresentable |= !density.is_normal();
+                self.unrepresentable |= !self.volume.is_finite()
+                    || !self.density_total.is_finite()
+                    || self.density_total + self.density_min == self.density_total;
+                for (price, change) in [(bar.low, density), (bar.high, -density)] {
+                    let value = [change, change * (price - origin), 0.0];
+                    self.unrepresentable |= value.iter().any(|v| !v.is_finite());
+                    VolumeEdge::insert(&mut self.root, price, value);
+                }
+            }
+            self.unrepresentable |= self
+                .root
+                .as_ref()
+                .unwrap()
+                .sum
+                .iter()
+                .any(|v| !v.is_finite());
+            // Cancellation must not destroy the source volume represented by the moments.
+            self.unrepresentable |= (self.root.as_ref().unwrap().sum[1] + self.volume).abs()
+                > self.volume * f64::EPSILON.sqrt();
+        }
+    }
+
+    fn before(&self, includes: impl Fn(f64) -> bool) -> ([f64; 3], usize) {
+        let mut sum = [0.0; 3];
+        let mut changes = 0;
+        let mut node = self.root.as_deref();
+        while let Some(edge) = node {
+            if includes(edge.price) {
+                changes += usize::from(edge.value[0] != 0.0 || edge.value[1] != 0.0)
+                    + edge.children[0].as_ref().map_or(0, |left| left.changes);
+                for (i, total) in sum.iter_mut().enumerate() {
+                    *total +=
+                        edge.value[i] + edge.children[0].as_ref().map_or(0.0, |left| left.sum[i]);
+                }
+                node = edge.children[1].as_deref();
+            } else {
+                node = edge.children[0].as_deref();
+            }
+        }
+        (sum, changes)
+    }
+
+    /// Only total volume is needed for developing POC and value area. Continuous bars integrate
+    /// their original density; point masses follow the histogram's rounding at row edges.
+    pub(crate) fn fill(&self, profile: &mut VolumeProfile) -> Option<()> {
+        if self.unrepresentable {
+            return None;
+        }
+        let changes = self.root.as_ref().map_or(0, |root| root.changes);
+        let cumulative = |price: f64, values: [f64; 3], through| {
+            if through == 0 {
+                0.0
+            } else if through == changes {
+                self.volume
+            } else {
+                values[0] * (price - self.origin.unwrap_or(0.0)) - values[1]
+            }
+        };
+        let continuous = |low, high| {
+            let (below, before) = self.before(|edge| edge <= low);
+            let (above, through) = self.before(|edge| edge < high);
+            if before == through {
+                // Integrate linear spans directly so equal rows do not acquire POC noise.
+                if before == 0 || before == changes || below[0] == 0.0 {
+                    0.0
+                } else {
+                    below[0] * (high - low)
+                }
+            } else {
+                cumulative(high, above, through) - cumulative(low, below, before)
+            }
+        };
+        let total_points = self.root.as_ref().map_or(0.0, |root| root.sum[2]);
+        let points = |row| {
+            if total_points == 0.0 {
+                0.0
+            } else {
+                self.before(|price| grid_row(profile.low, profile.row_height, price).0 < row)
+                    .0[2]
+            }
+        };
+        let mut point_low = points(0.0);
+        for row in 0..profile.volume.len() {
+            let low = profile.low + row as f64 * profile.row_height;
+            let high = low + profile.row_height;
+            let point_high = if row + 1 == profile.volume.len() {
+                total_points
+            } else {
+                points((row + 1) as f64)
+            };
+            let volume = continuous(low, high) + point_high - point_low;
+            if !volume.is_finite() {
+                return None;
+            }
+            profile.volume[row] = volume.max(0.0);
+            point_low = point_high;
+        }
+        Some(())
+    }
+}
+
 impl VolumeProfile {
     /// Group host options turnover into rows centered on multiples of `row_size`.
     /// A row at strike K includes [K - row_size/2, K + row_size/2); a boundary
@@ -666,8 +872,8 @@ impl VolumeProfile {
         })
     }
 
-    /// Keep a developing estimate in bounded work per bar by redistributing its row volumes
-    /// when the grid changes, instead of distributing every earlier source bar again.
+    /// Extend developing total volume, integrating source bars when row height changes and
+    /// retaining existing total volumes when a fixed grid grows.
     #[cfg(feature = "studies")]
     pub(crate) fn extend_developing(
         &mut self,
@@ -675,12 +881,13 @@ impl VolumeProfile {
         rows: usize,
         row_size: Option<f64>,
         bars: &[Bar],
+        source: &DevelopingVolume,
     ) -> Option<()> {
         let same_grid = if let Some(height) = row_size {
             self.fixed_height
                 && self.row_height == height
-                && span.0 >= self.low
-                && span.1 < self.high
+                && fixed_grid(span.0, span.1, height)
+                    .is_some_and(|(low, high, _)| (low, high) == (self.low, self.high))
         } else {
             !self.fixed_height
                 && if let Some(price) = self.flat_price {
@@ -697,34 +904,13 @@ impl VolumeProfile {
         if (self.low, self.high, self.row_height, self.volume.len())
             != (next.low, next.high, next.row_height, next.volume.len())
         {
-            let last = next.volume.len() - 1;
-            let row_of = |price| (grid_row(next.low, next.row_height, price).0 as usize).min(last);
-            for i in 0..self.volume.len() {
-                let low = self
-                    .flat_price
-                    .unwrap_or(self.low + i as f64 * self.row_height);
-                let high = self.flat_price.unwrap_or(low + self.row_height);
-                for row in row_of(low)..=row_of(high) {
-                    let fraction = if low == high {
-                        1.0
-                    } else {
-                        // A new tick grid can trim the old grid's empty price padding.
-                        let bottom = if row == 0 {
-                            low
-                        } else {
-                            next.low + row as f64 * next.row_height
-                        };
-                        let top = if row == last {
-                            high
-                        } else {
-                            next.low + (row + 1) as f64 * next.row_height
-                        };
-                        (high.min(top) - low.max(bottom)).max(0.0) / (high - low)
-                    };
-                    next.volume[row] += self.volume[i] * fraction;
-                    next.up[row] += self.up[i] * fraction;
-                    next.down[row] += self.down[i] * fraction;
-                }
+            if self.fixed_height && next.fixed_height && self.row_height == next.row_height {
+                let offset = ((self.low - next.low) / self.row_height).round() as usize;
+                next.volume[offset..offset + self.volume.len()].copy_from_slice(&self.volume);
+            } else {
+                source.fill(&mut next)?;
+                *self = next;
+                return Some(());
             }
             *self = next;
         }
@@ -800,7 +986,7 @@ impl VolumeProfile {
 
     /// Adds the volume of `bar` to the rows that its high-low range covers,
     /// in proportion to the overlap.
-    fn add(&mut self, bar: &Bar) {
+    pub(crate) fn add(&mut self, bar: &Bar) {
         if !valid_bar(bar) {
             return;
         }
@@ -1221,46 +1407,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// Developing grid changes conserve total, up and down volume, including a padded flat span.
-    #[cfg(feature = "studies")]
-    #[test]
-    fn developing_rows_rebin_without_losing_volume() {
-        let time = chrono::DateTime::UNIX_EPOCH;
-        let flat = Bar::new(time, 10.0, 10.0, 10.0, 10.0, 100.0);
-        for height in [None, Some(1.0)] {
-            let mut profile = VolumeProfile::of(std::slice::from_ref(&flat), 2, height).unwrap();
-            let up = Bar::new(time, 8.0, 12.0, 8.0, 12.0, 40.0);
-            profile
-                .extend_developing((8.0, 12.0), 2, None, &[up])
-                .unwrap();
-            assert_eq!(profile.volume(), [20.0, 120.0]);
-            let down = Bar::new(time, 12.0, 16.0, 4.0, 4.0, 120.0);
-            profile
-                .extend_developing((4.0, 16.0), 2, None, &[down])
-                .unwrap();
-            assert_eq!(profile.volume(), [80.0, 180.0]);
-            assert_eq!(profile.up(), [20.0, 120.0]);
-            assert_eq!(profile.down(), [60.0, 60.0]);
-            // A changed whole-tick height can cross the old row boundaries.
-            profile
-                .extend_developing((4.0, 16.0), 2, Some(7.0), &[])
-                .unwrap();
-            for (rows, total) in [
-                (profile.volume(), 260.0),
-                (profile.up(), 140.0),
-                (profile.down(), 120.0),
-            ] {
-                assert_close(rows.iter().sum(), total);
-            }
-        }
-        let flat = Bar::new(time, 10.9, 10.9, 10.9, 10.9, 100.0);
-        let mut profile = VolumeProfile::of(&[flat], 2, Some(3.0)).unwrap();
-        profile
-            .extend_developing((10.9, 10.9), 2, Some(5.0), &[])
-            .unwrap();
-        assert_eq!(profile.volume(), [100.0]);
     }
 
     /// Existing rows keep their prices and volume when a fixed grid grows at either edge.

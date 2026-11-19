@@ -23,14 +23,16 @@
 //! foreground colour until a line colour is chosen.
 //! Colours list the three developing plots before POC and the four row colours. Setting five
 //! colours edits the profile colours; other lengths start with the developing plots.
-//! Developing plots retain the running estimate and redistribute its rows when its grid
-//! changes. The displayed histogram continues to distribute the original source bars.
+//! Developing plots retain source-bar cumulative volume, so a changed row height bins the
+//! original bar distributions again without scanning the profile's price history.
+//! Each profile's final developing levels use the histogram's per-bar arithmetic, including ties.
 
 use super::AutoAnchor;
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
 use crate::data::{
-    FootprintBar, OrderFlowFootprints, OrderFlowInput, ProfileDisplay, ProfileLevel,
-    ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile, VolumeProfileConfig, grid_row,
+    DevelopingVolume, FootprintBar, OrderFlowFootprints, OrderFlowInput, ProfileDisplay,
+    ProfileLevel, ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile,
+    VolumeProfileConfig, grid_row,
 };
 use crate::model::{
     Bar, BarClock, CustomProfileSession, EventKind, Instrument, ProfileResolution, ProfileSession,
@@ -162,12 +164,16 @@ struct DevelopingProfile {
     span: Option<(f64, f64)>,
     input_span: Option<(f64, f64)>,
     profile: Option<VolumeProfile>,
+    source: DevelopingVolume,
 }
 
 #[derive(Clone, Debug)]
 struct DevelopingRange {
     before: DevelopingProfile,
     after: DevelopingProfile,
+    /// Exact histogram before the final bar, in the final bar's row layout.
+    opening: Option<VolumeProfile>,
+    layout: VolumeProfileConfig,
 }
 
 /// The kinds of level the extend inputs carry, in their order.
@@ -1080,13 +1086,45 @@ impl ProfileStudy {
         {
             self.refresh_ranges();
         }
-        // Finer inputs of the previous bar stop at the changed bar's open.
-        let developing_from = if times_changed && self.finer().is_some() {
+        // Restore the previous endpoint to cumulative arithmetic when its range grows.
+        // Finer inputs also stop at the changed bar's open.
+        let developing_from = if times_changed {
             from.saturating_sub(1)
         } else {
             from
         };
         self.refresh_developing(developing_from);
+    }
+
+    fn estimated_profile(
+        &self,
+        range: Range<usize>,
+        config: VolumeProfileConfig,
+        span: (f64, f64),
+    ) -> Option<VolumeProfile> {
+        let mut profile = VolumeProfile::empty(span.0, span.1, config.rows(), config.row_size())?;
+        let finer = self.finer().is_some() && !self.fine.is_empty();
+        for i in range {
+            let bar = &self.data[i];
+            let end = self
+                .data
+                .get(i + 1)
+                .map_or_else(|| self.close(bar.time), |next| next.time);
+            let inside = if finer {
+                &self.fine[self.fine.partition_point(|fine| fine.time < bar.time)
+                    ..self.fine.partition_point(|fine| fine.time < end)]
+            } else {
+                &[]
+            };
+            for input in if inside.is_empty() {
+                &self.data[i..=i]
+            } else {
+                inside
+            } {
+                profile.add(input);
+            }
+        }
+        Some(profile)
     }
 
     /// Resume each affected range before its changing bar; moving starts discard their prefix.
@@ -1123,14 +1161,14 @@ impl ProfileStudy {
         };
         let finer = self.finer().is_some() && !self.fine.is_empty();
         for range in ranges.into_iter().filter(|range| range.end > keep) {
-            let mut state = self
-                .developing
-                .remove(&range.start)
+            let cached = self.developing.remove(&range.start);
+            let mut state = cached
+                .as_ref()
                 .and_then(|cached| {
                     if cached.after.end <= keep {
-                        Some(cached.after)
+                        Some(cached.after.clone())
                     } else if cached.before.end <= keep {
-                        Some(cached.before)
+                        Some(cached.before.clone())
                     } else {
                         None
                     }
@@ -1140,8 +1178,11 @@ impl ProfileStudy {
                     span: None,
                     input_span: None,
                     profile: None,
+                    source: DevelopingVolume::default(),
                 });
             let mut before = state.clone();
+            let mut opening = None;
+            let mut layout = base;
             for i in state.end..range.end {
                 if i + 1 == range.end {
                     before = state.clone();
@@ -1173,6 +1214,7 @@ impl ProfileStudy {
                     inside
                 };
                 let previous_span = state.input_span;
+                state.source.add(added);
                 if let Some((low, high)) = crate::data::price_span(added) {
                     state.input_span = Some(
                         state
@@ -1181,36 +1223,93 @@ impl ProfileStudy {
                     );
                 }
                 if let Some(span) = state.input_span {
-                    if let Some(profile) = &mut state.profile {
-                        if profile
-                            .extend_developing(span, config.rows(), config.row_size(), added)
-                            .is_none()
-                        {
-                            state.profile = None;
-                        }
-                    } else if previous_span.is_none() {
-                        state.profile = VolumeProfile::from_bars(added, config);
-                    } else if VolumeProfile::empty(span.0, span.1, config.rows(), config.row_size())
-                        .is_some()
-                    {
-                        // A grid that was unrepresentable may become usable at a coarser height.
-                        state.profile = if finer {
-                            VolumeProfile::of_finer(
-                                &self.data[range.start..=i],
-                                end,
-                                &self.fine,
+                    if let Some(profile) = &mut state.profile
+                        && profile
+                            .extend_developing(
+                                span,
                                 config.rows(),
                                 config.row_size(),
+                                added,
+                                &state.source,
                             )
-                            .0
+                            .is_none()
+                    {
+                        state.profile = None;
+                    }
+                    if state.profile.is_none() && previous_span.is_none() {
+                        state.profile = VolumeProfile::from_bars(added, config);
+                    } else if state.profile.is_none()
+                        && let Some(mut profile) =
+                            VolumeProfile::empty(span.0, span.1, config.rows(), config.row_size())
+                    {
+                        // Grid recovery uses the index; only unrepresentable arithmetic needs source bars.
+                        state.profile = if state.source.fill(&mut profile).is_some() {
+                            Some(profile)
                         } else {
-                            VolumeProfile::from_bars(&self.data[range.start..=i], config)
+                            self.estimated_profile(range.start..i + 1, config, span)
                         };
                     }
                 }
+                let histogram = if i + 1 == range.end {
+                    layout = config;
+                    opening = cached
+                        .as_ref()
+                        .filter(|cached| {
+                            cached.before.end <= keep
+                                && cached.before.end <= i
+                                && cached.layout == config
+                                && (!finer || cached.before.end == i)
+                        })
+                        .and_then(|cached| {
+                            self.data[cached.before.end..i]
+                                .iter()
+                                .try_fold(cached.opening.clone()?, |profile, bar| {
+                                    profile.with_bar(bar)
+                                })
+                        })
+                        .or_else(|| {
+                            let bars = &self.data[range.start..i];
+                            if finer {
+                                VolumeProfile::of_finer(
+                                    bars,
+                                    self.data[i].time,
+                                    &self.fine,
+                                    config.rows(),
+                                    config.row_size(),
+                                )
+                                .0
+                            } else {
+                                VolumeProfile::from_bars(bars, config)
+                            }
+                        });
+                    // Keep the histogram's rounding and tie choices without rebuilding it on every tick.
+                    opening
+                        .clone()
+                        .and_then(|profile| {
+                            added
+                                .iter()
+                                .try_fold(profile, |profile, bar| profile.with_bar(bar))
+                        })
+                        .or_else(|| {
+                            // A moving grid needs the prefix in the final layout for subsequent ticks.
+                            opening =
+                                self.estimated_profile(range.start..i, config, state.input_span?);
+                            opening.clone().map(|mut profile| {
+                                added.iter().for_each(|bar| profile.add(bar));
+                                profile
+                            })
+                        })
+                } else {
+                    None
+                };
+                let profile = if i + 1 == range.end {
+                    histogram.as_ref()
+                } else {
+                    state.profile.as_ref()
+                };
                 if i >= keep
                     && bar_span.is_some()
-                    && let Some(profile) = &state.profile
+                    && let Some(profile) = profile
                     && let Some((poc, (low, high))) = profile.poc_and_value_area(self.value_area)
                 {
                     for (line, row) in [poc as f64 + 0.5, high as f64 + 1.0, low as f64]
@@ -1228,6 +1327,8 @@ impl ProfileStudy {
                 DevelopingRange {
                     before,
                     after: state,
+                    opening,
+                    layout,
                 },
             );
         }
@@ -1936,7 +2037,7 @@ macro_rules! profile_study {
             fn set_visible_range(&mut self, range: Range<usize>) -> bool {
                 if self.profile.view != range {
                     let from = if self.profile.view.start == range.start {
-                        self.profile.view.end.min(range.end)
+                        self.profile.view.end.min(range.end).saturating_sub(1)
                     } else {
                         0
                     };
@@ -3657,6 +3758,88 @@ mod tests {
     #[test]
     fn developing_levels_restart_with_each_profile() {
         let start = "2026-03-05T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let mut mismatches = Vec::new();
+        for (case, prices, expected) in [
+            (
+                "expanding rows",
+                [
+                    (2.0, 4.0, 1.0, 3.0, 150.0),
+                    (8.0, 8.0, 8.0, 8.0, 200.0),
+                    (12.0, 13.0, 11.0, 12.0, 100.0),
+                ],
+                8.25,
+            ),
+            (
+                "equal densities",
+                [
+                    (0.0, 3.0, 0.0, 3.0, 100.0),
+                    (3.0, 18.0, 3.0, 18.0, 500.0),
+                    (0.0, 24.0, 0.0, 18.0, 0.0),
+                ],
+                3.5,
+            ),
+        ] {
+            let mut source: Vec<_> = prices
+                .into_iter()
+                .enumerate()
+                .map(|(i, (open, high, low, close, volume))| {
+                    Bar::new(
+                        start + TimeDelta::hours(i as i64),
+                        open,
+                        high,
+                        low,
+                        close,
+                        volume,
+                    )
+                })
+                .collect();
+            let mut study = VolProfileAnchored::default();
+            study.set_timeframe(Timeframe::Hour1);
+            study.calculate(&source);
+            let histogram = study.volume_profiles(0..source.len()).remove(0).profile;
+            let (poc, (low, high)) = histogram.poc_and_value_area(0.7).unwrap();
+            assert_eq!(
+                histogram.low() + (poc as f64 + 0.5) * histogram.row_height(),
+                expected,
+                "{case}"
+            );
+            for (line, row) in [poc as f64 + 0.5, high as f64 + 1.0, low as f64]
+                .into_iter()
+                .enumerate()
+            {
+                let expected = Some(histogram.low() + row * histogram.row_height());
+                let actual = study.values().value(line, source.len() - 1);
+                if actual != expected {
+                    mismatches.push(format!(
+                        "{case} line {line}: {actual:?}, expected {expected:?}"
+                    ));
+                }
+            }
+            // Repeated ticks and appends must retain the same earlier values as a full calculation.
+            for append in [false, true, true] {
+                if append {
+                    let mut last = source.last().unwrap().clone();
+                    last.time += TimeDelta::hours(1);
+                    source.push(last);
+                }
+                let from = source.len() - 1;
+                source[from].volume += 10.0;
+                study.update(&source, from);
+                let mut fresh = VolProfileAnchored::default();
+                fresh.set_timeframe(Timeframe::Hour1);
+                fresh.calculate(&source);
+                for line in 0..3 {
+                    for i in 0..source.len() {
+                        assert_eq!(
+                            study.values().value(line, i),
+                            fresh.values().value(line, i),
+                            "{case} line {line} bar {i}"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
         let bars: Vec<_> = [
             (0, 10.0, 100.0),
             (1, 12.0, 300.0),
