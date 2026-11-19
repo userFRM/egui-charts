@@ -94,6 +94,8 @@ pub struct Trading {
     ticket: OrderTicket,
     /// A change the user asked for on a line, waiting for confirmation.
     pending: Option<TradingLineAction>,
+    /// The quantity in a pending Close dialog; each new confirmation resets it.
+    close_quantity: Option<f64>,
     /// An order the user asked the broker to preview, until it is placed or discarded.
     preview: Option<Preview>,
     /// Decimals of the chart's prices at the last [`show`](Self::show), in which
@@ -149,6 +151,7 @@ impl std::fmt::Debug for Trading {
             .field("rules_failed", &self.rules_failed)
             .field("placing", &self.placing)
             .field("pending", &self.pending)
+            .field("close_quantity", &self.close_quantity)
             .field("decimals", &self.decimals)
             .field("instruments", &self.instruments)
             .field("chart_logo", &self.chart_logo)
@@ -205,6 +208,7 @@ impl Default for Trading {
             placing: Vec::new(),
             ticket: OrderTicket::default(),
             pending: None,
+            close_quantity: None,
             preview: None,
             decimals: 2,
             instruments: HashMap::new(),
@@ -540,20 +544,6 @@ impl Trading {
 /// Why an order is refused while the broker is not live.
 const NOT_LIVE: &str = "the broker is not connected";
 
-/// Whether every number of `rules` is positive and finite and a time in force is offered.
-fn valid(rules: &TradingRules) -> bool {
-    let positive = |value: f64| value.is_finite() && value > 0.0;
-    positive(rules.quantity_step)
-        && positive(rules.min_quantity)
-        && positive(rules.point_value)
-        && rules
-            .max_quantity
-            .is_none_or(|max| positive(max) && max >= rules.min_quantity)
-        && rules.leverage.is_none_or(positive)
-        && rules.pip_value.is_none_or(positive)
-        && !rules.time_in_force.is_empty()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,6 +558,7 @@ mod tests {
     pub(super) struct Recorder {
         pub(super) state: Vec<AccountEvent>,
         pub(super) brackets: bool,
+        pub(super) partial_close: bool,
         pub(super) placed: Mutex<Vec<OrderRequest>>,
         pub(super) cancelled: Mutex<Vec<OrderId>>,
         pub(super) modified: Mutex<Vec<(OrderId, OrderRequest)>>,
@@ -587,6 +578,7 @@ mod tests {
                 reverse: true,
                 preview: true,
                 brackets: self.brackets,
+                partial_close: self.partial_close,
                 take_profit_level_stops: self.brackets,
                 ..Capabilities::default()
             };

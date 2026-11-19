@@ -61,7 +61,7 @@
 //! ## Statistics
 //! [`LinearRegression`], [`TrendStrengthIndex`], [`StandardError`],
 //! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`], [`Seasonality`], [`Ratio`], [`LunarPhases`],
-//! [`Spread`], [`Correlation`]
+//! [`Spread`], [`Correlation`], [`CorrelationLog`]
 //!
 //! ## Time
 //! [`TradingSessions`]
@@ -168,6 +168,9 @@ mod std_dev;
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod auto_drawing;
 mod auto_key_levels;
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+mod auto_trend_lines;
 mod elliott_wave;
 mod gaps;
 mod intraday_pivot_points;
@@ -313,7 +316,7 @@ pub use market_breadth::{
 };
 mod special_k;
 mod woodies_cci;
-pub use symbol_pair::{Correlation, Ratio, Spread, SymbolPair};
+pub use symbol_pair::{Correlation, CorrelationLog, Ratio, Spread, SymbolPair};
 pub use technical_ratings::{RatingBasis, TechnicalRatings};
 // Time studies
 mod lower_interval;
@@ -392,6 +395,9 @@ pub use std_dev::StandardDeviation;
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 pub use auto_drawing::{AutoDrawing, AutoDrawingKind};
 pub use auto_key_levels::AutoKeyLevels;
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+pub use auto_trend_lines::AutoTrendLines;
 pub use elliott_wave::ElliottWave;
 pub use gaps::Gaps;
 pub use intraday_pivot_points::IntradayPivotPoints;

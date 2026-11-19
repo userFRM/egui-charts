@@ -3,7 +3,7 @@ import { areas, counts, features, percentage, treemap, type Feature } from './pr
 const background = 'var(--progress-background, #ffffff)';
 const colours = { verified: '#2ea043', unverified: '#388bfd', incomplete: '#d29922', missing: '#6e7681' };
 const order = { verified: 0, unverified: 1, incomplete: 2, missing: 3 };
-const columns = 3, gap = 5, width = 1000, panelHeight = 300;
+const columns = 2, gap = 5, width = 1000, panelHeight = 200;
 const panelWidth = (width - gap * (columns - 1)) / columns;
 const escape = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 const text = (x: number, y: number, size: number, value: string) =>

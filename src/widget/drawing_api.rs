@@ -117,7 +117,7 @@ impl Chart {
     /// midpoint, price labels and text placement as one undoable edit. A horizontal line or ray
     /// and a regression trend draw only the text placement, and a vertical line the text
     /// placement, the text's orientation and the reach across panes. Unknown, locked and other
-    /// drawing types leave drawings and history untouched.
+    /// drawing types, and the drawing's own measurements, leave drawings and history untouched.
     pub fn set_line_measurements(
         &mut self,
         id: usize,
@@ -144,6 +144,9 @@ impl Chart {
             return Err(DrawingError::Invalid(
                 "Drawing is not a trend line, ray, extended line, info line, trend angle, horizontal line, horizontal ray, vertical line or regression trend",
             ));
+        }
+        if drawing.line_measurements == measurements {
+            return Ok(());
         }
         self.user_action(|chart| {
             chart.drawings_mut().edit_drawing(id, |drawing| {
@@ -366,9 +369,12 @@ impl Chart {
         Ok(())
     }
 
-    /// Replace a pin's text popup switch or a signpost's glyph, its switch and its disc colour in
-    /// one undoable edit. Other drawing tools, a glyph that is empty or longer than 32 bytes, and
-    /// locked drawings change nothing.
+    /// Replace the marker of a pin, a signpost, a horizontal line, a horizontal ray, an up, down,
+    /// left or right arrow mark, or a parallel, flat top/bottom or disjoint channel in one
+    /// undoable edit. The text switch shows or hides a pin's text popup and the text of the
+    /// lines, arrow marks and channels; the glyph, its switch and the disc colour apply to a
+    /// signpost. Other drawing tools, such as a trend line or an arrow marker, a glyph that is
+    /// empty or longer than 32 bytes, locked drawings and the drawing's own marker change nothing.
     pub fn set_annotation_marker(
         &mut self,
         id: usize,
@@ -383,12 +389,16 @@ impl Chart {
         if drawing.locked {
             return Err(DrawingError::Locked(id));
         }
-        if !matches!(
-            drawing.tool_type,
-            crate::drawings::DrawingToolType::AnchoredNote
-                | crate::drawings::DrawingToolType::Signpost
-        ) {
-            return Err(DrawingError::Invalid("Drawing is not a pin or signpost"));
+        if !(drawing.tool_type.has_text_switch()
+            || matches!(
+                drawing.tool_type,
+                crate::drawings::DrawingToolType::AnchoredNote
+                    | crate::drawings::DrawingToolType::Signpost
+            ))
+        {
+            return Err(DrawingError::Invalid(
+                "Drawing is not a pin, signpost, horizontal line, horizontal ray, arrow mark or parallel, flat top/bottom or disjoint channel",
+            ));
         }
         if !marker.is_valid() {
             return Err(DrawingError::Invalid("Invalid annotation marker"));
@@ -612,8 +622,7 @@ impl Chart {
             .count();
         self.drawings.delete_drawings(ids);
         if kept > 0 {
-            self.host_events
-                .push(super::ChartEvent::LockedDrawingsKept(kept));
+            self.push_event(super::ChartEvent::LockedDrawingsKept(kept));
         }
     }
 
@@ -892,7 +901,7 @@ mod tests {
     }
 
     /// Host edits retain measurements in saved records and templates and undo in one step;
-    /// old records keep every readout hidden. Rejected edits do not add history.
+    /// old records keep every readout hidden. Rejected and unchanged edits do not add history.
     #[test]
     fn line_measurements_survive_host_edits_templates_and_saved_records() {
         use crate::drawings::persistence::{StoredDrawing, drawing_to_stored, stored_to_drawing};
@@ -921,6 +930,7 @@ mod tests {
             text_orientation: crate::drawings::LineTextOrientation::Horizontal,
             across_panes: true,
         };
+        chart.set_line_measurements(1, measurements).unwrap();
         chart.set_line_measurements(1, measurements).unwrap();
         assert_eq!(chart.drawings().drawings[0].line_measurements, measurements);
         assert!(chart.undo());
@@ -1306,7 +1316,10 @@ mod tests {
         chart.set_regression_trend_config(7, edited).unwrap();
         assert_eq!(chart.drawings().drawings[0].regression_trend, Some(edited));
         assert!(chart.undo());
-        assert_eq!(chart.drawings().drawings[0].regression_trend, None);
+        assert_eq!(
+            chart.drawings().drawings[0].regression_trend,
+            Some(RegressionTrendConfig::drawing_default())
+        );
         assert!(!chart.can_undo());
         assert!(chart.redo());
         // An unchanged assignment does not create a second history entry.
@@ -1384,8 +1397,9 @@ mod tests {
         assert_eq!(drawing.text_color, None);
     }
 
-    /// A host sets a pin's or a signpost's marker in one undoable step; other tools, a glyph
-    /// that is empty or longer than 32 bytes, and locked drawings change nothing.
+    /// A host sets the marker of a pin, a signpost and each drawing with a text switch in one
+    /// undoable step, switching the text off and on again; other tools, a glyph that is empty or
+    /// longer than 32 bytes, locked drawings and an unchanged marker change nothing.
     #[test]
     fn annotation_marker_host_edits_are_validated_and_undoable() {
         use crate::drawings::AnnotationMarker;
@@ -1395,11 +1409,31 @@ mod tests {
             show_glyph: true,
             glyph_color: Some([255, 152, 0, 255]),
         };
-        for tool in [DrawingToolType::AnchoredNote, DrawingToolType::Signpost] {
+        let shown = AnnotationMarker {
+            show_text: true,
+            ..marker.clone()
+        };
+        for tool in [
+            DrawingToolType::AnchoredNote,
+            DrawingToolType::Signpost,
+            DrawingToolType::HorizontalLine,
+            DrawingToolType::HorizontalRay,
+            DrawingToolType::ArrowMarkUp,
+            DrawingToolType::ArrowMarkDown,
+            DrawingToolType::ArrowMarkLeft,
+            DrawingToolType::ArrowMarkRight,
+            DrawingToolType::ParallelChannel,
+            DrawingToolType::FlatTopBottom,
+            DrawingToolType::DisjointChannel,
+        ] {
             let mut chart = Chart::new(BarData::default());
             chart.drawings_mut().drawings.push(Drawing::new(7, tool));
             chart.set_annotation_marker(7, marker.clone()).unwrap();
             chart.set_annotation_marker(7, marker.clone()).unwrap();
+            assert_eq!(chart.drawings().drawings[0].marker, marker, "{tool:?}");
+            chart.set_annotation_marker(7, shown.clone()).unwrap();
+            assert_eq!(chart.drawings().drawings[0].marker, shown, "{tool:?}");
+            assert!(chart.undo());
             assert_eq!(chart.drawings().drawings[0].marker, marker, "{tool:?}");
             assert!(chart.undo());
             assert_eq!(chart.drawings().drawings[0].marker, Default::default());
@@ -1424,11 +1458,20 @@ mod tests {
                 Err(DrawingError::Locked(7))
             );
             chart.drawings_mut().drawings[0].locked = false;
-            chart.drawings_mut().drawings[0].tool_type = DrawingToolType::Note;
-            assert!(matches!(
-                chart.set_annotation_marker(7, marker.clone()),
-                Err(DrawingError::Invalid(_))
-            ));
+            for other in [
+                DrawingToolType::Note,
+                DrawingToolType::TrendLine,
+                DrawingToolType::ArrowMarker,
+            ] {
+                chart.drawings_mut().drawings[0].tool_type = other;
+                assert!(
+                    matches!(
+                        chart.set_annotation_marker(7, marker.clone()),
+                        Err(DrawingError::Invalid(_))
+                    ),
+                    "{other:?}"
+                );
+            }
             assert_eq!(chart.drawings().drawings[0].marker, Default::default());
             assert!(!chart.can_undo());
         }
