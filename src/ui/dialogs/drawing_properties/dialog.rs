@@ -36,6 +36,8 @@ pub struct DrawingPropertiesDialog {
     pub coordinates: CoordinatesState,
     /// Named templates, kept in memory unless the host attaches its storage service.
     pub templates: TemplateStore<DrawingTemplate>,
+    /// Estimated and total bars of the edited anchored VWAP, last read by `show_and_apply`.
+    vwap_estimated: Option<(usize, usize)>,
     preview: Option<(String, DrawingId, Vec<PreviewDrawing>)>,
     template_name: String,
     saving_template: bool,
@@ -63,6 +65,7 @@ impl DrawingPropertiesDialog {
             coordinates: CoordinatesState::default(),
             error: None,
             templates: TemplateStore::new(StoreKind::DrawingTemplates),
+            vwap_estimated: None,
             preview: None,
             template_name: String::new(),
             saving_template: false,
@@ -116,6 +119,10 @@ impl DrawingPropertiesDialog {
         ctx: &Context,
         chart: &mut crate::widget::Chart,
     ) -> DrawingPropertiesAction {
+        self.vwap_estimated = self
+            .drawing_id
+            .filter(|_| self.is_open)
+            .and_then(|id| chart.vwap_estimated_bars(id.0));
         let action = self.show(ctx);
         // Each frame edits the drawings as they were before the preview, as Ok does.
         self.restore_preview(chart);
@@ -263,6 +270,7 @@ impl DrawingPropertiesDialog {
                 drawing.middle_line = old.middle_line;
                 drawing.theme_shade = old.theme_shade;
                 drawing.line_measurements = old.line_measurements;
+                drawing.range_settings = old.range_settings;
                 drawing.price_axis_label = old.price_axis_label;
                 drawing.time_axis_label = old.time_axis_label;
                 drawing.elliott_degree = old.elliott_degree;
@@ -538,6 +546,7 @@ impl DrawingPropertiesDialog {
                             &mut state.level_pickers,
                             &mut self.coordinates,
                             self.props.tick_size,
+                            self.vwap_estimated,
                         );
                     }
                 }
@@ -780,6 +789,8 @@ mod tests {
             (Tool::TrendAngle, false, true, false),
             (Tool::TrendLine, true, true, false),
             (Tool::TextLabel, true, true, true),
+            (Tool::DateRange, true, true, false),
+            (Tool::DateAndPriceRange, true, true, false),
             (Tool::XABCDPattern, false, true, false),
         ] {
             let mut drawing = Drawing::new(7, tool);
@@ -895,6 +906,7 @@ mod tests {
                 settings.note_text_style = Some(note_text);
                 settings.text_color = Some([1, 2, 3, 255]);
                 settings.line_measurements.price_labels = true;
+                settings.range_settings.volume = false;
                 settings.theme_shade = true;
                 settings.anchor_price_style = Some(note_text);
                 settings.middle_line.width = 3.0;
@@ -920,6 +932,7 @@ mod tests {
                 assert_eq!(preview.note_text_style, Some(note_text));
                 assert_eq!(preview.text_color, Some([1, 2, 3, 255]));
                 assert!(preview.line_measurements.price_labels);
+                assert!(!preview.range_settings.volume);
                 assert!(preview.theme_shade);
                 assert_eq!(preview.anchor_price_style, Some(note_text));
                 assert_eq!(preview.middle_line.width, 3.0);
@@ -982,6 +995,11 @@ mod tests {
             );
             assert_eq!(restored.text_color, Some([41, 98, 255, 255]), "{finish}");
             assert_eq!(restored.line_measurements, Default::default(), "{finish}");
+            assert_eq!(
+                restored.range_settings,
+                crate::drawings::RangeSettings::default(),
+                "{finish}"
+            );
             assert!(!restored.theme_shade, "{finish}");
             assert_eq!(restored.anchor_price_style, None, "{finish}");
             assert_eq!(

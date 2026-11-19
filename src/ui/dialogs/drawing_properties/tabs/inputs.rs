@@ -65,6 +65,7 @@ impl InputsTab {
         pickers: &mut Vec<Vec<ColorPickerState>>,
         coordinates: &mut CoordinatesState,
         tick_size: Option<f64>,
+        vwap_estimated: Option<(usize, usize)>,
     ) {
         ui.space_md();
         match drawing.tool_type {
@@ -237,8 +238,8 @@ impl InputsTab {
                             0 => PositionSize::Quantity(1.0),
                             1 => PositionSize::RiskAmount(100.0),
                             _ => PositionSize::RiskPercent {
-                                account_size: 10_000.0,
-                                percent: 1.0,
+                                account_size: 1_000.0,
+                                percent: 25.0,
                             },
                         };
                     }
@@ -541,6 +542,24 @@ impl InputsTab {
                         );
                     });
                     ui.end_row();
+                    ui.label("");
+                    ui.checkbox(
+                        &mut config.executions,
+                        l10n::text(ui.ctx(), "Use executions"),
+                    );
+                    ui.end_row();
+                    if config.executions
+                        && let Some((estimated, bars)) =
+                            vwap_estimated.filter(|&(estimated, _)| estimated > 0)
+                    {
+                        ui.label("");
+                        ui.label(l10n::format_text(
+                            ui.ctx(),
+                            "Estimated from bars: {0} of {1}",
+                            &[("0", estimated.to_string()), ("1", bars.to_string())],
+                        ));
+                        ui.end_row();
+                    }
                     let label = ui.label(l10n::text(ui.ctx(), "Bands calculation"));
                     ui.label_inputs_by(label.id, |ui| {
                         let ctx = ui.ctx().clone();

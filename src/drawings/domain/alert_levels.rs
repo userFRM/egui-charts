@@ -11,16 +11,30 @@ impl Drawing {
     /// its painted lines, and is empty when the anchored range has fewer than two bars or
     /// invalid geometry. The anchored VWAP is level 0 and the upper and lower lines of each
     /// enabled band `n` (from zero) levels `2n + 1` and `2n + 2`, at the values the painted lines
-    /// have at `bar`; they are empty before the anchor, past the last bar and before volume
-    /// trades.
+    /// have at `bar`; they are empty before the anchor, past the last bar, before volume trades
+    /// and at a bar whose source price or volume is not finite. An anchored VWAP set to count
+    /// executions counts every bar at its source price here;
+    /// [`Chart::alert_value`](crate::Chart::alert_value) reads the chart's executions.
     pub fn alert_levels_with_bars(
         &self,
         bar: f64,
         scale: PriceScaleMode,
         bars: &[Bar],
     ) -> Vec<(usize, String, f64)> {
+        self.alert_levels_with_executions(bar, scale, bars, None)
+    }
+
+    /// [`Self::alert_levels_with_bars`], with an anchored VWAP reading the supplied executions
+    /// when its settings count them.
+    pub(crate) fn alert_levels_with_executions(
+        &self,
+        bar: f64,
+        scale: PriceScaleMode,
+        bars: &[Bar],
+        executions: Option<crate::data::FootprintView<'_>>,
+    ) -> Vec<(usize, String, f64)> {
         if self.tool_type == DrawingToolType::AnchoredVWAP {
-            return self.vwap_alert_levels(bar, bars);
+            return self.vwap_alert_levels(bar, bars, executions);
         }
         if self.tool_type != DrawingToolType::RegressionTrend {
             return self.alert_levels(bar, scale);
@@ -62,7 +76,12 @@ impl Drawing {
             .collect()
     }
 
-    fn vwap_alert_levels(&self, bar: f64, bars: &[Bar]) -> Vec<(usize, String, f64)> {
+    fn vwap_alert_levels(
+        &self,
+        bar: f64,
+        bars: &[Bar],
+        executions: Option<crate::data::FootprintView<'_>>,
+    ) -> Vec<(usize, String, f64)> {
         let Some(anchor) = self.chart_points.first() else {
             return Vec::new();
         };
@@ -77,7 +96,8 @@ impl Drawing {
             return Vec::new();
         };
         let config = self.vwap.unwrap_or_default();
-        let Some((vwap, unit)) = crate::drawings::rendering::anchored_vwap_through(span, &config)
+        let Some((vwap, unit)) =
+            crate::drawings::rendering::anchored_vwap_through(span, &config, executions)
         else {
             return Vec::new();
         };
