@@ -26,6 +26,7 @@ enum LineSize {
 }
 
 impl LineSize {
+    /// The label study inputs show for this choice.
     fn label(self) -> &'static str {
         match self {
             Self::Small => "Small",
