@@ -72,6 +72,11 @@ fn pixel_conflation_threshold() -> Option<f32> {
     Some(1.0)
 }
 
+/// Older saved configurations use the theme for overnight shading.
+fn follow_the_theme() -> Color32 {
+    Color32::PLACEHOLDER
+}
+
 /// Appearance of the price axis: its border, tick marks and which labels it shows. It applies to
 /// the main and series price axes; value tag settings also apply to study panes.
 ///
@@ -462,10 +467,14 @@ pub struct ChartConfig {
     pub session_break_style: LineStyle,
     /// Session configuration (market hours)
     pub session_config: Option<SessionConfig>,
-    /// Shade bars identified as extended hours by the session metadata.
+    /// Shade bars identified as extended or overnight hours by the session metadata.
     pub show_extended_hours: bool,
     /// Extended-hours fill. `PLACEHOLDER` uses the active theme accent at low opacity.
     pub extended_hours_color: Color32,
+    /// Fill for overnight windows. `PLACEHOLDER` follows the active theme accent at twice
+    /// the extended-hours opacity. Older saved charts use that theme default.
+    #[serde(default = "follow_the_theme")]
+    pub overnight_hours_color: Color32,
     /// Whether to show the symbol watermark.
     pub show_watermark: bool,
     /// Text of the symbol watermark; `\n` starts another line. `None` shows the symbol and the
@@ -620,6 +629,7 @@ impl Default for ChartConfig {
             session_config: None,
             show_extended_hours: true,
             extended_hours_color: Color32::PLACEHOLDER,
+            overnight_hours_color: Color32::PLACEHOLDER,
             // Watermark disabled by default
             show_watermark: false,
             watermark_text: None,

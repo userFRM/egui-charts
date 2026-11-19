@@ -1705,3 +1705,111 @@ fn study_tables_sit_in_their_own_pane() {
     let pane = chart.get_rendered_indicator_panes()[0].chart_rect;
     assert!(pane.contains(heading), "{heading:?} outside {pane:?}");
 }
+
+/// Removing a study pane, or the study that owns it, while a drawing is being placed in it
+/// cancels that drawing; when the pane stays, the drawing follows the pane's next owner (#3465).
+#[test]
+#[cfg(feature = "drawings")]
+fn removing_a_study_pane_cancels_the_drawing_placed_in_it() {
+    use crate::drawings::DrawingToolType;
+    use crate::widget::test_frames::frame;
+    use crate::widget::{ChartElementId, PaneId};
+    let press = |ctx: &Context, chart: &mut crate::widget::Chart, key| {
+        let event = Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        let time = ctx.input(|input| input.time) + 0.1;
+        frame(ctx, chart, time, vec![event]);
+    };
+    let mut failures = Vec::new();
+    for (removal, tool, finish) in [
+        ("Delete", DrawingToolType::TrendLine, None),
+        ("remove_pane", DrawingToolType::TrendLine, None),
+        ("undo", DrawingToolType::TrendLine, None),
+        ("shared pane", DrawingToolType::TrendLine, None),
+        ("Delete", DrawingToolType::Path, Some(egui::Key::Enter)),
+        ("Delete", DrawingToolType::Polyline, Some(egui::Key::Escape)),
+    ] {
+        let name = format!("{removal}, {tool:?}");
+        let ctx = Context::default();
+        let mut chart = chart(&[1000.0], &[1100.0]);
+        let rsi = chart.user_action(|chart| chart.add_indicator(Box::new(RSI::new(14))));
+        let other = (removal == "shared pane").then(|| {
+            let other = chart.add_indicator(Box::new(RSI::new(7)));
+            assert!(chart.move_indicator_to_pane(other, rsi));
+            other
+        });
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        let pane = chart.series_pane(rsi).unwrap();
+        let study = chart.get_rendered_indicator_panes()[0].clone();
+        let at = |bar| Pos2::new(study.mapping.idx_to_x(bar), study.chart_rect.center().y);
+        chart.drawings_mut().set_active_tool(Some(tool));
+        let anchors = if tool == DrawingToolType::TrendLine {
+            1
+        } else {
+            2
+        };
+        for bar in [30, 50].into_iter().take(anchors) {
+            click(&ctx, &mut chart, at(bar));
+        }
+        match removal {
+            "Delete" => {
+                chart.selection.select(ChartElementId::Indicator(rsi), None);
+                press(&ctx, &mut chart, egui::Key::Delete);
+            }
+            "remove_pane" => assert!(chart.remove_pane(pane)),
+            "undo" => assert!(chart.undo()),
+            _ => assert!(chart.remove_series(rsi)),
+        }
+        assert!(
+            !chart.indicators().any(|(id, _)| id == rsi),
+            "{name}: the study stays"
+        );
+        if let Some(key) = finish {
+            press(&ctx, &mut chart, key);
+            if !chart.drawings().drawings.is_empty() {
+                failures.push(format!(
+                    "{name}: saved {:?}",
+                    chart.drawings().drawings[0].pane
+                ));
+            }
+            continue;
+        }
+        frame(
+            &ctx,
+            &mut chart,
+            ctx.input(|input| input.time) + 0.1,
+            Vec::new(),
+        );
+        let target = if other.is_some() { pane } else { PaneId::MAIN };
+        let points = if let Some(other) = other {
+            let study = chart.get_rendered_indicator_panes()[0].clone();
+            assert_eq!(chart.series_pane(other), Some(pane));
+            vec![Pos2::new(
+                study.mapping.idx_to_x(70),
+                study.chart_rect.center().y,
+            )]
+        } else {
+            let y = chart.get_rendered_price_rect().center().y;
+            let mapping = chart.get_chart_mapping();
+            vec![
+                Pos2::new(mapping.idx_to_x(30), y),
+                Pos2::new(mapping.idx_to_x(70), y),
+            ]
+        };
+        for point in points {
+            click(&ctx, &mut chart, point);
+        }
+        let placed: Vec<_> = (chart.drawings().drawings.iter())
+            .map(|drawing| (chart.drawing_pane(drawing.id), drawing.pane))
+            .collect();
+        if placed != [(Some(target), other.map(|other| other.0))] {
+            failures.push(format!("{name}: placed {placed:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}

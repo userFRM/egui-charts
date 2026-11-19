@@ -249,9 +249,9 @@ enum Anchor {
 /// then the chart events.
 const ANCHORS: [(Anchor, &str); 14] = [
     (Anchor::Bars(AutoAnchor::Auto), "Auto"),
-    (Anchor::Bars(AutoAnchor::HighestHigh), "Highest high"),
-    (Anchor::Bars(AutoAnchor::LowestLow), "Lowest low"),
-    (Anchor::Bars(AutoAnchor::HighestVolume), "Highest volume"),
+    (Anchor::Bars(AutoAnchor::HighestHigh), "Highest High"),
+    (Anchor::Bars(AutoAnchor::LowestLow), "Lowest Low"),
+    (Anchor::Bars(AutoAnchor::HighestVolume), "Highest Volume"),
     (Anchor::Bars(AutoAnchor::Session), "Session"),
     (Anchor::Bars(AutoAnchor::Week), "Week"),
     (Anchor::Bars(AutoAnchor::Month), "Month"),
@@ -442,7 +442,7 @@ impl ProfileStudy {
                 InputKind::Length(1, 10_000),
             ));
             let units = PERIOD_UNITS.iter().map(|unit| match unit {
-                PeriodUnit::Calendar(period) => format!("{period:?}"),
+                PeriodUnit::Calendar(period) => period.label().to_owned(),
                 PeriodUnit::Bar => "Bar".into(),
                 PeriodUnit::Minute => "Minute".into(),
                 PeriodUnit::Hour => "Hour".into(),
@@ -1817,6 +1817,11 @@ macro_rules! profile_study {
             }
             fn needs_order_flow(&self) -> bool {
                 false
+            }
+            // The finer bars are chosen below the interval the profile is calculated on, so they
+            // apply on any Interval.
+            fn requests_allow_other_intervals(&self) -> bool {
+                true
             }
             fn volume_profiles(&self, visible: Range<usize>) -> Vec<StudyProfile> {
                 self.profile.profiles(visible)
@@ -3877,9 +3882,9 @@ mod tests {
             ANCHORS.map(|(_, label)| label),
             [
                 "Auto",
-                "Highest high",
-                "Lowest low",
-                "Highest volume",
+                "Highest High",
+                "Lowest Low",
+                "Highest Volume",
                 "Session",
                 "Week",
                 "Month",

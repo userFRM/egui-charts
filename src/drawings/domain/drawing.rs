@@ -178,7 +178,8 @@ pub struct Drawing {
     /// Position as fractions of the pane width and height for anchored text, which keeps its
     /// place in the pane while the chart scrolls and zooms. The chart keeps
     /// [`chart_points`](Self::chart_points) on the bar and price under it.
-    /// `None` adopts the first displayed position, including for older saved drawings.
+    /// `None` takes the first position the text is drawn at inside its pane, including for older
+    /// saved drawings; until then the text stays on its bar and price.
     /// A pin saved with one takes the bar and price under it the first time a chart draws it,
     /// and the chart then clears it.
     #[serde(default)]
@@ -374,8 +375,15 @@ pub struct Drawing {
     pub bars_pattern: Option<BarsPatternConfig>,
 
     // === Z-Order (rendering layer) ===
-    /// Z-order for rendering priority (higher = drawn on top)
+    /// Z-order among the drawings of the same `series_layer` (higher = drawn on top).
     pub z_order: i32,
+    /// How many series and studies of the drawing's pane are drawn under it, counted from the
+    /// back of the pane's draw order: `Some(0)` draws it under all of them. `None`, the default,
+    /// draws it over all of them, as drawings were drawn before this setting, and so does a
+    /// count of at least the number of series and studies in the pane. Drawings with the same
+    /// count are layered by [`z_order`](Self::z_order).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series_layer: Option<usize>,
 }
 
 fn enabled() -> bool {
@@ -729,6 +737,7 @@ impl Drawing {
             }),
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
+            series_layer: None,
         }
     }
 
@@ -925,8 +934,10 @@ impl Drawing {
     }
 
     /// Rebuilds anchored text coordinates relative to the pane. Call after
-    /// `update_screen_coords`; other tools retain their chart coordinates. Older drawings
-    /// adopt their first displayed position. Resizing preserves the width and height fractions.
+    /// `update_screen_coords`; other tools retain their chart coordinates. A text without a pane
+    /// position, such as an older drawing or one just moved, takes one the first time its point
+    /// is drawn inside `pane`, and stays on its bar and price until then. Resizing preserves the
+    /// width and height fractions.
     pub fn update_pane_coords(&mut self, pane: egui::Rect) {
         if self.tool_type != DrawingToolType::AnchoredText
             || !pane.is_finite()
@@ -935,7 +946,11 @@ impl Drawing {
         {
             return;
         }
-        if let Some(pos) = self.points.first_mut() {
+        // A position taken outside the pane would keep the text out of view whatever the
+        // chart scrolls to; until it is drawn inside, the text stays on its bar and price.
+        if let Some(pos) = self.points.first_mut()
+            && (self.screen_anchor.is_some() || pane.contains(*pos))
+        {
             let anchor = self.screen_anchor.get_or_insert_with(|| {
                 [
                     (pos.x - pane.left()) / pane.width(),

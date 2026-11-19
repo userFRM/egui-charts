@@ -2089,6 +2089,22 @@ mod tests {
             ("PMO", &["Price Momentum Oscillator"], &[]),
             ("TPO", &["Time Price Opportunity"], &[]),
             ("Variable Index Dynamic Average", &["VIDYA"], &[]),
+            ("Price Channel", &["Price Channel"], &["Donchian"]),
+            (
+                "Multi-Time Period Charts",
+                &["Higher Interval Candles"],
+                &[],
+            ),
+            (
+                "Auto trendlines",
+                &["Auto Trend Line"],
+                &["Auto Parallel Channel"],
+            ),
+            (
+                "Session Time Price Opportunity",
+                &["Time Price Opportunity"],
+                &["Vol Profile Session"],
+            ),
         ];
         let ctx = egui::Context::default();
         let mut dialog = IndicatorDialog::new();

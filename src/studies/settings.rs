@@ -2856,6 +2856,193 @@ mod tests {
         }
     }
 
+    /// Guards #3494: a volume profile offers the Interval and Wait for interval close whatever
+    /// finer bars it requests, from its Source interval or the host's suggestion, so either order
+    /// of Source interval and Interval, by input or by Apply, gives the same study. It reads the
+    /// finer bars inside the Interval's bars from the profile's first bar, and keeps the Interval
+    /// listed once it is cleared.
+    #[test]
+    fn profiles_offer_the_interval_in_either_order() {
+        use crate::model::{BarClock, ProfileResolution};
+        use crate::studies::{
+            StudyData, StudyDataRequest, VolProfileAutoAnchored, VolProfileVisible,
+        };
+        // 48 hourly bars from Monday 2 March 2026 00:00 UTC, two daily bars of volume 99, and one
+        // minute bar on each day, of volume 2 and 3.
+        let start: chrono::DateTime<chrono::Utc> = "2026-03-02T00:00:00Z".parse().unwrap();
+        let hour = |h: i64| start + chrono::Duration::hours(h);
+        let flat = |h, volume| Bar::new(hour(h), 100.0, 101.0, 100.0, 101.0, volume);
+        let chart: Vec<_> = (0..48).map(|h| flat(h, 1.0)).collect();
+        let days = [flat(0, 99.0), flat(24, 99.0)];
+        let minutes = [
+            Bar::new(hour(10), 100.0, 100.5, 100.0, 100.5, 2.0),
+            Bar::new(hour(29), 100.5, 101.0, 100.5, 101.0, 3.0),
+        ];
+        let bars = |timeframe| StudyDataRequest {
+            symbol: String::new(),
+            timeframe: Some(timeframe),
+            metric: None,
+        };
+        let suggested = Instrument::new("TEST")
+            .with_profile_resolutions([ProfileResolution::new(Timeframe::Min1, None)]);
+        let interval = (
+            "calculation_timeframe",
+            InputValue::Timeframe(Some(Timeframe::Day1)),
+        );
+        let source = (
+            "source_interval",
+            InputValue::Timeframe(Some(Timeframe::Min1)),
+        );
+        let listed = |study: &ConfiguredStudy| -> Vec<_> {
+            study
+                .inputs()
+                .into_iter()
+                .filter(|input| {
+                    matches!(
+                        input.id.as_str(),
+                        "calculation_timeframe" | "wait_for_close"
+                    )
+                })
+                .map(|input| (input.id, input.value))
+                .collect()
+        };
+        type Factory = fn() -> Box<dyn Indicator>;
+        let studies: [(&str, Factory); 2] = [
+            ("Vol Profile VR", || Box::new(VolProfileVisible::new(1))),
+            ("Vol Profile Auto Anchored", || {
+                Box::new(VolProfileAutoAnchored::new(1))
+            }),
+        ];
+        let (mut observed, mut expected) = (Vec::new(), Vec::new());
+        for (name, study) in studies {
+            for (order, apply, host, edits) in [
+                (
+                    "source, then interval",
+                    false,
+                    false,
+                    vec![vec![source.clone()], vec![interval.clone()]],
+                ),
+                (
+                    "interval, then source",
+                    false,
+                    false,
+                    vec![vec![interval.clone()], vec![source.clone()]],
+                ),
+                (
+                    "source, then interval",
+                    true,
+                    false,
+                    vec![vec![source.clone()], vec![interval.clone()]],
+                ),
+                (
+                    "interval, then source",
+                    true,
+                    false,
+                    vec![vec![interval.clone()], vec![source.clone()]],
+                ),
+                (
+                    "one Apply",
+                    true,
+                    false,
+                    vec![vec![source.clone(), interval.clone()]],
+                ),
+                (
+                    "suggested, then interval",
+                    false,
+                    true,
+                    vec![vec![interval.clone()]],
+                ),
+            ] {
+                let case = format!("{name}: {order}, apply_settings {apply}");
+                let rows = edits.len();
+                let mut study = ConfiguredStudy::new(study());
+                study.set_timeframe(Timeframe::Hour1);
+                study.set_bar_clock(&BarClock::new(Timeframe::Hour1));
+                study.set_instrument(host.then_some(&suggested));
+                study.set_visible_range(0..chart.len());
+                study.calculate(&chart);
+                let results: Vec<_> = edits
+                    .into_iter()
+                    .map(|edit| {
+                        if apply {
+                            let inputs: Vec<_> = edit
+                                .iter()
+                                .map(|(id, value)| (id.to_string(), value.clone()))
+                                .collect();
+                            let settings = study.settings();
+                            study.apply_settings(&inputs, settings)
+                        } else {
+                            edit.into_iter()
+                                .try_for_each(|(id, value)| study.set_input(id, value))
+                        }
+                        .map_err(|error| error.to_string())
+                    })
+                    .collect();
+                let reply = |request, bars, timeframe| StudyData {
+                    request,
+                    bars,
+                    clock: BarClock::new(timeframe),
+                    instrument: host.then_some(&suggested),
+                    timeframe,
+                };
+                let replies = [
+                    reply(bars(Timeframe::Day1), &days[..], Timeframe::Day1),
+                    reply(bars(Timeframe::Min1), &minutes[..], Timeframe::Min1),
+                ];
+                // A suggestion follows the profile length, known once the daily bars arrived.
+                for _ in 0..2 {
+                    study.update_data(&chart, 0, &replies);
+                }
+                let profiles: Vec<_> = study
+                    .volume_profiles(0..chart.len())
+                    .into_iter()
+                    .map(|plot| {
+                        let rows = &plot.profile;
+                        (plot.bars, rows.low(), rows.high(), rows.volume().to_vec())
+                    })
+                    .collect();
+                let starts = [
+                    study.data_start(&bars(Timeframe::Day1)),
+                    study.data_start(&bars(Timeframe::Min1)),
+                ];
+                let on_interval = (listed(&study), study.data_requests(), starts, profiles);
+                let cleared = study
+                    .set_input("calculation_timeframe", InputValue::Timeframe(None))
+                    .map_err(|error| error.to_string());
+                study.calculate(&chart);
+                observed.push((
+                    case.clone(),
+                    results,
+                    on_interval,
+                    cleared,
+                    listed(&study),
+                    study.data_requests(),
+                ));
+                expected.push((
+                    case,
+                    vec![Ok(()); rows],
+                    (
+                        vec![
+                            (interval.0.to_owned(), interval.1.clone()),
+                            ("wait_for_close".to_owned(), InputValue::Toggle(true)),
+                        ],
+                        vec![bars(Timeframe::Day1), bars(Timeframe::Min1)],
+                        [None, Some(start)],
+                        // Each daily bar holds a minute bar, so the one row sums 2 + 3.
+                        vec![(0..48, 100.0, 101.0, vec![5.0])],
+                    ),
+                    Ok(()),
+                    vec![
+                        (interval.0.to_owned(), InputValue::Timeframe(None)),
+                        ("wait_for_close".to_owned(), InputValue::Toggle(true)),
+                    ],
+                    vec![bars(Timeframe::Min1)],
+                ));
+            }
+        }
+        assert_eq!(observed, expected);
+    }
+
     #[test]
     fn edits_are_atomic_and_interval_visibility_preserves_the_global_toggle() {
         let mut study = ConfiguredStudy::new(Box::new(BollingerBands::new(3, 2.0)));
@@ -3053,6 +3240,76 @@ mod tests {
             study.apply_settings(&[], absent).unwrap();
             assert_eq!(study.settings(), defaults);
         }
+        // Profiles saved with finer bars keep their presentation and both saved interval inputs.
+        // Saves that omitted those inputs keep their existing chart interval and close-wait defaults.
+        for (saved, interval) in [
+            (
+                r#"{"name":"Vol Profile VR","inputs":[["row_count",{"Length":24}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":"Min1"}],["feed_source",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileVisible.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                None,
+            ),
+            (
+                r#"{"name":"Vol Profile VR","inputs":[["row_count",{"Length":24}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":"Min1"}],["feed_source",{"Toggle":true}],["calculation_timeframe",{"Timeframe":"Day1"}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileVisible.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                Some(Timeframe::Day1),
+            ),
+            (
+                r#"{"name":"Vol Profile Auto Anchored","inputs":[["row_count",{"Length":24}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":"Min1"}],["feed_source",{"Toggle":true}],["anchor",{"Choice":0}],["length",{"Length":100}],["width",{"Number":30.0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileAutoAnchored.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                None,
+            ),
+            (
+                r#"{"name":"Vol Profile Auto Anchored","inputs":[["row_count",{"Length":24}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":"Min1"}],["feed_source",{"Toggle":true}],["anchor",{"Choice":0}],["length",{"Length":100}],["width",{"Number":30.0}],["calculation_timeframe",{"Timeframe":"Day1"}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileAutoAnchored.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                Some(Timeframe::Day1),
+            ),
+        ] {
+            let template = serde_json::from_str::<crate::studies::StudyTemplate>(saved).unwrap();
+            let mut older = template.create().unwrap();
+            older.set_timeframe(Timeframe::Hour1);
+            assert_eq!(older.settings(), template.settings);
+            assert_eq!(older.is_visible(), template.visible);
+            assert_eq!(Some(older.scale()), template.scale);
+            let mut expected = template.inputs.clone();
+            for (id, value) in [
+                ("calculation_timeframe", InputValue::Timeframe(interval)),
+                ("wait_for_close", InputValue::Toggle(true)),
+            ] {
+                if !expected.iter().any(|(saved, _)| saved == id) {
+                    expected.push((id.to_owned(), value.clone()));
+                }
+                assert_eq!(
+                    older
+                        .inputs()
+                        .iter()
+                        .find(|input| input.id == id)
+                        .unwrap()
+                        .value,
+                    value
+                );
+            }
+            assert_eq!(
+                crate::studies::StudyTemplate::from_study(older.as_ref()).inputs,
+                expected
+            );
+        }
+        // A template saved before the size basis existed keeps fill-based filtering and
+        // its exact presentation; the missing toggle takes its declared false default.
+        let saved = r#"{"name":"Size-Filtered CVD","inputs":[["min",{"Number":100.0}],["max",{"Number":1.7976931348623157e+308}],["anchor",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.OrderFlowStudy.html","plots":[{"color":[38,166,154,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[2,10,10,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let template = serde_json::from_str::<crate::studies::StudyTemplate>(saved).unwrap();
+        let older = template.create().unwrap();
+        assert_eq!(older.settings(), template.settings);
+        assert_eq!(
+            older
+                .inputs()
+                .iter()
+                .find(|input| input.id == "combine_fills")
+                .unwrap()
+                .value,
+            InputValue::Toggle(false)
+        );
+        let mut expected = template.inputs.clone();
+        expected.insert(2, ("combine_fills".to_owned(), InputValue::Toggle(false)));
+        assert_eq!(
+            crate::studies::StudyTemplate::from_study(older.as_ref()).inputs,
+            expected
+        );
         // A KST opens with a dashed zero guide. Saved before it had one, it restores with the
         // guide hidden, and a guide shown since keeps its style through a template.
         let declared =
