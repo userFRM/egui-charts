@@ -650,6 +650,8 @@ pub struct ConfiguredStudy {
     /// The values kept on the bars that remain after the chart evicted the oldest bars, until
     /// the study is calculated again.
     kept: Option<Kept>,
+    /// Defaults by input id that replace the declared ones, from `set_input_defaults`.
+    input_defaults: Vec<(String, InputValue)>,
 }
 
 impl Clone for ConfiguredStudy {
@@ -701,6 +703,7 @@ impl ConfiguredStudy {
             aligned_markers: self.aligned_markers.clone(),
             aligned_zones: self.aligned_zones.clone(),
             kept: self.kept.clone(),
+            input_defaults: self.input_defaults.clone(),
         }
     }
 
@@ -748,6 +751,7 @@ impl ConfiguredStudy {
             aligned_markers: Vec::new(),
             aligned_zones: Vec::new(),
             kept: None,
+            input_defaults: Vec::new(),
         }
     }
     /// Attach a host-chosen help article to this study, retained in saved presentation.
@@ -758,13 +762,25 @@ impl ConfiguredStudy {
 
     /// Whether the study can be calculated on another interval: it reads one source, or the bars
     /// alone, without order flow it cannot do without and with no data of its own to request
-    /// unless its requests apply on any interval. An accepted interval stays available if
-    /// calculating on it changes those requests.
+    /// unless its requests apply on any interval or are price bars it reads on that interval as
+    /// on a chart of it: other symbols' bars, and bars of the chart's interval, while the study
+    /// has no interval input of its own. An accepted interval stays available if calculating on
+    /// it changes those requests.
     fn runs_on_other_bars(&self) -> bool {
+        let requests = self.study.data_requests();
+        let follows = |request: &super::StudyDataRequest| {
+            request.metric.is_none() && (request.timeframe.is_none() || !request.symbol.is_empty())
+        };
         self.calculation_timeframe.is_some()
             || self.study.source().is_some()
-            || ((self.study.data_requests().is_empty()
-                || self.study.requests_allow_other_intervals())
+            || ((requests.is_empty()
+                || self.study.requests_allow_other_intervals()
+                || (requests.iter().all(follows)
+                    && !self
+                        .study
+                        .inputs()
+                        .iter()
+                        .any(|input| matches!(input.kind, super::InputKind::Timeframe))))
                 && !self.study.needs_order_flow())
     }
 
@@ -777,11 +793,67 @@ impl ConfiguredStudy {
         }
     }
 
+    /// The study's own requests it reads while it runs on another symbol or interval, each with
+    /// the request made for it. Price bars of the chart's interval are made on the calculation
+    /// interval, and the chart symbol's on the calculation symbol, as on a chart of them. Metrics,
+    /// other symbols' bars of a stated interval, the chart symbol's candles inside the Interval's
+    /// bars and every request of a study whose requests apply on any interval are made as stated.
+    /// The study reads no other request.
+    fn requests_on_other_bars(&self) -> Vec<(super::StudyDataRequest, super::StudyDataRequest)> {
+        // Bars inside the Interval's bars, on the chart symbol, are the candles a chart of
+        // that interval would read (24-hour Volume on 1W reads hourly candles).
+        let inside = |timeframe: Timeframe| {
+            self.calculation_symbol.is_empty()
+                && !timeframe.is_trade_based()
+                && self
+                    .calculation_timeframe
+                    .is_some_and(|interval| timeframe.duration_ms() < interval.duration_ms())
+        };
+        let all = self.study.requests_allow_other_intervals();
+        self.study
+            .data_requests()
+            .into_iter()
+            .filter_map(|request| {
+                if all
+                    || request.metric.is_some()
+                    || (!request.symbol.is_empty() && request.timeframe.is_some())
+                    || (request.symbol.is_empty() && request.timeframe.is_some_and(inside))
+                {
+                    return Some((request.clone(), request));
+                }
+                request.timeframe.is_none().then(|| {
+                    let made = super::StudyDataRequest {
+                        symbol: if request.symbol.is_empty() {
+                            self.calculation_symbol.clone()
+                        } else {
+                            request.symbol.clone()
+                        },
+                        timeframe: self.calculation_timeframe,
+                        metric: None,
+                    };
+                    (request, made)
+                })
+            })
+            .collect()
+    }
+
     /// The bars evicted since the study was last calculated, by which the bars of its kept values
     /// trail those of the study.
     fn shift(&self) -> usize {
         self.kept.as_ref().map_or(0, |kept| kept.shift)
     }
+
+    /// The inner study's bar for a bar this study is asked about, through its shift and its
+    /// alignment to another interval.
+    fn inner_bar(&self, bar: usize) -> Option<usize> {
+        let bar = bar.checked_add(self.shift())?;
+        if self.aligned.is_some() {
+            self.aligned_bars.get(bar).copied().flatten()
+        } else {
+            Some(bar)
+        }
+    }
+
     fn update_price(&mut self, data: &[Bar], from: usize) {
         self.aligned = None;
         self.kept = None;
@@ -833,6 +905,9 @@ impl Indicator for ConfiguredStudy {
     fn set_registered_name(&mut self, name: &str) -> bool {
         self.registered = name.to_owned();
         true
+    }
+    fn set_input_defaults(&mut self, defaults: &[(String, InputValue)]) {
+        self.input_defaults = defaults.to_vec();
     }
     fn metric(&self) -> Option<&crate::data::MetricSeries> {
         self.study.metric()
@@ -906,6 +981,13 @@ impl Indicator for ConfiguredStudy {
                 )
                 .with_default(InputValue::Toggle(true)),
             ]);
+        }
+        for input in &mut inputs {
+            if let Some((_, value)) = self.input_defaults.iter().find(|(id, _)| *id == input.id)
+                && input.accepts(value)
+            {
+                input.default = value.clone();
+            }
         }
         inputs
     }
@@ -1006,27 +1088,12 @@ impl Indicator for ConfiguredStudy {
     }
     fn data_requests(&self) -> Vec<super::StudyDataRequest> {
         if !self.calculation_symbol.is_empty() || self.calculation_timeframe.is_some() {
-            // The bars come first: `update_data` reads them from the head. The study's own
-            // metric requests (exchange rates) follow, and the candles it reads inside the
-            // Interval's bars, or every request of a study whose histories apply on any interval.
+            // The bars come first: `update_data` reads them from the head. The requests the study
+            // reads on them follow, each once.
             let mut requests = vec![self.calculation_request()];
-            // Bars inside the Interval's bars, on the chart symbol, are the candles a chart of
-            // that interval would read (24-hour Volume on 1W reads hourly candles).
-            let inside = |timeframe: Timeframe| {
-                self.calculation_symbol.is_empty()
-                    && !timeframe.is_trade_based()
-                    && self
-                        .calculation_timeframe
-                        .is_some_and(|interval| timeframe.duration_ms() < interval.duration_ms())
-            };
-            let all = self.study.requests_allow_other_intervals();
-            for request in self.study.data_requests() {
-                if (all
-                    || request.metric.is_some()
-                    || (request.symbol.is_empty() && request.timeframe.is_some_and(inside)))
-                    && !requests.contains(&request)
-                {
-                    requests.push(request);
+            for (_, made) in self.requests_on_other_bars() {
+                if !requests.contains(&made) {
+                    requests.push(made);
                 }
             }
             requests
@@ -1079,10 +1146,27 @@ impl Indicator for ConfiguredStudy {
             self.study
                 .set_visible_range(source_bars(&self.spans, visible));
         }
-        if self.data_requests().len() > 1 {
+        let read = self.requests_on_other_bars();
+        if read.is_empty() {
+            self.update_price(source.bars, 0);
+        } else if read.iter().all(|(own, made)| own == made) {
             self.study.update_data(source.bars, 0, sources);
         } else {
-            self.update_price(source.bars, 0);
+            // The study finds each history under its own request.
+            let histories: Vec<_> = read
+                .into_iter()
+                .filter_map(|(own, made)| {
+                    let history = sources.iter().find(|history| history.request == made)?;
+                    Some(super::StudyData {
+                        request: own,
+                        bars: history.bars,
+                        clock: history.clock.clone(),
+                        instrument: history.instrument,
+                        timeframe: history.timeframe,
+                    })
+                })
+                .collect();
+            self.study.update_data(source.bars, 0, &histories);
         }
         let mut aligned = IndicatorValues::new();
         self.aligned_bars.clear();
@@ -1387,13 +1471,10 @@ impl Indicator for ConfiguredStudy {
         self.study.plot_color(line, bar)
     }
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
-        let bar = bar.checked_add(self.shift())?;
-        let bar = if self.aligned.is_some() {
-            self.aligned_bars.get(bar).copied().flatten()?
-        } else {
-            bar
-        };
-        self.study.plot_text(line, bar)
+        self.study.plot_text(line, self.inner_bar(bar)?)
+    }
+    fn plot_tooltip(&self, line: usize, bar: usize) -> Option<String> {
+        self.study.plot_tooltip(line, self.inner_bar(bar)?)
     }
     fn fills(&self) -> Vec<super::StudyFill> {
         self.study

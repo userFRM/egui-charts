@@ -80,7 +80,8 @@ pub enum ContextMenuAction {
     MergeTpoPrevious,
     /// Merge the clicked TPO profile with its next neighbour. Already applied by [`ChartMenus`].
     MergeTpoNext,
-    /// Restore the sessions of the clicked composite TPO profile. Already applied by [`ChartMenus`].
+    /// Restore a composite TPO profile's sessions, or split a session's profile at the clicked
+    /// period. Already applied by [`ChartMenus`].
     SplitTpoProfile,
     /// Merge the clicked execution profile with its previous neighbour. Applied by [`ChartMenus`].
     MergeTradeProfilePrevious,
@@ -88,12 +89,16 @@ pub enum ContextMenuAction {
     MergeTradeProfileNext,
     /// Split the clicked execution profile at the selected bar. Applied by [`ChartMenus`].
     SplitTradeProfile,
+    /// Restore the clicked TPO or execution profile chart's session boundaries by removing all
+    /// merges and splits. Already applied by [`ChartMenus`].
+    ResetProfileEdits,
     /// Draw a horizontal line at this price in the clicked pane, with the line tool's default
     /// style, and select it. Already applied by [`ChartMenus`].
     DrawHorizontalLine(f64),
 }
 
-/// Format a price with two decimals (more below 1) and thousands separators.
+/// Format a price with two decimals (more below 1) and thousands separators, for a menu shown
+/// without its chart.
 pub(crate) fn format_price(price: f64) -> String {
     // Use 2 decimal places for most prices, but handle very small prices
     let formatted = if price.abs() < 0.01 {
@@ -255,13 +260,14 @@ impl ChartContextMenu {
         std::mem::replace(&mut self.last_action, ContextMenuAction::None)
     }
 
-    /// Build the menu items based on current state
+    /// Build the menu items based on current state, writing prices with `price_text`.
     fn build_menu_items(
         &self,
         ctx: &Context,
         shortcuts: &crate::widget::ShortcutMap,
+        price_text: &dyn Fn(f64) -> String,
     ) -> Vec<MenuEntry<ContextMenuAction>> {
-        let price_str = format_price(self.click_price);
+        let price_str = price_text(self.click_price);
         let symbol = &self.symbol;
 
         let mut items = vec![
@@ -388,7 +394,7 @@ impl ChartContextMenu {
                             &[
                                 ("quantity", self.order_quantity.to_string().as_str()),
                                 ("symbol", symbol.as_str()),
-                                ("price", format_price(price).as_str()),
+                                ("price", price_text(price).as_str()),
                             ],
                         ),
                         ContextMenuAction::Order(request),
@@ -498,7 +504,7 @@ impl ChartContextMenu {
         if !self.is_open {
             return;
         }
-        let entries = self.build_menu_items(ctx, shortcuts);
+        let entries = self.build_menu_items(ctx, shortcuts, &format_price);
         if entries.is_empty() {
             self.close();
             return;
@@ -573,7 +579,11 @@ mod tests {
             menu.click_price = click;
             menu.order_types = types;
             let entries: Vec<_> = menu
-                .build_menu_items(&Context::default(), &crate::widget::ShortcutMap::default())
+                .build_menu_items(
+                    &Context::default(),
+                    &crate::widget::ShortcutMap::default(),
+                    &format_price,
+                )
                 .into_iter()
                 .filter_map(|entry| match entry {
                     MenuEntry::Item(MenuItem {
@@ -595,7 +605,11 @@ mod tests {
         let ctx = Context::default();
         ctx.set_os(egui::os::OperatingSystem::Nix);
         let shortcut = ChartContextMenu::new()
-            .build_menu_items(&Context::default(), &crate::widget::ShortcutMap::default())
+            .build_menu_items(
+                &Context::default(),
+                &crate::widget::ShortcutMap::default(),
+                &format_price,
+            )
             .into_iter()
             .find_map(|entry| match entry {
                 MenuEntry::Item(item) if item.action == ContextMenuAction::ResetChart => {

@@ -660,8 +660,10 @@ fn reward(request: &OrderRequest, entry: f64) -> Option<f64> {
 
 /// `quantity` rounded down to a whole multiple of `step`, at the step's decimals.
 fn round_down(quantity: f64, step: f64) -> f64 {
-    // The tolerance keeps 0.3 / 0.1 = 2.9999999999999996 at 3 steps.
-    to_step(quantity, step, |steps| (steps + 1e-9).floor())
+    // Allow division noise at both small step counts and large quantities converted from money.
+    to_step(quantity, step, |steps| {
+        (steps + 1e-9 + steps.abs() * 1e-12).floor()
+    })
 }
 
 /// A minimum or maximum order quantity of the symbol's rules that a quantity breaks.
@@ -841,6 +843,142 @@ mod tests {
                 );
             } else {
                 assert_eq!((ticket.price, ticket.limit), (0.0, 0.0));
+            }
+        }
+    }
+
+    /// A money exit needs a quantity above 0 before it can show a price, and an exit keeps its
+    /// value when switched to or from money without one.
+    #[test]
+    fn money_exits_without_a_quantity_keep_their_value_when_switching_modes() {
+        let rules = TradingRules::new("ES");
+        let mut capabilities = Capabilities::default();
+        (capabilities.market, capabilities.brackets) = (true, true);
+        let market = Market {
+            symbol: "ES",
+            formatter: None,
+            pip_value: None,
+            last: Some(100.0),
+            bid: None,
+            ask: None,
+            tick: 0.25,
+            decimals: 2,
+            currency: "USD",
+            balance: Some(10_000.0),
+            capabilities,
+            rules: &rules,
+            rules_ready: true,
+            offline: None,
+            ladder: None,
+            ladder_unavailable: None,
+            highlights: Vec::new(),
+            orders: &[],
+            positions: &[],
+            trades: &[],
+            session_open: None,
+            last_fill: None,
+            logo: None,
+        };
+        for quantity in [0.0, f64::NAN, -1.0] {
+            for profit in [true, false] {
+                let ctx = egui::Context::default();
+                let mut ticket = OrderTicket {
+                    quantity,
+                    ..OrderTicket::default()
+                };
+                let bracket = Bracket::new(BracketMode::Money, 25.0);
+                if profit {
+                    ticket.take_profit = (true, bracket);
+                } else {
+                    ticket.stop_loss = (true, bracket);
+                }
+                let frame = |ticket: &mut OrderTicket, events| {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(340.0, 900.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| ticket.form(ui, &market),
+                    );
+                    let texts: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) => Some((
+                                text.galley.text().to_owned(),
+                                text.galley.rect.translate(text.pos.to_vec2()).center(),
+                            )),
+                            _ => None,
+                        })
+                        .collect();
+                    output.drop_without_applying_deltas();
+                    texts
+                };
+                let find = |texts: &[(String, egui::Pos2)], wanted: &str| {
+                    texts.iter().find(|(text, _)| text == wanted).unwrap().1
+                };
+                let click = |at| {
+                    let button = |pressed| egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    };
+                    [
+                        vec![egui::Event::PointerMoved(at)],
+                        vec![button(true)],
+                        vec![button(false)],
+                        vec![],
+                    ]
+                };
+                frame(&mut ticket, vec![]);
+                let texts = frame(&mut ticket, vec![]);
+                let non_finite = texts
+                    .iter()
+                    .filter(|(text, _)| matches!(text.as_str(), "inf" | "-inf" | "NaN"))
+                    .count();
+                assert_eq!(
+                    non_finite,
+                    usize::from(quantity.is_nan()),
+                    "only the invalid quantity itself is shown"
+                );
+                let exit = if profit { "Take profit" } else { "Stop loss" };
+                // Picks `to` from the menu of the exit while it is in mode `from`.
+                let switch = |ticket: &mut OrderTicket, from: &str, to: &str| {
+                    let mut texts = frame(ticket, vec![]);
+                    for events in click(find(&texts, &format!("{exit}, {from}"))) {
+                        texts = frame(ticket, events);
+                    }
+                    for events in click(find(&texts, to)) {
+                        frame(ticket, events);
+                    }
+                    if profit {
+                        ticket.take_profit.1
+                    } else {
+                        ticket.stop_loss.1
+                    }
+                };
+                let price = Bracket::new(BracketMode::Price, 25.0);
+                assert_eq!(
+                    switch(&mut ticket, "USD", "price"),
+                    price,
+                    "{quantity} {profit}"
+                );
+                assert_eq!(
+                    switch(&mut ticket, "price", "USD"),
+                    bracket,
+                    "{quantity} {profit}"
+                );
+
+                // Once the quantity is fixed, money exits show their finite price again.
+                ticket.quantity = 1.0;
+                let texts = frame(&mut ticket, vec![]);
+                let expected = if profit { "125.00" } else { "75.00" };
+                find(&texts, expected);
             }
         }
     }
@@ -1319,6 +1457,29 @@ mod tests {
             };
             let request = ticket.request(&egui::Context::default(), &quoted).unwrap();
             assert_eq!(request.take_profit, Some(take_profit), "{side:?}");
+        }
+        let mut rules = TradingRules::new("BTC");
+        rules.quantity_step = 1e-8;
+        rules.min_quantity = 1e-8;
+        let market = Market {
+            symbol: "BTC",
+            rules: &rules,
+            last: Some(65_000.0),
+            bid: None,
+            ask: None,
+            ..quoted
+        };
+        // 6,302,184 steps cost 4,096.4196 at 65,000. Reading that value back must keep
+        // every step, while an amount genuinely below the boundary still rounds down.
+        for (quantity, expected) in [(0.06302184, 0.06302184), (0.06302183999, 0.06302183)] {
+            let ticket = OrderTicket {
+                symbol: "BTC".into(),
+                sizing: Sizing::Value,
+                amount: 65_000.0 * (quantity * rules.point_value),
+                ..OrderTicket::default()
+            };
+            let request = ticket.request(&egui::Context::default(), &market).unwrap();
+            assert_eq!(request.quantity, expected, "amount from {quantity}");
         }
     }
 }
