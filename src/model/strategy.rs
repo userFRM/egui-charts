@@ -1538,8 +1538,8 @@ mod tests {
 
     #[test]
     fn reports_saved_before_equity_ranges_load_without_intrabar_figures() {
-        // Literal report JSON in the format emitted before equity ranges existed.
-        let saved = r#"{"name":"Test","symbol":"TEST","timeframe":"Hour1","initial_capital":10000.0,"currency":null,"risk_free_rate":0.0,"properties":[],"trades":[{"side":"Buy","quantity":100.0,"entry_time":"2024-01-02T01:00:00Z","entry_price":100.0,"exit":null,"fees":0.0,"label":null}],"equity":[["2024-01-02T00:00:00Z",10000.0],["2024-01-02T01:00:00Z",10000.0],["2024-01-02T02:00:00Z",9000.0]]}"#;
+        // Report JSON saved on origin/main at 6d5462888, before equity ranges.
+        let saved = r#"{"name":"Held through a 30% dip","symbol":"HELD","timeframe":"Hour1","initial_capital":10000.0,"currency":null,"risk_free_rate":0.0,"properties":[["Order size","Fixed units: 1"],["Pyramiding","1"],["Commission","Fraction: 0"],["Slippage","Fraction: 0"],["Leverage","1"],["Long funding fraction","0"],["Short funding fraction","1"],["Long margin calls","Off"],["Short margin calls","Four times the shortfall at price points"],["Verify limit crossing","false"],["Price increment","0.01"],["Liquidation unit step","1"],["Order execution delay","0"],["Historical tick decisions","false"],["Decision chart type","Candles"],["Original-price execution","false"],["Fill on close","false"],["Recalculate after fills","false"],["Recalculate on every update","false"],["Start time","All supplied history"],["End time","Newest supplied bar"],["Lower-interval bars","0"],["Rejected orders","0"]],"trades":[{"side":"Buy","quantity":100.0,"entry_time":"1970-01-01T01:00:00Z","entry_price":100.0,"exit":null,"fees":0.0,"label":"Held"}],"equity":[["1969-12-31T23:00:00Z",10000.0],["1970-01-01T00:00:00Z",10000.0],["1970-01-01T01:00:00Z",10000.0],["1970-01-01T02:00:00Z",9000.0]]}"#;
         let loaded: StrategyReport = serde_json::from_str(saved).unwrap();
         assert!(loaded.equity_ranges.is_empty());
         assert_matches(
