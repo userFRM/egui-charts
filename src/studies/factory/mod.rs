@@ -421,6 +421,22 @@ impl IndicatorFactory {
                 ),
             );
         }
+        self.constructors.insert(
+            ChartPatterns::all().name().to_owned(),
+            (
+                Some(Self::PATTERNS),
+                Box::new(|| Box::new(ChartPatterns::all())),
+            ),
+        );
+        for &kind in PatternFamily::ALL.iter().flat_map(|family| family.kinds()) {
+            self.constructors.insert(
+                ChartPatterns::only(kind).name().to_owned(),
+                (
+                    Some(Self::PATTERNS),
+                    Box::new(move || Box::new(ChartPatterns::only(kind))),
+                ),
+            );
+        }
         #[cfg(feature = "drawings")]
         for kind in AutoDrawingKind::ALL {
             let name = AutoDrawing::new(kind, 5.0, 10).name().to_owned();
