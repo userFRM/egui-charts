@@ -817,6 +817,12 @@ impl StudyTemplate {
                     .push(("whole_tick_rows".to_owned(), InputValue::Toggle(false)));
                 changed = true;
             }
+            if study == "Vol Profile Periodic" && !has("restart_yearly") {
+                template
+                    .inputs
+                    .push(("restart_yearly".to_owned(), InputValue::Toggle(false)));
+                changed = true;
+            }
             if self.settings.plots.is_empty() {
                 let declared = crate::studies::VolProfileSession::default();
                 template.settings.plots = (0..3).map(|line| declared.plot_style(line)).collect();
@@ -1414,6 +1420,31 @@ mod tests {
             assert!(
                 (0..study.line_count()).all(|line| study.plot_style(line).visible),
                 "{name}"
+            );
+        }
+
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Vol Profile Periodic","inputs":[["row_count",{"Length":30}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":null}],["feed_source",{"Toggle":true}],["period_count",{"Length":1}],["period",{"Choice":1}],["restart_yearly",{"Toggle":false}],["width",{"Number":30.0}],["extend_poc",{"Toggle":false}],["extend_vah",{"Toggle":false}],["extend_val",{"Toggle":false}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfilePeriodic.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        for legacy in [
+            saved.clone(),
+            StudyTemplate {
+                inputs: saved
+                    .inputs
+                    .iter()
+                    .filter(|(id, _)| id != "restart_yearly")
+                    .cloned()
+                    .collect(),
+                ..saved
+            },
+        ] {
+            let restored = legacy.create().unwrap();
+            assert_eq!(
+                restored
+                    .inputs()
+                    .into_iter()
+                    .find(|input| input.id == "restart_yearly")
+                    .unwrap()
+                    .value,
+                Toggle(false)
             );
         }
 

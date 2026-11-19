@@ -87,6 +87,7 @@ struct ProfileStudy {
     display: ProfileDisplay,
     start_time: f64,
     end_time: f64,
+    extend_right: bool,
     period: PeriodUnit,
     period_count: usize,
     /// The open of the first bar of the last profile counted in bars or trading days, so that
@@ -247,9 +248,9 @@ enum Anchor {
 /// then the chart events.
 const ANCHORS: [(Anchor, &str); 14] = [
     (Anchor::Bars(AutoAnchor::Auto), "Auto"),
-    (Anchor::Bars(AutoAnchor::HighestHigh), "HighestHigh"),
-    (Anchor::Bars(AutoAnchor::LowestLow), "LowestLow"),
-    (Anchor::Bars(AutoAnchor::HighestVolume), "HighestVolume"),
+    (Anchor::Bars(AutoAnchor::HighestHigh), "Highest high"),
+    (Anchor::Bars(AutoAnchor::LowestLow), "Lowest low"),
+    (Anchor::Bars(AutoAnchor::HighestVolume), "Highest volume"),
     (Anchor::Bars(AutoAnchor::Session), "Session"),
     (Anchor::Bars(AutoAnchor::Week), "Week"),
     (Anchor::Bars(AutoAnchor::Month), "Month"),
@@ -306,10 +307,11 @@ impl ProfileStudy {
             display: ProfileDisplay::UpDown,
             start_time: -8e15,
             end_time: 8e15,
+            extend_right: false,
             period: PeriodUnit::Calendar(AnchorPeriod::Week),
             period_count: 1,
             period_start: None,
-            restart: false,
+            restart: true,
             anchor: Anchor::Bars(AutoAnchor::Auto),
             events: Vec::new(),
             length: 100,
@@ -320,8 +322,8 @@ impl ProfileStudy {
             adaptive: false,
             sessions: 0,
             custom: CustomProfileSession {
-                start: NaiveTime::MIN,
-                end: NaiveTime::MIN,
+                start: NaiveTime::from_hms_opt(9, 30, 0).unwrap(),
+                end: NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
                 zone: None,
             },
             hours_only: false,
@@ -420,6 +422,14 @@ impl ProfileStudy {
                 "End (YYYY-MM-DD HH:MM:SS UTC)",
                 InputValue::Text(time_text(self.end_time)),
                 InputKind::Text,
+            ));
+        }
+        if self.kind == Kind::Fixed {
+            inputs.push(StudyInput::new(
+                "extend_right",
+                "Extend right",
+                InputValue::Toggle(self.extend_right),
+                InputKind::Toggle,
             ));
         }
         if self.kind == Kind::Periodic {
@@ -660,6 +670,7 @@ impl ProfileStudy {
         }
         match (id, value) {
             ("show_rows", InputValue::Toggle(v)) => self.show_rows = v,
+            ("extend_right", InputValue::Toggle(v)) => self.extend_right = v,
             ("show_values", InputValue::Toggle(v)) => self.show_values = v,
             ("placement", InputValue::Choice(v)) => self.right = v == 1,
             ("up_color", InputValue::Color(v)) => self.colors[4] = v,
@@ -1131,7 +1142,7 @@ impl ProfileStudy {
             Kind::Fixed | Kind::Anchored => {
                 let start = data
                     .partition_point(|bar| (bar.time.timestamp_millis() as f64) < self.start_time);
-                let end = if self.kind == Kind::Fixed {
+                let end = if self.kind == Kind::Fixed && !self.extend_right {
                     data.partition_point(|bar| {
                         (bar.time.timestamp_millis() as f64) <= self.end_time
                     })
@@ -2793,7 +2804,21 @@ mod tests {
             })
             .collect();
         type Case = (Box<dyn Indicator>, Vec<(Range<usize>, f64)>);
+        let mut extended = VolProfileFixed::new(2).with_range(bars[1].time, bars[2].time);
+        extended
+            .set_input("extend_right", InputValue::Toggle(true))
+            .unwrap();
+        assert_eq!(
+            extended
+                .inputs()
+                .iter()
+                .find(|input| input.id == "end_time")
+                .unwrap()
+                .value,
+            InputValue::Text(time_text(bars[2].time.timestamp_millis() as f64))
+        );
         let cases: Vec<Case> = vec![
+            (Box::new(extended), vec![(1..4, 90.0)]),
             (Box::new(VolProfileVisible::new(2)), vec![(1..4, 90.0)]),
             (
                 Box::new(VolProfileFixed::new(2).with_range(bars[1].time, bars[2].time)),
@@ -3080,6 +3105,23 @@ mod tests {
                 study.calculate(&bars);
                 study
             };
+        let default_custom = calculated(3, None, true, &exchange);
+        let got: Vec<_> = default_custom
+            .volume_profiles(0..bars.len())
+            .into_iter()
+            .flat_map(|profile| profile.bars)
+            .collect();
+        let zone = exchange.time_zone.as_ref().unwrap();
+        let expected: Vec<_> = bars
+            .iter()
+            .enumerate()
+            .filter(|(_, bar)| {
+                let local = bar.time.with_timezone(zone).time();
+                (at(9, 30)..at(16, 0)).contains(&local)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(got, expected);
         let trading_day = "05 00:00, 05 05:00, 06 05:00, 07 05:00, 08 05:00, 09 04:00, 10 04:00";
         let plus_0530 = "05 00:00, 05 04:00, 06 04:00, 07 04:00, 08 04:00, 09 04:00, 10 04:00";
         for (sessions, custom, instrument, expected) in [
@@ -3236,6 +3278,27 @@ mod tests {
     fn periodic_counts_keep_their_period_starts_when_older_bars_load() {
         let at = |time: &str| time.parse::<DateTime<Utc>>().unwrap();
         let bar = |time| Bar::new(time, 100.0, 101.0, 99.0, 100.0, 1.0);
+        let year: Vec<_> = (0..7)
+            .map(|day| bar(at("2025-12-29T00:00:00Z") + TimeDelta::days(day)))
+            .collect();
+        for (restart, expected) in [(None, vec![0..3, 3..7]), (Some(false), std::iter::once(0..7).collect())] {
+            let mut study = VolProfilePeriodic::default();
+            study.set_timeframe(Timeframe::Day1);
+            if let Some(restart) = restart {
+                study
+                    .set_input("restart_yearly", InputValue::Toggle(restart))
+                    .unwrap();
+            }
+            study.calculate(&year);
+            assert_eq!(
+                study
+                    .volume_profiles(0..7)
+                    .into_iter()
+                    .map(|profile| profile.bars)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
         // Weekdays from a Monday, at 15:00 UTC.
         let weekdays = |monday: &str, count| -> Vec<_> {
             let monday = at(&format!("{monday}T15:00:00Z"));
@@ -3273,11 +3336,9 @@ mod tests {
             study
                 .set_input("period_count", InputValue::Length(count))
                 .unwrap();
-            if restart {
-                study
-                    .set_input("restart_yearly", InputValue::Toggle(true))
-                    .unwrap();
-            }
+            study
+                .set_input("restart_yearly", InputValue::Toggle(restart))
+                .unwrap();
             study
         };
         for (
@@ -3749,6 +3810,25 @@ mod tests {
     #[cfg(feature = "widget")]
     #[test]
     fn auto_anchored_profiles_start_at_the_latest_chart_event() {
+        assert_eq!(
+            ANCHORS.map(|(_, label)| label),
+            [
+                "Auto",
+                "Highest high",
+                "Lowest low",
+                "Highest volume",
+                "Session",
+                "Week",
+                "Month",
+                "Quarter",
+                "Year",
+                "Decade",
+                "Century",
+                "Earnings",
+                "Dividends",
+                "Splits"
+            ]
+        );
         use crate::model::{BarData, EventKind, TimeScaleEvent};
         use crate::widget::{Chart, test_frames::shapes};
         let at = |day: i64, hour: i64| {
