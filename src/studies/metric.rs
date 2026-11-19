@@ -2,7 +2,7 @@
 
 use super::{Indicator, IndicatorValue, IndicatorValues, StudyData, StudyDataRequest};
 
-use crate::data::MetricSeries;
+use crate::data::{MetricColors, MetricPlot, MetricSeries};
 use crate::model::Bar;
 use crate::scales::StudyFormat;
 use crate::studies::palette;
@@ -21,6 +21,9 @@ pub struct MetricStudy {
     metric: MetricSeries,
     values: IndicatorValues,
     color: Color32,
+    /// Bars drawn in the alternate colour of [`MetricSeries::colors`].
+    alternate: Vec<bool>,
+    alternate_color: Option<Color32>,
     visible: bool,
     /// The chart's bar calendar, which dates each bar's close.
     clock: crate::model::BarClock,
@@ -29,10 +32,18 @@ pub struct MetricStudy {
 impl MetricStudy {
     /// Display this metric of the chart's current instrument.
     pub fn new(metric: MetricSeries) -> Self {
+        let (color, alternate_color) = match metric.colors {
+            None => (palette::ACCENT, None),
+            Some(MetricColors::Single(color)) => (color, None),
+            Some(MetricColors::Change { rising, falling }) => (rising, Some(falling)),
+            Some(MetricColors::Sign { positive, negative }) => (positive, Some(negative)),
+        };
         Self {
             metric,
             values: IndicatorValues::new(),
-            color: palette::ACCENT,
+            color,
+            alternate: Vec::new(),
+            alternate_color,
             visible: true,
             clock: crate::model::BarClock::exact(),
         }
@@ -67,7 +78,13 @@ impl Indicator for MetricStudy {
             color: self.color,
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
-            plot_type: super::PlotType::StepLine,
+            plot_type: match self.metric.plot {
+                MetricPlot::Line | MetricPlot::Candles => super::PlotType::Line,
+                MetricPlot::StepLine => super::PlotType::StepLine,
+                MetricPlot::Columns => super::PlotType::Columns,
+                MetricPlot::Histogram => super::PlotType::Histogram,
+                MetricPlot::Area => super::PlotType::Area,
+            },
             visible: true,
         }
     }
@@ -87,24 +104,46 @@ impl Indicator for MetricStudy {
             .iter()
             .find(|source| &source.request == request)
             .map_or(&[][..], |source| source.bars);
-        self.values = data
-            .iter()
-            .enumerate()
-            .map(|(at, bar)| {
-                // The clock bounds the live bar too; a point at its close waits for the next bar.
-                let close = self
-                    .clock
-                    .next_open(self.clock.bar_open(bar.time))
-                    .or_else(|| data.get(at + 1).map(|next| next.time));
-                let end = close.map_or(points.len(), |close| {
-                    points.partition_point(|point| point.time < close)
-                });
-                end.checked_sub(1).map_or(IndicatorValue::None, |last| {
-                    IndicatorValue::Single(points[last].close)
-                })
-            })
-            .collect();
+        let mut values = IndicatorValues::new();
+        self.alternate.clear();
+        let mut previous = None;
+        let mut falling = false;
+        for (at, bar) in data.iter().enumerate() {
+            // The clock bounds the live bar too; a point at its close waits for the next bar.
+            let close = self
+                .clock
+                .next_open(self.clock.bar_open(bar.time))
+                .or_else(|| data.get(at + 1).map(|next| next.time));
+            let end = close.map_or(points.len(), |close| {
+                points.partition_point(|point| point.time < close)
+            });
+            let value = end
+                .checked_sub(1)
+                .map(|last| points[last].close)
+                .filter(|v| v.is_finite());
+            let alternate = value.is_some_and(|value| match self.metric.colors {
+                Some(MetricColors::Change { .. }) => {
+                    if let Some(reference) = previous {
+                        if value < reference {
+                            falling = true;
+                        } else if value > reference {
+                            falling = false;
+                        }
+                    }
+                    falling
+                }
+                Some(MetricColors::Sign { .. }) => value < 0.0,
+                _ => false,
+            });
+            self.alternate.push(alternate);
+            values.push(value.map_or(IndicatorValue::None, IndicatorValue::Single));
+            if value.is_some() {
+                previous = value;
+            }
+        }
+        self.values = values;
     }
+
     fn set_bar_clock(&mut self, clock: &crate::model::BarClock) -> bool {
         let changed = self.clock != *clock;
         self.clock = clock.clone();
@@ -115,12 +154,35 @@ impl Indicator for MetricStudy {
         &self.values
     }
     fn colors(&self) -> Vec<Color32> {
-        vec![self.color]
+        std::iter::once(self.color)
+            .chain(self.alternate_color)
+            .collect()
     }
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if let Some(&color) = colors.first() {
             self.color = color;
         }
+        if self.alternate_color.is_some()
+            && let Some(&color) = colors.get(1)
+        {
+            self.alternate_color = Some(color);
+        }
+    }
+    fn plot_variants(&self, line: usize) -> Vec<super::PlotVariant> {
+        if line == 0
+            && let Some(color) = self.alternate_color
+        {
+            let caption = match self.metric.colors {
+                Some(MetricColors::Change { .. }) => "Falling",
+                _ => "Below zero",
+            };
+            vec![super::PlotVariant::new(caption, color)]
+        } else {
+            Vec::new()
+        }
+    }
+    fn plot_variant(&self, line: usize, bar: usize) -> Option<usize> {
+        (line == 0 && self.alternate.get(bar) == Some(&true)).then_some(0)
     }
     fn is_visible(&self) -> bool {
         self.visible

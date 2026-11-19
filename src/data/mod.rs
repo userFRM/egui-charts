@@ -51,7 +51,10 @@ pub mod http;
 pub(crate) mod inbox;
 mod market;
 mod metrics;
-pub use metrics::{MetricPage, MetricPoint, MetricRequest, MetricSeries, MetricSubscription};
+pub use metrics::{
+    MetricColors, MetricPage, MetricPlot, MetricPoint, MetricRequest, MetricSeries,
+    MetricSubscription,
+};
 #[cfg_attr(
     not(any(test, feature = "widget", feature = "alert-engine")),
     expect(dead_code, reason = "only charts and alerts consume a feed")

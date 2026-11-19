@@ -1068,10 +1068,12 @@ mod tests {
         factory.register("Metric", || {
             Box::new(crate::studies::MetricStudy::new(
                 crate::data::MetricSeries {
-                    id: "oi".into(),
-                    name: "Open interest".into(),
                     unit: String::new(),
-                    format: crate::scales::StudyFormat::Volume,
+                    ..crate::data::MetricSeries::new(
+                        "oi",
+                        "Open interest",
+                        crate::scales::StudyFormat::Volume,
+                    )
                 },
             ))
         });

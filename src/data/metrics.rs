@@ -4,6 +4,7 @@ use super::{Sink, SubscriptionId};
 use crate::model::Bar;
 use crate::scales::StudyFormat;
 use chrono::{DateTime, Utc};
+use egui::Color32;
 
 /// One metric offered for an instrument, identified by a host-owned key.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -17,18 +18,89 @@ pub struct MetricSeries {
     pub unit: String,
     /// Numeric format used in legends, axes and tooltips.
     pub format: StudyFormat,
+    /// How the study draws values until the user picks another plot type in its Style tab.
+    /// Metrics saved before plots could be declared draw as a step line.
+    #[serde(default)]
+    pub plot: MetricPlot,
+    /// Plot colours and the bars each applies to, or `None` for the chart's default colour.
+    /// The Style tab edits these colours and saves the user's choices with the study.
+    #[serde(default)]
+    pub colors: Option<MetricColors>,
 }
 
 impl MetricSeries {
-    /// A metric without a display unit: assign [`unit`](Self::unit) to show one.
+    /// A metric without a display unit, drawn as a step line in the chart's default colour:
+    /// assign [`unit`](Self::unit), [`plot`](Self::plot) and [`colors`](Self::colors) to change them.
+    ///
+    /// ```
+    /// use ecolor::Color32;
+    /// use egui_charts::data::{MetricColors, MetricPlot, MetricSeries};
+    /// use egui_charts::scales::StudyFormat;
+    ///
+    /// let mut funding = MetricSeries::new("funding_rate", "Funding rate", StudyFormat::Percent);
+    /// funding.unit = "%".into();
+    /// funding.plot = MetricPlot::Columns;
+    /// funding.colors = Some(MetricColors::Sign {
+    ///     positive: Color32::from_rgb(8, 153, 129),
+    ///     negative: Color32::from_rgb(242, 54, 69),
+    /// });
+    /// let interest = MetricSeries::new("open_interest", "Open interest", StudyFormat::Volume);
+    /// assert_eq!((interest.plot, interest.colors), (MetricPlot::StepLine, None));
+    /// ```
     pub fn new(id: impl Into<String>, name: impl Into<String>, format: StudyFormat) -> Self {
         Self {
             id: id.into(),
             name: name.into(),
             unit: String::new(),
             format,
+            plot: MetricPlot::StepLine,
+            colors: None,
         }
     }
+}
+
+/// How a metric's study draws its values until the user picks a plot type in its Style tab.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum MetricPlot {
+    /// Values joined by straight segments.
+    Line,
+    /// Each value held as a horizontal segment until the next one.
+    #[default]
+    StepLine,
+    /// Columns from zero, as wide as the bar spacing allows.
+    Columns,
+    /// Thin bars from zero.
+    Histogram,
+    /// A line over a fill down to zero.
+    Area,
+    /// A candle on each bar from the open, high, low and close of the points published in it.
+    /// A bar without such a point draws a flat candle at the value it holds.
+    Candles,
+}
+
+/// The colours of a metric's plot and the bars each applies to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum MetricColors {
+    /// Every bar in one colour.
+    Single(Color32),
+    /// Bars whose value rose in `rising` and bars whose value fell in `falling`.
+    /// A value falls below the previous bar's, or for candles below its open;
+    /// an unchanged value keeps the previous colour, and the first value is rising.
+    Change {
+        /// Colour of rising and first values.
+        rising: Color32,
+        /// Colour of falling values.
+        falling: Color32,
+    },
+    /// Values at or above zero in `positive` and values below zero in `negative`.
+    Sign {
+        /// Colour of values at or above zero.
+        positive: Color32,
+        /// Colour of values below zero.
+        negative: Color32,
+    },
 }
 
 /// A metric's value from this instant until the next published point.

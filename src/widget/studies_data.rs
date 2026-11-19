@@ -1118,10 +1118,12 @@ pub(super) mod tests {
                 if metric {
                     chart.add_indicator(Box::new(crate::studies::MetricStudy::new(
                         crate::data::MetricSeries {
-                            id: "oi".into(),
-                            name: "Open interest".into(),
                             unit: "contracts".into(),
-                            format: crate::scales::StudyFormat::Volume,
+                            ..crate::data::MetricSeries::new(
+                                "oi",
+                                "Open interest",
+                                crate::scales::StudyFormat::Volume,
+                            )
                         },
                     )));
                 } else {
@@ -1433,7 +1435,7 @@ pub(super) mod tests {
     /// the normal subscription lifetime when the chart's instrument changes.
     #[test]
     fn metric_history_and_live_points_refresh_the_pane_and_its_consumers() {
-        use crate::data::{MetricPoint, MetricSeries};
+        use crate::data::MetricPoint;
         use crate::scales::StudyFormat;
         use crate::studies::{MetricStudy, StudySource};
         let feed = Arc::new(Feed::default());
@@ -1442,11 +1444,9 @@ pub(super) mod tests {
             .with_symbol("MAIN")
             .with_timeframe(Timeframe::Min30)
             .build();
-        let metric = chart.add_indicator(Box::new(MetricStudy::new(MetricSeries {
-            id: "oi".into(),
-            name: "Open interest".into(),
+        let metric = chart.add_indicator(Box::new(MetricStudy::new(crate::data::MetricSeries {
             unit: "contracts".into(),
-            format: StudyFormat::Volume,
+            ..crate::data::MetricSeries::new("oi", "Open interest", StudyFormat::Volume)
         })));
         let average = chart.add_indicator(Box::new(SMA::new(2)));
         chart
@@ -1512,6 +1512,89 @@ pub(super) mod tests {
                 .iter()
                 .all(|sub| !sub.sink.is_active())
         );
+    }
+
+    /// Declarations paint per bar, held values keep their colour, and Style edits survive saves.
+    #[test]
+    fn declared_metric_styles_paint_per_bar_until_a_style_edit() {
+        use crate::data::{MetricColors, MetricPlot, MetricSeries};
+        use crate::scales::StudyFormat;
+        use crate::studies::MetricStudy;
+        use crate::widget::test_frames::painted_colors;
+        use egui::Color32;
+        let positive = Color32::from_rgb(10, 160, 120);
+        let negative = Color32::from_rgb(230, 50, 60);
+        let rising = Color32::from_rgb(20, 120, 240);
+        let falling = Color32::from_rgb(250, 150, 10);
+        let edited = Color32::from_rgb(140, 40, 200);
+        let mut chart = ChartBuilder::new().with_timeframe(Timeframe::Min30).build();
+        chart.set_data(super::super::SeriesId::MAIN, bars(&[1.0; 5], 30));
+        let mut funding = MetricSeries::new("funding", "Funding rate", StudyFormat::Percent);
+        funding.plot = MetricPlot::Columns;
+        funding.colors = Some(MetricColors::Sign { positive, negative });
+        let funding = chart.add_indicator(Box::new(MetricStudy::new(funding)));
+        let mut interest = MetricSeries::new("oi", "Open interest", StudyFormat::Volume);
+        interest.plot = MetricPlot::Line;
+        interest.colors = Some(MetricColors::Change { rising, falling });
+        let interest = chart.add_indicator(Box::new(MetricStudy::new(interest)));
+        let supply = |chart: &mut Chart| {
+            for (id, values) in [
+                ("funding", [1.0, -1.0, 0.0, -2.0, 3.0]),
+                ("oi", [10.0, 20.0, 15.0, 15.0, 30.0]),
+            ] {
+                chart.set_study_data(
+                    StudyDataRequest {
+                        symbol: String::new(),
+                        timeframe: None,
+                        metric: Some(id.into()),
+                    },
+                    bars(&values, 30),
+                    None,
+                );
+            }
+        };
+        supply(&mut chart);
+        let ctx = egui::Context::default();
+        let paint = |chart: &mut Chart| {
+            let mut painted = Vec::new();
+            for frame in 0..12 {
+                painted = shapes(&ctx, chart, frame as f64, Vec::new());
+            }
+            painted_colors(&painted)
+        };
+        let colors = paint(&mut chart);
+        for color in [positive, negative, rising, falling] {
+            assert!(colors.contains(&color), "declared colour {color:?}");
+        }
+        for (id, expected) in [
+            (funding, [None, Some(negative), None, Some(negative), None]),
+            (interest, [None, None, Some(falling), Some(falling), None]),
+        ] {
+            let study = chart.indicators().find(|(key, _)| *key == id).unwrap().1;
+            assert_eq!(
+                (0..5)
+                    .map(|bar| study.plot_color(0, bar))
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+        let study = chart.indicator_mut(funding).unwrap();
+        let mut settings = study.settings();
+        settings.plot_variants[0][0].color = edited;
+        study.apply_settings(&[], settings).unwrap();
+        let saved =
+            serde_json::from_str(&serde_json::to_string(&chart.snapshot().unwrap()).unwrap())
+                .unwrap();
+        let mut restored = ChartBuilder::new().with_timeframe(Timeframe::Min30).build();
+        restored.set_data(super::super::SeriesId::MAIN, bars(&[1.0; 5], 30));
+        restored.restore(&saved).unwrap();
+        supply(&mut restored);
+        for chart in [&mut chart, &mut restored] {
+            let colors = paint(chart);
+            assert!(colors.contains(&edited));
+            assert!(colors.contains(&positive));
+            assert!(!colors.contains(&negative));
+        }
     }
 
     #[test]
