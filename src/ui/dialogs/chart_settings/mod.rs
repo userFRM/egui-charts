@@ -2351,6 +2351,9 @@ mod tests {
             .1
             .take()
             .expect("Ok applies the settings");
+        // Saved in a template or layout and loaded again.
+        let settings: ChartSettingsState =
+            serde_json::from_value(serde_json::to_value(&settings).unwrap()).unwrap();
         chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
         frame(&ctx, &mut chart, 0.1, Vec::new());
         let painted = shapes(&ctx, &mut chart, 0.2, Vec::new());
