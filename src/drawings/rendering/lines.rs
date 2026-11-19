@@ -43,11 +43,15 @@ impl Drawing {
         }
     }
 
-    /// The drawing's text laid out in its colour and font, or `None` when it has no visible text.
+    /// The drawing's text laid out in its colour and font, or `None` when it has no visible text
+    /// or its tool's Show text switch (`marker.show_text`) is off.
     pub(super) fn text_galley(
         &self,
         painter: &egui::Painter,
     ) -> Option<std::sync::Arc<egui::Galley>> {
+        if self.tool_type.has_text_switch() && !self.marker.show_text {
+            return None;
+        }
         let text = self.text.as_deref().filter(|t| !t.trim().is_empty())?;
         let color = self.text_color.map_or(self.color32(), |[r, g, b, a]| {
             Color32::from_rgba_unmultiplied(r, g, b, a)
@@ -902,6 +906,8 @@ mod tests {
     /// Every mark has its base 14 pt from the anchor, with text 4 pt beyond it.
     /// Each row's alignment settings name the point of the text it expects; tools without
     /// alignment settings ignore them.
+    /// Switched off, the text of a horizontal line, a horizontal ray, an arrow mark or a channel
+    /// is not painted; other tools ignore the switch.
     #[test]
     fn line_and_shape_text_sits_on_its_drawing_and_reads_upright() {
         use crate::drawings::{ChartPoint, DrawingToolType as T};
@@ -1074,6 +1080,26 @@ mod tests {
                 plain.text = text;
                 assert_eq!(strings(&texts(&plain)), others, "{tool:?} without text");
             }
+            let hides = matches!(
+                tool,
+                T::HorizontalLine
+                    | T::HorizontalRay
+                    | T::ArrowMarkUp
+                    | T::ArrowMarkDown
+                    | T::ArrowMarkLeft
+                    | T::ArrowMarkRight
+                    | T::ParallelChannel
+                    | T::FlatTopBottom
+                    | T::DisjointChannel
+            );
+            let mut hidden = drawing.clone();
+            hidden.marker.show_text = false;
+            let shown = strings(&texts(&drawing));
+            assert_eq!(
+                strings(&texts(&hidden)),
+                if hides { others } else { shown },
+                "{tool:?} with its text switched off"
+            );
         }
 
         // Synthetic bold paints a regression trend's text twice and its correlation once.
@@ -1098,7 +1124,8 @@ mod tests {
     /// 2 at y = 120, the text's named point sits at x = 4, 250 or 496 and y = 125, 120 or 115. A
     /// horizontal ray from x = 100 places it within 100 to 500 the same way, at x = 104, 300 or 496,
     /// and one starting left of the pane within the part in view. Only text on the line interrupts
-    /// it, 4 pt clear of the letters on each side.
+    /// it, 4 pt clear of the letters on each side. Switched off, the text is not painted and the
+    /// line is whole.
     #[test]
     fn horizontal_line_and_ray_text_follow_their_settings_and_interrupt_the_line_only_on_it() {
         use crate::drawings::{
@@ -1187,6 +1214,15 @@ mod tests {
                 // The gap's start at the line's start leaves nothing before the text.
                 let want: Vec<_> = want.into_iter().filter(|(a, b)| a < b).collect();
                 assert_eq!(lines, want, "{tool:?} {anchor:?}");
+                // Hiding text closes the gap; showing it again restores its style and placement.
+                drawing.marker.show_text = false;
+                assert_eq!(
+                    paint(&drawing),
+                    (None, vec![(start, 500.)]),
+                    "{tool:?} {anchor:?} switched off"
+                );
+                drawing.marker.show_text = true;
+                assert_eq!(paint(&drawing), (Some(text), lines), "{tool:?} {anchor:?}");
             }
         }
     }

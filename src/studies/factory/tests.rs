@@ -286,6 +286,14 @@ fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
         if study.needs_order_flow() {
             continue;
         }
+        // A single chart formation repeats its family's study with the other formations off.
+        if PatternFamily::ALL
+            .iter()
+            .flat_map(|family| family.kinds())
+            .any(|&kind| ChartPatterns::only(kind).name() == name)
+        {
+            continue;
+        }
         // External series have no values until the host supplies their distinct inputs.
         if !study.data_requests().is_empty() {
             continue;

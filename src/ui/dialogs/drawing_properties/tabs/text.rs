@@ -332,8 +332,10 @@ impl TextTab {
         FormGrid::new("text_grid").show(ui, |ui| {
             let writes = (props.tool_settings.as_ref())
                 .is_none_or(|template| template.settings.tool_type.supports_text());
+            // Keep the text and its settings editable while it is switched off.
             if let Some(template) = &mut props.tool_settings
-                && template.settings.tool_type == DrawingToolType::AnchoredNote
+                && (template.settings.tool_type == DrawingToolType::AnchoredNote
+                    || template.settings.tool_type.has_text_switch())
             {
                 ui.label("");
                 ui.checkbox(
@@ -656,6 +658,8 @@ mod tests {
     /// and emphasis alone. The flat top/bottom and disjoint channel also style the prices beside
     /// their lines. A chart pattern styles its labels: colour and emphasis alone, its colour
     /// swatch showing the white or black they take until a colour is set.
+    /// Horizontal lines and rays, arrow marks and the parallel, flat top/bottom and disjoint
+    /// channels offer the Show text switch.
     #[test]
     fn tools_offer_the_text_settings_they_draw() {
         let chart = crate::Chart::new(crate::model::BarData::default());
@@ -712,6 +716,22 @@ mod tests {
             assert_eq!(
                 labels.contains(&"Text orientation"),
                 tool == DrawingToolType::VerticalLine,
+                "{tool:?}"
+            );
+            assert_eq!(
+                labels.contains(&"Show text"),
+                matches!(
+                    tool,
+                    DrawingToolType::HorizontalLine
+                        | DrawingToolType::HorizontalRay
+                        | DrawingToolType::ParallelChannel
+                        | DrawingToolType::FlatTopBottom
+                        | DrawingToolType::DisjointChannel
+                        | DrawingToolType::ArrowMarkUp
+                        | DrawingToolType::ArrowMarkDown
+                        | DrawingToolType::ArrowMarkLeft
+                        | DrawingToolType::ArrowMarkRight
+                ),
                 "{tool:?}"
             );
             assert_eq!(
