@@ -161,6 +161,8 @@ pub enum PrecisionMode {
     Decimals7,
     /// Use 8 decimal places.
     Decimals8,
+    /// Fractions of a whole unit, such as 32nds for `112'16`.
+    Fraction(crate::model::PriceFraction),
     /// A number of decimal places the list lacks, such as one a host chose with
     /// [`PriceScale::set_price_precision`](crate::scales::PriceScale::set_price_precision).
     Other(u8),
@@ -180,6 +182,14 @@ impl PrecisionMode {
             PrecisionMode::Decimals6,
             PrecisionMode::Decimals7,
             PrecisionMode::Decimals8,
+            PrecisionMode::Fraction(crate::model::PriceFraction::Halves),
+            PrecisionMode::Fraction(crate::model::PriceFraction::Quarters),
+            PrecisionMode::Fraction(crate::model::PriceFraction::Eighths),
+            PrecisionMode::Fraction(crate::model::PriceFraction::Sixteenths),
+            PrecisionMode::Fraction(crate::model::PriceFraction::ThirtySeconds),
+            PrecisionMode::Fraction(crate::model::PriceFraction::HalfThirtySeconds),
+            PrecisionMode::Fraction(crate::model::PriceFraction::SixtyFourths),
+            PrecisionMode::Fraction(crate::model::PriceFraction::OneTwentyEighths),
         ]
     }
 
@@ -196,13 +206,28 @@ impl PrecisionMode {
             PrecisionMode::Decimals6 => "6 decimals".into(),
             PrecisionMode::Decimals7 => "7 decimals".into(),
             PrecisionMode::Decimals8 => "8 decimals".into(),
+            PrecisionMode::Fraction(crate::model::PriceFraction::Halves) => "1/2".into(),
+            PrecisionMode::Fraction(crate::model::PriceFraction::Quarters) => "1/4".into(),
+            PrecisionMode::Fraction(crate::model::PriceFraction::Eighths) => "1/8".into(),
+            PrecisionMode::Fraction(crate::model::PriceFraction::Sixteenths) => "1/16".into(),
+            PrecisionMode::Fraction(crate::model::PriceFraction::ThirtySeconds) => "1/32".into(),
+            PrecisionMode::Fraction(crate::model::PriceFraction::HalfThirtySeconds) => {
+                "1/32 with halves".into()
+            }
+            PrecisionMode::Fraction(crate::model::PriceFraction::SixtyFourths) => "1/64".into(),
+            PrecisionMode::Fraction(crate::model::PriceFraction::OneTwentyEighths) => {
+                "1/128".into()
+            }
             PrecisionMode::Other(decimals) => format!("{decimals} decimals").into(),
         }
     }
 
-    /// The mode of a chosen precision of `decimals`, `Default` when none is chosen.
-    pub(crate) fn from_decimals(decimals: Option<u8>) -> Self {
-        let Some(decimals) = decimals else {
+    /// The scale's chosen fraction or decimals, or `Default` when neither is chosen.
+    pub(crate) fn from_scale(scale: &crate::scales::PriceScale) -> Self {
+        if let Some(fraction) = scale.chosen_fraction() {
+            return Self::Fraction(fraction);
+        }
+        let Some(decimals) = scale.chosen_precision() else {
             return Self::Default;
         };
         Self::all()
@@ -212,10 +237,18 @@ impl PrecisionMode {
             .unwrap_or(Self::Other(decimals))
     }
 
-    /// Explicit precision, or None to follow the instrument.
+    /// The fraction prices are written in, if this mode is one.
+    pub fn fraction(&self) -> Option<crate::model::PriceFraction> {
+        match self {
+            PrecisionMode::Fraction(fraction) => Some(*fraction),
+            _ => None,
+        }
+    }
+
+    /// Explicit decimals, or `None` for `Default`, which follows the instrument, and fractions.
     pub fn decimals(&self) -> Option<usize> {
         match self {
-            PrecisionMode::Default => None,
+            PrecisionMode::Default | PrecisionMode::Fraction(_) => None,
             PrecisionMode::Decimals0 => Some(0),
             PrecisionMode::Decimals1 => Some(1),
             PrecisionMode::Decimals2 => Some(2),

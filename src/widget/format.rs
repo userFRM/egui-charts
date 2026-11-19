@@ -378,6 +378,17 @@ impl Chart {
         true
     }
 
+    /// A series' saved display declaration, else the fraction chosen on its scale.
+    fn display_format(&self, id: super::SeriesId) -> Option<SeriesDisplayFormat> {
+        self.series_style(id)?.display_format.or_else(|| {
+            let fraction = self.series_price_scale(id)?.chosen_fraction()?;
+            Some(SeriesDisplayFormat {
+                kind: SeriesFormat::Fraction(fraction),
+                ..Default::default()
+            })
+        })
+    }
+
     pub(super) fn series_label_formatter(
         &self,
         id: super::SeriesId,
@@ -392,10 +403,15 @@ impl Chart {
                     .cloned()
                     .or_else(|| self.price_formatter.clone())
                     .or_else(|| {
+                        let format = self.display_format(id)?;
+                        // An apostrophe separates the fraction, so it groups no thousands there.
+                        let fraction = matches!(format.kind, SeriesFormat::Fraction(_));
                         Some(std::sync::Arc::new(DisplayFormatLabels {
-                            format: self.series_style(id)?.display_format?,
+                            format,
                             thousands_sep: self.config.thousands_sep.filter(|separator| {
-                                *separator != '.' && !separator.is_ascii_digit()
+                                *separator != '.'
+                                    && !separator.is_ascii_digit()
+                                    && !(fraction && *separator == '\'')
                             }),
                         }))
                     })
@@ -484,8 +500,7 @@ impl Chart {
         id: super::SeriesId,
         map: crate::scales::PriceMap,
     ) -> crate::scales::PriceMap {
-        self.series_style(self.series_axis_owner(id))
-            .and_then(|style| style.display_format)
+        self.display_format(self.series_axis_owner(id))
             .map_or(map, |format| map.with_display_format(format))
     }
 

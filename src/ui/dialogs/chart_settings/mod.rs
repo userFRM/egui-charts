@@ -2368,6 +2368,8 @@ mod tests {
             for (group, choice) in [
                 ("", "show_session_breaks"),
                 ("", "extended_hours"),
+                ("", "back_adjust_futures"),
+                ("", "settlement_as_close"),
                 ("/scales_and_lines", "price_line_source"),
                 ("/scales_and_lines", "thousands_sep"),
                 ("/scales_appearance", "font_family"),
@@ -2390,9 +2392,15 @@ mod tests {
                 .templates
                 .save("Old", serde_json::from_value(saved).unwrap())
                 .unwrap();
-            dialog.open(ChartSettingsState::from_chart(&chart));
+            let current = ChartSettingsState::from_chart(&chart);
+            assert!(current.settlement_as_close);
+            assert!(!current.back_adjust_futures);
+            dialog.open(current);
             load_template(&mut dialog, "Old");
             let shown = dialog.settings();
+            // Older templates keep their last-trade closes, independently of the new default.
+            assert!(!shown.settlement_as_close);
+            assert!(!shown.back_adjust_futures);
             assert_eq!(shown.margins.right_bars, row, "{pixels:?}");
             assert_eq!(dialog.margin_right_str, row.to_string(), "{pixels:?}");
             assert_eq!(

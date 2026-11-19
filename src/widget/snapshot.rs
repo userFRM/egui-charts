@@ -485,12 +485,10 @@ impl Chart {
         // The snapshot's own field holds the session, set above.
         settings.extended_hours = None;
         // Layouts saved before a precision could be chosen hold the one shown, which followed
-        // the next instrument; the saved scale holds the chosen one.
-        settings.precision = super::settings::PrecisionMode::from_decimals(
-            snapshot
-                .price_scale
-                .as_ref()
-                .and_then(crate::scales::PriceScale::chosen_precision),
+        // the next instrument; the saved scale holds the chosen decimals or fraction.
+        settings.precision = snapshot.price_scale.as_ref().map_or(
+            super::settings::PrecisionMode::Default,
+            super::settings::PrecisionMode::from_scale,
         );
         if settings.chart_type == crate::model::ChartType::HollowCandles {
             // Settings saved before hollow candles had a style hold the switches of the candles.

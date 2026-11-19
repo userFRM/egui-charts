@@ -374,8 +374,7 @@ impl ChartSettingsState {
         settings.crosshair.color = crosshair.horz_line_color;
         settings.crosshair.line_width = crosshair.horz_line_width;
         settings.crosshair.line_style = crosshair.horz_line_style;
-        settings.precision =
-            PrecisionMode::from_decimals(chart.state().price_scale().chosen_precision());
+        settings.precision = PrecisionMode::from_scale(chart.state().price_scale());
         settings.watermark.mode = if !config.show_watermark {
             WatermarkMode::ReplayMode
         } else if config.watermark_text.is_some() {
@@ -748,10 +747,9 @@ impl ChartSettingsState {
         let options = chart.state.price_scale_mut().options_mut();
         options.mode = mode;
         options.invert_scale = self.scales_and_lines.invert_scale;
-        chart
-            .state
-            .price_scale_mut()
-            .set_price_precision(self.precision.decimals().map(|value| value as u8));
+        let scale = chart.state.price_scale_mut();
+        scale.set_price_precision(self.precision.decimals().map(|value| value as u8));
+        scale.set_price_fraction(self.precision.fraction());
         if let Some(style) = chart.series_style_mut(crate::widget::SeriesId::MAIN) {
             style.price_line_color = self.scales_and_lines.symbol_price_color;
             if let Some(source) = self.scales_and_lines.price_line_source {
@@ -1415,6 +1413,27 @@ mod tests {
             assert_eq!(precision, Some(decimals), "precision {decimals}");
             assert!(!chart.can_undo(), "precision {decimals}");
         }
+
+        // A chosen fraction and extended hours also apply back without recording an edit.
+        let mut chart = Chart::new(bars());
+        chart.set_instrument(Some(
+            crate::model::Instrument::new("SAMPLE").with_price_decimals(2),
+        ));
+        chart
+            .price_scale_mut()
+            .set_price_fraction(Some(crate::model::PriceFraction::Eighths));
+        chart.set_extended_hours(true);
+        chart.user_action(|chart| {
+            ChartSettingsState::from_chart(chart)
+                .apply_to_chart(chart)
+                .unwrap();
+        });
+        assert_eq!(
+            chart.state().price_scale().chosen_fraction(),
+            Some(crate::model::PriceFraction::Eighths)
+        );
+        assert!(chart.extended_hours());
+        assert!(!chart.can_undo());
 
         // Hidden and doubled price axes read as a right placement, which keeps them as they are.
         for (left, right) in [(false, false), (true, true)] {
@@ -3016,9 +3035,90 @@ mod tests {
         assert!(range.max - range.min < 0.0875, "{range:?}");
     }
 
+    /// Fractional settings reach axis ticks, price tags and readouts, read back, survive layout
+    /// restoration and undo, and give way to decimals. An apostrophe groups no thousands.
+    #[test]
+    fn fractional_precision_reaches_the_axis_and_reads_back() {
+        use crate::chart::rendering::axes::price_marks;
+        use crate::model::{Instrument, PriceFraction};
+        use crate::widget::{
+            SeriesId,
+            test_frames::{chart, shapes},
+        };
+        let ctx = Context::default();
+        let mut chart = chart(&[1234.0], &[1234.5]);
+        chart.set_instrument(Some(Instrument::new("ZB").with_price_decimals(2)));
+        let mut settings = ChartSettingsState::from_chart(&chart);
+        settings.precision = PrecisionMode::Fraction(PriceFraction::ThirtySeconds);
+        chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
+        let painted = shapes(&ctx, &mut chart, 0.0, vec![]);
+        assert_eq!(
+            chart.format_series_price(SeriesId::MAIN, 1234.5).as_deref(),
+            Some("1,234'16")
+        );
+        assert!(
+            painted.iter().any(
+                |shape| matches!(shape, Shape::Text(text) if text.galley.text() == "1,234'16")
+            )
+        );
+        let map = chart.series_price_map(SeriesId::MAIN).unwrap();
+        let formatter = chart
+            .series_label_formatter(SeriesId::MAIN, PriceScaleMode::Normal)
+            .unwrap();
+        let marks = price_marks(&map, Some(formatter.as_ref()));
+        assert!(!marks.is_empty());
+        assert!(
+            marks
+                .iter()
+                .all(|mark| (mark.price * 32.0).fract() == 0.0 && mark.label.contains('\'')),
+            "{marks:?}"
+        );
+        assert!(marks.windows(2).all(|pair| pair[0].label != pair[1].label));
+        assert_eq!(
+            ChartSettingsState::from_chart(&chart).precision,
+            settings.precision
+        );
+
+        let saved = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
+        let mut restored = crate::widget::test_frames::chart(&[1234.0], &[1234.5]);
+        restored.set_instrument(Some(Instrument::new("ZB").with_price_decimals(2)));
+        restored
+            .restore(&serde_json::from_str(&saved).unwrap())
+            .unwrap();
+        shapes(&ctx, &mut restored, 0.1, vec![]);
+        assert_eq!(
+            restored
+                .format_series_price(SeriesId::MAIN, 1234.5)
+                .as_deref(),
+            Some("1,234'16")
+        );
+
+        chart.config_mut().thousands_sep = Some('\'');
+        shapes(&ctx, &mut chart, 0.2, vec![]);
+        assert_eq!(
+            chart.format_series_price(SeriesId::MAIN, 1234.5).as_deref(),
+            Some("1234'16")
+        );
+        chart.config_mut().thousands_sep = Some(',');
+        assert!(chart.undo());
+        shapes(&ctx, &mut chart, 0.3, vec![]);
+        assert_eq!(
+            chart.format_series_price(SeriesId::MAIN, 1234.5).as_deref(),
+            Some("1,234.50")
+        );
+        assert!(chart.redo());
+        settings.precision = PrecisionMode::Decimals3;
+        chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
+        shapes(&ctx, &mut chart, 0.4, vec![]);
+        assert_eq!(
+            chart.format_series_price(SeriesId::MAIN, 1234.5).as_deref(),
+            Some("1,234.500")
+        );
+    }
+
     /// The session breaks switch, the extended hours choice and the bar the last price line
-    /// follows reach the chart, read back and are undone. Settings saved before these, the axis font family and the thousands
-    /// separator could be chosen hold none of them and keep the chart's.
+    /// follows reach the chart, read back and are undone. Settings saved before these, the axis
+    /// font family and the thousands separator could be chosen keep the chart's choices.
     #[test]
     fn session_choices_and_last_price_bar_apply_and_read_back() {
         use crate::model::PriceLineSource::{LastBar, LastVisible};

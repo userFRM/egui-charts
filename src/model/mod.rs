@@ -115,8 +115,8 @@ pub use replay::ReplaySession;
 pub(crate) use revision::next_revision;
 pub use series_scale::{AxisSide, PaneAxisOptions, SeriesScale};
 pub use series_style::{
-    AutoscaleInfo, AutoscaleMargins, AutoscaleProvider, PriceLineSource, SeriesAlerts,
-    SeriesDisplayFormat, SeriesFormat, SeriesStyle,
+    AutoscaleInfo, AutoscaleMargins, AutoscaleProvider, PriceFraction, PriceLineSource,
+    SeriesAlerts, SeriesDisplayFormat, SeriesFormat, SeriesStyle,
 };
 pub use session::{
     CompositeSessionProvider, DailySessionProvider, ExchangeSessionProvider,
