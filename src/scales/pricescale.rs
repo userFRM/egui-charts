@@ -296,6 +296,9 @@ pub struct PriceScale {
     /// The decimals chosen by the user or the host, which outlast instrument changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     chosen_precision: Option<u8>,
+    /// The chosen fraction overrides displayed decimals and outlasts instrument changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    chosen_fraction: Option<crate::model::PriceFraction>,
     #[serde(default)]
     tick_size: Option<f64>,
     bar_ratio: Option<f64>,
@@ -320,6 +323,7 @@ impl PriceScale {
             level: 0.0,
             instrument_precision: None,
             chosen_precision: None,
+            chosen_fraction: None,
             tick_size: None,
             bar_ratio: None,
         }
@@ -330,6 +334,22 @@ impl PriceScale {
     /// the instrument's precision, else derives the decimals from the tick step.
     pub fn set_price_precision(&mut self, decimals: Option<u8>) {
         self.chosen_precision = decimals;
+    }
+
+    /// Chooses fractional raw-price labels, such as `112'16`, on ticks, tags, the crosshair
+    /// and the legend. `None` restores decimals. A fraction takes precedence over
+    /// [`set_price_precision`](Self::set_price_precision) and stays through instrument,
+    /// interval and symbol changes. A series'
+    /// [`display_format`](crate::model::SeriesStyle::display_format) and the chart's price
+    /// formatters take precedence; percentage and indexed modes keep their labels.
+    pub fn set_price_fraction(&mut self, fraction: Option<crate::model::PriceFraction>) {
+        self.chosen_fraction = fraction;
+    }
+
+    /// The fraction [`Self::set_price_fraction`] chose, if any.
+    #[cfg(feature = "widget")]
+    pub(crate) fn chosen_fraction(&self) -> Option<crate::model::PriceFraction> {
+        self.chosen_fraction
     }
 
     /// The decimals ticks and tags take, whatever the scale's mode shows: the chosen ones, else
@@ -642,6 +662,13 @@ impl PriceMap {
             self.transform.mode,
             PriceScaleMode::Normal | PriceScaleMode::Logarithmic
         ) {
+            if let crate::model::SeriesFormat::Fraction(fraction) = format.kind {
+                // Nice tick steps round up to whole multiples of the displayed fraction.
+                self.price_precision =
+                    Some(super::price_formatter::decimals(fraction.step()) as u8);
+                self.tick_marks.min_price_step = Some(fraction.step());
+                return self;
+            }
             self.price_precision = Some(format.precision);
             let unit = 10f64.powi(-i32::from(format.precision));
             let step_for = |unit: f64| {

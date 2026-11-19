@@ -61,6 +61,8 @@ pub struct SettingsDialog {
     /// Controls the host hid.
     hidden: HashSet<Control>,
     apply_to_all: bool,
+    /// Whether the Symbol tab offers the futures data choices.
+    futures_data: bool,
     /// The local sounds the host can play, by name, offered on the Trading and Alerts tabs. The host
     /// plays the chosen one; see
     /// [`Trading::take_execution_sound`](crate::ui::trading::Trading::take_execution_sound).
@@ -172,6 +174,7 @@ impl SettingsDialog {
             config: SettingsDialogConfig::default(),
             hidden: HashSet::new(),
             apply_to_all: false,
+            futures_data: false,
             execution_sounds: Vec::new(),
             sound_preview: None,
             order_flow_layers: [true; 4],
@@ -193,6 +196,15 @@ impl SettingsDialog {
     /// [`SettingsAction::ApplyToAll`]. Off by default.
     pub fn offer_apply_to_all(&mut self, offered: bool) {
         self.apply_to_all = offered;
+    }
+
+    /// Offers continuous futures back adjustment and settlement closes on the Symbol tab for
+    /// a host that reloads its history for these choices. They return in
+    /// [`ChartSettingsState::back_adjust_futures`] and
+    /// [`ChartSettingsState::settlement_as_close`]. Off by default; the host offers these only
+    /// for supported futures history. Settlement affects daily and longer bars only.
+    pub fn offer_futures_data(&mut self, offered: bool) {
+        self.futures_data = offered;
     }
 
     /// Shows or hides `control`: Templates (the template button and menu; Reset to defaults
@@ -831,6 +843,7 @@ impl SettingsDialog {
                     .scales_and_lines
                     .thousands_sep
                     .or(scales.thousands_sep);
+                let extended_hours = template.extended_hours.or(self.settings.extended_hours);
                 let date_format = template
                     .scales_and_lines
                     .date_format
@@ -877,6 +890,7 @@ impl SettingsDialog {
                 self.settings.scales_and_lines.use_24_hour = use_24_hour;
                 self.settings.scales_and_lines.weekday_names = weekday_names;
                 self.settings.show_session_breaks = session_breaks;
+                self.settings.extended_hours = extended_hours;
                 self.settings.price_target_positive_color = positive;
                 self.settings.price_target_negative_color = negative;
                 self.settings.margins.right_bars = right_bars;
@@ -954,6 +968,7 @@ impl SettingsDialog {
                 ..Default::default()
             };
             // What a new chart holds, where the default settings hold no choice.
+            self.settings.extended_hours = Some(false);
             self.settings.scales_appearance.font_family = Some(Default::default());
             self.settings.scales_and_lines.price_line_source = Some(Default::default());
             let style = crate::model::SeriesStyle::default();
@@ -2810,6 +2825,9 @@ mod tests {
             .unwrap();
             for (group, choice) in [
                 ("", "show_session_breaks"),
+                ("", "extended_hours"),
+                ("", "back_adjust_futures"),
+                ("", "settlement_as_close"),
                 ("", "price_target_positive_color"),
                 ("", "price_target_negative_color"),
                 ("/scales_and_lines", "price_line_source"),
@@ -2837,6 +2855,7 @@ mod tests {
             chart.config_mut().axis_font_family = FontFamily::Monospace;
             chart.config_mut().thousands_sep = Some('\'');
             chart.config_mut().show_session_breaks = true;
+            chart.set_extended_hours(true);
             chart.config_mut().price_target_positive_color = Color32::BLUE;
             chart.config_mut().price_target_negative_color = Color32::YELLOW;
             chart.pane_options_mut().separator_color = Some(Color32::RED);
@@ -2851,9 +2870,16 @@ mod tests {
                 .templates
                 .save("Old", serde_json::from_value(saved).unwrap())
                 .unwrap();
-            dialog.open(ChartSettingsState::from_chart(&chart));
+            let current = ChartSettingsState::from_chart(&chart);
+            assert!(current.settlement_as_close);
+            assert!(!current.back_adjust_futures);
+            dialog.open(current);
             load_template(&mut dialog, "Old");
             let shown = dialog.settings();
+            // Older templates keep their last-trade closes, independently of the new default.
+            assert!(!shown.settlement_as_close);
+            assert!(!shown.back_adjust_futures);
+            assert_eq!(shown.extended_hours, Some(true), "{pixels:?}");
             assert_eq!(shown.margins.right_bars, row, "{pixels:?}");
             assert_eq!(dialog.margin_right_str, row.to_string(), "{pixels:?}");
             assert_eq!(
@@ -2902,6 +2928,7 @@ mod tests {
             assert_eq!(config.axis_font_family, FontFamily::Monospace);
             assert_eq!(config.thousands_sep, Some('\''));
             assert!(config.show_session_breaks);
+            assert!(chart.extended_hours());
             assert_eq!(
                 (
                     config.price_target_positive_color,
