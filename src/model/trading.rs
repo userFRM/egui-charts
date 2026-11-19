@@ -119,8 +119,15 @@ pub enum PositionBracket {
     StopLoss,
 }
 
-/// A take profit that closes its own part of an order: one of
-/// [`OrderRequest::take_profit_levels`].
+/// A take profit that closes its own part of an order, with an optional stop loss of its own:
+/// one of [`OrderRequest::take_profit_levels`].
+///
+/// ```
+/// use egui_charts::model::TakeProfitLevel;
+///
+/// let mut level = TakeProfitLevel::new(110.0, 2.0);
+/// level.stop_loss = Some(95.0);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct TakeProfitLevel {
@@ -129,12 +136,21 @@ pub struct TakeProfitLevel {
     pub price: f64,
     /// Positive, in the symbol's trading units.
     pub quantity: f64,
+    /// The price at which a stop loss closes this level's quantity, for an account that accepts
+    /// [level stops](Capabilities::take_profit_level_stops): below the entry for a buy, above
+    /// for a sell. When either fills, the other is cancelled. `None` leaves the level to the
+    /// order's [`stop_loss`](OrderRequest::stop_loss).
+    pub stop_loss: Option<f64>,
 }
 
 impl TakeProfitLevel {
-    /// A take profit that closes `quantity` at `price`.
+    /// A take profit that closes `quantity` at `price`, without a stop loss of its own.
     pub fn new(price: f64, quantity: f64) -> Self {
-        Self { price, quantity }
+        Self {
+            price,
+            quantity,
+            stop_loss: None,
+        }
     }
 }
 
@@ -157,10 +173,13 @@ pub struct OrderRequest {
     /// Several take profits, each closing its own quantity, for an account that accepts
     /// [take-profit levels](Capabilities::take_profit_levels), in the order given. Their
     /// quantities add up to [`quantity`](Self::quantity). Empty for one take profit or none,
-    /// which [`take_profit`](Self::take_profit) holds.
+    /// which [`take_profit`](Self::take_profit) holds. No more than
+    /// [`max_take_profit_levels`](Capabilities::max_take_profit_levels).
     pub take_profit_levels: Vec<TakeProfitLevel>,
     /// The price at which a stop-loss order closes the filled quantity, for an account that
     /// accepts [brackets](Capabilities::brackets): below the entry for a buy, above for a sell.
+    /// With [`take_profit_levels`](Self::take_profit_levels) it closes the quantity of the levels
+    /// without a [stop loss of their own](TakeProfitLevel::stop_loss).
     pub stop_loss: Option<f64>,
     /// How long the order stays working.
     pub time_in_force: TimeInForce,
@@ -476,6 +495,13 @@ pub struct Capabilities {
     /// [`OrderRequest::take_profit_levels`]. Needs [`brackets`](Self::brackets); without it the
     /// order ticket offers one take profit.
     pub take_profit_levels: bool,
+    /// Accepts a stop loss of its own for each take-profit level, through
+    /// [`TakeProfitLevel::stop_loss`]. Needs [`take_profit_levels`](Self::take_profit_levels);
+    /// without it the order's single stop loss protects every level.
+    pub take_profit_level_stops: bool,
+    /// The largest number of take-profit levels an order may carry, counting the first, or
+    /// `None` without a limit. Below 2 the order ticket offers no levels.
+    pub max_take_profit_levels: Option<usize>,
     /// Closes a position with an opposite market order, so the Close and Flatten controls work.
     pub close: bool,
     /// Reverses a position with an opposite market order of twice its size, so the Reverse
