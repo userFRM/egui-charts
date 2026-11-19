@@ -2522,6 +2522,11 @@ mod tests {
         use egui::accesskit::Role;
         use egui_kittest::{Harness, kittest::Queryable};
         let mut dialog = SettingsDialog::new();
+        let config = crate::data::DepthHistoryConfig {
+            columns: 1_000,
+            ..Default::default()
+        };
+        dialog.set_depth_history_config(Some(&config));
         dialog.open(ChartSettingsState::default());
         dialog.active_tab = SettingsTab::OrderFlow;
         let theme = Theme::light();
@@ -2541,6 +2546,12 @@ mod tests {
                 (dialog, Vec::new()),
             );
         harness.run();
+        // An unchanged choice keeps the host's 1,000 columns, rather than restoring 600.
+        harness.get_by_label(if usize::BITS == 64 {
+            "Up to 26.8 MB"
+        } else {
+            "Up to 26.3 MB"
+        });
         harness
             .get_by_role_and_label(Role::ComboBox, "History retention")
             .click();

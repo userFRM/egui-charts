@@ -113,11 +113,12 @@ impl SettingsDialog {
                 });
             });
             self.draw_setting_row_with_controls(ui, "Memory", theme, |ui, dialog| {
-                let bytes = dialog
-                    .depth_config
-                    .clone()
-                    .with_retention(dialog.settings.order_flow.heatmap_retention)
-                    .max_memory();
+                let retention = dialog.settings.order_flow.heatmap_retention;
+                let mut config = dialog.depth_config.clone();
+                if config.retention != retention {
+                    config = config.with_retention(retention);
+                }
+                let bytes = config.max_memory();
                 ui.label(
                     RichText::new(l10n::format_text(
                         ui.ctx(),
