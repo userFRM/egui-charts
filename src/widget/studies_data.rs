@@ -2829,7 +2829,7 @@ pub(super) mod tests {
             timeframe: Some(Timeframe::Hour1),
             metric: None,
         };
-        assert_eq!(chart.study_data_requests(), [request.clone()]);
+        assert_eq!(chart.study_data_requests(), std::slice::from_ref(&request));
         chart.set_study_data(request, other.clone(), None);
         let mut reference = Chart::new(crate::model::BarData::from_bars(other));
         reference.set_symbol("OTHER");
