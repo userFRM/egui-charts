@@ -761,7 +761,7 @@ mod tests {
                     InputValue::Text("2021-01, 2022-03".into()),
                 )),
                 average: Some(13.5),
-                jan_sd: Some(23.334523779156068),
+                jan_sd: Some(23.33452377915607),
                 mar_sd: None,
                 projection: [53, 12, 15, 56],
                 ..defaults()
