@@ -762,6 +762,14 @@ impl SettingsDialog {
                     .scales_and_lines
                     .price_line_source
                     .or(scales.price_line_source);
+                let line_width = template
+                    .scales_and_lines
+                    .price_line_width
+                    .or(scales.price_line_width);
+                let line_style = template
+                    .scales_and_lines
+                    .price_line_style
+                    .or(scales.price_line_style);
                 let separator = template
                     .scales_and_lines
                     .thousands_sep
@@ -796,6 +804,8 @@ impl SettingsDialog {
                 self.settings.chart_type_params = params;
                 self.settings.price_source = source;
                 self.settings.scales_and_lines.price_line_source = line_source;
+                self.settings.scales_and_lines.price_line_width = line_width;
+                self.settings.scales_and_lines.price_line_style = line_style;
                 self.settings.scales_and_lines.thousands_sep = separator;
                 self.settings.scales_and_lines.date_format = date_format;
                 self.settings.scales_and_lines.use_24_hour = use_24_hour;
@@ -876,6 +886,9 @@ impl SettingsDialog {
             // What a new chart holds, where the default settings hold no choice.
             self.settings.scales_appearance.font_family = Some(Default::default());
             self.settings.scales_and_lines.price_line_source = Some(Default::default());
+            let style = crate::model::SeriesStyle::default();
+            self.settings.scales_and_lines.price_line_width = Some(style.price_line_width);
+            self.settings.scales_and_lines.price_line_style = Some(style.price_line_style);
             self.settings.scales_and_lines.thousands_sep =
                 Some(crate::widget::settings::ThousandsSeparator::Comma);
             self.settings.scales_and_lines.date_format =
@@ -962,6 +975,11 @@ mod tests {
                 options.time_scale.use_24_hour = false;
                 options.time_scale.weekday_names = crate::scales::WeekdayNames::Never;
                 chart.set_chart_options(options);
+                // A customised last price line, which Reset returns to a new chart's.
+                if let Some(style) = chart.series_style_mut(crate::widget::SeriesId::MAIN) {
+                    style.price_line_width = 3.0;
+                    style.price_line_style = crate::model::LineStyle::Solid;
+                }
                 let mut settings = ChartSettingsState::from_chart(&chart);
                 settings.scales_appearance.text_color = Color32::RED;
                 settings.grid_lines.horizontal_color = Color32::GREEN;
@@ -1041,6 +1059,14 @@ mod tests {
                         Some(true),
                         Some(crate::scales::WeekdayNames::Default)
                     ),
+                    "{preset}"
+                );
+                assert_eq!(
+                    (
+                        actual.scales_and_lines.price_line_width,
+                        actual.scales_and_lines.price_line_style
+                    ),
+                    (Some(1.0), Some(crate::model::LineStyle::Dashed)),
                     "{preset}"
                 );
                 let mismatches: Vec<_> = [

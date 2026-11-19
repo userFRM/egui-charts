@@ -350,6 +350,8 @@ pub struct ScalesAndLinesSettings {
     pub show_currency: bool,
     /// Display host-supplied price unit metadata.
     pub show_unit: bool,
+    /// Show the currency and unit only while the pointer is over the price scale.
+    pub currency_unit_on_hover: bool,
     /// Display Auto, Log and Percent navigation buttons.
     pub show_scale_mode_buttons: bool,
     /// Display the price-axis host action button.
@@ -364,6 +366,15 @@ pub struct ScalesAndLinesSettings {
     pub price_to_bar_ratio: f64,
     /// Last price tag and line colour, or the candle direction colour when unset.
     pub symbol_price_color: Option<Color32>,
+    /// Last price line width in logical points. `None` keeps the chart's width, as do settings
+    /// saved without this field.
+    pub price_line_width: Option<f32>,
+    /// Last price line pattern. `None` keeps the chart's pattern, as do settings saved without
+    /// this field.
+    pub price_line_style: Option<crate::model::LineStyle>,
+    /// Write the change of the last price from the previous session's close under the last
+    /// price tag, absolute and in percent.
+    pub show_last_price_change: bool,
     /// Display the last values of studies on their price axes.
     pub show_study_values: bool,
     /// Study value tag colour, or each plot's colour when unset.
@@ -431,12 +442,16 @@ impl Default for ScalesAndLinesSettings {
             axis_layout: Default::default(),
             show_currency: true,
             show_unit: true,
+            currency_unit_on_hover: false,
             show_scale_mode_buttons: true,
             show_plus_button: true,
             allow_label_overlap: false,
             lock_price_to_bar_ratio: false,
             price_to_bar_ratio: 1.0,
             symbol_price_color: None,
+            price_line_width: None,
+            price_line_style: None,
+            show_last_price_change: false,
             show_study_values: true,
             study_value_color: None,
             show_symbol_name: false,

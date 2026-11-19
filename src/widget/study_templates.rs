@@ -660,4 +660,96 @@ mod tests {
         assert!(chart.undo());
         assert_eq!(shown(&chart), before);
     }
+
+    /// Every built-in set applies through the default factory in place of the chart's studies,
+    /// with the studies, offsets and panes it declares, and its volume study can still show its
+    /// average.
+    #[test]
+    fn builtin_study_template_sets_apply_with_their_studies_and_panes() {
+        use crate::studies::InputValue;
+
+        // The set's name, its studies with the offset of their first plot, and the chart's
+        // panes as positions in the set, the price pane first, where the main series leads.
+        type Row = (
+            &'static str,
+            &'static [(&'static str, isize)],
+            &'static [&'static [usize]],
+        );
+        let expected: [Row; 6] = [
+            (
+                "Williams Alligator",
+                &[("Volume", 0), ("Williams Alligator", 8)],
+                &[&[0, 1]],
+            ),
+            ("Displaced EMA", &[("Volume", 0), ("EMA", 5)], &[&[0, 1]]),
+            (
+                "Moving average ribbon",
+                &[("Volume", 0), ("MA Ribbon", 0)],
+                &[&[0, 1]],
+            ),
+            (
+                "Oscillators",
+                &[("Volume", 0), ("RSI", 0), ("StochRSI", 0), ("CCI", 0)],
+                &[&[0], &[1], &[2], &[3]],
+            ),
+            (
+                "Swing trading",
+                &[("Volume", 0), ("BB", 0), ("MACD", 0), ("Stochastic", 0)],
+                &[&[0, 1], &[2], &[3]],
+            ),
+            (
+                "Volume analysis",
+                &[("Volume", 0), ("OBV", 0), ("MFI", 0)],
+                &[&[0], &[1], &[2]],
+            ),
+        ];
+        let sets = StudyTemplateSet::builtin();
+        assert_eq!(
+            sets.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+            expected.map(|(name, ..)| name)
+        );
+        for ((name, set), (_, studies, panes)) in sets.iter().zip(expected) {
+            let mut chart = test_frames::chart(&[1.0], &[2.0]);
+            chart.add_indicator(Box::new(CCI::new(20)));
+            let ids = chart
+                .apply_study_template_set(set)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let shown: Vec<_> = chart
+                .indicators()
+                .map(|(_, study)| (study.name().to_owned(), study.plot_offset(0)))
+                .collect();
+            let declared: Vec<_> = studies
+                .iter()
+                .map(|&(study, offset)| (study.to_owned(), offset))
+                .collect();
+            assert_eq!(shown, declared, "{name}");
+            let layout: Vec<_> = chart
+                .panes()
+                .into_iter()
+                .map(|pane| chart.pane_series(pane))
+                .collect();
+            let declared: Vec<Vec<_>> = panes
+                .iter()
+                .enumerate()
+                .map(|(at, pane)| {
+                    (at == 0)
+                        .then_some(SeriesId::MAIN)
+                        .into_iter()
+                        .chain(pane.iter().map(|&position| ids[position]))
+                        .collect()
+                })
+                .collect();
+            assert_eq!(layout, declared, "{name}");
+            // Turned on, the volume average is drawn, as on a volume study added to a chart.
+            chart
+                .indicator_mut(ids[0])
+                .unwrap()
+                .set_input("show_average", InputValue::Toggle(true))
+                .unwrap();
+            assert!(
+                chart.indicators().next().unwrap().1.plot_style(2).visible,
+                "{name}"
+            );
+        }
+    }
 }

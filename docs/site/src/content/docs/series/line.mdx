@@ -44,6 +44,9 @@ ignores curvature. `marker_radius` controls the point circles;
 and `crosshair_marker_border_width` style the hover marker, which is hidden until the radius is
 positive and by default takes the point's line colour with a chart-background ring;
 `last_price_animation` controls the last-price pulse.
+[`line_gradient`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeStyles.html#structfield.line_gradient)
+draws the Line chart's line in a gradient from `line_gradient_start` at its leftmost segment in
+view to `line_gradient_end` at its rightmost; a bar's own colour still colours its segment.
 
 For an added series, use
 [`SeriesOptions::color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.color)

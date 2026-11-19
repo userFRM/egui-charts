@@ -322,11 +322,6 @@ impl DrawingProps {
                     note_text_style,
                     arrow_start_style,
                     arrow_end_style,
-                    custom_settings,
-                    pitchfork,
-                    gann,
-                    ghost_feed,
-                    bars_pattern,
                     position_size,
                     position_sizing,
                     position_readout.persistent,
@@ -339,9 +334,6 @@ impl DrawingProps {
                     marker.glyph,
                     marker.show_glyph,
                     marker.glyph_color,
-                    volume_profile,
-                    regression_trend,
-                    vwap,
                     channel_midline,
                     anchor_price_style,
                     middle_line,
@@ -366,6 +358,33 @@ impl DrawingProps {
                     elliott_degree,
                     elliott_show_wave,
                 );
+                // Each config takes only its edited members, keeping the peer's other settings.
+                macro_rules! edited_config {
+                    ($($field:ident => $shown:expr),+ $(,)?) => {
+                        $(if settings.$field != target.$field {
+                            let shown = $shown;
+                            drawing.$field = settings.$field.as_ref().map(|edited| {
+                                merged(&shown(&drawing), &shown(&target), edited)
+                            });
+                        })+
+                    };
+                }
+                edited_config!(
+                    pitchfork => super::tabs::pitchfork_shown,
+                    gann => |d: &Drawing| d.gann_config().clone(),
+                    ghost_feed => |d: &Drawing| d.ghost_feed.unwrap_or_default(),
+                    bars_pattern => |d: &Drawing| d.bars_pattern.unwrap_or_default(),
+                    volume_profile => |d: &Drawing| d.volume_profile.unwrap_or_default(),
+                    regression_trend => |d: &Drawing| d.regression_trend.unwrap_or_default(),
+                    vwap => |d: &Drawing| d.vwap.unwrap_or_default(),
+                );
+                if settings.custom_settings != target.custom_settings {
+                    merge_edits(
+                        &mut drawing.custom_settings,
+                        &target.custom_settings,
+                        &settings.custom_settings,
+                    );
+                }
                 if settings.fib_config != target.fib_config {
                     if matches!(
                         drawing.tool_type,
@@ -537,6 +556,74 @@ impl DrawingProps {
         }
         Ok(())
     }
+}
+
+/// Writes changed members into `own`, descending through objects with the same members and
+/// through arrays edited without a change of length, over the items `own` holds, as Fibonacci
+/// levels are. A changed shape, such as a level list gaining an item, replaces the whole value.
+fn merge_edits(
+    own: &mut serde_json::Value,
+    original: &serde_json::Value,
+    edited: &serde_json::Value,
+) {
+    use serde_json::Value;
+    if original == edited {
+        return;
+    }
+    match (own, original, edited) {
+        (Value::Object(own), Value::Object(original), Value::Object(edited))
+            if own.len() == edited.len()
+                && original.len() == edited.len()
+                && edited
+                    .keys()
+                    .all(|key| own.contains_key(key) && original.contains_key(key)) =>
+        {
+            for (key, edited) in edited {
+                if let Some(own) = own.get_mut(key) {
+                    merge_edits(own, &original[key], edited);
+                }
+            }
+        }
+        // An RGBA colour's red, green and blue are one hue, replaced whole as the drawing
+        // colour's is, so that no drawing takes a mix of its own and the picked channels.
+        (Value::Array(own), Value::Array(original), Value::Array(edited))
+            if [&own[..], &original[..], &edited[..]].iter().all(|colour| {
+                colour.len() == 4 && colour.iter().all(|c| c.as_u64().is_some_and(|c| c <= 255))
+            }) =>
+        {
+            if original[..3] != edited[..3] {
+                own[..3].clone_from_slice(&edited[..3]);
+            }
+            if original[3] != edited[3] {
+                own[3] = edited[3].clone();
+            }
+        }
+        (Value::Array(own), Value::Array(original), Value::Array(edited))
+            if original.len() == edited.len() =>
+        {
+            for ((own, original), edited) in own.iter_mut().zip(original).zip(edited) {
+                merge_edits(own, original, edited);
+            }
+        }
+        (own, _, edited) => *own = edited.clone(),
+    }
+}
+
+/// Apply the changed members, retaining the former whole-config copy if the merged settings
+/// cannot round trip, for example when a peer holds a non-finite number.
+fn merged<T: serde::Serialize + serde::de::DeserializeOwned + Clone>(
+    own: &T,
+    original: &T,
+    edited: &T,
+) -> T {
+    let json = |config: &T| serde_json::to_value(config).ok();
+    let (Some(mut value), Some(original), Some(changed)) =
+        (json(own), json(original), json(edited))
+    else {
+        return edited.clone();
+    };
+    merge_edits(&mut value, &original, &changed);
+    serde_json::from_value(value).unwrap_or_else(|_| edited.clone())
 }
 
 #[cfg(test)]
@@ -1177,6 +1264,208 @@ mod tests {
                 assert_eq!(config.size, Some(size));
                 assert_eq!(config.opacity, opacity.unwrap_or(original_opacity));
             }
+        }
+        // Opened drawing, peer, dialog edit, and the peer's independently expected settings.
+        use crate::drawings::{
+            BarsPatternConfig, ChartPoint, GannConfig, GhostFeedConfig, PitchforkConfig,
+            PitchforkLevel, RegressionTrendConfig, VwapConfig,
+        };
+        type ConfigCase = (
+            &'static str,
+            DrawingToolType,
+            fn(&mut Drawing),
+            fn(&mut Drawing),
+            fn(&mut Drawing),
+            fn(&mut Drawing),
+        );
+        let cases: &[ConfigCase] = &[
+            (
+                "bars pattern",
+                DrawingToolType::BarsPattern,
+                |d| {
+                    d.bars_pattern = Some(BarsPatternConfig {
+                        mirrored: true,
+                        ..Default::default()
+                    })
+                },
+                |d| d.bars_pattern = None,
+                |d| d.bars_pattern.as_mut().unwrap().flipped = true,
+                |d| {
+                    d.bars_pattern = Some(BarsPatternConfig {
+                        flipped: true,
+                        ..Default::default()
+                    })
+                },
+            ),
+            (
+                "pitchfork levels",
+                DrawingToolType::Pitchfork,
+                |d| d.pitchfork = Some(PitchforkConfig::default()),
+                |d| {
+                    let mut config = PitchforkConfig::default();
+                    config.levels[3].color = [1, 2, 3, 255];
+                    config.background_opacity = 10;
+                    d.pitchfork = Some(config);
+                },
+                |d| d.pitchfork.as_mut().unwrap().levels[0].visible = false,
+                |d| d.pitchfork.as_mut().unwrap().levels[0].visible = false,
+            ),
+            (
+                "legacy pitchfork",
+                DrawingToolType::Pitchfork,
+                |d| d.pitchfork = Some(PitchforkConfig::default()),
+                |d| {
+                    d.pitchfork = None;
+                    d.color = [0, 128, 0, 255];
+                    d.stroke_width = 2.0;
+                },
+                |d| d.pitchfork.as_mut().unwrap().background_opacity = 75,
+                |d| {
+                    d.pitchfork = Some(PitchforkConfig {
+                        levels: [0.0, 0.5, 1.0, 1.5]
+                            .map(|value| PitchforkLevel {
+                                value,
+                                visible: true,
+                                color: [0, 128, 0, 255],
+                                line_style: LineStyle::Solid,
+                                width: Some(if value == 1.0 {
+                                    crate::styles::stroke::HAIRLINE
+                                } else {
+                                    2.0
+                                }),
+                            })
+                            .to_vec(),
+                        show_background: true,
+                        background_opacity: 75,
+                    })
+                },
+            ),
+            (
+                "gann",
+                DrawingToolType::GannSquare,
+                |d| {
+                    let mut config = GannConfig::for_tool(DrawingToolType::GannSquare);
+                    config.show_fan = !config.show_fan;
+                    d.gann = Some(config);
+                },
+                |d| d.gann = None,
+                |d| {
+                    let config = d.gann.as_mut().unwrap();
+                    config.show_arcs = !config.show_arcs;
+                },
+                |d| {
+                    let mut config = GannConfig::for_tool(DrawingToolType::GannSquare);
+                    config.show_arcs = !config.show_arcs;
+                    d.gann = Some(config);
+                },
+            ),
+            (
+                "regression trend",
+                DrawingToolType::RegressionTrend,
+                |d| d.regression_trend = RegressionTrendConfig::new(2.0),
+                |d| d.regression_trend = RegressionTrendConfig::default().with_deviations(1.5, 2.5),
+                |d| d.regression_trend.as_mut().unwrap().use_upper = false,
+                |d| d.regression_trend.as_mut().unwrap().use_upper = false,
+            ),
+            (
+                "custom settings",
+                DrawingToolType::Polyline,
+                |d| {
+                    d.custom_tool = Some("host-path".into());
+                    d.custom_settings = serde_json::json!({"a": 1, "b": 2});
+                },
+                |d| {
+                    d.custom_tool = Some("host-path".into());
+                    d.custom_settings = serde_json::json!({"a": 5, "b": 7});
+                },
+                |d| d.custom_settings["b"] = serde_json::json!(3),
+                |d| d.custom_settings = serde_json::json!({"a": 5, "b": 3}),
+            ),
+            (
+                "ghost feed",
+                DrawingToolType::GhostFeed,
+                |d| {
+                    d.ghost_feed = Some(GhostFeedConfig {
+                        average_range_ticks: 20.0,
+                        ..Default::default()
+                    })
+                },
+                |d| d.ghost_feed = None,
+                |d| d.ghost_feed.as_mut().unwrap().noise_ticks = 0.0,
+                |d| {
+                    d.ghost_feed = Some(GhostFeedConfig {
+                        average_range_ticks: 10.0,
+                        noise_ticks: 0.0,
+                        ..Default::default()
+                    })
+                },
+            ),
+            (
+                "ghost feed body colour sharing a channel with the peer's",
+                DrawingToolType::GhostFeed,
+                |_| {},
+                |d| d.ghost_feed = None,
+                |d| d.ghost_feed.as_mut().unwrap().body_up = [38, 229, 154, 255],
+                |d| {
+                    d.ghost_feed = Some(GhostFeedConfig {
+                        body_up: [38, 229, 154, 255],
+                        ..Default::default()
+                    })
+                },
+            ),
+            (
+                "volume profile",
+                DrawingToolType::FixedRangeVolumeProfile,
+                |d| d.volume_profile = crate::data::VolumeProfileConfig::new(24, 0.7),
+                |d| d.volume_profile = crate::data::VolumeProfileConfig::new(48, 0.8),
+                |d| d.volume_profile.as_mut().unwrap().extend_right = true,
+                |d| d.volume_profile.as_mut().unwrap().extend_right = true,
+            ),
+            (
+                "vwap band line",
+                DrawingToolType::AnchoredVWAP,
+                |d| d.vwap = Some(VwapConfig::default()),
+                |d| {
+                    let mut config = VwapConfig::default();
+                    config.bands[0].lower.color = [1, 2, 3, 255];
+                    config.track_price = true;
+                    d.vwap = Some(config);
+                },
+                |d| d.vwap.as_mut().unwrap().bands[0].upper.visible = false,
+                |d| d.vwap.as_mut().unwrap().bands[0].upper.visible = false,
+            ),
+            (
+                "edited level of a list of a different length",
+                DrawingToolType::Pitchfork,
+                |d| d.pitchfork = Some(PitchforkConfig::default()),
+                |d| {
+                    let mut config = PitchforkConfig::default();
+                    config.levels.truncate(4);
+                    config.background_opacity = 10;
+                    d.pitchfork = Some(config);
+                },
+                |d| d.pitchfork.as_mut().unwrap().levels[0].visible = false,
+                |d| d.pitchfork.as_mut().unwrap().levels[0].visible = false,
+            ),
+        ];
+        for &(case, tool, opened, peer, edit, change) in cases {
+            let mut drawings = [Drawing::new(1, tool), Drawing::new(2, tool)];
+            for drawing in &mut drawings {
+                drawing.chart_points = [(0.0, 10.0), (2.0, 11.0), (5.0, 10.0)]
+                    .map(|(bar, price)| ChartPoint::new(bar, price))
+                    .to_vec();
+            }
+            opened(&mut drawings[0]);
+            peer(&mut drawings[1]);
+            let mut chart = Chart::new(crate::model::BarData::new());
+            chart.drawings_mut().drawings = drawings.to_vec();
+            chart.drawings_mut().select_drawings([1, 2]);
+            let mut props = DrawingProps::from_drawing(&drawings[0], &chart);
+            edit(&mut props.tool_settings.as_mut().unwrap().settings);
+            let edits = props.edited_drawings(DrawingId(1), &chart).unwrap();
+            edit(&mut drawings[0]);
+            change(&mut drawings[1]);
+            assert_eq!(format!("{edits:?}"), format!("{drawings:?}"), "{case}");
         }
         // Properties assembled without tool settings hold the colour premultiplied, which reads
         // 76 back as 75 at alpha 51: an unedited colour leaves every hue as saved.

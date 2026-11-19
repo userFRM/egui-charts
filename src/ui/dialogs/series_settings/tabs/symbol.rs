@@ -57,7 +57,25 @@ impl SymbolTab {
             Self::parameters(ui, settings);
             let styles = &mut settings.chart_type_params.styles;
             match settings.chart_type {
-                ChartType::Line => Self::line_style(ui, &mut styles.line, "line_style"),
+                ChartType::Line => {
+                    let label = ui.label(l10n::text(ui.ctx(), "Colour type"));
+                    ui.label_inputs_by(label.id, |ui| {
+                        ui.combo_select(
+                            "line_color_type",
+                            &mut styles.line_gradient,
+                            [false, true],
+                            |gradient| if *gradient { "Gradient" } else { "Solid" }.to_owned(),
+                        );
+                    });
+                    ui.end_row();
+                    if styles.line_gradient {
+                        Self::fill_row(ui, "Start colour", &mut styles.line_gradient_start);
+                        Self::fill_row(ui, "End colour", &mut styles.line_gradient_end);
+                    } else {
+                        Self::fill_row(ui, "Line colour", &mut styles.line.color);
+                    }
+                    Self::line_width_and_style(ui, &mut styles.line, "line_style");
+                }
                 ChartType::StepLine => Self::line_style(ui, &mut styles.step_line, "line_style"),
                 ChartType::LineWithMarkers => {
                     Self::line_style(ui, &mut styles.line_with_markers, "line_style");
@@ -956,6 +974,11 @@ impl SymbolTab {
 
     fn line_style(ui: &mut Ui, style: &mut LinePlotStyle, id: &str) {
         Self::fill_row(ui, "Line colour", &mut style.color);
+        Self::line_width_and_style(ui, style, id);
+    }
+
+    /// The width and style rows of a line, below its colour rows.
+    fn line_width_and_style(ui: &mut Ui, style: &mut LinePlotStyle, id: &str) {
         let label = ui.label(l10n::text(ui.ctx(), "Line width"));
         ui.add(
             egui::DragValue::new(&mut style.width)
