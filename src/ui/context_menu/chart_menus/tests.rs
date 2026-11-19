@@ -3,6 +3,79 @@ use crate::theme::Theme;
 use egui::{Color32, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
 #[test]
+fn stop_limit_orders_keep_their_requests_and_host_text_through_menu_rows() {
+    use crate::model::{OrderRequest, OrderSide, OrderType};
+
+    struct Lots;
+    impl TradingFormatter for Lots {
+        fn quantity(&self, symbol: &str, quantity: f64) -> Option<String> {
+            (symbol == "AAPL").then(|| format!("{} lots", quantity / 100.0))
+        }
+    }
+
+    let ctx = Context::default();
+    let chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+    for (click, side, stop, limit, label) in [
+        (101.1, OrderSide::Buy, 101.0, 101.25, "Buy"),
+        (98.9, OrderSide::Sell, 99.0, 98.75, "Sell"),
+    ] {
+        for kind in ["chart", "custom", "pointer"] {
+            let mut menus = ChartMenus::default();
+            menus.set_order_entries(
+                1000.0,
+                Capabilities {
+                    limit: false,
+                    stop: false,
+                    stop_limit: true,
+                    ..Default::default()
+                },
+            );
+            menus.set_order_formatter(Some(Arc::new(Lots)));
+            menus.chart.symbol = "AAPL".into();
+            menus.chart.market_price = Some(100.0);
+            menus.chart.tick_size = Some(0.25);
+            menus.chart.open(Pos2::ZERO, click);
+            if kind == "custom" {
+                menus.set_menu_rows(|_, rows| {
+                    assert!(
+                        rows.iter()
+                            .any(|row| row.id() == Some(MenuRowId::StopLimitOrder))
+                    );
+                    vec![MenuRow::BuiltIn(MenuRowId::StopLimitOrder)]
+                });
+            } else if kind == "pointer" {
+                menus.price_menu = true;
+                menus.set_menu_rows(|_, _| panic!("pointer price menus keep their fixed rows"));
+            }
+            let target = RightClickTarget::Background {
+                pos: Pos2::ZERO,
+                price: click,
+            };
+            let orders: Vec<_> = menus
+                .build_menu_items(&ctx, &chart, HostMenuContext::new(target, None, click))
+                .into_iter()
+                .filter_map(|entry| match entry {
+                    MenuEntry::Item(MenuItem {
+                        label,
+                        action: ChartContextAction::Chart(ContextMenuAction::Order(order)),
+                        ..
+                    }) => Some((label, order)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                orders,
+                [(
+                    format!("{label} 10 lots AAPL @ {stop:.2} stop limit {limit:.2}"),
+                    OrderRequest::new("AAPL", side, 1000.0, OrderType::StopLimit { stop, limit }),
+                )],
+                "{kind} at {click}"
+            );
+        }
+    }
+}
+
+#[test]
 fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
     let mut menu = ChartContextMenu::new();
     let submenu = |menu: &ChartContextMenu| {
@@ -577,6 +650,14 @@ fn host_menu_entries_filter_targets_and_return_the_original_click() {
             let original = menus.context.unwrap();
             assert_eq!(original.time, Some(time));
             assert_eq!(original.target, target);
+            assert_eq!(
+                original.menu,
+                match target {
+                    RightClickTarget::Background { .. } => ChartMenuKind::Chart,
+                    RightClickTarget::Element { .. } => ChartMenuKind::Series,
+                    RightClickTarget::Drawing { .. } => ChartMenuKind::Drawing,
+                }
+            );
             match target {
                 RightClickTarget::Background { .. } => assert_eq!(original.price, 123.25),
                 RightClickTarget::Element { .. } => assert_eq!(original.price, 321.5),
@@ -619,6 +700,254 @@ fn host_menu_entries_filter_targets_and_return_the_original_click() {
                 "one action per choice"
             );
         }
+    }
+}
+
+/// Guards #3241: hosts place rows among built-ins, omit individual rows, customize axes and
+/// discard duplicate or unavailable ids and empty submenus. Moved built-ins keep their actions;
+/// an axis host choice returns the original click without changing chart history.
+#[test]
+fn host_rows_take_any_place_in_the_chart_and_price_axis_menus() {
+    use crate::ui::context_menu::{ChartMenuKind, MenuRow, MenuRowId};
+    use egui::Shape;
+
+    fn collect(shape: &Shape, texts: &mut Vec<(String, Pos2)>) {
+        match shape {
+            Shape::Text(text) => texts.push((
+                text.galley.text().to_owned(),
+                text.pos + text.galley.size() / 2.0,
+            )),
+            Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, texts)),
+            _ => {}
+        }
+    }
+    let click = |pos, button| {
+        vec![
+            Event::PointerMoved(pos),
+            Event::PointerButton {
+                pos,
+                button,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            },
+            Event::PointerButton {
+                pos,
+                button,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            },
+        ]
+    };
+    for theme in [Theme::light(), Theme::dark()] {
+        let ctx = Context::default();
+        crate::theme::apply_to_egui(&ctx, &theme);
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        let mut menus = ChartMenus::default();
+        menus.set_menu_rows(|click, mut rows| {
+            match click.menu {
+                ChartMenuKind::Chart => {
+                    rows.retain(|row| row.id() != Some(MenuRowId::ViewDataTable));
+                    let at = rows
+                        .iter()
+                        .position(|row| row.id() == Some(MenuRowId::ChartSettings))
+                        .expect("chart settings row");
+                    rows.insert(
+                        at,
+                        MenuRow::Host(MenuItem::new("Send to ticket", "ticket".to_owned())),
+                    );
+                }
+                ChartMenuKind::Series => {
+                    rows = vec![
+                        MenuRow::Separator,
+                        MenuRow::BuiltIn(MenuRowId::ViewDataTable),
+                        MenuRow::BuiltIn(MenuRowId::CopyPrice),
+                        MenuRow::BuiltIn(MenuRowId::CopyPrice),
+                        MenuRow::Separator,
+                        MenuRow::Separator,
+                        MenuRow::Submenu {
+                            id: None,
+                            label: "Empty".into(),
+                            icon: None,
+                            rows: vec![MenuRow::Separator],
+                        },
+                        MenuRow::BuiltIn(MenuRowId::SeriesSettings),
+                        MenuRow::Separator,
+                    ];
+                }
+                ChartMenuKind::PriceAxis { .. } => {
+                    rows.insert(
+                        1,
+                        MenuRow::Host(MenuItem::new("Axis ticket", "axis-ticket".to_owned())),
+                    );
+                }
+                _ => {}
+            }
+            rows
+        });
+        let frame = |chart: &mut Chart, menus: &mut ChartMenus, events| {
+            let mut action = None;
+            let right_click = chart.right_click.take();
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 900.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        chart.show(ui);
+                    });
+                    if right_click.is_some() {
+                        chart.right_click = right_click;
+                    }
+                    action = menus.show(ui.ctx(), chart);
+                },
+            );
+            let mut texts = Vec::new();
+            for shape in &output.shapes {
+                collect(&shape.shape, &mut texts);
+            }
+            output.drop_without_applying_deltas();
+            (action, texts)
+        };
+        frame(&mut chart, &mut menus, vec![]);
+        chart.right_click = Some(RightClickTarget::Background {
+            pos: Pos2::new(100.0, 100.0),
+            price: 105.0,
+        });
+        frame(&mut chart, &mut menus, vec![]);
+        let (_, text) = frame(&mut chart, &mut menus, vec![]);
+        let tail = [
+            "View Data Table…",
+            "Export Data to CSV…",
+            "Series Settings…",
+            "Send to ticket",
+            "Chart Settings…",
+        ];
+        assert_eq!(
+            text.iter()
+                .filter(|(label, _)| tail.contains(&label.as_str()))
+                .map(|(label, _)| label.as_str())
+                .collect::<Vec<_>>(),
+            &tail[1..]
+        );
+        let settings = text
+            .iter()
+            .find(|(label, _)| label == "Chart Settings…")
+            .unwrap()
+            .1;
+        frame(&mut chart, &mut menus, vec![Event::PointerMoved(settings)]);
+        let mut chosen = None;
+        for pressed in [true, false] {
+            chosen = chosen.or(frame(
+                &mut chart,
+                &mut menus,
+                vec![Event::PointerButton {
+                    pos: settings,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                }],
+            )
+            .0);
+        }
+        assert_eq!(
+            chosen,
+            Some(ChartContextAction::Chart(ContextMenuAction::OpenSettings))
+        );
+
+        chart.right_click = Some(RightClickTarget::Element {
+            id: ChartElementId::Series(SeriesId::MAIN),
+            bar_idx: 0,
+            pos: Pos2::new(100.0, 100.0),
+            price: 105.0,
+        });
+        frame(&mut chart, &mut menus, vec![]);
+        let actions = menus
+            .build_menu_items(&ctx, &chart, menus.context.unwrap())
+            .into_iter()
+            .map(|entry| match entry {
+                MenuEntry::Item(item) => Some(item.action),
+                MenuEntry::Separator => None,
+                MenuEntry::Submenu { .. } => panic!("empty submenu must be omitted"),
+            })
+            .collect::<Vec<_>>();
+        use crate::ui::dialogs::SeriesContextMenuAction as Series;
+        assert_eq!(
+            actions,
+            vec![
+                Some(ChartContextAction::Series(Series::CopyPrice)),
+                None,
+                Some(ChartContextAction::Series(Series::OpenSettings))
+            ]
+        );
+        frame(
+            &mut chart,
+            &mut menus,
+            vec![Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        assert!(!chart.menu_open);
+
+        let plot = chart.get_rendered_price_rect();
+        let anchor = Pos2::new(plot.right() + 25.0, plot.center().y);
+        frame(
+            &mut chart,
+            &mut menus,
+            click(anchor, PointerButton::Secondary),
+        );
+        let (_, text) = frame(&mut chart, &mut menus, vec![]);
+        let head = ["Auto scale", "Axis ticket", "Scale price chart only"];
+        assert_eq!(
+            text.iter()
+                .filter(|(label, _)| head.contains(&label.as_str()))
+                .map(|(label, _)| label.as_str())
+                .collect::<Vec<_>>(),
+            head
+        );
+        let ticket = text
+            .iter()
+            .find(|(label, _)| label == "Axis ticket")
+            .unwrap()
+            .1;
+        let (chosen, _) = frame(
+            &mut chart,
+            &mut menus,
+            click(ticket, PointerButton::Primary),
+        );
+        let Some(ChartContextAction::Host { id, context }) = chosen else {
+            panic!("axis host action");
+        };
+        assert_eq!(id, "axis-ticket");
+        assert_eq!(
+            context.menu,
+            ChartMenuKind::PriceAxis {
+                pane: crate::widget::PaneId::MAIN,
+                axis: crate::widget::PaneScale::Named(crate::model::SeriesScale::Right),
+            }
+        );
+        assert_eq!(context.time, None);
+        assert_eq!(
+            context.target,
+            RightClickTarget::Background {
+                pos: anchor,
+                price: context.price
+            }
+        );
+        // A linear scale maps the top to max and bottom to min; its centre is the midpoint.
+        let map = chart.get_chart_mapping();
+        let range = chart.state().price_scale().range();
+        let expected = range.max
+            - (anchor.y - map.rect.top()) as f64 / map.rect.height() as f64
+                * (range.max - range.min);
+        assert!((context.price - expected).abs() < 0.00001);
+        assert!(!chart.can_undo());
+        assert!(!chart.menu_open);
     }
 }
 
@@ -772,7 +1101,7 @@ fn axis_right_clicks_open_menus_and_apply_choices() {
                 }
             }
             let label = if short {
-                "High and low"
+                "High and low lines"
             } else if hours {
                 "Extended hours"
             } else if time {
@@ -809,7 +1138,13 @@ fn axis_right_clicks_open_menus_and_apply_choices() {
             assert_eq!(chart.chart_options(), &options);
             assert_eq!(chart.state().price_scale().options(), &scale);
             if short {
-                assert!(chart.config().show_high_low);
+                assert_eq!(
+                    (
+                        chart.config().show_high_low,
+                        chart.config().show_high_low_lines
+                    ),
+                    (false, Some(true))
+                );
             } else if ratio {
                 let before = chart.state().price_scale().range().length();
                 let (spacing, offset) = chart.get_time_scale_state();
@@ -1244,14 +1579,60 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
             assert!(map.rect.contains(pos));
             assert!(super::super::tpo::TpoMenu::open(&chart, pos).is_none());
         }
-        pick(&mut chart, &mut menus, 0, "Split profile");
-        assert_eq!(counts(&chart), [4, 4, 4, 4]);
-        assert_eq!(chart.chart_type_params().tpo_composites, [day(3)..=day(4)]);
+        let cells = |shapes: &[egui::epaint::ClippedShape], xs: std::ops::Range<f32>, y: f32| {
+            let mut cells: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Rect(cell)
+                        if (2.0..=24.0).contains(&cell.rect.height())
+                            && xs.contains(&cell.rect.center().x)
+                            && (cell.rect.center().y - y).abs() < 1.0 =>
+                    {
+                        Some(cell.rect.center())
+                    }
+                    _ => None,
+                })
+                .collect();
+            cells.sort_by(|a, b| a.x.total_cmp(&b.x));
+            cells
+        };
+        let (_, shapes) = frame(&mut chart, &mut menus, vec![]);
+        let map = chart.get_chart_mapping();
+        let row = cells(
+            &shapes,
+            map.rect.left()..map.idx_to_x(12),
+            map.price_to_y(101.0),
+        );
+        assert_eq!(row.len(), 12);
+        pick_at(
+            &mut chart,
+            &mut menus,
+            row[4],
+            "Split profile at selected period",
+        );
+        assert_eq!(counts(&chart), [4, 8, 4]);
+        assert_eq!(
+            chart.chart_type_params().tpo_composites,
+            [day(3)..=day(4), day(1)..=day(2)]
+        );
+        assert!(chart.chart_type_params().tpo_splits.is_empty());
         assert!(chart.undo());
         assert_eq!(counts(&chart), [12, 4]);
         assert!((chart.chart_type_params().renko_brick_size - 29.0 / 14.0).abs() < 1e-12);
 
         assert!(chart.redo());
+        assert_eq!(counts(&chart), [4, 8, 4]);
+        let (_, shapes) = frame(&mut chart, &mut menus, vec![]);
+        let map = chart.get_chart_mapping();
+        let xs = map.idx_to_x(4).max(map.rect.left())..map.idx_to_x(12);
+        let row = cells(&shapes, xs, map.price_to_y(101.0));
+        assert_eq!(row.len(), 8);
+        pick_at(
+            &mut chart,
+            &mut menus,
+            row[4],
+            "Split profile at selected period",
+        );
         assert_eq!(counts(&chart), [4, 4, 4, 4]);
         pick(&mut chart, &mut menus, 4, "Merge with previous profile");
         assert_eq!(counts(&chart), [8, 4, 4]);
@@ -1309,9 +1690,19 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
         split.set_visible_logical_range(crate::model::LogicalRange::new(-1.0, 9.0));
         let (_, shapes) = frame(&mut split, &mut split_menus, vec![]);
         let profiles = |chart: &Chart| -> Vec<(DateTime<chrono::Utc>, String, f64)> {
-            let mut config = chart.chart_type_params().tpo_config(None);
+            let mut config = if chart.chart_type() == ChartType::TimePriceOpportunity {
+                chart.chart_type_params().tpo_config(None)
+            } else {
+                chart
+                    .indicators()
+                    .find_map(|(_, study)| study.tpo())
+                    .unwrap()
+                    .clone()
+            };
             config.tick_size = 1.0;
-            to_tpo_profiles(chart.bars(SeriesId::MAIN), &config, &chart.bar_clock())
+            let (clock, session) = chart.profile_hours(&config.session);
+            config.session = session.clone();
+            to_tpo_profiles(chart.bars(SeriesId::MAIN), &config, &clock)
                 .iter()
                 .map(|p| {
                     (
@@ -1425,6 +1816,66 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
             a.x < map.idx_to_x(4) - map.bar_spacing * 0.5,
             "the next session's letters join the split part's displayed profile"
         );
+        let mut merged = Chart::new(BarData::from_bars(bars.clone()));
+        merged.set_timeframe(Timeframe::Min30);
+        merged.set_chart_type(ChartType::TimePriceOpportunity);
+        let mut merged_menus = ChartMenus::default();
+        frame(&mut merged, &mut merged_menus, vec![]);
+        merged.set_visible_logical_range(crate::model::LogicalRange::new(-1.0, 9.0));
+        pick(&mut merged, &mut merged_menus, 0, "Merge with next profile");
+        let joined = [(at(0), "AABBBCCDDAAABBBCCCDDD".to_owned(), 102.0)];
+        assert_eq!(profiles(&merged), joined);
+        let (_, shapes) = frame(&mut merged, &mut merged_menus, vec![]);
+        let map = merged.get_chart_mapping();
+        let a = letter(
+            &shapes,
+            "A",
+            map.rect.left()..map.rect.right(),
+            map.price_to_y(101.0),
+        )
+        .unwrap();
+        assert!(!enabled(
+            &TpoMenu::open(&merged, a).unwrap(),
+            "Split profile at selected period"
+        ));
+        // Only the second session's C reaches row 101.
+        let c = letter(
+            &shapes,
+            "C",
+            map.rect.left()..map.rect.right(),
+            map.price_to_y(101.0),
+        )
+        .unwrap();
+        pick_at(
+            &mut merged,
+            &mut merged_menus,
+            c,
+            "Split profile at selected period",
+        );
+        assert_eq!(
+            profiles(&merged),
+            [
+                (at(0), "AABBBCCDDAAABBB".to_owned(), 102.0),
+                (day(1) + Duration::minutes(60), "CCCDDD".to_owned(), 100.0)
+            ]
+        );
+        assert_eq!(merged.chart_type_params().tpo_composites, [day(0)..=day(1)]);
+        assert_eq!(
+            merged.chart_type_params().tpo_splits,
+            [day(1) + Duration::minutes(60)]
+        );
+        let mut config = merged.chart_type_params().tpo_config(Some(1.0));
+        config.tick_size = 1.0;
+        assert_eq!(
+            to_tpo_profiles(&bars, &config, &merged.bar_clock())
+                .iter()
+                .map(|p| (p.value_area_low, p.value_area_high))
+                .collect::<Vec<_>>(),
+            [(100.0, 102.0), (100.0, 102.0)]
+        );
+        assert!(merged.undo());
+        assert_eq!(profiles(&merged), joined);
+
         let mut columns = Chart::new(BarData::from_bars(bars.clone()));
         columns.set_timeframe(Timeframe::Min30);
         columns.set_chart_type(ChartType::TimePriceOpportunity);
@@ -1446,6 +1897,199 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
             "Split profile at selected period",
         );
         assert_eq!(profiles(&columns), parts);
+
+        let mut study_chart = Chart::new(BarData::from_bars(bars.clone()));
+        study_chart.set_timeframe(Timeframe::Min30);
+        study_chart.set_instrument(Some(crate::model::Instrument::new("X").with_tick_size(1.0)));
+        let study_id =
+            study_chart.add_indicator(Box::new(crate::studies::TimePriceOpportunity::default()));
+        let mut study_menus = ChartMenus::default();
+        frame(&mut study_chart, &mut study_menus, vec![]);
+        study_chart.set_visible_logical_range(crate::model::LogicalRange::new(-1.0, 9.0));
+        assert_eq!(profiles(&study_chart), whole);
+        pick(
+            &mut study_chart,
+            &mut study_menus,
+            0,
+            "Merge with next profile",
+        );
+        assert_eq!(profiles(&study_chart), joined);
+        let (_, shapes) = frame(&mut study_chart, &mut study_menus, vec![]);
+        let map = study_chart.get_chart_mapping();
+        // Only the second session's C reaches row 101.
+        let c = letter(
+            &shapes,
+            "C",
+            map.rect.left()..map.rect.right(),
+            map.price_to_y(101.0),
+        )
+        .unwrap();
+        pick_at(
+            &mut study_chart,
+            &mut study_menus,
+            c,
+            "Split profile at selected period",
+        );
+        let divided = [
+            (at(0), "AABBBCCDDAAABBB".to_owned(), 102.0),
+            (day(1) + Duration::minutes(60), "CCCDDD".to_owned(), 100.0),
+        ];
+        assert_eq!(profiles(&study_chart), divided);
+        assert!(study_chart.undo());
+        assert_eq!(profiles(&study_chart), joined);
+        assert!(study_chart.undo());
+        assert_eq!(profiles(&study_chart), whole);
+        assert!(study_chart.redo());
+        assert!(study_chart.redo());
+        assert_eq!(profiles(&study_chart), divided);
+        let layout = SavedLayout::new(
+            ChartLayoutMode::Single,
+            vec![study_chart.snapshot().unwrap()],
+        );
+        let saved = SavedLayout::from_json(&layout.to_json().unwrap()).unwrap();
+        let mut restored = Chart::new(BarData::from_bars(bars.clone()));
+        restored.restore(&saved.charts[0]).unwrap();
+        assert_eq!(profiles(&restored), divided);
+        let (restored_id, _) = restored.indicators().next().unwrap();
+        let mut restored_menus = ChartMenus::default();
+        frame(&mut restored, &mut restored_menus, vec![]);
+        let map = restored.get_chart_mapping();
+        let stale = TpoMenu::open(
+            &restored,
+            Pos2::new(
+                map.idx_to_x(0).max(map.rect.left()) + 4.0,
+                map.price_to_y(101.0),
+            ),
+        )
+        .unwrap();
+        // A menu opened before another boundary edit must not overwrite the newer input.
+        restored
+            .indicator_mut(restored_id)
+            .unwrap()
+            .set_input(
+                "splits",
+                crate::studies::InputValue::Text("1970-01-02T01:30:00Z".into()),
+            )
+            .unwrap();
+        restored.user_action(|chart| stale.apply(chart, &ContextMenuAction::ResetProfileEdits));
+        assert!(
+            !restored
+                .indicators()
+                .next()
+                .unwrap()
+                .1
+                .tpo()
+                .unwrap()
+                .splits
+                .is_empty()
+        );
+        let config = study_chart
+            .indicators()
+            .find(|(id, _)| *id == study_id)
+            .unwrap()
+            .1
+            .tpo()
+            .unwrap();
+        let before = (config.composites.clone(), config.splits.clone());
+        for (id, invalid) in [
+            ("splits", "bad"),
+            ("splits", "1970-01-02T01:30:00Z;bad"),
+            (
+                "composites",
+                "1970-01-03T00:00:00Z/1970-01-04T00:00:00Z;bad",
+            ),
+            ("composites", "1970-01-03T00:00:00Z/1970-01-02T00:00:00Z"),
+        ] {
+            assert!(
+                study_chart
+                    .indicator_mut(study_id)
+                    .unwrap()
+                    .set_input(id, crate::studies::InputValue::Text(invalid.into()))
+                    .is_err()
+            );
+            let config = study_chart
+                .indicators()
+                .find(|(id, _)| *id == study_id)
+                .unwrap()
+                .1
+                .tpo()
+                .unwrap();
+            assert_eq!(
+                (&config.composites, &config.splits),
+                (&before.0, &before.1),
+                "{id}: {invalid}"
+            );
+        }
+        pick(
+            &mut study_chart,
+            &mut study_menus,
+            0,
+            "Reset merges and splits",
+        );
+        assert_eq!(profiles(&study_chart), whole);
+        assert!(study_chart.undo());
+        assert_eq!(profiles(&study_chart), divided);
+        frame(&mut study_chart, &mut study_menus, vec![]);
+        let map = study_chart.get_chart_mapping();
+        let pos = Pos2::new(
+            map.idx_to_x(0).max(map.rect.left()) + 4.0,
+            map.price_to_y(101.0),
+        );
+        assert!(TpoMenu::open(&study_chart, pos).is_some());
+        study_chart.set_indicators_hidden(true);
+        assert!(TpoMenu::open(&study_chart, pos).is_none());
+
+        // Custom hours keep only 00:30 and 01:00 of each day. Their first bar starts A,
+        // independently of the midnight bar that the chart still shows.
+        let mut hours = Chart::new(BarData::from_bars(bars.clone()));
+        hours.set_timeframe(Timeframe::Min30);
+        hours.set_instrument(Some(crate::model::Instrument::new("X").with_tick_size(1.0)));
+        let mut study = crate::studies::TimePriceOpportunity::default();
+        for (id, value) in [
+            ("hours", crate::studies::InputValue::Choice(2)),
+            ("session_start", crate::studies::InputValue::Length(30)),
+            ("session_end", crate::studies::InputValue::Length(90)),
+        ] {
+            crate::studies::Indicator::set_input(&mut study, id, value).unwrap();
+        }
+        hours.add_indicator(Box::new(study));
+        let mut hours_menus = ChartMenus::default();
+        frame(&mut hours, &mut hours_menus, vec![]);
+        hours.set_visible_logical_range(crate::model::LogicalRange::new(-1.0, 9.0));
+        let unmerged = [
+            (at(30), "AAABB".to_owned(), 102.0),
+            (day(1) + Duration::minutes(30), "AAABBB".to_owned(), 100.0),
+        ];
+        assert_eq!(profiles(&hours), unmerged);
+        pick(&mut hours, &mut hours_menus, 1, "Merge with next profile");
+        assert_eq!(
+            profiles(&hours),
+            [(at(30), "AAABBAAABBB".to_owned(), 102.0)]
+        );
+        let (_, shapes) = frame(&mut hours, &mut hours_menus, vec![]);
+        let map = hours.get_chart_mapping();
+        let b = letter(
+            &shapes,
+            "B",
+            map.rect.left()..map.rect.right(),
+            map.price_to_y(101.0),
+        )
+        .unwrap();
+        pick_at(
+            &mut hours,
+            &mut hours_menus,
+            b,
+            "Split profile at selected period",
+        );
+        assert_eq!(
+            profiles(&hours),
+            [
+                (at(30), "AAABBAAA".to_owned(), 102.0),
+                (day(1) + Duration::minutes(60), "BBB".to_owned(), 100.0)
+            ]
+        );
+        assert!(hours.undo());
+        assert_eq!(profiles(&hours).len(), 1);
 
         let bars = (0..14)
             .map(|i| {
@@ -1478,6 +2122,38 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
         );
         assert_eq!(counts(&weekly), [14]);
         assert_eq!(weekly.chart_type_params().tpo_composites, [day(0)..=day(6)]);
+        assert!(weekly.undo());
+        assert_eq!(counts(&weekly), [8, 6]);
+        let (_, shapes) = frame(&mut weekly, &mut weekly_menus, vec![]);
+        let map = weekly.get_chart_mapping();
+        let b = letter(
+            &shapes,
+            "B",
+            map.rect.left()..map.rect.right(),
+            map.price_to_y(101.0),
+        )
+        .unwrap();
+        // The second period of the weekly profile is day zero's B; split the next session's A.
+        let a = Pos2::new(
+            b.x + (b.x
+                - letter(
+                    &shapes,
+                    "A",
+                    map.rect.left()..map.rect.right(),
+                    map.price_to_y(101.0),
+                )
+                .unwrap()
+                .x),
+            b.y,
+        );
+        pick_at(
+            &mut weekly,
+            &mut weekly_menus,
+            a,
+            "Split profile at selected period",
+        );
+        assert_eq!(counts(&weekly), [2, 6, 6]);
+        assert_eq!(weekly.chart_type_params().tpo_splits, [day(1)]);
         assert!(weekly.undo());
         assert_eq!(counts(&weekly), [8, 6]);
     }

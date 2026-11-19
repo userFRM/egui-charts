@@ -95,7 +95,9 @@ pub use options_volume::{
     OptionsVolume, OptionsVolumeQuery, OptionsVolumeReader, OptionsVolumeSink,
 };
 #[cfg(feature = "studies")]
-pub(crate) use volume_profile::{ExposureProfile, StrikeExposure, grid_row};
+pub(crate) use volume_profile::{
+    DevelopingVolume, ExposureProfile, StrikeExposure, grid_row, price_span, whole_tick_rows,
+};
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -1286,8 +1288,7 @@ pub struct FeedState {
     pub last_error: Option<FeedError>,
     /// Bars and ticks dropped by validation: non-finite values, a high or low on the wrong side of
     /// the open and close, negative volume, a tick or history bar that would overflow its slot's
-    /// volume, a time too far ahead of the feed's clock (see `Sink::set_server_time`), or pending
-    /// bar slots evicted after overflow (also reported in `last_error`).
+    /// volume, or a time too far ahead of the feed's clock (see `Sink::set_server_time`).
     pub rejected_bars: u64,
     /// Trades older than the last accepted execution or forming bar, dropped.
     pub late_ticks: u64,

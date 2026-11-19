@@ -5,7 +5,7 @@ use super::ChartLayout;
 use crate::config::{DrawingSort, DrawingToolType};
 use crate::drawings::manager::sync_id;
 use crate::drawings::persistence::{DrawingStorage, StoredCoord, StoredDrawing};
-use crate::drawings::{Drawing, DrawingManager, FolderSync};
+use crate::drawings::{Drawing, DrawingManager, DrawingToolRegistry, FolderSync};
 use crate::widget::{Chart, PaneId};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -1167,6 +1167,8 @@ pub struct SymbolDrawing {
     pub id: String,
     /// The drawing's tool.
     pub tool_type: DrawingToolType,
+    /// The tool name given by [`DrawingToolRegistry::tool_name`].
+    tool: String,
     /// The name given to the drawing, if any.
     pub label: Option<String>,
     /// Time of the last edit in Unix milliseconds, once an edit reached the drawing.
@@ -1179,7 +1181,7 @@ impl SymbolDrawing {
         self.label
             .as_deref()
             .filter(|label| !label.trim().is_empty())
-            .unwrap_or(self.tool_type.as_str())
+            .unwrap_or(&self.tool)
     }
 }
 
@@ -1273,19 +1275,21 @@ fn stored_key(record: &StoredDrawing) -> String {
     )
 }
 
-fn live_row(drawing: &Drawing) -> SymbolDrawing {
+fn live_row(drawing: &Drawing, registry: &DrawingToolRegistry) -> SymbolDrawing {
     SymbolDrawing {
         id: sync_id(drawing),
         tool_type: drawing.tool_type,
+        tool: registry.tool_name(drawing).to_owned(),
         label: drawing.label.clone(),
         modified_at: drawing.modified_at,
     }
 }
 
-fn stored_row(record: &StoredDrawing) -> SymbolDrawing {
+fn stored_row(record: &StoredDrawing, registry: &DrawingToolRegistry) -> SymbolDrawing {
     SymbolDrawing {
         id: record.id.clone(),
         tool_type: record.drawing.tool_type,
+        tool: registry.tool_name(&record.drawing).to_owned(),
         label: record.drawing.label.clone(),
         modified_at: Some(record.modified_at),
     }
@@ -1331,14 +1335,22 @@ fn inventory(charts: &[&mut Chart]) -> BTreeMap<String, Vec<(SymbolDrawing, Stri
         };
         if !chart.symbol().is_empty() {
             for drawing in chart.drawings().drawings.iter().filter(|d| inventoried(d)) {
-                hold(chart.symbol(), live_row(drawing), live_key(chart, drawing));
+                hold(
+                    chart.symbol(),
+                    live_row(drawing, &chart.drawings().registry),
+                    live_key(chart, drawing),
+                );
             }
         }
         if chart.keeps_stored_drawings() {
             for (symbol, drawings) in chart.stored_symbols() {
                 if lists_stored(charts, slot, symbol, drawings) {
                     for record in drawings.drawings().iter().filter(|r| r.drawing.listed) {
-                        hold(symbol, stored_row(record), stored_key(record));
+                        hold(
+                            symbol,
+                            stored_row(record, &chart.drawings().registry),
+                            stored_key(record),
+                        );
                     }
                 }
             }
@@ -1351,7 +1363,11 @@ fn inventory(charts: &[&mut Chart]) -> BTreeMap<String, Vec<(SymbolDrawing, Stri
                 .iter()
                 .filter(|d| inventoried(d) && !chart.stores(symbol, d))
             {
-                hold(symbol, live_row(drawing), live_key(chart, drawing));
+                hold(
+                    symbol,
+                    live_row(drawing, &manager.registry),
+                    live_key(chart, drawing),
+                );
             }
         }
     }
@@ -1385,7 +1401,8 @@ impl ChartLayout {
     }
 
     /// Deletes the drawings [`Self::drawing_inventory`] lists under `symbol`, locked ones
-    /// included, and leaves those of other symbols. Stored drawings are written without them.
+    /// included, and leaves those whose user edits are off and those of other symbols. Stored
+    /// drawings are written without them.
     /// Undoing the edit on the active chart or any chart it changed restores them on all of
     /// them. Returns whether the symbol had drawings. Call it outside [`Chart::user_action`]:
     /// each chart records its part as its own action.
@@ -1398,6 +1415,23 @@ impl ChartLayout {
             .collect();
         if keys.is_empty() {
             return false;
+        }
+        // A symbol with only protected drawings has no deletion to record on any chart.
+        let editable = |d: &Drawing| inventoried(d) && d.user_edit_enabled;
+        if !charts.iter().any(|chart| {
+            (chart.symbol() == symbol && chart.drawings().drawings.iter().any(editable))
+                || chart
+                    .symbol_drawings
+                    .get(symbol)
+                    .is_some_and(|(manager, _)| manager.drawings.iter().any(editable))
+                || chart.stored_symbol_drawings(symbol).is_some_and(|stored| {
+                    stored
+                        .drawings()
+                        .iter()
+                        .any(|record| editable(&record.drawing))
+                })
+        }) {
+            return true;
         }
         let active = self.active.min(charts.len().saturating_sub(1));
         // Charts on one storage read each other's writes, so that one of them deletes what they
@@ -1428,6 +1462,9 @@ impl ChartLayout {
         for slot in slots {
             let writes = writes[slot];
             let doomed = |chart: &Chart, drawing: &Drawing| {
+                if !drawing.user_edit_enabled {
+                    return false;
+                }
                 if writes && inventoried(drawing) {
                     return true;
                 }
@@ -1497,11 +1534,18 @@ impl Chart {
         }
         let stored = self
             .stored_symbol_drawings(symbol)
-            .filter(|_| writes)
+            .filter(|stored| {
+                writes
+                    && stored
+                        .drawings()
+                        .iter()
+                        .any(|record| record.drawing.listed && record.drawing.user_edit_enabled)
+            })
             .cloned();
         if let Some(stored) = &stored {
             let mut left = stored.clone();
-            left.drawings.retain(|record| !record.drawing.listed);
+            left.drawings
+                .retain(|record| !record.drawing.listed || !record.drawing.user_edit_enabled);
             self.write_unshown_drawings(symbol, left);
         }
         if retained.is_empty() && stored.is_none() {
@@ -1676,6 +1720,33 @@ mod tests {
                 ((*symbol).to_owned(), rows)
             })
             .collect()
+    }
+
+    /// Symbol deletion leaves protected drawings on both the shown and retained symbol paths.
+    #[test]
+    fn deleting_a_symbol_keeps_drawings_without_user_edits() {
+        for shown in [true, false] {
+            for free in [true, false] {
+                let mut a = bars(60);
+                a.set_symbol("AAA");
+                let mut held = line("Held");
+                held.user_edit_enabled = false;
+                // Initial host data is outside the user's undo history.
+                a.drawings_mut().drawings.push(held);
+                if free {
+                    let mut drawing = line("Free");
+                    drawing.id = 1;
+                    a.drawings_mut().drawings.push(drawing);
+                }
+                if !shown {
+                    a.set_symbol("BBB");
+                }
+                let mut layout = ChartLayout::default();
+                assert!(layout.delete_symbol_drawings(&mut [&mut a], "AAA"));
+                assert_eq!(names(&layout, &[&mut a]), listed(&[("AAA", &["Held"])]));
+                assert_eq!(a.can_undo(), free, "shown {shown}, free {free}");
+            }
+        }
     }
 
     /// A symbol-wide deletion stays one edit when a clone replaces its layout.
@@ -2274,6 +2345,7 @@ mod tests {
         let row = |id: &str, label: &str, modified_at| SymbolDrawing {
             id: id.into(),
             tool_type: DrawingToolType::TrendLine,
+            tool: DrawingToolType::TrendLine.as_str().to_owned(),
             label: Some(label.into()),
             modified_at,
         };

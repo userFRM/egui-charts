@@ -28,12 +28,18 @@ symbol's daily bars in [`data_requests`](https://userfrm.github.io/egui-charts/d
 longer periods fill without scrolling back. Where the chart's own bars hold a later close on or
 before the target, as when the daily bars stop earlier, that close counts. Daily and longer
 charts, and hosts that supply no daily bars, use the chart's loaded bars. A connected feed pages
-the daily bars back to the start of the date one year before the last chart bar's trading date,
-the oldest period, and stops there or at the end of its history, whatever its page size and the
-chart's first bar. This also applies on price-based charts such as Renko: a study's stated
+the daily bars back to the start of the oldest period's date, one year before the last chart
+bar's trading date with the default periods, and stops there or at the end of its history,
+whatever its page size and the chart's first bar. This also applies on price-based charts such as Renko: a study's stated
 start before the first chart bar is honored, while a later start loads to the first chart bar
 because the source study has no view of the rendered elements. Missing history and zero
 reference prices show N/A.
+
+Each symbol in Performance's Symbol list adds a row measured from that symbol's own latest daily
+close: the study requests the symbol's daily bars on every interval, from the oldest date any
+row's periods reach, and a symbol without them shows N/A. While Include chart symbol is on, a
+listed chart symbol shares the chart symbol's first row. Its Timeframe list sets the period
+columns, such as 5D, 1W, 3M, YTD or 2Y; its six plots keep the chart symbol's standard periods.
 
 With Use Daily Bars enabled on an intraday chart, Pivot Points Standard and Projected Pivot
 Points request the symbol's daily bars. A connected feed loads through the full period before
@@ -100,15 +106,17 @@ Direct callers supply [`StudyData`](https://userfrm.github.io/egui-charts/docs/a
 invalid prices, negative volume or unordered timestamps leave accepted values unchanged.
 Pass `from = 0` whenever a requested history changes. A nonzero `from` reuses those histories
 and updates the changed chart bars; the chart supplies this invalidation automatically.
-An unavailable or stale interval leaves gaps. Include the earlier intrabar when its close is
-needed to classify a doji. Empty history clears the values, and 24-hour Volume returns to
-summing chart bars; missing parent intervals remain unavailable, while supplied zero volume
-produces zero. Accounts, feed selection, retrieval, subscriptions and retries belong to the
+An unavailable or stale interval leaves gaps. A doji at the previous intrabar's close takes that
+intrabar's side, so include the earlier intrabars back to the last one that closed away from
+its open or from the close before it. Empty history clears the values, and 24-hour Volume
+returns to summing chart bars; missing parent intervals remain unavailable, while supplied zero
+volume produces zero. Accounts, feed selection, retrieval, subscriptions and retries belong to the
 host. No split is inferred from a parent candle's direction or total volume.
 
 [`Indicator::table`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.table) exposes labelled percentages independently of plots, including Performance's
-six periods and Seasonality's years and summary rows. The shared chart renderer paints them
-in the study pane and in image exports, with scrolling when the table exceeds the pane.
+periods for each symbol and Seasonality's years and summary rows. The shared chart renderer
+paints them in the study pane and in image exports, at the position and size each table states,
+with scrolling when the table exceeds the space it has.
 [`Indicator::projections`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.projections) exposes fractional price boxes for future whitespace, included in
 selection and autoscaling; Seasonality ends its current projection at the next UTC month boundary,
 using the same interpolation and final observed bar spacing as the time axis. Its heatmap

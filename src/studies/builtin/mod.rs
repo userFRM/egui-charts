@@ -52,8 +52,9 @@
 //!
 //! ## Support / resistance
 //! [`PivotPoints`], [`IntradayPivotPoints`], [`ProjectedPivotPoints`], [`PivotPointsHighLow`],
-//! [`MissedPivots`], [`KeyLevels`], [`ElliottWave`], [`Reversal`], [`RisingWedge`], [`FallingWedge`],
-//! [`WilliamsFractals`], [`Gaps`], [`ZigZag`], [`PriceChannel`]
+//! [`MissedPivots`], [`KeyLevels`], [`AutoKeyLevels`], [`ElliottWave`], [`Reversal`], [`BookerReversal`],
+//! [`ZivGhostPivots`], [`RisingWedge`], [`FallingWedge`], [`WilliamsFractals`], [`Gaps`], [`ZigZag`],
+//! [`PriceChannel`]
 //!
 //! ## Patterns
 //! [`CandlestickPatterns`], [`ChartPatterns`]
@@ -61,7 +62,7 @@
 //! ## Statistics
 //! [`LinearRegression`], [`TrendStrengthIndex`], [`StandardError`],
 //! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`], [`Seasonality`], [`Ratio`], [`LunarPhases`],
-//! [`Spread`], [`Correlation`]
+//! [`Spread`], [`Correlation`], [`CorrelationLog`]
 //!
 //! ## Time
 //! [`TradingSessions`]
@@ -72,7 +73,7 @@ mod footprint_studies;
 pub(crate) use footprint_studies::footprint_studies_on_rows;
 pub use footprint_studies::{
     FootprintStudy, FootprintStudyConfig, FootprintStudyKind, FootprintStudyState,
-    footprint_studies,
+    footprint_studies, footprint_studies_with_closes,
 };
 mod options_volume_profile;
 pub use options_volume_profile::OptionsVolumeProfile;
@@ -167,6 +168,11 @@ mod std_dev;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod auto_drawing;
+mod auto_key_levels;
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+mod auto_trend_lines;
+mod booker_reversal;
 mod elliott_wave;
 mod gaps;
 mod intraday_pivot_points;
@@ -183,6 +189,7 @@ mod swings;
 mod wedge;
 mod williams_fractals;
 mod zigzag;
+mod ziv_ghost_pivots;
 
 // Oscillator/Momentum indicators (additional)
 mod connors_rsi;
@@ -312,7 +319,7 @@ pub use market_breadth::{
 };
 mod special_k;
 mod woodies_cci;
-pub use symbol_pair::{Correlation, Ratio, Spread, SymbolPair};
+pub use symbol_pair::{Correlation, CorrelationLog, Ratio, Spread, SymbolPair};
 pub use technical_ratings::{RatingBasis, TechnicalRatings};
 // Time studies
 mod lower_interval;
@@ -368,7 +375,7 @@ pub use volume::{Volume, VolumeAverage, VolumeColorRule};
 pub(crate) use volume_profile::time_text;
 pub use volume_profile::{
     ProfileInput, VolProfileAnchored, VolProfileAutoAnchored, VolProfileFixed, VolProfilePeriodic,
-    VolProfileSession, VolProfileVisible,
+    VolProfileSession, VolProfileSessionHd, VolProfileVisible,
 };
 pub use vwap::{VolumeWeightedAvgPrice, VwapAnchor};
 pub use vwap_auto_anchored::{AutoAnchor, VwapAutoAnchored};
@@ -390,13 +397,18 @@ pub use std_dev::StandardDeviation;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 pub use auto_drawing::{AutoDrawing, AutoDrawingKind};
+pub use auto_key_levels::AutoKeyLevels;
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+pub use auto_trend_lines::AutoTrendLines;
+pub use booker_reversal::BookerReversal;
 pub use elliott_wave::ElliottWave;
 pub use gaps::Gaps;
 pub use intraday_pivot_points::IntradayPivotPoints;
 pub use key_levels::KeyLevels;
 pub use knoxville_divergence::KnoxvilleDivergence;
 pub use lunar_phases::{LunarPhase, LunarPhases, MoonPhase, lunar_phases};
-pub use missed_pivots::MissedPivots;
+pub use missed_pivots::{MissedPivotPeriod, MissedPivots};
 pub use pivot_points::{PivotLabelSide, PivotMethod, PivotPoints, PivotTimeframe};
 pub use pivot_points_high_low::PivotPointsHighLow;
 pub use projected_pivot_points::ProjectedPivotPoints;
@@ -405,6 +417,7 @@ pub use rsi_divergence::RsiDivergence;
 pub use wedge::{FallingWedge, RisingWedge, Wedge};
 pub use williams_fractals::WilliamsFractals;
 pub use zigzag::{ZigZag, ZigZagChange, ZigZagMode, ZigZagPivot};
+pub use ziv_ghost_pivots::ZivGhostPivots;
 
 // Re-exports - Additional Oscillator/Momentum indicators
 pub use connors_rsi::ConnorsRSI;

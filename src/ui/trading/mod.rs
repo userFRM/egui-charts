@@ -16,19 +16,20 @@ pub use account_panel::{AccountPanel, AccountPanelAction};
 pub use broker_picker::{BrokerFact, BrokerPicker, BrokerPickerAction, BrokerTile};
 pub use dom::DepthPanel;
 pub use format::TradingFormatter;
-pub use ticket::{Bracket, BracketMode, OrderPreset};
+pub use ticket::{Bracket, BracketMode, OrderPreset, PresetLevel};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::chart::TradingLineAction;
 use crate::data::inbox::Inbox;
 use crate::data::{FeedError, FeedStatus};
 use crate::model::{
-    Account, Capabilities, Instrument, Order, OrderPreview, OrderRequest, OrderSide, OrderType,
-    Position, Quote, TradingRules,
+    Account, Capabilities, Instrument, Order, OrderId, OrderPreview, OrderRequest, OrderSide,
+    OrderType, Position, Quote, TradingRules,
 };
 use crate::services::{Broker, HistoryKind, Listener};
+use crate::ui::drawing_toolbar::{DrawingToolbarAction, ToolbarState};
 use crate::ui::model::ConnectionState;
 use crate::widget::settings::TradingSettings;
 use format::Numbers;
@@ -41,6 +42,7 @@ use ticket::{OrderTicket, order_quantity};
 /// chart. Open the order ticket with [`open_ticket`](Self::open_ticket), for example from the
 /// chart menu's [`Order`](crate::ui::context_menu::ContextMenuAction::Order) entries, and route
 /// the chart's Buy and Sell buttons ([`Chart::take_quote_action`](crate::widget::Chart::take_quote_action)) to [`trade`](Self::trade).
+/// Without a two-sided quote the buttons show the last price while a broker is set.
 /// Orders reach the broker only from the ticket's submit button, or once the user confirms them
 /// in the depth ladder, or at once from Buy and Sell and the ladder when the user turned on
 /// [`TradingSettings::instant_orders`].
@@ -93,6 +95,10 @@ pub struct Trading {
     ticket: OrderTicket,
     /// A change the user asked for on a line, waiting for confirmation.
     pending: Option<TradingLineAction>,
+    /// The position to protect, with the take profit and stop loss entered so far.
+    protecting: Option<(Position, Option<f64>, Option<f64>)>,
+    /// The quantity in a pending Close dialog; each new confirmation resets it.
+    close_quantity: Option<f64>,
     /// An order the user asked the broker to preview, until it is placed or discarded.
     preview: Option<Preview>,
     /// Decimals of the chart's prices at the last [`show`](Self::show), in which
@@ -117,12 +123,19 @@ pub struct Trading {
     /// The chart settings' trading options: what [`show`](Self::show) draws, whether Buy and
     /// Sell trade at once, which events raise notifications and whether fills ask for a sound.
     /// Copy the chart settings' [`trading`](crate::widget::settings::ChartSettingsState::trading)
-    /// options here when the user applies them.
+    /// options here when the user applies them, and read them back when opening the dialog or
+    /// saving: [`apply_hide_action`](Self::apply_hide_action) changes them from the Hide menu.
     pub display: TradingSettings,
     /// The sound asked for by fills since the host last took it.
     sound: Option<String>,
     /// The open quantity calculator: where it sits and the text of its field.
     calculator: Option<(egui::Pos2, String)>,
+    /// The action behind each order answer, kept until the broker answers so a refusal names it.
+    sent: Vec<(u64, Sent)>,
+    /// User cancellations stay silent until the order ends or the cancellation is refused.
+    cancelling: HashSet<OrderId>,
+    /// A loss was announced, but no later live update has announced the return yet.
+    connection_lost: bool,
 }
 
 impl std::fmt::Debug for Trading {
@@ -141,6 +154,7 @@ impl std::fmt::Debug for Trading {
             .field("rules_failed", &self.rules_failed)
             .field("placing", &self.placing)
             .field("pending", &self.pending)
+            .field("close_quantity", &self.close_quantity)
             .field("decimals", &self.decimals)
             .field("instruments", &self.instruments)
             .field("chart_logo", &self.chart_logo)
@@ -151,6 +165,9 @@ impl std::fmt::Debug for Trading {
             .field("display", &self.display)
             .field("sound", &self.sound)
             .field("calculator", &self.calculator)
+            .field("sent", &self.sent)
+            .field("cancelling", &self.cancelling)
+            .field("connection_lost", &self.connection_lost)
             .finish_non_exhaustive()
     }
 }
@@ -162,6 +179,16 @@ struct Preview {
     key: u64,
     request: OrderRequest,
     estimate: Option<OrderPreview>,
+}
+
+/// An action sent to the broker, or refused locally, awaiting its answer.
+#[derive(Debug)]
+enum Sent {
+    Place(OrderRequest),
+    /// The last listed request may be absent if the order ended before confirmation.
+    Cancel(OrderId, Option<OrderRequest>),
+    /// Describe the order before the change, which a refusal leaves in place.
+    Modify(OrderRequest),
 }
 
 impl Default for Trading {
@@ -184,6 +211,8 @@ impl Default for Trading {
             placing: Vec::new(),
             ticket: OrderTicket::default(),
             pending: None,
+            protecting: None,
+            close_quantity: None,
             preview: None,
             decimals: 2,
             instruments: HashMap::new(),
@@ -196,8 +225,26 @@ impl Default for Trading {
             display: TradingSettings::default(),
             sound: None,
             calculator: None,
+            sent: Vec::new(),
+            cancelling: HashSet::new(),
+            connection_lost: false,
         }
     }
+}
+
+/// `quantity` of `symbol` in the host's text, else at its own decimals, up to eight,
+/// with thousands separators, as the account tables write it.
+pub(crate) fn quantity_text(
+    formatter: Option<&dyn TradingFormatter>,
+    symbol: &str,
+    quantity: f64,
+) -> String {
+    Numbers {
+        symbol,
+        decimals: 2,
+        formatter,
+    }
+    .quantity(quantity, account_panel::quantity_decimals(quantity))
 }
 
 impl Trading {
@@ -305,6 +352,9 @@ impl Trading {
     /// order, the execution sound, the quantity calculator and the trading rules of the previous
     /// account are dropped, and a new stream starts.
     fn connect(&mut self) {
+        self.sent.clear();
+        self.cancelling.clear();
+        self.connection_lost = false;
         self.preview = None;
         self.sound = None;
         self.calculator = None;
@@ -323,17 +373,17 @@ impl Trading {
     /// trading rules stay.
     fn listen(&mut self) {
         // Their rules answers belong to the old stream, whose positions may have changed unseen.
-        for _ in std::mem::take(&mut self.placing) {
-            self.refuse(NOT_LIVE);
+        for (_, _, order) in std::mem::take(&mut self.placing) {
+            self.refuse(Sent::Place(order), NOT_LIVE);
         }
         self.pending = None;
+        self.protecting = None;
         self.account = None;
         self.connection = None;
         self.orders.clear();
         self.positions.clear();
         self.account_panel.clear();
-        // Stream keys are even; rules, previews and history pages use odd keys, and order
-        // replies use zero.
+        // Stream keys are even; rules, previews, history pages and order answers use odd keys.
         self.generation += 2;
         let (listener, events) = Listener::new(&self.inbox, self.generation);
         self.listener = Some(listener);
@@ -351,6 +401,37 @@ impl Trading {
             .as_ref()
             .map(|account| account.capabilities)
             .unwrap_or_default()
+    }
+
+    /// Refresh the Hide menu's position, order and execution checks from [`display`](Self::display).
+    /// Call this before each
+    /// [`DrawingToolbar::show_with_action`](crate::ui::drawing_toolbar::DrawingToolbar::show_with_action),
+    /// then pass its returned action to [`apply_hide_action`](Self::apply_hide_action).
+    pub fn sync_hide_menu(&self, state: &mut ToolbarState) {
+        state.hide_positions = !self.display.show_positions;
+        state.hide_orders = !self.display.show_orders;
+        state.hide_executions = !self.display.show_executions;
+    }
+
+    /// Apply the visibility requested by the toolbar after a Hide menu click to
+    /// [`display`](Self::display): [`HideAllPoss`](DrawingToolbarAction::HideAllPoss) changes
+    /// positions, [`HideAllOrders`](DrawingToolbarAction::HideAllOrders) orders,
+    /// [`HideAllExecutions`](DrawingToolbarAction::HideAllExecutions) execution marks, and
+    /// [`HideAll`](DrawingToolbarAction::HideAll) all three. Other actions leave it unchanged.
+    /// Refresh `state` with [`sync_hide_menu`](Self::sync_hide_menu) before showing the toolbar
+    /// so its flags hold the requested visibility after the click.
+    pub fn apply_hide_action(&mut self, action: &DrawingToolbarAction, state: &ToolbarState) {
+        use DrawingToolbarAction as A;
+        let all = matches!(action, A::HideAll);
+        if all || matches!(action, A::HideAllPoss) {
+            self.display.show_positions = !state.hide_positions;
+        }
+        if all || matches!(action, A::HideAllOrders) {
+            self.display.show_orders = !state.hide_orders;
+        }
+        if all || matches!(action, A::HideAllExecutions) {
+            self.display.show_executions = !state.hide_executions;
+        }
     }
 
     /// Opens the order ticket filled from `request`, for the user to check and submit.
@@ -393,29 +474,44 @@ impl Trading {
         }
     }
 
-    fn place(&self, request: OrderRequest) {
-        if let Some(service) = self.live_service() {
-            service.place(request, self.inbox.reply(0));
+    fn place(&mut self, request: OrderRequest) {
+        if let Some((service, key)) = self.live_service(Sent::Place(request.clone())) {
+            service.place(request, self.inbox.reply(key));
         }
     }
 
-    /// The broker to send an order, cancellation or change to: `None` without a broker, and
-    /// while the broker reports that it is not live, when nothing is sent and the next
-    /// [`poll`](Self::poll) reports the order, cancellation or change as refused.
-    fn live_service(&self) -> Option<Arc<dyn Broker>> {
+    /// Cancels `id`, describing it with its last listed request when it is still available.
+    fn cancel_order(&mut self, id: OrderId, request: Option<OrderRequest>) {
+        if let Some((service, key)) = self.live_service(Sent::Cancel(id.clone(), request)) {
+            self.cancelling.insert(id.clone());
+            service.cancel(id, self.inbox.reply(key));
+        }
+    }
+
+    /// Tracks `sent` and returns the live broker with its answer key. While the broker is not
+    /// live, nothing is sent and the next [`poll`](Self::poll) reports that action as refused.
+    fn live_service(&mut self, sent: Sent) -> Option<(Arc<dyn Broker>, u64)> {
         let service = self.service.clone()?;
-        if self.is_connected() {
-            return Some(service);
+        if !self.is_connected() {
+            self.refuse(sent, NOT_LIVE);
+            return None;
         }
-        self.refuse(NOT_LIVE);
-        None
+        Some((service, self.track(sent)))
     }
 
-    /// Reports an order, cancellation or change as refused for `reason`, the way
-    /// [`poll`](Self::poll) reports the broker's own refusals.
-    fn refuse(&self, reason: &str) {
-        let error = FeedError::Other(reason.into());
-        self.inbox.reply::<()>(0).send(Err(error));
+    /// Allocates an answer key and keeps the action until its answer is read.
+    fn track(&mut self, sent: Sent) -> u64 {
+        self.request_key += 2;
+        self.sent.push((self.request_key, sent));
+        self.request_key
+    }
+
+    /// Queues a local refusal through the same answer path as the broker's refusals.
+    fn refuse(&mut self, sent: Sent, reason: &str) {
+        let key = self.track(sent);
+        self.inbox
+            .reply::<()>(key)
+            .send(Err(FeedError::Other(reason.into())));
     }
 
     fn load_rules(&mut self, symbol: &str) {
@@ -468,20 +564,6 @@ impl Trading {
 /// Why an order is refused while the broker is not live.
 const NOT_LIVE: &str = "the broker is not connected";
 
-/// Whether every number of `rules` is positive and finite and a time in force is offered.
-fn valid(rules: &TradingRules) -> bool {
-    let positive = |value: f64| value.is_finite() && value > 0.0;
-    positive(rules.quantity_step)
-        && positive(rules.min_quantity)
-        && positive(rules.point_value)
-        && rules
-            .max_quantity
-            .is_none_or(|max| positive(max) && max >= rules.min_quantity)
-        && rules.leverage.is_none_or(positive)
-        && rules.pip_value.is_none_or(positive)
-        && !rules.time_in_force.is_empty()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,6 +578,7 @@ mod tests {
     pub(super) struct Recorder {
         pub(super) state: Vec<AccountEvent>,
         pub(super) brackets: bool,
+        pub(super) partial_close: bool,
         pub(super) placed: Mutex<Vec<OrderRequest>>,
         pub(super) cancelled: Mutex<Vec<OrderId>>,
         pub(super) modified: Mutex<Vec<(OrderId, OrderRequest)>>,
@@ -515,6 +598,8 @@ mod tests {
                 reverse: true,
                 preview: true,
                 brackets: self.brackets,
+                partial_close: self.partial_close,
+                take_profit_level_stops: self.brackets,
                 ..Capabilities::default()
             };
             events.push(AccountEvent::Account(Account::new(
@@ -690,15 +775,23 @@ mod tests {
                 let messages: Vec<_> = (toasts.toasts().iter())
                     .map(|toast| toast.message.as_str())
                     .collect();
-                let expected_messages: &[&str] = match response {
-                    "failure" => &["Trading rules unavailable: network error: offline"],
-                    "invalid" => &["The broker returned invalid trading rules"],
-                    "changed" => &["Order refused: the position changed before the order was sent"],
-                    "withdrawn" => {
-                        &["Order refused: the account no longer accepts this order type"]
-                    }
-                    _ => &[],
+                let order = match operation {
+                    "close" => "Sell 2 OTHER at market",
+                    "reverse" => "Sell 4 OTHER at market",
+                    "take profit" => "Sell 2 OTHER take profit 110.00",
+                    _ => "Sell 2 OTHER stop loss 90.00",
                 };
+                let reason = match response {
+                    "failure" => Some("trading rules unavailable: network error: offline"),
+                    "invalid" => Some("the broker returned invalid trading rules"),
+                    "changed" => Some("the position changed before the order was sent"),
+                    "withdrawn" => Some("the account no longer accepts this order type"),
+                    _ => None,
+                };
+                let expected_messages: Vec<_> = reason
+                    .into_iter()
+                    .map(|reason| format!("Order refused: {order}: {reason}"))
+                    .collect();
                 assert_eq!(
                     messages, expected_messages,
                     "{operation} with {response} rules"

@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     model::{ChartType, Direction, OrderSide, SignalShape},
-    strategies::Commission,
+    strategies::{Commission, OrderSize, StrategyContext},
 };
 use egui::{Role, Vec2};
 use egui_kittest::{Harness, kittest::Queryable};
@@ -51,7 +51,7 @@ fn built_in_run_edits_costs_and_inputs_and_replaces_fill_signals() {
             let report = h.state().0.report().unwrap();
             // Three rising closes place the long at bar 3, filled at bar 4's open of 100.
             // Three falling closes reverse it at bar 7's open of 101: one unit earns 1.
-            assert_eq!(report.performance().net_profit, 1.0);
+            assert_eq!(report.performance().all.net_profit, 1.0);
             assert_eq!(report.trades[0].entry_time, bars()[4].time);
             assert_eq!(report.trades[0].exit.as_ref().unwrap().time, bars()[7].time);
             assert!(!h.state().0.is_stale());
@@ -75,7 +75,10 @@ fn built_in_run_edits_costs_and_inputs_and_replaces_fill_signals() {
             h.run();
             h.get_by_role_and_label(Role::Button, "Run").click();
             h.run();
-            assert_eq!(h.state().0.report().unwrap().performance().net_profit, -1.0);
+            assert_eq!(
+                h.state().0.report().unwrap().performance().all.net_profit,
+                -1.0
+            );
             assert!(!h.state().0.is_stale());
             h.state_mut()
                 .0
@@ -89,7 +92,7 @@ fn built_in_run_edits_costs_and_inputs_and_replaces_fill_signals() {
             assert_eq!(report.trades[0].side, OrderSide::Buy);
             assert_eq!(report.trades[0].entry_time, bars()[2].time);
             assert_eq!(
-                report.performance().net_profit,
+                report.performance().all.net_profit,
                 -5.0,
                 "102 to 99, less two unit fees"
             );
@@ -142,6 +145,20 @@ fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
         ] {
             h.get_by_role_and_label(Role::SpinButton, label);
         }
+        h.get_by_role_and_label(Role::TextInput, "End (UTC)")
+            .focus();
+        h.run();
+        h.get_by_role_and_label(Role::TextInput, "End (UTC)")
+            .type_text("1970-01-02");
+        h.run();
+        assert_eq!(
+            h.state().settings().end_time,
+            Some(DateTime::UNIX_EPOCH + chrono::TimeDelta::days(1))
+        );
+        h.get_by_role_and_label(Role::Button, "Undo settings")
+            .click();
+        h.run();
+        assert_eq!(h.state().settings().end_time, None);
         let start = h
             .get_by_role_and_label(Role::SpinButton, "Price increment")
             .rect()
@@ -176,6 +193,15 @@ fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
             .click();
         h.run();
         assert!(h.state().settings().recalculate_on_history);
+        h.get_by_role_and_label(Role::CheckBox, "Recalculate on every update")
+            .click();
+        h.run();
+        assert!(h.state().settings().recalculate_on_every_update);
+        h.get_by_role_and_label(Role::Button, "Undo settings")
+            .click();
+        h.run();
+        assert!(!h.state().settings().recalculate_on_every_update);
+        assert!(h.state().settings().recalculate_on_history);
         h.get_by_role_and_label(Role::ComboBox, "Decision candles")
             .click();
         h.run();
@@ -190,6 +216,8 @@ fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
         let mut tiny = h.state().settings().clone();
         tiny.price_increment = 1e-8;
         tiny.liquidation_increment = 1e-6;
+        tiny.leverage = 2.0;
+        tiny.long_funding = Some(0.5);
         h.state_mut().set_settings(tiny).unwrap();
         let output = egui::Context::default().run_ui(
             egui::RawInput {
@@ -203,8 +231,13 @@ fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
                 h.state_mut().show(ui, "TEST", Timeframe::Min1, &bars());
             },
         );
-        for value in ["0.00000001", "0.000001"] {
-            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == value)), "small increments must remain visible: {value}");
+        for value in [
+            "0.00000001",
+            "0.000001",
+            "Four times the shortfall at price points",
+            "Whole position at the margin crossing",
+        ] {
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == value)), "{value} must be shown");
         }
         output.drop_without_applying_deltas();
         let mut settings = h.state().settings().clone();
@@ -214,6 +247,7 @@ fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
         settings.liquidation_increment = 0.1;
         settings.fill_on_close = true;
         settings.order_delay = 3;
+        settings.recalculate_on_every_update = true;
         h.state_mut().set_settings(settings.clone()).unwrap();
         let saved = serde_json::to_string(&settings).unwrap();
         let restored = serde_json::from_str::<BacktestSettings>(&saved).unwrap();
@@ -250,6 +284,7 @@ fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
             ("Decision chart type", "Heikin Ashi"),
             ("Original-price execution", "true"),
             ("Historical tick decisions", "false"),
+            ("Recalculate on every update", "true"),
         ] {
             assert_eq!(property(key), expected);
         }
@@ -340,6 +375,75 @@ fn tick_slippage_follows_the_price_increment_until_a_size_is_typed() {
 }
 
 #[test]
+fn selecting_a_strategy_applies_its_declared_order_size() {
+    let mut tester = StrategyTester::default();
+    for (name, size) in [
+        ("SuperTrend", OrderSize::EquityFraction(0.15)),
+        ("Technical Ratings", OrderSize::EquityFraction(0.05)),
+        ("Consecutive Up/Down", OrderSize::Fixed(1.0)),
+    ] {
+        let mut settings = tester.settings().clone();
+        settings.order_size = OrderSize::Cash(500.0);
+        settings.commission = Commission::PerOrder(2.0);
+        tester.set_settings(settings).unwrap();
+        tester.select_strategy(name).unwrap();
+        assert_eq!(tester.settings().order_size, size, "{name}");
+        assert_eq!(
+            tester.settings().commission,
+            Commission::PerOrder(2.0),
+            "{name}"
+        );
+        assert!(tester.undo_settings(), "{name}");
+        assert_eq!(
+            tester.settings().order_size,
+            OrderSize::Cash(500.0),
+            "{name}"
+        );
+        assert_eq!(tester.strategy(), name);
+    }
+    tester.settings.start_time = Some(DateTime::UNIX_EPOCH + chrono::TimeDelta::days(5));
+    tester.settings.end_time = Some(DateTime::UNIX_EPOCH + chrono::TimeDelta::days(1));
+    tester.start = "1970-01-0".into();
+    tester.end = "1970-01-02".into();
+    let before = tester.settings().clone();
+    let undo_steps = tester.undo_settings.len();
+    assert!(!tester.redo_settings.is_empty());
+    assert_eq!(tester.select_strategy("SuperTrend"), Ok(()));
+    assert_eq!(tester.strategy(), "SuperTrend");
+    assert_eq!(
+        tester.settings().order_size,
+        OrderSize::EquityFraction(0.15)
+    );
+    assert_eq!(tester.start, "1970-01-0");
+    assert_eq!(tester.end, "1970-01-02");
+    assert!(!tester.redo_settings());
+    assert_eq!(tester.undo_settings.len(), undo_steps + 1);
+    assert!(tester.undo_settings());
+    assert_eq!(tester.settings(), &before);
+    assert_eq!(tester.undo_settings.len(), undo_steps);
+    assert_eq!(tester.strategy(), "SuperTrend");
+
+    struct Sized(OrderSize);
+    impl Strategy for Sized {
+        fn default_order_size(&self) -> Option<OrderSize> {
+            Some(self.0)
+        }
+        fn on_bar(&mut self, _: &mut StrategyContext<'_>) {}
+    }
+    // A host strategy listed first sets the starting size; one the form refuses gives way.
+    for (declared, size) in [
+        (OrderSize::Cash(250.0), OrderSize::Cash(250.0)),
+        (OrderSize::Fixed(f64::NAN), OrderSize::Fixed(1.0)),
+    ] {
+        let mut factory = StrategyFactory::new();
+        factory.register("A host strategy", move || Box::new(Sized(declared)));
+        let tester = StrategyTester::new(factory);
+        assert_eq!(tester.strategy(), "A host strategy");
+        assert_eq!(tester.settings().order_size, size);
+    }
+}
+
+#[test]
 fn run_failures_remain_visible_above_scrolling_content() {
     for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
         for tab in [Tab::Report, Tab::Properties, Tab::Optimisation] {
@@ -380,6 +484,12 @@ fn requested_history_is_scoped_and_superseded_by_edits_and_chart_changes() {
     let mut tester = StrategyTester::default();
     let mut settings = tester.settings().clone();
     settings.start_time = Some(source[2].time);
+    settings.end_time = settings.start_time;
+    assert_eq!(
+        tester.set_settings(settings.clone()),
+        Err("Use an end after the start")
+    );
+    settings.end_time = Some(source[6].time);
     tester.set_settings(settings).unwrap();
     tester.lower = true;
     tester.lower_timeframe = Timeframe::Sec30;
@@ -396,12 +506,14 @@ fn requested_history_is_scoped_and_superseded_by_edits_and_chart_changes() {
             request.symbol.as_str(),
             request.timeframe,
             request.start,
+            request.end,
             request.lower_timeframe
         ),
         (
             "TEST",
             Timeframe::Min1,
             source[2].time,
+            Some(source[6].time),
             Some(Timeframe::Sec30)
         )
     );
@@ -466,7 +578,79 @@ fn requested_history_is_scoped_and_superseded_by_edits_and_chart_changes() {
         comparison.buy_and_hold_equity.first().unwrap().0,
         bars()[2].time
     );
-    assert!((comparison.buy_and_hold_return.unwrap() - (101.0 / 102.0 - 1.0)).abs() < 1e-12);
+    assert_eq!(
+        comparison.buy_and_hold_equity.last().unwrap().0,
+        bars()[5].time
+    );
+    assert!((comparison.buy_and_hold_return.unwrap() - (99.0 / 102.0 - 1.0)).abs() < 1e-12);
+    assert!(
+        h.state()
+            .report()
+            .unwrap()
+            .properties
+            .contains(&("End time".into(), "1970-01-01T00:06:00+00:00".into()))
+    );
+}
+
+#[test]
+fn runs_report_the_instrument_currency_and_convert_into_another_at_requested_rates() {
+    let mut tester = StrategyTester::default();
+    tester.select_strategy("Consecutive Up/Down").unwrap();
+    tester.set_instrument_currency(Some("USD".into()));
+    let mut h = Harness::builder().with_max_steps(32).build_ui_state(
+        |ui, tester: &mut StrategyTester| {
+            tester.show(ui, "TEST", Timeframe::Min1, &bars());
+        },
+        tester,
+    );
+    // Without an account currency the run needs no history and reports the instrument's.
+    assert_eq!(
+        h.state_mut()
+            .request_run("TEST", Timeframe::Min1, &bars(), false),
+        Ok(None)
+    );
+    h.run();
+    assert_eq!(h.state().report().unwrap().currency.as_deref(), Some("USD"));
+    let mut settings = h.state().settings().clone();
+    settings.currency = Some("EUR".into());
+    h.state_mut().set_settings(settings).unwrap();
+    let Some(StrategyTesterAction::RequestHistory(request)) = h
+        .state_mut()
+        .request_run("TEST", Timeframe::Min1, &bars(), false)
+        .unwrap()
+    else {
+        panic!("missing exchange rate request");
+    };
+    assert_eq!(
+        request.exchange_rate,
+        Some(StudyDataRequest::exchange_rate("USD", "EUR"))
+    );
+    let rate = Bar::new(bars()[0].time, 0.5, 0.5, 0.5, 0.5, 0.0);
+    h.state_mut()
+        .set_history_with_rates(&request, bars(), Vec::new(), vec![rate])
+        .unwrap();
+    h.run();
+    let report = h.state().report().unwrap();
+    assert_eq!(report.currency.as_deref(), Some("EUR"));
+    // The long from 100 to 101 earns 1 USD, 0.5 EUR.
+    assert_eq!(report.performance().all.net_profit, 0.5);
+    // An optimisation without the rates skips each trial instead of listing zero results.
+    h.state_mut().ranges[0].enabled = true;
+    h.state_mut().ranges[0].from = InputValue::Length(1);
+    h.state_mut().ranges[0].to = InputValue::Length(2);
+    h.state_mut()
+        .start_job(
+            "TEST",
+            Timeframe::Min1,
+            bars(),
+            Vec::new(),
+            Vec::new(),
+            true,
+        )
+        .unwrap();
+    h.run();
+    assert!(h.state().trials.is_empty());
+    assert_eq!(h.state().skipped, [("Exchange rates unavailable", 2)]);
 }
 
 #[test]
@@ -546,7 +730,14 @@ fn optimisation_counts_decimal_grid_yields_sorts_and_applies_inputs() {
     tester.ranges[0].to = InputValue::Length(3);
     assert_eq!(optimisation::grid(&tester.ranges).unwrap().0, 3);
     tester
-        .start_job("TEST", Timeframe::Min1, bars(), Vec::new(), true)
+        .start_job(
+            "TEST",
+            Timeframe::Min1,
+            bars(),
+            Vec::new(),
+            Vec::new(),
+            true,
+        )
         .unwrap();
     assert!(
         tester

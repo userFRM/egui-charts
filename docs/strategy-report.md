@@ -62,6 +62,8 @@ a fraction of current marked equity, or cash divided by the absolute execution p
 Cash and equity sizing reject a zero execution price. The default pyramiding limit is one
 open entry; zero disables entries. A partial exit retains its entry slot until that lot is
 fully closed. An opposite entry reverses the position and starts a new entry count.
+[`Strategy::default_order_size`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/trait.Strategy.html#method.default_order_size) suggests the strategy's usual size; the tester applies it on selection,
+while [`Backtest::run`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.run) uses its settings alone. Select the strategy before restoring saved settings.
 
 Commission is an absolute fill-value fraction, an amount per unit, or an amount per order.
 Each fill pays once, even when reversing or closing several FIFO lots; trade fees and net
@@ -69,6 +71,16 @@ profits include their quantity shares of entry and exit commission. Open trades 
 their unallocated entry fees, already deducted from equity. Market and stop orders slip
 against their side once per fill, by ticks times tick size, ticks of the price increment or an
 absolute-price fraction. Limits, including the limit execution of a stop-limit order, never slip.
+
+A report is in `settings.currency`, or in [`Backtest::instrument_currency`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#structfield.instrument_currency), the currency of the
+prices, when that is unset. When the settings name another currency, the engine converts what it
+derives from prices into it: sizing, funding, margin and liquidation, fraction commissions,
+profits and equity, at the rate in force at each fill and at the last price of each equity mark.
+Supply [`Backtest::exchange_rates`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#structfield.exchange_rates), the host's answer to [`Backtest::exchange_rate_request`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.exchange_rate_request); each
+point's close applies from its time until the next point. The initial capital, cash order sizes
+and per-unit and per-order commissions are account amounts already. A run that needs a rate where
+none applies, or where it is not finite and positive, reports [`StrategyReport::unavailable`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#structfield.unavailable)
+instead of trades and equity. Excursions and the buy-and-hold benchmark stay unconverted.
 
 Long and short exposure fund separately. [`long_funding`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.long_funding) and [`short_funding`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.short_funding)
 are the fractions of absolute position market value that equity must cover, one over leverage
@@ -89,6 +101,10 @@ at the crossing. An order at the boundary can avert the deficit; a gap already b
 at its open. For example, capital 1,000 and 15 long units entered at 100 with leverage 2 give
 equity `15p - 500` and margin `7.5p` at positive price `p`; a decline crosses at `p = 200/3`,
 leaving equity 500 before exit costs, even if the bar later recovers.
+
+The report properties *Long margin calls* and *Short margin calls* name each side's rule:
+`Four times the shortfall at price points`, `Whole position at the margin crossing`, or `Off`
+when that side requires no funding. The tester shows the rule below each funding field.
 
 [`require_limit_cross`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.require_limit_cross) makes limit entries, triggered stop-limits and profit-taking exits wait until
 the price trades through the limit by one [`price_increment`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.price_increment). They then fill at the limit, or at
@@ -132,8 +148,12 @@ data service is required by the engine. With a start time, equity starts at that
 subsequent values are stamped at chart-bar closes, preserving the starting capital point.
 The final execution bar has no known closing time; its equity mark is provisionally labelled
 one nanosecond after its last supplied price timestamp so the curve stays ordered.
-Without a start time, the existing equity timestamps are retained. When comparing a
-bounded run in the panel, supply only its eligible chart bars as the comparison source.
+Without a start time, the existing equity timestamps are retained.
+[`settings.end_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.end_time) ends the run: chart bars that have not closed by then are not decided on,
+filled or marked and do not reach [`Strategy::prepare`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/trait.Strategy.html#method.prepare). Trades still open remain open.
+An execution bar closes when the next one opens, so the newest one does not count as closed.
+[`Backtest::update`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.update) ignores the end. When comparing a bounded run in the panel, supply only its eligible
+chart bars: those opening at or after the start and closing by the end.
 
 Migration: [`Backtest::initial_capital`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.initial_capital) and [`Backtest::fill_on_close`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.fill_on_close) move to
 [`Backtest::settings`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#structfield.settings). [`Backtest::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.new) keeps its starting-capital argument. Add `&[]` as the
@@ -180,7 +200,8 @@ An open trade has no exit boundary. The host owns navigation, highlighting, repo
 placement, data loading and CSV storage. Chart entry/exit markers use the signals service.
 The assembled terminal and its demo mounting remain separate integration work.
 
-The Summary tab shows all performance metrics, equity and drawdown in account units,
+The Summary tab shows trade figures in All, Long and Short columns, followed by the drawdown,
+ratio, growth and buy-and-hold figures for the whole run, equity and drawdown in account units,
 and an optional fee-free buy-and-hold comparison on the same equity scale. Curve positions
 and hover values retain submillisecond timestamps. Hover a curve
 for timestamped values. The virtualized trade list uses entry-time order, keeps equal-time
@@ -189,15 +210,20 @@ Fill prices retain their precision and fill times retain fractional seconds.
 Properties includes run metadata and the host's ordered settings. Invalid inputs are
 counted visibly. An undefined or non-finite metric displays as `N/A`, including when
 converting a fraction to a displayed percentage overflows.
-CSV exports only valid trades using [`StrategyReport::trades_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.trades_csv), retaining its existing
-columns, quoting and UTC timestamps. Export summary CSV returns
+Export trades CSV writes valid trades using
+[`StrategyReport::trades_csv_with_excursions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.trades_csv_with_excursions): the columns of
+[`StrategyReport::trades_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.trades_csv) with the displayed excursions in the final `mae` and `mfe` cells,
+empty when unavailable, and the same quoting and UTC timestamps. Export summary CSV returns
 [`StrategyReportAction::ExportSummaryCsv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyReportAction.html#variant.ExportSummaryCsv) with a suggested file name and the metrics and
 properties shown, as [`StrategyReport::summary_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.summary_csv) writes them: a dot as the decimal
 separator, no thousands separator, and an empty cell for an unavailable value. Percent
 values keep 15 significant decimal digits, so a rate of `0.07` reads `7`, and a zero is
 always `0`. Both exports prefix a text cell that starts with `=`, `+`, `-`, `@`, a tab or a
 carriage return with an apostrophe, so a spreadsheet shows it as text; numeric cells,
-including negative numbers, are unchanged.
+including negative numbers, are unchanged. The summary CSV ends with a `side` column:
+`all`, `long` or `short` on trade figures, with one row per side in that order, and empty
+on whole-run figures and properties. Largest position uses the unit `quantity` and holding
+times use `bars`.
 
 ## Metric definitions
 
@@ -215,6 +241,50 @@ and losses use exit-time order, ties retaining input order. Breakeven trades bre
 runs; invalid and open trades do not participate. For profits `5, 3, -1, -7, -2, 0, 4, 4, 0, 2`,
 net profit is 8, gross profit 18, gross loss 10, largest winner 5, largest loser -7, and the
 longest winning and losing runs are 2 and 3.
+
+### Figures by side
+
+Read the trade figures through `performance.all`, `performance.long` and `performance.short`,
+each a `StrategyTradeStats`. Migration: replace `performance.net_profit` with
+`performance.all.net_profit`, and likewise for the other trade fields. Summary CSV readers
+that select by figure name should also select `side = all` for the former aggregate value.
+
+Each side applies the same validity rules. A positive closed-trade net profit wins, a
+negative one loses, and zero is even. Even trades count as closed and enter the win rate's
+denominator and average trade, without entering either winning or losing figures. Open
+trades enter only the open count and largest position. Average winning trade is gross
+profit divided by winners; average losing trade is gross loss divided by losers, a positive
+amount. Their ratio needs both. The largest winner's fraction uses gross profit; the largest
+loser's fraction uses gross loss and a positive loss magnitude. Net profit over the largest
+loss is a multiple, negative for a net loss. With closed trades long +50, long -20, short +30
+and short 0, there are 2 winners, 1 loser and 1 even trade. The average winner is 40, average
+loser 20 and their ratio 2. Longs and shorts each net 30; long profit factor is 2.5 and short
+profit factor is unavailable because there is no short loss.
+
+Largest position is the greatest summed quantity held at once, including open trades.
+Holdings include entry and exclude exit, so reversing in one fill never adds the closing
+and opening positions. A trade closed at its entry time still counts at that instant.
+Long and short quantities add in the aggregate, allowing host reports with both held.
+Two overlapping longs of 2 and 3 units therefore give 5.
+
+Holding times come from the source bars passed to
+[`StrategyReport::comparison`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.comparison).
+Bars held are the exit bar's position minus the entry bar's: entry on bar 3 and exit on bar 7
+holds 4 bars, and entry and exit within one bar holds 0. A fill belongs to the last source
+bar opening at or before it, including in a session gap. Bars with invalid prices still
+count. Averages cover closed trades, winners and losers of each side; open trades and
+entries before the first source bar are excluded. A reversal ends one trade's count at its
+bar and starts the new trade's count there.
+
+Return over maximum drawdown divides net profit by the maximum drawdown in money; it needs
+a positive drawdown, without an annualisation minimum. Compound annual growth uses
+`(last / first)^(1 / years) - 1` over the usable equity curve, with 365.25 days per year.
+It requires at least 13 weeks, a positive first value and a nonnegative final value; a zero
+final value gives -100%. Equity 1,000, 900, 1,210 across two years grows 10% per year;
+net profit 60 divided by drawdown 100 gives 0.6. Buy-and-hold profit multiplies its fractional
+return by positive finite initial capital. Outperformance subtracts that profit from the
+strategy's closed-trade net profit, excluding open trades. A 25% return on 1,000 makes 250,
+so net profit 60 outperforms it by -190.
 
 [`StrategyReport::comparison(source)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.comparison) takes the complete source bars of this run's symbol
 and interval, with timestamps denoting bar opens. The host must supply exactly the run's

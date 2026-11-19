@@ -169,7 +169,7 @@ impl FeedLink {
     }
 
     fn rebuild_paged_trade_rate(&self, input: &crate::data::OrderFlowInput, history: &[Bar]) {
-        if let Some(tf @ (Timeframe::Ticks(_) | Timeframe::Range(_))) = self.clock.timeframe()
+        if let Some(tf) = self.clock.timeframe().filter(|tf| tf.is_trade_based())
             && self.trades_from_start
             && self.pushed_from.is_none()
             && self.trades.live().next().is_none()
@@ -745,8 +745,6 @@ impl Chart {
             link.instrument = None;
         }
         if symbol != self.symbol {
-            self.host_events
-                .push(super::ChartEvent::SymbolChanged(symbol.clone()));
             #[cfg(feature = "drawings")]
             self.anchor_drawing_points();
             #[cfg(feature = "drawings")]
@@ -761,6 +759,7 @@ impl Chart {
                 next.0.registry = self.drawings.registry.clone();
                 next.0.options = self.drawings.options.clone();
                 next.0.tool_defaults = self.drawings.tool_defaults.clone();
+                next.0.custom_tool_defaults = self.drawings.custom_tool_defaults.clone();
                 next.0.set_active_tool(self.drawings.active_tool);
                 if let Some(id) = self.drawings.active_custom_tool() {
                     let _ = next.0.set_custom_tool(id);
@@ -769,6 +768,9 @@ impl Chart {
                 next.0.eraser_mode = self.drawings.eraser_mode;
                 next.0.set_hidden(self.drawings.is_hidden());
                 next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
+                self.flush_drawing_events();
+                next.0.events.clear();
+                next.0.events_dropped = 0;
                 std::mem::swap(&mut self.drawings, &mut next.0);
                 std::mem::swap(&mut self.marks, &mut next.1);
                 self.attach_pending_drawings();
@@ -792,6 +794,7 @@ impl Chart {
                     self.symbol_markers.insert(self.symbol.clone(), next_marks);
                 }
             }
+            self.push_event(super::ChartEvent::SymbolChanged(symbol.clone()));
             if !keep_history {
                 self.history.clear();
             }
@@ -856,8 +859,7 @@ impl Chart {
     pub fn set_timeframe(&mut self, timeframe: Timeframe) {
         if self.timeframe != Some(timeframe) {
             self.clear_source_signals();
-            self.host_events
-                .push(super::ChartEvent::TimeframeChanged(timeframe));
+            self.push_event(super::ChartEvent::TimeframeChanged(timeframe));
             self.bar_close_time = None;
         }
         if self.timeframe != Some(timeframe)
@@ -965,6 +967,8 @@ impl Chart {
 
     /// Reloads the current feed key on the next frame, retaining drawings and chart history.
     /// Use after changing host-side feed settings or to retry a permanent request failure.
+    /// A feed asks for the same reload of the chart's series through
+    /// [`Sink::reload_history`](crate::data::Sink::reload_history).
     pub fn reload_feed(&mut self) {
         self.study_data.clear_feed();
         if let Some(link) = &mut self.feed_link {
@@ -1006,6 +1010,16 @@ impl Chart {
     pub fn trades(&self, series: SeriesId) -> impl Iterator<Item = &Tick> {
         let link = self.feed_link.as_ref().filter(|_| series == SeriesId::MAIN);
         link.into_iter().flat_map(|link| link.trades.iter())
+    }
+
+    /// Identifies the retained tape behind [`Self::trades`], or `None` without a feed or for
+    /// another series than [`SeriesId::MAIN`]. Compare for equality: replacing the tape,
+    /// including on a feed reset, changes the value; adding or evicting trades does not.
+    pub fn trade_generation(&self, series: SeriesId) -> Option<u64> {
+        self.feed_link
+            .as_ref()
+            .filter(|_| series == SeriesId::MAIN)
+            .map(|link| link.trades.generation)
     }
 
     /// Combines the retained fills with explicit aggressor ids, in first-fill order. At most

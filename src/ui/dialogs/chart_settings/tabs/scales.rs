@@ -2,12 +2,16 @@
 
 use super::super::SettingsDialog;
 use super::canvas::line_style_preview;
-use super::{pick_color, price_line_dropdown, styled_checkbox, styled_dropdown, trading_option};
+use super::{
+    pick_color, price_line_dropdown, price_line_dropdown_pinning, styled_checkbox, styled_dropdown,
+    trading_option,
+};
 use crate::localization as l10n;
 use crate::model::{LineStyle, PriceLineSource};
+use crate::scales::WeekdayNames;
 use crate::theme::Theme;
 use crate::tokens::DESIGN_TOKENS;
-use crate::widget::settings::ThousandsSeparator;
+use crate::widget::settings::{DateFormat, ThousandsSeparator};
 use egui::Ui;
 
 impl SettingsDialog {
@@ -349,12 +353,73 @@ impl SettingsDialog {
                         &mut dialog.settings.scales_and_lines.show_prev_close,
                     );
                 });
-                styled_checkbox(
+                self.draw_setting_row_with_controls(
                     ui,
-                    &mut self.settings.scales_and_lines.show_high_low,
-                    "High and low price labels",
-                    theme.ui.text,
+                    "Previous close line",
+                    theme,
+                    |ui, dialog| {
+                        let mut line = dialog
+                            .settings
+                            .scales_and_lines
+                            .prev_close_line
+                            .unwrap_or_default();
+                        let before = line;
+                        let state = &mut dialog.color_picker_states.prev_close_line;
+                        let mut color = state.sel_color;
+                        if pick_color(ui, state, "prev_close_line_color", &mut color) {
+                            line.color = Some(color);
+                        }
+                        ui.add_space(theme.spacing.lg);
+                        styled_dropdown(
+                            ui,
+                            "prev_close_line_style",
+                            DESIGN_TOKENS.sizing.settings_dialog.small_dropdown_width,
+                            theme.ui.text,
+                            line_style_preview(line.style),
+                            |ui| {
+                                for style in LineStyle::all() {
+                                    let label = l10n::text(ui.ctx(), line_style_preview(*style));
+                                    if ui.selectable_label(line.style == *style, label).clicked() {
+                                        line.style = *style;
+                                    }
+                                }
+                            },
+                        );
+                        ui.add_space(theme.spacing.lg);
+                        // A width the host set outside the offered range stays until it is dragged.
+                        ui.add(
+                            egui::DragValue::new(&mut line.width)
+                                .range(1.0..=4.0)
+                                .clamp_existing_to_range(false)
+                                .speed(0.5)
+                                .suffix(l10n::text(ui.ctx(), " px")),
+                        )
+                        .accessible_name(l10n::text(ui.ctx(), "Previous close line width"));
+                        if line != before {
+                            dialog.settings.scales_and_lines.prev_close_line = Some(line);
+                        }
+                    },
                 );
+                self.draw_setting_row_with_controls(ui, "Bid and ask", theme, |ui, dialog| {
+                    let scales = &mut dialog.settings.scales_and_lines;
+                    price_line_dropdown_pinning(
+                        ui,
+                        "bid_ask_mode",
+                        theme.ui.text,
+                        &mut scales.show_bid_ask,
+                        &mut scales.show_bid_ask_lines,
+                    );
+                });
+                self.draw_setting_row_with_controls(ui, "High and low", theme, |ui, dialog| {
+                    let scales = &mut dialog.settings.scales_and_lines;
+                    price_line_dropdown_pinning(
+                        ui,
+                        "high_low_mode",
+                        theme.ui.text,
+                        &mut scales.show_high_low,
+                        &mut scales.show_high_low_lines,
+                    );
+                });
                 ui.add_space(theme.spacing.xxxl);
                 self.draw_section_header(ui, "SCALE MODES", theme);
                 if styled_checkbox(
@@ -392,7 +457,101 @@ impl SettingsDialog {
                 {
                     self.settings.scales_and_lines.lock_price_to_bar_ratio = false;
                 }
+                ui.add_space(theme.spacing.xxxl);
+                self.draw_section_header(ui, "TIME SCALE", theme);
+                self.draw_setting_row_with_controls(ui, "Date format", theme, |ui, dialog| {
+                    let date_format = &mut dialog.settings.scales_and_lines.date_format;
+                    // Keep a host pattern listed while it is the chart's choice.
+                    let host = date_format.clone().filter(|format| {
+                        matches!(format, DateFormat::Pattern(pattern)
+                            if !DATE_FORMATS.contains(&pattern.as_str()))
+                    });
+                    let selected =
+                        date_format_name(date_format.as_ref().unwrap_or(&DateFormat::Default));
+                    styled_dropdown(ui, "date_format", 150.0, theme.ui.text, &selected, |ui| {
+                        let presets =
+                            DATE_FORMATS.map(|pattern| DateFormat::Pattern(pattern.into()));
+                        for format in std::iter::once(DateFormat::Default)
+                            .chain(presets)
+                            .chain(host)
+                        {
+                            let label = l10n::text(ui.ctx(), date_format_name(&format));
+                            ui.selectable_value(date_format, Some(format), label);
+                        }
+                    });
+                });
+                self.draw_setting_row_with_controls(ui, "Clock", theme, |ui, dialog| {
+                    let use_24_hour = &mut dialog.settings.scales_and_lines.use_24_hour;
+                    let name = |use_24_hour| if use_24_hour { "24-hour" } else { "12-hour" };
+                    styled_dropdown(
+                        ui,
+                        "clock",
+                        150.0,
+                        theme.ui.text,
+                        name(use_24_hour.unwrap_or(true)),
+                        |ui| {
+                            for option in [true, false] {
+                                let label = l10n::text(ui.ctx(), name(option));
+                                ui.selectable_value(use_24_hour, Some(option), label);
+                            }
+                        },
+                    );
+                });
+                self.draw_setting_row_with_controls(ui, "Day of week", theme, |ui, dialog| {
+                    let weekday_names = &mut dialog.settings.scales_and_lines.weekday_names;
+                    let name = |names| match names {
+                        WeekdayNames::Default => "Default",
+                        WeekdayNames::Always => "Always",
+                        WeekdayNames::Never => "Never",
+                    };
+                    styled_dropdown(
+                        ui,
+                        "weekday_names",
+                        150.0,
+                        theme.ui.text,
+                        name(weekday_names.unwrap_or_default()),
+                        |ui| {
+                            for option in [
+                                WeekdayNames::Default,
+                                WeekdayNames::Always,
+                                WeekdayNames::Never,
+                            ] {
+                                let label = l10n::text(ui.ctx(), name(option));
+                                ui.selectable_value(weekday_names, Some(option), label);
+                            }
+                        },
+                    );
+                });
             });
         });
+    }
+}
+
+/// Date patterns offered alongside the built-in dates.
+const DATE_FORMATS: [&str; 6] = [
+    "%d %b %Y",
+    "%b %d, %Y",
+    "%Y-%m-%d",
+    "%d.%m.%Y",
+    "%d/%m/%Y",
+    "%m/%d/%Y",
+];
+
+/// A sample past the twelfth distinguishes day-first and month-first dates.
+fn date_format_name(format: &DateFormat) -> String {
+    use chrono::TimeZone;
+    use std::fmt::Write;
+    let pattern = match format {
+        DateFormat::Default => return "Default".into(),
+        DateFormat::Pattern(pattern) => pattern,
+    };
+    let sample = chrono::Utc
+        .with_ymd_and_hms(2024, 3, 13, 14, 30, 0)
+        .unwrap();
+    let mut name = String::new();
+    // Formatting into a string reports invalid patterns instead of panicking.
+    match write!(name, "{}", sample.format(pattern)) {
+        Ok(()) => name,
+        Err(_) => pattern.clone(),
     }
 }

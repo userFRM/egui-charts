@@ -18,6 +18,11 @@ use std::collections::HashSet;
 /// knows them. A fixed list of instruments is a service on its own: see the
 /// implementation for `Vec<Instrument>`.
 ///
+/// The dialog asks for the next page when the last result comes into view, `query.limit`
+/// results after the previous page. An answer shorter than `query.limit` ends the results,
+/// unless the service [leaves results out](Self::leaves_results_out): then paging ends at an empty
+/// answer or after three consecutive full pages with no readable results.
+///
 /// ```
 /// use egui_charts::data::{FeedError, Reply};
 /// use egui_charts::model::Instrument;
@@ -43,6 +48,21 @@ use std::collections::HashSet;
 pub trait SymbolSearch: MaybeSend + 'static {
     /// Up to `query.limit` instruments matching `query`, best first.
     fn search(&self, query: SymbolQuery, reply: Reply<Vec<Instrument>>);
+
+    /// Whether an answer can be shorter than `query.limit` before the last page, because the
+    /// service leaves out results it cannot read. `false` by default. When `true`, the dialog
+    /// keeps paging until an empty answer, so the results cost one more request at their end,
+    /// and each page still starts `query.limit` results after the previous one, counting the
+    /// results left out.
+    ///
+    /// For a full page with no readable results, answer [`FeedError::Other`](crate::data::FeedError::Other)
+    /// with the first reason. The dialog requests the next page without scrolling, stopping
+    /// after three consecutive such pages and showing the first reason. A readable page resets
+    /// that count. All remaining error variants, including HTTP and network failures, stop
+    /// paging immediately.
+    fn leaves_results_out(&self) -> bool {
+        false
+    }
 }
 
 /// What the user typed into the symbol search dialog, and the filters chosen there.
@@ -61,7 +81,8 @@ pub struct SymbolQuery {
     pub sector: Option<String>,
     /// Data provider, independent of the exchange, when set.
     pub source: Option<String>,
-    /// Matching results to skip, for the next page.
+    /// Matching results to skip, for the next page: `limit` for each earlier page, including any
+    /// results the service left out of them.
     pub offset: usize,
     /// Results wanted at most.
     pub limit: usize,
@@ -216,6 +237,10 @@ impl SymbolQuery {
 impl SymbolSearch for crate::data::http::HttpDatafeed {
     fn search(&self, query: SymbolQuery, reply: Reply<Vec<Instrument>>) {
         self.search_symbols(&query.http_params(), query.limit, reply);
+    }
+
+    fn leaves_results_out(&self) -> bool {
+        true
     }
 }
 

@@ -83,11 +83,14 @@ impl<B: PriceBuilder> Built<B> {
 /// eight charts of one type.
 const CACHE_CAPACITY: usize = 16;
 
+/// Box size, reversal, source and one step back of a Point and Figure chart.
+type PnfKey = (f64, u32, PriceBasedSource, bool);
+
 thread_local! {
     static RENKO: RefCell<SpanCache<Built<RenkoBuilder>, (f64, PriceBasedSource, bool)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
     static KAGI: RefCell<SpanCache<Built<KagiBuilder>, (f64, PriceBasedSource)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
     static LINE_BREAK: RefCell<SpanCache<Built<LineBreakBuilder>, (usize, PriceBasedSource)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
-    static POINT_AND_FIGURE: RefCell<SpanCache<Built<PnfBuilder>, (f64, u32, PriceBasedSource)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
+    static POINT_AND_FIGURE: RefCell<SpanCache<Built<PnfBuilder>, PnfKey>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
     static RANGE: RefCell<SpanCache<Built<RangeBarBuilder>, f64>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
 }
 
@@ -238,11 +241,17 @@ pub(super) fn point_and_figure(
     let (box_size, reversal) = (params.pnf_box_size, params.pnf_reversal);
     let config = PointFigureConfig {
         use_close: params.pnf_source == PriceBasedSource::Close,
+        one_step_back: params.pnf_one_step_back,
         ..PointFigureConfig::new(box_size, reversal as usize)
     };
     cached(
         &POINT_AND_FIGURE,
-        (box_size, reversal, params.pnf_source),
+        (
+            box_size,
+            reversal,
+            params.pnf_source,
+            params.pnf_one_step_back,
+        ),
         full,
         revision,
         point_figure::MAX_COLUMNS,
@@ -286,14 +295,17 @@ pub(super) fn range_bars(
 #[derive(Default)]
 pub(crate) struct ExecutionRanges {
     key: Option<(f64, u64, Option<chrono::DateTime<chrono::Utc>>)>,
-    /// The range bars of the held trades, and the time of the first one.
-    executions: Option<(Vec<Bar>, chrono::DateTime<chrono::Utc>)>,
+    /// The range bars of the held trades, whether each closed without a trade in its range,
+    /// and the time of the first trade.
+    executions: Option<(Vec<Bar>, Vec<bool>, chrono::DateTime<chrono::Utc>)>,
     /// The approximated range bars before the bar holding the first held trade, as the cache built
     /// them: a new build gives a new `Arc`. Held instead of the build, whose `Rc` is not `Send`.
     approximated: Option<Arc<[Bar]>>,
     built: Option<(Arc<[Bar]>, bool)>,
     /// Whether `built` starts with approximated range bars.
     mixed: bool,
+    /// Whether each bar of `built` closed without a trade in its range.
+    phantoms: Vec<bool>,
 }
 
 impl ExecutionRanges {
@@ -328,15 +340,16 @@ impl ExecutionRanges {
                 first.get_or_insert(trade.ts);
                 builder.push_tick(trade);
             }
-            let bars: Vec<_> = (builder.elements().iter())
-                .map(range_bar::RangeBar::to_bar)
-                .collect();
-            self.executions = first.map(|first| (bars, first));
+            let elements = builder.elements();
+            let bars = elements.iter().map(range_bar::RangeBar::to_bar).collect();
+            let phantoms = elements.iter().map(|bar| bar.tick_cnt == 0).collect();
+            self.executions = first.map(|first| (bars, phantoms, first));
             self.key = Some(key);
             self.built = None;
         }
-        let Some((executions, first)) = &self.executions else {
+        let Some((executions, execution_phantoms, first)) = &self.executions else {
             (self.built, self.approximated, self.mixed) = (None, None, false);
+            self.phantoms.clear();
             return None;
         };
         // The bar holding the first trade is left out: the trades from it on replace its OHLC. A
@@ -357,10 +370,13 @@ impl ExecutionRanges {
         };
         if self.built.is_none() || !unchanged {
             // The range in progress at the first trade is dropped: the trades open the next one.
-            let (closed, late_start) = approximated.as_deref().map_or((&[][..], false), |built| {
-                let open = usize::from(built.builder.has_open_bar());
-                (&built.bars[..built.bars.len() - open], built.late_start)
-            });
+            let (closed, closed_elements, late_start) =
+                approximated
+                    .as_deref()
+                    .map_or((&[][..], &[][..], false), |built| {
+                        let len = built.bars.len() - usize::from(built.builder.has_open_bar());
+                        (&built.bars[..len], &built.elements[..len], built.late_start)
+                    });
             let all = closed.len() + executions.len();
             let skipped = all.saturating_sub(range_bar::MAX_BARS);
             let bars: Arc<[Bar]> = closed
@@ -368,6 +384,11 @@ impl ExecutionRanges {
                 .chain(executions)
                 .skip(skipped)
                 .cloned()
+                .collect();
+            self.phantoms = (closed_elements.iter())
+                .map(|bar| bar.tick_cnt == 0)
+                .chain(execution_phantoms.iter().copied())
+                .skip(skipped)
                 .collect();
             self.built = Some((bars, late_start || all >= range_bar::MAX_BARS));
             self.mixed = closed.len() > skipped;
@@ -385,6 +406,26 @@ impl ExecutionRanges {
             (Some(_), true) => OhlcThenExecutions,
         }
     }
+}
+
+/// Whether each of the `len` range bars the chart shows from `start` on closed without a trade
+/// in its range: those built from `executions` while it holds them, else those approximated from
+/// `full`, for which `params.range_size` must be valid.
+pub(crate) fn range_phantoms(
+    executions: &ExecutionRanges,
+    full: &[Bar],
+    revision: u64,
+    params: &ChartTypeParams,
+    start: usize,
+    len: usize,
+) -> Vec<bool> {
+    if executions.built.is_some() {
+        let phantoms = executions.phantoms.get(start..start + len);
+        return phantoms.unwrap_or_default().to_vec();
+    }
+    let built = range_bars(full, revision, params);
+    let shown = built.shown(start, len);
+    shown.iter().map(|bar| bar.tick_cnt == 0).collect()
 }
 
 /// The element containing a loaded time. Columns include quiet bars up to the next column's
@@ -793,6 +834,191 @@ mod tests {
         );
     }
 
+    /// The Range, Renko and Line Break styles reach the painter. With a range of 2, the closes 100, 101 and
+    /// 99 complete a bar from 100 up to 101 and down to 99, which thin bars draw as a stroke from
+    /// 99 to 101 at the wick width with ticks at 100 and 99. With a range of 1, a bar that opens
+    /// at 103.5 after a close at 100 completes the bars 100 to 101, 101 to 102 and 102 to 103 in
+    /// one jump: only the first held a price, so phantom bars outline the second and third. A bar
+    /// that trades from 100 to 103.5 completes them along its path, and none is a gap. Bricks of
+    /// 1 from 100 to 102 take the border and wick colours set for rising bricks, a translucent
+    /// border as set. Shown Line Break borders take the colour set for rising lines, or else the
+    /// rising body colour at full opacity.
+    #[test]
+    fn range_and_renko_styles_reach_the_painter() {
+        use crate::model::BarData;
+        use crate::widget::{
+            Chart,
+            test_frames::{frame, shapes},
+        };
+        use egui::{Color32, Shape};
+        let paint = |kind: ChartType, params: ChartTypeParams, source: Vec<Bar>| {
+            let mut chart = Chart::new(BarData::from_bars(source));
+            chart.set_chart_type_params(params);
+            chart.set_chart_type(kind);
+            chart
+                .series_style_mut(crate::widget::SeriesId::MAIN)
+                .unwrap()
+                .price_line_visible = false;
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.2, vec![]);
+            (painted, chart)
+        };
+
+        let mut params = ChartTypeParams {
+            range_size: 2.0,
+            ..Default::default()
+        };
+        params.styles.range.thin_bars = true;
+        let (painted, chart) = paint(
+            ChartType::Range,
+            params,
+            bars(0, &[100.0, 101.0, 99.0], None),
+        );
+        let map = chart.get_chart_mapping();
+        let (x, down) = (map.idx_to_x(0), chart.config().bearish_color);
+        // A slot holds what lies within half the spacing of its centre.
+        let half = (map.idx_to_x(1) - x) / 2.0;
+        let near = |px: f32| (px - x).abs() < half;
+        let wick = chart.config().wick_width;
+        let parts: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::LineSegment {
+                    points: [a, b],
+                    stroke,
+                } if stroke.color == down && near(a.x) && near(b.x) => {
+                    let part = if a.x == b.x {
+                        "stroke"
+                    } else if a.x < x && b.x == x {
+                        "open tick"
+                    } else if a.x == x && b.x > x {
+                        "close tick"
+                    } else {
+                        "other"
+                    };
+                    Some((part, a.y, b.y, stroke.width == wick))
+                }
+                _ => None,
+            })
+            .collect();
+        let y = |price| map.price_to_y(price);
+        assert_eq!(
+            parts,
+            [
+                ("stroke", y(101.0), y(99.0), true),
+                ("open tick", y(100.0), y(100.0), true),
+                ("close tick", y(99.0), y(99.0), true),
+            ],
+            "thin range bar"
+        );
+        assert!(
+            !painted
+                .iter()
+                .any(|shape| matches!(shape, Shape::Rect(r) if r.fill == down)),
+            "a thin range bar has no block"
+        );
+
+        // The same three bars, completed by one bar that trades from 100 up to 103.5.
+        let mut traded = bars(0, &[100.0, 103.5], None);
+        (traded[1].open, traded[1].low) = (100.0, 100.0);
+        for (source, phantom_bars, gap) in [
+            (bars(0, &[100.0, 103.5], None), false, "filled"),
+            (bars(0, &[100.0, 103.5], None), true, "outlined"),
+            (traded, true, "filled"),
+        ] {
+            let mut params = ChartTypeParams::default();
+            params.styles.range.phantom_bars = phantom_bars;
+            let (painted, chart) = paint(ChartType::Range, params, source);
+            let map = chart.get_chart_mapping();
+            let up = chart.config().bullish_color;
+            let drawn: Vec<_> = (0..4)
+                .map(|i| {
+                    let x = map.idx_to_x(i);
+                    painted.iter().find_map(|shape| match shape {
+                        Shape::Rect(r) if (r.rect.center().x - x).abs() < 0.5 => {
+                            Some(if r.fill == up {
+                                "filled"
+                            } else if r.fill == Color32::TRANSPARENT && r.stroke.color == up {
+                                "outlined"
+                            } else {
+                                "other"
+                            })
+                        }
+                        _ => None,
+                    })
+                })
+                .collect();
+            let filled = Some("filled");
+            assert_eq!(
+                drawn,
+                [filled, Some(gap), Some(gap), filled],
+                "phantom bars {phantom_bars}, gaps {gap}"
+            );
+        }
+
+        let (border, wick) = (
+            Color32::from_rgba_unmultiplied(1, 2, 3, 128),
+            Color32::from_rgb(4, 5, 6),
+        );
+        let mut params = ChartTypeParams {
+            renko_wicks: true,
+            ..Default::default()
+        };
+        params.styles.renko.border_up = Some(border);
+        params.styles.renko.wick_up = Some(wick);
+        let (painted, chart) = paint(
+            ChartType::Renko,
+            params,
+            bars(0, &[100.0, 101.0, 102.0], None),
+        );
+        let plot = chart.get_rendered_price_rect();
+        let borders = painted
+            .iter()
+            .filter(|shape| {
+                matches!(shape, Shape::Rect(r)
+                    if r.stroke.color == border && plot.contains(r.rect.center()))
+            })
+            .count();
+        let wicks = painted
+            .iter()
+            .filter(|shape| {
+                matches!(shape, Shape::LineSegment { points, stroke }
+                    if stroke.color == wick && points[0].x == points[1].x)
+            })
+            .count();
+        assert_eq!((borders, wicks), (2, 2), "renko borders and wicks");
+
+        for (visible, own, count) in [
+            (true, Some(border), 3),
+            (true, None, 3),
+            (false, Some(border), 0),
+            (false, None, 0),
+        ] {
+            let mut params = ChartTypeParams::default();
+            let style = &mut params.styles.line_break;
+            style.border_visible = visible;
+            style.border_up = own;
+            let (painted, chart) = paint(
+                ChartType::LineBreak,
+                params,
+                bars(0, &[100.0, 101.0, 102.0], None),
+            );
+            let plot = chart.get_rendered_price_rect();
+            let expected = own.unwrap_or(chart.config().bullish_color);
+            let borders = painted
+                .iter()
+                .filter(|shape| {
+                    matches!(shape, Shape::Rect(r)
+                    if r.stroke.width > 0.0 && r.stroke.color == expected
+                        && plot.contains(r.rect.center()))
+                })
+                .count();
+            assert_eq!(borders, count, "line break borders {visible}, {own:?}");
+        }
+    }
+
     #[test]
     fn box_sizes_freeze_through_streaming_and_wait_for_history() {
         use crate::model::{BarData, BoxSizeMethod};
@@ -1147,6 +1373,60 @@ mod tests {
         }
     }
 
+    /// Phantom marks follow the same history/trade join and retention as the displayed bars.
+    #[test]
+    fn phantom_marks_follow_approximated_bars_before_the_trades() {
+        use crate::model::{BarClock, Tick, Timeframe};
+        let start = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let at = |minute| start + Duration::minutes(minute);
+        let flat = |minute, price| Bar::new(at(minute), price, price, price, price, 0.0);
+        // (history, two trade prices, closes of the two phantom bars, retained bar count)
+        type Row = (Vec<Bar>, [f64; 2], [f64; 2], usize);
+        let rows: [Row; 3] = [
+            (vec![], [100.0, 103.5], [102.0, 103.0], 4),
+            (
+                vec![flat(0, 100.0), flat(1, 103.5)],
+                [104.0, 105.5],
+                [102.0, 103.0],
+                5,
+            ),
+            (
+                vec![
+                    flat(0, 0.0),
+                    Bar::new(at(1), 0.0, 5000.0, 0.0, 5000.0, 0.0),
+                    flat(2, 5003.5),
+                ],
+                [5004.0, 5005.5],
+                [5002.0, 5003.0],
+                5000,
+            ),
+        ];
+        let params = ChartTypeParams {
+            range_size: 1.0,
+            ..Default::default()
+        };
+        for (history, prices, expected, len) in rows {
+            let first = at(history.len() as i64);
+            let trades = prices.map(|price| Tick::new(first, price, 1.0, None));
+            let mut ranges = ExecutionRanges::default();
+            let clock = BarClock::new(Timeframe::Min1);
+            let (bars, _) = ranges
+                .bars(&params, &history, 0, &clock, 0, trades.iter(), None)
+                .unwrap();
+            let marks = range_phantoms(&ranges, &history, 0, &params, 0, bars.len());
+            let phantom_closes: Vec<_> = bars
+                .iter()
+                .zip(&marks)
+                .filter(|(_, phantom)| **phantom)
+                .map(|(bar, _)| bar.close)
+                .collect();
+            assert_eq!(
+                (bars.len(), marks.len(), phantom_closes),
+                (len, len, expected.to_vec())
+            );
+        }
+    }
+
     #[test]
     fn price_based_charts_are_built_over_the_whole_history() {
         // (name, chart type, params, calls as (bars, revision), expected OHLC ends and minutes)
@@ -1274,18 +1554,40 @@ mod tests {
 
     /// The newest close adds no element and lies beyond the elements in view, further than the
     /// scale margins of a tenth of the pane reach: the fit holds the last price line and its
-    /// label all the same.
+    /// label all the same. A type that labels its newest element instead shows that element's
+    /// close: closes that rise to 139 and end at 138.6, short of a new element, leave the newest
+    /// brick, line and column at 139.
     #[test]
     fn last_price_line_stays_in_view_on_price_based_charts() {
         use crate::model::{BarData, LineStyle};
         use crate::widget::test_frames::{frame, shapes};
         use crate::widget::{Chart, SeriesId};
         use egui::{Color32, Shape};
-        // (chart type, parameters, first open, closes, label of the newest close)
+        // (chart type, parameters, first open, closes, label of the price line)
         type Row<'a> = (ChartType, ChartTypeParams, Option<f64>, &'a [f64], &'a str);
         // Lines of 10 from 100 to 340, then 241: above 240, the low of the last ten lines. Any
         // close that adds no line lies within those, so this chart is read with fewer in view.
         let stairs = Vec::from_iter((1..=24).map(|i| 100.0 + 10.0 * f64::from(i)).chain([241.0]));
+        let rise = [100.0, 139.0, 138.6];
+        let mut choices: Vec<Row> = Vec::new();
+        for kind in [
+            ChartType::Renko,
+            ChartType::Kagi,
+            ChartType::LineBreak,
+            ChartType::PointAndFigure,
+        ] {
+            for real in [true, false] {
+                let mut params = ChartTypeParams::default();
+                *match kind {
+                    ChartType::Renko => &mut params.renko_real_price,
+                    ChartType::Kagi => &mut params.kagi_real_price,
+                    ChartType::LineBreak => &mut params.line_break_real_price,
+                    _ => &mut params.pnf_real_price,
+                } = real;
+                let label = if real { "138.60" } else { "139.00" };
+                choices.push((kind, params, None, &rise, label));
+            }
+        }
         let rows: [Row; 4] = [
             // Bricks of 1 from 100 to 103, fitted up to 103.375.
             (
@@ -1326,7 +1628,7 @@ mod tests {
             ),
         ];
         let mut failures = Vec::new();
-        for (kind, params, first_open, closes, label) in rows {
+        for (kind, params, first_open, closes, label) in rows.into_iter().chain(choices) {
             let ctx = egui::Context::default();
             let mut chart = Chart::new(BarData::from_bars(bars(0, closes, first_open)));
             chart.set_chart_type_params(params);
@@ -1340,9 +1642,7 @@ mod tests {
             frame(&ctx, &mut chart, 0.1, vec![]);
             let painted = shapes(&ctx, &mut chart, 0.2, vec![]);
             let plot = chart.get_rendered_price_rect();
-            let y = chart
-                .get_chart_mapping()
-                .price_to_y(closes[closes.len() - 1]);
+            let y = chart.get_chart_mapping().price_to_y(label.parse().unwrap());
             if !painted.iter().any(|shape| {
                 matches!(shape,
                     Shape::LineSegment { points, stroke }

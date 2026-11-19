@@ -594,6 +594,26 @@ impl Chart {
                 }
             }
             for (_, updates) in drained.updates {
+                if updates.reload {
+                    // Replace this history and its subscription without disturbing other histories.
+                    series.bars.clear();
+                    series.from_ticks.clear();
+                    series.error = None;
+                    series.stream_error = None;
+                    stream.pending = false;
+                    stream.history = None;
+                    stream.cursor = None;
+                    stream.retry_at = None;
+                    stream.failures = 0;
+                    stream.end = false;
+                    stream.paged = false;
+                    if let Some(id) = stream.subscription.take() {
+                        stream.inbox.unsubscribe(id);
+                        stream.feed.unsubscribe(id);
+                    }
+                    changes.note(&series.request, true);
+                    continue;
+                }
                 if updates.reset {
                     series.bars.clear();
                     series.from_ticks.clear();
@@ -1354,6 +1374,58 @@ pub(super) mod tests {
             }
             assert_eq!(chart.pending_from[0], Some(0));
         }
+    }
+
+    /// A study history replaces its subscription and reloads the latest page when its feed
+    /// asks, discarding live data received before and after the request in the same drain.
+    #[test]
+    fn a_study_history_reloads_when_its_feed_asks() {
+        let feed = Arc::new(Feed::default());
+        let mut chart = ChartBuilder::new()
+            .with_feed(feed.clone())
+            .with_symbol("MAIN")
+            .with_timeframe(Timeframe::Hour1)
+            .build();
+        let id = chart.add_indicator(Box::new(SMA::new(1)));
+        chart
+            .indicator_mut(id)
+            .unwrap()
+            .set_input("calculation_symbol", InputValue::Symbol("REMOTE".into()))
+            .unwrap();
+        let ctx = egui::Context::default();
+        for frame in 0..8 {
+            shapes(&ctx, &mut chart, frame as f64, Vec::new());
+        }
+        let remote = |feed: &Feed| {
+            feed.sinks
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(symbol, _)| symbol == "REMOTE")
+                .map(|(_, sink)| sink.clone())
+                .collect::<Vec<_>>()
+        };
+        let sinks = remote(&feed);
+        assert_eq!(sinks.len(), 1);
+        let sink = &sinks[0];
+        let closes = |chart: &Chart| {
+            chart.study_data.series[0]
+                .bars
+                .iter()
+                .map(|bar| bar.close)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(closes(&chart), [10.0, 14.0, 20.0]);
+        let at = DateTime::UNIX_EPOCH + Duration::hours(3);
+        sink.push_tick(crate::model::Tick::new(at, 30.0, 1.0, None));
+        sink.reload_history();
+        sink.push_tick(crate::model::Tick::new(at, 40.0, 1.0, None));
+        chart.pump_study_data(&ctx, Some(feed.clone()));
+        assert!(!sink.is_active());
+        assert_eq!(remote(&feed).len(), 2);
+        assert!(closes(&chart).is_empty());
+        chart.pump_study_data(&ctx, Some(feed.clone()));
+        assert_eq!(closes(&chart), [10.0, 14.0, 20.0]);
     }
 
     /// Metric streams keep exact publication times, refresh dependent studies, and use

@@ -565,8 +565,8 @@ impl HighLowStyle {
     }
 }
 
-/// The Kagi chart's stroke widths in logical points. Non-positive or non-finite widths hide
-/// the lines of that thickness.
+/// The Kagi chart's strokes. Widths are in logical points; non-positive or non-finite widths
+/// hide the lines of that thickness.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -575,6 +575,14 @@ pub struct KagiStyle {
     pub thick_width: f32,
     /// Width of the thin lines of a downtrend.
     pub thin_width: f32,
+    /// Colour of the thick lines. [`Color32::PLACEHOLDER`] draws them in the chart's rising
+    /// candle body colour, as documents saved before this colour read.
+    #[serde(default = "candle_body_color")]
+    pub up_color: Color32,
+    /// Colour of the thin lines. [`Color32::PLACEHOLDER`] draws them in the chart's falling
+    /// candle body colour, as documents saved before this colour read.
+    #[serde(default = "candle_body_color")]
+    pub down_color: Color32,
 }
 
 impl Default for KagiStyle {
@@ -582,18 +590,152 @@ impl Default for KagiStyle {
         Self {
             thick_width: 2.5,
             thin_width: 1.5,
+            up_color: DESIGN_TOKENS.semantic.extended.bullish,
+            down_color: DESIGN_TOKENS.semantic.extended.bearish,
         }
     }
 }
 
+impl KagiStyle {
+    /// How a Kagi chart drew before it had colours of its own: in the candle body colours.
+    fn saved_without_colors() -> Self {
+        Self {
+            up_color: Color32::PLACEHOLDER,
+            down_color: Color32::PLACEHOLDER,
+            ..Self::default()
+        }
+    }
+}
+
+/// What a missing colour of a style that once drew in the candle body colours reads.
+fn candle_body_color() -> Color32 {
+    Color32::PLACEHOLDER
+}
+
+/// `color`, or `candle` for [`Color32::PLACEHOLDER`]: the candle body colour that a style saved
+/// before it had colours of its own draws in.
+#[cfg(feature = "widget")]
+pub(crate) fn or_candle(color: Color32, candle: Color32) -> Color32 {
+    if color == Color32::PLACEHOLDER {
+        candle
+    } else {
+        color
+    }
+}
+
+/// The Point and Figure chart's colours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct PointFigureStyle {
+    /// Colour of the X columns. [`Color32::PLACEHOLDER`] draws them in the chart's rising candle
+    /// body colour, as documents saved before this colour read.
+    pub up_color: Color32,
+    /// Colour of the O columns. [`Color32::PLACEHOLDER`] draws them in the chart's falling
+    /// candle body colour, as documents saved before this colour read.
+    pub down_color: Color32,
+}
+
+impl Default for PointFigureStyle {
+    fn default() -> Self {
+        Self {
+            up_color: DESIGN_TOKENS.semantic.extended.bullish,
+            down_color: DESIGN_TOKENS.semantic.extended.bearish,
+        }
+    }
+}
+
+impl PointFigureStyle {
+    /// How a Point and Figure chart drew before it had this style: in the candle body colours.
+    fn saved_without_style() -> Self {
+        Self {
+            up_color: Color32::PLACEHOLDER,
+            down_color: Color32::PLACEHOLDER,
+        }
+    }
+}
+
+/// The Line Break chart's line borders. A colour left `None` draws the border in its line's
+/// colour at full opacity, as a chart that has not set it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct LineBreakStyle {
+    /// Outline each line.
+    pub border_visible: bool,
+    /// Border of rising lines.
+    pub border_up: Option<Color32>,
+    /// Border of falling lines.
+    pub border_down: Option<Color32>,
+}
+
+impl Default for LineBreakStyle {
+    fn default() -> Self {
+        Self {
+            border_visible: true,
+            border_up: None,
+            border_down: None,
+        }
+    }
+}
+
+/// The Renko chart's brick borders and wicks. Colours left `None` draw as a chart that has not
+/// set them: the border in its brick's colour at full opacity and the wick in the brick's colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct RenkoStyle {
+    /// Outline each brick.
+    pub border_visible: bool,
+    /// Border of rising bricks.
+    pub border_up: Option<Color32>,
+    /// Border of falling bricks.
+    pub border_down: Option<Color32>,
+    /// Wick of rising bricks, drawn while
+    /// [`ChartTypeParams::renko_wicks`](super::ChartTypeParams::renko_wicks) is on.
+    pub wick_up: Option<Color32>,
+    /// Wick of falling bricks, drawn while
+    /// [`ChartTypeParams::renko_wicks`](super::ChartTypeParams::renko_wicks) is on.
+    pub wick_down: Option<Color32>,
+}
+
+impl Default for RenkoStyle {
+    fn default() -> Self {
+        Self {
+            border_visible: true,
+            border_up: None,
+            border_down: None,
+            wick_up: None,
+            wick_down: None,
+        }
+    }
+}
+
+/// The Range chart's bars.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct RangeStyle {
+    /// Draw each bar as a stroke from its low to its high with open and close ticks, at the
+    /// chart's wick width at every zoom level as thin OHLC bars are, instead of a filled block.
+    pub thin_bars: bool,
+    /// Draw a bar that closed without a trade in its range, as one of the bars a single trade
+    /// across a price gap closes, as an outline in its direction's colour without a fill. These
+    /// bars stay elements of the chart: studies, the legend and the data window read them as
+    /// they read the bars that traded.
+    pub phantom_bars: bool,
+}
+
 /// Styles of the candle, hollow candle, volume candle, Heikin-Ashi, bar, column, high-low, line,
-/// step, marker, area, HLC area, baseline and Kagi chart types.
+/// step, marker, area, HLC area, baseline, Renko, Kagi, Line Break, Point and Figure and Range
+/// chart types.
 /// Defaults use the design-token palette and remain independent of candle colours.
 ///
 /// ```
 /// use egui_charts::model::{
 ///     CandlesStyle, ChartTypeStyles, ColumnsStyle, HeikinStyle, HighLowStyle, HlcAreaStyle,
-///     HollowStyle, KagiStyle, PriceSource, VolumeCandlesStyle,
+///     HollowStyle, KagiStyle, LineBreakStyle, PointFigureStyle, PriceSource, RangeStyle,
+///     RenkoStyle, VolumeCandlesStyle,
 /// };
 ///
 /// let mut styles = ChartTypeStyles::default();
@@ -617,7 +759,20 @@ impl Default for KagiStyle {
 /// styles.hlc_area = hlc_area;
 /// let mut kagi = KagiStyle::default();
 /// kagi.thick_width = 3.0;
+/// kagi.up_color = egui::Color32::BLUE;
 /// styles.kagi = kagi;
+/// let mut point_figure = PointFigureStyle::default();
+/// point_figure.up_color = egui::Color32::BLUE;
+/// styles.point_figure = point_figure;
+/// let mut range = RangeStyle::default();
+/// range.thin_bars = true;
+/// styles.range = range;
+/// let mut renko = RenkoStyle::default();
+/// renko.border_visible = false;
+/// styles.renko = renko;
+/// let mut line_break = LineBreakStyle::default();
+/// line_break.border_visible = false;
+/// styles.line_break = line_break;
 /// styles.columns = ColumnsStyle::default();
 /// styles.step_line_price_source = Some(PriceSource::High);
 /// styles.line_gradient = true;
@@ -686,8 +841,20 @@ pub struct ChartTypeStyles {
     /// were drawn.
     #[serde(default = "HighLowStyle::saved_without_style")]
     pub high_low: HighLowStyle,
-    /// Kagi chart.
+    /// Renko chart.
+    pub renko: RenkoStyle,
+    /// Line Break chart.
+    pub line_break: LineBreakStyle,
+    /// Kagi chart. Documents saved before its colours draw in the candle body colours, as they
+    /// were drawn.
+    #[serde(default = "KagiStyle::saved_without_colors")]
     pub kagi: KagiStyle,
+    /// Point and Figure chart. Documents saved before this style draw in the candle body
+    /// colours, as they were drawn.
+    #[serde(default = "PointFigureStyle::saved_without_style")]
+    pub point_figure: PointFigureStyle,
+    /// Range chart.
+    pub range: RangeStyle,
     /// Radius in logical points of the marker drawn on the line at the crosshair's bar in the
     /// Line, Step line, Line with markers, Area and Baseline charts. Non-positive or non-finite
     /// radii hide it, the default.
@@ -728,7 +895,11 @@ impl Default for ChartTypeStyles {
             bars: BarsStyle::default(),
             columns: ColumnsStyle::default(),
             high_low: HighLowStyle::default(),
+            renko: RenkoStyle::default(),
+            line_break: LineBreakStyle::default(),
             kagi: KagiStyle::default(),
+            point_figure: PointFigureStyle::default(),
+            range: RangeStyle::default(),
             crosshair_marker_radius: 0.0,
             crosshair_marker_fill: None,
             crosshair_marker_border_color: None,
@@ -790,6 +961,8 @@ impl ChartTypeStyles {
             volume_candles: VolumeCandlesStyle::saved_without_style(),
             heikin: HeikinStyle::saved_without_style(),
             high_low: HighLowStyle::saved_without_style(),
+            kagi: KagiStyle::saved_without_colors(),
+            point_figure: PointFigureStyle::saved_without_style(),
             ..Self::default()
         }
     }

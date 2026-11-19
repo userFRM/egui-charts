@@ -15,7 +15,8 @@ mod tests;
 
 use crate::localization as l10n;
 use crate::model::{
-    Bar, OrderSide, StrategyComparison, StrategyPerformance, StrategyReport, Timeframe,
+    Bar, OrderSide, StrategyComparison, StrategyPerformance, StrategyReport, SummaryUnit,
+    Timeframe, run_figures, trade_figures,
 };
 use crate::theme::ThemeExt;
 use crate::ui_kit::{
@@ -53,7 +54,8 @@ pub enum StrategyReportAction {
     None,
     /// Reveal this trade on the chart.
     SelectTrade(StrategyTradeSelection),
-    /// Save these valid trades as CSV.
+    /// Save these valid trades as CSV, written by [`StrategyReport::trades_csv_with_excursions`]
+    /// with the excursions the list of trades shows.
     ExportCsv(String),
     /// Save the summary metrics and run properties shown, as [`StrategyReport::summary_csv`]
     /// writes them, under the suggested file name.
@@ -151,12 +153,14 @@ impl StrategyReportPanel {
     }
 
     /// Draw the report and return this frame's host intent. No report draws nothing.
+    /// A report with [`StrategyReport::unavailable`] shows that reason instead of its summary and exports.
     pub fn show(&mut self, ui: &mut Ui) -> StrategyReportAction {
         let Some(data) = &self.data else {
             return StrategyReportAction::None;
         };
         let mut action = StrategyReportAction::None;
         let theme = ui.active_theme();
+        let unavailable = data.report.unavailable.as_deref();
         ui.horizontal_wrapped(|ui| {
             ui.label(
                 RichText::new(l10n::text(ui.ctx(), "Strategy report"))
@@ -168,18 +172,24 @@ impl StrategyReportPanel {
                 "{} · {}",
                 data.report.symbol, data.report.timeframe
             ));
-            if Button::new("Export trades CSV").show(ui).clicked() {
-                action = StrategyReportAction::ExportCsv(data.report.trades_csv());
-            }
-            if Button::new("Export summary CSV").show(ui).clicked() {
-                action = StrategyReportAction::ExportSummaryCsv {
-                    filename: summary_filename(&data.report),
-                    content: data.report.summary_csv(&data.performance, &data.comparison),
-                };
+            if unavailable.is_none() {
+                if Button::new("Export trades CSV").show(ui).clicked() {
+                    action = StrategyReportAction::ExportCsv(
+                        data.report.trades_csv_with_excursions(&data.comparison),
+                    );
+                }
+                if Button::new("Export summary CSV").show(ui).clicked() {
+                    action = StrategyReportAction::ExportSummaryCsv {
+                        filename: summary_filename(&data.report),
+                        content: data.report.summary_csv(&data.performance, &data.comparison),
+                    };
+                }
             }
         });
         TabBar::new(&[Tab::Summary, Tab::Trades, Tab::Properties], &mut self.tab).show(ui);
-        if data.performance.skipped_trades
+        if let Some(reason) = unavailable {
+            ui.colored_label(theme.ui.warning, l10n::text(ui.ctx(), reason));
+        } else if data.performance.skipped_trades
             + data.performance.skipped_equity_points
             + data.comparison.skipped_bars
             > 0
@@ -199,12 +209,13 @@ impl StrategyReportPanel {
         }
         match self.tab {
             Tab::Summary => {
-                egui::ScrollArea::vertical()
-                    .id_salt("summary")
-                    .show(ui, |ui| {
-                        summary(ui, data, &mut self.compare);
-                    })
-                    .inner
+                if unavailable.is_none() {
+                    egui::ScrollArea::vertical()
+                        .id_salt("summary")
+                        .show(ui, |ui| {
+                            summary(ui, data, &mut self.compare);
+                        });
+                }
             }
             Tab::Trades => {
                 if let Some(index) = trades(ui, data, &mut self.selected) {
@@ -296,58 +307,63 @@ fn property(ui: &mut Ui, label: &str, value: &str) {
 }
 
 fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
-    let p = &data.performance;
     let report = &data.report;
     let theme = ui.active_theme();
-    let metrics = [
-        ("Net profit", money(Some(p.net_profit), report)),
-        ("Net return", percent(p.net_profit_fraction)),
-        ("Gross profit", money(Some(p.gross_profit), report)),
-        ("Gross loss", money(Some(p.gross_loss), report)),
-        ("Profit factor", number(p.profit_factor)),
-        ("Win rate", percent(p.win_rate)),
-        ("Average trade", money(p.average_trade, report)),
-        ("Fees", money(Some(p.total_fees), report)),
-        ("Maximum drawdown", money(p.max_drawdown, report)),
-        ("Maximum drawdown %", percent(p.max_drawdown_fraction)),
-        ("Sharpe ratio", number(p.sharpe_ratio)),
-        ("Sortino ratio", number(p.sortino_ratio)),
-        (
-            "Buy-and-hold return",
-            percent(data.comparison.buy_and_hold_return),
-        ),
-        (
-            "Largest winning trade",
-            money(p.largest_winning_trade, report),
-        ),
-        (
-            "Largest losing trade",
-            money(p.largest_losing_trade, report),
-        ),
-        ("Consecutive wins", p.max_consecutive_wins.to_string()),
-        ("Consecutive losses", p.max_consecutive_losses.to_string()),
-        (
-            "Closed / open trades",
-            format!("{} / {}", p.closed_trades, p.open_trades),
-        ),
-    ];
+    let cell = |value: Option<f64>, unit: SummaryUnit| match unit {
+        SummaryUnit::Money => money(value, report),
+        SummaryUnit::Percent => percent(value),
+        SummaryUnit::Ratio | SummaryUnit::Bars => number(value),
+        SummaryUnit::Count | SummaryUnit::Quantity => value
+            .filter(|v| v.is_finite())
+            .map_or_else(|| "N/A".into(), |v| v.to_string()),
+    };
     let pairs = if ui.available_width() >= 760.0 { 2 } else { 1 };
-    egui::Grid::new("performance")
-        .striped(true)
-        .spacing([theme.spacing.xxl, theme.spacing.sm])
+    egui::ScrollArea::horizontal()
+        .id_salt("summary_sides")
         .show(ui, |ui| {
-            for (i, (label, value)) in metrics.iter().enumerate() {
-                ui.label(RichText::new(l10n::text(ui.ctx(), label)).color(theme.ui.text_secondary));
-                ui.label(RichText::new(value).strong());
-                if (i + 1) % pairs == 0 {
+            egui::Grid::new("performance_by_side")
+                .striped(true)
+                .spacing([theme.spacing.xxl, theme.spacing.sm])
+                .show(ui, |ui| {
+                    ui.label("");
+                    for side in ["All", "Long", "Short"] {
+                        ui.label(RichText::new(l10n::text(ui.ctx(), side)).strong());
+                    }
                     ui.end_row();
-                }
-            }
+                    for (label, unit, values) in trade_figures(&data.performance, &data.comparison)
+                    {
+                        ui.label(
+                            RichText::new(l10n::text(ui.ctx(), label))
+                                .color(theme.ui.text_secondary),
+                        );
+                        for value in values {
+                            ui.label(RichText::new(cell(value, unit)).strong());
+                        }
+                        ui.end_row();
+                    }
+                });
+            ui.add_space(theme.spacing.md);
+            let metrics = run_figures(&data.performance, &data.comparison);
+            egui::Grid::new("performance")
+                .striped(true)
+                .spacing([theme.spacing.xxl, theme.spacing.sm])
+                .show(ui, |ui| {
+                    for (i, &(label, unit, value)) in metrics.iter().enumerate() {
+                        ui.label(
+                            RichText::new(l10n::text(ui.ctx(), label))
+                                .color(theme.ui.text_secondary),
+                        );
+                        ui.label(RichText::new(cell(value, unit)).strong());
+                        if (i + 1) % pairs == 0 {
+                            ui.end_row();
+                        }
+                    }
+                });
         });
     ui.label(
         RichText::new(l10n::text(
             ui.ctx(),
-            "N/A means unavailable. Ratios require at least 13 weeks of equity.",
+            "N/A means unavailable. Ratios and compound growth require at least 13 weeks of equity; holding times and buy-and-hold figures require the source bars.",
         ))
         .color(theme.ui.text_muted)
         .size(theme.text.small),

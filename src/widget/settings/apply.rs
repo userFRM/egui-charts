@@ -1,7 +1,7 @@
 //! Apply and read the chart settings exposed by the shared dialog.
 
 use super::{
-    BackgroundType, ButtonVisibility, ChartSettingsState, GridLinesMode, PrecisionMode,
+    BackgroundType, ButtonVisibility, ChartSettingsState, DateFormat, GridLinesMode, PrecisionMode,
     ThousandsSeparator, WatermarkMode,
 };
 use crate::{
@@ -161,8 +161,8 @@ fn set_unless_resolved(current: &mut Option<Color32>, fallback: Color32, color: 
 }
 
 impl ChartSettingsState {
-    /// Read the chart's current display settings. Host-managed trading and alert groups
-    /// retain defaults; hosts preserve their current values when refreshing chart settings.
+    /// Read the chart's current display settings. Host-managed trading and alert groups and
+    /// futures data choices retain defaults; hosts preserve them when refreshing settings.
     pub fn from_chart(chart: &Chart) -> Self {
         let config = chart.config();
         let mut settings = Self {
@@ -171,6 +171,7 @@ impl ChartSettingsState {
             price_source: Some(chart.config().price_source),
             events: chart.event_visibility().clone(),
             show_session_breaks: Some(config.show_session_breaks),
+            extended_hours: Some(chart.extended_hours()),
             order_flow: super::OrderFlowSettings {
                 show_heatmap: chart
                     .feed_link
@@ -193,6 +194,8 @@ impl ChartSettingsState {
                     .unwrap_or_default(),
             },
             show_price_targets: chart.price_targets_visible(),
+            price_target_positive_color: Some(config.price_target_positive_color),
+            price_target_negative_color: Some(config.price_target_negative_color),
             ..Self::default()
         };
         settings.candle_colors.body_up = config.bullish_color;
@@ -261,11 +264,13 @@ impl ChartSettingsState {
         settings.grid_lines.horizontal_color = config.grid_color;
         settings.grid_lines.vertical_color =
             config.vertical_grid_color.unwrap_or(config.grid_color);
+        settings.pane_separator_color = chart.pane_options().separator_color;
         settings.status_line.show_logo = config.show_legend_badge;
         settings.status_line.show_market_status = config.show_market_status;
         settings.status_line.show_symbol = config.show_symbol_labels;
         settings.status_line.title_as_description = config.title_as_description;
         settings.status_line.show_quote_boxes = config.show_quote_boxes;
+        settings.status_line.quote_panel = config.quote_panel;
         settings.status_line.show_ohlc = config.show_ohlc_info;
         settings.status_line.show_change = config.show_ohlc_change;
         settings.status_line.show_change_percent = config.show_ohlc_change_percent;
@@ -324,7 +329,10 @@ impl ChartSettingsState {
         settings.scales_and_lines.show_prev_close = config.show_prev_close_line;
         settings.scales_and_lines.show_countdown = config.show_countdown;
         settings.scales_and_lines.show_bid_ask = config.show_bid_ask;
+        settings.scales_and_lines.show_bid_ask_lines = config.show_bid_ask_lines;
+        settings.scales_and_lines.prev_close_line = Some(config.prev_close_line);
         settings.scales_and_lines.show_high_low = config.show_high_low;
+        settings.scales_and_lines.show_high_low_lines = config.show_high_low_lines;
         settings.margins.top_percent =
             (chart.state().price_scale().options().scale_margins.top * 100.0) as f32;
         settings.margins.bottom_percent =
@@ -341,6 +349,13 @@ impl ChartSettingsState {
         settings.scales_and_lines.invert_scale = scale.options().invert_scale;
 
         settings.set_timezone_mode(&chart.chart_options().time_scale.timezone);
+        let time_scale = &chart.chart_options().time_scale;
+        settings.scales_and_lines.use_24_hour = Some(time_scale.use_24_hour);
+        settings.scales_and_lines.weekday_names = Some(time_scale.weekday_names);
+        settings.scales_and_lines.date_format = Some(match &chart.date_format {
+            Some(pattern) => DateFormat::Pattern(pattern.clone()),
+            None => DateFormat::Default,
+        });
         settings.grid_lines.mode = match (
             config.show_grid && config.show_horizontal_grid,
             config.show_grid && config.show_vertical_grid,
@@ -373,8 +388,7 @@ impl ChartSettingsState {
         settings.crosshair.color = crosshair.horz_line_color;
         settings.crosshair.line_width = crosshair.horz_line_width;
         settings.crosshair.line_style = crosshair.horz_line_style;
-        settings.precision =
-            PrecisionMode::from_decimals(chart.state().price_scale().chosen_precision());
+        settings.precision = PrecisionMode::from_scale(chart.state().price_scale());
         settings.watermark.mode = if !config.show_watermark {
             WatermarkMode::ReplayMode
         } else if config.watermark_text.is_some() {
@@ -476,7 +490,10 @@ impl ChartSettingsState {
     /// Apply the display controls offered by the dialog without rebuilding the chart or feed.
     /// Host-owned trading and alerts are left to their providers. Invalid timezone,
     /// margins or crosshair width returns an error before changing the chart. The optional
-    /// choices that hold `None`, as in settings saved before they existed, keep the chart's.
+    /// choices that hold `None`, as in settings saved before they existed, keep the chart's,
+    /// while the optional colours apply as they are: `None` gives the last price its candle
+    /// direction colour, study values their plot colours and pane separators the theme's grid
+    /// line colour.
     pub fn apply_to_chart(&self, chart: &mut Chart) -> Result<(), ChartSettingsError> {
         let timezone = self.validate()?;
         if let Some(params) = &self.chart_type_params {
@@ -505,7 +522,23 @@ impl ChartSettingsState {
         );
         chart.set_event_visibility(self.events.clone());
         chart.set_price_targets_visible(self.show_price_targets);
+        if let Some(extended) = self.extended_hours {
+            chart.set_extended_hours(extended);
+        }
         chart.chart_options.time_scale.timezone = timezone;
+        let scales = &self.scales_and_lines;
+        if let Some(use_24_hour) = scales.use_24_hour {
+            chart.chart_options.time_scale.use_24_hour = use_24_hour;
+        }
+        if let Some(weekday_names) = scales.weekday_names {
+            chart.chart_options.time_scale.weekday_names = weekday_names;
+        }
+        if let Some(date_format) = &scales.date_format {
+            chart.set_date_format(match date_format {
+                DateFormat::Default => None,
+                DateFormat::Pattern(pattern) => Some(pattern.clone()),
+            });
+        }
         if self.scales_appearance.lines_color != axis_line_color(chart.config()) {
             // A transparent line is no line; any other colour draws on the price axes and the time axis.
             let line = (self.scales_appearance.lines_color != Color32::TRANSPARENT)
@@ -522,6 +555,7 @@ impl ChartSettingsState {
         crosshair.vert_line_width = self.crosshair.line_width;
         crosshair.horz_line_style = self.crosshair.line_style;
         crosshair.vert_line_style = crosshair.horz_line_style;
+        chart.pane_options_mut().separator_color = self.pane_separator_color;
         let mut axis_layout = self.scales_and_lines.axis_layout;
         if self.scales_and_lines.price_scale_left != chart.main_axis_on_left()
             && axis_layout.side.is_some()
@@ -596,6 +630,7 @@ impl ChartSettingsState {
         config.show_symbol_labels = self.status_line.show_symbol;
         config.title_as_description = self.status_line.title_as_description;
         config.show_quote_boxes = self.status_line.show_quote_boxes;
+        config.quote_panel = self.status_line.quote_panel;
         config.show_ohlc_change = self.status_line.show_change;
         config.show_ohlc_change_percent = self.status_line.show_change_percent;
         config.show_legend_volume = self.status_line.show_volume;
@@ -630,12 +665,27 @@ impl ChartSettingsState {
         config.show_prev_close_line = self.scales_and_lines.show_prev_close;
         config.show_countdown = self.scales_and_lines.show_countdown;
         config.show_bid_ask = self.scales_and_lines.show_bid_ask;
+        if let Some(lines) = self.scales_and_lines.show_bid_ask_lines {
+            config.show_bid_ask_lines = Some(lines);
+        }
+        if let Some(line) = self.scales_and_lines.prev_close_line {
+            config.prev_close_line = line;
+        }
         config.show_high_low = self.scales_and_lines.show_high_low;
+        if let Some(lines) = self.scales_and_lines.show_high_low_lines {
+            config.show_high_low_lines = Some(lines);
+        }
         if let Some(separator) = self.scales_and_lines.thousands_sep {
             config.thousands_sep = thousands_sep(separator);
         }
         if let Some(show) = self.show_session_breaks {
             config.show_session_breaks = show;
+        }
+        if let Some(color) = self.price_target_positive_color {
+            config.price_target_positive_color = color;
+        }
+        if let Some(color) = self.price_target_negative_color {
+            config.price_target_negative_color = color;
         }
 
         set_unless_resolved(
@@ -744,10 +794,12 @@ impl ChartSettingsState {
         let options = chart.state.price_scale_mut().options_mut();
         options.mode = mode;
         options.invert_scale = self.scales_and_lines.invert_scale;
-        chart
-            .state
-            .price_scale_mut()
-            .set_price_precision(self.precision.decimals().map(|value| value as u8));
+        let scale = chart.state.price_scale_mut();
+        // A fraction shows over decimals a host chose, which it leaves for when it is cleared.
+        if self.precision.fraction().is_none() {
+            scale.set_price_precision(self.precision.decimals().map(|value| value as u8));
+        }
+        scale.set_price_fraction(self.precision.fraction());
         if let Some(style) = chart.series_style_mut(crate::widget::SeriesId::MAIN) {
             style.price_line_color = self.scales_and_lines.symbol_price_color;
             if let Some(source) = self.scales_and_lines.price_line_source {
@@ -1411,6 +1463,30 @@ mod tests {
             assert_eq!(precision, Some(decimals), "precision {decimals}");
             assert!(!chart.can_undo(), "precision {decimals}");
         }
+
+        // A chosen fraction over host decimals and extended hours also apply back without
+        // recording an edit.
+        let mut chart = Chart::new(bars());
+        chart.set_instrument(Some(
+            crate::model::Instrument::new("SAMPLE").with_price_decimals(2),
+        ));
+        chart.price_scale_mut().set_price_precision(Some(3));
+        chart
+            .price_scale_mut()
+            .set_price_fraction(Some(crate::model::PriceFraction::Eighths));
+        chart.set_extended_hours(true);
+        chart.user_action(|chart| {
+            ChartSettingsState::from_chart(chart)
+                .apply_to_chart(chart)
+                .unwrap();
+        });
+        let scale = chart.state().price_scale();
+        assert_eq!(
+            (scale.chosen_fraction(), scale.chosen_precision()),
+            (Some(crate::model::PriceFraction::Eighths), Some(3))
+        );
+        assert!(chart.extended_hours());
+        assert!(!chart.can_undo());
 
         // Hidden and doubled price axes read as a right placement, which keeps them as they are.
         for (left, right) in [(false, false), (true, true)] {
@@ -3012,44 +3088,274 @@ mod tests {
         assert!(range.max - range.min < 0.0875, "{range:?}");
     }
 
-    /// The session breaks switch and the bar the last price line follows reach the chart, read
-    /// back and are undone. Settings saved before these, the axis font family and the thousands
-    /// separator could be chosen hold none of them and keep the chart's.
+    /// Fractional settings reach axis ticks, price tags and readouts, read back, survive layout
+    /// restoration and undo, and give way to decimals. An apostrophe groups no thousands.
     #[test]
-    fn session_breaks_and_last_price_bar_apply_and_read_back() {
+    fn fractional_precision_reaches_the_axis_and_reads_back() {
+        use crate::chart::rendering::axes::price_marks;
+        use crate::model::{Instrument, PriceFraction};
+        use crate::widget::{
+            SeriesId,
+            test_frames::{chart, shapes},
+        };
+        let ctx = Context::default();
+        let mut chart = chart(&[1234.0], &[1234.5]);
+        chart.set_instrument(Some(Instrument::new("ZB").with_price_decimals(2)));
+        let mut settings = ChartSettingsState::from_chart(&chart);
+        settings.precision = PrecisionMode::Fraction(PriceFraction::ThirtySeconds);
+        chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
+        let painted = shapes(&ctx, &mut chart, 0.0, vec![]);
+        assert_eq!(
+            chart.format_series_price(SeriesId::MAIN, 1234.5).as_deref(),
+            Some("1,234'16")
+        );
+        assert!(
+            painted.iter().any(
+                |shape| matches!(shape, Shape::Text(text) if text.galley.text() == "1,234'16")
+            )
+        );
+        let map = chart.series_price_map(SeriesId::MAIN).unwrap();
+        let formatter = chart
+            .series_label_formatter(SeriesId::MAIN, PriceScaleMode::Normal)
+            .unwrap();
+        let marks = price_marks(&map, Some(formatter.as_ref()));
+        assert!(!marks.is_empty());
+        assert!(
+            marks
+                .iter()
+                .all(|mark| (mark.price * 32.0).fract() == 0.0 && mark.label.contains('\'')),
+            "{marks:?}"
+        );
+        assert!(marks.windows(2).all(|pair| pair[0].label != pair[1].label));
+        assert_eq!(
+            ChartSettingsState::from_chart(&chart).precision,
+            settings.precision
+        );
+
+        #[cfg(feature = "ui")]
+        {
+            let saved = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
+            let mut restored = crate::widget::test_frames::chart(&[1234.0], &[1234.5]);
+            restored.set_instrument(Some(Instrument::new("ZB").with_price_decimals(2)));
+            restored
+                .restore(&serde_json::from_str(&saved).unwrap())
+                .unwrap();
+            shapes(&ctx, &mut restored, 0.1, vec![]);
+            assert_eq!(
+                restored
+                    .format_series_price(SeriesId::MAIN, 1234.5)
+                    .as_deref(),
+                Some("1,234'16")
+            );
+        }
+
+        chart.config_mut().thousands_sep = Some('\'');
+        shapes(&ctx, &mut chart, 0.2, vec![]);
+        assert_eq!(
+            chart.format_series_price(SeriesId::MAIN, 1234.5).as_deref(),
+            Some("1234'16")
+        );
+        chart.config_mut().thousands_sep = Some(',');
+        assert!(chart.undo());
+        shapes(&ctx, &mut chart, 0.3, vec![]);
+        assert_eq!(
+            chart.format_series_price(SeriesId::MAIN, 1234.5).as_deref(),
+            Some("1,234.50")
+        );
+        assert!(chart.redo());
+        settings.precision = PrecisionMode::Decimals3;
+        chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
+        shapes(&ctx, &mut chart, 0.4, vec![]);
+        assert_eq!(
+            chart.format_series_price(SeriesId::MAIN, 1234.5).as_deref(),
+            Some("1,234.500")
+        );
+    }
+
+    /// Optional label and display choices reach the chart, read back and are undone. Settings
+    /// saved before they could be chosen keep the chart's choices.
+    #[test]
+    fn optional_choices_apply_read_back_and_survive_older_saves() {
         use crate::model::PriceLineSource::{LastBar, LastVisible};
+        use crate::scales::{
+            TickMarkType,
+            WeekdayNames::{Always, Never},
+        };
         use crate::widget::{SeriesId, test_frames::chart};
+        use chrono::TimeZone;
+        let time = chrono::Utc
+            .with_ymd_and_hms(2024, 3, 13, 14, 30, 0)
+            .unwrap();
         let read = |chart: &Chart| {
             let style = chart.series_style(SeriesId::MAIN).unwrap();
-            (chart.config().show_session_breaks, style.price_line_source)
+            let labels = chart.build_time_formatter();
+            (
+                chart.config().show_session_breaks,
+                style.price_line_source,
+                chart.config().prev_close_line,
+                chart.config().show_bid_ask_lines,
+                chart.config().show_high_low_lines,
+                [
+                    labels.format_crosshair(time, 60),
+                    labels.format_crosshair(time, 86_400),
+                    labels.format(time, TickMarkType::Time),
+                ],
+                chart.extended_hours(),
+            )
         };
         let mut chart = chart(&[100.0], &[110.0]);
         let new_chart = ChartSettingsState::from_chart(&chart);
-        for (breaks, source) in [(true, LastVisible), (false, LastBar)] {
+        let solid = crate::config::ChartLineStyle {
+            color: Some(Color32::GOLD),
+            width: 2.0,
+            style: crate::model::LineStyle::Solid,
+        };
+        let rows = [
+            (
+                true,
+                LastVisible,
+                DateFormat::Default,
+                false,
+                Never,
+                ["13 Mar '24 02:30 PM", "Mar 13, 2024", "02:30 PM"],
+                solid,
+                true,
+            ),
+            (
+                false,
+                LastBar,
+                DateFormat::Default,
+                true,
+                Always,
+                ["Wed 13 Mar '24 14:30", "Wed Mar 13, 2024", "14:30"],
+                Default::default(),
+                false,
+            ),
+            (
+                false,
+                LastBar,
+                DateFormat::Pattern("%d.%m.%Y".into()),
+                true,
+                Always,
+                ["Wed 13.03.2024 14:30", "Wed 13.03.2024", "14:30"],
+                Default::default(),
+                false,
+            ),
+        ];
+        for (breaks, source, date_format, use_24_hour, weekday_names, labels, line, lines) in &rows
+        {
             let mut settings = ChartSettingsState::from_chart(&chart);
-            settings.show_session_breaks = Some(breaks);
-            settings.scales_and_lines.price_line_source = Some(source);
+            settings.show_session_breaks = Some(*breaks);
+            settings.extended_hours = Some(*breaks);
+            let scales = &mut settings.scales_and_lines;
+            scales.price_line_source = Some(*source);
+            scales.prev_close_line = Some(*line);
+            scales.show_bid_ask_lines = Some(*lines);
+            scales.show_high_low_lines = Some(*lines);
+            scales.date_format = Some(date_format.clone());
+            scales.use_24_hour = Some(*use_24_hour);
+            scales.weekday_names = Some(*weekday_names);
             chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
-            assert_eq!(read(&chart), (breaks, source));
+            assert_eq!(
+                read(&chart),
+                (
+                    *breaks,
+                    *source,
+                    *line,
+                    Some(*lines),
+                    Some(*lines),
+                    labels.map(String::from),
+                    *breaks
+                )
+            );
             let settings = ChartSettingsState::from_chart(&chart);
+            let saved: ChartSettingsState =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            let mut target = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            saved.apply_to_chart(&mut target).unwrap();
+            assert_eq!(
+                read(&target),
+                read(&chart),
+                "template applied to another chart"
+            );
+            let scales = &saved.scales_and_lines;
             assert_eq!(
                 (
                     settings.show_session_breaks,
-                    settings.scales_and_lines.price_line_source
+                    scales.price_line_source,
+                    scales.date_format.clone(),
+                    scales.use_24_hour,
+                    scales.weekday_names,
+                    scales.prev_close_line,
+                    scales.show_bid_ask_lines,
+                    scales.show_high_low_lines,
+                    settings.extended_hours
                 ),
-                (Some(breaks), Some(source))
+                (
+                    Some(*breaks),
+                    Some(*source),
+                    Some(date_format.clone()),
+                    Some(*use_24_hour),
+                    Some(*weekday_names),
+                    Some(*line),
+                    Some(*lines),
+                    Some(*lines),
+                    Some(*breaks)
+                )
             );
         }
+        for row in [&rows[1], &rows[0]] {
+            assert!(chart.undo());
+            assert_eq!(
+                read(&chart),
+                (
+                    row.0,
+                    row.1,
+                    row.6,
+                    Some(row.7),
+                    Some(row.7),
+                    row.5.map(String::from),
+                    row.0
+                )
+            );
+        }
+        // A date-only action also redoes, then returns to the older-save setup.
+        assert!(chart.redo());
+        assert!(chart.redo());
+        assert_eq!(
+            read(&chart),
+            (
+                rows[2].0,
+                rows[2].1,
+                rows[2].6,
+                Some(rows[2].7),
+                Some(rows[2].7),
+                rows[2].5.map(String::from),
+                rows[2].0
+            )
+        );
         assert!(chart.undo());
-        assert_eq!(read(&chart), (true, LastVisible));
+        assert!(chart.undo());
 
+        chart.set_date_format(Some("%d.%m.%Y".into()));
+        let mut options = chart.chart_options().clone();
+        options.time_scale.use_24_hour = false;
+        options.time_scale.weekday_names = Always;
+        chart.set_chart_options(options);
         chart.config_mut().axis_font_family = egui::FontFamily::Monospace;
         chart.config_mut().thousands_sep = Some('_');
         let mut saved = serde_json::to_value(new_chart).unwrap();
         for (group, choice) in [
             ("", "show_session_breaks"),
+            ("", "extended_hours"),
             ("/scales_and_lines", "price_line_source"),
+            ("/scales_and_lines", "prev_close_line"),
+            ("/scales_and_lines", "show_bid_ask_lines"),
+            ("/scales_and_lines", "show_high_low_lines"),
             ("/scales_and_lines", "thousands_sep"),
+            ("/scales_and_lines", "date_format"),
+            ("/scales_and_lines", "use_24_hour"),
+            ("/scales_and_lines", "weekday_names"),
             ("/scales_appearance", "font_family"),
         ] {
             let group = saved.pointer_mut(group).unwrap().as_object_mut().unwrap();
@@ -3057,7 +3363,18 @@ mod tests {
         }
         let saved: ChartSettingsState = serde_json::from_value(saved).unwrap();
         saved.apply_to_chart(&mut chart).unwrap();
-        assert_eq!(read(&chart), (true, LastVisible));
+        assert_eq!(
+            read(&chart),
+            (
+                true,
+                LastVisible,
+                solid,
+                Some(true),
+                Some(true),
+                ["Wed 13.03.2024 02:30 PM", "Wed 13.03.2024", "02:30 PM"].map(String::from),
+                true
+            )
+        );
         assert_eq!(chart.config().axis_font_family, egui::FontFamily::Monospace);
         assert_eq!(chart.config().thousands_sep, Some('_'));
     }

@@ -21,15 +21,15 @@ pub struct DrawingProps {
     /// Tool-specific settings, edited by the Inputs page.
     pub tool_settings: Option<Box<DrawingTemplate>>,
     /// Template loaded from the Template menu, or the tool's defaults after Reset to defaults.
-    /// Applying gives every unlocked selected drawing of the template's tool all of the template
-    /// first, then the edited values; drawings of other tools take the edited values.
+    /// Applying first gives every selected drawing of its tool that accepts user edits all of the
+    /// template, then the edited values; drawings of other tools take the edited values.
     pub template: Option<Box<DrawingTemplate>>,
     /// Instrument tick size for position level inputs; absent disables editing by ticks.
     pub tick_size: Option<f64>,
     /// Staged anchor edits, applied only to the drawing whose dialog was opened.
     pub coordinates: CoordinatesState,
-    /// Save these properties as the default for new drawings of this tool. Built-in tools only:
-    /// a host-registered tool has no default of its own, so the flag is ignored for one.
+    /// Save these properties as the default for new drawings of this tool, under its registered
+    /// id in `DrawingManager::custom_tool_defaults` or its built-in type.
     pub save_as_default: bool,
     /// Primary color
     pub color: Color32,
@@ -146,11 +146,12 @@ impl DrawingProps {
         })
     }
 
-    /// Validate and apply one undoable edit to the unlocked selection. A value that differs from
-    /// drawing `id`'s, which these properties were read from, was edited, and only edited values
-    /// change the drawings: text only those that show text, tool inputs only drawings of the same
-    /// tool, coordinates only `id`. A loaded `template` first gives every unlocked selected
-    /// drawing of its tool all of its values. Errors leave all live drawings unchanged.
+    /// Validate and apply one undoable edit to the selected drawings that accept user edits.
+    /// A value that differs from drawing `id`'s, which these properties were read from, was
+    /// edited, and only edited values change the drawings: text only those that show text, tool
+    /// inputs only drawings of the same tool, coordinates only `id`. A loaded `template` first
+    /// gives every selected drawing of its tool that accepts user edits all of its values.
+    /// Errors leave all live drawings unchanged.
     pub fn apply_to_chart(&self, id: DrawingId, chart: &mut Chart) -> Result<(), &'static str> {
         let edits = self.edited_drawings(id, chart)?;
         chart.user_action(|chart| {
@@ -166,11 +167,8 @@ impl DrawingProps {
             })?;
             if self.save_as_default
                 && let Some(drawing) = manager.drawings.iter().find(|d| d.id == id.0)
-                && drawing.custom_tool.is_none()
             {
-                let mut defaults = DrawingTemplate::from_drawing(drawing);
-                defaults.settings.visible = true;
-                manager.tool_defaults.insert(drawing.tool_type, defaults);
+                manager.save_tool_default(DrawingTemplate::from_drawing(drawing));
             }
             Ok(())
         })
@@ -199,16 +197,18 @@ impl DrawingProps {
             .iter()
             .find(|d| d.id == id.0)
             .ok_or("Drawing was removed")?;
-        if target.locked
+        if !target.accepts_user_edits()
             && (self.save_as_default
                 || !chart.drawings().is_selected(id.0)
-                || !chart
-                    .drawings()
-                    .drawings
-                    .iter()
-                    .any(|drawing| !drawing.locked && chart.drawings().is_selected(drawing.id)))
+                || !chart.drawings().drawings.iter().any(|drawing| {
+                    drawing.accepts_user_edits() && chart.drawings().is_selected(drawing.id)
+                }))
         {
-            return Err("Unlock the drawing before editing its properties");
+            return Err(if target.user_edit_enabled {
+                "Unlock the drawing before editing its properties"
+            } else {
+                "This drawing cannot be edited"
+            });
         }
         let adds_position_stop = matches!(
             target.tool_type,
@@ -243,7 +243,7 @@ impl DrawingProps {
             .drawings
             .iter()
             .filter(|drawing| {
-                !drawing.locked
+                drawing.accepts_user_edits()
                     && if selected {
                         chart.drawings().is_selected(drawing.id)
                     } else {
@@ -354,6 +354,22 @@ impl DrawingProps {
                     line_measurements.text_vertical_align,
                     line_measurements.text_orientation,
                     line_measurements.across_panes,
+                    range_settings.price_change,
+                    range_settings.percent_change,
+                    range_settings.pip_change,
+                    range_settings.bar_count,
+                    range_settings.elapsed_time,
+                    range_settings.volume,
+                    range_settings.text_color,
+                    range_settings.font_size,
+                    range_settings.background,
+                    range_settings.background_color,
+                    range_settings.border,
+                    range_settings.border_color,
+                    range_settings.border_width,
+                    range_settings.border_style,
+                    range_settings.extend_top,
+                    range_settings.extend_bottom,
                     price_axis_label,
                     time_axis_label,
                     elliott_degree,
@@ -375,6 +391,7 @@ impl DrawingProps {
                     gann => |d: &Drawing| d.gann_config().clone(),
                     ghost_feed => |d: &Drawing| d.ghost_feed.unwrap_or_default(),
                     bars_pattern => |d: &Drawing| d.bars_pattern.unwrap_or_default(),
+                    projection => |d: &Drawing| d.projection_config().into_owned(),
                     volume_profile => |d: &Drawing| d.volume_profile.unwrap_or_default(),
                     regression_trend => |d: &Drawing| d.regression_trend.unwrap_or_default(),
                     vwap => |d: &Drawing| d.vwap.unwrap_or_default(),
@@ -489,6 +506,11 @@ impl DrawingProps {
             }) {
                 return Err("Pitchfork widths must be above 0 and at most 100");
             }
+            if settings.projection.as_ref().is_some_and(|c| !c.is_valid()) {
+                return Err(
+                    "Projection coefficients must be between 0 and 100, widths above 0 and at most 100",
+                );
+            }
             if let Some(c) = settings.gann.as_ref() {
                 let square = matches!(
                     settings.tool_type,
@@ -540,6 +562,11 @@ impl DrawingProps {
             }
             if !settings.position_style.is_valid() {
                 return Err("Position line width must be 1 to 100 and font size 1 to 256");
+            }
+            if !settings.range_settings.is_valid() {
+                return Err(
+                    "Range label size must be 1 to 256 and border width above 0 and at most 100",
+                );
             }
             if !settings.marker.is_valid() {
                 return Err("Glyph must be 1 to 32 bytes");
@@ -674,6 +701,23 @@ mod tests {
             .drawings_mut()
             .edit_drawing(7, |d| d.locked = false)
             .unwrap();
+        chart
+            .drawings_mut()
+            .edit_drawing(7, |d| d.user_edit_enabled = false)
+            .unwrap();
+        assert_eq!(
+            DrawingProps {
+                font_size: 40.0,
+                ..props.clone()
+            }
+            .apply_to_chart(DrawingId(7), &mut chart),
+            Err("This drawing cannot be edited")
+        );
+        assert_eq!(chart.drawings().drawings[0].font_size, 24.0);
+        chart
+            .drawings_mut()
+            .edit_drawing(7, |d| d.user_edit_enabled = true)
+            .unwrap();
         // A size the drawings file would refuse cannot be applied.
         assert!(
             DrawingProps {
@@ -763,6 +807,7 @@ mod tests {
                     &mut props,
                     &mut pickers,
                     &mut Default::default(),
+                    None,
                 );
             });
             let labels: Vec<_> = output
@@ -822,6 +867,10 @@ mod tests {
             let settings = &mut props.tool_settings.as_mut().unwrap().settings;
             settings.fib_config = Some(FibonacciConfig {
                 reverse: true,
+                ..Default::default()
+            });
+            settings.projection = Some(crate::drawings::ProjectionConfig {
+                show_background: false,
                 ..Default::default()
             });
             settings.pitchfork = Some(PitchforkConfig {
@@ -911,6 +960,7 @@ mod tests {
             let saved = &chart.drawings().drawings[0];
             assert_eq!(format!("{:?}", saved.fib_config), expected);
             assert_eq!(saved.pitchfork.as_ref().unwrap().background_opacity, 75);
+            assert!(!saved.projection.as_ref().unwrap().show_background);
             assert_eq!(
                 saved
                     .gann

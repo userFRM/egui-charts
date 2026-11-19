@@ -1520,7 +1520,7 @@ mod tests {
         use IndicatorTab::*;
         // (tab, category, search, studies listed, studies not listed). A search covers every
         // built-in page.
-        let cases: [(_, _, _, &[&str], &[&str]); 9] = [
+        let cases: [(_, _, _, &[&str], &[&str]); 10] = [
             (
                 Indicators,
                 BuiltIns,
@@ -1529,6 +1529,7 @@ mod tests {
                 &[
                     "Vol Profile VR",
                     "All Candlestick Patterns",
+                    "Engulfing - Bearish",
                     "Execution Delta",
                     "Cumulative Execution Delta",
                     "Host flow",
@@ -1547,8 +1548,21 @@ mod tests {
                 Patterns,
                 BuiltIns,
                 "",
-                &["All Candlestick Patterns"],
+                &[
+                    "All Candlestick Patterns",
+                    "Engulfing - Bearish",
+                    "All Chart Patterns",
+                    "Bull Flag",
+                    "Double Bottom",
+                ],
                 &["RSI", "Vol Profile VR"],
+            ),
+            (
+                Indicators,
+                BuiltIns,
+                "Cup and Handle",
+                &["Cup and Handle", "Inverted Cup and Handle"],
+                &["Double Top", "Reversal Chart Patterns"],
             ),
             (
                 OrderFlow,
@@ -1816,15 +1830,15 @@ mod tests {
             dialog.open_tab(OrderFlow);
             for query in ["", "Order flow"] {
                 *dialog.search.query_mut() = query.into();
-                for (id, accepted) in [
-                    "Trade Rate",
-                    "Rolling Volume and Delta",
-                    "Quoted Spread",
-                    "Book Size",
-                ]
-                .into_iter()
-                .zip(expected)
-                {
+                for (id, column) in [
+                    ("Trade Rate", 0),
+                    ("Volatility Regime", 0),
+                    ("Rolling Volume and Delta", 1),
+                    ("Quoted Spread", 2),
+                    ("Book Size", 3),
+                    ("Book Balance", 3),
+                ] {
+                    let accepted = expected[column];
                     let ind = dialog.indicators.iter().find(|ind| ind.id == id).unwrap();
                     assert_eq!(
                         dialog.matches(&ctx, ind),
@@ -1925,7 +1939,7 @@ mod tests {
     }
 
     /// The browser finds a study by its conventional full and short names, also with the
-    /// qualifier last, without catching its neighbours.
+    /// qualifier last, without catching its neighbours, and lists a full name holding a dash whole.
     #[test]
     fn search_finds_studies_by_their_full_names() {
         // (search, studies listed, studies not listed)
@@ -2008,6 +2022,11 @@ mod tests {
                 &["SMA/EMA Cross"],
                 &["MA Cross", "EMA Cross"],
             ),
+            (
+                "Correlation - Log",
+                &["Correlation - Log"],
+                &["Correlation Coefficient"],
+            ),
             ("Klinger Oscillator", &["Klinger"], &[]),
             ("Linear Regression Curve", &["LinReg"], &["LinReg Slope"]),
             ("Moon Phases", &["Lunar Phases"], &[]),
@@ -2057,7 +2076,11 @@ mod tests {
                 &["Vol Profile Session"],
                 &["Vol Profile Periodic"],
             ),
-            ("Session Volume Profile HD", &["Vol Profile Session"], &[]),
+            (
+                "Session Volume Profile HD",
+                &["Vol Profile Session HD"],
+                &[],
+            ),
             (
                 "Periodic Volume Profile",
                 &["Vol Profile Periodic"],
@@ -2076,9 +2099,19 @@ mod tests {
                     "Knoxville Divergence",
                     "Intraday Pivot Points",
                     "Missed Pivot Levels",
+                    "Booker Reversal",
+                    "Ziv Ghost Pivots",
                 ],
                 &["Pivot Points Standard"],
             ),
+            ("Rob Booker Reversal", &["Booker Reversal"], &["Reversal"]),
+            ("Booker Reversal", &["Booker Reversal"], &["Reversal"]),
+            (
+                "Rob Booker Ziv Ghost Pivots",
+                &["Ziv Ghost Pivots"],
+                &["Projected Pivot Points"],
+            ),
+            ("Ziv Ghost Pivots", &["Ziv Ghost Pivots"], &[]),
             ("CRSI", &["Connors RSI"], &[]),
             ("DC", &["Donchian"], &[]),
             ("ADR", &["Average Daily Range"], &[]),
@@ -2101,6 +2134,19 @@ mod tests {
                 &["Time Price Opportunity"],
                 &["Vol Profile Session"],
             ),
+            (
+                "Engulfing - Bearish",
+                &["Engulfing - Bearish"],
+                &["Engulfing - Bullish", "All Candlestick Patterns"],
+            ),
+            (
+                "Tasuki",
+                &[
+                    "Downside Tasuki Gap - Bearish",
+                    "Upside Tasuki Gap - Bullish",
+                ],
+                &["All Candlestick Patterns"],
+            ),
         ];
         let ctx = egui::Context::default();
         let mut dialog = IndicatorDialog::new();
@@ -2121,6 +2167,16 @@ mod tests {
             }
         }
         assert!(misses.is_empty(), "{misses:?}");
+        // A full name holding a dash is listed whole, in the coefficient's category.
+        let log = dialog
+            .indicators
+            .iter()
+            .find(|ind| ind.id == "Correlation - Log")
+            .unwrap();
+        assert_eq!(
+            (log.name.as_str(), log.category.as_str()),
+            ("Correlation - Log", "Statistics")
+        );
     }
 
     /// Each study is added with the parameters the factory creates it with until the user

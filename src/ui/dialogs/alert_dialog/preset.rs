@@ -159,7 +159,7 @@ impl AlertPreset {
     /// webhook address stay. A rule stays whole where its stored operator would drop the drawings
     /// or plots it tests or needs levels it lacks. A stored study that `sources` does not offer
     /// under its stored name is not reused, and an alert on host events keeps its condition, interval
-    /// and any frequency it cannot use.
+    /// and any frequency it cannot use; a position alert keeps its condition and frequency.
     pub(super) fn apply(
         &self,
         alert: &mut Alert,
@@ -167,7 +167,8 @@ impl AlertPreset {
         now: DateTime<Utc>,
     ) {
         let events = alert.condition.is_event();
-        if self.fields.condition && !events && !self.rules.is_empty() {
+        let position = matches!(alert.condition, AlertCondition::Position { .. });
+        if self.fields.condition && !events && !position && !self.rules.is_empty() {
             let first = AlertRule {
                 source: alert.source.clone(),
                 condition: alert.condition.clone(),
@@ -223,6 +224,7 @@ impl AlertPreset {
             .additional_timeframes
             .truncate(alert.additional_conditions.len());
         if self.fields.frequency
+            && !position
             && (!events
                 || matches!(
                     self.frequency,
@@ -259,7 +261,9 @@ fn without_thresholds(condition: &AlertCondition) -> Option<AlertCondition> {
     use AlertCondition as C;
     let channel = |comparison| channel_condition(comparison, 0.0, 0.0);
     Some(match condition {
-        C::StrategyFills(_) | C::DetectorSignals(_) | C::CustomEvents(_) => return None,
+        C::StrategyFills(_) | C::DetectorSignals(_) | C::CustomEvents(_) | C::Position { .. } => {
+            return None;
+        }
         C::Crossing(_) => C::Crossing(0.0),
         C::CrossingUp(_) => C::CrossingUp(0.0),
         C::CrossingDown(_) => C::CrossingDown(0.0),
@@ -336,7 +340,11 @@ fn restored_condition(
         _ => 1.0,
     };
     Some(match stored {
-        C::StrategyFills(_) | C::DetectorSignals(_) | C::CustomEvents(_) | C::Channel { .. } => {
+        C::StrategyFills(_)
+        | C::DetectorSignals(_)
+        | C::CustomEvents(_)
+        | C::Channel { .. }
+        | C::Position { .. } => {
             return None;
         }
         C::MovingBy { .. } | C::MovingByPercent { .. } | C::VolumeAboveAverage { .. }
@@ -958,19 +966,33 @@ mod tests {
     }
 
     #[test]
-    fn a_strategy_fill_alert_keeps_what_it_needs_to_stay_valid() {
+    fn event_and_position_alerts_keep_what_they_need_to_stay_valid() {
         let now = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap();
         let mut saved = Alert::new("OLD", AlertCondition::Below(9.0));
         saved.frequency = AlertFrequency::OncePerBarClose;
         saved.timeframe = Some(Timeframe::Hour1);
+        saved.additional_conditions.push(AlertRule::new(
+            AlertSource::Price,
+            AlertCondition::Above(1.0),
+        ));
         let preset = AlertPreset::capture(&saved, &[], PresetFields::default(), now);
         let run = AlertCondition::StrategyFills("run".into());
-        let mut alert = Alert::new("NEW", run.clone());
-        preset.apply(&mut alert, &[], now);
-        assert_eq!(alert.condition, run);
-        assert_eq!(alert.frequency, AlertFrequency::EveryTime);
-        assert_eq!(alert.timeframe, None);
-        assert!(alert.is_valid());
+        let position = AlertCondition::Position {
+            levels: Box::new(["p", "p#1", "p#2"].map(|id| AlertSource::Drawing(id.into()))),
+            progress: crate::model::AlertPositionProgress::AwaitingEntry,
+        };
+        for (condition, frequency, timeframe) in [
+            (run.clone(), AlertFrequency::EveryTime, None),
+            (position, AlertFrequency::Once, Some(Timeframe::Hour1)),
+        ] {
+            let mut alert = Alert::new("NEW", condition.clone());
+            preset.apply(&mut alert, &[], now);
+            assert_eq!(alert.condition, condition);
+            assert!(alert.additional_conditions.is_empty());
+            assert_eq!(alert.frequency, frequency);
+            assert_eq!(alert.timeframe, timeframe);
+            assert!(alert.is_valid());
+        }
         // The run itself is not reusable.
         let fills =
             AlertPreset::capture(&Alert::new("OLD", run), &[], PresetFields::default(), now);

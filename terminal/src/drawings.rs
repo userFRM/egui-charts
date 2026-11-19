@@ -251,6 +251,7 @@ impl Terminal {
         };
         toolbar.sync_from_domain_state(&DrawingToolbarDomainState {
             sel_tool: manager.active_tool(),
+            sel_custom_tool: manager.active_custom_tool().map(str::to_owned),
             magnet_mode: manager.options.magnet_mode,
             snap_to_indicators: manager.options.snap_to_indicators,
             magnet_type,
