@@ -24,6 +24,7 @@ impl Chart {
             crate::services::AlertFeed::history_request(self.symbol(), self.timeframe()?);
         request.clock = self.bar_clock();
         request.extended_hours = self.extended_hours();
+        request.overnight_hours = self.overnight_hours();
         request.adjusted = self.dividend_adjusted();
         request.conversion = self.conversion().map(str::to_owned);
         Some(crate::services::AlertData {
@@ -98,6 +99,7 @@ impl Chart {
                 }),
             sources: self.alert_sources(),
             extended_hours: self.extended_hours(),
+            overnight_hours: self.overnight_hours(),
             conversion: self.conversion().map(str::to_owned),
             count: if bars.is_empty() { 1000 } else { bars.len() },
             start: bars.first().map(|bar| bar.time),

@@ -44,8 +44,8 @@ pub struct StudyInput {
     pub default: InputValue,
     /// Accepted values, used to build the editor.
     pub kind: InputKind,
-    /// The choice input this one applies with and the choices it applies to. An editor hides it
-    /// under the other choices and keeps its value. `None` always shows it.
+    /// The choice or toggle input this one applies with and its accepted values (0/1 for a
+    /// toggle). An editor hides it under other values and keeps its value. `None` always shows it.
     pub shown_when: Option<(String, Vec<usize>)>,
 }
 
@@ -73,7 +73,7 @@ impl StudyInput {
         self
     }
 
-    /// Show this input only while the choice input `id` holds one of `choices`.
+    /// Show this input while `id` holds one of `choices`, with toggles counted as 0 or 1.
     pub fn shown_when(mut self, id: impl Into<String>, choices: impl Into<Vec<usize>>) -> Self {
         self.shown_when = Some((id.into(), choices.into()));
         self
@@ -81,12 +81,26 @@ impl StudyInput {
 
     /// Whether an editor listing `inputs`, this one among them, shows this input.
     pub fn is_shown(&self, inputs: &[StudyInput]) -> bool {
-        self.shown_when.as_ref().is_none_or(|(id, choices)| {
-            inputs.iter().any(|input| {
-                input.id == *id
-                    && matches!(input.value, InputValue::Choice(choice) if choices.contains(&choice))
-            })
-        })
+        let mut input = self;
+        // Follow dependent controls too; a cyclic host schema shows none of that cycle.
+        for _ in 0..=inputs.len() {
+            let Some((id, choices)) = &input.shown_when else {
+                return true;
+            };
+            let Some(parent) = inputs.iter().find(|parent| parent.id == *id) else {
+                return false;
+            };
+            let shown = match parent.value {
+                InputValue::Choice(choice) => choices.contains(&choice),
+                InputValue::Toggle(on) => choices.contains(&usize::from(on)),
+                _ => false,
+            };
+            if !shown {
+                return false;
+            }
+            input = parent;
+        }
+        false
     }
 
     /// Check a value against this input's schema. Setters must also validate values.
@@ -145,7 +159,9 @@ macro_rules! input_spec {
             crate::studies::InputValue::Choice(
                 choices.iter().position(|v| *v == $value).unwrap_or(0),
             ),
-            crate::studies::InputKind::Choice(choices.iter().map(|v| format!("{v:?}")).collect()),
+            crate::studies::InputKind::Choice(
+                choices.iter().map(|v| v.label().to_owned()).collect(),
+            ),
         )
     }};
     ($id:expr, $value:expr, toggle($label:expr)) => {
@@ -162,6 +178,14 @@ macro_rules! input_spec {
             $label,
             crate::studies::InputValue::Timeframe($value),
             crate::studies::InputKind::Timeframe,
+        )
+    };
+    ($id:expr, $value:expr, text($label:expr)) => {
+        crate::studies::StudyInput::new(
+            $id,
+            $label,
+            crate::studies::InputValue::Text($value.clone()),
+            crate::studies::InputKind::Text,
         )
     };
     ($id:expr, $value:expr, color($label:expr)) => {
@@ -215,6 +239,12 @@ macro_rules! input_assign {
             _ => unreachable!(),
         }
     };
+    ($value:expr, text($label:expr)) => {
+        match $value {
+            crate::studies::InputValue::Text(v) => v,
+            _ => unreachable!(),
+        }
+    };
     ($value:expr, color($label:expr)) => {
         match $value {
             crate::studies::InputValue::Color(v) => v,
@@ -225,12 +255,12 @@ macro_rules! input_assign {
 
 #[cfg(feature = "studies")]
 macro_rules! study_inputs {
-    ($this:ident; $($field:ident $([$index:literal])? : $kind:ident($($args:expr),*) $(if $choice:ident in $shown:expr)?),+ $(,)? ; $($changed:ident $(, $previous:ident)? =>)? $after:block) => {
+    ($this:ident; $($field:ident $([$index:literal])? : $kind:ident($($args:expr),*) $(if $choice:ident $([$choice_index:literal])? in $shown:expr)?),+ $(,)? ; $($changed:ident $(, $previous:ident)? =>)? $after:block) => {
         fn inputs(&$this) -> Vec<crate::studies::StudyInput> {
             let defaults = Self::default();
             vec![$(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), $this.$field $([$index])?, $kind($($args),*))
                 .with_default(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), defaults.$field $([$index])?, $kind($($args),*)).value)
-                $(.shown_when(stringify!($choice), $shown))?),+]
+                $(.shown_when(stringify!($choice $([$choice_index])?), $shown))?),+]
         }
 
         fn set_input(&mut $this, id: &str, value: crate::studies::InputValue) -> Result<(), crate::studies::StudyError> {

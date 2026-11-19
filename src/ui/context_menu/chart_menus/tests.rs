@@ -6,21 +6,25 @@ use egui::{Color32, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2}
 fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
     let mut menu = ChartContextMenu::new();
     let submenu = |menu: &ChartContextMenu| {
-        menu.build_menu_items(&Context::default(), &crate::widget::ShortcutMap::default())
-            .into_iter()
-            .find_map(|entry| match entry {
-                MenuEntry::Submenu { label, entries, .. } => Some((
-                    label,
-                    entries
-                        .into_iter()
-                        .filter_map(|entry| match entry {
-                            MenuEntry::Item(item) => Some(item.action),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>(),
-                )),
-                _ => None,
-            })
+        menu.build_menu_items(
+            &Context::default(),
+            &crate::widget::ShortcutMap::default(),
+            &crate::ui::context_menu::format_price,
+        )
+        .into_iter()
+        .find_map(|entry| match entry {
+            MenuEntry::Submenu { label, entries, .. } => Some((
+                label,
+                entries
+                    .into_iter()
+                    .filter_map(|entry| match entry {
+                        MenuEntry::Item(item) => Some(item.action),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+            _ => None,
+        })
     };
     menu.watchlists = vec!["Tech".into(), "Energy".into()];
     assert_eq!(submenu(&menu), None, "no symbol");
@@ -127,7 +131,7 @@ fn hidden_menu_controls_remove_rows_and_empty_sections() {
                     assert!(
                         matches!(
                             menus
-                                .build_menu_items(&ctx, chart.shortcuts(), menus.context.unwrap())
+                                .build_menu_items(&ctx, &chart, menus.context.unwrap())
                                 .first(),
                             Some(MenuEntry::Item(_))
                         ),
@@ -177,7 +181,7 @@ fn hidden_alerts_and_settings_leave_the_drawing_menu_and_chart() {
         });
         output.drop_without_applying_deltas();
         menus
-            .build_menu_items(&ctx, chart.shortcuts(), menus.context.unwrap())
+            .build_menu_items(&ctx, chart, menus.context.unwrap())
             .into_iter()
             .take(3)
             .map(|entry| match entry {
@@ -1647,7 +1651,7 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
         assert_eq!(profiles(&split), parts);
         let layout = SavedLayout::new(ChartLayoutMode::Single, vec![split.snapshot().unwrap()]);
         let layout = SavedLayout::from_json(&layout.to_json().unwrap()).unwrap();
-        let mut restored = Chart::new(BarData::from_bars(bars));
+        let mut restored = Chart::new(BarData::from_bars(bars.clone()));
         restored.restore(&layout.charts[0]).unwrap();
         assert_eq!(restored.chart_type_params().tpo_splits, [at(60)]);
         assert_eq!(profiles(&restored), parts);
@@ -1677,6 +1681,61 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
             a.x < map.idx_to_x(4) - map.bar_spacing * 0.5,
             "the next session's letters join the split part's displayed profile"
         );
+        let mut columns = Chart::new(BarData::from_bars(bars.clone()));
+        columns.set_timeframe(Timeframe::Min30);
+        columns.set_chart_type(ChartType::TimePriceOpportunity);
+        columns.set_chart_type_params(crate::model::ChartTypeParams {
+            tpo_split_periods: true,
+            ..Default::default()
+        });
+        columns.set_visible_logical_range(crate::model::LogicalRange::new(-1.0, 9.0));
+        let mut column_menus = ChartMenus::default();
+        frame(&mut columns, &mut column_menus, vec![]);
+        let (_, shapes) = frame(&mut columns, &mut column_menus, vec![]);
+        let map = columns.get_chart_mapping();
+        let day0 = map.rect.left()..map.idx_to_x(4) - map.bar_spacing * 0.5;
+        let c = letter(&shapes, "C", day0, map.price_to_y(103.0)).unwrap();
+        pick_at(
+            &mut columns,
+            &mut column_menus,
+            c,
+            "Split profile at selected period",
+        );
+        assert_eq!(profiles(&columns), parts);
+
+        let bars = (0..14)
+            .map(|i| {
+                Bar::new(
+                    day(i / 2) + Duration::minutes(i % 2 * 30),
+                    100.0,
+                    102.0,
+                    100.0,
+                    102.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut weekly = Chart::new(BarData::from_bars(bars));
+        weekly.set_timeframe(Timeframe::Min30);
+        weekly.set_chart_type(ChartType::TimePriceOpportunity);
+        weekly.set_chart_type_params(crate::model::ChartTypeParams {
+            tpo_profile_period: crate::model::TPOProfilePeriod::Week,
+            ..Default::default()
+        });
+        let mut weekly_menus = ChartMenus::default();
+        weekly.set_visible_logical_range(crate::model::LogicalRange::new(-1.0, 15.0));
+        frame(&mut weekly, &mut weekly_menus, vec![]);
+        assert_eq!(counts(&weekly), [8, 6]);
+        pick(
+            &mut weekly,
+            &mut weekly_menus,
+            8,
+            "Merge with previous profile",
+        );
+        assert_eq!(counts(&weekly), [14]);
+        assert_eq!(weekly.chart_type_params().tpo_composites, [day(0)..=day(6)]);
+        assert!(weekly.undo());
+        assert_eq!(counts(&weekly), [8, 6]);
     }
 }
 
@@ -2513,5 +2572,125 @@ fn study_and_series_panes_offer_no_main_symbol_alerts_or_orders() {
             2 * usize::from(trading),
             "{case}"
         );
+    }
+}
+
+/// Guards #3427: the chart and series menus write the clicked price, and the order rows their
+/// price, as the chart's price scale writes prices: at the instrument's precision, with the
+/// chart's thousands separator or the host's price formatter, and as a price on a percentage
+/// scale, where the rows still copy, alert and order prices.
+#[test]
+fn menu_rows_write_prices_as_the_price_scale_does() {
+    use crate::model::Instrument;
+    use crate::scales::{CustomPriceFormatter, PriceScaleMode};
+    type Setup = fn(&mut Chart);
+    // (bar low, bar high, tick size, setup, clicked price, its text, the order price's text)
+    type Row = (f64, f64, f64, Setup, f64, &'static str, &'static str);
+    let rows: [Row; 4] = [
+        (
+            1.084,
+            1.085,
+            0.00001,
+            |_| {},
+            1.084537,
+            "1.08454",
+            "1.08454",
+        ),
+        (
+            1230.0,
+            1240.0,
+            0.25,
+            |chart| chart.config_mut().thousands_sep = Some('\''),
+            1234.6,
+            "1'234.60",
+            "1'234.50",
+        ),
+        (
+            1.084,
+            1.085,
+            0.00001,
+            |chart| {
+                chart.set_price_formatter(Some(std::sync::Arc::new(CustomPriceFormatter::new(
+                    |price| format!("<{price:.6}>"),
+                ))));
+            },
+            1.084537,
+            "<1.084537>",
+            "<1.084540>",
+        ),
+        (
+            1.084,
+            1.085,
+            0.00001,
+            |chart| chart.price_scale_mut().options_mut().mode = PriceScaleMode::Percentage,
+            1.084537,
+            "1.08454",
+            "1.08454",
+        ),
+    ];
+    let ctx = Context::default();
+    for (low, high, tick, setup, click, text, order) in rows {
+        let mut chart = crate::widget::test_frames::chart(&[low], &[high]);
+        chart.symbol = "EURUSD".into();
+        chart.set_instrument(Some(Instrument::new("EURUSD").with_tick_size(tick)));
+        setup(&mut chart);
+        let mut menus = ChartMenus::default();
+        let frame = |chart: &mut Chart, menus: &mut ChartMenus, show_chart: bool| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 900.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    if show_chart {
+                        chart.show(ui);
+                    }
+                    menus.show(ui.ctx(), chart);
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        frame(&mut chart, &mut menus, true);
+        frame(&mut chart, &mut menus, true);
+        let pos = chart.get_chart_mapping().rect.center();
+        for (target, expected) in [
+            (
+                RightClickTarget::Background { pos, price: click },
+                vec![
+                    format!("Copy price {text}"),
+                    format!("Add alert on EURUSD at {text}…"),
+                    format!("Draw horizontal line at {text}"),
+                    format!("Buy 1 EURUSD @ {order} limit"),
+                    format!("Sell 1 EURUSD @ {order} stop"),
+                ],
+            ),
+            (
+                RightClickTarget::Element {
+                    id: ChartElementId::Series(SeriesId::MAIN),
+                    bar_idx: 0,
+                    pos,
+                    price: click,
+                },
+                vec![
+                    format!("Add alert on EURUSD at {text}…"),
+                    format!("Copy price {text}"),
+                ],
+            ),
+        ] {
+            // The chart clears an undrained right-click when it is shown.
+            chart.right_click = Some(target);
+            frame(&mut chart, &mut menus, false);
+            let labels: Vec<_> = menus
+                .build_menu_items(&ctx, &chart, menus.context.unwrap())
+                .into_iter()
+                .filter_map(|entry| match entry {
+                    MenuEntry::Item(item) => Some(item.label),
+                    _ => None,
+                })
+                .collect();
+            for row in expected {
+                assert!(labels.contains(&row), "{row:?} in {labels:?}");
+            }
+        }
     }
 }

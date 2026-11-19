@@ -28,7 +28,7 @@ pub enum AverageType {
 }
 
 impl AverageType {
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Simple => "SMA",
             Self::Exponential => "EMA",

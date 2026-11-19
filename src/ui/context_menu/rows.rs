@@ -196,8 +196,10 @@ pub enum MenuRowId {
     IndicatorValues,
     /// "Countdown to bar close".
     Countdown,
-    /// "Bid and ask".
+    /// "Bid and ask labels".
     BidAndAsk,
+    /// "Bid and ask lines".
+    BidAndAskLines,
     /// "High and low".
     HighAndLow,
     /// "Scale settings" in the price axis menu.
@@ -210,6 +212,8 @@ pub enum MenuRowId {
     ExchangeTime,
     /// "Extended hours".
     ExtendedHours,
+    /// "Overnight hours".
+    OvernightHours,
     /// "Session breaks".
     SessionBreaks,
     /// "Time zone and session settings" in the time axis menu.

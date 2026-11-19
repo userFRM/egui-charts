@@ -201,6 +201,7 @@ impl Chart {
             series_formatters: Default::default(),
             study_formatters: Default::default(),
             extended_hours: false,
+            overnight_hours: false,
             conversion: None,
             measured_axis_width: 0.0,
             last_layout: None,
@@ -228,6 +229,8 @@ impl Chart {
             feed_link: None,
             #[cfg(feature = "drawings")]
             cursor_modes: CursorModeState::new(),
+            #[cfg(feature = "drawings")]
+            layered_drawings: Vec::new(),
             main_series_style: crate::model::SeriesStyle::default(),
             last_price_pulse: std::cell::Cell::new(None),
             last_price_map: PriceMap::new(
@@ -890,7 +893,7 @@ impl ChartBuilder {
         self
     }
 
-    /// Toggle session-break dividers (day/week/month boundaries) and shading.
+    /// Toggle session-break dividers at day, week, month and year boundaries.
     #[must_use]
     pub fn with_session_breaks(mut self, show: bool) -> Self {
         self.config.show_session_breaks = show;

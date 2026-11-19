@@ -16,6 +16,16 @@ pub enum VolumeColorRule {
     PreviousClose,
 }
 
+impl VolumeColorRule {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Open => "Open",
+            Self::PreviousClose => "Previous close",
+        }
+    }
+}
+
 /// Moving average formula for volume.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -24,6 +34,16 @@ pub enum VolumeAverage {
     Simple,
     /// Alpha 2/(length+1), seeded by the first usable volume.
     Exponential,
+}
+
+impl VolumeAverage {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Simple => "Simple",
+            Self::Exponential => "Exponential",
+        }
+    }
 }
 
 /// Volume columns and a moving average, in the price pane or a separate pane.

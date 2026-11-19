@@ -23,7 +23,8 @@
 //! [`ChandeMomentumOscillator`], [`TrueStrengthIndex`],
 //! [`StochasticMomentumIndex`], [`SchaffTrendCycle`], [`PriceOscillator`],
 //! [`PercentageVolumeOscillator`], [`AcceleratorOscillator`], [`AroonOscillator`],
-//! [`BullBearPower`], [`AdvanceDeclineRatioBars`], [`PriceMomentumOscillator`], [`PringsSpecialK`],
+//! [`BullBearPower`], [`AdvanceDecline`], [`AdvanceDeclineRatioBars`],
+//! [`PriceMomentumOscillator`], [`PringsSpecialK`],
 //! [`SMIErgodicIndicator`], [`SMIErgodicOscillator`], [`WoodiesCCI`]
 //!
 //! ## Trend
@@ -51,8 +52,8 @@
 //!
 //! ## Support / resistance
 //! [`PivotPoints`], [`IntradayPivotPoints`], [`ProjectedPivotPoints`], [`PivotPointsHighLow`],
-//! [`MissedPivots`], [`KeyLevels`], [`ElliottWave`], [`Reversal`], [`RisingWedge`], [`FallingWedge`],
-//! [`WilliamsFractals`], [`Gaps`], [`ZigZag`], [`PriceChannel`]
+//! [`MissedPivots`], [`KeyLevels`], [`AutoKeyLevels`], [`ElliottWave`], [`Reversal`],
+//! [`RisingWedge`], [`FallingWedge`], [`WilliamsFractals`], [`Gaps`], [`ZigZag`], [`PriceChannel`]
 //!
 //! ## Patterns
 //! [`CandlestickPatterns`], [`ChartPatterns`]
@@ -166,6 +167,7 @@ mod std_dev;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod auto_drawing;
+mod auto_key_levels;
 mod elliott_wave;
 mod gaps;
 mod intraday_pivot_points;
@@ -290,6 +292,7 @@ mod bbw;
 
 // Eleventh batch - Oscillators
 mod accelerator_oscillator;
+mod advance_decline;
 mod advance_decline_ratio_bars;
 mod aroon_oscillator;
 mod average_daily_range;
@@ -388,13 +391,14 @@ pub use std_dev::StandardDeviation;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 pub use auto_drawing::{AutoDrawing, AutoDrawingKind};
+pub use auto_key_levels::AutoKeyLevels;
 pub use elliott_wave::ElliottWave;
 pub use gaps::Gaps;
 pub use intraday_pivot_points::IntradayPivotPoints;
 pub use key_levels::KeyLevels;
 pub use knoxville_divergence::KnoxvilleDivergence;
 pub use lunar_phases::{LunarPhase, LunarPhases, MoonPhase, lunar_phases};
-pub use missed_pivots::MissedPivots;
+pub use missed_pivots::{MissedPivotPeriod, MissedPivots};
 pub use pivot_points::{PivotLabelSide, PivotMethod, PivotPoints, PivotTimeframe};
 pub use pivot_points_high_low::PivotPointsHighLow;
 pub use projected_pivot_points::ProjectedPivotPoints;
@@ -511,6 +515,7 @@ pub use bbw::BollingerBandsWidth;
 
 // Re-exports - Eleventh batch (Oscillators)
 pub use accelerator_oscillator::AcceleratorOscillator;
+pub use advance_decline::AdvanceDecline;
 pub use advance_decline_ratio_bars::AdvanceDeclineRatioBars;
 pub use aroon_oscillator::AroonOscillator;
 pub use average_daily_range::AverageDailyRange;

@@ -18,6 +18,16 @@ pub enum OscillatorAverage {
     Simple,
 }
 
+impl OscillatorAverage {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Exponential => "Exponential",
+            Self::Simple => "Simple",
+        }
+    }
+}
+
 /// Resumable [`OscillatorAverage`] over the finite values it is fed.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Mean {

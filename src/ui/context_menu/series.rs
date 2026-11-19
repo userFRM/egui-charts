@@ -122,13 +122,14 @@ impl SeriesContextMenu {
         std::mem::replace(&mut self.last_action, SeriesContextMenuAction::None)
     }
 
-    /// Build menu items for the series context menu
+    /// Build menu items for the series context menu, writing the price with `price_text`.
     pub(crate) fn build_menu_items(
         &self,
         ctx: &Context,
         shortcuts: &crate::widget::ShortcutMap,
+        price_text: &dyn Fn(f64) -> String,
     ) -> Vec<MenuEntry<SeriesContextMenuAction>> {
-        let price_str = format_price(self.click_price);
+        let price_str = price_text(self.click_price);
         let symbol = &self.symbol;
         let has_symbol = !symbol.is_empty();
 
@@ -206,7 +207,7 @@ impl SeriesContextMenu {
         if !self.is_open {
             return;
         }
-        let entries = self.build_menu_items(ctx, shortcuts);
+        let entries = self.build_menu_items(ctx, shortcuts, &format_price);
         if entries.is_empty() {
             self.close();
             return;
