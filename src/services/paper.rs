@@ -23,7 +23,8 @@ const TIMES_IN_FORCE: [TimeInForce; 1] = [TimeInForce::GoodTillCancelled];
 /// Feed it the last price of every symbol it trades with [`set_price`](Self::set_price), live or
 /// replayed. During replay, call [`set_replay_time`](Self::set_replay_time) before each price so
 /// fills and history use the source bar's time. Only good-till-cancelled orders are supported;
-/// the account has no trading-session calendar. Market orders fill at the last price; limit and
+/// the account has no trading-session calendar. Market orders fill at the bid or ask of a usable
+/// [quote](Self::set_bid_ask), otherwise at the last price; limit and
 /// stop orders fill at the first price that reaches them, a limit at that price or better;
 /// a triggered stop-limit works on as a limit order. An order's take profits and stop loss become
 /// exit orders once it fills, for the quantity the fill opened: take-profit levels each close their
@@ -87,6 +88,7 @@ struct State {
     positions: HashMap<String, Position>,
     last: HashMap<String, f64>,
     rules: HashMap<String, TradingRules>,
+    quotes: HashMap<String, (f64, f64)>,
     balance_history: Vec<BalanceChange>,
     journal: Vec<JournalEntry>,
 }
@@ -164,6 +166,23 @@ impl PaperAccount {
         }
     }
 
+    /// Takes `bid` and `ask` as the quote of `symbol`: while both are known and the bid is not
+    /// above the ask, market orders fill a buy at the ask and a sell at the bid, including the
+    /// orders that close or reverse a position. Otherwise, and once either is `None` or not
+    /// finite, they fill at the last price. Limit and stop orders trigger and fill on the last
+    /// price as before. The account still needs the last price of every symbol it trades.
+    pub fn set_bid_ask(&self, symbol: &str, bid: Option<f64>, ask: Option<f64>) {
+        let mut state = self.lock();
+        match (bid, ask) {
+            (Some(bid), Some(ask)) if bid.is_finite() && ask.is_finite() && bid <= ask => {
+                state.quotes.insert(symbol.to_owned(), (bid, ask));
+            }
+            _ => {
+                state.quotes.remove(symbol);
+            }
+        }
+    }
+
     /// Gives `rules.symbol` its trading rules: the quantity step, minimum and maximum quantity,
     /// point value, leverage and times in force that [`rules`](Broker::rules) answers, so the
     /// order ticket sizes its orders by them. Fills, profit and loss, trade and market values,
@@ -204,7 +223,7 @@ impl PaperAccount {
     }
 
     /// Returns the account to its starting balance without orders, positions or history. It keeps
-    /// its settings and symbol rules, the host's prices and replay clock, and the count its order
+    /// its settings and symbol rules, the host's prices, quotes and replay clock, and the count its order
     /// ids continue from. It ends the event stream of the last [`connect`](Broker::connect), so
     /// the terminal connects
     /// again at its next poll and shows the fresh account; a host that reads the stream itself
@@ -219,6 +238,7 @@ impl PaperAccount {
             next_id,
             last,
             rules,
+            quotes,
             ..
         } = std::mem::take(&mut *state);
         *state = State {
@@ -227,6 +247,7 @@ impl PaperAccount {
             next_id,
             last,
             rules,
+            quotes,
             ..State::default()
         };
     }
@@ -366,6 +387,25 @@ impl State {
             })
     }
 
+    /// Where `request` fills now at the last price `last`: a market order at the quote's ask for
+    /// a buy and bid for a sell, else at `last`; a limit or stop order at `last` once `last` reaches
+    /// it, a stop-limit order once `last` reaches both its stop and its limit. `None` if it does
+    /// not fill now.
+    fn fills_at(&self, request: &OrderRequest, last: f64) -> Option<f64> {
+        let at_last = |order_type: OrderType| order_type.fill_price(request.side, last, last);
+        match request.order_type {
+            OrderType::Market => Some(match self.quotes.get(&request.symbol) {
+                Some(&(_, ask)) if request.side == OrderSide::Buy => ask,
+                Some(&(bid, _)) => bid,
+                None => last,
+            }),
+            OrderType::StopLimit { limit, .. } => {
+                at_last(request.order_type).and(at_last(OrderType::Limit(limit)))
+            }
+            order_type => at_last(order_type),
+        }
+    }
+
     /// Projects this request against the whole account, excluding the order it replaces.
     fn buying_power(
         &self,
@@ -389,23 +429,17 @@ impl State {
             return Ok(());
         }
         let last = self.last[&request.symbol];
-        let reached =
-            |order_type: OrderType| order_type.fill_price(request.side, last, last).is_some();
-        let immediate = reached(request.order_type)
-            && match request.order_type {
-                OrderType::StopLimit { limit, .. } => reached(OrderType::Limit(limit)),
-                _ => true,
-            };
+        let fill = self.fills_at(request, last);
+        let immediate = fill.is_some();
         if immediate && after.abs() < held.abs() {
             return Ok(());
         }
         let (equity, mut margin) = self.equity_and_margin(terms);
-        let price = match request.order_type {
-            _ if immediate => last,
-            OrderType::Market => last,
+        let price = fill.unwrap_or(match request.order_type {
             OrderType::Limit(price) | OrderType::Stop(price) => price,
             OrderType::StopLimit { limit, .. } => limit,
-        };
+            _ => last,
+        });
         let (reserved, commissions) = self.reservations(terms, replacing);
         let (pv, lev) = self.terms_of(terms, &request.symbol);
         let value = request.quantity * price.abs() * pv;
@@ -670,9 +704,7 @@ impl State {
             }
             if let Some(fill) = fill {
                 let order = self.working.remove(index);
-                let mut request = order.request.clone();
-                request.order_type = OrderType::Market;
-                match self.buying_power(terms, &request, Some(&order.id)) {
+                match self.buying_power(terms, &order.request, Some(&order.id)) {
                     Ok(()) => self.fill(terms, order, fill),
                     Err(error) => {
                         self.log(format!("Order {} rejected: {error}", order.id));
@@ -785,7 +817,8 @@ impl Broker for PaperAccount {
             return;
         }
         if order.request.order_type == OrderType::Market {
-            state.fill(self, order, last);
+            let price = state.fills_at(&order.request, last).unwrap_or(last);
+            state.fill(self, order, price);
         } else {
             let symbol = order.request.symbol.clone();
             state.push(AccountEvent::Order(order.clone()));
@@ -1042,6 +1075,56 @@ mod tests {
         paper.reset();
         rules.leverage = Some(10.0);
         assert_eq!(rules_of(&paper, "SYM"), rules);
+    }
+
+    /// Markets use a usable two-sided quote; missing, invalid and crossed quotes fall back to
+    /// last, which still triggers and prices pending orders even when the ask exceeds the limit.
+    #[test]
+    fn market_orders_fill_at_the_quote_and_others_at_the_last_price() {
+        use OrderSide::{Buy, Sell};
+        for (bid, ask, kind, side, price) in [
+            (Some(99.9), Some(100.1), OrderType::Market, Buy, 100.1),
+            (Some(99.9), Some(100.1), OrderType::Market, Sell, 99.9),
+            (None, None, OrderType::Market, Buy, 100.0),
+            (None, None, OrderType::Market, Sell, 100.0),
+            (Some(99.9), None, OrderType::Market, Buy, 100.0),
+            (None, Some(100.1), OrderType::Market, Sell, 100.0),
+            (Some(f64::NAN), Some(100.1), OrderType::Market, Buy, 100.0),
+            (
+                Some(99.9),
+                Some(f64::INFINITY),
+                OrderType::Market,
+                Sell,
+                100.0,
+            ),
+            (Some(100.1), Some(99.9), OrderType::Market, Buy, 100.0),
+            (Some(99.0), Some(99.0), OrderType::Market, Buy, 99.0),
+            (
+                Some(99.9),
+                Some(100.1),
+                OrderType::Limit(100.05),
+                Buy,
+                100.0,
+            ),
+            (Some(99.9), Some(100.1), OrderType::Stop(99.95), Buy, 100.0),
+        ] {
+            let paper = PaperAccount::new("USD", 100_000.0);
+            paper.set_price("SYM", 100.0);
+            paper.set_bid_ask("SYM", Some(98.0), Some(102.0));
+            paper.set_bid_ask("SYM", bid, ask);
+            for _ in 0..2 {
+                place(&paper, OrderRequest::new("SYM", side, 1.0, kind)).unwrap();
+                let state = paper.lock();
+                assert_eq!(
+                    state.executions[0].price, price,
+                    "{bid:?}/{ask:?} {kind:?} {side:?}"
+                );
+                assert_eq!(state.positions["SYM"].average_price, price);
+                assert_eq!(state.positions["SYM"].last_price, Some(100.0));
+                drop(state);
+                paper.reset();
+            }
+        }
     }
 
     #[test]
