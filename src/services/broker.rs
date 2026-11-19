@@ -169,7 +169,11 @@ pub trait Broker: MaybeSend + 'static {
     /// A page holds [`AccountEvent::Order`] with a finished status, [`AccountEvent::Execution`],
     /// [`AccountEvent::Balance`] or [`AccountEvent::Journal`] events, as the request's
     /// [`HistoryKind`] says, oldest first, and never working orders or positions: those come only
-    /// from the pushed stream. The first page of a request holds the newest entries of its range
+    /// from the pushed stream. Set [`Execution::symbol`] on fills of an executions page: their
+    /// orders may be older than any the panel holds. Without a known order or a symbol, a fill
+    /// is listed without a symbol and not marked on a chart.
+    ///
+    /// The first page of a request holds the newest entries of its range
     /// and each page after it, asked for with the [`next`](HistoryPage::next) cursor, the entries
     /// before the previous one. Entries that were pushed live may appear again in a page: an order
     /// is matched by its id and other events by value, so repeat them unchanged. Answer for the
@@ -261,7 +265,8 @@ pub enum AccountEvent {
     Order(Order),
     /// Adds the position in its symbol, or replaces it; a quantity of 0 removes it.
     Position(Position),
-    /// One fill, drawn on charts of its order's symbol: push the order first.
+    /// One fill, drawn on charts of its order's symbol, or its own
+    /// [`Execution::symbol`] when the order is unknown: push the order first or set the symbol.
     Execution(Execution),
     /// The connection to the broker; a stream starts as [`FeedStatus::Live`]. See
     /// [`Broker::connect`].

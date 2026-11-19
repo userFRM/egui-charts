@@ -231,18 +231,11 @@ impl Trading {
                 .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
             // Under the lines, so that no mark covers an order's or a position's label.
             if display.show_executions {
-                let fills: Vec<_> = self
-                    .account_panel
-                    .fills
+                let fills = &self.account_panel.fills;
+                let fills: Vec<_> = fills
                     .executions
                     .iter()
-                    .filter(|fill| {
-                        self.account_panel
-                            .fills
-                            .orders
-                            .get(&fill.order)
-                            .is_some_and(|request| request.symbol == symbol)
-                    })
+                    .filter(|fill| fills.symbol(fill) == Some(symbol))
                     .collect();
                 // `Trading::numbers` takes the ticket's decimals; prices here keep the market's.
                 let numbers = Numbers {
