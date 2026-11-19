@@ -517,9 +517,9 @@ impl Chart {
 
     /// Removes a pane, its series and studies, with the studies that read their output as
     /// [`remove_series`](Self::remove_series) removes them, its markers, price lines and drawings,
-    /// including locked drawings. Attached primitives detach on the next frame. The original price
-    /// pane can be removed; its retained data still supplies the shared horizontal mapping and
-    /// study inputs.
+    /// including locked drawings, and cancels a drawing being placed in it. Attached primitives
+    /// detach on the next frame. The original price pane can be removed; its retained data still
+    /// supplies the shared horizontal mapping and study inputs.
     /// A main series removed with it stays out of the layout and is not drawn, while its bars
     /// keep taking [`set_data`](Self::set_data), [`update`](Self::update) and the feed.
     /// Surviving panes keep their ids, order and data. Without the original pane, new bar series
@@ -534,6 +534,8 @@ impl Chart {
         if self.pane_index(pane).is_none() {
             return false;
         }
+        #[cfg(feature = "drawings")]
+        let placed = self.placement_pane();
         let members = self.pane_series(pane);
         #[cfg(feature = "drawings")]
         {
@@ -578,6 +580,8 @@ impl Chart {
         }
         self.follow_feed_pause();
         self.sync_panes();
+        #[cfg(feature = "drawings")]
+        self.keep_placement_in(placed);
         true
     }
 
