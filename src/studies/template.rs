@@ -416,6 +416,17 @@ impl StudyTemplate {
         let shared_smoothing = declares("smoothing")
             && value("smooth1").is_some()
             && value("smooth1") == value("smooth2");
+        // A saved Zig Zag deviation that the study declares but now refuses.
+        let refused_deviation = value("deviation_percent").and_then(|saved| match saved {
+            InputValue::Number(deviation)
+                if own
+                    .iter()
+                    .any(|input| input.id == "deviation_percent" && !input.accepts(saved)) =>
+            {
+                Some(*deviation)
+            }
+            _ => None,
+        });
         let mut template = self.clone();
         match study {
             // Older Knoxville saves drew only momentum and its confirmation marks, and saves
@@ -831,6 +842,41 @@ impl StudyTemplate {
                 // Older panes showed all groups; now they show the rating selected by the basis.
                 for plot in template.settings.plots.iter_mut().take(2) {
                     plot.visible = false;
+                }
+            }
+            // Zig Zag took deviations from 0 up, and drew no labels and stopped at its last pivot
+            // before either had a setting; the automatic drawings share its deviation.
+            "ZigZag"
+            | "Auto Trend Line"
+            | "Auto Parallel Channel"
+            | "Auto Fibonacci Retracement"
+            | "Auto Fibonacci Extension"
+            | "Auto Pitchfork"
+                if refused_deviation.is_some()
+                    || (study == "ZigZag" && !has("extend_to_last_bar")) =>
+            {
+                if let Some(deviation) = refused_deviation {
+                    for (id, value) in &mut template.inputs {
+                        if id == "deviation_percent" {
+                            *value = InputValue::Number(deviation.clamp(
+                                crate::studies::ZigZag::MIN_DEVIATION,
+                                crate::studies::ZigZag::MAX_DEVIATION,
+                            ));
+                        }
+                    }
+                }
+                if study == "ZigZag" && !has("extend_to_last_bar") {
+                    for (id, value) in [
+                        ("extend_to_last_bar", InputValue::Toggle(false)),
+                        ("price_labels", InputValue::Toggle(false)),
+                        ("change_labels", InputValue::Toggle(false)),
+                        ("change_mode", InputValue::Choice(1)),
+                        ("volume_labels", InputValue::Toggle(false)),
+                    ] {
+                        if !has(id) {
+                            template.inputs.push((id.to_owned(), value));
+                        }
+                    }
                 }
             }
             // The former Zig Zag construction's inputs and single plot give way to the
@@ -1534,6 +1580,44 @@ mod tests {
                     ("row_ticks", Length(0)),
                 ],
             ),
+            // Saved when the deviation took any number from 0 up: restored at the nearer bound.
+            (
+                "ZigZag",
+                vec![("deviation_percent", Number(0.0))],
+                vec![("deviation_percent", Number(0.000_01))],
+            ),
+            (
+                "ZigZag",
+                vec![("deviation_percent", Number(150.0))],
+                vec![("deviation_percent", Number(100.0))],
+            ),
+            #[cfg(feature = "drawings")]
+            (
+                "Auto Pitchfork",
+                vec![("deviation_percent", Number(0.0))],
+                vec![("deviation_percent", Number(0.000_01))],
+            ),
+            // Saved before labels and the extension to the last bar, both on by default since.
+            (
+                "ZigZag",
+                vec![("deviation_percent", Number(3.0))],
+                vec![
+                    ("deviation_percent", Number(3.0)),
+                    ("price_labels", Toggle(false)),
+                    ("change_labels", Toggle(false)),
+                    ("change_mode", Choice(1)),
+                    ("volume_labels", Toggle(false)),
+                    ("extend_to_last_bar", Toggle(false)),
+                ],
+            ),
+            (
+                "ZigZag",
+                vec![("extend_to_last_bar", Toggle(true))],
+                vec![
+                    ("extend_to_last_bar", Toggle(true)),
+                    ("price_labels", Toggle(true)),
+                ],
+            ),
             // Saved before the twelve lengths were inputs.
             (
                 "GMMA",
@@ -1692,6 +1776,26 @@ mod tests {
         }
         assert_eq!(value("row_ticks"), Some(&Length(0)));
         assert_eq!(value("width"), Some(&Number(30.0)));
+
+        // A Zig Zag as a chart saved it before the extension and the new label defaults.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"ZigZag","inputs":[["deviation_percent",{"Number":3.0}],["depth",{"Length":10}],["mode",{"Choice":0}],["price_labels",{"Toggle":true}],["change_labels",{"Toggle":true}],["change_mode",{"Choice":1}],["volume_labels",{"Toggle":false}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ZigZag.html","plots":[{"color":[41,98,255,255],"width":2.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+        )
+        .unwrap();
+        let study = saved.create().unwrap();
+        assert_eq!(study.settings(), saved.settings);
+        let inputs = study.inputs();
+        for (id, kept) in [
+            ("deviation_percent", Number(3.0)),
+            ("price_labels", Toggle(true)),
+            ("change_labels", Toggle(true)),
+            ("change_mode", Choice(1)),
+            ("volume_labels", Toggle(false)),
+            ("extend_to_last_bar", Toggle(false)),
+        ] {
+            let input = inputs.iter().find(|input| input.id == id);
+            assert_eq!(input.map(|input| &input.value), Some(&kept), "ZigZag {id}");
+        }
     }
 
     /// A Correlation Coefficient as a chart saved it before it opened as an area: a line with its
