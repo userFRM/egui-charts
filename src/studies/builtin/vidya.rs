@@ -5,7 +5,7 @@ use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
-/// VIDYA - Variable Index Dynamic Avg
+/// VIDYA - Variable Index Dynamic Average
 /// Adaptive moving avg that adjusts based on volatility
 /// Uses Chande Momentum Oscillator for volatility measurement
 #[derive(Clone, Debug)]
@@ -59,7 +59,7 @@ impl Indicator for VIDYA {
     }
 
     fn desc(&self) -> &str {
-        "Variable Index Dynamic Avg - Volatility-adjusted MA"
+        "Variable Index Dynamic Average - Volatility-adjusted MA"
     }
 
     fn calculate(&mut self, data: &[Bar]) {

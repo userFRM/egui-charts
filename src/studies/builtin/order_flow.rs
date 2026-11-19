@@ -2,7 +2,7 @@
 
 use super::anchor_period::AnchorPeriod;
 use super::trade_delta::CvdMarkers;
-use crate::data::{OrderFilter, OrderFlowInput, OrderFlowKind};
+use crate::data::{OrderFilter, OrderFlowInput, OrderFlowKind, SizeBasis};
 use crate::model::{Bar, BarClock};
 use crate::studies::{
     Indicator, IndicatorValues, InputKind, InputValue, PlotStyle, PlotType, StudyCandle, StudyInput,
@@ -31,6 +31,7 @@ const ANCHORS: [Option<AnchorPeriod>; 8] = [
 pub struct OrderFlowStudy {
     kind: OrderFlowKind,
     filter: OrderFilter,
+    basis: SizeBasis,
     input: OrderFlowInput,
     clock: BarClock,
     values: IndicatorValues,
@@ -55,6 +56,7 @@ impl OrderFlowStudy {
         Self {
             kind,
             filter: OrderFilter::default(),
+            basis: SizeBasis::Fill,
             input: OrderFlowInput::new(kind),
             clock: BarClock::new(crate::model::Timeframe::Min1),
             values: IndicatorValues::new(),
@@ -78,7 +80,8 @@ impl OrderFlowStudy {
     /// Exact execution delta in a separate pane, as candles by default. With `cumulative`,
     /// candles carry the total until the selected anchor period changes (each exchange trading
     /// day by default); otherwise every candle opens at zero. Inputs select an inclusive size
-    /// range and candles or a cumulative line / per-bar histogram. No volume is inferred from
+    /// range, whether it measures each fill or its aggressive order, and candles or a cumulative
+    /// line / per-bar histogram. No volume is inferred from
     /// price bars. The chart connects the same source as Size-Filtered CVD, including its
     /// historical coverage, retention and replay cutoff.
     ///
@@ -232,7 +235,9 @@ impl OrderFlowStudy {
 
     /// A fresh source for the current kind and filter, with no values.
     fn reset(&mut self) {
-        self.input = OrderFlowInput::new(self.kind).with_order_filter(self.filter.clone());
+        self.input = OrderFlowInput::new(self.kind)
+            .with_order_filter(self.filter.clone())
+            .with_size_basis(self.basis);
         self.values = IndicatorValues::new();
         self.candles.clear();
         self.markers.labels.clear();
@@ -484,6 +489,13 @@ impl Indicator for OrderFlowStudy {
                 InputKind::Length(min, max),
             )
         };
+        let combine = StudyInput::new(
+            "combine_fills",
+            "Combine fills of an aggressive order",
+            InputValue::Toggle(self.basis == SizeBasis::AggressiveOrder),
+            InputKind::Toggle,
+        )
+        .with_default(InputValue::Toggle(false));
         match self.kind {
             OrderFlowKind::Spread => vec![],
             OrderFlowKind::BookSize { levels, distance } => vec![
@@ -536,7 +548,7 @@ impl Indicator for OrderFlowStudy {
                         InputKind::Number(0.0, f64::MAX),
                     )
                 };
-                ranges
+                let mut inputs: Vec<_> = ranges
                     .iter()
                     .enumerate()
                     .flat_map(|(i, [min, max])| {
@@ -553,7 +565,9 @@ impl Indicator for OrderFlowStudy {
                             ),
                         ]
                     })
-                    .collect()
+                    .collect();
+                inputs.push(combine);
+                inputs
             }
             OrderFlowKind::FlowSum { bars } => vec![
                 length("bars", "Bars", bars, 1, 10_000),
@@ -575,6 +589,7 @@ impl Indicator for OrderFlowStudy {
                         )
                     })
                     .to_vec();
+                inputs.push(combine);
                 if self.delta != Some(false) {
                     inputs.push(
                         StudyInput::new(
@@ -715,6 +730,15 @@ impl Indicator for OrderFlowStudy {
             self.histogram = *on;
             return Ok(());
         }
+        if let ("combine_fills", InputValue::Toggle(on)) = (id, &value) {
+            self.basis = if *on {
+                SizeBasis::AggressiveOrder
+            } else {
+                SizeBasis::Fill
+            };
+            self.reset();
+            return Ok(());
+        }
         match (&mut self.kind, id, value) {
             (OrderFlowKind::SizeDelta { ranges }, id, InputValue::Number(v)) => {
                 let index = id[3..]
@@ -775,7 +799,8 @@ impl Indicator for OrderFlowStudy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{OrderSide, Tick};
+    use crate::data::Footprint;
+    use crate::model::{OrderSide, Tick, Timeframe};
     use chrono::{DateTime, TimeDelta, Utc};
 
     const NAN: f64 = f64::NAN;
@@ -811,6 +836,111 @@ mod tests {
 
     fn lines(study: &OrderFlowStudy) -> Vec<Vec<f64>> {
         study.values().columns().to_vec()
+    }
+
+    /// Guards what the trade-size filters measure (#3197): each fill alone, or the combined fills of
+    /// its aggressive order, the fills of one aggressor order id at one timestamp, counted at their
+    /// own prices. Expected values by hand from the tape below: per order, orders 1 and 2 and
+    /// the single sell reach 50; an order growing past 49 is taken back with the delta path its
+    /// fills made; the two 30-lot fills without an id stay apart; id 1 at 50 s is another order.
+    #[test]
+    fn size_filters_measure_single_fills_or_aggressive_orders() {
+        let (buy, sell) = (Some(OrderSide::Buy), Some(OrderSide::Sell));
+        let ten = start();
+        let fill = |second: i64, price: f64, size: f64, side, id: Option<u64>| {
+            let tick = Tick::new(ten + TimeDelta::seconds(second), price, size, side);
+            match id {
+                Some(id) => tick.with_aggressor_order_id(id),
+                None => tick,
+            }
+        };
+        let mut tape: Vec<Tick> = [100.0, 101.0, 102.0, 103.0, 104.0]
+            .map(|price| fill(10, price, 10.0, buy, Some(1)))
+            .to_vec();
+        tape.extend([
+            fill(20, 100.0, 50.0, sell, None),
+            fill(30, 100.0, 20.0, buy, Some(2)),
+            fill(30, 101.0, 30.0, sell, Some(3)),
+            fill(30, 102.0, 30.0, buy, Some(2)),
+            fill(30, 103.0, 10.0, sell, Some(3)),
+            fill(40, 100.0, 30.0, buy, None),
+            fill(40, 100.0, 30.0, buy, None),
+            fill(50, 104.0, 40.0, sell, Some(1)),
+        ]);
+        let clock = BarClock::new(Timeframe::Min1);
+        // Rows: (level, ask, ask trades, bid, bid trades); footprint (min_delta, max_delta); CVD
+        // [delta, high, low]; Multi-Range Delta over [0, 49], [50, ∞] and [20, 20].
+        #[rustfmt::skip]
+        let cases = [
+            ("per fill only the single 50-lot sell reaches 50", false, [50.0, f64::MAX],
+                vec![(100, 0.0, 0, 50.0, 1)], (-50.0, 0.0), [-50.0, 0.0, -50.0], [80.0, -50.0, 20.0]),
+            ("per order orders 1 and 2 and the single sell reach 50, at their fills' prices", true, [50.0, f64::MAX],
+                vec![(100, 30.0, 2, 50.0, 1), (101, 10.0, 1, 0.0, 0), (102, 40.0, 2, 0.0, 0),
+                    (103, 10.0, 1, 0.0, 0), (104, 10.0, 1, 0.0, 0)],
+                (0.0, 50.0), [50.0, 50.0, 0.0], [-20.0, 50.0, 0.0]),
+            ("an order growing past the maximum is taken back with its part of the delta path", true, [0.0, 49.0],
+                vec![(100, 60.0, 2, 0.0, 0), (101, 0.0, 0, 30.0, 1), (103, 0.0, 0, 10.0, 1), (104, 0.0, 0, 40.0, 1)],
+                (-40.0, 20.0), [-20.0, 20.0, -40.0], [-20.0, 50.0, 0.0]),
+        ];
+        for (name, combine, [min, max], rows, extremes, cvd, ranges) in cases {
+            let mut flow = Footprint::new(clock.clone(), 1.0, 1).unwrap();
+            flow.set_size_filter(min, max).unwrap();
+            if combine {
+                flow.set_size_basis(SizeBasis::AggressiveOrder).unwrap();
+            }
+            let mut studies = [
+                OrderFlowStudy::new(OrderFlowKind::FilteredCvd { min, max }),
+                OrderFlowStudy::new(OrderFlowKind::SizeDelta {
+                    ranges: [[0.0, 49.0], [50.0, f64::MAX], [20.0, 20.0]],
+                }),
+            ];
+            for study in &mut studies {
+                study
+                    .set_input("combine_fills", InputValue::Toggle(combine))
+                    .unwrap();
+            }
+            for (i, trade) in tape.iter().enumerate() {
+                flow.push(trade).unwrap();
+                for study in &studies {
+                    study.order_flow_inputs()[0].push_trade(&clock, trade);
+                }
+                // At 20 and 30 lots only the third range changes membership: its whole
+                // order counts at 20, and none of it at 30, before range one changes.
+                if combine && matches!(i, 1 | 2) {
+                    let expected = if i == 1 {
+                        [20.0, 0.0, 20.0]
+                    } else {
+                        [30.0, 0.0, 0.0]
+                    };
+                    assert_eq!(
+                        studies[1].order_flow_inputs()[0].values()[&ten],
+                        expected,
+                        "{name}, fill {i}"
+                    );
+                }
+            }
+            let bar = &flow.bars()[&ten];
+            let got: Vec<_> = (bar.levels.values())
+                .map(|r| (r.level, r.ask, r.ask_trades, r.bid, r.bid_trades))
+                .collect();
+            assert_eq!(got, rows, "{name}");
+            assert_eq!((bar.min_delta, bar.max_delta), extremes, "{name}");
+            let values = studies.map(|study| study.order_flow_inputs()[0].values()[&ten]);
+            assert_eq!(values, [cvd, ranges], "{name}");
+        }
+        // A basis change applies only to future fills. Old order parts must not undo a
+        // fill counted in between under another basis, even at the same timestamp.
+        let input = OrderFlowInput::new(OrderFlowKind::FilteredCvd {
+            min: 50.0,
+            max: f64::MAX,
+        })
+        .with_size_basis(SizeBasis::AggressiveOrder);
+        input.push_trade(&clock, &fill(10, 100.0, 20.0, buy, Some(7)));
+        let input = input.with_size_basis(SizeBasis::Fill);
+        input.push_trade(&clock, &fill(10, 101.0, 50.0, sell, None));
+        let input = input.with_size_basis(SizeBasis::AggressiveOrder);
+        input.push_trade(&clock, &fill(10, 102.0, 30.0, buy, Some(7)));
+        assert_eq!(input.values()[&ten], [-50.0, 0.0, -50.0]);
     }
 
     #[test]

@@ -174,9 +174,9 @@ pub struct Legend<'a> {
     /// The decimals of the series' prices in place of the instrument's; the chart sets it to
     /// the precision chosen for its price scale.
     pub(crate) price_decimals: Option<u8>,
-    /// The rects the chart shades as extended hours under the legend, left to right, and their
-    /// shading. The chart sets it.
-    pub(crate) extended_hours: (&'a [Rect], Color32),
+    /// The rects shaded as extended or overnight hours under the legend, left to right,
+    /// each with its colour. The chart sets it.
+    pub(crate) extended_hours: &'a [(Rect, Color32)],
     /// The colour of the chart background at a point under the legend, which the backdrops take.
     /// The chart sets it; a legend shown on its own has the theme's chart background.
     pub(crate) background: Option<&'a dyn Fn(Pos2) -> Color32>,
@@ -244,7 +244,7 @@ impl<'a> Legend<'a> {
             quantity: None,
             thousands_sep: None,
             price_decimals: None,
-            extended_hours: (&[], Color32::TRANSPARENT),
+            extended_hours: &[],
             background: None,
         }
     }
@@ -457,24 +457,14 @@ impl<'a> Legend<'a> {
                 );
             }
         }
-        // The change from `reference` to `value`, absolute and as a percentage.
         let change_text = |reference: f64, value: f64| {
-            let change = value - reference;
-            let pct = percent_change(reference, value);
-            let absolute = self.formatters.price.map_or_else(
-                || {
-                    crate::scales::group_thousands(
-                        format!("{change:+.precision$}"),
-                        self.thousands_sep,
-                    )
-                },
-                |formatter| formatter.format_change(change),
-            );
-            let percent = self
-                .formatters
-                .percentage
-                .map_or_else(|| format!("{pct:+.2}%"), |formatter| formatter.format(pct));
-            (change, absolute, percent)
+            price_change_text(
+                &self.formatters,
+                self.thousands_sep,
+                precision,
+                reference,
+                value,
+            )
         };
         if self.show_change || self.show_change_percent {
             let reference = self.previous_close.unwrap_or(self.bar.open);
@@ -993,6 +983,28 @@ impl<'a> Legend<'a> {
     }
 }
 
+/// The change from `reference` to `value`, absolute and in percent of the reference's
+/// magnitude, as the legend writes it: the price formatter's change format, else `precision`
+/// decimals grouped by `thousands_sep`, and the percentage formatter, else two decimals.
+pub(crate) fn price_change_text(
+    formatters: &super::ValueFormatters<'_>,
+    thousands_sep: Option<char>,
+    precision: usize,
+    reference: f64,
+    value: f64,
+) -> (f64, String, String) {
+    let change = value - reference;
+    let pct = percent_change(reference, value);
+    let absolute = formatters.price.map_or_else(
+        || crate::scales::group_thousands(format!("{change:+.precision$}"), thousands_sep),
+        |formatter| formatter.format_change(change),
+    );
+    let percent = formatters
+        .percentage
+        .map_or_else(|| format!("{pct:+.2}%"), |formatter| formatter.format(pct));
+    (change, absolute, percent)
+}
+
 /// A glyph of the market status pill.
 enum StatusGlyph {
     Session(MarketSession),
@@ -1007,6 +1019,7 @@ fn session_status(session: MarketSession, theme: &crate::theme::Theme) -> (&'sta
         MarketSession::Open => ("Market open", theme.ui.success),
         MarketSession::PreMarket => ("Pre-market", theme.ui.warning),
         MarketSession::PostMarket => ("Post-market", theme.ui.info),
+        MarketSession::Overnight => ("Overnight", theme.ui.accent),
         MarketSession::Closed => ("Market closed", theme.ui.text_muted),
     }
 }
@@ -1039,6 +1052,12 @@ fn paint_status_glyph(
             painter.circle_filled(center, 4.0, color);
             painter.circle_filled(center + Vec2::new(2.0, -1.5), 3.5, fill);
         }
+        StatusGlyph::Session(MarketSession::Overnight) => {
+            // The cut-out crescent and a small star remain distinct from the post-market glyph.
+            painter.circle_filled(center + Vec2::new(-1.0, 0.5), 3.5, color);
+            painter.circle_filled(center + Vec2::new(1.0, -1.0), 3.0, fill);
+            painter.circle_filled(center + Vec2::new(3.5, -3.0), 1.0, color);
+        }
         StatusGlyph::Session(MarketSession::Closed) => {
             painter.circle_stroke(center, 3.5, Stroke::new(1.5, color));
         }
@@ -1069,8 +1088,8 @@ struct Layout<'a> {
     chart_background: &'a dyn Fn(Pos2) -> Color32,
     /// Opacity of the current row's background.
     backdrop: f32,
-    /// The rects shaded as extended hours and their shading.
-    tint: (&'a [Rect], Color32),
+    /// The extended and overnight rectangles, each with its shading.
+    tint: &'a [(Rect, Color32)],
     colors: &'a StyleColors,
 }
 
@@ -1081,7 +1100,7 @@ impl<'a> Layout<'a> {
         colors: &'a StyleColors,
         first_row_end: f32,
         chart_background: &'a dyn Fn(Pos2) -> Color32,
-        tint: (&'a [Rect], Color32),
+        tint: &'a [(Rect, Color32)],
     ) -> Self {
         Self {
             painter,
@@ -1100,36 +1119,36 @@ impl<'a> Layout<'a> {
     /// `rect` in the chart background behind it at `opacity`, and over the extended hours shading
     /// in the shaded background at the same opacity, so each part matches the plot beneath.
     fn fill(&self, rect: Rect, opacity: f32) -> egui::Shape {
-        let (shaded, shade) = self.tint;
-        let part = |part: Rect, shaded: bool| {
+        let shaded = self.tint;
+        let part = |part: Rect, shade: Option<Color32>| {
             // shortcut: one colour per part, so a steep horizontal gradient shows a step at the
             // ends of a wide row; paint the part as a slice of the gradient if that is seen.
             let color = (self.chart_background)(part.center());
-            let color = if shaded { color.blend(shade) } else { color };
+            let color = shade.map_or(color, |shade| color.blend(shade));
             egui::Shape::rect_filled(part, 0.0, color.gamma_multiply(opacity))
         };
         let mut parts = Vec::new();
         let mut left = rect.left();
         // The parts are disjoint: a shaded part laid over a translucent fill would apply the
         // opacity twice.
-        for shaded in shaded
+        for (shaded, shade) in shaded
             .iter()
-            .map(|shaded| rect.intersect(*shaded))
-            .filter(Rect::is_positive)
+            .map(|(shaded, shade)| (rect.intersect(*shaded), *shade))
+            .filter(|(rect, _)| rect.is_positive())
         {
             parts.push((
                 Rect::from_x_y_ranges(left..=shaded.left(), rect.y_range()),
-                false,
+                None,
             ));
-            parts.push((shaded, true));
+            parts.push((shaded, Some(shade)));
             left = shaded.right();
         }
         if parts.is_empty() {
-            return part(rect, false);
+            return part(rect, None);
         }
         parts.push((
             Rect::from_x_y_ranges(left..=rect.right(), rect.y_range()),
-            false,
+            None,
         ));
         egui::Shape::Vec(
             parts
@@ -1271,7 +1290,7 @@ mod mark_tests {
     #[test]
     fn legend_names_the_market_state_and_hides_it_independently() {
         use crate::theme::contrast;
-        use MarketSession::{Closed, Open, PostMarket, PreMarket};
+        use MarketSession::{Closed, Open, Overnight, PostMarket, PreMarket};
         use egui::Shape;
         for (_, theme) in crate::theme::presets() {
             for (session, data, shown, labels) in [
@@ -1288,6 +1307,7 @@ mod mark_tests {
                     true,
                     &["Post-market", "End-of-day data"][..],
                 ),
+                (Some(Overnight), None, true, &["Overnight"][..]),
                 (Some(Closed), None, true, &["Market closed"][..]),
                 (Some(Open), Some(DataStatus::Delayed), false, &[][..]),
                 (None, Some(DataStatus::Delayed), true, &["Delayed data"][..]),
@@ -1361,6 +1381,7 @@ mod mark_tests {
                         "Market open" => theme.ui.success,
                         "Pre-market" | "Delayed data" | "End-of-day data" => theme.ui.warning,
                         "Post-market" => theme.ui.info,
+                        "Overnight" => theme.ui.accent,
                         "Market closed" => theme.ui.text_muted,
                         _ => unreachable!(),
                     };
@@ -1373,10 +1394,10 @@ mod mark_tests {
                             } else {
                                 circle.fill == color
                                     && circle.radius
-                                        == if labels[index] == "Pre-market" {
-                                            2.0
-                                        } else {
-                                            4.0
+                                        == match labels[index] {
+                                            "Pre-market" => 2.0,
+                                            "Overnight" => 3.5,
+                                            _ => 4.0,
                                         }
                             }
                         }
@@ -1984,10 +2005,13 @@ mod layout_tests {
             let ctx = Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
             let bar = Bar::new(Utc.timestamp_opt(0, 0).unwrap(), 1.0, 1.0, 1.0, 1.0, 240.0);
-            let shaded = [Rect::from_min_max(Pos2::ZERO, Pos2::new(30.0, 600.0))];
+            let shaded = [(
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(30.0, 600.0)),
+                Color32::from_rgba_premultiplied(0, 0, 40, 40),
+            )];
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 let mut legend = Legend::new("SAMPLE", "1m", &bar);
-                legend.extended_hours = (&shaded, Color32::from_rgba_premultiplied(0, 0, 40, 40));
+                legend.extended_hours = &shaded;
                 legend.show(
                     ui,
                     Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)),

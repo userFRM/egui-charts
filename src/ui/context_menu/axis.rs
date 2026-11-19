@@ -26,6 +26,7 @@ enum Action {
     HighLow,
     Timezone(TimezoneMode),
     ExtendedHours,
+    OvernightHours,
     SessionBreaks,
     Settings,
 }
@@ -118,13 +119,31 @@ impl AxisMenus {
                     matches!(timezone, TimezoneMode::Exchange(_)),
                 ),
             ];
+            let overnight = chart.overnight_hours()
+                || chart
+                    .instrument()
+                    .and_then(|instrument| instrument.session.as_ref())
+                    .is_some_and(|session| {
+                        !session.overnight_windows.is_empty()
+                            || session
+                                .overrides
+                                .iter()
+                                .any(|date| !date.overnight_windows.is_empty())
+                    });
+            entries.push(MenuEntry::Separator);
+            entries.push(row(
+                "Extended hours",
+                Action::ExtendedHours,
+                chart.extended_hours(),
+            ));
+            if overnight {
+                entries.push(row(
+                    "Overnight hours",
+                    Action::OvernightHours,
+                    chart.overnight_hours(),
+                ));
+            }
             entries.extend([
-                MenuEntry::Separator,
-                row(
-                    "Extended hours",
-                    Action::ExtendedHours,
-                    chart.extended_hours(),
-                ),
                 row(
                     "Session breaks",
                     Action::SessionBreaks,
@@ -264,7 +283,9 @@ impl AxisMenus {
                 MenuEntry::Item(item) => match item.action {
                     Action::Settings => Control::Settings,
                     Action::Timezone(_) => Control::TimeZone,
-                    Action::ExtendedHours | Action::SessionBreaks => Control::Session,
+                    Action::ExtendedHours | Action::OvernightHours | Action::SessionBreaks => {
+                        Control::Session
+                    }
                     _ => return true,
                 },
                 MenuEntry::Submenu { .. } | MenuEntry::Separator => return true,
@@ -378,6 +399,7 @@ impl AxisMenus {
                 Action::HighLow => chart.config_mut().show_high_low = !chart.config().show_high_low,
                 Action::Timezone(zone) => chart.chart_options.time_scale.timezone = zone,
                 Action::ExtendedHours => chart.set_extended_hours(!chart.extended_hours()),
+                Action::OvernightHours => chart.set_overnight_hours(!chart.overnight_hours()),
                 Action::SessionBreaks => {
                     chart.config_mut().show_session_breaks = !chart.config().show_session_breaks
                 }
@@ -440,6 +462,42 @@ mod tests {
     use super::*;
     use crate::studies::{CustomIndicator, IndicatorValue};
     use egui::{Event, Modifiers, PointerButton, RawInput, Vec2};
+
+    /// The time axis offers overnight hours for an instrument with overnight windows, and while
+    /// they are requested; other charts keep the menu as it was.
+    #[test]
+    fn time_axis_offers_overnight_hours_with_overnight_windows() {
+        use crate::model::{Instrument, Session, SessionWindow};
+        use chrono::{NaiveTime, Weekday::*};
+        let rows = |chart: &Chart| -> Vec<(String, bool)> {
+            AxisMenus::entries(true, chart, None)
+                .into_iter()
+                .filter_map(|entry| match entry {
+                    MenuEntry::Item(item) => Some((item.label, item.icon.is_some())),
+                    _ => None,
+                })
+                .collect()
+        };
+        let at = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[101.0]);
+        assert!(
+            !rows(&chart)
+                .iter()
+                .any(|(label, _)| label == "Overnight hours")
+        );
+        chart.set_instrument(Some(
+            Instrument::new("A").with_session(
+                Session::new([SessionWindow::new([Mon], at(9), at(16))])
+                    .with_overnight_windows([SessionWindow::new([Mon], at(20), at(4))]),
+            ),
+        ));
+        assert!(rows(&chart).contains(&("Overnight hours".into(), false)));
+        chart.set_overnight_hours(true);
+        chart.set_instrument(None);
+        let rows = rows(&chart);
+        assert!(rows.contains(&("Extended hours".into(), true)));
+        assert!(rows.contains(&("Overnight hours".into(), true)));
+    }
 
     /// The selected pane owns the menu, which closes if that pane or its last source leaves.
     #[test]

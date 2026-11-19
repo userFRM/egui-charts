@@ -91,7 +91,9 @@ pub use option_chain::{
 };
 #[cfg(feature = "studies")]
 pub(crate) use options_volume::OptionsVolumeSource;
-pub use options_volume::{OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink};
+pub use options_volume::{
+    OptionsVolume, OptionsVolumeQuery, OptionsVolumeReader, OptionsVolumeSink,
+};
 #[cfg(feature = "studies")]
 pub(crate) use volume_profile::{ExposureProfile, StrikeExposure, grid_row};
 #[cfg_attr(
@@ -100,7 +102,10 @@ pub(crate) use volume_profile::{ExposureProfile, StrikeExposure, grid_row};
 )]
 pub(crate) mod trades;
 
-pub use inbox::{Reply, Sink, aggregate_trades, aggregate_trades_with_tick_size};
+pub use inbox::{
+    Reply, ReplyReader, Sink, SinkReader, SinkUpdates, aggregate_trades,
+    aggregate_trades_with_tick_size,
+};
 pub use order_flow::{BarBook, OrderFlowBars, OrderFlowFootprints, OrderFlowInput, OrderFlowKind};
 pub use orders::{
     OrderEvent, OrderFilter, OrderFilterUnavailable, OrderQueue, OrderSizeTier, OrderSizeTiers,
@@ -113,7 +118,7 @@ pub(crate) use resample::resample_periods;
 pub use resample::{resample, resample_with_session};
 pub use study::{StudyData, StudyDataRequest};
 pub use targets::PriceTargets;
-pub use trades::{CombinedTrade, ConsumedOrder, combine_trades};
+pub use trades::{CombinedTrade, ConsumedOrder, SizeBasis, combine_trades};
 pub use volume_profile::{
     ProfileDisplay, ProfileLevel, ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile,
     VolumeProfileConfig,
@@ -536,8 +541,12 @@ pub struct HistoryRequest {
     pub since: Option<DateTime<Utc>>,
     /// Bars wanted. Fewer is fine; the chart asks again as the user scrolls back.
     pub count: usize,
-    /// Include the instrument's extended trading hours, as well as regular hours.
+    /// Include the instrument's pre-market and post-market windows as well as regular hours.
     pub extended_hours: bool,
+    /// Include [`Session::overnight_windows`](crate::model::Session::overnight_windows) too.
+    /// With `extended_hours`, this selects all hours. Without it, requests select regular hours.
+    /// The chart requests regular, extended or all hours and never overnight hours alone.
+    pub overnight_hours: bool,
     /// Request dividend-adjusted bars when the instrument supports them. An unsupported feed
     /// returns unadjusted bars; [`Instrument::dividend_adjustment`] advertises the choice.
     pub adjusted: bool,
@@ -570,6 +579,7 @@ impl HistoryRequest {
             since: None,
             count,
             extended_hours: false,
+            overnight_hours: false,
             adjusted: false,
             conversion: None,
         }
@@ -646,6 +656,9 @@ pub struct FootprintRequest {
     pub count: usize,
     /// Include extended hours, with the same meaning as [`HistoryRequest::extended_hours`].
     pub extended_hours: bool,
+    /// Include overnight windows too, as in
+    /// [`HistoryRequest::overnight_hours`]. Requires `extended_hours`.
+    pub overnight_hours: bool,
     /// Use the same adjustment as [`HistoryRequest::adjusted`].
     pub adjusted: bool,
     /// Requested price currency or unit; see [`HistoryRequest::conversion`].
@@ -680,6 +693,7 @@ impl FootprintRequest {
             since: None,
             count,
             extended_hours: false,
+            overnight_hours: false,
             adjusted: false,
             conversion: None,
         }
@@ -1106,13 +1120,79 @@ pub struct Subscription {
     pub timeframe: Timeframe,
     /// The same calendar boundaries supplied to history requests.
     pub clock: BarClock,
-    /// Include the instrument's extended trading hours, as well as regular hours.
+    /// Include the instrument's pre-market and post-market windows as well as regular hours.
     pub extended_hours: bool,
+    /// Include overnight windows too, as in
+    /// [`HistoryRequest::overnight_hours`]. Requires `extended_hours`.
+    pub overnight_hours: bool,
     /// The currency or unit the host chose, in which the updates are wanted; see
     /// [`HistoryRequest::conversion`].
     pub conversion: Option<String>,
     /// Destination for updates; stop publishing when it becomes inactive.
     pub sink: Sink,
+}
+
+impl Subscription {
+    /// Live updates of `symbol` at `timeframe` into `sink`: regular hours in the instrument's own
+    /// currency, on the UTC calendar of [`BarClock::new`], as [`HistoryRequest::new`] sets them.
+    /// Its [`id`](Self::id) is the sink's, which every clone of `sink` shares, so a feed can
+    /// forward a subscription it received by building another one on `subscription.sink.clone()`.
+    /// Assign [`clock`](Self::clock) and the other fields to match a chart. A [`SinkReader`]
+    /// builds a sink outside a chart, to test [`Datafeed::subscribe`]; give it the same clock.
+    ///
+    /// ```
+    /// use egui_charts::data::{
+    ///     Datafeed, FeedStatus, HistoryPage, HistoryRequest, Reply, SinkReader, Subscription,
+    /// };
+    /// use egui_charts::model::{Tick, Timeframe};
+    ///
+    /// /// Reports the stream live and pushes two trades.
+    /// struct Exchange;
+    ///
+    /// impl Datafeed for Exchange {
+    ///     fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+    ///         reply.send(Ok(HistoryPage::default()));
+    ///     }
+    ///
+    ///     fn subscribe(&self, subscription: Subscription) {
+    ///         let sink = subscription.sink;
+    ///         sink.set_status(FeedStatus::Live);
+    ///         let at = |time: &str| time.parse().expect("a valid time");
+    ///         sink.push_tick(Tick::new(at("2026-01-05T15:00:20Z"), 100.0, 2.0, None));
+    ///         sink.push_tick(Tick::new(at("2026-01-05T15:00:40Z"), 101.0, 1.0, None));
+    ///     }
+    /// }
+    ///
+    /// let (reader, sink) = SinkReader::new("ES", Timeframe::Min1, None);
+    /// let probe = sink.clone();
+    /// Exchange.subscribe(Subscription::new("ES", Timeframe::Min1, sink));
+    /// let updates = reader.take();
+    /// assert_eq!(updates.status, Some(FeedStatus::Live));
+    /// let [bar] = updates.bars.as_slice() else {
+    ///     panic!("one bar, got {:?}", updates.bars);
+    /// };
+    /// assert_eq!(bar.time, "2026-01-05T15:00:00Z".parse::<chrono::DateTime<chrono::Utc>>()?);
+    /// assert_eq!(
+    ///     (bar.open, bar.high, bar.low, bar.close, bar.volume),
+    ///     (100.0, 101.0, 100.0, 101.0, 3.0)
+    /// );
+    /// assert!(reader.take().bars.is_empty());
+    /// drop(reader);
+    /// assert!(!probe.is_active());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn new(symbol: impl Into<String>, timeframe: Timeframe, sink: Sink) -> Self {
+        Self {
+            id: sink.id,
+            symbol: symbol.into(),
+            timeframe,
+            clock: BarClock::new(timeframe),
+            extended_hours: false,
+            overnight_hours: false,
+            conversion: None,
+            sink,
+        }
+    }
 }
 
 /// Identifies a subscription. Unique within the process, so one feed can serve many charts.

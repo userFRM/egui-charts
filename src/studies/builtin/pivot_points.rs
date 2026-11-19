@@ -69,6 +69,20 @@ pub enum PivotMethod {
     Camarilla,
 }
 
+impl PivotMethod {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Traditional => "Traditional",
+            Self::Fibonacci => "Fibonacci",
+            Self::Woodie => "Woodie",
+            Self::Classic => "Classic",
+            Self::DM => "DM",
+            Self::Camarilla => "Camarilla",
+        }
+    }
+}
+
 /// The calendar period of each set of pivots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[non_exhaustive]
@@ -97,6 +111,24 @@ pub enum PivotTimeframe {
     TenYears,
 }
 
+impl PivotTimeframe {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::Daily => "Daily",
+            Self::Weekly => "Weekly",
+            Self::Monthly => "Monthly",
+            Self::Quarterly => "Quarterly",
+            Self::Yearly => "Yearly",
+            Self::TwoYears => "Biyearly",
+            Self::ThreeYears => "Triyearly",
+            Self::FiveYears => "Quinquennially",
+            Self::TenYears => "Decennially",
+        }
+    }
+}
+
 /// Which end of each pivot level its label sits at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[non_exhaustive]
@@ -106,6 +138,16 @@ pub enum PivotLabelSide {
     Left,
     /// At the end of the level, above its line.
     Right,
+}
+
+impl PivotLabelSide {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Left => "Left",
+            Self::Right => "Right",
+        }
+    }
 }
 
 const LEVEL_NAMES: [&str; 11] = [

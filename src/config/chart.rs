@@ -72,6 +72,11 @@ fn pixel_conflation_threshold() -> Option<f32> {
     Some(1.0)
 }
 
+/// Older saved configurations use the theme for overnight shading.
+fn follow_the_theme() -> Color32 {
+    Color32::PLACEHOLDER
+}
+
 /// Appearance of the price axis: its border, tick marks and which labels it shows. It applies to
 /// the main and series price axes; value tag settings also apply to study panes.
 ///
@@ -304,7 +309,9 @@ pub struct ChartConfig {
     pub vertical_grid_line_style: Option<LineStyle>,
     /// Text color for labels
     pub text_color: Color32,
-    /// Font size of the price and time axis labels in logical pixels; `None` follows the theme.
+    /// Font size of this chart's price and time scale text in logical pixels: the axis labels
+    /// and tags, including the crosshair's and those of study panes. `None` follows the theme's
+    /// label size; other chart text keeps the theme's sizes.
     /// Default: None
     pub axis_font_size: Option<f32>,
     /// Font family of this chart's price and time axis labels and tags, including study panes.
@@ -376,6 +383,10 @@ pub struct ChartConfig {
     pub show_currency: bool,
     /// Show the host-supplied price unit above the price ticks.
     pub show_unit: bool,
+    /// Show the currency and unit only while the pointer is over the price scale or their menu
+    /// is open. Off by default: they stay visible.
+    #[serde(default)]
+    pub currency_unit_on_hover: bool,
     /// Show Auto, Log and Percent buttons in chart navigation.
     pub show_scale_mode_buttons: bool,
     /// Enable the crosshair price tag action that opens the host's price menu.
@@ -402,6 +413,11 @@ pub struct ChartConfig {
     pub show_symbol_labels: bool,
     /// Whether to show last price value
     pub show_symbol_last_val: bool,
+    /// Write the main series' change from the previous session's close, absolute and in
+    /// percent, under its last value tag, as the legend writes its day change. Shown only with
+    /// the tag and when an earlier session has a close. Off by default.
+    #[serde(default)]
+    pub show_symbol_last_change: bool,
     /// Draw a line at the latest close independently of its tag.
     pub show_price_line: bool,
     /// Draw a line at the preceding session close independently of its tag.
@@ -451,10 +467,14 @@ pub struct ChartConfig {
     pub session_break_style: LineStyle,
     /// Session configuration (market hours)
     pub session_config: Option<SessionConfig>,
-    /// Shade bars identified as extended hours by the session metadata.
+    /// Shade bars identified as extended or overnight hours by the session metadata.
     pub show_extended_hours: bool,
     /// Extended-hours fill. `PLACEHOLDER` uses the active theme accent at low opacity.
     pub extended_hours_color: Color32,
+    /// Fill for overnight windows. `PLACEHOLDER` follows the active theme accent at twice
+    /// the extended-hours opacity. Older saved charts use that theme default.
+    #[serde(default = "follow_the_theme")]
+    pub overnight_hours_color: Color32,
     /// Whether to show the symbol watermark.
     pub show_watermark: bool,
     /// Text of the symbol watermark; `\n` starts another line. `None` shows the symbol and the
@@ -565,6 +585,7 @@ impl Default for ChartConfig {
             indicator_backdrop_opacity: 0.6,
             show_currency: true,
             show_unit: true,
+            currency_unit_on_hover: false,
             show_scale_mode_buttons: true,
             show_plus_button: true,
             show_extended_session_price: true,
@@ -578,6 +599,7 @@ impl Default for ChartConfig {
             left_axis_scale_mode: PriceScaleMode::Normal,
             show_symbol_labels: true,
             show_symbol_last_val: true,
+            show_symbol_last_change: false,
             show_price_line: true,
             show_prev_close_line: false,
             show_symbol_prev_close: false,
@@ -607,6 +629,7 @@ impl Default for ChartConfig {
             session_config: None,
             show_extended_hours: true,
             extended_hours_color: Color32::PLACEHOLDER,
+            overnight_hours_color: Color32::PLACEHOLDER,
             // Watermark disabled by default
             show_watermark: false,
             watermark_text: None,
