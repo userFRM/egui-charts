@@ -18,7 +18,7 @@ pub use dom::DepthPanel;
 pub use format::TradingFormatter;
 pub use ticket::{Bracket, BracketMode, OrderPreset};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::chart::TradingLineAction;
@@ -125,6 +125,10 @@ pub struct Trading {
     calculator: Option<(egui::Pos2, String)>,
     /// The action behind each order answer, kept until the broker answers so a refusal names it.
     sent: Vec<(u64, Sent)>,
+    /// User cancellations stay silent until the order ends or the cancellation is refused.
+    cancelling: HashSet<OrderId>,
+    /// A loss was announced, but no later live update has announced the return yet.
+    connection_lost: bool,
 }
 
 impl std::fmt::Debug for Trading {
@@ -154,6 +158,8 @@ impl std::fmt::Debug for Trading {
             .field("sound", &self.sound)
             .field("calculator", &self.calculator)
             .field("sent", &self.sent)
+            .field("cancelling", &self.cancelling)
+            .field("connection_lost", &self.connection_lost)
             .finish_non_exhaustive()
     }
 }
@@ -210,6 +216,8 @@ impl Default for Trading {
             sound: None,
             calculator: None,
             sent: Vec::new(),
+            cancelling: HashSet::new(),
+            connection_lost: false,
         }
     }
 }
@@ -320,6 +328,8 @@ impl Trading {
     /// account are dropped, and a new stream starts.
     fn connect(&mut self) {
         self.sent.clear();
+        self.cancelling.clear();
+        self.connection_lost = false;
         self.preview = None;
         self.sound = None;
         self.calculator = None;
@@ -416,6 +426,7 @@ impl Trading {
     /// Cancels `id`, describing it with its last listed request when it is still available.
     fn cancel_order(&mut self, id: OrderId, request: Option<OrderRequest>) {
         if let Some((service, key)) = self.live_service(Sent::Cancel(id.clone(), request)) {
+            self.cancelling.insert(id.clone());
             service.cancel(id, self.inbox.reply(key));
         }
     }

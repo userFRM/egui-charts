@@ -2019,6 +2019,7 @@ mod tests {
         assert_eq!(
             messages,
             [
+                "The broker disconnected: orders are not sent until it is back",
                 "Order refused: Sell 2 OTHER at market: the broker is not connected",
                 "Order refused: Buy 1 SYM at market: the broker is not connected",
                 "Cancel refused: Buy 1 SYM limit 95.00: the broker is not connected",
@@ -2048,7 +2049,7 @@ mod tests {
             std::slice::from_ref(&working.id)
         );
         assert_eq!(*broker.modified.lock().unwrap(), [(working.id, moved)]);
-        assert_eq!(toasts.toasts().len(), 4, "the broker accepted them");
+        assert_eq!(toasts.toasts().len(), 6, "the broker accepted them");
     }
 
     /// At the narrowest ticket a long symbol gives way, so that the broker's status stays clear of

@@ -14,7 +14,8 @@ use crate::widget::settings::TradingNotifications;
 
 impl Trading {
     /// Applies the broker's pushes and answers, reporting refused orders, cancellations and
-    /// changes, rejected orders and fills in `toasts`, each naming its order.
+    /// changes, rejected orders, fills and broker cancellations in `toasts`, each naming its
+    /// order, and announcing when the broker stops being live and is live again.
     /// A lagged stream is replaced by a new one, on which the broker restates the account: the
     /// order ticket, a previewed order and the quantity calculator stay as the user left them,
     /// a change to an order or a position that waits for confirmation is dropped, and a
@@ -132,6 +133,9 @@ impl Trading {
                     .and_then(|done| done.err()),
             };
             if let Some(error) = error {
+                if let Sent::Cancel(id, _) = &sent {
+                    self.cancelling.remove(id);
+                }
                 self.notify(toasts, self.refusal(ctx, &sent, &error.to_string()));
             }
         }
@@ -190,7 +194,10 @@ impl Trading {
                 {
                     self.pending = None;
                 }
+                let listed = self.orders.iter().any(|working| working.id == order.id);
                 self.orders.retain(|working| working.id != order.id);
+                let asked =
+                    order.status != OrderStatus::Working && self.cancelling.remove(&order.id);
                 if announce
                     && first_order
                     && order.status == OrderStatus::Working
@@ -255,6 +262,20 @@ impl Trading {
                             executed: false,
                         });
                         self.notify(toasts, toast);
+                    }
+                    OrderStatus::Cancelled if announce && listed && !asked => {
+                        let chart =
+                            (self.chart_logo.as_ref()).map_or("", |(chart, _)| chart.as_str());
+                        let numbers = self.numbers(&order.request.symbol, chart);
+                        let text = order_text(ctx, &order.request, &numbers);
+                        self.notify(
+                            toasts,
+                            Toast::info(l10n::format_text(
+                                ctx,
+                                "Cancelled: {order}",
+                                &[("order", text.as_str())],
+                            )),
+                        );
                     }
                     _ => {}
                 }
@@ -379,11 +400,21 @@ impl Trading {
                         for (_, _, order) in std::mem::take(&mut self.placing) {
                             self.refuse(Sent::Place(order), super::NOT_LIVE);
                         }
+                        if !self.restating {
+                            self.connection_lost = true;
+                            let lost =
+                                "The broker disconnected: orders are not sent until it is back";
+                            self.notify(toasts, Toast::error(l10n::text(ctx, lost)));
+                        }
                     }
                     // Ask once more for what the broker may not have answered meanwhile.
                     (false, true) => {
                         self.ask_rules_again();
                         self.account_panel.resume();
+                        if !self.restating && std::mem::take(&mut self.connection_lost) {
+                            let back = l10n::text(ctx, "The broker is connected again");
+                            self.notify(toasts, Toast::success(back));
+                        }
                     }
                     _ => {}
                 }
@@ -658,6 +689,112 @@ mod tests {
     use crate::widget::Chart;
     use crate::widget::settings::TradingSettings;
     use std::sync::Arc;
+
+    /// Broker cancellations are news once, but a user's cancellation stays silent whether its
+    /// push arrives before or after the answer; only All includes that information notice.
+    #[test]
+    fn broker_cancellations_are_announced_once() {
+        let ctx = egui::Context::default();
+        let order = |id, side, quantity, kind| {
+            Order::new(
+                OrderId::new(id),
+                OrderRequest::new("SYM", side, quantity, kind),
+                OrderStatus::Working,
+            )
+        };
+        let a = order("1", OrderSide::Buy, 1.0, OrderType::Limit(95.0));
+        let b = order("2", OrderSide::Buy, 1.0, OrderType::Limit(94.0));
+        let c = order("3", OrderSide::Sell, 2.0, OrderType::Stop(90.0));
+        let cancelled = |order: &Order| {
+            AccountEvent::Order(Order::new(
+                order.id.clone(),
+                order.request.clone(),
+                OrderStatus::Cancelled,
+            ))
+        };
+        for level in TradingNotifications::ALL {
+            let broker = Arc::new(Recorder {
+                state: [&a, &b, &c]
+                    .map(|order| AccountEvent::Order(order.clone()))
+                    .into(),
+                ..Recorder::default()
+            });
+            let mut trading = Trading::default();
+            trading.display.notifications = level;
+            trading.set_service(broker.clone());
+            let mut toasts = Toasts::new();
+            trading.poll(&ctx, &mut toasts);
+            trading.execute(Some(TradingLineAction::Cancel(a.clone())));
+            trading.poll(&ctx, &mut toasts);
+            trading.apply(&ctx, cancelled(&a), &mut toasts);
+            trading.execute(Some(TradingLineAction::Cancel(b.clone())));
+            trading.apply(&ctx, cancelled(&b), &mut toasts);
+            trading.poll(&ctx, &mut toasts);
+            for _ in 0..2 {
+                trading.apply(&ctx, cancelled(&c), &mut toasts);
+            }
+            let unseen = order("4", OrderSide::Sell, 2.0, OrderType::Stop(90.0));
+            trading.apply(&ctx, cancelled(&unseen), &mut toasts);
+            let messages: Vec<_> = toasts
+                .toasts()
+                .iter()
+                .map(|toast| toast.message.as_str())
+                .collect();
+            let expected = if level == TradingNotifications::All {
+                vec!["Cancelled: Sell 2 SYM stop 90.00"]
+            } else {
+                vec![]
+            };
+            assert_eq!(messages, expected, "{level:?}");
+            assert_eq!(
+                *broker.cancelled.lock().unwrap(),
+                [a.id.clone(), b.id.clone()]
+            );
+        }
+    }
+
+    /// Only live connection transitions are news: no initial or restated status is announced,
+    /// repeated offline/live statuses are quiet, and Errors retains the loss alone.
+    #[test]
+    fn losing_and_regaining_the_broker_raise_one_notice_each() {
+        use crate::data::FeedStatus;
+        let ctx = egui::Context::default();
+        for level in TradingNotifications::ALL {
+            let broker = Arc::new(Recorder {
+                state: vec![AccountEvent::Status(FeedStatus::Connecting)],
+                ..Recorder::default()
+            });
+            let mut trading = Trading::default();
+            trading.display.notifications = level;
+            trading.set_service(broker);
+            let mut toasts = Toasts::new();
+            trading.poll(&ctx, &mut toasts);
+            for status in [
+                FeedStatus::Live,
+                FeedStatus::Disconnected,
+                FeedStatus::Connecting,
+                FeedStatus::Live,
+                FeedStatus::Live,
+            ] {
+                trading.apply(&ctx, AccountEvent::Status(status), &mut toasts);
+            }
+            trading.listen();
+            trading.poll(&ctx, &mut toasts);
+            trading.apply(&ctx, AccountEvent::Status(FeedStatus::Live), &mut toasts);
+            let messages: Vec<_> = toasts
+                .toasts()
+                .iter()
+                .map(|toast| toast.message.as_str())
+                .collect();
+            let lost = "The broker disconnected: orders are not sent until it is back";
+            let expected = match level {
+                TradingNotifications::All => vec![lost, "The broker is connected again"],
+                TradingNotifications::Errors => vec![lost],
+                TradingNotifications::Off => vec![],
+            };
+            assert_eq!(messages, expected, "{level:?}");
+        }
+    }
 
     /// Refusals identify the action and the unchanged order, including both stop-limit prices
     /// and an id fallback after an order has left the working list.

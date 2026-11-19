@@ -525,10 +525,12 @@ impl Default for TradingSettings {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum TradingNotifications {
-    /// Fills, partial fills, rejections and refused orders.
+    /// Everything Errors shows, and fills, partial fills, placed orders, orders the broker
+    /// cancelled and a broker that is live again.
     #[default]
     All,
-    /// Rejections and refused orders only.
+    /// Rejected orders, refused orders, cancellations and changes, and a broker that stops
+    /// being live.
     Errors,
     /// None.
     Off,
