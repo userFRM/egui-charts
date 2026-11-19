@@ -138,12 +138,21 @@ impl DrawingManager {
     /// active timeframe and group visibility, so hidden drawings are not hit.
     /// After [`Self::render_all`], uses the actual clipped paint geometry, including text and
     /// data-driven bodies. Before the first paint, falls back to the tool's geometric outline.
+    /// Series and studies cover drawings at the pointer positions the chart probes each frame.
     pub fn hit_test(&self, point: Pos2) -> Option<usize> {
+        let floor = self
+            .covers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|(at, _)| *at == point)
+            .map_or(0, |c| c.1);
         let painted = self.painted.lock().unwrap_or_else(|e| e.into_inner());
         in_z_order(&self.drawings)
             .into_iter()
             .rev()
             .filter(|d| d.selectable && self.shows(d))
+            .filter(|d| d.series_layer.unwrap_or(usize::MAX) >= floor)
             .filter(|d| {
                 self.pane_clips.is_empty()
                     || self
@@ -277,6 +286,22 @@ impl DrawingManager {
         }
     }
 
+    /// Replaces the series and study covers inside a pane, keeping other panes' points.
+    pub(crate) fn set_covers(&self, rect: Rect, covers: impl IntoIterator<Item = (Pos2, usize)>) {
+        let mut points = self.covers.lock().unwrap_or_else(|e| e.into_inner());
+        points.retain(|(at, _)| !rect.contains(*at));
+        points.extend(covers);
+    }
+
+    /// The paint-list range of `id`'s shapes from the last paint of its pane.
+    pub(crate) fn painted_range(&self, id: usize) -> Option<std::ops::Range<usize>> {
+        let painted = self.painted.lock().unwrap_or_else(|e| e.into_inner());
+        painted
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.start..p.start + p.shapes.len())
+    }
+
     /// Render all drawings against the chart's bars and coordinate mapping
     pub fn render_all(&self, painter: &egui::Painter, price_rect: Rect, view: &ChartView) {
         let painter = &painter.with_clip_rect(price_rect);
@@ -357,6 +382,7 @@ impl DrawingManager {
                 }
                 painted.push(PaintedDrawing {
                     id: drawing.id,
+                    start,
                     points: drawing.points.clone(),
                     handle_points: match drawing.tool_type {
                         DrawingToolType::RegressionTrend => {
