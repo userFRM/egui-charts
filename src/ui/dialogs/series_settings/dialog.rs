@@ -457,10 +457,101 @@ mod tests {
         chart
     }
 
+    /// The colours of the strokes `chart` paints in its plot, without repeats.
+    fn painted_strokes(chart: &mut crate::Chart) -> Vec<egui::Color32> {
+        use crate::widget::test_frames::{frame, shapes};
+        let ctx = Context::default();
+        frame(&ctx, chart, 0.0, vec![]);
+        let painted = shapes(&ctx, chart, 0.1, vec![]);
+        let plot = chart.get_rendered_price_rect();
+        let mut colors = Vec::new();
+        for shape in painted {
+            if let egui::Shape::LineSegment { points, stroke } = shape
+                && plot.contains(points[0])
+                && !colors.contains(&stroke.color)
+            {
+                colors.push(stroke.color);
+            }
+        }
+        colors
+    }
+
+    /// Kagi lines and Point and Figure columns take the colours accepted for them and leave the
+    /// candle colours alone, also when their type is chosen again. A layout or template saved
+    /// before they had colours draws them in its candle body colours, as it was drawn.
+    #[test]
+    fn series_settings_colours_reach_kagi_lines_and_point_and_figure_columns() {
+        let candles = [
+            egui::Color32::from_rgb(8, 153, 129),
+            egui::Color32::from_rgb(242, 54, 69),
+        ];
+        let own = [
+            egui::Color32::from_rgb(1, 2, 3),
+            egui::Color32::from_rgb(4, 5, 6),
+        ];
+        let saved = [
+            egui::Color32::from_rgb(1, 100, 2),
+            egui::Color32::from_rgb(101, 2, 3),
+        ];
+        // The thin Kagi line takes the falling colour, the X column the rising one.
+        for (kind, side) in [(ChartType::Kagi, 1), (ChartType::PointAndFigure, 0)] {
+            let mut chart = price_based_chart(kind, candles);
+            let mut settings = chart.series_settings();
+            let styles = &mut settings.chart_type_params.styles;
+            [styles.kagi.up_color, styles.kagi.down_color] = own;
+            [styles.point_figure.up_color, styles.point_figure.down_color] = own;
+            chart.apply_series_settings(&settings);
+            assert!(painted_strokes(&mut chart).contains(&own[side]), "{kind:?}");
+            chart.set_chart_type(ChartType::Candles);
+            let config = chart.config();
+            assert_eq!([config.bullish_color, config.bearish_color], candles);
+            let (bodies, _) = painted_candles(&mut chart, &own);
+            assert!(bodies.is_empty(), "{kind:?}: {bodies:?}");
+            chart.set_chart_type(kind);
+            assert!(painted_strokes(&mut chart).contains(&own[side]), "{kind:?}");
+
+            // The Kagi entry as saved before its colours, and no Point and Figure entry.
+            let former: serde_json::Value =
+                serde_json::from_str(r#"{"thick_width":2.5,"thin_width":1.5}"#).unwrap();
+            for template in [false, true] {
+                let saved_chart = price_based_chart(kind, saved);
+                let mut restored = price_based_chart(kind, candles);
+                if template {
+                    let state =
+                        crate::widget::settings::ChartSettingsState::from_chart(&saved_chart);
+                    let mut json = serde_json::to_value(state).unwrap();
+                    let styles = &mut json["chart_type_params"]["styles"];
+                    styles["kagi"] = former.clone();
+                    styles.as_object_mut().unwrap().remove("point_figure");
+                    let state: crate::widget::settings::ChartSettingsState =
+                        serde_json::from_value(json).unwrap();
+                    state.apply_to_chart(&mut restored).unwrap();
+                } else {
+                    let snapshot = saved_chart.snapshot().unwrap();
+                    let mut json = serde_json::to_value(snapshot).unwrap();
+                    for params in ["/chart_type_params", "/settings/chart_type_params"] {
+                        let styles = &mut json.pointer_mut(params).unwrap()["styles"];
+                        styles["kagi"] = former.clone();
+                        styles.as_object_mut().unwrap().remove("point_figure");
+                    }
+                    let snapshot: crate::widget::ChartSnapshot =
+                        serde_json::from_value(json).unwrap();
+                    restored.restore(&snapshot).unwrap();
+                }
+                let strokes = painted_strokes(&mut restored);
+                assert!(
+                    strokes.contains(&saved[side]),
+                    "{kind:?} {template}: {strokes:?}"
+                );
+            }
+        }
+    }
+
     /// Every setting of the price-based chart types accepted in the dialog comes back from a
     /// saved layout.
     #[test]
     fn price_based_settings_survive_a_layout() {
+        let color = |v: u8| Some(egui::Color32::from_rgb(v, 2 * v, 3 * v));
         let mut chart = price_based_chart(ChartType::Renko, [egui::Color32::GREEN; 2]);
         let mut settings = chart.series_settings();
         let params = &mut settings.chart_type_params;
@@ -469,6 +560,10 @@ mod tests {
         params.kagi_real_price = false;
         params.line_break_real_price = false;
         params.pnf_real_price = false;
+        let styles = &mut params.styles;
+        [styles.kagi.up_color, styles.kagi.down_color] = [color(10), color(11)].map(Option::unwrap);
+        let point_figure = [color(12), color(13)].map(Option::unwrap);
+        [styles.point_figure.up_color, styles.point_figure.down_color] = point_figure;
         chart.apply_series_settings(&settings);
         let json = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
         let mut restored = price_based_chart(ChartType::Candles, [egui::Color32::RED; 2]);

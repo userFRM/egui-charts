@@ -150,7 +150,27 @@ impl SymbolTab {
                         .labelled_by(label.id);
                         ui.end_row();
                     }
-                    Self::candle_colors_section(ui, settings);
+                    let candles = [settings.bullish_color, settings.bearish_color];
+                    Self::own_color_rows(
+                        ui,
+                        [
+                            ("Thick line colour", &mut styles.kagi.up_color),
+                            ("Thin line colour", &mut styles.kagi.down_color),
+                        ],
+                        candles,
+                    );
+                }
+                ChartType::PointAndFigure => {
+                    let candles = [settings.bullish_color, settings.bearish_color];
+                    let style = &mut styles.point_figure;
+                    Self::own_color_rows(
+                        ui,
+                        [
+                            ("Rising column colour", &mut style.up_color),
+                            ("Falling column colour", &mut style.down_color),
+                        ],
+                        candles,
+                    );
                 }
                 _ => Self::candle_colors_section(ui, settings),
             }
@@ -1107,6 +1127,19 @@ impl SymbolTab {
                     }
                 }
             });
+            ui.end_row();
+        }
+    }
+
+    /// Rows of a style's rising and falling colours; one saved before the style had them shows
+    /// the candle body colour it draws in, `candles`, until picked.
+    fn own_color_rows(ui: &mut Ui, rows: [(&str, &mut Color32); 2], candles: [Color32; 2]) {
+        for ((label, color), candle) in rows.into_iter().zip(candles) {
+            ui.label(l10n::text(ui.ctx(), label));
+            let mut shown = crate::model::or_candle(*color, candle);
+            if Self::color_picker(ui, &mut shown) {
+                *color = shown;
+            }
             ui.end_row();
         }
     }
