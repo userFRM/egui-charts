@@ -8,6 +8,7 @@ use crate::model::PriceLine;
 use crate::painting::dashed_line::draw_dashed_line;
 use crate::scales::PriceMap;
 use crate::theme::{ThemeExt, contrast};
+pub(crate) use currency::currency_menu_id;
 pub use currency::render_axis_currency;
 use egui::{Align2, Color32, CornerRadius, FontFamily, FontId, Painter, Pos2, Rect, Stroke, Vec2};
 pub(super) use labels::semibold;
@@ -660,8 +661,8 @@ pub fn render_quote_tags(
     )
 }
 
-/// The chart's current-value stack, optionally including the supplied quote's bar countdown.
-/// A non-empty `close_name` leads the current close's tag.
+/// The chart's current-value stack, with `below` written under the close's price: lines such
+/// as its change and the bar countdown. A non-empty `close_name` leads the current close's tag.
 pub(crate) fn render_quote_tags_with_countdown(
     painter: &Painter,
     price_rect: Rect,
@@ -670,7 +671,7 @@ pub(crate) fn render_quote_tags_with_countdown(
     session: Option<(&crate::model::quote::SessionQuote, Color32)>,
     volume: Option<(f64, Color32)>,
     axis_right: f32,
-    countdown: Option<&str>,
+    below: Option<&str>,
     volume_precision: Option<u8>,
     reserved_top: f32,
     formatter: Option<&dyn crate::scales::PriceFormatter>,
@@ -714,7 +715,7 @@ pub(crate) fn render_quote_tags_with_countdown(
                         formatter,
                     ),
                 );
-                countdown.map_or_else(|| price.clone(), |time| format!("{price}\n{time}"))
+                below.map_or_else(|| price.clone(), |below| format!("{price}\n{below}"))
             },
             close.color,
         ));
@@ -734,12 +735,11 @@ pub(crate) fn render_quote_tags_with_countdown(
             axis_right,
         );
         let mut y = price_map.price_to_y(quote.price);
+        // A close tag of `1 + n` lines clears the session tag at `height + n * line / 2`.
         let separation = height
-            + if countdown.is_some() {
-                (height - TAG_PADDING.y * 2.0) / 2.0
-            } else {
-                0.0
-            };
+            + below.map_or(0.0, |below| {
+                below.lines().count() as f32 * (height - TAG_PADDING.y * 2.0) / 2.0
+            });
         if !allow_overlap && !rows.is_empty() && (y - close_y).abs() < separation {
             y = close_y - separation;
         }
