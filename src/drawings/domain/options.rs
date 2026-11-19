@@ -1222,13 +1222,17 @@ impl Default for MiddleLineStyle {
 }
 
 /// What a pin and a signpost show at their marker: a pin's text popup, and the glyph a signpost
-/// can carry on a coloured disc below its text. Other tools ignore these settings. A new drawing
-/// shows a pin's text and leaves a signpost's glyph off.
+/// can carry on a coloured disc below its text. The text switch also shows and hides the text
+/// of a horizontal line, a horizontal ray, an arrow mark and the parallel, flat top/bottom and
+/// disjoint channels. Other tools ignore these settings. A new drawing shows its text and
+/// leaves a signpost's glyph off.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
 pub struct AnnotationMarker {
-    /// Whether a pin shows its text in a popup while it is selected or under the pointer.
+    /// Whether a pin shows its text in a popup while it is selected or under the pointer, and
+    /// whether a horizontal line, a horizontal ray, an arrow mark or a parallel, flat
+    /// top/bottom or disjoint channel draws its text. Switched off, the text is kept.
     pub show_text: bool,
     /// Glyph on a signpost's disc: an emoji, or the id of a bundled icon or sticker.
     pub glyph: String,
