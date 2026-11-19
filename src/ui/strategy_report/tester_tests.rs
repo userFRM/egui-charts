@@ -44,41 +44,19 @@ fn trend() -> Vec<Bar> {
         .collect()
 }
 
+/// A full run is independent of the retained engine used by the tester.
+fn fresh(tester: &StrategyTester, bars: &[Bar], lower: &[Bar]) -> StrategyReport {
+    let engine = tester.engine("TEST", Timeframe::Min1);
+    engine.run(tester.configured_strategy().unwrap().as_mut(), bars, lower)
+}
+
 #[test]
 fn a_run_continues_on_new_bars_and_rebuilds_after_corrections() {
     let source = trend();
-    let mut corrected = source[..101].to_vec();
-    corrected[50] = Bar::new(source[50].time, 103.0, 110.0, 103.0, 110.0, 1.0);
-    let mut failures = Vec::new();
-    for (name, initial, next, host) in [
-        (
-            "append",
-            source[..100].to_vec(),
-            source[..101].to_vec(),
-            false,
-        ),
-        (
-            "correction",
-            source[..101].to_vec(),
-            corrected.clone(),
-            false,
-        ),
-        (
-            "shorter",
-            source[..101].to_vec(),
-            source[..99].to_vec(),
-            false,
-        ),
-        ("host correction", source[..101].to_vec(), corrected, true),
-    ] {
-        let mut tester = StrategyTester::default();
-        tester.select_strategy("Consecutive Up/Down").unwrap();
-        if host {
-            let mut settings = tester.settings().clone();
-            settings.start_time = Some(source[2].time);
-            tester.set_settings(settings).unwrap();
-        }
-        let mut h = Harness::builder()
+    let mut tester = StrategyTester::default();
+    tester.select_strategy("Consecutive Up/Down").unwrap();
+    let mut h =
+        Harness::builder()
             .with_size(Vec2::new(1440.0, 900.0))
             .build_ui_state(
                 |ui,
@@ -89,54 +67,258 @@ fn a_run_continues_on_new_bars_and_rebuilds_after_corrections() {
                 )| {
                     actions.extend(tester.show(ui, "TEST", Timeframe::Min1, bars));
                 },
-                (tester, initial.clone(), Vec::new()),
+                (tester, source[..100].to_vec(), Vec::new()),
             );
-        if host {
-            let Some(StrategyTesterAction::RequestHistory(request)) = h
-                .state_mut()
-                .0
-                .request_run("TEST", Timeframe::Min1, &initial, false)
-                .unwrap()
-            else {
-                panic!("missing history request");
-            };
-            h.state_mut()
-                .0
-                .set_history(&request, initial, Vec::new())
-                .unwrap();
+    h.get_by_role_and_label(Role::Button, "Run").click();
+    h.run();
+    let report = h.state().0.report().unwrap();
+    assert_eq!(report.trades.len(), 1);
+    assert_eq!(report.trades[0].side, OrderSide::Buy);
+    assert_eq!(report.trades[0].entry_time, source[4].time);
+    assert_eq!(report.trades[0].entry_price, 103.0);
+    assert!(report.trades[0].exit.is_none());
+    assert_eq!(report.equity.last().unwrap().1, 9_997.0);
+    let signals = |actions: &[StrategyTesterAction]| match actions.last().unwrap() {
+        StrategyTesterAction::Signals { signals, .. } => signals.len(),
+        _ => panic!("missing fill replacement"),
+    };
+    assert_eq!(signals(&h.state().2), 1);
+    assert!(!h.state().0.is_stale());
+    let count = h.state().2.len();
+    h.run();
+    assert_eq!(h.state().2.len(), count, "identical frames emit nothing");
+    h.state_mut().0.ranges[0].enabled = true;
+    h.state_mut()
+        .0
+        .request_run("TEST", Timeframe::Min1, &source[..100], true)
+        .unwrap();
+    h.state_mut().1 = source[..101].to_vec();
+    h.run();
+    let tester = &h.state().0;
+    assert!(!tester.is_stale());
+    assert_eq!(tester.report(), Some(&fresh(tester, &source[..101], &[])));
+    let report = tester.report().unwrap();
+    assert_eq!(report.trades.len(), 2);
+    let exit = report.trades[0].exit.as_ref().unwrap();
+    assert_eq!(
+        (exit.time, exit.price, exit.profit),
+        (source[100].time, 99.0, -4.0)
+    );
+    assert_eq!(report.trades[1].side, OrderSide::Sell);
+    assert_eq!(report.trades[1].entry_time, source[100].time);
+    assert_eq!(report.trades[1].entry_price, 99.0);
+    assert_eq!(signals(&h.state().2), 3);
+    h.state_mut().0.report.tab = super::super::Tab::Trades;
+    h.state_mut().0.report.selected = Some(1);
+    h.state_mut().0.report.compare = true;
+    h.state_mut().0.tab = Tab::Inputs;
+    h.state_mut().1 = source.clone();
+    h.run();
+    let tester = &h.state().0;
+    assert_eq!(tester.report(), Some(&fresh(tester, &source, &[])));
+    assert_eq!(tester.report().unwrap().equity.last().unwrap().1, 9_997.0);
+    assert_eq!(tester.report.tab, super::super::Tab::Trades);
+    assert_eq!(tester.report.selected, Some(1));
+    assert!(tester.report.compare);
+    assert_eq!(tester.tab, Tab::Inputs);
+    let mut corrected = source.clone();
+    corrected[50] = Bar::new(source[50].time, 103.0, 110.0, 103.0, 110.0, 1.0);
+    h.state_mut().1 = corrected.clone();
+    h.run();
+    let tester = &h.state().0;
+    assert!(!tester.is_stale());
+    assert_eq!(tester.report(), Some(&fresh(tester, &corrected, &[])));
+    assert_eq!(
+        tester
+            .report()
+            .unwrap()
+            .equity
+            .iter()
+            .find(|(t, _)| *t == source[50].time)
+            .unwrap()
+            .1,
+        10_007.0
+    );
+    let before = tester.report().unwrap().clone();
+    h.state_mut().1.truncate(99);
+    h.run();
+    assert!(h.state().0.is_stale());
+    assert_eq!(h.state().0.report(), Some(&before));
+    h.state_mut().1 = corrected;
+    h.run();
+    assert!(h.state().0.is_stale(), "shorter history ends continuation");
+    assert_eq!(h.state().0.report(), Some(&before));
+}
+
+#[test]
+fn continued_runs_request_finer_bars_and_use_host_history() {
+    fn frame(tester: &mut StrategyTester, bars: &[Bar]) -> Vec<StrategyTesterAction> {
+        let mut actions = Vec::new();
+        egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| {
+                actions.extend(tester.show(ui, "TEST", Timeframe::Min1, bars));
+            })
+            .drop_without_applying_deltas();
+        actions
+    }
+    let source = trend();
+    let finer = |count: usize| {
+        source[..count]
+            .iter()
+            .flat_map(|bar| {
+                [0, 30].map(|seconds| {
+                    Bar::new(
+                        bar.time + chrono::TimeDelta::seconds(seconds),
+                        bar.open,
+                        bar.high,
+                        bar.low,
+                        bar.close,
+                        0.5,
+                    )
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    // The same host request path carries finer fills, conversion rates, or a start date alone.
+    for (lower, converted, dated) in [
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ] {
+        let mut tester = StrategyTester::default();
+        tester.select_strategy("Consecutive Up/Down").unwrap();
+        tester.lower = lower;
+        tester.lower_timeframe = Timeframe::Sec30;
+        let mut settings = tester.settings().clone();
+        if dated {
+            settings.start_time = Some(source[2].time);
+        }
+        if converted {
+            tester.set_instrument_currency(Some("USD".into()));
+            settings.currency = Some("EUR".into());
+        }
+        tester.set_settings(settings).unwrap();
+        frame(&mut tester, &source[..100]);
+        let Some(StrategyTesterAction::RequestHistory(r1)) = tester
+            .request_run("TEST", Timeframe::Min1, &source[..100], false)
+            .unwrap()
+        else {
+            panic!("missing initial request");
+        };
+        let first_lower = if lower { finer(100) } else { vec![] };
+        let rate = |index: usize, price: f64| {
+            Bar::new(source[index].time, price, price, price, price, 0.0)
+        };
+        let rates = if converted {
+            vec![rate(0, 0.5)]
         } else {
-            h.get_by_role_and_label(Role::Button, "Run").click();
+            vec![]
+        };
+        tester
+            .set_history_with_rates(
+                &r1,
+                source[..100].to_vec(),
+                first_lower.clone(),
+                rates.clone(),
+            )
+            .unwrap();
+        for _ in 0..3 {
+            frame(&mut tester, &source[..100]);
         }
-        h.run();
-        assert!(!h.state().0.is_stale(), "{name}");
-        assert_eq!(
-            h.state().0.report().unwrap().trades[0].entry_time,
-            source[4].time
-        );
-        assert_eq!(h.state().0.report().unwrap().trades[0].entry_price, 103.0);
-        h.run();
-        assert!(!h.state().0.is_stale(), "identical {name}");
-        if name == "append" {
-            let bars = h.state().1.clone();
-            h.state_mut()
-                .0
-                .request_run("TEST", Timeframe::Min1, &bars, true)
+        assert!(!tester.is_stale());
+        let before = tester.report().unwrap().clone();
+        let actions = frame(&mut tester, &source[..101]);
+        if lower || converted {
+            let [StrategyTesterAction::RequestHistory(r2)] = actions.as_slice() else {
+                panic!("missing continuation request: {actions:?}");
+            };
+            assert_eq!(
+                (
+                    r2.symbol.as_str(),
+                    r2.timeframe,
+                    r2.start,
+                    r2.lower_timeframe,
+                    r2.exchange_rate.clone()
+                ),
+                (
+                    "TEST",
+                    Timeframe::Min1,
+                    source[100].time,
+                    lower.then_some(Timeframe::Sec30),
+                    r1.exchange_rate.clone()
+                )
+            );
+            assert_ne!(r2.id, r1.id);
+            assert!(tester.is_stale());
+            assert_eq!(tester.report(), Some(&before));
+            assert!(frame(&mut tester, &source[..101]).is_empty());
+            assert!(tester.set_history(&r1, source.clone(), finer(101)).is_err());
+            let all_lower = if lower { finer(101) } else { vec![] };
+            let added_rates = if converted {
+                vec![rate(100, 0.25)]
+            } else {
+                vec![]
+            };
+            // Reply chart bars are deliberately different; only its finer bars and rates are used.
+            tester
+                .set_history_with_rates(
+                    r2,
+                    vec![source[0].clone()],
+                    all_lower.get(200..).unwrap_or(&[]).to_vec(),
+                    added_rates.clone(),
+                )
                 .unwrap();
-            h.run();
-            assert!(!h.state().0.is_stale());
-        }
-        let before = h.state().0.report().unwrap().clone();
-        h.state_mut().1 = next;
-        h.run();
-        assert_eq!(h.state().0.report(), Some(&before));
-        if !h.state().0.is_stale() {
-            failures.push(name);
+            let mut actions = Vec::new();
+            for _ in 0..3 {
+                actions.extend(frame(&mut tester, &source[..101]));
+            }
+            assert!(
+                actions
+                    .iter()
+                    .any(|action| matches!(action, StrategyTesterAction::Signals { .. }))
+            );
+            assert!(!tester.is_stale());
+            let mut engine = tester.engine("TEST", Timeframe::Min1);
+            engine.exchange_rates = rates.into_iter().chain(added_rates).collect();
+            assert_eq!(
+                tester.report(),
+                Some(&engine.run(
+                    tester.configured_strategy().unwrap().as_mut(),
+                    &source[..101],
+                    &all_lower
+                ))
+            );
+            if converted {
+                assert_eq!(tester.report().unwrap().performance().net_profit, -1.0);
+            }
+            let actions = frame(&mut tester, &source);
+            let [StrategyTesterAction::RequestHistory(r3)] = actions.as_slice() else {
+                panic!("missing next request");
+            };
+            assert!(tester.history_failed(r3, "History unavailable"));
+            assert!(tester.is_stale());
+            assert!(!tester.history_failed(r2, "late failure"));
+            assert!(frame(&mut tester, &source).is_empty());
+        } else {
+            assert!(
+                actions
+                    .iter()
+                    .all(|action| !matches!(action, StrategyTesterAction::RequestHistory(_)))
+            );
+            for _ in 0..3 {
+                frame(&mut tester, &source[..101]);
+            }
+            assert!(!tester.is_stale());
+            assert_eq!(tester.report(), Some(&fresh(&tester, &source[..101], &[])));
+            let before = tester.report().unwrap().clone();
+            let mut corrected = source[..101].to_vec();
+            corrected[50].close = 110.0;
+            corrected[50].high = 110.0;
+            frame(&mut tester, &corrected);
+            assert!(tester.is_stale());
+            assert_eq!(tester.report(), Some(&before));
         }
     }
-    assert!(
-        failures.is_empty(),
-        "bar changes left current: {failures:?}"
-    );
 }
 
 #[test]
@@ -758,7 +940,7 @@ fn runs_report_the_instrument_currency_and_convert_into_another_at_requested_rat
             Vec::new(),
             Vec::new(),
             true,
-            false,
+            None,
         )
         .unwrap();
     h.run();
@@ -849,7 +1031,7 @@ fn optimisation_counts_decimal_grid_yields_sorts_and_applies_inputs() {
             Vec::new(),
             Vec::new(),
             true,
-            false,
+            None,
         )
         .unwrap();
     assert!(

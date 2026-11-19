@@ -221,6 +221,30 @@ always `0`. Both exports prefix a text cell that starts with `=`, `+`, `-`, `@`,
 carriage return with an apostrophe, so a spreadsheet shows it as text; numeric cells,
 including negative numbers, are unchanged.
 
+With `ui` and `strategies`, [`StrategyTester`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyTester.html)
+keeps the engine and strategy of a completed Run. As `show` receives new closed bars, it
+continues the report to the same result as a fresh Run over the longer history and returns
+`StrategyTesterAction::Signals` to replace the chart's fill markers. The report keeps its
+open tab, buy-and-hold toggle and selected entry when that entry remains. A corrected
+processed chart bar rebuilds the run; a shorter history ends continuation and marks the
+report stale. For a run on host history, changes to chart bars at or before its last host
+bar also end continuation and mark it stale, since newer host history is needed.
+
+Runs with finer fill bars or currency conversion request the finer bars or exchange rates
+for each new chart bar with `StrategyTesterAction::RequestHistory` and stay stale while
+waiting. Answer through `set_history` or `set_history_with_rates`; continuation uses the
+reply's finer bars and rates with the chart history captured when requested. A failed
+request ends continuation and preserves the last report as stale. The host supplies these
+data; the library fetches no market history or rates. End dates still bound the run.
+Optimisation results do not continue. Form edits, symbol or interval changes, Run and
+`set_report` end continuation; editing optimisation ranges or running an optimisation
+keeps the single run following its chart. Continuation leaves the tester's form tab open.
+
+A host running its own engine uses [`Backtest::update`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.update)
+while the final bar is forming, or [`Backtest::update_closed_async`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.update_closed_async)
+when every bar is closed. Closed-bar updates respect the historical end date and do not
+make forming-bar decisions, even when live recalculation is enabled.
+
 ## Metric definitions
 
 [`StrategyReport::performance`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.performance) retains the base definitions on [`StrategyPerformance`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyPerformance.html):

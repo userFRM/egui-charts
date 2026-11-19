@@ -94,6 +94,39 @@ struct ReportData {
     trades: Vec<usize>,
 }
 
+impl ReportData {
+    fn new(report: StrategyReport, bars: &[Bar]) -> Self {
+        let performance = report.performance();
+        let comparison = report.comparison(bars);
+        let equity = report.equity_curve();
+        let mut peak = equity.first().map_or(0.0, |p| p.1);
+        let drawdown = equity
+            .iter()
+            .map(|&(t, e)| {
+                peak = peak.max(e);
+                (t, e - peak)
+            })
+            .filter(|(_, d)| d.is_finite())
+            .collect();
+        let mut trades: Vec<_> = report
+            .trades
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.is_valid())
+            .map(|(i, _)| i)
+            .collect();
+        trades.sort_by_key(|&i| report.trades[i].entry_time);
+        Self {
+            report,
+            performance,
+            comparison,
+            equity,
+            drawdown,
+            trades,
+        }
+    }
+}
+
 /// Standalone summary, equity/drawdown charts, trade list and run properties.
 ///
 /// Call [`Self::set_report`] once when the host supplies or replaces a run. Metrics and display
@@ -114,36 +147,21 @@ impl StrategyReportPanel {
         self.tab = Tab::Summary;
         self.selected = None;
         self.compare = false;
-        self.data = report.map(|report| {
-            let performance = report.performance();
-            let comparison = report.comparison(bars);
-            let equity = report.equity_curve();
-            let mut peak = equity.first().map_or(0.0, |p| p.1);
-            let drawdown = equity
-                .iter()
-                .map(|&(t, e)| {
-                    peak = peak.max(e);
-                    (t, e - peak)
-                })
-                .filter(|(_, d)| d.is_finite())
-                .collect();
-            let mut trades: Vec<_> = report
-                .trades
-                .iter()
-                .enumerate()
-                .filter(|(_, t)| t.is_valid())
-                .map(|(i, _)| i)
-                .collect();
-            trades.sort_by_key(|&i| report.trades[i].entry_time);
-            ReportData {
-                report,
-                performance,
-                comparison,
-                equity,
-                drawdown,
-                trades,
-            }
+        self.data = report.map(|report| ReportData::new(report, bars));
+    }
+
+    /// Keep the report controls and the selected entry as its trades grow or rebuild.
+    #[cfg(feature = "strategies")]
+    pub(super) fn continue_report(&mut self, report: StrategyReport, bars: &[Bar]) {
+        self.selected = self.selected.and_then(|index| {
+            let old = self.data.as_ref()?.report.trades.get(index)?;
+            report.trades.iter().position(|trade| {
+                trade.side == old.side
+                    && trade.entry_time == old.entry_time
+                    && trade.label == old.label
+            })
         });
+        self.data = Some(ReportData::new(report, bars));
     }
 
     /// The currently supplied report, or `None` when cleared.

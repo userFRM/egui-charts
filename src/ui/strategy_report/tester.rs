@@ -85,7 +85,7 @@ impl StrategyHistoryRequest {
     }
 }
 
-/// Host intents from the tester. Replace the previous run's markers when a run completes.
+/// Host intents from the tester. Replace the previous run's markers when a run completes or continues.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum StrategyTesterAction {
@@ -142,6 +142,12 @@ type Job = Pin<Box<dyn Future<Output = Result<JobOutput, &'static str>>>>;
 
 /// The completed single run's bars, retained to compare against later chart frames.
 struct Continuation {
+    /// Retained execution state and the strategy that produced it.
+    engine: Backtest,
+    strategy: Box<dyn Strategy>,
+    /// Finer fill history and its requested interval, if used.
+    lower: Vec<Bar>,
+    lower_timeframe: Option<Timeframe>,
     /// Host history first, then chart bars, oldest first.
     bars: Vec<Bar>,
     /// Leading bars supplied through `set_history`.
@@ -160,11 +166,43 @@ impl Continuation {
             crate::strategies::same_bars(&bars[..cut], &self.chart),
         )
     }
+}
 
-    fn matches(&self, bars: &[Bar]) -> bool {
-        let (tail, kept) = self.tail(bars);
-        kept && crate::strategies::same_bars(tail, &self.bars[self.host..])
+impl std::fmt::Debug for Continuation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Continuation")
+            .field("bars", &self.bars.len())
+            .field("host", &self.host)
+            .field("chart", &self.chart.len())
+            .field("lower", &self.lower.len())
+            .field("lower_timeframe", &self.lower_timeframe)
+            .finish_non_exhaustive()
     }
+}
+
+/// Resume the retained engine cooperatively, returning it with its updated report.
+fn continue_job(
+    mut follow: Box<Continuation>,
+    bars: Vec<Bar>,
+    lower: Vec<Bar>,
+    completed: Rc<Cell<usize>>,
+) -> Job {
+    Box::pin(async move {
+        let Continuation {
+            engine, strategy, ..
+        } = &mut *follow;
+        engine
+            .update_closed_async(strategy.as_mut(), &bars, &lower)
+            .await;
+        let report = engine
+            .report()
+            .cloned()
+            .expect("an update leaves a live report");
+        follow.bars = bars;
+        follow.lower = lower;
+        completed.set(1);
+        Ok(JobOutput::Report(report, follow))
+    })
 }
 
 /// Counts one trial skipped for `reason`, keeping reasons in first-seen order.
@@ -182,6 +220,17 @@ fn skip(skipped: &mut Vec<(&'static str, usize)>, reason: &'static str) {
 /// web builds. Host strategy preparation and callbacks must be bounded, as documented on
 /// [`Backtest::run_async`]. Edits cancel pending work and retain the previous report as stale.
 /// History replies are tied to a request id and discarded after an edit or scope change.
+///
+/// A completed Run retains its engine and strategy. More closed chart bars continue its report,
+/// returning [`StrategyTesterAction::Signals`] with updated fills; the result equals a fresh Run
+/// over that history. A corrected processed bar rebuilds it. Shorter history, or a changed chart
+/// bar at or before the last host-supplied bar, marks it stale and ends continuation. Runs using
+/// finer fills or exchange rates request those data for new bars and stay stale until answered
+/// through [`Self::set_history`] or [`Self::set_history_with_rates`]. Only the reply's finer bars
+/// and rates are used. Optimisation results do not continue. Form edits, a scope change, Run and
+/// [`Self::set_report`] end continuation; optimisation ranges and requests leave it running.
+/// Continued reports keep the report tab, comparison toggle and selected entry when it remains.
+///
 /// An optimisation skips combinations the strategy refuses as a whole, and runs that lack exchange
 /// rates, and shows how many, with the reason. Pass the chart instrument's currency to
 /// [`Self::set_instrument_currency`]. Give each tester its own egui id scope.
@@ -207,6 +256,10 @@ pub struct StrategyTester {
     pending: Option<(StrategyHistoryRequest, bool)>,
     job: Option<Job>,
     follow: Option<Box<Continuation>>,
+    /// Owns the continuation until the job completes.
+    follow_job: Option<Job>,
+    /// Host data requested for a captured continuation history.
+    follow_request: Option<(StrategyHistoryRequest, Box<Continuation>, Vec<Bar>)>,
     completed: Rc<Cell<usize>>,
     total: usize,
     ranges: Vec<Range>,
@@ -238,9 +291,10 @@ impl std::fmt::Debug for StrategyTester {
             .field("scope", &self.scope)
             .field("revision", &self.revision)
             .field("pending", &self.pending)
+            .field("follow", &self.follow)
             .field(
-                "follow",
-                &self.follow.as_ref().map(|follow| follow.bars.len()),
+                "follow_request",
+                &self.follow_request.as_ref().map(|(request, ..)| request),
             )
             .field("completed", &self.completed)
             .field("total", &self.total)
@@ -297,6 +351,8 @@ impl StrategyTester {
             pending: None,
             job: None,
             follow: None,
+            follow_job: None,
+            follow_request: None,
             completed: Rc::new(Cell::new(0)),
             total: 0,
             trials: Vec::new(),
@@ -434,7 +490,8 @@ impl StrategyTester {
 
     /// Supply both histories for the exact pending request. A superseded reply is rejected.
     /// Empty finer history is refused rather than silently using chart-bar fills.
-    /// A request naming exchange rates then reports them unavailable.
+    /// A request naming exchange rates then reports them unavailable. A continuation uses only
+    /// `lower` from the reply and the chart bars received by [`Self::show`].
     pub fn set_history(
         &mut self,
         request: &StrategyHistoryRequest,
@@ -446,7 +503,8 @@ impl StrategyTester {
 
     /// Supply both histories and the exchange rates the request names, as [`Self::set_history`]
     /// does. Rates are ignored when the request names none; empty rates for a request that names
-    /// them report the rates unavailable.
+    /// them report the rates unavailable. Continuation replies replace finer bars and rates from
+    /// the requested start onward, retaining earlier history and using the captured chart bars.
     pub fn set_history_with_rates(
         &mut self,
         request: &StrategyHistoryRequest,
@@ -454,6 +512,33 @@ impl StrategyTester {
         lower: Vec<Bar>,
         rates: Vec<Bar>,
     ) -> Result<(), &'static str> {
+        if self
+            .follow_request
+            .as_ref()
+            .is_some_and(|(pending, ..)| pending == request)
+        {
+            if bars.is_empty() || (request.lower_timeframe.is_some() && lower.is_empty()) {
+                return Err("Requested history is empty");
+            }
+            let (_, mut follow, bars) = self.follow_request.take().expect("a matching request");
+            follow.lower.retain(|bar| bar.time < request.start);
+            follow
+                .lower
+                .extend(lower.into_iter().filter(|bar| bar.time >= request.start));
+            if request.exchange_rate.is_some() {
+                follow
+                    .engine
+                    .exchange_rates
+                    .retain(|bar| bar.time < request.start);
+                follow
+                    .engine
+                    .exchange_rates
+                    .extend(rates.into_iter().filter(|bar| bar.time >= request.start));
+            }
+            let lower = std::mem::take(&mut follow.lower);
+            self.follow_job = Some(continue_job(follow, bars, lower, Rc::new(Cell::new(0))));
+            return Ok(());
+        }
         let Some((pending, optimise)) = &self.pending else {
             return Err("History request is no longer current");
         };
@@ -471,7 +556,7 @@ impl StrategyTester {
             lower,
             rates,
             optimise,
-            true,
+            Some(request.lower_timeframe),
         )
     }
 
@@ -481,6 +566,16 @@ impl StrategyTester {
         request: &StrategyHistoryRequest,
         message: impl Into<String>,
     ) -> bool {
+        if self
+            .follow_request
+            .as_ref()
+            .is_some_and(|(pending, ..)| pending == request)
+        {
+            self.follow_request = None;
+            self.stale = true;
+            self.error = Some(message.into());
+            return true;
+        }
         if self
             .pending
             .as_ref()
@@ -497,6 +592,8 @@ impl StrategyTester {
     fn changed(&mut self) {
         self.stale = true;
         self.follow = None;
+        self.follow_job = None;
+        self.follow_request = None;
         self.cancel();
     }
 
@@ -545,21 +642,38 @@ impl StrategyTester {
         lower: Vec<Bar>,
         rates: Vec<Bar>,
         optimise: bool,
-        host: bool,
+        request: Option<Option<Timeframe>>,
     ) -> Result<(), &'static str> {
         let (symbol, timeframe) = scope;
         super::properties::validate(&self.settings)?;
         self.check_run(optimise)?;
-        let (count, axes) = if optimise {
-            optimisation::grid(&self.ranges)?
-        } else {
-            (1, Vec::new())
-        };
+        let mut engine = self.engine(symbol, timeframe);
+        engine.exchange_rates = rates;
+        if !optimise {
+            if !bars.windows(2).all(|pair| pair[0].time < pair[1].time) {
+                return Err("Bar times must be strictly increasing");
+            }
+            let follow = Box::new(Continuation {
+                engine,
+                strategy: self.configured_strategy()?,
+                host: if request.is_some() { bars.len() } else { 0 },
+                bars: Vec::new(),
+                chart: Vec::new(),
+                lower: Vec::new(),
+                lower_timeframe: request.flatten(),
+            });
+            self.total = 1;
+            self.completed = Rc::new(Cell::new(0));
+            self.error = None;
+            self.trials.clear();
+            self.skipped.clear();
+            self.job = Some(continue_job(follow, bars, lower, self.completed.clone()));
+            return Ok(());
+        }
+        let (count, axes) = optimisation::grid(&self.ranges)?;
         let factory = self.factory.clone();
         let name = self.name.clone();
         let inputs = self.inputs.clone();
-        let mut engine = self.engine(symbol, timeframe);
-        engine.exchange_rates = rates;
         self.total = count;
         self.completed = Rc::new(Cell::new(0));
         let completed = self.completed.clone();
@@ -585,9 +699,6 @@ impl StrategyTester {
                     strategy.set_input(&input.id, input.value.clone())?;
                 }
                 if let Err(reason) = strategy.validate_inputs() {
-                    if !optimise {
-                        return Err(reason);
-                    }
                     skip(&mut skipped, reason);
                     completed.set(ordinal + 1);
                     continue;
@@ -600,16 +711,6 @@ impl StrategyTester {
                     .join(", ");
                 let report = engine.run_async(strategy.as_mut(), &bars, &lower).await;
                 completed.set(ordinal + 1);
-                if !optimise {
-                    return Ok(JobOutput::Report(
-                        report,
-                        Box::new(Continuation {
-                            host: if host { bars.len() } else { 0 },
-                            bars,
-                            chart: Vec::new(),
-                        }),
-                    ));
-                }
                 if report.unavailable.is_some() {
                     skip(&mut skipped, "Exchange rates unavailable");
                     continue;
@@ -678,7 +779,7 @@ impl StrategyTester {
                 Vec::new(),
                 Vec::new(),
                 optimise,
-                false,
+                None,
             )?;
             Ok(None)
         }
@@ -733,7 +834,7 @@ impl StrategyTester {
                     l10n::text(ui.ctx(), "Result is stale. Run again to update."),
                 );
             }
-            if self.pending.is_some() {
+            if self.pending.is_some() || self.follow_request.is_some() {
                 ui.label(l10n::text(ui.ctx(), "Waiting for host history"));
             }
             if self.job.is_some() || self.pending.is_some() {
@@ -919,13 +1020,8 @@ impl StrategyTester {
             self.undo_settings.push(before);
             self.redo_settings.clear();
         }
-        if self
-            .follow
-            .as_ref()
-            .is_some_and(|follow| !follow.matches(bars))
-        {
-            self.stale = true;
-            self.follow = None;
+        if let Some(action) = self.follow_chart(bars) {
+            actions.push(action);
         }
         if let Some(job) = &mut self.job {
             match job.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
@@ -970,7 +1066,100 @@ impl StrategyTester {
                 }
             }
         }
+        if let Some(job) = &mut self.follow_job {
+            match job.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+                Poll::Pending => ui.ctx().request_repaint(),
+                Poll::Ready(result) => {
+                    self.follow_job = None;
+                    match result {
+                        Ok(JobOutput::Report(report, follow)) => {
+                            actions.push(StrategyTesterAction::Signals {
+                                symbol: report.symbol.clone(),
+                                timeframe: report.timeframe,
+                                signals: report.signals(),
+                            });
+                            let from = follow.bars.partition_point(|bar| {
+                                self.settings
+                                    .start_time
+                                    .is_some_and(|start| bar.time < start)
+                            });
+                            let to = self
+                                .settings
+                                .bars_before_end(report.timeframe, &follow.bars)
+                                .max(from);
+                            self.report.continue_report(report, &follow.bars[from..to]);
+                            self.stale = false;
+                            self.follow = Some(follow);
+                        }
+                        Err(error) => {
+                            self.error = Some(error.into());
+                            self.stale = true;
+                        }
+                        _ => {}
+                    }
+                    ui.ctx().request_repaint();
+                }
+            }
+        }
         actions
+    }
+
+    /// Follow the chart only while a completed single run is idle.
+    fn follow_chart(&mut self, bars: &[Bar]) -> Option<StrategyTesterAction> {
+        let follow = self.follow.as_ref()?;
+        let (tail, kept) = follow.tail(bars);
+        let previous = &follow.bars[follow.host..];
+        if !kept || tail.len() < previous.len() {
+            self.stale = true;
+            self.follow = None;
+            return None;
+        }
+        if crate::strategies::same_bars(tail, previous) {
+            return None;
+        }
+        if !tail.windows(2).all(|pair| pair[0].time < pair[1].time) {
+            self.stale = true;
+            self.follow = None;
+            self.error = Some("Bar times must be strictly increasing".into());
+            return None;
+        }
+        let first = tail
+            .iter()
+            .zip(previous)
+            .take_while(|(a, b)| {
+                crate::strategies::same_bars(std::slice::from_ref(a), std::slice::from_ref(b))
+            })
+            .count();
+        let mut bars = follow.bars[..follow.host].to_vec();
+        bars.extend_from_slice(tail);
+        let exchange_rate = follow.engine.exchange_rate_request();
+        // Bars past a historical end need neither finer fills nor exchange rates.
+        let needs_history = (follow.lower_timeframe.is_some() || exchange_rate.is_some())
+            && follow.host + first
+                < self
+                    .settings
+                    .bars_before_end(follow.engine.timeframe, &bars);
+        if needs_history {
+            self.revision = self.revision.wrapping_add(1);
+            let mut request = StrategyHistoryRequest::new(
+                self.revision,
+                &follow.engine.symbol,
+                follow.engine.timeframe,
+                tail[first].time,
+            );
+            request.end = self.settings.end_time;
+            request.lower_timeframe = follow.lower_timeframe;
+            request.exchange_rate = exchange_rate;
+            self.stale = true;
+            let follow = self.follow.take().expect("an idle continuation");
+            self.follow_request = Some((request.clone(), follow, bars));
+            Some(StrategyTesterAction::RequestHistory(request))
+        } else {
+            let mut follow = self.follow.take().expect("an idle continuation");
+            let lower = std::mem::take(&mut follow.lower);
+            self.follow_job = Some(continue_job(follow, bars, lower, Rc::new(Cell::new(0))));
+            None
+        }
     }
 
     fn sort_trials(&mut self) {
