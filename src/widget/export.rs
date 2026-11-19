@@ -2016,8 +2016,8 @@ mod tests {
     }
 
     /// An export uses the same scales as the widget, so a main series that reserves 60 and 70
-    /// points keeps them: on the 10% margins of the default scale its high, 20, sits
-    /// 0.1 h + 60 below the top of the plot and its low, 10, 0.1 h + 70 above the bottom.
+    /// points keeps them: on a new chart's 10 % top and 8 % bottom margins its high, 20, sits
+    /// 0.1 h + 60 below the top of the plot and its low, 10, 0.08 h + 70 above the bottom.
     /// The style the host set on the main series is the one the snapshot reports.
     #[test]
     fn export_snapshot_keeps_the_main_series_style() {
@@ -2029,7 +2029,7 @@ mod tests {
             let height = bottom - top;
             (
                 map.price_to_y(20.0) - top - (0.1 * height + 60.0),
-                bottom - map.price_to_y(10.0) - (0.1 * height + 70.0),
+                bottom - map.price_to_y(10.0) - (0.08 * height + 70.0),
             )
         };
         let ctx = egui::Context::default();
