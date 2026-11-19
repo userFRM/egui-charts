@@ -2728,3 +2728,60 @@ fn study_titles_reach_the_translator_apart_from_plot_names() {
         ]
     );
 }
+
+/// The scale font sizes and styles the crosshair's time label like the other scale text, which
+/// stays inside the time axis at every size the settings offer, and leaves other chart text,
+/// such as the jump-to-latest button's, at the theme's sizes.
+#[test]
+fn scale_font_reaches_the_crosshair_time_label_and_nothing_else() {
+    use egui::{Color32, FontFamily, FontId};
+
+    const TAG: Color32 = Color32::from_rgb(1, 2, 3);
+    for (size, family) in [
+        (10.0, FontFamily::Proportional),
+        (20.0, FontFamily::Proportional),
+        (20.0, FontFamily::Monospace),
+    ] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.config.show_volume = false;
+        chart.chart_options.tooltip.enabled = false;
+        chart.chart_options.crosshair.vert_label_background_color = TAG;
+        chart.config_mut().axis_font_size = Some(size);
+        chart.config_mut().axis_font_family = family.clone();
+        chart.config_mut().realtime_button_text = Some("Latest".into());
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        // Scrolled back from the latest bar, the chart offers the jump-to-latest button.
+        chart.scroll_to_position(-20.0, false);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let plot = chart.get_rendered_price_rect();
+        let pos = plot.center();
+        let label = chart.format_time(chart.x_to_time(pos.x).unwrap());
+        let painted = shapes(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(pos)]);
+        let font = |text: &str| {
+            painted
+                .iter()
+                .find_map(|shape| match shape {
+                    Shape::Text(shape) if shape.galley.text() == text => {
+                        Some(shape.galley.job.sections[0].format.font_id.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{text:?} is painted"))
+        };
+        // The button keeps the default theme's label size.
+        assert_eq!(
+            (font(&label), font("Latest")),
+            (FontId::new(size, family.clone()), FontId::proportional(12.0))
+        );
+        let tag = painted
+            .iter()
+            .find_map(|shape| match shape {
+                Shape::Rect(rect) if rect.fill == TAG => Some(rect.rect),
+                _ => None,
+            })
+            .unwrap();
+        let axis = chart.time_axis_rect;
+        assert!(axis.contains_rect(tag), "{tag:?} in {axis:?} at {size} {family:?}");
+    }
+}
