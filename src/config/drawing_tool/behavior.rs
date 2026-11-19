@@ -56,6 +56,8 @@ impl DrawingToolType {
                 | Self::FibonacciSpiral
                 | Self::FibonacciSpeedResistanceArcs
                 | Self::FibonacciWedge
+                // Projections fill their target zones from their own settings.
+                | Self::ProjectionTool
                 // Forks fill their bands from their level settings.
                 | Self::Pitchfork
                 | Self::SchiffPitchfork
@@ -201,7 +203,8 @@ impl DrawingToolType {
     }
 
     /// Whether the renderer draws the drawing's line style, so the Style tab and the floating
-    /// toolbar offer it. Pitchfork levels and the regression trend's lines set their own.
+    /// toolbar offer it. Pitchfork levels, the regression trend's lines and the projection's leg
+    /// and levels set their own.
     pub fn supports_line_style(&self) -> bool {
         self.draws_line()
             && !matches!(
@@ -212,6 +215,7 @@ impl DrawingToolType {
                     | Self::InsidePitchfork
                     | Self::Pitchfan
                     | Self::RegressionTrend
+                    | Self::ProjectionTool
             )
     }
 

@@ -125,7 +125,8 @@ pub struct FootprintConfig {
     /// bar. A bar of a day or longer then shows its own delta. Used by the footprint chart type
     /// and [`crate::widget::Chart::show_footprint`].
     pub session_cumulative_delta: bool,
-    /// Annotations calculated from the displayed rows after executions or grouping change.
+    /// Annotations calculated from the displayed rows and their bars' closes after executions,
+    /// grouping or closes change.
     /// `None` hides them. Used by the footprint chart type and [`crate::widget::Chart::show_footprint`].
     #[cfg(feature = "studies")]
     pub studies: Option<crate::studies::FootprintStudyConfig>,
@@ -1785,12 +1786,13 @@ pub(crate) fn render_footprint_statistics_rows_read(
 #[derive(Clone, Default)]
 struct FootprintStudyCache {
     revision: Option<u64>,
-    source: Vec<(chrono::DateTime<chrono::Utc>, i64)>,
+    source: Vec<(chrono::DateTime<chrono::Utc>, i64, Option<i64>)>,
     config: Option<crate::studies::FootprintStudyConfig>,
     studies: std::sync::Arc<[crate::studies::FootprintStudy]>,
 }
 
-/// Cache calculations per chart, including display grouping and execution corrections.
+/// Cache calculations per chart, including display grouping, execution corrections and corrected
+/// closes.
 #[cfg(feature = "studies")]
 pub(crate) fn render_footprint_annotations(
     painter: &Painter,
@@ -1811,8 +1813,10 @@ pub(crate) fn render_footprint_annotations(
         .iter()
         .zip(flow.matching(bars))
         .filter_map(|(bar, row)| {
-            row.filter(|row| flow.complete_at(row.time))
-                .map(|row| (bar.time, row, row_group(mapping, bar, flow, config)))
+            row.filter(|row| flow.complete_at(row.time)).map(|row| {
+                let group = row_group(mapping, bar, flow, config);
+                (bar.time, row, group, flow.level_of(bar.close))
+            })
         })
         .collect();
     let studies = painter.ctx().data_mut(|data| {
@@ -1822,22 +1826,22 @@ pub(crate) fn render_footprint_annotations(
             || cache.config.as_ref() != Some(&settings)
             || cache.source.len() != source.len()
             || !cache.source.iter().zip(&source).all(
-                |((time, group), (next_time, _, next_group))| {
-                    time == next_time && group == next_group
+                |((time, group, close), (next_time, _, next_group, next_close))| {
+                    time == next_time && group == next_group && close == next_close
                 },
             )
         {
             cache.source = source
                 .iter()
-                .map(|(time, _, group)| (*time, *group))
+                .map(|(time, _, group, close)| (*time, *group, *close))
                 .collect();
             let grouped: Vec<_> = source
                 .iter()
-                .map(|(_, bar, group)| (group_bar(*bar, *group), *group))
+                .map(|(_, bar, group, close)| (group_bar(*bar, *group), *group, *close))
                 .collect();
             let rows: Vec<_> = grouped
                 .iter()
-                .map(|(bar, group)| (bar.view(), *group))
+                .map(|(bar, group, close)| (bar.view(), *group, *close))
                 .collect();
             cache.studies =
                 crate::studies::footprint_studies_on_rows(&rows, &settings, flow).into();
@@ -1849,9 +1853,10 @@ pub(crate) fn render_footprint_annotations(
     render_footprint_studies_read(painter, mapping, bars, flow, &studies, config);
 }
 
-/// Paints footprint study levels and zones. Compute `studies` only after executions change.
-/// Stacks, naked POCs and unfinished levels extend to their first revisit, their expiry or the
-/// last displayed bar, in full colour while unvisited and dimmed once revisited or expired;
+/// Paints footprint study levels and zones. Compute `studies` after executions or closes change.
+/// Stacks, naked POCs and unfinished levels extend to their first revisit, or a stack that ends
+/// only when broken to its break, to their expiry or the last displayed bar, in full colour while
+/// unvisited or rejected and dimmed once revisited, broken or expired;
 /// stacks take the imbalance colour of their side;
 /// local annotations stay anchored to their originating bar. Delta percentage and ratio markers
 /// are triangles outside the bar: buy markers above it, sell markers below, the delta marker
@@ -1955,9 +1960,9 @@ pub(crate) fn render_footprint_studies_read(
             _ => config.text_color,
         };
         let color = match study.state {
-            FootprintStudyState::Revisited | FootprintStudyState::Expired => {
-                color.gamma_multiply(0.45)
-            }
+            FootprintStudyState::Revisited
+            | FootprintStudyState::Expired
+            | FootprintStudyState::Broken => color.gamma_multiply(0.45),
             _ => color,
         };
         let label = match study.kind {
@@ -2032,11 +2037,15 @@ pub(crate) fn render_footprint_studies_read(
             continue;
         }
         if pointer.is_some_and(|p| rect.expand(2.0).contains(p)) {
-            let key = match study.state {
-                FootprintStudyState::Unvisited => "{label}: {low} to {high} (unvisited)",
-                FootprintStudyState::Revisited => "{label}: {low} to {high} (revisited)",
-                FootprintStudyState::Expired => "{label}: {low} to {high} (expired)",
-                FootprintStudyState::Local => "{label}: {low} to {high} (this bar)",
+            let (key, count) = match study.state {
+                FootprintStudyState::Unvisited => ("{label}: {low} to {high} (unvisited)", 0),
+                FootprintStudyState::Revisited => ("{label}: {low} to {high} (revisited)", 0),
+                FootprintStudyState::Expired => ("{label}: {low} to {high} (expired)", 0),
+                FootprintStudyState::Local => ("{label}: {low} to {high} (this bar)", 0),
+                FootprintStudyState::Rejected(count) => {
+                    ("{label}: {low} to {high} (rejections: {count})", count)
+                }
+                FootprintStudyState::Broken => ("{label}: {low} to {high} (broken)", 0),
             };
             let ctx = painter.ctx();
             hovered.push(l10n::format_text(
@@ -2046,6 +2055,7 @@ pub(crate) fn render_footprint_studies_read(
                     ("label", l10n::text(ctx, label)),
                     ("low", (study.low as f64 * flow.price_step()).to_string()),
                     ("high", (study.high as f64 * flow.price_step()).to_string()),
+                    ("count", count.to_string()),
                 ],
             ));
         }
@@ -2218,13 +2228,13 @@ mod tests {
                             let group = row_group(&map, bar, flow.into(), config);
                             let mut owned = FootprintBar::empty(source.time);
                             owned.absorb_grouped(source, group);
-                            (owned, group)
+                            (owned, group, flow.level_of(bar.close))
                         })
                 })
                 .collect();
             let rows: Vec<_> = grouped
                 .iter()
-                .map(|(bar, group)| (bar.into(), *group))
+                .map(|(bar, group, close)| (bar.into(), *group, *close))
                 .collect();
             let settings = crate::studies::FootprintStudyConfig {
                 imbalance_min_volume: config.imbalance_min_volume,
@@ -2264,6 +2274,40 @@ mod tests {
         flow.set_budget(100, 100);
         let repeated = cached_annotations(&ctx, &map, &bars, &flow, &config);
         assert!(Arc::ptr_eq(&covered, &repeated));
+
+        // Zones that end only when broken read the bars' closes, and a corrected close
+        // recalculates. Bar 0 is incomplete now. Bar 1's ask zone at 101..103 is rejected by
+        // bar 2, closing at 104, and broken once that close becomes 99.
+        config.row_ticks = 1;
+        config.auto_row_height = None;
+        config.studies.as_mut().unwrap().zones_until_broken = true;
+        let mut corrected = bars.clone();
+        corrected[2].close = 99.0;
+        corrected[2].low = 99.0;
+        for (shown, outcome) in [
+            (
+                &bars[..],
+                (None, crate::studies::FootprintStudyState::Rejected(1)),
+            ),
+            (
+                &corrected[..],
+                (
+                    Some(bars[2].time),
+                    crate::studies::FootprintStudyState::Broken,
+                ),
+            ),
+        ] {
+            let cached = cached_annotations(&ctx, &map, shown, &flow, &config);
+            assert_eq!(&*cached, eager(shown, &flow, &config));
+            let zone = cached
+                .iter()
+                .find(|s| {
+                    s.start == bars[1].time
+                        && s.kind == crate::studies::FootprintStudyKind::StackedAsk
+                })
+                .map(|s| (s.end, s.state));
+            assert_eq!(zone, Some(outcome));
+        }
     }
 
     /// The settings of a chart saved before the ladder became the default.
@@ -4125,9 +4169,9 @@ mod tests {
         }
     }
 
-    /// Guards that the painted study annotations follow their public state: an unvisited zone
-    /// keeps its colour, a revisited or expired one is dimmed, and a buy marker is a triangle
-    /// above the bar's top row.
+    /// Guards that the painted study annotations follow their public state: an unvisited or
+    /// rejected zone keeps its colour, a revisited, expired or broken one is dimmed, and a buy
+    /// marker is a triangle above the bar's top row.
     #[cfg(feature = "studies")]
     #[test]
     fn studies_are_painted_as_their_state_and_kind_say() {
@@ -4181,6 +4225,16 @@ mod tests {
                 FootprintStudyState::Local,
                 400,
             ),
+            study(
+                FootprintStudyKind::StackedAsk,
+                FootprintStudyState::Rejected(2),
+                403,
+            ),
+            study(
+                FootprintStudyKind::StackedAsk,
+                FootprintStudyState::Broken,
+                404,
+            ),
         ];
         let config = bid_ask_config();
         let ctx = egui::Context::default();
@@ -4201,7 +4255,10 @@ mod tests {
             })
             .collect();
         let dimmed = config.ask_color.gamma_multiply(0.45);
-        assert_eq!(strokes, [config.ask_color, dimmed, dimmed]);
+        assert_eq!(
+            strokes,
+            [config.ask_color, dimmed, dimmed, config.ask_color, dimmed]
+        );
         let top = map.price_to_y(100.125);
         let triangle = output.shapes.iter().find_map(|shape| match &shape.shape {
             Shape::Path(path) if path.fill == config.ask_color => Some(path.points.clone()),

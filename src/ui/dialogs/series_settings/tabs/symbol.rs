@@ -5,7 +5,7 @@ use crate::localization as l10n;
 use crate::model::{
     BaselineLevel, BoxSizeMethod, ChartType, ChartTypeParams, FootprintColor, FootprintMode,
     FootprintStatistic, HighLowStyle, LinePlotStyle, LineStyle, PriceBasedSource, PriceSource,
-    ProfileRows, ProfileSession, TimezoneId,
+    ProfileRows, ProfileSession, TPOProfilePeriod, TimezoneId,
 };
 use crate::theme::ThemeExt;
 use crate::ui_kit::color_picker::keep_opacity;
@@ -832,13 +832,38 @@ impl SymbolTab {
                 )
                 .labelled_by(label.id);
                 ui.end_row();
+                let label = ui.label(l10n::text(ui.ctx(), "Profile period"));
+                ui.label_inputs_by(label.id, |ui| {
+                    ui.combo_select(
+                        "tpo_profile_period",
+                        &mut params.tpo_profile_period,
+                        [
+                            TPOProfilePeriod::Session,
+                            TPOProfilePeriod::Week,
+                            TPOProfilePeriod::Month,
+                        ],
+                        |period| {
+                            match period {
+                                TPOProfilePeriod::Session => "Session",
+                                TPOProfilePeriod::Week => "Week",
+                                TPOProfilePeriod::Month => "Month",
+                            }
+                            .to_owned()
+                        },
+                    );
+                });
+                ui.end_row();
                 let label = ui.label(l10n::text(ui.ctx(), "Initial balance"));
-                ui.add(
-                    egui::DragValue::new(&mut params.tpo_initial_balance_minutes)
-                        .range(1..=1440)
-                        .suffix(l10n::text(ui.ctx(), " min")),
-                )
-                .labelled_by(label.id);
+                ui.label_inputs_by(label.id, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut params.tpo_initial_balance, "");
+                        ui.add(
+                            egui::DragValue::new(&mut params.tpo_initial_balance_minutes)
+                                .range(1..=1440)
+                                .suffix(l10n::text(ui.ctx(), " min")),
+                        );
+                    })
+                });
                 ui.end_row();
                 for (name, enabled) in [
                     ("Poor highs and lows", &mut params.tpo_poor_highs_lows),
@@ -874,8 +899,11 @@ impl SymbolTab {
                 .labelled_by(label.id);
                 ui.end_row();
                 let label = ui.label(l10n::text(ui.ctx(), "Split extended hours"));
-                ui.checkbox(&mut params.tpo_split_sessions, "")
-                    .labelled_by(label.id);
+                ui.add_enabled(
+                    params.tpo_profile_period == TPOProfilePeriod::Session,
+                    egui::Checkbox::without_text(&mut params.tpo_split_sessions),
+                )
+                .labelled_by(label.id);
                 ui.end_row();
                 let label = ui.label(l10n::text(ui.ctx(), "Single prints"));
                 ui.checkbox(&mut params.tpo_single_prints, "")
@@ -887,6 +915,36 @@ impl SymbolTab {
                 ui.end_row();
                 let label = ui.label(l10n::text(ui.ctx(), "Letters"));
                 ui.checkbox(&mut params.tpo_letters, "")
+                    .labelled_by(label.id);
+                ui.end_row();
+                ui.checkbox(
+                    &mut params.tpo_colored_blocks,
+                    l10n::text(ui.ctx(), "Coloured blocks"),
+                );
+                let colored = params.tpo_colored_blocks;
+                ui.add_enabled_ui(colored, |ui| {
+                    ui.horizontal(|ui| {
+                        for color in &mut params.tpo_block_colors {
+                            Self::color_picker(ui, color);
+                        }
+                    })
+                });
+                ui.end_row();
+                ui.label(l10n::text(ui.ctx(), "Block colour"));
+                ui.add_enabled_ui(!colored, |ui| {
+                    Self::color_picker(ui, &mut params.tpo_block_color)
+                });
+                ui.end_row();
+                let label = ui.label(l10n::text(ui.ctx(), "Opacity outside value area"));
+                ui.add(
+                    egui::DragValue::new(&mut params.tpo_outside_value_area_opacity)
+                        .range(0..=100)
+                        .suffix("%"),
+                )
+                .labelled_by(label.id);
+                ui.end_row();
+                let label = ui.label(l10n::text(ui.ctx(), "Split display"));
+                ui.checkbox(&mut params.tpo_split_periods, "")
                     .labelled_by(label.id);
                 ui.end_row();
                 let label = ui.label(l10n::text(ui.ctx(), "Statistics"));

@@ -176,6 +176,8 @@ impl Chart {
         ui: &mut Ui,
         footprint: Option<(FootprintView<'_>, &FootprintConfig)>,
     ) -> Response {
+        #[cfg(feature = "drawings")]
+        self.layered_drawings.clear();
         let footprint = footprint.filter(|_| self.replay.is_none());
         let theme = self.theme_override.clone();
         let _theme_scope = theme
@@ -421,6 +423,16 @@ impl Chart {
         // Within the frame of the edit, in case it is the last.
         #[cfg(feature = "drawings")]
         self.save_stored_drawings();
+        #[cfg(feature = "drawings")]
+        {
+            let mut layers: std::collections::HashMap<_, Vec<_>> = std::collections::HashMap::new();
+            for (layer, before, range) in std::mem::take(&mut self.layered_drawings) {
+                layers.entry(layer).or_default().push((before, range));
+            }
+            for (layer, moves) in layers {
+                primitives::move_shapes_before(ui.ctx(), layer, &moves);
+            }
+        }
         response
     }
 
@@ -492,6 +504,12 @@ impl Chart {
         let show_right_axis = primary_side == Some(crate::model::AxisSide::Right);
         let main_pane = self.main_series_pane();
         let order = self.main_series_order().to_vec();
+        #[cfg(feature = "drawings")]
+        let layered = self
+            .drawings
+            .drawings
+            .iter()
+            .any(|d| d.series_layer.is_some());
         // Register the icon loader once per context, and the general SVG loader for UI images.
         #[cfg(feature = "icons")]
         {
@@ -666,7 +684,8 @@ impl Chart {
         #[cfg(not(feature = "drawings"))]
         let drawing_tool_active = false;
         #[cfg(not(feature = "drawings"))]
-        let (is_drawing_interaction, drawing_gesture, marking) = (false, false, false);
+        let (is_drawing_interaction, drawing_gesture, edit_interaction, marking) =
+            (false, false, false, false);
         #[cfg(feature = "drawings")]
         if self.drawings.selection_area().is_some_and(|area| {
             area.pane
@@ -701,9 +720,9 @@ impl Chart {
                 && !navigation_interaction
                 && !realtime_interaction,
         );
+        // The gestures that own the pointer wherever they began.
         #[cfg(feature = "drawings")]
-        let drawing_gesture = self.drawings.active_tool.is_some()
-            || marking
+        let edit_gesture = marking
             || self.drawings.dragging_handle.is_some()
             || self.drawings.text_editor.is_some()
             || self.drawings.curr_drawing.is_some()
@@ -723,6 +742,10 @@ impl Chart {
                                 .any(|d| d.id == id && !d.locked)
                         })
                 });
+        #[cfg(feature = "drawings")]
+        let drawing_gesture = drawing_tool_active || edit_gesture;
+        #[cfg(feature = "drawings")]
+        let edit_interaction = box_selection || edit_gesture;
         #[cfg(feature = "drawings")]
         let is_drawing_interaction = box_selection || drawing_gesture;
         let show_price_button =
@@ -866,9 +889,16 @@ impl Chart {
         // Handle double-click to reset axes
         self.handle_double_click(&time_response, time_axis_rect);
 
+        // A selected tool places drawings in the plot only, so a press on the main price axis or
+        // the time axis zooms that axis, as a study pane's axis does.
+        let axis_press = ui
+            .input(|i| i.pointer.press_origin().or_else(|| i.pointer.hover_pos()))
+            .is_some_and(|pos| price_axis_rect.contains(pos) || time_axis_rect.contains(pos));
+        let owns_drag =
+            touch_readout_interaction || edit_interaction || (drawing_tool_active && !axis_press);
         // The price axis: a drawing or a touch readout that owns the drag keeps it, as on the plot.
         let mut axis_response = time_response.clone();
-        if is_drawing_interaction || touch_readout_interaction {
+        if owns_drag {
             axis_response.flags.remove(egui::response::Flags::DRAGGED);
         }
         let price_axis_gestures = self.price_axis_gestures(ui, &axis_response, price_axis_rect);
@@ -898,7 +928,7 @@ impl Chart {
             price_axis_rect,
             time_axis_rect,
             chart_rect.min.x,
-            is_drawing_interaction || touch_readout_interaction,
+            owns_drag,
         );
 
         // Apply kinetic scrolling
@@ -926,7 +956,7 @@ impl Chart {
         else if response.hovered() {
             let at = ui
                 .input(|i| i.pointer.press_origin().or(i.pointer.hover_pos()))
-                .filter(|_| !(is_drawing_interaction || touch_readout_interaction));
+                .filter(|_| !owns_drag);
             let cursor = match at {
                 Some(pos) if price_axis_rect.contains(pos) => self.price_axis_cursor(),
                 Some(pos) if time_axis_rect.contains(pos) => self.time_axis_cursor(),
@@ -1000,6 +1030,7 @@ impl Chart {
         let volume_rect = layout.volume_rect;
 
         // Get visible range
+        let logical = self.state.time_scale().visible_data_range();
         let (start_idx, end_idx) = self.state.visible_range();
         let cutoff = self.replay_time();
         let (registry, bars) = if self.chart_type.is_time_independent() {
@@ -1014,7 +1045,10 @@ impl Chart {
             .indicators_mut()
             .iter_mut()
             .enumerate()
-            .filter_map(|(at, study)| study.set_visible_range(start_idx..end_idx).then_some(at))
+            .filter_map(|(at, study)| {
+                study.set_visible_logical_range(logical);
+                study.set_visible_range(start_idx..end_idx).then_some(at)
+            })
             .collect();
         if !changed.is_empty() {
             let requests = registry
@@ -1646,18 +1680,9 @@ impl Chart {
                 .session_provider
                 .as_deref()
                 .unwrap_or(&exchange_session);
-            let background =
-                rendering::SessionBackgroundRenderer::from_background(self.config.background_color);
-            background.render(
-                &session_ctx,
-                time_data,
-                provider,
-                &time_coords,
-                time_coords.start_idx,
-            );
             rendering::SessionBreakRenderer::new(rendering::SessionBreakRenderConfig {
                 line_color: self.config.session_break_color,
-                line_width: 1.0,
+                line_width: self.config.session_break_width,
                 style: self.config.session_break_style,
             })
             .render(
@@ -1681,6 +1706,14 @@ impl Chart {
                     color
                 }
             };
+            let premarket = self
+                .config
+                .premarket_color
+                .unwrap_or(self.config.extended_hours_color);
+            let postmarket = self
+                .config
+                .postmarket_color
+                .unwrap_or(self.config.extended_hours_color);
             rendering::render_extended_hours(
                 &session_ctx,
                 time_data,
@@ -1688,7 +1721,10 @@ impl Chart {
                 &time_coords,
                 time_coords.start_idx,
                 (
-                    shade(self.config.extended_hours_color, 0.08),
+                    self.config.shade_premarket.then(|| shade(premarket, 0.08)),
+                    self.config
+                        .shade_postmarket
+                        .then(|| shade(postmarket, 0.08)),
                     shade(self.config.overnight_hours_color, 0.16),
                 ),
             )
@@ -2130,6 +2166,30 @@ impl Chart {
                 })
                 .or_else(|| builtin_at(pos))
         };
+        #[cfg(feature = "drawings")]
+        if layered {
+            let (hover, press) =
+                ui.input(|input| (input.pointer.hover_pos(), input.pointer.press_origin()));
+            let mut probes = Vec::new();
+            for point in [pointer, response.interact_pointer_pos(), hover, press]
+                .into_iter()
+                .flatten()
+            {
+                if price_rect.contains(point) && !probes.contains(&point) {
+                    probes.push(point);
+                }
+            }
+            let covers = probes.into_iter().filter_map(|point| {
+                let (element, _) = element_at(point)?;
+                let (super::ChartElementId::Indicator(id) | super::ChartElementId::Series(id)) =
+                    element;
+                order
+                    .iter()
+                    .position(|member| *member == id)
+                    .map(|e| (point, e + 1))
+            });
+            self.drawings.set_covers(price_rect, covers);
+        }
         // The element under the pointer goes last when hovered series are drawn on top.
         let on_top = ui
             .input(|input| input.pointer.hover_pos())
@@ -2447,7 +2507,19 @@ impl Chart {
                 paint_overlay(id);
             }
         };
-        behind.iter().for_each(paint_unhovered);
+        #[cfg(feature = "drawings")]
+        let mut marks = Vec::new();
+        for id in behind {
+            #[cfg(feature = "drawings")]
+            if layered {
+                marks.push(Some(primitives::next_shape(&clipped_painter)));
+            }
+            paint_unhovered(id);
+        }
+        #[cfg(feature = "drawings")]
+        if layered {
+            marks.push(Some(primitives::next_shape(&clipped_painter)));
+        }
         if !main_on_top {
             paint_main_series();
         }
@@ -2466,7 +2538,13 @@ impl Chart {
             });
         }
 
-        front.iter().for_each(paint_unhovered);
+        for id in front.iter().filter(|id| **id != super::SeriesId::MAIN) {
+            #[cfg(feature = "drawings")]
+            if layered {
+                marks.push(Some(primitives::next_shape(&clipped_painter)));
+            }
+            paint_unhovered(id);
+        }
         match on_top {
             Some(super::ChartElementId::Indicator(id)) => paint_overlay(&id),
             _ if main_on_top => paint_main_series(),
@@ -2749,14 +2827,12 @@ impl Chart {
             && (self.config.show_symbol_prev_close || self.config.show_prev_close_line)
             && let Some((previous_close, _)) = session_closes
         {
-            let line = PriceLine::new(previous_close, ui.active_theme().ui.text_secondary)
-                .with_style(crate::model::LineStyle::Dotted)
-                .with_axis_label(self.config.show_symbol_prev_close)
-                .with_width(if self.config.show_prev_close_line {
-                    1.0
-                } else {
-                    0.0
-                });
+            let line = chart_line(
+                &self.config.prev_close_line,
+                previous_close,
+                ui.active_theme().ui.text_secondary,
+                self.config.show_prev_close_line,
+            );
             rendering::render_price_line(
                 &painter,
                 price_rect,
@@ -2772,6 +2848,30 @@ impl Chart {
                     rendering::axes::axis_label_colors(&line),
                     false,
                 ));
+            }
+        }
+
+        if self.main_series_visible
+            && (self.config.show_average_close_line || self.config.show_average_close_label)
+            && let Some(average) = average_close(visible_data)
+        {
+            let line = chart_line(
+                &self.config.average_close_line,
+                average,
+                ui.active_theme().ui.info,
+                self.config.show_average_close_line,
+            );
+            rendering::render_price_line(
+                &painter,
+                price_rect,
+                &price_map,
+                &line,
+                price_rect.left(),
+                false,
+                axis_edge,
+            );
+            if self.config.show_average_close_label {
+                pending_values.push((average, rendering::axes::axis_label_colors(&line), false));
             }
         }
 
@@ -3073,9 +3173,25 @@ impl Chart {
             }
         }
 
-        if show_price_axis && self.main_series_visible {
+        let trading_bid_ask = {
+            #[cfg(feature = "ui")]
+            {
+                std::mem::take(&mut self.trading_bid_ask)
+            }
+            #[cfg(not(feature = "ui"))]
+            {
+                false
+            }
+        };
+        if self.main_series_visible {
+            // Each value, its name, style and colour without one, and whether its line and its
+            // tag show.
             let mut values = Vec::new();
-            if self.config.show_high_low {
+            let high_low_lines = self
+                .config
+                .show_high_low_lines
+                .unwrap_or(self.config.show_high_low);
+            if self.config.show_high_low || high_low_lines {
                 let high = visible_data
                     .iter()
                     .map(|bar| bar.high)
@@ -3084,19 +3200,31 @@ impl Chart {
                     .iter()
                     .map(|bar| bar.low)
                     .fold(f64::INFINITY, f64::min);
-                values.extend([(high, "High", colors.bullish), (low, "Low", colors.bearish)]);
+                values.extend([
+                    (
+                        high,
+                        "High",
+                        self.config.high_line,
+                        colors.bullish,
+                        high_low_lines,
+                        self.config.show_high_low,
+                    ),
+                    (
+                        low,
+                        "Low",
+                        self.config.low_line,
+                        colors.bearish,
+                        high_low_lines,
+                        self.config.show_high_low,
+                    ),
+                ]);
             }
-            let trading_bid_ask = {
-                #[cfg(feature = "ui")]
-                {
-                    std::mem::take(&mut self.trading_bid_ask)
-                }
-                #[cfg(not(feature = "ui"))]
-                {
-                    false
-                }
-            };
-            if (self.config.show_bid_ask || trading_bid_ask)
+            let bid_ask_lines = self
+                .config
+                .show_bid_ask_lines
+                .unwrap_or(self.config.show_bid_ask);
+            let bid_ask_tags = self.config.show_bid_ask || trading_bid_ask;
+            if (bid_ask_lines || bid_ask_tags)
                 && let Some(quote) = self.quote.as_ref().filter(|quote| {
                     quote.bid.is_finite()
                         && quote.ask.is_finite()
@@ -3105,21 +3233,26 @@ impl Chart {
                 })
             {
                 values.extend([
-                    (quote.bid, "Bid", ui.active_theme().ui.accent),
-                    (quote.ask, "Ask", ui.active_theme().chart.candle_down),
+                    (
+                        quote.bid,
+                        "Bid",
+                        self.config.bid_line,
+                        ui.active_theme().ui.accent,
+                        bid_ask_lines,
+                        bid_ask_tags,
+                    ),
+                    (
+                        quote.ask,
+                        "Ask",
+                        self.config.ask_line,
+                        ui.active_theme().chart.candle_down,
+                        bid_ask_lines,
+                        bid_ask_tags,
+                    ),
                 ]);
             }
-            for (value, name, color) in values {
-                let line = PriceLine::new(value, color)
-                    .with_width(
-                        if (name == "Bid" || name == "Ask") && !self.config.show_bid_ask {
-                            0.0
-                        } else {
-                            1.0
-                        },
-                    )
-                    .with_style(crate::model::LineStyle::Dotted)
-                    .with_axis_label(false);
+            for (value, name, style, fallback, line_shown, tag_shown) in values {
+                let line = chart_line(&style, value, fallback, line_shown);
                 rendering::render_price_line(
                     &painter,
                     price_rect,
@@ -3129,9 +3262,12 @@ impl Chart {
                     false,
                     axis_edge,
                 );
-                if price_map
-                    .range()
-                    .contains(price_map.transform().to_scale(value))
+                let color = line.color;
+                if show_price_axis
+                    && tag_shown
+                    && price_map
+                        .range()
+                        .contains(price_map.transform().to_scale(value))
                 {
                     let price = price_map.label(
                         price_map.transform().to_scale(value),
@@ -3265,6 +3401,12 @@ impl Chart {
             self.cursor_modes = cursor_modes;
             self.history
                 .finish_drawing_action(&mut self.drawings, drawing_history);
+            Self::queue_layered_drawings(
+                &self.drawings,
+                &mut self.layered_drawings,
+                painter.layer_id(),
+                &marks,
+            );
         }
         #[cfg(feature = "drawings")]
         if let Some(id) = pointer.and_then(|pos| self.drawings.hit_test(pos)) {
@@ -3688,7 +3830,7 @@ impl Chart {
                             ("VAL", profile.value_area_low),
                         ]);
                     }
-                    let widest = profile.price_tpo_count.values().max().copied().unwrap_or(0);
+                    let widest = rendering::candles::tpo::profile_columns(profile, config);
                     self.paint_profile_context(
                         ui,
                         &coords,
@@ -4259,6 +4401,47 @@ impl Chart {
         self.record_host_click(ui, &response);
         shown
     }
+}
+
+/// `style` as a price line at `price`, in `fallback` while it sets no colour. The line shows
+/// only while `shown`, at a positive and finite width; callers draw its tag.
+fn chart_line(
+    style: &crate::config::ChartLineStyle,
+    price: f64,
+    fallback: egui::Color32,
+    shown: bool,
+) -> PriceLine {
+    let width = if shown && style.width.is_finite() && style.width > 0.0 {
+        style.width
+    } else {
+        0.0
+    };
+    PriceLine::new(price, style.color.unwrap_or(fallback))
+        .with_width(width)
+        .with_style(style.style)
+        .with_axis_label(false)
+}
+
+/// The mean close of the bars with a finite close, `None` without one. A running mean, so that
+/// large closes do not overflow a sum.
+fn average_close(bars: &[crate::model::Bar]) -> Option<f64> {
+    let mut mean = None;
+    let mut count = 0.0;
+    for close in bars
+        .iter()
+        .map(|bar| bar.close)
+        .filter(|close| close.is_finite())
+    {
+        count += 1.0;
+        let previous: f64 = mean.unwrap_or(0.0);
+        let delta = close - previous;
+        mean = Some(if delta.is_finite() {
+            previous + delta / count
+        } else {
+            previous * ((count - 1.0) / count) + close / count
+        });
+    }
+    mean
 }
 
 #[cfg(test)]

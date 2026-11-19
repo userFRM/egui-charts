@@ -11,8 +11,9 @@ use super::preset::{self, AlertPreset, MAX_PRESETS, PresetFields};
 use super::{AlertDialogAction, AlertDialogConfig};
 use crate::data::inbox::Inbox;
 use crate::model::{
-    Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertFrequency, AlertRule,
-    AlertSource, AlertSourceName, NotificationSchedule, NotificationWindow, Timeframe, TimezoneId,
+    Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertFrequency,
+    AlertPositionProgress, AlertRule, AlertSource, AlertSourceName, NotificationSchedule,
+    NotificationWindow, Timeframe, TimezoneId,
 };
 use crate::services::revisions::{Revisions, Settled, Written};
 use crate::services::{ConflictChoice, Storage, StoreKind};
@@ -637,6 +638,13 @@ impl AlertDialog {
                                 && intervals.iter().any(|interval| interval.is_trade_based())
                             {
                                 "Mixed intervals need time-based bars"
+                            } else if matches!(
+                                self.alert.condition,
+                                AlertCondition::Position { .. }
+                            ) && (self.alert.watchlist.is_some()
+                                || !self.alert.additional_conditions.is_empty())
+                            {
+                                "A position alert watches one symbol and takes no other conditions"
                             } else {
                                 "Check the subject, levels and lookback"
                             };
@@ -768,8 +776,10 @@ impl AlertDialog {
                         (AlertFrequency::OncePerBarClose, "Once per bar close"),
                         (AlertFrequency::OncePerMinute, "Once per minute"),
                     ] {
-                        if self.alert.condition.is_event()
-                            && !matches!(value, AlertFrequency::Once | AlertFrequency::EveryTime)
+                        if (self.alert.condition.is_event()
+                            && !matches!(value, AlertFrequency::Once | AlertFrequency::EveryTime))
+                            || (matches!(self.alert.condition, AlertCondition::Position { .. })
+                                && value != AlertFrequency::Once)
                         {
                             continue;
                         }
@@ -986,6 +996,7 @@ impl AlertDialog {
                     &mut self.alert.source,
                     &mut self.alert.condition,
                     &self.sources,
+                    true,
                 );
             } else {
                 let index = self.editing_condition - 1;
@@ -998,7 +1009,13 @@ impl AlertDialog {
                     "Follow first interval",
                 );
                 let rule = &mut self.alert.additional_conditions[index];
-                rule_form(ui, &mut rule.source, &mut rule.condition, &self.sources);
+                rule_form(
+                    ui,
+                    &mut rule.source,
+                    &mut rule.condition,
+                    &self.sources,
+                    false,
+                );
                 if ui
                     .button(l10n::text(ui.ctx(), "Remove condition"))
                     .clicked()
@@ -1008,7 +1025,13 @@ impl AlertDialog {
                 }
             }
         });
+        let position = matches!(self.alert.condition, AlertCondition::Position { .. });
+        if position {
+            // A position alert ends at its exit, so it takes frequency Once.
+            self.alert.frequency = AlertFrequency::Once;
+        }
         if !events
+            && !position
             && ui
                 .add_enabled(
                     self.alert.additional_conditions.len() < 4,
@@ -1281,11 +1304,49 @@ fn drawing_channel(
     })
 }
 
+/// Seed a position alert from the position drawing the rule names, or the first one offered,
+/// retaining an existing one verbatim.
+fn drawing_position(
+    source: &AlertSource,
+    condition: &AlertCondition,
+    sources: &[(AlertSource, AlertSourceName)],
+) -> Option<AlertCondition> {
+    use crate::drawings::DrawingToolType as T;
+    if let AlertCondition::Position { .. } = condition {
+        return Some(condition.clone());
+    }
+    let positions: Vec<&AlertSource> = sources
+        .iter()
+        .filter(|(_, name)| {
+            name.label("tool")
+                .is_some_and(|tool| tool == T::LongPos.as_str() || tool == T::ShortPos.as_str())
+        })
+        .map(|(source, _)| source)
+        .collect();
+    let named = match condition {
+        AlertCondition::Compare { other, .. } => drawing_id(other),
+        _ => None,
+    }
+    .or(drawing_id(source))
+    .filter(|id| positions.iter().any(|s| drawing_id(s) == Some(*id)));
+    let id = named.or_else(|| positions.first().and_then(|s| drawing_id(s)))?;
+    let levels: Vec<AlertSource> = positions
+        .into_iter()
+        .filter(|s| drawing_id(s) == Some(id))
+        .cloned()
+        .collect();
+    Some(AlertCondition::Position {
+        levels: Box::new(levels.try_into().ok()?),
+        progress: AlertPositionProgress::AwaitingEntry,
+    })
+}
+
 pub(crate) fn rule_form(
     ui: &mut Ui,
     source: &mut AlertSource,
     condition: &mut AlertCondition,
     sources: &[(AlertSource, AlertSourceName)],
+    offer_position: bool,
 ) {
     ui.add_enabled_ui(
         !matches!(condition, AlertCondition::VolumeAboveAverage { .. }) && !condition.is_event(),
@@ -1293,6 +1354,9 @@ pub(crate) fn rule_form(
     );
     let level = condition.level().unwrap_or(0.0);
     let channel = drawing_channel(source, condition, sources);
+    let position = offer_position
+        .then(|| drawing_position(source, condition, sources))
+        .flatten();
     let choices = [
         (AlertCondition::Crossing(level), "Crossing"),
         (AlertCondition::CrossingUp(level), "Crossing up"),
@@ -1358,6 +1422,7 @@ pub(crate) fn rule_form(
     ]
     .into_iter()
     .chain(channel.map(|c| (c, "Drawing channel")))
+    .chain(position.map(|c| (c, "Position entry and exit")))
     .collect::<Vec<_>>();
     let selected = choices
         .iter()
@@ -1388,6 +1453,9 @@ pub(crate) fn rule_form(
         .response
         .accessible_name(l10n::text(ui.ctx(), "Condition"));
     ui.horizontal_wrapped(|ui| match condition {
+        AlertCondition::Position { progress, .. } => {
+            ui.label(l10n::text(ui.ctx(), progress.to_string()));
+        }
         AlertCondition::StrategyFills(run) => {
             ui.text_edit_singleline(run)
                 .accessible_name(l10n::text(ui.ctx(), "Strategy run"));
@@ -1711,6 +1779,53 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_position_level_offers_the_alert_from_entry_to_exit() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut dialog = AlertDialog::new();
+        for (id, tool) in [("7", "Long Position"), ("9", "Short Position")] {
+            for (suffix, level) in [("", "Entry"), ("#1", "Target"), ("#2", "Stop")] {
+                dialog.sources.push((
+                    AlertSource::Drawing(format!("{id}{suffix}")),
+                    AlertSourceName::new(
+                        "{tool} {id}: {level}",
+                        &[("id", id)],
+                        &[("tool", tool), ("level", level)],
+                    ),
+                ));
+            }
+        }
+        let mut alert = Alert::new(
+            "SAMPLE",
+            AlertCondition::Compare {
+                other: AlertSource::Drawing("9#2".into()),
+                comparison: AlertComparison::Crossing,
+            },
+        );
+        alert.frequency = AlertFrequency::EveryTime;
+        dialog.edit(alert);
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(960.0, 900.0))
+            .build_ui_state(|ui, dialog: &mut AlertDialog| dialog.form(ui), dialog);
+        h.run();
+        h.get_by_label("Condition").click();
+        h.run();
+        h.get_by_label("Position entry and exit").scroll_to_me();
+        h.run();
+        h.get_by_label("Position entry and exit").click();
+        h.run();
+        h.run();
+        assert_eq!(
+            h.state().alert.condition,
+            AlertCondition::Position {
+                levels: Box::new(["9", "9#1", "9#2"].map(|id| AlertSource::Drawing(id.into()))),
+                progress: AlertPositionProgress::AwaitingEntry,
+            }
+        );
+        assert_eq!(h.state().alert.frequency, AlertFrequency::Once);
+        assert!(h.query_by_label("Add condition").is_none());
     }
 
     /// Names the chart builds keep their parts through storage, so the source list shows the
