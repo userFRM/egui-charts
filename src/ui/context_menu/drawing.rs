@@ -10,7 +10,7 @@ use crate::localization as l10n;
 use crate::model::{Alert, AlertComparison, AlertCondition, Timeframe};
 use crate::theme::Theme;
 use crate::ui::Control;
-use crate::ui::context_menu::{MenuEntry, MenuItem, show_menu};
+use crate::ui::context_menu::{MenuEntry, MenuItem, MenuRowId, show_menu};
 use crate::widget::{Chart, PaneId};
 
 use egui::{Context, Id, Pos2};
@@ -319,6 +319,7 @@ impl DrawingContextMenu {
             ])
             .chain((!self.panes.is_empty()).then(|| {
                 MenuEntry::Submenu {
+                    id: Some(MenuRowId::MoveTo),
                     label: "Move to".into(),
                     icon: Some(&embedded_icons::MOVE_PANE),
                     entries: self
@@ -344,6 +345,7 @@ impl DrawingContextMenu {
             .chain([
                 MenuEntry::Separator,
                 MenuEntry::Submenu {
+                    id: Some(MenuRowId::IntervalVisibility),
                     label: "Intervals visibility".into(),
                     icon: None,
                     entries: self.interval_items(),
@@ -439,6 +441,31 @@ pub(super) fn interval_filter(
 }
 
 impl DrawingContextMenuAction {
+    pub(super) fn row_id(&self) -> Option<MenuRowId> {
+        Some(match self {
+            Self::None => return None,
+            Self::AddAlert(_) => MenuRowId::AddAlert,
+            Self::Edit => MenuRowId::Edit,
+            Self::BringToFront => MenuRowId::BringToFront,
+            Self::BringForward => MenuRowId::BringForward,
+            Self::SendToBack => MenuRowId::SendToBack,
+            Self::SendBackward => MenuRowId::SendBackward,
+            Self::Copy => MenuRowId::Copy,
+            Self::MoveTo(pane) => MenuRowId::MoveToPane(*pane),
+            Self::Intervals(range) => match range {
+                IntervalRange::AndAbove => MenuRowId::IntervalsAndAbove,
+                IntervalRange::AndBelow => MenuRowId::IntervalsAndBelow,
+                IntervalRange::Only => MenuRowId::CurrentIntervalOnly,
+                IntervalRange::All => MenuRowId::AllIntervals,
+            },
+            Self::Lock => MenuRowId::Lock,
+            Self::Hide => MenuRowId::ToggleVisibility,
+            Self::ReversePosition => MenuRowId::ReversePosition,
+            Self::Clone => MenuRowId::Clone,
+            Self::Delete => MenuRowId::Delete,
+        })
+    }
+
     /// Apply an interval command to `id`, recording undo and saved-state updates. Returns
     /// whether this is an interval command; other actions remain the caller's responsibility.
     /// With no chart interval, only the all-intervals command changes the filter.
