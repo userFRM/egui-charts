@@ -783,7 +783,11 @@ mod tests {
         let mut request = OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Limit(95.0));
         request.time_in_force = TimeInForce::GoodTillDate;
         request.expires = Some("2026-12-01T21:00:00Z".parse().unwrap());
-        let order = Order::new(OrderId::new("dated"), request, OrderStatus::Working);
+        let order = Order::new(OrderId::new("dated"), request.clone(), OrderStatus::Working);
+        request.side = OrderSide::Sell;
+        request.order_type = OrderType::Limit(105.0);
+        request.position_bracket = Some(crate::model::PositionBracket::TakeProfit);
+        let exit = Order::new(OrderId::new("dated-exit"), request, OrderStatus::Working);
         let mut trading = Trading::default();
         let colors = crate::theme::Theme::dark().chart;
         for account in ["stocks", "crypto"] {
@@ -796,7 +800,11 @@ mod tests {
         trading.disconnect();
         assert_eq!(trading.market(&chart, &colors).account, "");
         trading.set_service(Arc::new(Recorder {
-            state: vec![AccountEvent::Order(order)],
+            state: vec![
+                AccountEvent::Order(order),
+                AccountEvent::Order(exit),
+                AccountEvent::Position(Position::new("ES", 1.0, 100.0)),
+            ],
             ..Recorder::default()
         }));
         let ctx = egui::Context::default();
@@ -832,6 +840,14 @@ mod tests {
                 .any(|text| text == "Limit until 2026-12-01 16:00"),
             "{texts:?}"
         );
+        assert_eq!(
+            texts
+                .iter()
+                .filter(|text| text.ends_with(" until 2026-12-01 16:00"))
+                .count(),
+            2,
+            "a position exit keeps its expiry beside its bracket name or P&L: {texts:?}"
+        );
         let mut harness = egui_kittest::Harness::builder()
             .allow_missing_glyphs()
             .with_size(egui::vec2(1440.0, 900.0))
@@ -843,7 +859,7 @@ mod tests {
                 trading,
             );
         harness.run();
-        harness.get_by_label("Orders 1").click();
+        harness.get_by_label("Orders 2").click();
         harness.run();
         assert!(
             harness

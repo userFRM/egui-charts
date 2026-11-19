@@ -307,30 +307,7 @@ pub fn render_trading_lines<'a>(
                 level
             };
             let (name, color) = match appearance {
-                Level::Entry => {
-                    let name = match request
-                        .expires
-                        .filter(|_| request.time_in_force == TimeInForce::GoodTillDate)
-                    {
-                        Some(expires) => l10n::format_text(
-                            ui.ctx(),
-                            "{kind} until {expiry}",
-                            &[
-                                ("kind", l10n::text(ui.ctx(), kind)),
-                                (
-                                    "expiry",
-                                    options
-                                        .timezone
-                                        .wall_time(expires)
-                                        .format("%Y-%m-%d %H:%M")
-                                        .to_string(),
-                                ),
-                            ],
-                        ),
-                        None => l10n::text(ui.ctx(), kind),
-                    };
-                    (name, side_color(request.side))
-                }
+                Level::Entry => (l10n::text(ui.ctx(), kind), side_color(request.side)),
                 Level::TakeProfit => (l10n::text(ui.ctx(), "TP"), theme.ui.take_profit),
                 Level::StopLoss => (l10n::text(ui.ctx(), "SL"), theme.ui.stop_loss),
             };
@@ -341,14 +318,36 @@ pub fn render_trading_lines<'a>(
                 .or(parent_price)
                 .or(options.last_price);
             let ctx = ui.ctx().clone();
-            let body = |price: f64| match (appearance, options.bracket_pnl, entry) {
-                (Level::TakeProfit | Level::StopLoss, Some(unit), Some(entry)) => {
-                    let gain = (price - entry)
-                        * parent.map_or(direction(request.side), |p| p.quantity.signum());
-                    let money = gain * quantity * options.point_value;
-                    pnl_text(&ctx, unit, money, gain, entry, options).0
+            let body = |price: f64| {
+                let body = match (appearance, options.bracket_pnl, entry) {
+                    (Level::TakeProfit | Level::StopLoss, Some(unit), Some(entry)) => {
+                        let gain = (price - entry)
+                            * parent.map_or(direction(request.side), |p| p.quantity.signum());
+                        let money = gain * quantity * options.point_value;
+                        pnl_text(&ctx, unit, money, gain, entry, options).0
+                    }
+                    _ => name.clone(),
+                };
+                match request.expires.filter(|_| {
+                    level == Level::Entry && request.time_in_force == TimeInForce::GoodTillDate
+                }) {
+                    Some(expires) => l10n::format_text(
+                        &ctx,
+                        "{kind} until {expiry}",
+                        &[
+                            ("kind", body),
+                            (
+                                "expiry",
+                                options
+                                    .timezone
+                                    .wall_time(expires)
+                                    .format("%Y-%m-%d %H:%M")
+                                    .to_string(),
+                            ),
+                        ],
+                    ),
+                    None => body,
                 }
-                _ => name.clone(),
             };
             let line = PriceLine::new(price, color).with_style(
                 if appearance == Level::Entry && options.submit {
