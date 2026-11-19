@@ -13,7 +13,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
 
 use super::{Events, SignalEvent, Signals};
 use crate::data::depth::Book;
@@ -276,13 +275,31 @@ pub struct Detector<R> {
     pub rule: R,
 }
 
-/// Reads a detector rule, `null` giving the default rule.
+/// Reads a rule object without an option wrapper, or the unit form of an older settings file.
 fn rule_or_default<'de, D, R>(deserializer: D) -> Result<R, D::Error>
 where
     D: serde::Deserializer<'de>,
     R: serde::Deserialize<'de> + Default,
 {
-    Ok(Option::<R>::deserialize(deserializer)?.unwrap_or_default())
+    struct Rule<R>(std::marker::PhantomData<R>);
+
+    impl<'de, R: serde::Deserialize<'de> + Default> serde::de::Visitor<'de> for Rule<R> {
+        type Value = R;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a rule object or unit")
+        }
+
+        fn visit_unit<E: serde::de::Error>(self) -> Result<R, E> {
+            Ok(R::default())
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<R, A::Error> {
+            R::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+
+    deserializer.deserialize_any(Rule(std::marker::PhantomData))
 }
 
 impl<R: Default> Default for Detector<R> {
