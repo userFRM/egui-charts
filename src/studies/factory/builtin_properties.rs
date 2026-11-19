@@ -209,7 +209,11 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(RelativeVolumeAtTime::new(l(0))),
         Box::new(ZigZag::new(x(5.0), l(0))),
         #[cfg(feature = "drawings")]
-        Box::new(AutoDrawing::new(AutoDrawingKind::TrendLine, x(5.0), l(0))),
+        Box::new(
+            AutoTrendLines::new()
+                .with_bars_to_breakout(l(0))
+                .with_pivots(true),
+        ),
         #[cfg(feature = "drawings")]
         Box::new(AutoDrawing::new(
             AutoDrawingKind::ParallelChannel,
@@ -754,7 +758,6 @@ fn degenerate_lengths_and_hostile_bars_are_survivable() {
         !matches!(
             study.name(),
             "ZigZag"
-                | "Auto Trend Line"
                 | "Auto Parallel Channel"
                 | "Auto Fibonacci Retracement"
                 | "Auto Fibonacci Extension"

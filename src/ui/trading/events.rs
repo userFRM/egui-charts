@@ -176,7 +176,8 @@ impl Trading {
                 if matches!(self.pending, Some(TradingLineAction::Modify(_, _)))
                     && !account.capabilities.modify
                     || matches!(self.pending, Some(TradingLineAction::Close(_)))
-                        && !account.capabilities.close
+                        && (!account.capabilities.close
+                            || self.close_quantity.is_some() && !account.capabilities.partial_close)
                     || matches!(self.pending, Some(TradingLineAction::Reverse(_)))
                         && !account.capabilities.reverse
                     || matches!(&self.pending,
@@ -517,6 +518,7 @@ fn valid_event(event: &AccountEvent) -> bool {
                     account.equity,
                     account.realized_pnl,
                     account.margin,
+                    account.margin_buffer,
                     account.orders_margin,
                     account.available_funds,
                 ]
@@ -555,6 +557,12 @@ fn valid_event(event: &AccountEvent) -> bool {
                 .all(finite)
         }
         AccountEvent::Execution(fill) => positive(fill.quantity) && fill.price.is_finite(),
+        AccountEvent::ClosedPosition(closed) => {
+            positive(closed.quantity)
+                && closed.average_price.is_finite()
+                && closed.exit_price.is_finite()
+                && closed.realized_pnl.is_finite()
+        }
         AccountEvent::Balance(change) => change.balance.is_finite() && change.amount.is_finite(),
         _ => true,
     }
@@ -1616,6 +1624,11 @@ mod tests {
             for event in [
                 AccountEvent::Order(invalid_stop),
                 AccountEvent::Account(Account::new("USD", bad, Capabilities::default())),
+                AccountEvent::Account({
+                    let mut invalid = account.clone();
+                    invalid.margin_buffer = Some(bad);
+                    invalid
+                }),
                 AccountEvent::Order(invalid_order),
                 AccountEvent::Order(invalid_level),
                 AccountEvent::Position(Position::new("SYM", bad, 100.0)),
@@ -1627,6 +1640,31 @@ mod tests {
                     trading.positions.as_slice(),
                     std::slice::from_ref(&position)
                 );
+            }
+        }
+        let closed = |quantity, entry, exit, pnl| {
+            AccountEvent::ClosedPosition(crate::model::ClosedPosition::new(
+                "SYM",
+                OrderSide::Sell,
+                quantity,
+                entry,
+                exit,
+                pnl,
+                chrono::Utc::now(),
+            ))
+        };
+        // A short of 1 from -5 to -7.5 earns 2.5; prices need not be positive.
+        assert!(valid_event(&closed(1.0, -5.0, -7.5, 2.5)));
+        for quantity in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(!valid_event(&closed(quantity, -5.0, -7.5, 2.5)));
+        }
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for event in [
+                closed(1.0, bad, -7.5, 2.5),
+                closed(1.0, -5.0, bad, 2.5),
+                closed(1.0, -5.0, -7.5, bad),
+            ] {
+                assert!(!valid_event(&event));
             }
         }
     }

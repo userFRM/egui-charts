@@ -127,16 +127,18 @@ impl AccountPanel {
         match kind {
             HistoryKind::Orders => self.history.len(),
             HistoryKind::Executions => self.fills.executions.len(),
+            HistoryKind::ClosedPositions => self.closed.len(),
             HistoryKind::Balance => self.balance.len(),
             HistoryKind::Journal => self.journal.len(),
         }
     }
 
-    /// The time of the oldest entry listed of `kind`; for orders, when it closed.
+    /// The time of the oldest entry listed of `kind`; for orders and closed positions, the close.
     fn oldest(&self, kind: HistoryKind) -> Option<DateTime<Utc>> {
         match kind {
             HistoryKind::Orders => self.history.first().and_then(|order| order.closed),
             HistoryKind::Executions => self.fills.executions.first().map(|fill| fill.time),
+            HistoryKind::ClosedPositions => self.closed.first().map(|closed| closed.closed),
             HistoryKind::Balance => self.balance.first().map(|change| change.time),
             HistoryKind::Journal => self.journal.first().map(|entry| entry.time),
         }
@@ -201,6 +203,20 @@ impl AccountPanel {
                 older.append(&mut fills.executions);
                 fills.executions = older;
             }
+            HistoryKind::ClosedPositions => {
+                let page = events
+                    .into_iter()
+                    .filter_map(|event| match event {
+                        AccountEvent::ClosedPosition(closed) => Some(closed),
+                        _ => None,
+                    })
+                    .collect();
+                let room = HISTORY_LIMIT.saturating_sub(self.closed.len());
+                let mut older = unlisted(page, &self.closed[self.closed_paged..], room);
+                self.closed_paged += older.len();
+                older.append(&mut self.closed);
+                self.closed = older;
+            }
             HistoryKind::Balance => {
                 let page = events
                     .into_iter()
@@ -260,7 +276,8 @@ mod tests {
     use super::*;
     use crate::data::FeedError;
     use crate::model::{
-        BalanceChange, Execution, JournalEntry, OrderRequest, OrderSide, OrderType, Position,
+        BalanceChange, ClosedPosition, Execution, JournalEntry, OrderRequest, OrderSide, OrderType,
+        Position,
     };
     use crate::services::HistoryPage;
     use crate::ui::trading::Trading;
@@ -314,18 +331,27 @@ mod tests {
         let b2 = BalanceChange::new(at(20), 999.0, -1.0, "Commission for order 2");
         let j1 = JournalEntry::new(at(10), "Order 1 filled");
         let j2 = JournalEntry::new(at(20), "Order 2 filled");
+        let closed = |seconds| {
+            let mut closed =
+                ClosedPosition::new("SYM", OrderSide::Buy, 1.0, 100.0, 101.0, 1.0, at(seconds));
+            closed.opened = Some(at(seconds - 5));
+            closed
+        };
+        let (c1, c2) = (closed(10), closed(20));
         let stream = [
             AccountEvent::Order(o2.clone()),
             AccountEvent::Execution(f1.clone()),
             AccountEvent::Execution(f2.clone()),
             AccountEvent::Balance(b2.clone()),
             AccountEvent::Journal(j2.clone()),
+            AccountEvent::ClosedPosition(c2.clone()),
         ];
         let kinds = [
             HistoryKind::Orders,
             HistoryKind::Executions,
             HistoryKind::Balance,
             HistoryKind::Journal,
+            HistoryKind::ClosedPositions,
         ];
         for page_first in [false, true] {
             let broker = Arc::new(Recorder {
@@ -372,12 +398,16 @@ mod tests {
                     AccountEvent::Journal(j1.clone()),
                     AccountEvent::Journal(j2.clone()),
                 ],
+                vec![
+                    AccountEvent::ClosedPosition(c1.clone()),
+                    AccountEvent::ClosedPosition(c2.clone()),
+                ],
             ];
             let mut first = Vec::new();
             for (((request, reply), page), (kind, seconds)) in asked
                 .into_iter()
                 .zip(pages)
-                .zip(kinds.into_iter().zip([21, 11, 21, 21]))
+                .zip(kinds.into_iter().zip([21, 11, 21, 21, 21]))
             {
                 let mut expected = HistoryRequest::new(kind, 100);
                 expected.to = to(seconds);
@@ -385,7 +415,7 @@ mod tests {
                 reply.send(Ok(HistoryPage::new(page, Some(format!("{kind:?}")))));
                 first.push(request);
             }
-            assert_eq!(first.len(), 4);
+            assert_eq!(first.len(), 5);
             let mut toasts = Toasts::new();
             trading.poll(&ctx, &mut toasts);
             assert!(toasts.toasts().is_empty());
@@ -411,6 +441,7 @@ mod tests {
             assert_eq!(panel.fills.price("SYM"), Some(100.0));
             assert_eq!(panel.balance, [b1.clone(), b2.clone()]);
             assert_eq!(panel.journal, [j1.clone(), j2.clone()]);
+            assert_eq!(panel.closed, [c1.clone(), c2.clone()]);
 
             for kind in kinds {
                 trading.load_older(kind);
@@ -547,7 +578,7 @@ mod tests {
         }
     }
 
-    /// Only the four history tables ask, each for its own kind, once shown to their end.
+    /// Only the five history tables ask, each for its own kind, once shown to their end.
     #[test]
     fn the_end_of_a_history_tab_asks_for_its_kind() {
         for (tab, show_executions, expected) in [
@@ -555,6 +586,7 @@ mod tests {
             (Tab::Orders, false, None),
             (Tab::History, false, Some(HistoryKind::Orders)),
             (Tab::History, true, Some(HistoryKind::Executions)),
+            (Tab::Closed, false, Some(HistoryKind::ClosedPositions)),
             (Tab::Balance, false, Some(HistoryKind::Balance)),
             (Tab::Journal, false, Some(HistoryKind::Journal)),
         ] {

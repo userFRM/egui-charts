@@ -542,7 +542,7 @@ impl Chart {
             *self.state.price_scale_mut() = scale.clone();
         }
         if self.panes().contains(&PaneId::MAIN) {
-            self.move_series_to_pane(super::SeriesId::MAIN, PaneId::MAIN);
+            self.move_series_keeping_layers(super::SeriesId::MAIN, PaneId::MAIN);
         } else {
             self.leave_panes(super::SeriesId::MAIN);
         }
@@ -595,14 +595,14 @@ impl Chart {
             .iter()
             .position(|pane| pane.members.contains(&0))
         {
-            self.move_series_to_pane(super::SeriesId::MAIN, panes[&at]);
+            self.move_series_keeping_layers(super::SeriesId::MAIN, panes[&at]);
         }
         for (saved, study) in snapshot.studies.iter().zip(studies) {
             let id = self.insert_indicator(study);
             self.set_indicator_inputs(id, saved.caption.clone());
             self.set_indicator_autoscale(id, saved.autoscale);
             self.restored_studies.insert(saved.id, id.0);
-            self.move_series_to_pane(id, panes[&saved.pane]);
+            self.move_series_keeping_layers(id, panes[&saved.pane]);
         }
         // Only a snapshot this chart took names its columns by saved ids; a study of any other
         // snapshot starts a new column.
@@ -651,7 +651,7 @@ impl Chart {
             self.set_series_visible(id, saved.visible);
             self.restore_annotations(id, &saved.annotations);
             self.restored_studies.insert(saved.id, id.0);
-            self.move_series_to_pane(id, panes[&saved.pane]);
+            self.move_series_keeping_layers(id, panes[&saved.pane]);
             if let Some(scale) = &saved.price_scale {
                 *self.series_price_scale_mut(id).expect("restored series") = scale.clone();
             }
