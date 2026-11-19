@@ -772,7 +772,7 @@ fn axis_right_clicks_open_menus_and_apply_choices() {
                 }
             }
             let label = if short {
-                "High and low"
+                "High and low lines"
             } else if hours {
                 "Extended hours"
             } else if time {
@@ -809,7 +809,13 @@ fn axis_right_clicks_open_menus_and_apply_choices() {
             assert_eq!(chart.chart_options(), &options);
             assert_eq!(chart.state().price_scale().options(), &scale);
             if short {
-                assert!(chart.config().show_high_low);
+                assert_eq!(
+                    (
+                        chart.config().show_high_low,
+                        chart.config().show_high_low_lines
+                    ),
+                    (false, Some(true))
+                );
             } else if ratio {
                 let before = chart.state().price_scale().range().length();
                 let (spacing, offset) = chart.get_time_scale_state();
