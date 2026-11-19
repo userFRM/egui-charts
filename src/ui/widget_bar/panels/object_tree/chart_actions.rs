@@ -710,4 +710,128 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn studies_on_studies_stop_at_their_cap_on_every_path() {
+        use crate::studies::{IndicatorFactory, RSI, SMA, StudyError, StudySource};
+
+        let fixture = || {
+            let mut chart = chart(&[100.0], &[200.0]);
+            assert_eq!(chart.chained_study_limit(), None);
+            let rsi = chart.add_indicator(Box::new(RSI::new(14)));
+            let linked = chart.add_indicator(Box::new(SMA::new(3)));
+            chart
+                .set_indicator_source(linked, StudySource::Study { id: rsi.0, plot: 0 })
+                .unwrap();
+            let price = chart.add_indicator(Box::new(SMA::new(7)));
+            chart.set_chained_study_limit(Some(1));
+            (chart, rsi, linked, price)
+        };
+        let state = |chart: &Chart| {
+            chart
+                .indicators()
+                .map(|(id, s)| {
+                    (
+                        id,
+                        s.inputs()
+                            .into_iter()
+                            .map(|i| (i.id, i.value))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        for path in ["add", "paste", "template set", "duplicate", "source"] {
+            let (mut chart, rsi, linked, price) = fixture();
+            let before = state(&chart);
+            let undoable = chart.can_undo();
+            match path {
+                "add" => {
+                    let copy = chart
+                        .indicators()
+                        .find(|(id, _)| *id == linked)
+                        .unwrap()
+                        .1
+                        .clone_box();
+                    let Err(StudyError::ChainedStudyLimitReached(refused)) =
+                        chart.try_add_indicator(copy)
+                    else {
+                        panic!("the chained cap refuses another study on a study");
+                    };
+                    assert_eq!(
+                        refused
+                            .into_inner()
+                            .inputs()
+                            .into_iter()
+                            .map(|i| (i.id, i.value))
+                            .collect::<Vec<_>>(),
+                        before[1].1
+                    );
+                }
+                "paste" => {
+                    let text = chart.copy_indicator(linked).unwrap();
+                    assert!(matches!(
+                        chart.paste_indicator(&text, &IndicatorFactory::new()),
+                        Err(StudyError::InvalidInput { .. })
+                    ));
+                }
+                "template set" => {
+                    let mut set = chart.study_template_set();
+                    set.studies.push(set.studies[1].clone());
+                    assert!(chart.apply_chosen_study_template_set(&set).is_err());
+                }
+                "duplicate" => apply(
+                    &mut ObjectTreePanel::new(),
+                    &mut chart,
+                    ObjectTreeAction::Duplicate(usize::MAX / 2 + linked.0),
+                ),
+                "source" => assert!(matches!(
+                    chart.set_indicator_source(price, StudySource::Study { id: rsi.0, plot: 0 }),
+                    Err(StudyError::InvalidInput { id, .. }) if id == "source"
+                )),
+                _ => unreachable!(),
+            }
+            assert_eq!(state(&chart), before, "{path}");
+            assert_eq!(chart.can_undo(), undoable, "{path}");
+        }
+
+        let (mut chart, _, linked, price) = fixture();
+        assert!(chart.try_add_indicator(Box::new(SMA::new(9))).is_ok());
+        assert!(
+            chart
+                .set_indicator_source(
+                    linked,
+                    StudySource::Study {
+                        id: price.0,
+                        plot: 0
+                    }
+                )
+                .is_ok()
+        );
+        // A refusal does not stop a later selected price study from being copied.
+        let mut tree = ObjectTreePanel::new();
+        tree.state_mut().select(usize::MAX / 2 + linked.0);
+        tree.state_mut().toggle_selection(usize::MAX / 2 + price.0);
+        apply(&mut tree, &mut chart, ObjectTreeAction::DuplicateSelected);
+        assert_eq!(
+            chart
+                .indicators()
+                .skip(1)
+                .flat_map(|(_, s)| s.line_names())
+                .collect::<Vec<_>>(),
+            ["SMA(3)", "SMA(7)", "SMA(9)", "SMA(7)"]
+        );
+        chart.set_chained_study_limit(None);
+        let copy = chart
+            .indicators()
+            .find(|(id, _)| *id == linked)
+            .unwrap()
+            .1
+            .clone_box();
+        assert!(chart.try_add_indicator(copy).is_ok());
+
+        let (mut chart, _, _, _) = fixture();
+        let set = chart.study_template_set();
+        assert!(chart.apply_chosen_study_template_set(&set).is_ok());
+    }
 }
