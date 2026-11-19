@@ -20,8 +20,8 @@ use std::collections::HashSet;
 ///
 /// The dialog asks for the next page when the last result comes into view, `query.limit`
 /// results after the previous page. An answer shorter than `query.limit` ends the results,
-/// unless the service [leaves results out](Self::leaves_results_out): then only an empty
-/// answer ends them.
+/// unless the service [leaves results out](Self::leaves_results_out): then paging ends at an empty
+/// answer or after three consecutive full pages with no readable results.
 ///
 /// ```
 /// use egui_charts::data::{FeedError, Reply};
@@ -54,6 +54,12 @@ pub trait SymbolSearch: MaybeSend + 'static {
     /// keeps paging until an empty answer, so the results cost one more request at their end,
     /// and each page still starts `query.limit` results after the previous one, counting the
     /// results left out.
+    ///
+    /// For a full page with no readable results, answer [`FeedError::Other`](crate::data::FeedError::Other)
+    /// with the first reason. The dialog requests the next page without scrolling, stopping
+    /// after three consecutive such pages and showing the first reason. A readable page resets
+    /// that count. All remaining error variants, including HTTP and network failures, stop
+    /// paging immediately.
     fn leaves_results_out(&self) -> bool {
         false
     }

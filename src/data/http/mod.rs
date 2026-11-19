@@ -167,8 +167,8 @@ impl HttpDatafeed {
         let target = url(&self.base, "search", params);
         get(target, String::new(), move |result| {
             // A result this build cannot read is left out rather than hiding the others; resolving
-            // it still reports why. A full page with none readable reports the first reason: an
-            // empty answer would end paging while the server has more.
+            // it still reports why. A full page with none readable signals bounded automatic
+            // paging with its first reason; an empty answer would hide later server results.
             reply.send(result.and_then(|symbols: Vec<serde_json::Value>| {
                 let full = limit > 0 && symbols.len() >= limit;
                 let mut unreadable = None;
@@ -186,7 +186,9 @@ impl HttpDatafeed {
                     })
                     .collect();
                 match unreadable {
-                    Some(error) if found.is_empty() && full => Err(error),
+                    Some(error) if found.is_empty() && full => {
+                        Err(FeedError::Other(error.to_string()))
+                    }
                     _ => Ok(found),
                 }
             }));
