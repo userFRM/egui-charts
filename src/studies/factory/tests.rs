@@ -249,9 +249,10 @@ fn every_study_styles_a_line_past_its_last() {
 }
 
 /// Catalogue studies have distinct values except ADX and DMI, which expose the same Wilder
-/// components in a different order. Fixed profiles use a saved end.
+/// components in a different order, and Donchian and Price Channel, which draw the same highest
+/// high, lowest low and midpoint with their own colours and fill. Fixed profiles use a saved end.
 #[test]
-fn catalogue_studies_are_distinct_except_for_adx_and_dmi_components() {
+fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
     use crate::model::Bar;
     use chrono::{TimeZone, Utc};
 
@@ -299,13 +300,20 @@ fn catalogue_studies_are_distinct_except_for_adx_and_dmi_components() {
                 .unwrap();
         }
         study.calculate(&bars);
-        // Studies that draw only shapes differ by their zones, projections, table or profile.
+        // Studies that draw only shapes differ by their zones, projections, table or profile, and
+        // studies of constant columns by their colours.
         let shapes = vec![
             format!("{:?}", study.zones()),
             format!("{:?}", study.projections()),
             format!("{:?}", study.table()),
             study.tpo().is_some().to_string(),
             format!("{:?}", study.volume_profiles(200..400)),
+            format!(
+                "{:?}",
+                (0..bars.len())
+                    .map(|bar| study.plot_color(0, bar))
+                    .collect::<Vec<_>>()
+            ),
         ];
         #[cfg(feature = "drawings")]
         let shapes = shapes
@@ -327,7 +335,7 @@ fn catalogue_studies_are_distinct_except_for_adx_and_dmi_components() {
             duplicates.push(format!("{first} and {name}"));
         }
     }
-    assert_eq!(duplicates, ["ADX and DMI"]);
+    assert_eq!(duplicates, ["ADX and DMI", "Donchian and Price Channel"]);
 }
 
 /// The study browser opens these studies with the lengths most often used for them.
@@ -347,9 +355,18 @@ fn catalogue_studies_open_with_their_usual_lengths() {
         ("CMO", "period", 9),
         ("HV", "period", 10),
         ("TSI", "signal_period", 13),
+        ("Knoxville Divergence", "momentum_period", 20),
+        ("Knoxville Divergence", "rsi_period", 21),
+        ("Knoxville Divergence", "lookback", 150),
+        ("Advance/Decline", "period", 10),
     ];
+    let factory = IndicatorFactory::new();
     for (name, id, length) in rows {
-        let inputs = IndicatorFactory::new().create(name).unwrap().inputs();
+        assert!(
+            factory.list().iter().any(|listed| listed == name),
+            "{name} is not listed"
+        );
+        let inputs = factory.create(name).unwrap().inputs();
         let input = inputs.iter().find(|input| input.id == id);
         assert_eq!(
             input.map(|input| &input.value),
