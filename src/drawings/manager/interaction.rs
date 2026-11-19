@@ -1,6 +1,6 @@
 //! Pointer interaction: handles and drags, tool selection and drawing creation.
 
-use super::{DrawingManager, DrawingSyncAction, sync_id};
+use super::{DrawingEventKind, DrawingManager, DrawingSyncAction, sync_id};
 use crate::drawings::domain::{
     ChartPoint, Drawing, DrawingInteractionMode, DrawingToolType, HandlePos,
 };
@@ -290,13 +290,17 @@ impl DrawingManager {
         for old in &erase.before {
             if self.drawings.iter().any(|d| d.id == old.id) {
                 self.queue_edit(old);
-            } else if old.saveable {
-                self.queue(DrawingSyncAction::Delete(sync_id(old)));
+            } else {
+                if old.saveable {
+                    self.queue(DrawingSyncAction::Delete(sync_id(old)));
+                }
+                self.report(old.id, DrawingEventKind::Removed);
             }
         }
         for id in &erase.added {
             if self.drawings.iter().any(|d| d.id == *id) {
                 self.queue(DrawingSyncAction::SaveDrawing(*id));
+                self.report(*id, DrawingEventKind::Created);
             }
         }
         let ids = erase
@@ -315,8 +319,11 @@ impl DrawingManager {
             })
             .collect();
         drawings.sort_by_key(|(index, _)| *index);
-        self.history
-            .push_command(DrawingCommand::Snapshot { drawings, ids });
+        self.history.push_command(DrawingCommand::Snapshot {
+            drawings,
+            ids,
+            moved: false,
+        });
     }
 
     // === Handle delegation ===
@@ -458,6 +465,75 @@ impl DrawingManager {
                 | T::RegressionTrend
                 | T::FibonacciChannel
         )
+    }
+
+    /// Tools whose first two anchors span a box that Shift keeps square on screen, while the
+    /// drawing is placed and while one of its corners is dragged: a Fib circle comes out round
+    /// and a Gann 1x1 line runs at 45 degrees.
+    pub(crate) fn squares_box(tool: DrawingToolType) -> bool {
+        use DrawingToolType as T;
+        matches!(
+            tool,
+            T::Rect
+                | T::Ellipse
+                | T::FibonacciCircles
+                | T::GannBox
+                | T::GannSquare
+                | T::GannFixed
+                | T::GannFan
+        )
+    }
+
+    /// The far corner of the square on `anchor` toward `point`: its side is the larger of the
+    /// two distances, cut to the room a positive `bounds` leaves in that direction.
+    pub(crate) fn square_corner(anchor: Pos2, point: Pos2, bounds: egui::Rect) -> Pos2 {
+        let delta = point - anchor;
+        let direction = egui::vec2(
+            if delta.x < 0.0 { -1.0 } else { 1.0 },
+            if delta.y < 0.0 { -1.0 } else { 1.0 },
+        );
+        let mut side = delta.x.abs().max(delta.y.abs());
+        if bounds.is_positive() {
+            let room = egui::vec2(
+                if direction.x < 0.0 {
+                    anchor.x - bounds.left()
+                } else {
+                    bounds.right() - anchor.x
+                },
+                if direction.y < 0.0 {
+                    anchor.y - bounds.top()
+                } else {
+                    bounds.bottom() - anchor.y
+                },
+            );
+            side = side.min(room.x).min(room.y).max(0.0);
+        }
+        anchor + direction * side
+    }
+
+    /// The corner a Shift drag of `handle` keeps fixed while it squares the box, and the price at
+    /// that corner's screen y: the other anchor, or for a box's mixed corner the opposite one.
+    fn square_anchor(&self, drawing: &Drawing, handle: HandlePos) -> Option<(Pos2, f64)> {
+        if !self.interaction_modifiers.shift
+            || drawing.custom_tool.is_some()
+            || !Self::squares_box(drawing.tool_type)
+        {
+            return None;
+        }
+        let ([first, second, ..], [a, b, ..]) =
+            (drawing.points.as_slice(), drawing.chart_points.as_slice())
+        else {
+            return None;
+        };
+        match handle {
+            HandlePos::Start | HandlePos::Point(0) | HandlePos::TopLeft => Some((*second, b.price)),
+            HandlePos::End | HandlePos::Point(1) | HandlePos::BottomRight => {
+                Some((*first, a.price))
+            }
+            HandlePos::TopRight => Some((Pos2::new(first.x, second.y), b.price)),
+            HandlePos::BottomLeft => Some((Pos2::new(second.x, first.y), a.price)),
+            _ => None,
+        }
     }
 
     // Project onto the nearest 45-degree direction. Integer directions keep diagonals exact.
@@ -604,9 +680,13 @@ impl DrawingManager {
                         constrained_price = Some((chart_anchor.price, anchor.y));
                     }
                 }
+                if let Some((anchor, price)) = self.square_anchor(drawing, handle) {
+                    snapped = Self::square_corner(anchor, snapped, self.pane_rect);
+                    constrained_price = Some((price, anchor.y));
+                }
             }
-            // Shift edits receive precise bars for the angle; other Shift edits keep whole bars
-            // while anchors snap to bars in time.
+            // Shift edits receive precise bars for the angle or the square; other Shift edits
+            // keep whole bars while anchors snap to bars in time.
             let whole_bars = self.interaction_modifiers.shift
                 && constrained_price.is_none()
                 && self.options.snap_to_time;
@@ -803,6 +883,9 @@ impl DrawingManager {
         }
         for id in converted {
             self.queue_update(id);
+            if self.drawings.iter().any(|d| d.id == id) {
+                self.report(id, DrawingEventKind::AnchorsChanged);
+            }
         }
     }
 
@@ -811,6 +894,7 @@ impl DrawingManager {
     /// A copy drag records the additions instead, so undo removes every copy.
     pub fn end_drag_handle(&mut self) {
         self.end_partial_erase();
+        let moved = self.drag_origin.is_some();
         if let Some(old_state) = self.drag_old_state.take() {
             if std::mem::take(&mut self.drag_copy) {
                 let mut ids: Vec<_> = std::mem::take(&mut self.drag_group)
@@ -821,23 +905,29 @@ impl DrawingManager {
                 ids.sort_by_key(|id| self.drawings.iter().position(|d| d.id == *id));
                 for &id in &ids {
                     self.queue(DrawingSyncAction::SaveDrawing(id));
+                    self.report(id, DrawingEventKind::Created);
                 }
                 self.history
                     .push_command(crate::drawings::services::DrawingCommand::Snapshot {
                         drawings: Vec::new(),
                         ids,
+                        moved: false,
                     });
                 self.dragging_handle = None;
                 self.drag_origin = None;
                 return;
             }
-            self.queue_edit(&old_state);
+            self.queue_change(&old_state, moved);
             if self.drag_group.is_empty() {
-                self.history.push_modify(old_state.id, old_state);
+                if moved {
+                    self.history.push_moved(old_state.id, old_state);
+                } else {
+                    self.history.push_modify(old_state.id, old_state);
+                }
             } else {
                 let mut before = std::mem::take(&mut self.drag_group);
                 for drawing in &before {
-                    self.queue_update(drawing.id);
+                    self.queue_change(drawing, true);
                 }
                 before.push(old_state);
                 let snapshot = self
@@ -849,7 +939,7 @@ impl DrawingManager {
                         Some((index, old.clone()))
                     })
                     .collect();
-                self.history.push_snapshot(snapshot);
+                self.history.push_moved_snapshot(snapshot);
             }
         }
         self.dragging_handle = None;
@@ -1002,7 +1092,9 @@ impl DrawingManager {
     /// Prepares a post or idea card showing `post`, placed by the next click on the chart, as
     /// [`Self::start_icon_insertion`] does for a picked icon. The tool's saved defaults apply,
     /// and the inline editor does not open, since the card has its content. Does nothing for
-    /// other tools or a disabled one.
+    /// other tools or a disabled one. On a chart, the card stands on the bar of the time its
+    /// content was published, at the clicked price, as
+    /// [`Chart::set_post_source`](crate::widget::Chart::set_post_source) describes.
     pub fn start_post_insertion(&mut self, tool: DrawingToolType, post: PostLink) {
         if !matches!(tool, DrawingToolType::Tweet | DrawingToolType::Idea)
             || !self.registry.availability(tool).enabled
@@ -1255,6 +1347,7 @@ impl DrawingManager {
             self.drawings.push(drawing);
             self.select(id);
             self.queue(DrawingSyncAction::SaveDrawing(id));
+            self.report(id, DrawingEventKind::Created);
             if !self.stay_in_drawing_mode {
                 self.active_tool = None;
                 self.active_custom_tool = None;

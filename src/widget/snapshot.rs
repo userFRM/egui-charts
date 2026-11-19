@@ -542,7 +542,7 @@ impl Chart {
             *self.state.price_scale_mut() = scale.clone();
         }
         if self.panes().contains(&PaneId::MAIN) {
-            self.move_series_to_pane(super::SeriesId::MAIN, PaneId::MAIN);
+            self.move_series_keeping_layers(super::SeriesId::MAIN, PaneId::MAIN);
         } else {
             self.leave_panes(super::SeriesId::MAIN);
         }
@@ -595,14 +595,14 @@ impl Chart {
             .iter()
             .position(|pane| pane.members.contains(&0))
         {
-            self.move_series_to_pane(super::SeriesId::MAIN, panes[&at]);
+            self.move_series_keeping_layers(super::SeriesId::MAIN, panes[&at]);
         }
         for (saved, study) in snapshot.studies.iter().zip(studies) {
             let id = self.insert_indicator(study);
             self.set_indicator_inputs(id, saved.caption.clone());
             self.set_indicator_autoscale(id, saved.autoscale);
             self.restored_studies.insert(saved.id, id.0);
-            self.move_series_to_pane(id, panes[&saved.pane]);
+            self.move_series_keeping_layers(id, panes[&saved.pane]);
         }
         // Only a snapshot this chart took names its columns by saved ids; a study of any other
         // snapshot starts a new column.
@@ -651,7 +651,7 @@ impl Chart {
             self.set_series_visible(id, saved.visible);
             self.restore_annotations(id, &saved.annotations);
             self.restored_studies.insert(saved.id, id.0);
-            self.move_series_to_pane(id, panes[&saved.pane]);
+            self.move_series_keeping_layers(id, panes[&saved.pane]);
             if let Some(scale) = &saved.price_scale {
                 *self.series_price_scale_mut(id).expect("restored series") = scale.clone();
             }
@@ -2436,6 +2436,71 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<CrosshairOptions>("{}").unwrap(),
             CrosshairOptions::default()
+        );
+    }
+
+    /// Chosen time labels survive layouts; older layouts keep the labels they showed.
+    #[test]
+    fn layouts_keep_the_time_label_choices() {
+        use crate::scales::{TickMarkType, WeekdayNames};
+        use crate::widget::settings::{ChartSettingsState, DateFormat};
+        use crate::widget::{ChartLayoutMode, SavedLayout, test_frames::chart};
+        let time = Utc.with_ymd_and_hms(2024, 3, 13, 14, 30, 0).unwrap();
+        let labels = |chart: &Chart| {
+            let formatter = chart.build_time_formatter();
+            [
+                formatter.format_crosshair(time, 60),
+                formatter.format_crosshair(time, 86_400),
+                formatter.format(time, TickMarkType::Time),
+            ]
+        };
+        let mut source = chart(&[100.0], &[110.0]);
+        let mut settings = ChartSettingsState::from_chart(&source);
+        settings.scales_and_lines.date_format = Some(DateFormat::Pattern("%d.%m.%Y".into()));
+        settings.scales_and_lines.use_24_hour = Some(false);
+        settings.scales_and_lines.weekday_names = Some(WeekdayNames::Always);
+        settings.apply_to_chart(&mut source).unwrap();
+        let json = SavedLayout::new(ChartLayoutMode::Single, vec![source.snapshot().unwrap()])
+            .to_json()
+            .unwrap();
+        let mut restored = chart(&[100.0], &[110.0]);
+        restored
+            .restore(&SavedLayout::from_json(&json).unwrap().charts[0])
+            .unwrap();
+        assert_eq!(
+            labels(&restored),
+            ["Wed 13.03.2024 02:30 PM", "Wed 13.03.2024", "02:30 PM"]
+        );
+
+        let mut older: serde_json::Value = serde_json::from_str(&json).unwrap();
+        for (group, choice) in [
+            ("/charts/0/settings/scales_and_lines", "date_format"),
+            ("/charts/0/settings/scales_and_lines", "use_24_hour"),
+            ("/charts/0/settings/scales_and_lines", "weekday_names"),
+            ("/charts/0/options/time_scale", "use_24_hour"),
+            ("/charts/0/options/time_scale", "weekday_names"),
+        ] {
+            older
+                .pointer_mut(group)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove(choice)
+                .expect(choice);
+        }
+        let older = SavedLayout::from_json(&older.to_string()).unwrap();
+        let mut restored = chart(&[100.0], &[110.0]);
+        restored.restore(&older.charts[0]).unwrap();
+        assert_eq!(
+            labels(&restored),
+            ["Wed 13 Mar '24 14:30", "Mar 13, 2024", "14:30"]
+        );
+        // Older saves never stored host date patterns, so restoring one still keeps that pattern.
+        restored.set_date_format(Some("%Y-%m-%d".into()));
+        restored.restore(&older.charts[0]).unwrap();
+        assert_eq!(
+            labels(&restored),
+            ["2024-03-13 14:30", "2024-03-13", "14:30"]
         );
     }
 

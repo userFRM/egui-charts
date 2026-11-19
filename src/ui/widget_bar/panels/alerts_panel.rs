@@ -1017,6 +1017,7 @@ impl AlertsPanel {
                     &mut self.draft.source,
                     &mut self.draft.condition,
                     &self.sources,
+                    true,
                 );
                 if self.draft_saving {
                     ui.label(l10n::text(ui.ctx(), "Saving…"));
