@@ -165,7 +165,9 @@ pub struct Drawing {
     /// by [`Self::update_screen_coords`]
     #[serde(skip)]
     pub level_ys: Vec<f32>,
-    /// Position as fractions of the pane width and height for anchored text.
+    /// Position as fractions of the pane width and height for anchored text, which keeps its
+    /// place in the pane while the chart scrolls and zooms. The chart keeps
+    /// [`chart_points`](Self::chart_points) on the bar and price under it.
     /// `None` adopts the first displayed position, including for older saved drawings.
     /// A pin saved with one takes the bar and price under it the first time a chart draws it,
     /// and the chart then clears it.
