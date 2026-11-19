@@ -1377,6 +1377,11 @@ impl Indicator for ConfiguredStudy {
             .set_visible_range(source_bars(&self.spans, &range))
             && !self.spans.is_empty()
     }
+    fn set_visible_logical_range(&mut self, range: crate::model::LogicalRange) {
+        if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
+            self.study.set_visible_logical_range(range);
+        }
+    }
     fn set_bar_clock(&mut self, clock: &crate::model::BarClock) -> bool {
         self.clock = clock.clone();
         if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
@@ -1963,6 +1968,10 @@ impl Indicator for ConfiguredStudy {
             self.study.labels()
         }
     }
+    fn labels_use_plot_background(&self) -> bool {
+        self.study.labels_use_plot_background()
+    }
+
     fn labels_on_price(&self) -> bool {
         self.study.labels_on_price()
     }
