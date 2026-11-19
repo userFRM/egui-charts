@@ -167,7 +167,7 @@ impl Chart {
             return;
         };
         if !overlay && let Some(pane) = self.series_pane(source) {
-            self.move_series_to_pane(id, pane);
+            self.move_series_keeping_layers(id, pane);
         }
         let own = self
             .indicators()

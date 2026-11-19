@@ -612,8 +612,7 @@ impl Chart {
             .count();
         self.drawings.delete_drawings(ids);
         if kept > 0 {
-            self.host_events
-                .push(super::ChartEvent::LockedDrawingsKept(kept));
+            self.push_event(super::ChartEvent::LockedDrawingsKept(kept));
         }
     }
 
@@ -1306,7 +1305,10 @@ mod tests {
         chart.set_regression_trend_config(7, edited).unwrap();
         assert_eq!(chart.drawings().drawings[0].regression_trend, Some(edited));
         assert!(chart.undo());
-        assert_eq!(chart.drawings().drawings[0].regression_trend, None);
+        assert_eq!(
+            chart.drawings().drawings[0].regression_trend,
+            Some(RegressionTrendConfig::drawing_default())
+        );
         assert!(!chart.can_undo());
         assert!(chart.redo());
         // An unchanged assignment does not create a second history entry.
