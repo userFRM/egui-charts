@@ -782,6 +782,94 @@ fn added_series_legend_controls_undo_as_one_step() {
     }
 }
 
+/// A study pane's legend buttons stay where they were drawn when the pointer reaches them,
+/// though the legend then shows the bar under the pointer, and Remove removes the study there.
+#[test]
+fn study_pane_legend_buttons_stay_under_the_pointer() {
+    use crate::studies::{CustomIndicator, Indicator, IndicatorValue};
+    use crate::widget::test_frames::frame;
+
+    let custom = |early, late| {
+        Box::new(
+            CustomIndicator::new("Legend width study", move |bars| {
+                (0..bars.len())
+                    .map(|bar| IndicatorValue::Single(if bar < 50 { early } else { late }))
+                    .collect()
+            })
+            .with_overlay(false),
+        ) as Box<dyn Indicator>
+    };
+    let mut failures = Vec::new();
+    for (name, indicator) in [
+        ("warm-up", Box::new(RSI::default()) as Box<dyn Indicator>),
+        ("narrower", custom(1.0, 123456.78)),
+        ("wider", custom(123456.78, 1.0)),
+    ] {
+        let ctx = Context::default();
+        ctx.enable_accesskit();
+        let mut chart = chart(&[100.0, 102.0, 99.0], &[101.0, 104.0, 100.0]);
+        let study = chart.add_indicator(indicator);
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        let pane = chart.series_pane(study).unwrap();
+        let rect = chart
+            .pane_layout
+            .panes
+            .iter()
+            .find(|item| item.id == pane)
+            .unwrap()
+            .rect;
+        // Left of the first bar: the row initially shows the last bar's values.
+        let start = Pos2::new(rect.left() + 14.0, rect.top() + 12.0);
+        let mut remove_at = |at| {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                time: Some(ctx.input(|input| input.time) + 0.1),
+                events: vec![Event::PointerMoved(at)],
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    chart.show(ui);
+                });
+            });
+            let bounds = output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .find_map(|(_, node)| {
+                    (node.label() == Some("Remove study"))
+                        .then(|| node.bounds())
+                        .flatten()
+                })
+                .map(|bounds| {
+                    Rect::from_min_max(
+                        Pos2::new(bounds.x0 as f32, bounds.y0 as f32),
+                        Pos2::new(bounds.x1 as f32, bounds.y1 as f32),
+                    )
+                });
+            output.drop_without_applying_deltas();
+            bounds
+        };
+        let drawn = remove_at(start).expect("revealed Remove button");
+        let reached = remove_at(drawn.center());
+        if reached != Some(drawn) {
+            failures.push(format!("{name}: drawn {drawn:?}, reached {reached:?}"));
+        }
+        click(&ctx, &mut chart, drawn.center());
+        if chart.indicators().any(|(id, _)| id == study) {
+            failures.push(format!("{name}: Remove missed the study"));
+            continue;
+        }
+        assert!(chart.undo(), "{name}: removal left no undo step");
+        assert!(chart.indicators().any(|(id, _)| id == study), "{name}");
+        assert!(!chart.can_undo(), "{name}: removal took more than a step");
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 #[test]
 fn merged_panes_share_scales_and_studies_can_return_to_the_main_pane() {
     use crate::scales::PriceScaleMode;

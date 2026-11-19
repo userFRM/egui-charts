@@ -707,22 +707,44 @@ impl IndicatorPane {
                 chart_rect.bottom(),
             );
         }
-        let controls = self.legend_controls_rect(painter, chart_rect, indicator);
+        let controls_id = response.id.with("study_controls");
+        let held_id = controls_id.with("held");
+        // Keep the buttons where the pointer saw them while values follow the hovered bar.
+        // shortcut: only x is held; a row above that rewraps still moves this row, hold
+        // legend_offset too if that shows up.
+        let held_x = ui
+            .ctx()
+            .data(|data| data.get_temp::<(f32, Rect)>(held_id))
+            .filter(|(_, row)| {
+                ui.rect_contains_pointer(*row)
+                    || ui
+                        .ctx()
+                        .data(|data| data.get_temp::<bool>(controls_id))
+                        .unwrap_or(false)
+            })
+            .map(|(x, _)| x);
+        let controls = self.legend_controls_rect(painter, chart_rect, indicator, held_x);
         let responses = controls.map(|controls| {
             let row = Rect::from_min_max(
                 chart_rect.min + egui::vec2(0.0, self.legend_offset),
                 controls.right_bottom(),
             );
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(held_id, (controls.left(), row)));
             crate::chart::rendering::study_controls(
                 ui,
                 row,
                 controls,
                 Some(self.background_at(ui.ctx(), controls.center())),
-                response.id.with("study_controls"),
+                controls_id,
                 indicator,
                 self.show_settings,
             )
         });
+        if controls.is_none() {
+            ui.ctx()
+                .data_mut(|data| data.remove::<(f32, Rect)>(held_id));
+        }
         let legend_rect = Rect::from_min_max(
             chart_rect.min,
             Pos2::new(
