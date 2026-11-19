@@ -49,6 +49,13 @@ pub(super) fn validate(settings: &BacktestSettings) -> Result<(), &'static str> 
             "Use finite account values, a positive size, leverage at least one and nonnegative costs",
         );
     }
+    if settings
+        .start_time
+        .zip(settings.end_time)
+        .is_some_and(|(start, end)| end <= start)
+    {
+        return Err("Use an end after the start");
+    }
     Ok(())
 }
 
@@ -110,10 +117,17 @@ pub(super) fn show(
     ui: &mut egui::Ui,
     settings: &mut BacktestSettings,
     start: &mut String,
+    end: &mut String,
     lower: &mut bool,
     lower_timeframe: &mut Timeframe,
 ) -> bool {
-    let before = (settings.clone(), start.clone(), *lower, *lower_timeframe);
+    let before = (
+        settings.clone(),
+        start.clone(),
+        end.clone(),
+        *lower,
+        *lower_timeframe,
+    );
     crate::ui_kit::FormGrid::new("backtest_settings").show(ui, |ui| {
         number(
             ui,
@@ -264,6 +278,13 @@ pub(super) fn show(
         )
         .labelled_by(label.id);
         ui.end_row();
+        let label = ui.label(l10n::text(ui.ctx(), "End (UTC)"));
+        ui.add(
+            egui::TextEdit::singleline(end)
+                .hint_text("YYYY-MM-DD or RFC 3339; empty runs to the newest bar"),
+        )
+        .labelled_by(label.id);
+        ui.end_row();
     });
     ui.checkbox(
         &mut settings.fill_on_close,
@@ -304,5 +325,12 @@ pub(super) fn show(
             .response
             .accessible_name(l10n::text(ui.ctx(), "Fill interval"));
     }
-    before != (settings.clone(), start.clone(), *lower, *lower_timeframe)
+    before
+        != (
+            settings.clone(),
+            start.clone(),
+            end.clone(),
+            *lower,
+            *lower_timeframe,
+        )
 }

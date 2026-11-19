@@ -46,6 +46,7 @@ impl DemoApp {
         run.settings = settings;
         // A forward test primes on the latest 121 bars and runs on without an end.
         run.settings.start_time = Some(first.time);
+        run.settings.end_time = None;
         if run.settings.currency.is_none() {
             run.settings.currency = self
                 .chart

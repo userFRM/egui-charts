@@ -136,8 +136,12 @@ data service is required by the engine. With a start time, equity starts at that
 subsequent values are stamped at chart-bar closes, preserving the starting capital point.
 The final execution bar has no known closing time; its equity mark is provisionally labelled
 one nanosecond after its last supplied price timestamp so the curve stays ordered.
-Without a start time, the existing equity timestamps are retained. When comparing a
-bounded run in the panel, supply only its eligible chart bars as the comparison source.
+Without a start time, the existing equity timestamps are retained.
+[`settings.end_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.end_time) ends the run: chart bars that have not closed by then are not decided on,
+filled or marked and do not reach [`Strategy::prepare`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/trait.Strategy.html#method.prepare). Trades still open remain open.
+An execution bar closes when the next one opens, so the newest one does not count as closed.
+[`Backtest::update`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.update) ignores the end. When comparing a bounded run in the panel, supply only its eligible
+chart bars: those opening at or after the start and closing by the end.
 
 Migration: [`Backtest::initial_capital`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.initial_capital) and [`Backtest::fill_on_close`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.fill_on_close) move to
 [`Backtest::settings`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#structfield.settings). [`Backtest::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.new) keeps its starting-capital argument. Add `&[]` as the

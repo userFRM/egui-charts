@@ -142,6 +142,20 @@ fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
         ] {
             h.get_by_role_and_label(Role::SpinButton, label);
         }
+        h.get_by_role_and_label(Role::TextInput, "End (UTC)")
+            .focus();
+        h.run();
+        h.get_by_role_and_label(Role::TextInput, "End (UTC)")
+            .type_text("1970-01-02");
+        h.run();
+        assert_eq!(
+            h.state().settings().end_time,
+            Some(DateTime::UNIX_EPOCH + chrono::TimeDelta::days(1))
+        );
+        h.get_by_role_and_label(Role::Button, "Undo settings")
+            .click();
+        h.run();
+        assert_eq!(h.state().settings().end_time, None);
         let start = h
             .get_by_role_and_label(Role::SpinButton, "Price increment")
             .rect()
@@ -398,6 +412,12 @@ fn requested_history_is_scoped_and_superseded_by_edits_and_chart_changes() {
     let mut tester = StrategyTester::default();
     let mut settings = tester.settings().clone();
     settings.start_time = Some(source[2].time);
+    settings.end_time = settings.start_time;
+    assert_eq!(
+        tester.set_settings(settings.clone()),
+        Err("Use an end after the start")
+    );
+    settings.end_time = Some(source[6].time);
     tester.set_settings(settings).unwrap();
     tester.lower = true;
     tester.lower_timeframe = Timeframe::Sec30;
@@ -414,12 +434,14 @@ fn requested_history_is_scoped_and_superseded_by_edits_and_chart_changes() {
             request.symbol.as_str(),
             request.timeframe,
             request.start,
+            request.end,
             request.lower_timeframe
         ),
         (
             "TEST",
             Timeframe::Min1,
             source[2].time,
+            Some(source[6].time),
             Some(Timeframe::Sec30)
         )
     );
@@ -484,7 +506,18 @@ fn requested_history_is_scoped_and_superseded_by_edits_and_chart_changes() {
         comparison.buy_and_hold_equity.first().unwrap().0,
         bars()[2].time
     );
-    assert!((comparison.buy_and_hold_return.unwrap() - (101.0 / 102.0 - 1.0)).abs() < 1e-12);
+    assert_eq!(
+        comparison.buy_and_hold_equity.last().unwrap().0,
+        bars()[5].time
+    );
+    assert!((comparison.buy_and_hold_return.unwrap() - (99.0 / 102.0 - 1.0)).abs() < 1e-12);
+    assert!(
+        h.state()
+            .report()
+            .unwrap()
+            .properties
+            .contains(&("End time".into(), "1970-01-01T00:06:00+00:00".into()))
+    );
 }
 
 #[test]

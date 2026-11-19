@@ -128,6 +128,11 @@ pub struct BacktestSettings {
     pub original_price_fills: bool,
     /// First eligible chart-bar open. Earlier bars warm studies and strategy state without trading.
     pub start_time: Option<DateTime<Utc>>,
+    /// End of the run. Chart bars that have not closed by then are left out: they are not decided
+    /// on, filled or marked, and [`Strategy::prepare`] does not receive them; trades still open
+    /// stay open. An execution bar closes when the next bar opens, so the newest one is left out.
+    /// `None` runs to the newest supplied bar. [`Backtest::update`] ignores it.
+    pub end_time: Option<DateTime<Utc>>,
 }
 
 impl Default for BacktestSettings {
@@ -154,6 +159,7 @@ impl Default for BacktestSettings {
             chart_type: ChartType::Candles,
             original_price_fills: false,
             start_time: None,
+            end_time: None,
         }
     }
 }
@@ -196,6 +202,18 @@ impl BacktestSettings {
         } else {
             "Four times the shortfall at price points"
         }
+    }
+
+    /// How many of `bars`, oldest first, close by [`Self::end_time`]; all of them without one.
+    pub(crate) fn bars_before_end(&self, timeframe: Timeframe, bars: &[Bar]) -> usize {
+        self.end_time.map_or(bars.len(), |end| {
+            (0..bars.len())
+                .take_while(|&index| {
+                    bar_end(timeframe, &bars[index], bars.get(index + 1))
+                        .is_some_and(|close| close <= end)
+                })
+                .count()
+        })
     }
 
     fn fee(&self, quantity: f64, price: f64) -> f64 {
@@ -627,11 +645,14 @@ impl Backtest {
     /// apply to regular candles and original-price execution; derived-price fills use their own
     /// candle path. Pass `&[]` to use chart bars alone.
     ///
-    /// With a start time, `prepare` still receives all bars, or none with historical tick
-    /// decisions, whose calculations refresh through `prepare_update`, but chart bars opening
-    /// before it cannot trade. Equity starts at the requested time and subsequent points use chart-bar
-    /// closes, so the starting value and first close have distinct timestamps. A final execution
+    /// With a start time, `prepare` still receives every bar that closes by the end time, or none
+    /// with historical tick decisions, whose calculations refresh through `prepare_update`.
+    /// Chart bars opening before the start cannot trade. Equity starts at the requested time and
+    /// subsequent points use chart-bar closes, so the starting value and first close have
+    /// distinct timestamps. A final execution
     /// bar without a known end labels its equity mark one nanosecond after its last source time.
+    /// With an end time, chart bars that close after it are left out, as
+    /// [`BacktestSettings::end_time`] describes.
     ///
     /// # Panics
     ///
@@ -669,6 +690,7 @@ impl Backtest {
         let candles = (settings.chart_type == ChartType::Heikin)
             .then(|| crate::model::BarData::from_bars(bars.to_vec()).to_heikin_ashi());
         let bars = candles.as_ref().map_or(bars, |data| data.bars.as_slice());
+        let last = settings.bars_before_end(self.timeframe, bars);
         let mut report = self.new_report(strategy, lower.len());
         let mut lower: Vec<_> = lower.iter().filter(|bar| valid_bar(bar)).collect();
         lower.sort_by_key(|bar| bar.time);
@@ -677,7 +699,7 @@ impl Backtest {
             if settings.recalculate_on_history && !settings.chart_type.transforms_data() {
                 &[]
             } else {
-                bars
+                &bars[..last]
             },
         );
         let mut run = Run {
@@ -696,9 +718,9 @@ impl Backtest {
             fills: None,
             forming: false,
         };
-        run.start_equity(self.timeframe, bars, &mut report);
+        run.start_equity(self.timeframe, &bars[..last], &mut report);
         let mut processed = cooperative.then_some(0);
-        for index in 0..bars.len() {
+        for index in 0..last {
             run.closed_bar_inner(bars, index, &lower, &mut report, true, &mut processed)
                 .await;
         }
@@ -804,6 +826,12 @@ impl Backtest {
             settings
                 .start_time
                 .map_or_else(|| "All supplied history".into(), |time| time.to_rfc3339()),
+        ));
+        report.properties.push((
+            "End time".into(),
+            settings
+                .end_time
+                .map_or_else(|| "Newest supplied bar".into(), |time| time.to_rfc3339()),
         ));
         report
             .properties
@@ -4166,10 +4194,12 @@ mod tests {
         // Chart path: 100 -> 94 -> 111 -> 108 stops at 95, losing 2*(100-95)=10.
         // Finer path: 100 -> 99 -> 111 reaches the 110 target first, earning 2*10=20.
         // A start at 01:00 warms on 00:00, decides at 01:00, and buys at 02:00 for 108.
-        for (name, lower, start, entry_bar, expected, times, decisions) in [
+        // An end at 02:00 excludes bar 2, closing at 03:00, so that entry never fills.
+        for (name, lower, start, end, entry_bar, expected, times, decisions) in [
             (
                 "chart path",
                 vec![],
+                None,
                 None,
                 0,
                 vec![trade(Buy, 2.0, 1, 100.0, Some((1, 95.0, -10.0)), "A / X")],
@@ -4179,6 +4209,7 @@ mod tests {
             (
                 "finer path",
                 vec![first.clone(), second.clone()],
+                None,
                 None,
                 0,
                 vec![trade(Buy, 2.0, 1, 100.0, Some((1, 110.0, 20.0)), "A / X")],
@@ -4199,6 +4230,7 @@ mod tests {
                     ),
                 ],
                 None,
+                None,
                 0,
                 vec![later_target],
                 vec![hour(-1), hour(0), hour(1), hour(2)],
@@ -4207,6 +4239,7 @@ mod tests {
             (
                 "finer bars are ordered",
                 vec![second.clone(), first.clone()],
+                None,
                 None,
                 0,
                 vec![trade(Buy, 2.0, 1, 100.0, Some((1, 110.0, 20.0)), "A / X")],
@@ -4217,6 +4250,7 @@ mod tests {
                 "uncovered bar falls back",
                 vec![Bar::new(hour(2), 108.0, 108.0, 108.0, 108.0, 0.0)],
                 None,
+                None,
                 0,
                 vec![trade(Buy, 2.0, 1, 100.0, Some((1, 95.0, -10.0)), "A / X")],
                 vec![hour(-1), hour(0), hour(1), hour(2)],
@@ -4225,6 +4259,7 @@ mod tests {
             (
                 "invalid finer bar falls back",
                 vec![Bar::new(hour(1), 100.0, f64::NAN, 99.0, 100.0, 0.0)],
+                None,
                 None,
                 0,
                 vec![trade(Buy, 2.0, 1, 100.0, Some((1, 95.0, -10.0)), "A / X")],
@@ -4235,6 +4270,7 @@ mod tests {
                 "start warms studies",
                 vec![],
                 Some(hour(1)),
+                None,
                 1,
                 vec![trade(Buy, 2.0, 2, 108.0, None, "A")],
                 vec![hour(1), hour(2), hour(3)],
@@ -4244,6 +4280,7 @@ mod tests {
                 "start between chart bars",
                 vec![first.clone(), second.clone()],
                 Some(hour(0) + TimeDelta::minutes(30)),
+                None,
                 1,
                 vec![trade(Buy, 2.0, 2, 108.0, None, "A")],
                 vec![hour(0) + TimeDelta::minutes(30), hour(2), hour(3)],
@@ -4253,10 +4290,21 @@ mod tests {
                 "start after history",
                 vec![first, second],
                 Some(hour(3)),
+                None,
                 3,
                 vec![],
                 vec![],
                 vec![0, 1, 2],
+            ),
+            (
+                "end keeps later bars out of the run",
+                vec![],
+                Some(hour(1)),
+                Some(hour(2)),
+                1,
+                vec![],
+                vec![hour(1), hour(2)],
+                vec![0, 1],
             ),
         ] {
             let mut strategy = History {
@@ -4267,8 +4315,9 @@ mod tests {
             };
             let mut engine = Backtest::new("History", "TEST", Timeframe::Hour1, 1000.0);
             engine.settings.start_time = start;
+            engine.settings.end_time = end;
             let report = engine.run(&mut strategy, &source, &lower);
-            assert_eq!(strategy.prepared, source.len(), "{name}");
+            assert_eq!(strategy.prepared, decisions.len(), "{name}");
             assert_eq!(strategy.decisions, decisions, "{name}");
             strategy.decisions.clear();
             let mut future = std::pin::pin!(engine.run_async(&mut strategy, &source, &lower));
@@ -4324,6 +4373,7 @@ mod tests {
                 "Fill on close",
                 "Recalculate after fills",
                 "Start time",
+                "End time",
                 "Lower-interval bars",
                 "Rejected orders",
             ] {
