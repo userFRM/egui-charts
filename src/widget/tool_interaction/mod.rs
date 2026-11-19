@@ -25,7 +25,35 @@ use crate::widget::Chart;
 use crate::widget::tool_interaction::cursor_modes::CursorModeState;
 use egui::{Painter, Pos2, Rect, Response, Ui};
 
+pub(super) type LayeredDrawing = (
+    egui::LayerId,
+    egui::layers::ShapeIdx,
+    std::ops::Range<usize>,
+);
+
 impl Chart {
+    /// Queues the paint of each drawing of the pane last handled whose `series_layer` puts it
+    /// under a series or study to move before the first shape of those items: `marks[k]` is
+    /// where item `k` of the pane began, `None` for an item that painted nothing.
+    pub(super) fn queue_layered_drawings(
+        drawings: &DrawingManager,
+        queued: &mut Vec<LayeredDrawing>,
+        layer: egui::LayerId,
+        marks: &[Option<egui::layers::ShapeIdx>],
+    ) {
+        if marks.is_empty() {
+            return;
+        }
+        for drawing in drawings.drawings.iter().filter(|d| drawings.owns_pane(d)) {
+            if let Some(s) = drawing.series_layer.filter(|s| *s < marks.len())
+                && let Some(target) = marks[s..].iter().flatten().min_by_key(|mark| mark.0)
+                && let Some(range) = drawings.painted_range(drawing.id)
+            {
+                queued.push((layer, *target, range));
+            }
+        }
+    }
+
     /// The rectangle of `drawing`'s readout card at its last painted anchors, with the card's text
     /// and pane clip as painted, or `None` without a card or before its pane has been drawn.
     #[cfg(feature = "ui")]
