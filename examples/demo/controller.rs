@@ -633,6 +633,10 @@ impl DemoApp {
         top_toolbar.timeframe_selector.current = Timeframe::Min1;
         // A host's own call to action sits at the right end; the demo only reports it.
         top_toolbar.call_to_action = Some(("upgrade".into(), "Upgrade".into()));
+        top_toolbar.builtin_indicator_templates = StudyTemplateSet::builtin()
+            .into_iter()
+            .map(|(name, _)| (name.to_owned(), name.to_owned()))
+            .collect();
         let mut menus = ChartMenus::default();
         menus.host_entries.extend([
             HostMenuEntry::new("research", "Open in research")
@@ -2380,6 +2384,14 @@ impl DemoApp {
             }
             TopToolbarAction::ApplyIndicatorTemplate(id) => {
                 if let Some(template) = self.study_templates.templates.entries().get(&id).cloned() {
+                    self.load_study_template(&template);
+                }
+            }
+            TopToolbarAction::ApplyBuiltinIndicatorTemplate(id) => {
+                if let Some((_, template)) = StudyTemplateSet::builtin()
+                    .into_iter()
+                    .find(|(name, _)| *name == id)
+                {
                     self.load_study_template(&template);
                 }
             }
@@ -6455,6 +6467,45 @@ mod tests {
         }
     }
 
+    /// The template menu offers the library's built-in sets apart from the saved ones, and
+    /// choosing one replaces the chart's studies in a single undo step.
+    #[test]
+    fn built_in_study_sets_apply_from_the_template_menu_in_one_undo_step() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let builtin = StudyTemplateSet::builtin();
+        assert_eq!(
+            app.top_toolbar.builtin_indicator_templates,
+            builtin
+                .iter()
+                .map(|(name, _)| ((*name).to_owned(), (*name).to_owned()))
+                .collect::<Vec<_>>()
+        );
+        app.chart
+            .add_indicator(Box::new(egui_charts::studies::EMA::new(5)));
+        let names = |app: &DemoApp| {
+            app.chart
+                .indicators()
+                .map(|(_, study)| study.name().to_owned())
+                .collect::<Vec<_>>()
+        };
+        let before = names(&app);
+        let (name, set) = &builtin[3];
+        app.handle_top_toolbar(
+            &ctx,
+            TopToolbarAction::ApplyBuiltinIndicatorTemplate((*name).to_owned()),
+        );
+        assert_eq!(
+            names(&app),
+            set.studies
+                .iter()
+                .map(|study| study.name.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(app.chart.undo());
+        assert_eq!(names(&app), before);
+    }
+
     #[test]
     fn legacy_themes_follow_system_and_new_choices_survive_restart() {
         // Repeated construction used to overflow this stack before checking the saved theme.
@@ -9943,6 +9994,72 @@ mod tests {
             });
             output.drop_without_applying_deltas();
             assert_eq!(painted, shown, "{pointer:?}");
+        }
+    }
+
+    /// A touch held on the plot shows its values after the hold delay, keeps them after the
+    /// finger lifts and clears them at the next tap.
+    #[test]
+    fn touch_hold_values_stay_after_release_until_the_next_tap() {
+        use eframe::App;
+        use egui::TouchPhase::{End, Start};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        settle(&mut app, &ctx);
+        let plot = app.chart.get_rendered_price_rect();
+        let pos = plot.center();
+        let touch = |phase| {
+            let mut events = vec![
+                egui::Event::Touch {
+                    device_id: egui::TouchDeviceId(1),
+                    id: egui::TouchId(1),
+                    phase,
+                    pos,
+                    force: None,
+                },
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: phase == Start,
+                    modifiers: Default::default(),
+                },
+            ];
+            if phase == End {
+                events.push(egui::Event::PointerGone);
+            }
+            events
+        };
+        // The demo keeps the default 500 ms hold delay.
+        for (time, events, shown) in [
+            (10.1, touch(Start), false),
+            (10.4, vec![], false),
+            (10.7, vec![], true),
+            (10.8, touch(End), true),
+            (10.9, vec![], true),
+            (11.4, touch(Start), true),
+            (11.5, touch(End), false),
+        ] {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            );
+            // Only the readout card paints an "Open" row; the status line writes "O 1.23".
+            let painted = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text)
+                    if text.galley.text() == "Open" && plot.contains(text.pos))
+            });
+            output.drop_without_applying_deltas();
+            assert_eq!(painted, shown, "time {time}");
         }
     }
 

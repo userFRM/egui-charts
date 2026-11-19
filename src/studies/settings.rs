@@ -1188,6 +1188,7 @@ impl Indicator for ConfiguredStudy {
             || !self.zones().is_empty()
             || !self.markers().is_empty()
             || !self.labels().is_empty()
+            || !self.price_segments().is_empty()
             || !self.projections().is_empty()
             || (0..self.line_count()).any(|line| self.provisional_after(line).is_some());
         #[cfg(feature = "drawings")]
@@ -1832,6 +1833,14 @@ impl Indicator for ConfiguredStudy {
     }
     fn labels_on_price(&self) -> bool {
         self.study.labels_on_price()
+    }
+    fn price_segments(&self) -> &[super::StudySegment] {
+        // Source bars of a study on another interval or symbol are not chart bars.
+        if self.aligned.is_some() {
+            &[]
+        } else {
+            self.study.price_segments()
+        }
     }
     fn set_label_precision(&mut self, precision: Option<usize>) {
         self.study.set_label_precision(precision);

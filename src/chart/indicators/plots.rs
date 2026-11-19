@@ -307,6 +307,46 @@ pub(crate) fn paint_labels(
     }
 }
 
+/// A study's straight lines on the main price chart, in the style of their outputs.
+pub(crate) fn paint_price_segments(
+    painter: &egui::Painter,
+    study: &dyn crate::studies::Indicator,
+    price: &crate::scales::PriceMap,
+    coords: &crate::chart::coords::ChartMapping,
+) {
+    let clip = painter.clip_rect();
+    for segment in study.price_segments() {
+        let style = study.plot_style(segment.plot);
+        let points = [
+            egui::pos2(
+                coords.idx_to_x(segment.start_bar),
+                price.price_to_y(segment.start_price),
+            ),
+            egui::pos2(
+                coords.idx_to_x(segment.end_bar),
+                price.price_to_y(segment.end_price),
+            ),
+        ];
+        if !style.visible
+            || !segment.start_price.is_finite()
+            || !segment.end_price.is_finite()
+            || !points.iter().all(|point| point.is_finite())
+            || !egui::Rect::from_two_pos(points[0], points[1]).intersects(clip.expand(style.width))
+        {
+            continue;
+        }
+        crate::chart::rendering::paint_study_plot(
+            painter,
+            &points,
+            crate::studies::PlotStyle {
+                plot_type: crate::studies::PlotType::Line,
+                ..style
+            },
+            f32::NAN,
+        );
+    }
+}
+
 /// Anchor and level prices of drawings reaching the visible bars, for all study scales.
 #[cfg(feature = "drawings")]
 pub(crate) fn mapped_drawings(

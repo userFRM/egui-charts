@@ -2,7 +2,9 @@
 
 use crate::model::Timeframe;
 use crate::studies::{
-    ConfiguredStudy, Indicator, IndicatorFactory, InputValue, StudyInput, StudyScale, StudySettings,
+    BollingerBands, CCI, ConfiguredStudy, EMA, Indicator, IndicatorFactory, InputValue, MACD,
+    MARibbon, MoneyFlowIndex, OnBalanceVolume, RSI, Stochastic, StochasticRSI, StudyInput,
+    StudyScale, StudySettings, Volume, WilliamsAlligator,
 };
 
 /// Serializable inputs and presentation of one study. Hosts may resolve `name` through their
@@ -115,6 +117,90 @@ impl<'de> serde::Deserialize<'de> for StudyTemplateSet {
             }
         }
         deserializer.deserialize_any(Visitor)
+    }
+}
+
+impl StudyTemplateSet {
+    /// The built-in sets with their names, in the order a menu lists them, for a host to offer
+    /// beside the user's own sets and apply as it applies those, for example with
+    /// `Chart::apply_chosen_study_template_set`:
+    ///
+    /// - "Williams Alligator": [`WilliamsAlligator`].
+    /// - "Displaced EMA": an [`EMA`] drawn 5 bars ahead.
+    /// - "Moving average ribbon": [`MARibbon`].
+    /// - "Oscillators": [`RSI`], [`StochasticRSI`] and [`CCI`].
+    /// - "Swing trading": [`BollingerBands`], [`MACD`] and [`Stochastic`].
+    /// - "Volume analysis": [`OnBalanceVolume`] and [`MoneyFlowIndex`].
+    ///
+    /// Each set starts with a [`Volume`] study, so that applying it keeps the chart's volume,
+    /// and its studies take their default inputs, apart from the displaced EMA's offset. The
+    /// overlays are drawn on the price pane and every other study has a pane of its own. No set
+    /// keeps a symbol or an interval.
+    pub fn builtin() -> Vec<(&'static str, Self)> {
+        let mut displaced = ConfiguredStudy::new(Box::new(EMA::default()));
+        displaced
+            .set_input("plot_offset", InputValue::Integer(5))
+            .expect("an EMA reads a price, so it takes an offset");
+        let sets: [(&'static str, Vec<Box<dyn Indicator>>); 6] = [
+            (
+                "Williams Alligator",
+                vec![Box::new(WilliamsAlligator::default())],
+            ),
+            ("Displaced EMA", vec![Box::new(displaced)]),
+            ("Moving average ribbon", vec![Box::new(MARibbon::default())]),
+            (
+                "Oscillators",
+                vec![
+                    Box::new(RSI::default()),
+                    Box::new(StochasticRSI::default()),
+                    Box::new(CCI::default()),
+                ],
+            ),
+            (
+                "Swing trading",
+                vec![
+                    Box::new(BollingerBands::default()),
+                    Box::new(MACD::default()),
+                    Box::new(Stochastic::default()),
+                ],
+            ),
+            (
+                "Volume analysis",
+                vec![
+                    Box::new(OnBalanceVolume::default()),
+                    Box::new(MoneyFlowIndex::default()),
+                ],
+            ),
+        ];
+        sets.into_iter()
+            .map(|(name, studies)| {
+                // Configured as a chart configures a study it adds, so that the set applies as one
+                // saved from a chart: a bare volume study would keep its average plot hidden.
+                let studies: Vec<Box<dyn Indicator>> =
+                    std::iter::once(Box::new(Volume::default()) as Box<dyn Indicator>)
+                        .chain(studies)
+                        .map(|study| {
+                            if study.has_settings() {
+                                study
+                            } else {
+                                Box::new(ConfiguredStudy::new(study))
+                            }
+                        })
+                        .collect();
+                let (price_pane, own): (Vec<_>, Vec<_>) =
+                    (0..studies.len()).partition(|&at| studies[at].is_overlay());
+                let set = Self {
+                    studies: studies
+                        .iter()
+                        .map(|study| StudyTemplate::from_study(study.as_ref()))
+                        .collect(),
+                    price_pane,
+                    panes: own.into_iter().map(|at| vec![at]).collect(),
+                    ..Self::default()
+                };
+                (name, set)
+            })
+            .collect()
     }
 }
 
@@ -309,6 +395,12 @@ impl StudyTemplate {
             && value("smooth1") == value("smooth2");
         let mut template = self.clone();
         match study {
+            // Older Knoxville saves drew only momentum and its confirmation marks.
+            "Knoxville Divergence" if declares("price_lines") && !has("price_lines") => {
+                template
+                    .inputs
+                    .push(("price_lines".to_owned(), InputValue::Toggle(false)));
+            }
             // One multiplier set both bands before each had its own.
             "LinReg Channel" if has("multiplier") => {
                 template.inputs = self
@@ -550,6 +642,21 @@ impl StudyTemplate {
                 template.settings.fills = declared.fills;
                 for fill in &mut template.settings.fills {
                     fill.visible = false;
+                }
+            }
+            // An Elliott Wave saved before its swings could be sized by price counted bars, showed
+            // the developing wave and drew no projections or impulse drawings.
+            "Elliott Wave" if !has("swing_mode") => {
+                for (id, value) in [
+                    ("swing_mode", InputValue::Choice(0)),
+                    ("swing_move", InputValue::Number(5.0)),
+                    ("show_developing", InputValue::Toggle(true)),
+                    ("projections", InputValue::Toggle(false)),
+                    ("as_drawings", InputValue::Toggle(false)),
+                ] {
+                    if !has(id) {
+                        template.inputs.push((id.to_owned(), value));
+                    }
                 }
             }
             // Chart patterns saved before developing boundaries had their own plot drew them
@@ -1169,6 +1276,44 @@ mod tests {
                 vec![],
                 vec![("periods [0]", Length(3)), ("periods [11]", Length(60))],
             ),
+            // Saved before swings could be sized by price and the constructions drawn.
+            (
+                "Elliott Wave",
+                vec![
+                    ("left", Length(2)),
+                    ("right", Length(3)),
+                    ("history", Length(7)),
+                ],
+                vec![
+                    ("left", Length(2)),
+                    ("right", Length(3)),
+                    ("history", Length(7)),
+                    ("swing_mode", Choice(0)),
+                    ("swing_move", Number(5.0)),
+                    ("show_developing", Toggle(true)),
+                    ("projections", Toggle(false)),
+                    ("as_drawings", Toggle(false)),
+                ],
+            ),
+            (
+                "Elliott Wave",
+                vec![
+                    ("swing_mode", Choice(2)),
+                    ("swing_move", Number(2.5)),
+                    ("history", Length(7)),
+                    ("show_developing", Toggle(false)),
+                    ("projections", Toggle(true)),
+                    ("as_drawings", Toggle(true)),
+                ],
+                vec![
+                    ("swing_mode", Choice(2)),
+                    ("swing_move", Number(2.5)),
+                    ("history", Length(7)),
+                    ("show_developing", Toggle(false)),
+                    ("projections", Toggle(true)),
+                    ("as_drawings", Toggle(true)),
+                ],
+            ),
         ];
         let factory = IndicatorFactory::new();
         let periods = (0..7).map(|period| {
@@ -1230,9 +1375,44 @@ mod tests {
     /// input labels retain the ids, values and styles of the saved studies.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
+        // This Knoxville template was saved before price lines existed. Its pane outputs stay
+        // styled as saved; enabling price lines and saving again retains that explicit choice.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"Knoxville Divergence","inputs":[["momentum_period",{"Length":1}],["rsi_period",{"Length":2}],["left",{"Length":1}],["right",{"Length":1}],["lookback",{"Length":10}],["oversold",{"Length":30}],["overbought",{"Length":70}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.KnoxvilleDivergence.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleUp","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+        ).unwrap();
+        let bars =
+            crate::studies::builtin::hlc_bars(&[10.0, 8.0, 9.0, 7.5, 8.5].map(|c| (c, c, c)));
+        let mut restored = saved.create().unwrap();
+        restored.calculate(&bars);
+        assert_eq!(restored.settings().plots, saved.settings.plots);
+        assert!(!restored.is_overlay());
+        assert_eq!(restored.values().value(1, 4), Some(-1.5));
+        assert!(restored.price_segments().is_empty());
+        restored
+            .set_input("price_lines", InputValue::Toggle(true))
+            .unwrap();
+        restored.calculate(&bars);
+        let mut again = StudyTemplate::from_study(restored.as_ref())
+            .create()
+            .unwrap();
+        again.calculate(&bars);
+        let mut fresh = ConfiguredStudy::new(Box::new(crate::studies::KnoxvilleDivergence::new(
+            1, 2, 1, 1, 10,
+        )));
+        fresh.calculate(&bars);
+        assert_eq!(fresh.price_segments().len(), 1);
+        assert_eq!(restored.price_segments(), fresh.price_segments());
+        assert_eq!(again.price_segments(), fresh.price_segments());
+
         // Chart saves made before the input labels changed keep every saved id, value and
         // style while the editor describes the three study-local controls distinctly.
         for (saved, id, label) in [
+            // Saved before Elliott Wave gained its swing and display inputs.
+            (
+                r#"{"name":"Elliott Wave","inputs":[["left",{"Length":2}],["right",{"Length":3}],["history",{"Length":7}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ElliottWave.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Circles","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleUp","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                "left",
+                "Pivot bars left",
+            ),
             (
                 r#"{"name":"LSMA","inputs":[["period",{"Length":25}],["offset",{"Integer":0}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.LSMA.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
                 "offset",

@@ -620,6 +620,8 @@ impl Default for KagiStyle {
 /// styles.kagi = kagi;
 /// styles.columns = ColumnsStyle::default();
 /// styles.step_line_price_source = Some(PriceSource::High);
+/// styles.line_gradient = true;
+/// styles.line_gradient_end = egui::Color32::from_rgba_premultiplied(0, 0, 120, 120);
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -627,6 +629,17 @@ impl Default for KagiStyle {
 pub struct ChartTypeStyles {
     /// Line chart.
     pub line: LinePlotStyle,
+    /// Draw the Line chart's line in a gradient instead of in `line`'s colour: the leftmost
+    /// segment in view takes `line_gradient_start`, the rightmost `line_gradient_end`, and the
+    /// segments between them blend from one to the other by position. A bar's own colour still
+    /// colours the segment it starts. Off by default and in documents saved without it.
+    pub line_gradient: bool,
+    /// The Line chart's gradient colour at its leftmost segment in view, including opacity, kept
+    /// while the line is drawn in one colour.
+    pub line_gradient_start: Color32,
+    /// The Line chart's gradient colour at its rightmost segment in view, including opacity,
+    /// kept while the line is drawn in one colour.
+    pub line_gradient_end: Color32,
     /// Step line chart.
     pub step_line: LinePlotStyle,
     /// Line with markers chart.
@@ -694,6 +707,9 @@ impl Default for ChartTypeStyles {
     fn default() -> Self {
         Self {
             line: LinePlotStyle::default(),
+            line_gradient: false,
+            line_gradient_start: DESIGN_TOKENS.semantic.brand.accent,
+            line_gradient_end: DESIGN_TOKENS.semantic.extended.purple,
             step_line: LinePlotStyle::default(),
             line_with_markers: LinePlotStyle::default(),
             marker_radius: 3.0,

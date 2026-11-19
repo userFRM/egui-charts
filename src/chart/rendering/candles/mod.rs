@@ -31,7 +31,10 @@ use crate::theme::ThemeExt;
 pub use heikin_ashi::HeikinAshiCache;
 pub(crate) use heikin_ashi::rising as heikin_rising;
 pub(crate) use helpers::prev_close;
-pub(crate) use line::{LAST_PRICE_PULSE_SECONDS, render_crosshair_marker, render_last_price_pulse};
+pub(crate) use line::{
+    LAST_PRICE_PULSE_SECONDS, gradient_share, gradient_span, render_crosshair_marker,
+    render_last_price_pulse,
+};
 pub use params::{
     BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, TradingColors, VolumeSettings,
 };
@@ -41,7 +44,8 @@ use crate::scales::PriceMap;
 
 /// The line colour of a line-based chart type at `value`, or `None` for other chart types. The
 /// Baseline chart takes the colour of the side of `baseline` that `value` lies on, in the price
-/// pane `rect` mapped by `price_map`.
+/// pane `rect` mapped by `price_map`, and a Line chart drawn in a gradient the blend `share` of
+/// the way from its start to its end colour.
 pub(crate) fn line_color_at(
     chart_type: ChartType,
     styles: &ChartTypeStyles,
@@ -50,6 +54,7 @@ pub(crate) fn line_color_at(
     rect: egui::Rect,
     value: f64,
     bar: &crate::model::Bar,
+    share: f32,
 ) -> Option<egui::Color32> {
     if bar.is_whitespace() {
         return None;
@@ -57,7 +62,13 @@ pub(crate) fn line_color_at(
     let own = bar.colors.as_deref();
     let color = own.and_then(|colors| colors.color);
     match chart_type {
-        ChartType::Line => Some(color.unwrap_or(styles.line.color)),
+        ChartType::Line => Some(color.unwrap_or(if styles.line_gradient {
+            styles
+                .line_gradient_start
+                .lerp_to_gamma(styles.line_gradient_end, share)
+        } else {
+            styles.line.color
+        })),
         ChartType::StepLine => Some(color.unwrap_or(styles.step_line.color)),
         ChartType::LineWithMarkers => Some(color.unwrap_or(styles.line_with_markers.color)),
         ChartType::Area => Some(color.unwrap_or(styles.area.line.color)),
@@ -216,6 +227,7 @@ pub fn render_chart_type(
 
         // === Line-Based Types ===
         ChartType::Line => {
+            let styles = &params.type_params.styles;
             line::render_line(
                 painter,
                 ctx.volume_ctx,
@@ -229,7 +241,10 @@ pub fn render_chart_type(
                 ctx.price_scale,
                 params.chart_rect_min_x(),
                 &idx_to_coord,
-                &params.type_params.styles.line,
+                &styles.line,
+                styles
+                    .line_gradient
+                    .then_some([styles.line_gradient_start, styles.line_gradient_end]),
                 params.price_source(),
             );
         }
@@ -477,6 +492,7 @@ pub fn render_chart_type(
                     width: crate::tokens::DESIGN_TOKENS.stroke.hairline,
                     ..Default::default()
                 },
+                None,
                 crate::model::PriceSource::Close,
             );
         }
@@ -610,6 +626,7 @@ mod tests {
                 ui.painter(),
                 (0..=60).map(|i| pos2(i as f32 / 2.0, 50.0)).collect(),
                 &settings.chart_type_params.styles.line,
+                0.0,
             );
         });
         let ink: f32 = output
@@ -625,6 +642,36 @@ mod tests {
             .sum();
         output.drop_without_applying_deltas();
         assert_eq!(ink, 22.0, "dash phase must survive short segments");
+        // The pattern also runs on where a bar of its own colour splits the line into three
+        // 10-point pieces: 8 + 8 + 6 points of ink, where starting each piece afresh gives 24.
+        let mut bars: Vec<Bar> = (0..4)
+            .map(|i| Bar::from_value(chrono::DateTime::UNIX_EPOCH, f64::from(i)))
+            .collect();
+        bars[1].colors = Some(Box::new(crate::model::BarColors {
+            color: Some(Color32::RED),
+            ..Default::default()
+        }));
+        let points: Vec<_> = (0..4).map(|i| pos2(i as f32 * 10.0, 50.0)).collect();
+        let output = ctx.run_ui(RawInput::default(), |ui| {
+            super::line::draw_bar_line(
+                ui.painter(),
+                &bars,
+                &points,
+                &settings.chart_type_params.styles.line,
+                None,
+                false,
+            );
+        });
+        let ink: f32 = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::LineSegment { points, .. } => Some(points[1].x - points[0].x),
+                _ => None,
+            })
+            .sum();
+        output.drop_without_applying_deltas();
+        assert_eq!(ink, 22.0, "dash phase must survive colour changes");
         let mut reset = chart.series_settings();
         reset.reset_to_default();
         assert_eq!(
@@ -739,10 +786,13 @@ mod tests {
         assert_eq!(statistics.3, (1, 1));
     }
 
+    /// Segments start at x 0, 10, 40 and 50. A gradient leaves the bar of its own colour as it
+    /// is and blends the others by position across the gap: the segment at 40 lies 0.8 of the
+    /// way, (0.2 * 250, 0, 0.8 * 250).
     #[test]
     fn a_line_breaks_at_whitespace_and_takes_the_colour_of_the_bar_it_starts_at() {
         let red = Color32::RED;
-        let mut bars: Vec<Bar> = (0..6)
+        let mut bars: Vec<Bar> = (0..7)
             .map(|i| Bar::from_value(chrono::DateTime::UNIX_EPOCH, i as f64))
             .collect();
         bars[1].colors = Some(Box::new(crate::model::BarColors {
@@ -750,32 +800,49 @@ mod tests {
             ..Default::default()
         }));
         bars[3] = Bar::whitespace(bars[3].time);
-        let points: Vec<_> = (0..6).map(|i| pos2(i as f32 * 10.0, 50.0)).collect();
+        let points: Vec<_> = (0..7).map(|i| pos2(i as f32 * 10.0, 50.0)).collect();
         let style = crate::model::LinePlotStyle::default();
-        let output = Context::default().run_ui(RawInput::default(), |ui| {
-            super::line::draw_bar_line(ui.painter(), &bars, &points, &style, false);
-        });
-        let paths: Vec<_> = output
-            .shapes
-            .iter()
-            .filter_map(|s| match &s.shape {
-                Shape::Path(path) => Some((
-                    path.stroke.color.clone(),
-                    path.points.iter().map(|p| p.x).collect::<Vec<_>>(),
-                )),
-                _ => None,
-            })
-            .collect();
-        output.drop_without_applying_deltas();
-        let solid = egui::epaint::ColorMode::Solid;
-        assert_eq!(
-            paths,
-            [
-                (solid(style.color), vec![0.0, 10.0]),
-                (solid(red), vec![10.0, 20.0]),
-                (solid(style.color), vec![40.0, 50.0]),
-            ]
-        );
+        let (start, end) = (Color32::from_rgb(250, 0, 0), Color32::from_rgb(0, 0, 250));
+        for (gradient, expected) in [
+            (
+                None,
+                vec![
+                    (style.color, vec![0.0, 10.0]),
+                    (red, vec![10.0, 20.0]),
+                    (style.color, vec![40.0, 50.0, 60.0]),
+                ],
+            ),
+            (
+                Some([start, end]),
+                vec![
+                    (start, vec![0.0, 10.0]),
+                    (red, vec![10.0, 20.0]),
+                    (Color32::from_rgb(50, 0, 200), vec![40.0, 50.0]),
+                    (end, vec![50.0, 60.0]),
+                ],
+            ),
+        ] {
+            let output = Context::default().run_ui(RawInput::default(), |ui| {
+                super::line::draw_bar_line(ui.painter(), &bars, &points, &style, gradient, false);
+            });
+            let paths: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Path(path) => Some((
+                        path.stroke.color.clone(),
+                        path.points.iter().map(|p| p.x).collect::<Vec<_>>(),
+                    )),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            let expected: Vec<_> = expected
+                .into_iter()
+                .map(|(color, xs)| (egui::epaint::ColorMode::Solid(color), xs))
+                .collect();
+            assert_eq!(paths, expected, "{gradient:?}");
+        }
     }
 
     #[test]

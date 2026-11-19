@@ -264,6 +264,7 @@ impl DrawingPropertiesDialog {
                 drawing.price_axis_label = old.price_axis_label;
                 drawing.time_axis_label = old.time_axis_label;
                 drawing.elliott_degree = old.elliott_degree;
+                drawing.elliott_show_wave = old.elliott_show_wave;
                 drawing.font_weight = old.font_weight;
                 drawing.italic = old.italic;
                 drawing.text_wrap = old.text_wrap;
@@ -614,12 +615,14 @@ const FOOTER_HEIGHT: f32 = 60.0;
 /// Keyboard and colour picker state kept in egui memory between frames.
 #[derive(Clone, Default)]
 struct UiState {
-    /// Colour, fill colour and signpost disc colour pickers of the Style tab; the colour and disc
-    /// pickers also serve the regression trend's base and upper lines.
+    /// Colour, fill colour and signpost disc colour pickers of the Style tab; they also serve the
+    /// ghost feed's rising body, falling body and wick, and the colour and disc pickers serve the
+    /// regression trend's base and upper lines.
     pickers: [ColorPickerState; 3],
     /// Text colour, background and border pickers of the Text tab, and of the Style tab's rows
-    /// for a price label's badge and a price note's label; the background picker also serves the
-    /// regression trend's lower line.
+    /// for a price label's badge and a price note's label; the text and background pickers also
+    /// serve the ghost feed's rising and falling borders, and the background picker the regression
+    /// trend's lower line.
     text_pickers: [ColorPickerState; 3],
     /// One list of colour pickers per level grid of the current tool.
     level_pickers: Vec<Vec<ColorPickerState>>,
@@ -743,6 +746,7 @@ mod tests {
                     ),
                     ("Line width", width),
                     ("Line style", style),
+                    ("Wick", tool == Tool::GhostFeed),
                     ("Coordinates", !freehand),
                     ("Template", true),
                     ("Ok", true),
@@ -889,6 +893,7 @@ mod tests {
                 settings.theme_shade = true;
                 settings.anchor_price_style = Some(note_text);
                 settings.middle_line.width = 3.0;
+                settings.elliott_show_wave = false;
                 dialog.coordinates.points[1].price = "125".into();
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
                 assert_eq!(
@@ -912,6 +917,7 @@ mod tests {
                 assert!(preview.theme_shade);
                 assert_eq!(preview.anchor_price_style, Some(note_text));
                 assert_eq!(preview.middle_line.width, 3.0);
+                assert!(!preview.elliott_show_wave);
                 assert_eq!(chart.drawings().drawings[2].stroke_width, 6.0);
                 assert!(!chart.can_undo());
                 assert!(chart.can_redo(), "preview must retain existing redo");
@@ -976,6 +982,7 @@ mod tests {
                 crate::drawings::MiddleLineStyle::default(),
                 "{finish}"
             );
+            assert!(restored.elliott_show_wave, "{finish}");
             assert_eq!(chart.drawings().drawings[0].stroke_width, 20.0, "{finish}");
             assert_eq!(chart.drawings().drawings[1].stroke_width, 4.0, "{finish}");
             assert_eq!(

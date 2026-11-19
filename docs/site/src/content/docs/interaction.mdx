@@ -21,6 +21,7 @@ actions and reads notifications after `show`. Try the
 | Double-click the time axis | Return to the latest bars |
 | Double-click a price axis | Restore autoscale |
 | Touch drag or pinch | Pan or zoom when the corresponding handler is enabled |
+| Hold a touch still on a plot | Show the crosshair and readouts after half a second; they follow the finger and stay until the next tap |
 
 Wheel input over a price axis scales prices instead. Configure
 [`ChartOptions::handle_scroll`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartOptions.html#structfield.handle_scroll)
@@ -31,8 +32,15 @@ by cloning
 editing the copy and applying it with
 [`set_chart_options`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_chart_options).
 Their group `enabled` switches preserve the individual gesture choices.
+A touch shows values only once it has been held for
+[`TooltipOptions::long_press_delay`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TooltipOptions.html#structfield.long_press_delay),
+and crosshair notifications report it from then on.
+[`touch_long_press`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TooltipOptions.html#structfield.touch_long_press)
+turns this off, and
+[`touch_exit_mode`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TooltipOptions.html#structfield.touch_exit_mode)
+ends the values on release instead of at the next tap. Mouse hover is unaffected.
 [`TrackingModeOptions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TrackingModeOptions.html)
-controls when touch tracking exits. Active [drawing tools](drawings.mdx) can
+controls when following the live edge ends. Active [drawing tools](drawings.mdx) can
 consume plot gestures for placing and editing their points.
 
 Pointer notifications retain egui button or touch input in
