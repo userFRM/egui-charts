@@ -290,7 +290,7 @@ fn continued_runs_request_finer_bars_and_use_host_history() {
                 ))
             );
             if converted {
-                assert_eq!(tester.report().unwrap().performance().net_profit, -1.0);
+                assert_eq!(tester.report().unwrap().performance().all.net_profit, -1.0);
             }
             let actions = frame(&mut tester, &source);
             let [StrategyTesterAction::RequestHistory(r3)] = actions.as_slice() else {
