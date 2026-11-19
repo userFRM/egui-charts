@@ -615,7 +615,14 @@ impl State {
         } else {
             margin += value / lev;
         }
-        let needed = margin + reserved + commissions + terms.commission_of(request.quantity, value);
+        // A fill away from last changes equity as well as the margin it holds.
+        let spread = if immediate {
+            (price - last) * signed * pv
+        } else {
+            0.0
+        };
+        let needed =
+            margin + reserved + commissions + terms.commission_of(request.quantity, value) + spread;
         if !needed.is_finite() || !equity.is_finite() || needed > equity {
             return Err(FeedError::Other(format!(
                 "Insufficient buying power: {needed:.2} {} needed, {equity:.2} available",
@@ -1315,6 +1322,20 @@ mod tests {
                 drop(state);
                 paper.reset();
             }
+        }
+        // At either side of the spread, 100 margin plus 0.10 unrealised loss needs 100.10.
+        for side in [Buy, Sell] {
+            let paper = PaperAccount::new("USD", 100.0);
+            paper.set_price("SYM", 100.0);
+            paper.set_bid_ask("SYM", Some(99.9), Some(100.1));
+            place(
+                &paper,
+                OrderRequest::new("SYM", side, 1.0, OrderType::Market),
+            )
+            .unwrap();
+            let state = paper.lock();
+            assert!(state.executions.is_empty());
+            assert!(matches!(state.finished[0].status, OrderStatus::Rejected(_)));
         }
     }
 
