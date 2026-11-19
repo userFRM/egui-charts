@@ -1233,14 +1233,13 @@ impl<'a> Layout<'a> {
         let background = (self.chart_background)(rect.center());
         if background.gamma_multiply(self.backdrop) != background {
             // Profiles can be opaque or contain letters; protect the full content bounds.
-            self.painter
+            self.content_painter(rect)
                 .add(self.fill(rect.expand(2.0).intersect(self.bounds.expand(2.0)), 1.0));
         }
         rect
     }
 
-    fn galley(&mut self, galley: Arc<egui::Galley>) {
-        let rect = self.reserve(galley.size());
+    fn content_painter(&self, rect: Rect) -> egui::Painter {
         let mut painter = self.painter.clone();
         if let Some(controls) = self.held_controls
             && rect.bottom() > controls.top()
@@ -1250,7 +1249,13 @@ impl<'a> Layout<'a> {
                 Pos2::new(controls.left(), controls.bottom()),
             )));
         }
-        painter.galley(rect.min, galley, self.colors.text);
+        painter
+    }
+
+    fn galley(&mut self, galley: Arc<egui::Galley>) {
+        let rect = self.reserve(galley.size());
+        self.content_painter(rect)
+            .galley(rect.min, galley, self.colors.text);
     }
 
     fn text(&mut self, text: String, size: f32, color: Color32, max_width: f32) {

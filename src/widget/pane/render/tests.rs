@@ -784,6 +784,7 @@ fn added_series_legend_controls_undo_as_one_step() {
 
 /// Study legend buttons stay where drawn in both pane kinds as hovered values change.
 /// Remove there removes the study and its dependents in one undo step.
+/// Clipped values cannot mask the chart beyond the held controls.
 #[test]
 fn study_pane_legend_buttons_stay_under_the_pointer() {
     use crate::studies::{
@@ -841,11 +842,12 @@ fn study_pane_legend_buttons_stay_under_the_pointer() {
                     events: at.into_iter().map(Event::PointerMoved).collect(),
                     ..Default::default()
                 };
-                let output = ctx.run_ui(input, |ui| {
+                let mut output = ctx.run_ui(input, |ui| {
                     egui::CentralPanel::default().show(ui, |ui| {
                         chart.show(ui);
                     });
                 });
+                output.textures_delta.clear();
                 let nodes = &output
                     .platform_output
                     .accesskit_update
@@ -871,6 +873,24 @@ fn study_pane_legend_buttons_stay_under_the_pointer() {
                 let row = bounds_of("Study controls")
                     .filter(|row| rect.contains(row.center()))
                     .min_by(|a, b| a.top().total_cmp(&b.top()));
+                if overlay
+                    && case == "wider"
+                    && remove.is_some_and(|rect| at == Some(rect.center()))
+                {
+                    let shapes = output
+                        .shapes
+                        .windows(2)
+                        .find(|shapes| matches!(&shapes[1].shape,
+                            egui::Shape::Text(text) if text.galley.text() == "123,456.78"
+                                && text.pos.x + text.galley.size().x > shapes[1].clip_rect.right()
+                        ))
+                        .expect("the wider hovered value overflows the held controls");
+                    assert!(matches!(&shapes[0].shape, egui::Shape::Rect(_)));
+                    assert_eq!(
+                        shapes[0].clip_rect, shapes[1].clip_rect,
+                        "{name}: the text protection patch must share the text clip"
+                    );
+                }
                 output.drop_without_applying_deltas();
                 (remove, row)
             };
