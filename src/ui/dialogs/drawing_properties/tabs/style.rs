@@ -3,7 +3,7 @@
 use crate::drawings::glyphs::GLYPHS;
 use crate::drawings::{
     ArrowStyle, Drawing, DrawingToolType, FontWeight, GhostFeedConfig, LineMeasurementPosition,
-    RangeReadoutPosition, StyleControls,
+    RangeSettings, StyleControls,
 };
 use crate::localization as l10n;
 use crate::model::LineStyle;
