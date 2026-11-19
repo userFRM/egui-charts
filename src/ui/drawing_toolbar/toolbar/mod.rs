@@ -52,6 +52,8 @@ impl CursorStateData {
 pub struct DrawingToolbarDomainState {
     /// The chart's active drawing tool, or `None` after construction finishes.
     pub sel_tool: Option<DrawingToolType>,
+    /// The registered tool id while `sel_tool` holds its polyline identity.
+    pub sel_custom_tool: Option<String>,
     /// Whether snapping is enabled.
     pub magnet_mode: bool,
     /// The snapping strength, retained while snapping is off.
@@ -85,10 +87,10 @@ use super::{
 /// Drawing toolbar - main UI component
 #[derive(Clone, Debug, Default)]
 pub struct DrawingToolbar {
-    /// Built-in availability for the bar, flyouts and shortcuts. Clone the chart manager's
-    /// registry here after changing it; hosts use its custom catalogue for their own picker.
-    /// A disabled tool stays in the strip, the flyouts and the Measure button, drawn disabled,
-    /// and a click on it returns [`DrawingToolbarAction::ToolUnavailable`].
+    /// Availability and registered tools for the bar, flyouts, strip and shortcuts. Clone the
+    /// chart manager's registry here after changing it. A registered tool's `category` lists it
+    /// in that flyout. Disabled entries stay visible and report clicks as
+    /// [`DrawingToolbarAction::ToolUnavailable`] or [`DrawingToolbarAction::CustomToolUnavailable`].
     pub registry: crate::drawings::DrawingToolRegistry,
     /// Toolbar state (selected tool, favorites, recent, etc.)
     pub state: ToolbarState,
@@ -138,6 +140,7 @@ impl DrawingToolbar {
             self.state.zoom_mode_active = false;
         }
         self.state.sel_tool = domain.sel_tool;
+        self.state.sel_custom_tool = domain.sel_custom_tool.clone();
         self.state.magnet_mode = domain.magnet_mode;
         self.state.magnet_type = domain.magnet_type;
         self.state.snap_to_indicators = domain.snap_to_indicators;
@@ -151,6 +154,7 @@ impl DrawingToolbar {
     pub fn get_domain_state(&self) -> DrawingToolbarDomainState {
         DrawingToolbarDomainState {
             sel_tool: self.state.sel_tool,
+            sel_custom_tool: self.state.sel_custom_tool.clone(),
             magnet_mode: self.state.magnet_mode,
             magnet_type: self.state.magnet_type,
             snap_to_indicators: self.state.snap_to_indicators,
@@ -167,6 +171,12 @@ impl DrawingToolbar {
     pub fn select_tool(&mut self, tool: DrawingToolType) {
         if self.registry.availability(tool).enabled {
             self.state.select_tool(tool);
+        }
+    }
+
+    pub(crate) fn select_custom_tool(&mut self, id: &str) {
+        if self.registry.get(id).is_some() && self.registry.custom_availability(id).enabled {
+            self.state.select_custom_tool(id);
         }
     }
 
@@ -200,7 +210,8 @@ impl DrawingToolbar {
         self.state.toggle_stay_in_drawing();
     }
 
-    /// Render the toolbar as a side panel and return the selected tool if changed
+    /// Render the toolbar as a side panel and return the selected tool if changed. Returns
+    /// `None` for a registered tool; use [`Self::show_with_action`] to receive its id.
     pub fn show(&mut self, ui: &mut Ui) -> Option<DrawingToolType> {
         let action = self.show_with_action(ui);
         match action {
@@ -474,53 +485,78 @@ impl DrawingToolbar {
 
             tools.retain(|tool| self.registry.availability(*tool).visible);
 
-            // Filter by search
-            if !self.state.search_query.is_empty() {
-                let query = self.state.search_query.to_lowercase();
-                tools.retain(|tool| {
-                    tool.as_str().to_lowercase().contains(&query)
-                        || l10n::text(ui.ctx(), tool.as_str())
-                            .to_lowercase()
-                            .contains(&query)
-                });
-            }
-
+            let query = self.state.search_query.to_lowercase();
+            let matches = |name: &str| {
+                query.is_empty()
+                    || name.to_lowercase().contains(&query)
+                    || l10n::text(ui.ctx(), name).to_lowercase().contains(&query)
+            };
+            tools.retain(|tool| matches(tool.as_str()));
             let is_icons = category == "Icons/Emojis";
-            if tools.is_empty() {
+            let custom: Vec<_> = if is_icons {
+                Vec::new()
+            } else {
+                self.registry
+                    .custom_tools()
+                    .filter(|(id, tool)| {
+                        tool.category.as_deref() == Some(category)
+                            && self.registry.custom_availability(id).visible
+                            && matches(self.registry.custom_name(id))
+                    })
+                    .collect()
+            };
+            if tools.is_empty() && custom.is_empty() {
                 continue;
             }
 
-            // Determine display tool
-            let display_tool = if is_icons {
-                None
-            } else if let Some(selected) = self.state.sel_tool {
-                if tools.contains(&selected) {
-                    Some(selected)
+            let selected_custom = custom
+                .iter()
+                .copied()
+                .find(|(id, _)| self.state.sel_custom_tool.as_deref() == Some(*id));
+            let display_custom = selected_custom.or_else(|| {
+                if tools.is_empty() {
+                    custom.first().copied()
                 } else {
+                    None
+                }
+            });
+            let display_tool = self
+                .state
+                .sel_builtin()
+                .filter(|tool| tools.contains(tool))
+                .or_else(|| {
                     self.state
                         .category_last_tool
                         .get(category)
                         .copied()
                         .filter(|tool| tools.contains(tool))
-                        .or_else(|| tools.first().copied())
-                }
+                })
+                .or_else(|| tools.first().copied());
+            let (tool_icon, tooltip) = if is_icons {
+                (&embedded_icons::EMOJI_ICON, category)
+            } else if let Some((id, tool)) = display_custom {
+                (
+                    tool.icon
+                        .as_ref()
+                        .unwrap_or(icons::get_icon(DrawingToolType::Polyline)),
+                    self.registry.custom_name(id),
+                )
             } else {
-                self.state
-                    .category_last_tool
-                    .get(category)
-                    .copied()
-                    .filter(|tool| tools.contains(tool))
-                    .or_else(|| tools.first().copied())
+                (
+                    display_tool
+                        .map(icons::get_icon)
+                        .unwrap_or(&embedded_icons::EMOJI_ICON),
+                    display_tool
+                        .as_ref()
+                        .map(|tool| tool.as_str())
+                        .unwrap_or(category),
+                )
             };
-
-            let tool_icon = display_tool
-                .map(icons::get_icon)
-                .unwrap_or(&embedded_icons::EMOJI_ICON);
-
-            let has_sel = self.state.sel_tool.is_some_and(|t| tools.contains(&t));
-
-            let tool_name = display_tool.map(|t| t.as_str().to_string());
-            let tooltip = tool_name.as_deref().unwrap_or(category);
+            let has_sel = selected_custom.is_some()
+                || self
+                    .state
+                    .sel_builtin()
+                    .is_some_and(|tool| tools.contains(&tool));
 
             // Simple button without arrow
             let response = draw_tool_button(ui, tool_icon, tooltip, has_sel);
@@ -598,7 +634,9 @@ impl DrawingToolbar {
 
         // Favourite tools strip
         let strip_shown = self.state.floating_visible
-            && (!self.state.favorites.is_empty() || !self.state.cursor_favorites.is_empty());
+            && (!self.state.favorites.is_empty()
+                || !self.state.cursor_favorites.is_empty()
+                || !self.state.custom_favorites.is_empty());
         if FavoritesButton::show(ui, strip_shown) {
             self.state.floating_visible = !strip_shown;
         }
@@ -648,8 +686,9 @@ impl DrawingToolbar {
         });
 
         let trading = !self.hidden.contains(&Control::Trading);
-        let sel_tool = self.state.sel_tool;
-        let starred = self.state.favorites.len() + self.state.cursor_favorites.len();
+        let starred = self.state.favorites.len()
+            + self.state.cursor_favorites.len()
+            + self.state.custom_favorites.len();
         let state = &mut self.state;
         let registry = &self.registry;
         let action = show_flyout(ui, category, anchor, |ui| match category {
@@ -663,15 +702,14 @@ impl DrawingToolbar {
             "Remove" => RemoveMenu::show_submenu(ui, state),
             "Icons/Emojis" => state.glyph_picker.show(ui, registry),
             _ => {
-                let favorites = &mut state.favorites;
                 let action = if category == "Cursors" {
                     CursorsCategory.render_with_favorites(ui, &mut state.cursor_favorites)
                 } else {
                     render_registered_tool_submenu(
                         ui,
+                        Some(category),
                         data::get_category_sections(category),
-                        sel_tool,
-                        favorites,
+                        state,
                         registry,
                     )
                 };
@@ -680,7 +718,11 @@ impl DrawingToolbar {
         })
         .flatten();
         // Starring a tool shows the strip it joins.
-        if self.state.favorites.len() + self.state.cursor_favorites.len() > starred {
+        if self.state.favorites.len()
+            + self.state.cursor_favorites.len()
+            + self.state.custom_favorites.len()
+            > starred
+        {
             self.state.floating_visible = true;
         }
 
@@ -691,8 +733,10 @@ impl DrawingToolbar {
         }
         let action = self.apply_pick(action?);
         // A tool picked while keeping the drawing mode on leaves the flyout open for the next one.
-        let keeps_open = matches!(action, Some(DrawingToolbarAction::SelectTool(_)))
-            && self.state.stay_in_drawing_mode;
+        let keeps_open = matches!(
+            action,
+            Some(DrawingToolbarAction::SelectTool(_) | DrawingToolbarAction::SelectCustomTool(_))
+        ) && self.state.stay_in_drawing_mode;
         if !keeps_open {
             self.close_flyout(&ctx);
         }
@@ -703,6 +747,13 @@ impl DrawingToolbar {
     /// `None` when the pick has no effect to report.
     fn apply_pick(&mut self, action: DrawingToolbarAction) -> Option<DrawingToolbarAction> {
         use DrawingToolbarAction as A;
+        if let A::SelectCustomTool(id) = &action {
+            if self.registry.get(id).is_none() || !self.registry.custom_availability(id).enabled {
+                return None;
+            }
+            self.select_custom_tool(id);
+            return Some(action);
+        }
         let tool = match &action {
             A::SelectTool(tool) => Some(*tool),
             A::InsertEmoji { .. } => Some(DrawingToolType::FontIcon),
@@ -982,6 +1033,205 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Registered tools join category search, report their ids, start construction and keep
+    /// favourites; hidden tools stay out and disabled tools report clicks without selection.
+    #[test]
+    fn registered_tools_join_their_category_search_and_strip() {
+        use crate::drawings::{DrawingManager, ToolAvailability};
+        use egui::accesskit::Role;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+
+        let mut toolbar = DrawingToolbar::new();
+        for (id, name) in [
+            ("midpoint", "Midpoint"),
+            ("off", "Off tool"),
+            ("hidden", "Hidden tool"),
+        ] {
+            let mut tool = crate::drawings::registry::tests::midpoint();
+            tool.name = name.into();
+            tool.category = Some("Lines".into());
+            tool.icon = Some(crate::icons::icons::TREND_LINE);
+            toolbar.registry.register(id, tool).unwrap();
+        }
+        toolbar.registry.set_custom_availability(
+            "off",
+            ToolAvailability {
+                visible: true,
+                enabled: false,
+            },
+        );
+        toolbar.registry.set_custom_availability(
+            "hidden",
+            ToolAvailability {
+                visible: false,
+                enabled: true,
+            },
+        );
+        toolbar.state.search_query = "mid".into();
+        toolbar.state.floating_visible = false;
+        type State = (DrawingToolbar, Vec<DrawingToolbarAction>);
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .with_step_dt(1.0 / 60.0)
+            .with_context_setup(|ctx| {
+                egui_extras::install_image_loaders(ctx);
+                crate::theme::apply_to_egui(ctx, &crate::theme::Theme::light());
+            })
+            .build_ui_state(
+                |ui, state: &mut State| {
+                    let action = state.0.show_with_action(ui);
+                    if action != DrawingToolbarAction::None {
+                        state.1.push(action);
+                    }
+                },
+                (toolbar, Vec::new()),
+            );
+        harness.run();
+        assert!(
+            harness
+                .query_by_role_and_label(Role::Button, "Midpoint")
+                .is_some()
+        );
+        assert!(
+            harness
+                .query_by_role_and_label(Role::Button, "Trend Line")
+                .is_none()
+        );
+        assert!(
+            harness
+                .query_by_role_and_label(Role::Button, "Hidden tool")
+                .is_none()
+        );
+        harness.state_mut().0.state.search_query.clear();
+        harness.run();
+        harness
+            .get_by_role_and_label(Role::Button, "Trend Line")
+            .click();
+        harness.run();
+        harness
+            .get_by_role_and_label(Role::MenuItem, "Midpoint")
+            .click();
+        harness.run();
+        assert_eq!(
+            harness.state().1.last(),
+            Some(&DrawingToolbarAction::SelectCustomTool("midpoint".into()))
+        );
+        let toolbar = &harness.state().0;
+        assert_eq!(toolbar.state.sel_custom_tool.as_deref(), Some("midpoint"));
+        assert_eq!(toolbar.state.sel_tool, Some(DrawingToolType::Polyline));
+        assert_eq!(
+            toolbar.state.custom_recent.front().map(String::as_str),
+            Some("midpoint")
+        );
+        let domain = toolbar.get_domain_state();
+        let mut synced = DrawingToolbar::new();
+        synced.sync_from_domain_state(&domain);
+        assert_eq!(synced.state.sel_custom_tool, toolbar.state.sel_custom_tool);
+        assert_eq!(synced.state.sel_builtin(), None);
+        let mut manager = DrawingManager::new();
+        manager.registry = toolbar.registry.clone();
+        manager.set_custom_tool("midpoint").unwrap();
+        manager.start_drawing_with_coords(
+            DrawingToolType::Polyline,
+            egui::pos2(10., 10.),
+            |x| x,
+            f64::from,
+        );
+        assert_eq!(
+            manager.curr_drawing().unwrap().custom_tool.as_deref(),
+            Some("midpoint")
+        );
+        assert_eq!(
+            manager.set_custom_tool("off"),
+            Err("Drawing tool is disabled")
+        );
+        assert_eq!(manager.active_custom_tool(), Some("midpoint"));
+        // Creation checks again if the host disables a tool after it was selected.
+        manager.cancel_curr_drawing();
+        manager.registry.set_custom_availability(
+            "midpoint",
+            ToolAvailability {
+                visible: true,
+                enabled: false,
+            },
+        );
+        manager.start_drawing_with_coords(
+            DrawingToolType::Polyline,
+            egui::pos2(10., 10.),
+            |x| x,
+            f64::from,
+        );
+        assert!(manager.curr_drawing().is_none());
+        let mut drawing = crate::drawings::Drawing::custom("midpoint");
+        drawing.chart_points = vec![
+            crate::drawings::ChartPoint::new(0., 1.),
+            crate::drawings::ChartPoint::new(1., 2.),
+        ];
+        assert_eq!(
+            manager.add_drawing(drawing.clone()),
+            Err("Drawing tool is disabled")
+        );
+        manager.paste_drawings(&[drawing]);
+        assert!(manager.drawings.is_empty());
+
+        harness
+            .get_by_role_and_label(Role::Button, "Midpoint")
+            .click();
+        harness.run();
+        assert!(
+            harness
+                .query_by_role_and_label(Role::MenuItem, "Hidden tool")
+                .is_none()
+        );
+        let off = harness.get_by_role_and_label(Role::MenuItem, "Off tool");
+        assert!(off.accesskit_node().is_disabled());
+        off.click();
+        harness.run();
+        assert_eq!(
+            harness.state().1.last(),
+            Some(&DrawingToolbarAction::CustomToolUnavailable("off".into()))
+        );
+        assert_eq!(
+            harness.state().0.state.sel_custom_tool.as_deref(),
+            Some("midpoint")
+        );
+        harness
+            .get_by_role_and_label(Role::Button, "Midpoint")
+            .click();
+        harness.run();
+        harness
+            .get_by_role_and_label(Role::MenuItem, "Midpoint")
+            .hover();
+        harness.run();
+        harness
+            .get_by_role_and_label(Role::Button, "Favourite Midpoint")
+            .click();
+        harness.run();
+        assert_eq!(harness.state().0.state.custom_favorites, ["midpoint"]);
+        assert!(harness.state().0.state.floating_visible);
+        harness.key_press(egui::Key::Escape);
+        harness.run();
+        harness
+            .query_all_by_role_and_label(Role::Button, "Midpoint")
+            .last()
+            .unwrap()
+            .click();
+        harness.run();
+        assert_eq!(
+            harness.state().1.last(),
+            Some(&DrawingToolbarAction::SelectCustomTool("midpoint".into()))
+        );
+        // A built-in pick clears the registered identity and its polyline highlight.
+        harness
+            .state_mut()
+            .0
+            .apply_pick(DrawingToolbarAction::SelectTool(DrawingToolType::TrendLine));
+        assert_eq!(harness.state().0.state.sel_custom_tool, None);
     }
 
     /// Tools the host disabled look disabled in the strip, a tool flyout, the Icons/Emojis
@@ -1429,9 +1679,9 @@ mod tests {
         let output = ctx.run_ui(RawInput::default(), |ui| {
             render_registered_tool_submenu(
                 ui,
-                data::get_category_sections("Lines"),
                 None,
-                &mut vec![],
+                data::get_category_sections("Lines"),
+                &mut ToolbarState::default(),
                 &toolbar.registry,
             );
         });

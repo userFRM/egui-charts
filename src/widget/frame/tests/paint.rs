@@ -738,6 +738,7 @@ fn status_visibility_reaches_the_chart_legend() {
         ));
         let mut settings = crate::widget::settings::ChartSettingsState::from_chart(&chart);
         settings.status_line.show_logo = hidden != 12;
+        settings.status_line.quote_panel = hidden == 2;
         settings.status_line.show_market_status = hidden != 13;
         settings.apply_to_chart(&mut chart).unwrap();
         assert_eq!(
@@ -2387,5 +2388,138 @@ fn drawings_take_their_place_among_the_series_and_studies() {
         } else {
             assert!(rsi.1 < rect, "rectangle covers study");
         }
+    }
+}
+
+/// The panel shares quote intents, replaces the legend buttons, clamps movement, counts one
+/// layout edit per drag and restores its place. Old saves retain the default placement.
+#[cfg(feature = "ui")]
+#[test]
+fn quote_panel_trades_like_the_legend_and_keeps_its_place() {
+    use crate::widget::{Chart, ChartSnapshot, QuoteSide, SeriesId};
+    use egui::{Event, PointerButton};
+    fn label(painted: &[Shape], wanted: &str) -> Pos2 {
+        let found: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text) if text.galley.text() == wanted => {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(found.len(), 1, "exactly one {wanted}");
+        found[0]
+    }
+    fn outline(painted: &[Shape]) -> Rect {
+        let sell = label(painted, "SELL");
+        let buy = label(painted, "BUY");
+        painted
+            .iter()
+            .find_map(|shape| match shape {
+                Shape::Rect(rect)
+                    if rect.stroke.width == 1.0
+                        && rect.rect.contains(sell)
+                        && rect.rect.contains(buy) =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .expect("panel outline")
+    }
+    let setup = || {
+        let mut chart = chart(&[90.0], &[110.0]);
+        chart.set_quote(Some(crate::model::Level1Quote {
+            symbol: chart.symbol().into(),
+            ts: chart.bars(SeriesId::MAIN)[99].time,
+            bid: 99.0,
+            ask: 101.0,
+            bid_size: 1.0,
+            ask_size: 1.0,
+        }));
+        chart.config_mut().quote_panel = true;
+        chart
+    };
+    let button = |at, pressed| Event::PointerButton {
+        pos: at,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    let near = |a: f32, b: f32| assert!((a - b).abs() < 0.5, "{a} != {b}");
+    for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+        let ctx = egui::Context::default();
+        crate::theme::apply_to_egui(&ctx, &theme);
+        let mut time = 0.0;
+        let mut draw = |chart: &mut Chart, events| {
+            time += 0.1;
+            shapes(&ctx, chart, time, events)
+        };
+        let mut chart = setup();
+        draw(&mut chart, vec![]);
+        let mut painted = draw(&mut chart, vec![]);
+        let initial = outline(&painted);
+        let free = chart.last_rendered_price_rect.shrink(8.0);
+        near(initial.center().x, free.center().x);
+        near(initial.top(), free.top());
+        // Hiding the legend's contents leaves the independent panel available.
+        chart.config_mut().show_symbol_labels = false;
+        chart.config_mut().show_ohlc_info = false;
+        chart.config_mut().show_ohlc_change = false;
+        chart.config_mut().show_ohlc_change_percent = false;
+        for (wanted, expected) in [("SELL", QuoteSide::Sell), ("BUY", QuoteSide::Buy)] {
+            let at = label(&painted, wanted);
+            for events in [
+                vec![Event::PointerMoved(at)],
+                vec![button(at, true)],
+                vec![button(at, false)],
+                vec![],
+            ] {
+                painted = draw(&mut chart, events);
+            }
+            assert_eq!(chart.take_quote_action(), Some(expected));
+        }
+        let before = chart.edit_count();
+        let grip = Pos2::new(initial.left() + 11.0, initial.center().y);
+        let end = grip + egui::vec2(2000.0, 2000.0);
+        for events in [
+            vec![Event::PointerMoved(grip)],
+            vec![button(grip, true)],
+            vec![Event::PointerMoved(end)],
+            vec![button(end, false)],
+            vec![],
+        ] {
+            painted = draw(&mut chart, events);
+        }
+        let moved = outline(&painted);
+        near(moved.right(), free.right());
+        near(moved.bottom(), free.bottom());
+        let snapshot = chart.snapshot().unwrap();
+        assert_eq!(snapshot.quote_panel, Some([1.0, 1.0]));
+        assert_eq!(chart.edit_count(), before + 1);
+        let mut restored = setup();
+        restored.restore(&snapshot).unwrap();
+        draw(&mut restored, vec![]);
+        let rect = outline(&draw(&mut restored, vec![]));
+        near(rect.left(), moved.left());
+        near(rect.top(), moved.top());
+        near(rect.right(), moved.right());
+        near(rect.bottom(), moved.bottom());
+        let mut old = serde_json::to_value(snapshot).unwrap();
+        assert!(old.as_object_mut().unwrap().remove("quote_panel").is_some());
+        let old: ChartSnapshot = serde_json::from_value(old).unwrap();
+        restored.restore(&old).unwrap();
+        draw(&mut restored, vec![]);
+        let rect = outline(&draw(&mut restored, vec![]));
+        near(rect.center().x, free.center().x);
+        near(rect.top(), free.top());
+        restored.config_mut().show_quote_boxes = false;
+        let hidden = draw(&mut restored, vec![]);
+        assert!(
+            !hidden
+                .iter()
+                .any(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == "BUY"))
+        );
     }
 }

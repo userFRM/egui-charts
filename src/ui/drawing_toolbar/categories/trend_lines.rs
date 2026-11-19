@@ -11,11 +11,11 @@ use egui::{Response, Ui};
 
 use super::{DrawingToolbarAction, ToolCategory};
 use crate::tokens::DESIGN_TOKENS;
-use crate::ui::drawing_toolbar::DrawingToolShortcuts;
 use crate::ui::drawing_toolbar::icons as toolbar_icons;
 use crate::ui::drawing_toolbar::submenu_builder::{
     FlyoutRow, flyout_row, row_width, section_header,
 };
+use crate::ui::drawing_toolbar::{DrawingToolShortcuts, ToolbarState};
 
 /// Trend Lines category implementation
 #[derive(Debug)]
@@ -53,20 +53,36 @@ pub fn render_tool_submenu(
     sel_tool: Option<DrawingToolType>,
     favorites: &mut Vec<DrawingToolType>,
 ) -> DrawingToolbarAction {
-    render_registered_tool_submenu(ui, sections, sel_tool, favorites, &Default::default())
+    let mut state = ToolbarState {
+        sel_tool,
+        favorites: std::mem::take(favorites),
+        ..Default::default()
+    };
+    let action =
+        render_registered_tool_submenu(ui, None, sections, &mut state, &Default::default());
+    *favorites = state.favorites;
+    action
 }
 
 pub(crate) fn render_registered_tool_submenu(
     ui: &mut Ui,
+    category: Option<&str>,
     mut sections: Vec<(&'static str, Vec<DrawingToolType>)>,
-    sel_tool: Option<DrawingToolType>,
-    favorites: &mut Vec<DrawingToolType>,
+    state: &mut ToolbarState,
     registry: &crate::drawings::DrawingToolRegistry,
 ) -> DrawingToolbarAction {
     for (_, tools) in &mut sections {
         tools.retain(|tool| registry.availability(*tool).visible);
     }
     sections.retain(|(_, tools)| !tools.is_empty());
+    let custom: Vec<_> = registry
+        .custom_tools()
+        .filter(|(id, tool)| {
+            category.is_some()
+                && tool.category.as_deref() == category
+                && registry.custom_availability(id).visible
+        })
+        .collect();
     let mut action = DrawingToolbarAction::None;
     let shortcuts = DrawingToolShortcuts::default();
     let hint = |ui: &Ui, tool| shortcuts.hint(ui.ctx(), tool);
@@ -88,6 +104,21 @@ pub(crate) fn render_registered_tool_submenu(
                 },
             )
         })
+        .chain(custom.iter().map(|(id, tool)| {
+            row_width(
+                ui,
+                &FlyoutRow {
+                    icon: Some(
+                        tool.icon
+                            .as_ref()
+                            .unwrap_or(toolbar_icons::get_icon(DrawingToolType::Polyline)),
+                    ),
+                    label: registry.custom_name(id),
+                    star: Some(false),
+                    ..Default::default()
+                },
+            )
+        }))
         .fold(
             DESIGN_TOKENS.sizing.drawing_toolbar_ext.submenu_width_xl,
             f32::max,
@@ -109,24 +140,63 @@ pub(crate) fn render_registered_tool_submenu(
                     icon: Some(toolbar_icons::get_icon(tool)),
                     label: tool.as_str(),
                     shortcut: hint.as_deref(),
-                    selected: sel_tool == Some(tool),
-                    star: Some(favorites.contains(&tool)),
+                    selected: state.sel_builtin() == Some(tool),
+                    star: Some(state.favorites.contains(&tool)),
                     disabled: !enabled,
                     ..Default::default()
                 },
             );
             if response.star.as_ref().is_some_and(Response::clicked) {
-                match favorites.iter().position(|&t| t == tool) {
+                match state.favorites.iter().position(|&t| t == tool) {
                     Some(index) => {
-                        favorites.remove(index);
+                        state.favorites.remove(index);
                     }
-                    None => favorites.push(tool),
+                    None => state.favorites.push(tool),
                 }
             } else if response.row.clicked() {
                 action = if enabled {
                     DrawingToolbarAction::SelectTool(tool)
                 } else {
                     DrawingToolbarAction::ToolUnavailable(tool)
+                };
+            }
+        }
+    }
+    if !custom.is_empty() {
+        if !sections.is_empty() {
+            ui.separator();
+        }
+        section_header(ui, "CUSTOM", width);
+        for (id, tool) in custom {
+            let enabled = registry.custom_availability(id).enabled;
+            let response = flyout_row(
+                ui,
+                width,
+                &FlyoutRow {
+                    icon: Some(
+                        tool.icon
+                            .as_ref()
+                            .unwrap_or(toolbar_icons::get_icon(DrawingToolType::Polyline)),
+                    ),
+                    label: registry.custom_name(id),
+                    selected: state.sel_custom_tool.as_deref() == Some(id),
+                    star: Some(state.custom_favorites.iter().any(|tool| tool == id)),
+                    disabled: !enabled,
+                    ..Default::default()
+                },
+            );
+            if response.star.as_ref().is_some_and(Response::clicked) {
+                match state.custom_favorites.iter().position(|tool| tool == id) {
+                    Some(index) => {
+                        state.custom_favorites.remove(index);
+                    }
+                    None => state.custom_favorites.push(id.to_owned()),
+                }
+            } else if response.row.clicked() {
+                action = if enabled {
+                    DrawingToolbarAction::SelectCustomTool(id.to_owned())
+                } else {
+                    DrawingToolbarAction::CustomToolUnavailable(id.to_owned())
                 };
             }
         }

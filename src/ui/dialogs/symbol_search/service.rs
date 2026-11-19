@@ -7,6 +7,8 @@ use crate::services::{ExpressionError, StoreKind, SymbolExpression, SymbolQuery,
 use crate::ui::dialogs::templates::TemplateStore;
 use std::sync::Arc;
 
+const MAX_UNREADABLE_PAGES: usize = 3;
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(super) struct Recent {
     name: String,
@@ -63,6 +65,8 @@ pub(super) struct Search {
     more: bool,
     offset: usize,
     error: Option<String>,
+    /// Consecutive full pages with no readable results and their first reason.
+    unreadable: Option<(usize, String)>,
     pub(super) exchange: Option<String>,
     pub(super) country: Option<String>,
     pub(super) sector: Option<String>,
@@ -81,6 +85,7 @@ impl std::fmt::Debug for Search {
             .field("more", &self.more)
             .field("offset", &self.offset)
             .field("error", &self.error)
+            .field("unreadable", &self.unreadable)
             .field("exchange", &self.exchange)
             .field("country", &self.country)
             .field("sector", &self.sector)
@@ -109,6 +114,7 @@ impl Default for Search {
             more: false,
             offset: 0,
             error: None,
+            unreadable: None,
             exchange: None,
             country: None,
             sector: None,
@@ -137,6 +143,7 @@ impl Search {
         self.loading = false;
         self.more = false;
         self.error = None;
+        self.unreadable = None;
         self.offset = 0;
         self.components = Components::default();
     }
@@ -187,14 +194,19 @@ impl Search {
             .set_waker(move || repaint.request_repaint_of(viewport));
         for (_, answer) in self.inbox.drain().answers {
             self.loading = false;
+            let limit = self.query.as_ref().expect("search request").limit;
+            let partial = self
+                .source
+                .as_ref()
+                .is_some_and(|source| source.leaves_results_out());
             match *answer
                 .downcast::<Result<Vec<Instrument>, FeedError>>()
                 .expect("symbol search")
             {
                 Ok(rows) => {
-                    let limit = self.query.as_ref().expect("search request").limit;
-                    self.more = rows.len() >= limit && limit > 0;
-                    self.offset += rows.len();
+                    self.unreadable = None;
+                    self.more = limit > 0 && (rows.len() >= limit || partial && !rows.is_empty());
+                    self.offset += limit;
                     for instrument in rows.into_iter().take(limit) {
                         if self.rows.iter().any(|row| {
                             row.symbol == instrument.symbol
@@ -206,7 +218,19 @@ impl Search {
                         self.rows.push(instrument);
                     }
                 }
+                Err(FeedError::Other(reason)) if partial && limit > 0 => {
+                    self.offset += limit;
+                    let (pages, first) = self.unreadable.get_or_insert((0, reason));
+                    *pages += 1;
+                    self.more = *pages < MAX_UNREADABLE_PAGES;
+                    if self.more {
+                        self.next_page();
+                    } else {
+                        self.error = Some(first.clone());
+                    }
+                }
                 Err(error) => {
+                    self.unreadable = None;
                     self.error = Some(error.to_string());
                     self.more = false;
                 }
@@ -486,6 +510,179 @@ mod tests {
             assert!(search.error.is_none());
         }
     }
+    /// Guards paging through a service that leaves out results it cannot read: a page of
+    /// `limit` server results with one unreadable keeps paging, the next request starts `limit`
+    /// past the previous one, unreadable full pages are skipped automatically, and an empty
+    /// page ends the results. Repeated unreadable pages stop at a bound with the first reason.
+    #[cfg(feature = "http")]
+    #[test]
+    fn unreadable_http_results_keep_paging_at_the_server_offset() {
+        use std::io::{BufRead as _, BufReader, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let mut targets = Vec::new();
+            let unreadable = r#"[{"symbol":""},{"symbol":""}]"#;
+            for (status, body) in [
+                (
+                    "200 OK",
+                    r#"[{"symbol":"BAD","timezone":"Mars/Olympus_Mons"},{"symbol":"A1"}]"#,
+                ),
+                ("200 OK", unreadable),
+                ("200 OK", unreadable),
+                ("200 OK", r#"[{"symbol":"A1"},{"symbol":"A2"}]"#),
+                ("200 OK", unreadable),
+                ("200 OK", unreadable),
+                ("200 OK", r#"[{"symbol":"A3"}]"#),
+                ("200 OK", "[]"),
+                (
+                    "200 OK",
+                    r#"[{"symbol":"B1","timezone":"Mars/Olympus_Mons"},{"symbol":""}]"#,
+                ),
+                ("200 OK", r#"[{"symbol":"B2"}]"#),
+                ("200 OK", "[]"),
+                (
+                    "200 OK",
+                    r#"[{"symbol":"C1","timezone":"Mars/Olympus_Mons"},{"symbol":""}]"#,
+                ),
+                ("200 OK", unreadable),
+                ("200 OK", unreadable),
+                ("200 OK", unreadable),
+                ("400 Bad Request", ""),
+                ("503 Service Unavailable", ""),
+                ("200 OK", "not json"),
+            ] {
+                let (mut connection, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(&connection);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                targets.push(line.split_whitespace().nth(1).unwrap().to_owned());
+                loop {
+                    line.clear();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                write!(
+                    connection,
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+            targets
+        });
+        let ctx = egui::Context::default();
+        let mut search = Search::default();
+        search.set_service(Some(Arc::new(crate::data::http::HttpDatafeed::new(base))));
+        let answer = |search: &mut Search| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while search.loading {
+                assert!(std::time::Instant::now() < deadline, "search answer");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                search.poll(&ctx);
+            }
+        };
+        search.query(&ctx, "A", None, 2);
+        for _ in 0..4 {
+            answer(&mut search);
+            search.next_page();
+        }
+        assert!(!search.loading, "an empty page ends the results");
+        assert_eq!(
+            search
+                .rows
+                .iter()
+                .map(|row| row.symbol.as_str())
+                .collect::<Vec<_>>(),
+            ["A1", "A2", "A3"]
+        );
+        assert!(search.error.is_none());
+        search.query(&ctx, "B", None, 2);
+        answer(&mut search);
+        assert_eq!(
+            search
+                .rows
+                .iter()
+                .map(|row| row.symbol.as_str())
+                .collect::<Vec<_>>(),
+            ["B2"],
+            "an unreadable first page requests the next page without scrolling"
+        );
+        assert!(search.error.is_none());
+        search.next_page();
+        answer(&mut search);
+        search.next_page();
+        assert!(!search.loading, "an empty page ends the results");
+        search.query(&ctx, "C", None, 2);
+        answer(&mut search);
+        search.next_page();
+        assert!(
+            !search.loading,
+            "three consecutive unreadable pages stop paging"
+        );
+        assert!(search.rows.is_empty());
+        let error = search.error.clone().expect("the reason is reported");
+        assert!(error.contains("Mars/Olympus_Mons"), "{error}");
+        for (query, reason) in [
+            ("D", "invalid data: HTTP 400"),
+            ("E", "network error: HTTP 503"),
+            ("F", "invalid data:"),
+        ] {
+            search.query(&ctx, query, None, 2);
+            answer(&mut search);
+            search.next_page();
+            assert!(!search.loading, "a request failure stops paging");
+            assert!(search.rows.is_empty());
+            let error = search
+                .error
+                .as_ref()
+                .expect("the request error is reported");
+            assert!(error.starts_with(reason), "{error}");
+        }
+        let offsets: Vec<_> = server
+            .join()
+            .unwrap()
+            .iter()
+            .map(|target| {
+                let param = |name: &str| {
+                    target
+                        .split(['?', '&'])
+                        .find_map(|pair| pair.strip_prefix(name))
+                        .unwrap()
+                        .to_owned()
+                };
+                (param("query="), param("offset="), param("limit="))
+            })
+            .collect();
+        let page =
+            |query: &str, offset: &str| (query.to_owned(), offset.to_owned(), "2".to_owned());
+        assert_eq!(
+            offsets,
+            [
+                page("A", "0"),
+                page("A", "2"),
+                page("A", "4"),
+                page("A", "6"),
+                page("A", "8"),
+                page("A", "10"),
+                page("A", "12"),
+                page("A", "14"),
+                page("B", "0"),
+                page("B", "2"),
+                page("B", "4"),
+                page("C", "0"),
+                page("C", "2"),
+                page("C", "4"),
+                page("D", "0"),
+                page("D", "2"),
+                page("E", "0"),
+                page("F", "0")
+            ]
+        );
+    }
+
     #[test]
     fn spread_lookup_reports_service_errors_without_claiming_the_symbol_is_unknown() {
         let ctx = egui::Context::default();
