@@ -21,8 +21,8 @@ pub struct DrawingProps {
     /// Tool-specific settings, edited by the Inputs page.
     pub tool_settings: Option<Box<DrawingTemplate>>,
     /// Template loaded from the Template menu, or the tool's defaults after Reset to defaults.
-    /// Applying gives every unlocked selected drawing of the template's tool all of the template
-    /// first, then the edited values; drawings of other tools take the edited values.
+    /// Applying first gives every selected drawing of its tool that accepts user edits all of the
+    /// template, then the edited values; drawings of other tools take the edited values.
     pub template: Option<Box<DrawingTemplate>>,
     /// Instrument tick size for position level inputs; absent disables editing by ticks.
     pub tick_size: Option<f64>,
@@ -146,11 +146,12 @@ impl DrawingProps {
         })
     }
 
-    /// Validate and apply one undoable edit to the unlocked selection. A value that differs from
-    /// drawing `id`'s, which these properties were read from, was edited, and only edited values
-    /// change the drawings: text only those that show text, tool inputs only drawings of the same
-    /// tool, coordinates only `id`. A loaded `template` first gives every unlocked selected
-    /// drawing of its tool all of its values. Errors leave all live drawings unchanged.
+    /// Validate and apply one undoable edit to the selected drawings that accept user edits.
+    /// A value that differs from drawing `id`'s, which these properties were read from, was
+    /// edited, and only edited values change the drawings: text only those that show text, tool
+    /// inputs only drawings of the same tool, coordinates only `id`. A loaded `template` first
+    /// gives every selected drawing of its tool that accepts user edits all of its values.
+    /// Errors leave all live drawings unchanged.
     pub fn apply_to_chart(&self, id: DrawingId, chart: &mut Chart) -> Result<(), &'static str> {
         let edits = self.edited_drawings(id, chart)?;
         chart.user_action(|chart| {
@@ -199,16 +200,18 @@ impl DrawingProps {
             .iter()
             .find(|d| d.id == id.0)
             .ok_or("Drawing was removed")?;
-        if target.locked
+        if !target.accepts_user_edits()
             && (self.save_as_default
                 || !chart.drawings().is_selected(id.0)
-                || !chart
-                    .drawings()
-                    .drawings
-                    .iter()
-                    .any(|drawing| !drawing.locked && chart.drawings().is_selected(drawing.id)))
+                || !chart.drawings().drawings.iter().any(|drawing| {
+                    drawing.accepts_user_edits() && chart.drawings().is_selected(drawing.id)
+                }))
         {
-            return Err("Unlock the drawing before editing its properties");
+            return Err(if target.user_edit_enabled {
+                "Unlock the drawing before editing its properties"
+            } else {
+                "This drawing cannot be edited"
+            });
         }
         let adds_position_stop = matches!(
             target.tool_type,
@@ -243,7 +246,7 @@ impl DrawingProps {
             .drawings
             .iter()
             .filter(|drawing| {
-                !drawing.locked
+                drawing.accepts_user_edits()
                     && if selected {
                         chart.drawings().is_selected(drawing.id)
                     } else {
@@ -700,6 +703,23 @@ mod tests {
         chart
             .drawings_mut()
             .edit_drawing(7, |d| d.locked = false)
+            .unwrap();
+        chart
+            .drawings_mut()
+            .edit_drawing(7, |d| d.user_edit_enabled = false)
+            .unwrap();
+        assert_eq!(
+            DrawingProps {
+                font_size: 40.0,
+                ..props.clone()
+            }
+            .apply_to_chart(DrawingId(7), &mut chart),
+            Err("This drawing cannot be edited")
+        );
+        assert_eq!(chart.drawings().drawings[0].font_size, 24.0);
+        chart
+            .drawings_mut()
+            .edit_drawing(7, |d| d.user_edit_enabled = true)
             .unwrap();
         // A size the drawings file would refuse cannot be applied.
         assert!(

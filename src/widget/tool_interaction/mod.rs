@@ -1879,18 +1879,61 @@ mod tests {
     }
 
     /// With the eraser on, a click on a drawing deletes it, whether or not a drawing is
-    /// selected, unless it is locked or Escape has turned the eraser off.
+    /// selected, unless it is locked, protected or Escape has turned the eraser off.
     #[test]
-    fn an_eraser_click_deletes_the_drawing_unless_it_is_locked() {
-        for (tool, selected, locked, escaped, kept) in [
-            (DrawingToolType::HorizontalLine, false, false, false, 0),
-            (DrawingToolType::HorizontalLine, true, false, false, 0),
-            (DrawingToolType::HorizontalLine, true, true, false, 1),
-            (DrawingToolType::HorizontalLine, false, false, true, 1),
-            (DrawingToolType::FibonacciExtension, false, false, false, 0),
-            (DrawingToolType::FibonacciExtension, true, false, false, 0),
-            (DrawingToolType::FibonacciExtension, true, true, false, 1),
-            (DrawingToolType::FibonacciExtension, false, false, true, 1),
+    fn an_eraser_click_deletes_the_drawing_unless_it_is_locked_or_protected() {
+        for (tool, selected, locked, escaped, user_edit, kept) in [
+            (
+                DrawingToolType::HorizontalLine,
+                false,
+                false,
+                false,
+                true,
+                0,
+            ),
+            (DrawingToolType::HorizontalLine, true, false, false, true, 0),
+            (DrawingToolType::HorizontalLine, true, true, false, true, 1),
+            (DrawingToolType::HorizontalLine, false, false, true, true, 1),
+            (
+                DrawingToolType::FibonacciExtension,
+                false,
+                false,
+                false,
+                true,
+                0,
+            ),
+            (
+                DrawingToolType::FibonacciExtension,
+                true,
+                false,
+                false,
+                true,
+                0,
+            ),
+            (
+                DrawingToolType::FibonacciExtension,
+                true,
+                true,
+                false,
+                true,
+                1,
+            ),
+            (
+                DrawingToolType::FibonacciExtension,
+                false,
+                false,
+                true,
+                true,
+                1,
+            ),
+            (
+                DrawingToolType::HorizontalLine,
+                false,
+                false,
+                false,
+                false,
+                1,
+            ),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
@@ -1912,6 +1955,7 @@ mod tests {
                 vec![ChartPoint::new(50.0, 15.0)]
             };
             line.locked = locked;
+            line.user_edit_enabled = user_edit;
             chart.drawings_mut().drawings.push(line);
             if selected {
                 chart.drawings_mut().select(1);
@@ -1949,7 +1993,7 @@ mod tests {
             let left = chart.drawings().drawings.len();
             assert_eq!(
                 left, kept,
-                "{tool:?}: selected {selected}, locked {locked}, escaped {escaped}"
+                "{tool:?}: selected {selected}, locked {locked}, escaped {escaped}, user edits {user_edit}"
             );
         }
     }
@@ -1961,18 +2005,20 @@ mod tests {
         use crate::drawings::manager::DrawingSyncAction;
         use egui::pos2;
 
-        for (tool, modifiers, locked, crossed, pieces) in [
-            (DrawingToolType::Brush, Modifiers::CTRL, false, 15, 2),
+        for (tool, modifiers, locked, user_edit, crossed, pieces) in [
+            (DrawingToolType::Brush, Modifiers::CTRL, false, true, 15, 2),
             (
                 DrawingToolType::Highlighter,
                 Modifiers::COMMAND,
                 false,
+                true,
                 15,
                 2,
             ),
-            (DrawingToolType::Brush, Modifiers::CTRL, false, 0, 1),
-            (DrawingToolType::Brush, Modifiers::CTRL, true, 15, 0),
-            (DrawingToolType::Brush, Modifiers::NONE, false, 15, 0),
+            (DrawingToolType::Brush, Modifiers::CTRL, false, true, 0, 1),
+            (DrawingToolType::Brush, Modifiers::CTRL, true, true, 15, 0),
+            (DrawingToolType::Brush, Modifiers::NONE, false, true, 15, 0),
+            (DrawingToolType::Brush, Modifiers::CTRL, false, false, 15, 0),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
@@ -1989,6 +2035,7 @@ mod tests {
                 })
                 .collect();
             stroke.locked = locked;
+            stroke.user_edit_enabled = user_edit;
             stroke.stored_id = Some("stroke".into());
             stroke.created_at = Some(123);
             chart.drawings_mut().drawings.push(stroke.clone());
