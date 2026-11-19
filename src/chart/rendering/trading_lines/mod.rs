@@ -1110,7 +1110,7 @@ impl Label<'_> {
             let response = ui
                 .interact(
                     cell.intersect(mapping.rect),
-                    key.with(index),
+                    key.with(("button", index)),
                     Sense::click(),
                 )
                 .on_hover_text(l10n::text(ui.ctx(), "Cancel"));
