@@ -459,6 +459,10 @@ pub(super) fn layout_entries(options: PaneAxisOptions) -> Vec<MenuEntry<LayoutAc
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::studies::{CustomIndicator, IndicatorValue};
+    use egui::{Event, Modifiers, PointerButton, RawInput, Vec2};
+
     /// The time axis offers overnight hours for an instrument with overnight windows, and while
     /// they are requested; other charts keep the menu as it was.
     #[test]
@@ -494,10 +498,6 @@ mod tests {
         assert!(rows.contains(&("Extended hours".into(), true)));
         assert!(rows.contains(&("Overnight hours".into(), true)));
     }
-
-    use super::*;
-    use crate::studies::{CustomIndicator, IndicatorValue};
-    use egui::{Event, Modifiers, PointerButton, RawInput, Vec2};
 
     /// The selected pane owns the menu, which closes if that pane or its last source leaves.
     #[test]

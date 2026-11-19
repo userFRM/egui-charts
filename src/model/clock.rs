@@ -57,7 +57,7 @@ impl BarClock {
         self.with_session_hours(zone, session, extended_hours, extended_hours)
     }
 
-    /// Selects the chart's extended and overnight hours independently.
+    /// As [`Self::with_session`], with overnight windows only when both flags are set.
     pub(crate) fn with_session_hours(
         mut self,
         zone: super::TimezoneId,

@@ -616,6 +616,27 @@ impl SessionOverride {
     }
 
     /// Sets the overnight windows of the date.
+    ///
+    /// ```
+    /// use chrono::{DateTime, NaiveDate, NaiveTime, Utc, Weekday::*};
+    /// use egui_charts::model::{
+    ///     ExchangeSessionProvider, OverrideWindow, Session, SessionOverride, SessionWindow,
+    ///     TimezoneId,
+    /// };
+    ///
+    /// let at = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+    /// let monday = NaiveDate::from_ymd_opt(2024, 7, 15).unwrap();
+    /// // Monday's regular hours are closed; its overnight window still opens on Sunday.
+    /// let session = Session::new([SessionWindow::new([Mon], at(9), at(16))]).with_overrides([
+    ///     SessionOverride::new(monday).with_overnight_windows([OverrideWindow::new(at(20), at(4))]),
+    /// ]);
+    /// let hours = ExchangeSessionProvider::new(TimezoneId::utc(), Some(session));
+    /// let sunday_night = "2024-07-14T22:00:00Z".parse::<DateTime<Utc>>()?;
+    /// let monday_noon = "2024-07-15T12:00:00Z".parse::<DateTime<Utc>>()?;
+    /// assert!(hours.is_open(sunday_night, true) && !hours.is_open(sunday_night, false));
+    /// assert!(!hours.is_open(monday_noon, true));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn with_overnight_windows(
         mut self,
         windows: impl IntoIterator<Item = OverrideWindow>,
