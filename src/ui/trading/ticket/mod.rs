@@ -30,10 +30,18 @@ pub enum BracketMode {
     Percent,
     /// The profit or loss at the exit in the account's currency.
     Money,
+    /// The profit or loss at the exit in percent of the account's balance.
+    BalancePercent,
 }
 
 impl BracketMode {
-    const ALL: [Self; 4] = [Self::Price, Self::Ticks, Self::Percent, Self::Money];
+    const ALL: [Self; 5] = [
+        Self::Price,
+        Self::Ticks,
+        Self::Percent,
+        Self::Money,
+        Self::BalancePercent,
+    ];
 
     fn name(self, currency: &str) -> &str {
         match self {
@@ -42,6 +50,7 @@ impl BracketMode {
             Self::Percent => "%",
             Self::Money if currency.is_empty() => "money",
             Self::Money => currency,
+            Self::BalancePercent => "% balance",
         }
     }
 }
@@ -80,14 +89,16 @@ impl Bracket {
     }
 
     /// The exit price for an order on `side` entering at `entry`, where `per_point` is the profit
-    /// or loss of the order's quantity per price unit: a take profit (`profit`) lies above the
-    /// entry of a buy and below that of a sell, a stop loss the other way.
+    /// or loss of the order's quantity per price unit and `balance` the account's positive
+    /// balance: a take profit (`profit`) lies above the entry of a buy and below that of a sell,
+    /// a stop loss the other way. An exit in a share of the balance has no price without one.
     pub(crate) fn price(
         &self,
         side: OrderSide,
         entry: f64,
         tick: f64,
         per_point: f64,
+        balance: Option<f64>,
         profit: bool,
     ) -> f64 {
         let sign = Self::sign(side, profit);
@@ -96,6 +107,9 @@ impl Bracket {
             BracketMode::Ticks => entry + sign * self.value * tick,
             BracketMode::Percent => entry * (1.0 + sign * self.value / 100.0),
             BracketMode::Money => entry + sign * self.value / per_point,
+            BracketMode::BalancePercent => balance.map_or(f64::NAN, |balance| {
+                entry + sign * balance * self.value / 100.0 / per_point
+            }),
         }
     }
 
@@ -107,6 +121,7 @@ impl Bracket {
         entry: f64,
         tick: f64,
         per_point: f64,
+        balance: Option<f64>,
         profit: bool,
     ) -> Self {
         let distance = Self::sign(side, profit) * (price - entry);
@@ -115,6 +130,9 @@ impl Bracket {
             BracketMode::Ticks => (distance / tick).round(),
             BracketMode::Percent => distance / entry * 100.0,
             BracketMode::Money => distance * per_point,
+            BracketMode::BalancePercent => {
+                balance.map_or(f64::NAN, |balance| distance * per_point / balance * 100.0)
+            }
         };
         Self { mode, value }
     }
@@ -226,7 +244,10 @@ enum Sizing {
     Units,
     /// The order's value in the account's currency.
     Value,
-    /// The loss at the stop loss, in percent of the account's balance.
+    /// The order's value in percent of the account's balance.
+    Balance,
+    /// The loss at the stop loss, in percent of the account's balance or, with
+    /// [`OrderTicket::risk_in_money`], in the account's currency.
     Risk,
 }
 
@@ -255,7 +276,7 @@ pub(crate) struct Market<'a> {
     pub decimals: usize,
     /// The account's currency.
     pub currency: &'a str,
-    /// The account's balance: risk sizing takes a percentage of it,
+    /// The account's balance: sizing and exits can take a percentage of it,
     /// and an order's margin is set against it.
     pub balance: Option<f64>,
     pub capabilities: Capabilities,
@@ -297,6 +318,12 @@ impl<'a> Market<'a> {
             formatter: self.formatter,
         }
     }
+
+    /// The account's balance while it is positive and finite, for sizing and exits by a share.
+    pub fn positive_balance(&self) -> Option<f64> {
+        self.balance
+            .filter(|balance| balance.is_finite() && *balance > 0.0)
+    }
 }
 
 /// What the user asked the ticket for.
@@ -329,8 +356,11 @@ pub(crate) struct OrderTicket {
     price_in_ticks: bool,
     sizing: Sizing,
     quantity: f64,
-    /// The value or risk entered for [`Sizing::Value`] and [`Sizing::Risk`].
+    /// The value, share or risk entered for [`Sizing::Value`], [`Sizing::Balance`] and
+    /// [`Sizing::Risk`].
     amount: f64,
+    /// The risk field takes money instead of a percentage of the balance.
+    risk_in_money: bool,
     take_profit: (bool, Bracket),
     /// The take-profit levels after the first. The first level, `take_profit`, takes the rest
     /// of the quantity.
@@ -369,6 +399,7 @@ impl Default for OrderTicket {
             sizing: Sizing::Units,
             quantity: 1.0,
             amount: 1_000.0,
+            risk_in_money: false,
             take_profit: (false, bracket),
             levels: Vec::new(),
             first_level_stop_loss: None,
@@ -483,7 +514,7 @@ impl OrderTicket {
 
     /// The enabled take profit or stop loss of an order entering at `entry`, snapped to the tick,
     /// or none without brackets. Fails when it is not on its side of the entry. Without a
-    /// `quantity`, a stop loss in money cannot be priced.
+    /// `quantity`, a stop loss in money or a share of the balance cannot be priced.
     fn exit(
         &self,
         market: &Market<'_>,
@@ -501,7 +532,7 @@ impl OrderTicket {
             return Ok(None);
         }
         let per_point = match (bracket.mode, quantity) {
-            (BracketMode::Money, None) => {
+            (BracketMode::Money | BracketMode::BalancePercent, None) => {
                 return Err("Sizing by risk needs the stop loss as a price, ticks or %".into());
             }
             (_, quantity) => quantity.unwrap_or(1.0) * market.rules.point_value,
@@ -641,27 +672,34 @@ impl OrderTicket {
             Kind::StopLimit => return Err("Enter a positive stop price".into()),
         };
         let rules = market.rules;
+        let balance = market.positive_balance();
         let reason = |limit: QuantityLimit| {
             limit.message(ctx, &market.numbers(), decimals(rules.quantity_step))
         };
-        // Units and value size the order before its exits; risk sizing needs the stop loss first.
-        let mut quantity = match self.sizing {
-            Sizing::Units => Some(order_quantity(self.quantity, rules).map_err(reason)?),
-            Sizing::Value => Some(
-                order_quantity(self.amount / (entry * rules.point_value), rules).map_err(reason)?,
-            ),
+        // Risk sizing needs the stop loss first; the other modes size the order before its exits.
+        let quantity = match self.sizing {
+            Sizing::Units => Some(self.quantity),
+            Sizing::Value => Some(self.amount / (entry * rules.point_value)),
+            Sizing::Balance => {
+                let balance = balance.ok_or("Sizing by balance needs the account's balance")?;
+                Some(balance * self.amount / 100.0 / (entry * rules.point_value))
+            }
             Sizing::Risk => None,
         };
+        let mut quantity = quantity
+            .map(|quantity| order_quantity(quantity, rules).map_err(reason))
+            .transpose()?;
         let stop_loss = self.exit(market, self.side, entry, quantity, false)?;
         let quantity = match quantity.take() {
             Some(quantity) => quantity,
             None => {
                 let stop = stop_loss.ok_or("Sizing by risk needs a stop loss")?;
-                let balance = market
-                    .balance
-                    .filter(|balance| balance.is_finite() && *balance > 0.0)
-                    .ok_or("Sizing by risk needs the account's balance")?;
-                let risk = balance * self.amount / 100.0;
+                let risk = if self.risk_in_money {
+                    self.amount
+                } else {
+                    let balance = balance.ok_or("Sizing by risk needs the account's balance")?;
+                    balance * self.amount / 100.0
+                };
                 order_quantity(risk / ((entry - stop).abs() * rules.point_value), rules)
                     .map_err(reason)?
             }
@@ -681,6 +719,49 @@ impl OrderTicket {
             rules.time_in_force[0]
         };
         Ok(request)
+    }
+
+    /// Switches the quantity or risk unit while keeping the order's size. Without the entry,
+    /// balance or stop needed to convert it, the amount keeps its number.
+    fn resize(
+        &mut self,
+        ctx: &egui::Context,
+        market: &Market<'_>,
+        sizing: Sizing,
+        risk_in_money: bool,
+    ) {
+        let request = self.request(ctx, market).ok();
+        let quantity = request
+            .as_ref()
+            .map_or(self.quantity, |request| request.quantity);
+        let per_point = quantity * market.rules.point_value;
+        let entry = self
+            .entry(market)
+            .map(|price| to_step(price, market.tick, f64::round));
+        let value = entry.map(|entry| entry * per_point);
+        let risk = request
+            .as_ref()
+            .zip(entry)
+            .and_then(|(request, entry)| Some(risk(request, entry)? * market.rules.point_value))
+            // A risk the order cannot take yet still converts by the balance alone.
+            .or_else(|| match (self.sizing, self.risk_in_money) {
+                (Sizing::Risk, true) => Some(self.amount),
+                (Sizing::Risk, false) => Some(self.amount * market.positive_balance()? / 100.0),
+                _ => None,
+            });
+        let share = |money: Option<f64>| Some(money? / market.positive_balance()? * 100.0);
+        let amount = match sizing {
+            Sizing::Units => None,
+            Sizing::Value => value,
+            Sizing::Balance => share(value),
+            Sizing::Risk if risk_in_money => risk,
+            Sizing::Risk => share(risk),
+        };
+        self.quantity = quantity;
+        if let Some(amount) = amount {
+            self.amount = amount;
+        }
+        (self.sizing, self.risk_in_money) = (sizing, risk_in_money);
     }
 
     fn apply(&mut self, preset: &OrderPreset) {
@@ -735,8 +816,12 @@ fn exit_price(
     per_point: f64,
     profit: bool,
 ) -> Result<f64, String> {
+    let balance = market.positive_balance();
+    if bracket.mode == BracketMode::BalancePercent && balance.is_none() {
+        return Err("An exit in % of the balance needs the account's balance".into());
+    }
     let price = to_step(
-        bracket.price(side, entry, market.tick, per_point, profit),
+        bracket.price(side, entry, market.tick, per_point, balance, profit),
         market.tick,
         f64::round,
     );
@@ -868,25 +953,20 @@ fn summary(
     )
 }
 
-/// The question that confirms an order: "Buy 1 ES @ 4,000.25 LIMIT?", then its exits.
-fn confirmation(
+/// The exits of an order, one line each, shared by the compact form and confirmation.
+fn exit_lines(
     ctx: &egui::Context,
     request: &OrderRequest,
     numbers: &Numbers<'_>,
     quantity_decimals: usize,
-) -> String {
-    let order = summary(ctx, request, numbers, quantity_decimals);
-    let question = match request.side {
-        OrderSide::Buy => "Buy {order}?",
-        OrderSide::Sell => "Sell {order}?",
-    };
-    let mut text = l10n::format_text(ctx, question, &[("order", order)]);
-    let mut line = |key: &str, values: &[(&str, String)]| {
-        text.push('\n');
-        text.push_str(&l10n::format_text(ctx, key, values));
-    };
+) -> Vec<String> {
+    let mut lines = Vec::new();
     if let Some(price) = request.take_profit {
-        line("Take profit {price}", &[("price", numbers.price(price))]);
+        lines.push(l10n::format_text(
+            ctx,
+            "Take profit {price}",
+            &[("price", numbers.price(price))],
+        ));
     }
     for level in &request.take_profit_levels {
         let mut values = vec![
@@ -902,10 +982,34 @@ fn confirmation(
         } else {
             "Take profit {price} for {quantity}"
         };
-        line(key, &values);
+        lines.push(l10n::format_text(ctx, key, &values));
     }
     if let Some(price) = request.stop_loss {
-        line("Stop loss {price}", &[("price", numbers.price(price))]);
+        lines.push(l10n::format_text(
+            ctx,
+            "Stop loss {price}",
+            &[("price", numbers.price(price))],
+        ));
+    }
+    lines
+}
+
+/// The question that confirms an order: "Buy 1 ES @ 4,000.25 LIMIT?", then its exits.
+fn confirmation(
+    ctx: &egui::Context,
+    request: &OrderRequest,
+    numbers: &Numbers<'_>,
+    quantity_decimals: usize,
+) -> String {
+    let order = summary(ctx, request, numbers, quantity_decimals);
+    let question = match request.side {
+        OrderSide::Buy => "Buy {order}?",
+        OrderSide::Sell => "Sell {order}?",
+    };
+    let mut text = l10n::format_text(ctx, question, &[("order", order)]);
+    for line in exit_lines(ctx, request, numbers, quantity_decimals) {
+        text.push('\n');
+        text.push_str(&line);
     }
     text
 }
@@ -1042,7 +1146,7 @@ mod tests {
                             events,
                             ..Default::default()
                         },
-                        |ui| ticket.form(ui, &market),
+                        |ui| ticket.form(ui, &market, false),
                     );
                     let texts: Vec<_> = output
                         .shapes
@@ -1188,7 +1292,7 @@ mod tests {
         );
         // The control is on the Order tab for the pending kind.
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            ticket.show(ui, &market, &mut vec![], &mut false);
+            ticket.show(ui, &market, &mut vec![], &mut false, &mut false);
         });
         let risk = output.shapes.iter().any(|shape| {
             matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Risk, % balance")
@@ -1309,6 +1413,7 @@ mod tests {
             mode: BracketMode::Money,
             value,
         };
+        let balance = |value| Bracket::new(BracketMode::BalancePercent, value);
         // (side, sizing, amount or quantity, take profit, stop loss) -> (quantity, tp, sl)
         let cases = [
             // 1,000,000 / (4,000 * 50) = 5 units.
@@ -1421,6 +1526,24 @@ mod tests {
                 Some(money(250.0)),
                 Ok((2.0, Some(4_005.0), Some(3_997.5))),
             ),
+            // 0.5% and 0.25% of 100,000 are 500 and 250, at 100 per point.
+            (
+                OrderSide::Buy,
+                Sizing::Units,
+                2.0,
+                Some(balance(0.5)),
+                Some(balance(0.25)),
+                Ok((2.0, Some(4_005.0), Some(3_997.5))),
+            ),
+            // 300 and 600 at 150 per point are 2 points down and 4 up for a sell.
+            (
+                OrderSide::Sell,
+                Sizing::Units,
+                3.0,
+                Some(balance(0.3)),
+                Some(balance(0.6)),
+                Ok((3.0, Some(3_998.0), Some(4_004.0))),
+            ),
             // A stop loss in money needs the quantity that risk sizing takes from it.
             (
                 OrderSide::Sell,
@@ -1456,7 +1579,16 @@ mod tests {
             for mode in BracketMode::ALL {
                 let at = |price, profit| {
                     let per_point = quantity * rules.point_value;
-                    Bracket::at(mode, price, side, 4_000.0, 0.25, per_point, profit)
+                    Bracket::at(
+                        mode,
+                        price,
+                        side,
+                        4_000.0,
+                        0.25,
+                        per_point,
+                        market.balance,
+                        profit,
+                    )
                 };
                 let actual = ticket(Some(at(take_profit, true)), Some(at(stop_loss, false)))
                     .request(&egui::Context::default(), &market)
@@ -1545,6 +1677,17 @@ mod tests {
                 true,
                 Ok((None, vec![level(3_998.0, 1.5), level(3_996.0, 1.5)], 450.0)),
             ),
+            // Each 1.5-unit level earns 75 per point: 0.15% and 0.3% give 2 and 4 points.
+            (
+                OrderSide::Sell,
+                Sizing::Units,
+                3.0,
+                balance(0.15),
+                None,
+                vec![(balance(0.3), 50.0)],
+                true,
+                Ok((None, vec![level(3_998.0, 1.5), level(3_996.0, 1.5)], 450.0)),
+            ),
             // Without the capability the first take profit covers the whole quantity.
             (
                 OrderSide::Buy,
@@ -1606,6 +1749,188 @@ mod tests {
                 );
             }
         }
+        // Balance quantities use notional value, and money risk needs no account balance.
+        type SizingCase = (
+            OrderSide,
+            Sizing,
+            bool,
+            f64,
+            Option<Bracket>,
+            Option<Bracket>,
+            Option<f64>,
+            Result<(f64, Option<f64>, Option<f64>), &'static str>,
+        );
+        let cases: &[SizingCase] = &[
+            // 400% of 100,000 / (4,000 * 50) = 2 units.
+            (
+                OrderSide::Buy,
+                Sizing::Balance,
+                false,
+                400.0,
+                None,
+                None,
+                Some(100_000.0),
+                Ok((2.0, None, None)),
+            ),
+            // 570,000 / 200,000 = 2.85, rounded down to 2.5 units.
+            (
+                OrderSide::Sell,
+                Sizing::Balance,
+                false,
+                570.0,
+                None,
+                None,
+                Some(100_000.0),
+                Ok((2.5, None, None)),
+            ),
+            // 1,000 / (2 * 50) = 10 units; a sell's 730 / 100 = 7.3 rounds down to 7.
+            (
+                OrderSide::Buy,
+                Sizing::Risk,
+                true,
+                1_000.0,
+                None,
+                Some(ticks(8.0)),
+                Some(100_000.0),
+                Ok((10.0, None, Some(3_998.0))),
+            ),
+            (
+                OrderSide::Sell,
+                Sizing::Risk,
+                true,
+                730.0,
+                None,
+                Some(ticks(8.0)),
+                Some(100_000.0),
+                Ok((7.0, None, Some(4_002.0))),
+            ),
+            (
+                OrderSide::Buy,
+                Sizing::Balance,
+                false,
+                400.0,
+                None,
+                None,
+                None,
+                Err("Sizing by balance needs the account's balance"),
+            ),
+            (
+                OrderSide::Buy,
+                Sizing::Risk,
+                false,
+                1.0,
+                None,
+                Some(ticks(8.0)),
+                None,
+                Err("Sizing by risk needs the account's balance"),
+            ),
+            (
+                OrderSide::Buy,
+                Sizing::Risk,
+                true,
+                1_000.0,
+                None,
+                Some(ticks(8.0)),
+                None,
+                Ok((10.0, None, Some(3_998.0))),
+            ),
+            (
+                OrderSide::Buy,
+                Sizing::Units,
+                false,
+                2.0,
+                Some(balance(0.5)),
+                None,
+                None,
+                Err("An exit in % of the balance needs the account's balance"),
+            ),
+            (
+                OrderSide::Buy,
+                Sizing::Units,
+                false,
+                2.0,
+                Some(balance(0.5)),
+                None,
+                Some(0.0),
+                Err("An exit in % of the balance needs the account's balance"),
+            ),
+            (
+                OrderSide::Sell,
+                Sizing::Risk,
+                false,
+                1.0,
+                None,
+                Some(balance(0.6)),
+                Some(100_000.0),
+                Err("Sizing by risk needs the stop loss as a price, ticks or %"),
+            ),
+            (
+                OrderSide::Buy,
+                Sizing::Risk,
+                true,
+                1_000.0,
+                None,
+                Some(balance(0.6)),
+                Some(100_000.0),
+                Err("Sizing by risk needs the stop loss as a price, ticks or %"),
+            ),
+        ];
+        let ctx = egui::Context::default();
+        for &(side, sizing, risk_in_money, amount, tp, sl, funds, expected) in cases {
+            market.balance = funds;
+            let ticket = OrderTicket {
+                symbol: "ES".into(),
+                side,
+                sizing,
+                risk_in_money,
+                quantity: amount,
+                amount,
+                take_profit: (tp.is_some(), tp.unwrap_or(ticks(1.0))),
+                stop_loss: (sl.is_some(), sl.unwrap_or(ticks(1.0))),
+                ..OrderTicket::default()
+            };
+            let actual = ticket
+                .request(&ctx, &market)
+                .map(|r| (r.quantity, r.take_profit, r.stop_loss));
+            assert_eq!(
+                actual.as_ref().map_err(String::as_str),
+                expected.as_ref().map_err(|s| *s),
+                "{side:?} {sizing:?} {amount}"
+            );
+        }
+        market.balance = Some(100_000.0);
+        let mut ticket = OrderTicket {
+            symbol: "ES".into(),
+            quantity: 2.0,
+            stop_loss: (true, ticks(8.0)),
+            ..OrderTicket::default()
+        };
+        for (sizing, money, amount) in [
+            (Sizing::Value, false, Some(400_000.0)),
+            (Sizing::Balance, false, Some(400.0)),
+            (Sizing::Risk, false, Some(0.2)),
+            (Sizing::Risk, true, Some(200.0)),
+            (Sizing::Units, true, None),
+        ] {
+            ticket.resize(&ctx, &market, sizing, money);
+            assert_eq!(
+                ticket.request(&ctx, &market).unwrap().quantity,
+                2.0,
+                "{sizing:?} {money}"
+            );
+            assert_eq!((ticket.sizing, ticket.risk_in_money), (sizing, money));
+            if let Some(amount) = amount {
+                assert!(
+                    (ticket.amount - amount).abs() < 1e-9,
+                    "{sizing:?}: {}",
+                    ticket.amount
+                );
+            }
+        }
+        // 40 at 100 per unit is below the minimum quantity; the unit still converts the risk.
+        (ticket.sizing, ticket.amount) = (Sizing::Risk, 40.0);
+        ticket.resize(&ctx, &market, Sizing::Risk, false);
+        assert!((ticket.amount - 0.04).abs() < 1e-9, "{}", ticket.amount);
         // A quoted market order enters a buy at the ask and a sell at the bid: 4 ticks = 1 point.
         let quoted = Market {
             bid: Some(3_999.75),
@@ -1808,10 +2133,23 @@ mod tests {
                 let mut reopened = OrderTicket::default();
                 reopened.open(&request);
                 assert_eq!(reopened.request(&ctx, &market), Ok(request.clone()));
+                if let Some(expected_risk) = expected_risk {
+                    for in_money in [true, false] {
+                        reopened.open(&request);
+                        reopened.resize(&ctx, &market, Sizing::Risk, in_money);
+                        let expected = if in_money {
+                            expected_risk
+                        } else {
+                            expected_risk / 100_000.0 * 100.0
+                        };
+                        assert!((reopened.amount - expected).abs() < 1e-9);
+                        assert_eq!(reopened.quantity, request.quantity);
+                    }
+                }
                 if accepted && first.is_none() && shared.is_none() && second == ticks(8.0) {
                     // Both halves have take profits; only the second half has a stop.
                     let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                        ticket.show(ui, &market, &mut vec![], &mut false);
+                        ticket.show(ui, &market, &mut vec![], &mut false, &mut false);
                     });
                     let theme = ctx.active_theme();
                     for (color, width) in [(theme.ui.take_profit, 10.0), (theme.ui.stop_loss, 5.0)]
@@ -1876,7 +2214,7 @@ mod tests {
                 }
             }
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                ticket.show(ui, &market, &mut vec![], &mut false);
+                ticket.show(ui, &market, &mut vec![], &mut false, &mut false);
             });
             let add_level = |text: &egui::epaint::TextShape| text.galley.text() == "Add level";
             assert_eq!(
