@@ -968,6 +968,10 @@ mod tests {
     #[test]
     fn currency_button_reserves_ticks_and_opens_its_menu() {
         use crate::model::Instrument;
+        assert_eq!(
+            crate::widget::settings::ScalesAndLinesSettings::default().currency_unit_on_hover,
+            crate::config::ChartConfig::default().currency_unit_on_hover
+        );
         for left in [false, true] {
             for currency in [None, Some(""), Some("USD")] {
                 let ctx = Context::default();
@@ -983,6 +987,11 @@ mod tests {
                         .with_price_decimals(0)
                 }));
                 frame(&ctx, &mut chart, 0.0, vec![]);
+                let hidden = shapes(&ctx, &mut chart, 0.05, vec![]);
+                assert!(!hidden.iter().any(|shape| matches!(shape,
+                    Shape::Text(text) if text.galley.text() == "USD"
+                )));
+                chart.config_mut().currency_unit_on_hover = false;
                 let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
                 let header = painted.iter().find_map(|shape| match shape {
                     Shape::Text(text) if text.galley.text() == "USD" => Some(text),
