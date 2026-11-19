@@ -395,6 +395,15 @@ impl OrderTicket {
         }
     }
 
+    /// Selects a type as its tab does, seeding an unentered price from the quote.
+    fn select_kind(&mut self, kind: Kind, market: &Market<'_>) {
+        if self.kind == Kind::Market && kind != Kind::Market && self.price == 0.0 {
+            self.price = self.touch(market).or(market.last).unwrap_or_default();
+            self.limit = self.price;
+        }
+        self.kind = kind;
+    }
+
     /// The order types the account accepts, as tabs with an underline.
     fn kinds(&mut self, ui: &mut Ui, market: &Market<'_>) {
         let theme = ui.active_theme();
@@ -424,11 +433,7 @@ impl OrderTicket {
                 Some(selected),
             );
             if response.clicked() {
-                if self.kind == Kind::Market && kind != Kind::Market && self.price == 0.0 {
-                    self.price = self.touch(market).or(market.last).unwrap_or_default();
-                    self.limit = self.price;
-                }
-                self.kind = kind;
+                self.select_kind(kind, market);
             }
             let color = if selected || response.hovered() {
                 theme.ui.text

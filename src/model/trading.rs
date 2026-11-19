@@ -192,7 +192,7 @@ impl OrderRequest {
 }
 
 /// How long an order stays working.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum TimeInForce {
     /// Until the end of the trading day.

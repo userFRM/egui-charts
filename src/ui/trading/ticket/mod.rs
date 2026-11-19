@@ -60,11 +60,12 @@ impl Bracket {
     /// A bracket of `value`, read as `mode` says.
     ///
     /// ```
-    /// use egui_charts::ui::trading::{Bracket, BracketMode, OrderPreset, PresetSizing};
+    /// use egui_charts::ui::trading::{Bracket, BracketMode, OrderKind, OrderPreset, PresetSizing};
     ///
     /// let mut preset = OrderPreset::new("Scalp", 2.0);
     /// preset.take_profit = Some(Bracket::new(BracketMode::Ticks, 8.0));
     /// preset.sizing = Some(PresetSizing::RiskPercent(1.0));
+    /// preset.order_type = Some(OrderKind::Limit);
     /// ```
     pub fn new(mode: BracketMode, value: f64) -> Self {
         Self { mode, value }
@@ -121,7 +122,7 @@ impl Bracket {
     }
 }
 
-/// A named quantity and brackets the ticket applies in one step. Hosts persist
+/// Named ticket parameters the ticket applies in one step. Hosts persist
 /// [`Trading::presets`](super::Trading::presets) themselves.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -139,6 +140,20 @@ pub struct OrderPreset {
     /// without it restore [`quantity`](Self::quantity) units.
     #[serde(default = "units")]
     pub sizing: Option<PresetSizing>,
+    /// Whether applying sets both exits, turning off one that is `None`. Presets saved without
+    /// this field restore exits.
+    #[serde(default = "restores")]
+    pub exits: bool,
+    /// The order type to select, or `None` to keep the ticket's.
+    #[serde(default)]
+    pub order_type: Option<Kind>,
+    /// The time in force to select, or `None` to keep the ticket's.
+    #[serde(default)]
+    pub time_in_force: Option<TimeInForce>,
+}
+
+fn restores() -> bool {
+    true
 }
 
 fn units() -> Option<PresetSizing> {
@@ -168,15 +183,24 @@ impl OrderPreset {
             take_profit: None,
             stop_loss: None,
             sizing: Some(PresetSizing::Units),
+            exits: true,
+            order_type: None,
+            time_in_force: None,
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Kind {
+/// The order types the ticket offers, without their prices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum Kind {
+    /// At the best price available now.
     Market,
+    /// At the entered price or better.
     Limit,
+    /// As a market order once the market trades at the entered price.
     Stop,
+    /// As a limit order at the limit price once the market trades at the stop price.
     StopLimit,
 }
 
@@ -207,6 +231,21 @@ enum Sizing {
     Value,
     /// The loss at the stop loss, in percent of the account's balance.
     Risk,
+}
+
+/// Which parts of the ticket a new preset keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PresetFields {
+    quantity: bool,
+    exits: bool,
+    order_type: bool,
+    time_in_force: bool,
+}
+
+impl Default for PresetFields {
+    fn default() -> Self {
+        Self { quantity: true, exits: true, order_type: true, time_in_force: true }
+    }
 }
 
 /// The ticket's two tabs.
@@ -313,6 +352,7 @@ pub(crate) struct OrderTicket {
     stop_loss: (bool, Bracket),
     time_in_force: TimeInForce,
     preset_name: String,
+    preset_fields: PresetFields,
     tab: Tab,
     exits_open: bool,
     ladder: Ladder,
@@ -345,6 +385,7 @@ impl Default for OrderTicket {
             stop_loss: (false, bracket),
             time_in_force: TimeInForce::Day,
             preset_name: String::new(),
+            preset_fields: PresetFields::default(),
             tab: Tab::Order,
             exits_open: true,
             ladder: Ladder::default(),
@@ -634,13 +675,21 @@ impl OrderTicket {
         if preset.sizing.is_some() {
             self.quantity = preset.quantity;
         }
-        self.take_profit = preset
-            .take_profit
-            .map_or((false, self.take_profit.1), |bracket| (true, bracket));
-        self.levels.clear();
-        self.stop_loss = preset
-            .stop_loss
-            .map_or((false, self.stop_loss.1), |bracket| (true, bracket));
+        if preset.exits {
+            self.take_profit = preset
+                .take_profit
+                .map_or((false, self.take_profit.1), |bracket| (true, bracket));
+            self.levels.clear();
+            self.stop_loss = preset
+                .stop_loss
+                .map_or((false, self.stop_loss.1), |bracket| (true, bracket));
+        }
+        if let Some(kind) = preset.order_type.filter(|kind| kind.accepted(&market.capabilities)) {
+            self.select_kind(kind, market);
+        }
+        if let Some(value) = preset.time_in_force.filter(|value| market.rules.time_in_force.contains(value)) {
+            self.time_in_force = value;
+        }
     }
 
     fn preset(&self, ctx: &egui::Context, name: String, market: &Market<'_>) -> OrderPreset {
@@ -650,13 +699,16 @@ impl OrderTicket {
         OrderPreset {
             name,
             quantity,
-            take_profit: self.take_profit.0.then_some(self.take_profit.1),
-            stop_loss: self.stop_loss.0.then_some(self.stop_loss.1),
-            sizing: Some(match self.sizing {
+            take_profit: (self.preset_fields.exits && self.take_profit.0).then_some(self.take_profit.1),
+            stop_loss: (self.preset_fields.exits && self.stop_loss.0).then_some(self.stop_loss.1),
+            sizing: self.preset_fields.quantity.then_some(match self.sizing {
                 Sizing::Units => PresetSizing::Units,
                 Sizing::Value => PresetSizing::Value(self.amount),
                 Sizing::Risk => PresetSizing::RiskPercent(self.amount),
             }),
+            exits: self.preset_fields.exits,
+            order_type: self.preset_fields.order_type.then_some(self.kind),
+            time_in_force: self.preset_fields.time_in_force.then_some(self.time_in_force),
         }
     }
 }
@@ -939,6 +991,62 @@ mod tests {
             assert_eq!(request.quantity, applied, "{sizing:?}, brackets {brackets}");
             assert_eq!(request.stop_loss, (stop && brackets).then_some(196.0));
         }
+    }
+
+    /// Unselected fields survive applying a preset, unsupported selections are skipped, and
+    /// older saved presets still restore their units and exits.
+    #[test]
+    fn presets_restore_only_the_fields_they_keep() {
+        let ctx = egui::Context::default();
+        let ticks = |v| Bracket::new(BracketMode::Ticks, v);
+        let all = PresetFields::default();
+        let quantity = PresetFields { quantity: true, exits: false, order_type: false, time_in_force: false };
+        let kinds = PresetFields { quantity: false, exits: false, order_type: true, time_in_force: true };
+        // Literal produced by serializing OrderPreset on origin/main.
+        let old = r#"{"name":"Scalp","quantity":2.0,"take_profit":null,"stop_loss":{"mode":"Ticks","value":8.0}}"#;
+        for (fields, accepts, legacy, kind, tif, units, profit, stop) in [
+            (all, true, false, Kind::Limit, TimeInForce::GoodTillCancelled, 2.0, Some(ticks(8.0)), None),
+            (quantity, true, false, Kind::Stop, TimeInForce::Day, 2.0, None, Some(ticks(4.0))),
+            (kinds, true, false, Kind::Limit, TimeInForce::GoodTillCancelled, 1.0, None, Some(ticks(4.0))),
+            (all, false, false, Kind::Stop, TimeInForce::Day, 2.0, Some(ticks(8.0)), None),
+            (all, true, true, Kind::Stop, TimeInForce::Day, 2.0, None, Some(ticks(8.0))),
+        ] {
+            let mut rules = TradingRules::new("ES");
+            rules.time_in_force.push(TimeInForce::GoodTillCancelled);
+            let mut market = market(&rules);
+            let saving = OrderTicket {
+                symbol: "ES".into(), kind: Kind::Limit, price: 100.0,
+                time_in_force: TimeInForce::GoodTillCancelled, quantity: 2.0,
+                take_profit: (true, ticks(8.0)), preset_fields: fields,
+                ..OrderTicket::default()
+            };
+            let saved = if legacy { old.to_owned() } else {
+                serde_json::to_string(&saving.preset(&ctx, "Scalp".into(), &market)).unwrap()
+            };
+            let preset: OrderPreset = serde_json::from_str(&saved).unwrap();
+            market.capabilities.limit = accepts;
+            let mut restricted = rules.clone();
+            if !accepts { restricted.time_in_force = vec![TimeInForce::Day]; }
+            market.rules = &restricted;
+            let mut ticket = OrderTicket {
+                symbol: "ES".into(), kind: Kind::Stop, price: 101.0,
+                stop_loss: (true, ticks(4.0)), levels: vec![(ticks(12.0), 50.0)],
+                ..OrderTicket::default()
+            };
+            ticket.apply(&preset, &market);
+            assert_eq!((ticket.kind, ticket.time_in_force, ticket.sizing, ticket.quantity),
+                (kind, tif, Sizing::Units, units), "{saved}, accepts {accepts}");
+            assert_eq!(ticket.take_profit.0.then_some(ticket.take_profit.1), profit);
+            assert_eq!(ticket.stop_loss.0.then_some(ticket.stop_loss.1), stop);
+            assert_eq!(ticket.levels.is_empty(), preset.exits);
+        }
+        let rules = TradingRules::new("ES");
+        let market = market(&rules);
+        let mut ticket = OrderTicket::default();
+        let mut preset = OrderPreset::new("Limit", 1.0);
+        preset.order_type = Some(Kind::Limit);
+        ticket.apply(&preset, &market);
+        assert_eq!((ticket.price, ticket.limit), (100.0, 100.0), "selecting seeds the entry like its tab");
     }
 
     #[test]

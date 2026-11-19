@@ -968,7 +968,7 @@ Terminal,Trading panel,"Position line with P&L, close and reverse",incomplete,ho
 Terminal,Trading panel,Several take-profit levels on one order,incomplete,host,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/chart/rendering/trading_lines/mod.rs;src/ui/trading/account_panel/view.rs;src/services/paper.rs,
 Terminal,Trading panel,"Show/hide positions, orders and executions",incomplete,library,src/ui/trading/mod.rs;src/ui/trading/view.rs;terminal/src/trading.rs,
 Terminal,Trading panel,Take-profit and stop-loss buttons on working order labels,verified,host,src/chart/rendering/trading_lines/mod.rs;src/ui/trading/view.rs,
-Terminal,Trading panel,Time in force and order presets,incomplete,library,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/ui/trading/widgets.rs;src/ui/trading/ticket/view.rs;src/ui/trading/mod.rs,3535
+Terminal,Trading panel,Time in force and order presets,incomplete,library,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/ui/trading/widgets.rs;src/ui/trading/ticket/view.rs;src/ui/trading/mod.rs;src/model/trading.rs,3535
 Terminal,Trading panel,Trade button and broker / paper account picker,unverified,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/broker_picker.rs;terminal/src/trading.rs,
 Terminal,Trading panel,Trading notifications,unverified,host,src/ui/trading/mod.rs;src/ui/trading/events.rs;src/ui/trading/format.rs;src/ui_kit/notifications/toast.rs;src/ui_kit/notifications/panel.rs,3279;3432;3433
 Terminal,Watchlists and screeners,Add to watchlist from the chart context menu,unverified,library,src/ui/context_menu/mod.rs;src/ui/widget_bar/panels/watchlist.rs;terminal/src/panels.rs,

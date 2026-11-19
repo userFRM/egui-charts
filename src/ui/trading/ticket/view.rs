@@ -253,6 +253,18 @@ impl OrderTicket {
         if let Some(index) = remove {
             presets.remove(index);
         }
+        ui.horizontal_wrapped(|ui| {
+            ui.weak(l10n::text(ui.ctx(), "Keep in preset"));
+            for (value, label, name) in [
+                (&mut self.preset_fields.quantity, "Quantity", "Keep quantity"),
+                (&mut self.preset_fields.exits, "Exits", "Keep exits"),
+                (&mut self.preset_fields.order_type, "Order type", "Keep order type"),
+                (&mut self.preset_fields.time_in_force, "Time in force", "Keep time in force"),
+            ] {
+                ui.checkbox(value, l10n::text(ui.ctx(), label))
+                    .accessible_name(l10n::text(ui.ctx(), name));
+            }
+        });
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.preset_name)
@@ -262,7 +274,8 @@ impl OrderTicket {
             let name = self.preset_name.trim();
             if ui
                 .add_enabled(
-                    !name.is_empty(),
+                    !name.is_empty() && (self.preset_fields.quantity || self.preset_fields.exits
+                        || self.preset_fields.order_type || self.preset_fields.time_in_force),
                     egui::Button::new(l10n::text(ui.ctx(), "Save")),
                 )
                 .clicked()
