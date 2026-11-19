@@ -205,7 +205,7 @@ pub(super) fn show(
                             "{side} {quantity} at {price}, {time}",
                             &[
                                 ("side", l10n::text(ui.ctx(), side_name(fill.side)).as_str()),
-                                ("quantity", fill.quantity.to_string().as_str()),
+                                ("quantity", numbers.quantity(fill.quantity, quantity_decimals(fill.quantity)).as_str()),
                                 ("price", numbers.price(fill.price).as_str()),
                                 // With seconds, also on charts of daily bars.
                                 ("time", time.format_crosshair(fill.time, 1).as_str()),
@@ -241,7 +241,8 @@ mod tests {
     use crate::model::OrderId;
     use crate::widget::test_frames;
 
-    /// Execution tooltips use the symbol's host price text and retain the decimal fallback.
+    /// Labels and hover use the same host quantity text, with grouped and rounded fallback;
+    /// hover prices retain the symbol's formatter.
     #[test]
     fn execution_hover_uses_symbol_price_formatter() {
         struct Host;
@@ -249,12 +250,18 @@ mod tests {
             fn price(&self, symbol: &str, price: f64) -> Option<String> {
                 (symbol == "BOND").then(|| format!("{price:.3} u"))
             }
+            fn quantity(&self, symbol: &str, quantity: f64) -> Option<String> {
+                (symbol == "BOND").then(|| format!("{quantity} lots"))
+            }
         }
-        for (symbol, formatter, expected) in [
-            ("BOND", Some(&Host as &dyn TradingFormatter), "1001.125 u"),
-            ("BOND", None, "1,001.12"),
-            ("OTHER", Some(&Host as &dyn TradingFormatter), "1,001.12"),
-        ] {
+        type Row<'a> = (&'a str, Option<&'a dyn TradingFormatter>, f64, &'a str, &'a str);
+        let rows: [Row<'_>; 4] = [
+            ("BOND", Some(&Host), 2.0, "Buy 2 lots", "Buy 2 lots at 1001.125 u, "),
+            ("BOND", None, 2.0, "Buy 2", "Buy 2 at 1,001.12, "),
+            ("OTHER", Some(&Host), 2.0, "Buy 2", "Buy 2 at 1,001.12, "),
+            ("OTHER", None, 0.1 + 0.2, "Buy 0.3", "Buy 0.3 at 1,001.12, "),
+        ];
+        for (symbol, formatter, quantity, label, hover) in rows {
             let ctx = egui::Context::default();
             let mut chart = test_frames::chart(&[990.0], &[1010.0]);
             let fill = Execution::new(
@@ -262,9 +269,9 @@ mod tests {
                 chart.bars(crate::widget::SeriesId::MAIN)[95].time,
                 OrderSide::Buy,
                 1001.125,
-                2.0,
+                quantity,
             );
-            let mut hovered = false;
+            let (mut hovered, mut labelled) = (false, false);
             for frame in 0..4 {
                 let mapping = chart.get_chart_mapping();
                 let events = chart
@@ -287,7 +294,7 @@ mod tests {
                             ui,
                             &chart,
                             &[&fill],
-                            false,
+                            true,
                             Numbers {
                                 symbol,
                                 decimals: 2,
@@ -298,11 +305,15 @@ mod tests {
                 );
                 hovered |= output.shapes.iter().any(|shape| {
                     matches!(&shape.shape, Shape::Text(text)
-                        if text.galley.text().starts_with(&format!("Buy 2 at {expected}, ")))
+                        if text.galley.text().starts_with(hover))
+                });
+                labelled |= output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, Shape::Text(text) if text.galley.text() == label)
                 });
                 output.drop_without_applying_deltas();
             }
-            assert!(hovered, "execution hover price: {symbol} {expected}");
+            assert!(labelled, "execution label: {symbol} {label}");
+            assert!(hovered, "execution hover: {symbol} {hover}");
         }
     }
 }
