@@ -376,7 +376,11 @@ fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool, as_percent: &mut 
         ),
     ];
     let pairs = if ui.available_width() >= 760.0 { 2 } else { 1 };
+    let columns = pairs * 2;
+    let column_width =
+        (ui.available_width() - theme.spacing.xxl * (columns - 1) as f32) / columns as f32;
     egui::Grid::new("performance")
+        .max_col_width(column_width.max(1.0))
         .striped(true)
         .spacing([theme.spacing.xxl, theme.spacing.sm])
         .show(ui, |ui| {
