@@ -2852,8 +2852,7 @@ pub(super) mod tests {
                         let settings = study.settings();
                         study.apply_settings(&inputs, settings)
                     } else {
-                        edit
-                            .iter()
+                        edit.iter()
                             .try_for_each(|(id, value)| study.set_input(id, value.clone()))
                     };
                     if let Err(error) = result {
