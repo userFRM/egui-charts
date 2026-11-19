@@ -2714,4 +2714,168 @@ pub(super) mod tests {
             );
         }
     }
+
+    /// A study calculated on another interval reads the other symbol its input names on that
+    /// interval, whether the symbol or the interval is chosen first, through `set_input` or
+    /// `apply_settings`, in one Apply, and once restored from a save made before it read it.
+    #[test]
+    fn a_study_symbol_loads_on_its_calculation_interval_in_either_order() {
+        use crate::studies::{
+            CustomIndicator, IndicatorValue, InputKind, Ratio, StudyInput, StudyTemplate,
+        };
+        // A study that follows its Symbol input, as Ratio does: the chart symbol while empty.
+        let custom = || -> Box<dyn crate::studies::Indicator> {
+            let requests = |inputs: &[StudyInput]| match &inputs[0].value {
+                InputValue::Symbol(symbol) if !symbol.is_empty() => vec![StudyDataRequest {
+                    symbol: symbol.clone(),
+                    timeframe: None,
+                    metric: None,
+                }],
+                _ => Vec::new(),
+            };
+            Box::new(
+                CustomIndicator::new("Other ratio", |_| Vec::new())
+                    .with_inputs(
+                        vec![StudyInput::new(
+                            "symbol",
+                            "Symbol",
+                            InputValue::Symbol(String::new()),
+                            InputKind::Symbol,
+                        )],
+                        move |bars, inputs, _, histories| {
+                            let wanted = requests(inputs);
+                            let history = histories
+                                .iter()
+                                .find(|history| wanted.contains(&history.request));
+                            bars.iter()
+                                .map(|bar| {
+                                    history
+                                        .and_then(|history| {
+                                            let at = history.bar_at(bar.time)?;
+                                            Some(bar.close / history.bars[at].close)
+                                        })
+                                        .map_or(IndicatorValue::None, IndicatorValue::Single)
+                                })
+                                .collect()
+                        },
+                    )
+                    .unwrap()
+                    .with_data_requests(requests),
+            )
+        };
+        let hourly = |symbol: &str| StudyDataRequest {
+            symbol: symbol.into(),
+            timeframe: Some(Timeframe::Hour1),
+            metric: None,
+        };
+        let chart = || {
+            let mut chart = Chart::new(crate::model::BarData::from_bars(bars(&[1.0; 6], 30)));
+            chart.set_symbol("MAIN");
+            chart.set_timeframe(Timeframe::Min30);
+            chart
+        };
+        // On a 30-minute chart of MAIN, the study requests both symbols on 1h. Hourly 10 / 5 = 2
+        // and 20 / 4 = 5 show once their hour closes, at the 00:30 and 01:30 bars; the 02:00
+        // hour, 40 / 10 = 4, is still open on the last bar.
+        let check = |case: &str, chart: &mut Chart, id: crate::widget::SeriesId| {
+            assert_eq!(
+                chart.study_data_requests(),
+                [hourly("MAIN"), hourly("OTHER")],
+                "{case}"
+            );
+            chart.set_study_data(hourly("MAIN"), bars(&[10.0, 20.0, 40.0], 60), None);
+            chart.set_study_data(hourly("OTHER"), bars(&[5.0, 4.0, 10.0], 60), None);
+            let ctx = egui::Context::default();
+            for frame in 0..10 {
+                shapes(&ctx, chart, frame as f64, Vec::new());
+            }
+            let (_, study) = chart
+                .indicators()
+                .find(|(candidate, _)| *candidate == id)
+                .unwrap();
+            assert_eq!(
+                (0..6)
+                    .map(|bar| study.values().value(0, bar))
+                    .collect::<Vec<_>>(),
+                [None, Some(2.0), Some(2.0), Some(5.0), Some(5.0), Some(5.0)],
+                "{case}"
+            );
+        };
+        let interval = (
+            "calculation_timeframe",
+            InputValue::Timeframe(Some(Timeframe::Hour1)),
+        );
+        type Factory = fn() -> Box<dyn crate::studies::Indicator>;
+        let studies: [(&str, &str, Factory); 2] = [
+            ("Ratio", "symbol_1", || Box::new(Ratio::default())),
+            ("custom", "symbol", custom),
+        ];
+        for (name, symbol, study) in studies {
+            let symbol = (symbol, InputValue::Symbol("OTHER".into()));
+            for (order, apply, edits) in [
+                (
+                    "symbol, then interval",
+                    false,
+                    vec![vec![symbol.clone()], vec![interval.clone()]],
+                ),
+                (
+                    "interval, then symbol",
+                    false,
+                    vec![vec![interval.clone()], vec![symbol.clone()]],
+                ),
+                (
+                    "symbol, then interval",
+                    true,
+                    vec![vec![symbol.clone()], vec![interval.clone()]],
+                ),
+                (
+                    "interval, then symbol",
+                    true,
+                    vec![vec![interval.clone()], vec![symbol.clone()]],
+                ),
+                (
+                    "one Apply",
+                    true,
+                    vec![vec![symbol.clone(), interval.clone()]],
+                ),
+            ] {
+                let case = format!("{name}: {order}, apply_settings {apply}");
+                let mut chart = chart();
+                let id = chart.add_indicator(study());
+                for batch in edits {
+                    let study = chart.indicator_mut(id).unwrap();
+                    let result = if apply {
+                        let inputs: Vec<_> = batch
+                            .iter()
+                            .map(|(id, value)| (id.to_string(), value.clone()))
+                            .collect();
+                        let settings = study.settings();
+                        study.apply_settings(&inputs, settings)
+                    } else {
+                        batch
+                            .iter()
+                            .try_for_each(|(id, value)| study.set_input(id, value.clone()))
+                    };
+                    if let Err(error) = result {
+                        panic!("{case}: {error}");
+                    }
+                }
+                check(&case, &mut chart, id);
+            }
+        }
+        // Saved with Interval 1h and Second symbol OTHER while the study did not read that
+        // symbol there, a Ratio restores those inputs and reads it.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"Ratio","inputs":[["symbol_0",{"Symbol":""}],["source_0",{"Choice":3}],["symbol_1",{"Symbol":"OTHER"}],["source_1",{"Choice":3}],["calculation_timeframe",{"Timeframe":"Hour1"}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/type.Ratio.html","plots":[{"color":[83,0,83,166],"width":2.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[5,0,5,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+        )
+        .unwrap();
+        let mut restored = chart();
+        let id = restored.add_indicator(saved.create().unwrap());
+        let (_, study) = restored
+            .indicators()
+            .find(|(candidate, _)| *candidate == id)
+            .unwrap();
+        assert_eq!(StudyTemplate::from_study(study).inputs, saved.inputs);
+        check("Ratio: restored", &mut restored, id);
+    }
 }

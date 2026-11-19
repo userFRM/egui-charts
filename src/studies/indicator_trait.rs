@@ -576,10 +576,13 @@ pub trait Indicator: Send {
 
     /// Whether the histories this study requests still apply when it is calculated on another
     /// interval than the chart's. A [`ConfiguredStudy`](super::ConfiguredStudy) then offers it the
-    /// Interval and Wait for interval close inputs, otherwise offered to source-aware studies and
-    /// studies that request nothing. On another interval it passes every request on with the
+    /// Interval and Wait for interval close inputs, otherwise offered to source-aware studies,
+    /// studies that request nothing, and studies without an interval input of their own that
+    /// request only price bars of other symbols or of the chart's interval, which they read on the
+    /// Interval as on a chart of it. On another interval it passes every request on with the
     /// start [`data_start`](Indicator::data_start) states. The default, `false`, keeps a study
-    /// that requests data on the chart's interval.
+    /// that requests other histories, such as the chart symbol's bars of a stated interval or
+    /// metrics, on the chart's interval.
     fn requests_allow_other_intervals(&self) -> bool {
         false
     }
