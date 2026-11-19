@@ -431,8 +431,8 @@ impl AlertFeed {
                 &self.request.clock,
                 updates.bars.into_values().collect(),
             );
-            if let Some(error) = updates.error {
-                // Discard pending replies and replace a failed subscription before evaluating again.
+            // Replace incomplete history and pending replies before evaluating again.
+            if updates.reload || updates.error.is_some() {
                 self.unsubscribe();
                 self.inbox = std::sync::Arc::default();
                 self.wake.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -445,6 +445,8 @@ impl AlertFeed {
                 self.origins.clear();
                 self.request.before = None;
                 self.end = false;
+            }
+            if let Some(error) = updates.error {
                 self.failed(&error, now);
                 errors.push(error);
             }
