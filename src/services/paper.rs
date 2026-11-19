@@ -165,16 +165,26 @@ impl PaperAccount {
         self.lock().replay_time = time;
     }
 
-    /// Returns the account to its starting balance without orders, positions or history,
-    /// retaining the host's prices and replay clock. The terminal shows the fresh account once
-    /// it connects again, such as through
-    /// `ui::trading::Trading::set_service` with the `ui` feature.
+    /// Returns the account to its starting balance without orders, positions or history. It keeps
+    /// its settings, the host's prices and replay clock, and the count its order ids continue from.
+    /// It ends the event stream of the last [`connect`](Broker::connect), so the terminal connects
+    /// again at its next poll and shows the fresh account; a host that reads the stream itself
+    /// calls `connect` again once [`Events::is_active`] is false.
     pub fn reset(&self) {
         let mut state = self.lock();
-        let last = std::mem::take(&mut state.last);
+        if let Some(events) = state.events.take() {
+            events.end();
+        }
+        let State {
+            replay_time,
+            next_id,
+            last,
+            ..
+        } = std::mem::take(&mut *state);
         *state = State {
             balance: self.initial,
-            replay_time: state.replay_time,
+            replay_time,
+            next_id,
             last,
             ..State::default()
         };

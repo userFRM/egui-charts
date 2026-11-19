@@ -1047,6 +1047,51 @@ mod tests {
         );
     }
 
+    /// Resetting a connected account clears the old orders, positions and fills at the next poll,
+    /// and later fills reach both the account panel and the chart's positions.
+    #[test]
+    fn a_reset_paper_account_restates_itself_on_the_next_poll() {
+        use crate::data::inbox::Inbox;
+        use crate::model::TimeInForce;
+        use crate::services::{Broker, PaperAccount};
+        let ctx = egui::Context::default();
+        let paper = Arc::new(PaperAccount::new("USD", 100_000.0));
+        paper.set_price("SYM", 100.0);
+        let mut trading = Trading::default();
+        (trading.display.instant_orders, trading.quantity) = (true, 1.0);
+        trading.set_service(paper.clone());
+        trading.poll(&ctx, &mut Toasts::new());
+        trading.trade("SYM".into(), OrderSide::Buy);
+        trading.poll(&ctx, &mut Toasts::new());
+        let held = |trading: &Trading| -> Vec<(String, f64)> {
+            (trading.positions.iter())
+                .map(|p| (p.symbol.clone(), p.quantity))
+                .collect()
+        };
+        trading.trade("SYM".into(), OrderSide::Buy);
+        let mut limit = OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(90.0));
+        limit.time_in_force = TimeInForce::GoodTillCancelled;
+        paper.place(limit, Arc::new(Inbox::default()).reply(0));
+        trading.poll(&ctx, &mut Toasts::new());
+        assert_eq!(
+            (held(&trading), trading.orders.len()),
+            (vec![("SYM".into(), 1.0)], 1)
+        );
+
+        let old_id = trading.account_panel.fills.executions[0].order.clone();
+        paper.reset();
+        trading.poll(&ctx, &mut Toasts::new());
+        assert_eq!((held(&trading), trading.orders.len()), (vec![], 0));
+        assert!(trading.account_panel.fills.executions.is_empty());
+        assert_eq!(trading.account.as_ref().map(|a| a.balance), Some(100_000.0));
+
+        trading.trade("SYM".into(), OrderSide::Buy);
+        trading.poll(&ctx, &mut Toasts::new());
+        assert_eq!(held(&trading), vec![("SYM".into(), 1.0)]);
+        assert_eq!(trading.account_panel.fills.executions.len(), 1);
+        assert_ne!(trading.account_panel.fills.executions[0].order, old_id);
+    }
+
     /// A close the user confirmed waits for the trading rules of its symbol; when the stream lags
     /// before their answer is read, the close is reported as refused, as when the broker stops
     /// being live, and never sent, so the position stays open. A regression drops the close
