@@ -16,14 +16,15 @@ const STUDY_ROW_ALPHA: u8 = 163;
 
 /// Whether a study's profile measures the bars in view, not a span of its own, so that its point
 /// of control crosses the plot. An options profile measures strikes.
-pub(crate) fn measures_view(profile: &VolumeProfile, right_aligned: bool) -> bool {
-    right_aligned && profile.source() != ProfileSource::Options
+pub(crate) fn measures_view(profile: &VolumeProfile, strip: bool) -> bool {
+    strip && profile.source() != ProfileSource::Options
 }
 
 /// Study rows leave candles visible; drawings also tint their span.
 pub(crate) enum ProfileStyle {
     Study {
         right_aligned: bool,
+        strip: bool,
         /// Share of the span that the row with the most volume takes.
         width: f32,
     },
@@ -87,13 +88,15 @@ pub(crate) fn paint_profile(
         return;
     }
     let options = profile.source() == ProfileSource::Options;
-    let (drawing, right_aligned, share, poc_width) = match style {
+    let (drawing, right_aligned, strip, share, poc_width) = match style {
         ProfileStyle::Study {
             right_aligned,
+            strip,
             width,
         } => (
             false,
             right_aligned,
+            strip,
             width,
             if options {
                 stroke::HAIRLINE
@@ -105,7 +108,7 @@ pub(crate) fn paint_profile(
         ProfileStyle::Drawing {
             anchored,
             poc_width,
-        } => (true, anchored, 0.3, poc_width),
+        } => (true, anchored, false, 0.3, poc_width),
     };
     if profile.exposure.is_some() {
         paint_exposure(painter, profile, config, span, share, price_to_y);
@@ -116,7 +119,7 @@ pub(crate) fn paint_profile(
     };
     let y_at_row = |row: usize| (price_to_y)(profile.low + row as f64 * profile.row_height);
     let color = shown_color(painter, color);
-    let spans_view = !drawing && measures_view(profile, right_aligned);
+    let spans_view = !drawing && measures_view(profile, strip);
     let rect = Rect::from_two_pos(
         Pos2::new(left, y_at_row(profile.volume.len())),
         Pos2::new(right, y_at_row(0)),
@@ -286,6 +289,57 @@ pub(crate) fn paint_profile(
                     rgba(color),
                 );
             }
+        }
+    }
+
+    if config.show_values && !drawing && !options {
+        use crate::scales::PriceFormatter;
+        let formatter = crate::scales::VolumeFormatter { precision: 2 };
+        let font = egui::FontId::proportional(typography::XS);
+        let text_color = painter.ctx().active_theme().ui.text;
+        for (row, &volume) in profile.volume.iter().enumerate() {
+            let delta = profile.up[row] - profile.down[row];
+            let amount = if config.display == ProfileDisplay::Delta {
+                delta.abs()
+            } else {
+                volume
+            };
+            if amount <= 0.0 {
+                continue;
+            }
+            let text = match config.display {
+                ProfileDisplay::Total => formatter.format(volume),
+                ProfileDisplay::UpDown => format!(
+                    "{} / {}",
+                    formatter.format(profile.up[row]),
+                    formatter.format(profile.down[row])
+                ),
+                ProfileDisplay::Delta => format!(
+                    "{}{}",
+                    if delta > 0.0 { "+" } else { "" },
+                    formatter.format(delta)
+                ),
+            };
+            let galley = painter.layout_no_wrap(text, font.clone(), text_color);
+            let (a, b) = (y_at_row(row), y_at_row(row + 1));
+            if (a - b).abs() < galley.size().y {
+                continue;
+            }
+            let width = if config.show_rows {
+                (amount / max_volume) as f32 * max_width
+            } else {
+                0.0
+            };
+            let x = if right_aligned {
+                row_right - width - 2.0 - galley.size().x
+            } else {
+                left + width + 2.0
+            };
+            painter.galley(
+                Pos2::new(x, (a + b - galley.size().y) * 0.5),
+                galley,
+                text_color,
+            );
         }
     }
 
@@ -680,6 +734,7 @@ mod tests {
                     } else {
                         ProfileStyle::Study {
                             right_aligned: false,
+                            strip: false,
                             width: 0.9,
                         }
                     },
@@ -774,6 +829,7 @@ mod tests {
                     span.clone(),
                     ProfileStyle::Study {
                         right_aligned,
+                        strip: right_aligned,
                         width: if right_aligned { 1.0 } else { 0.9 },
                     },
                     &|price| (price - 100.0) as f32 * 10.0,

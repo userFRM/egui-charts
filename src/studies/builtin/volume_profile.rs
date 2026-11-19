@@ -78,6 +78,8 @@ struct ProfileStudy {
     whole_ticks: bool,
     /// Share of a profile's span that its widest row takes; a visible profile fills its strip.
     width: f64,
+    right: bool,
+    show_values: bool,
     extend: [bool; 3],
     display: ProfileDisplay,
     start_time: f64,
@@ -295,6 +297,8 @@ impl ProfileStudy {
             row_ticks: 0,
             whole_ticks: true,
             width: 0.3,
+            right: kind == Kind::Visible,
+            show_values: false,
             extend: [false; 3],
             display: ProfileDisplay::UpDown,
             start_time: -8e15,
@@ -526,14 +530,12 @@ impl ProfileStudy {
                 .shown_when("sessions", [1, 2, 3]),
             );
         }
-        if self.kind != Kind::Visible {
-            inputs.push(StudyInput::new(
-                "width",
-                "Width (%)",
-                InputValue::Number(self.width * 100.0),
-                InputKind::Number(1.0, 100.0),
-            ));
-        }
+        inputs.push(StudyInput::new(
+            "width",
+            "Width (%)",
+            InputValue::Number(self.width * 100.0),
+            InputKind::Number(1.0, 100.0),
+        ));
         if matches!(self.kind, Kind::Session | Kind::Periodic) {
             for (i, (id, label)) in [
                 ("extend_poc", "Extend POC right"),
@@ -621,6 +623,24 @@ impl ProfileStudy {
         ] {
             inputs.push(StudyInput::new(id, label, value, kind).in_style_tab());
         }
+        inputs.push(
+            StudyInput::new(
+                "placement",
+                "Placement",
+                InputValue::Choice(usize::from(self.right)),
+                InputKind::Choice(vec!["Left".into(), "Right".into()]),
+            )
+            .in_style_tab(),
+        );
+        inputs.push(
+            StudyInput::new(
+                "show_values",
+                "Values",
+                InputValue::Toggle(self.show_values),
+                InputKind::Toggle,
+            )
+            .in_style_tab(),
+        );
         inputs
     }
 
@@ -634,6 +654,8 @@ impl ProfileStudy {
         }
         match (id, value) {
             ("show_rows", InputValue::Toggle(v)) => self.show_rows = v,
+            ("show_values", InputValue::Toggle(v)) => self.show_values = v,
+            ("placement", InputValue::Choice(v)) => self.right = v == 1,
             ("up_color", InputValue::Color(v)) => self.colors[1] = v,
             ("down_color", InputValue::Color(v)) => self.colors[2] = v,
             ("va_up_color", InputValue::Color(v)) => self.colors[3] = v,
@@ -1220,6 +1242,7 @@ impl ProfileStudy {
             config = config.with_row_size(Some(height)).unwrap_or(config);
         }
         config.show_rows = self.show_rows;
+        config.show_values = self.show_values;
         config.show_poc = self.lines[0];
         config.show_value_area_high = self.lines[1];
         config.show_value_area_low = self.lines[2];
@@ -1283,7 +1306,8 @@ impl ProfileStudy {
                     profile: Arc::new(profile),
                     config: effective,
                     color: self.colors[0].to_srgba_unmultiplied(),
-                    right_aligned: self.kind == Kind::Visible,
+                    right_aligned: self.right,
+                    strip: (self.kind == Kind::Visible).then_some(self.width as f32),
                     width,
                 };
                 profiles.push(plot.clone());
@@ -1316,7 +1340,8 @@ impl ProfileStudy {
                     profile: Arc::new(profile),
                     config: effective,
                     color: self.colors[0].to_srgba_unmultiplied(),
-                    right_aligned: self.kind == Kind::Visible,
+                    right_aligned: self.right,
+                    strip: (self.kind == Kind::Visible).then_some(self.width as f32),
                     width,
                 };
                 profiles.push(plot.clone());
@@ -1360,7 +1385,8 @@ impl ProfileStudy {
                     profile: Arc::new(profile),
                     config: effective,
                     color: self.colors[0].to_srgba_unmultiplied(),
-                    right_aligned: self.kind == Kind::Visible,
+                    right_aligned: self.right,
+                    strip: (self.kind == Kind::Visible).then_some(self.width as f32),
                     width,
                 };
                 profiles.push(plot.clone());
@@ -3694,19 +3720,24 @@ mod rendering_tests {
         );
         let coords = ChartMapping::new(rect, 200.0, 0, 1, 0.0, price);
         // Rows 0 and 1 hold 60, the rest 22.5. VA is 10..16; POC is 10.5.
-        for (inputs, x, value, expected) in [
-            (vec![], 390.0, 10.0, false),
-            (vec![], 390.0, 16.0, false),
-            (vec![("show_vah", true)], 390.0, 16.0, true),
-            (vec![("show_vah", true)], 390.0, 10.0, false),
-            (vec![("show_val", true)], 390.0, 10.0, true),
-            (vec![("show_val", true)], 390.0, 16.0, false),
-            (vec![], 390.0, 10.5, true),
-            (vec![("show_poc", false)], 390.0, 10.5, false),
-            (vec![], 20.0, 12.5, true),
-            (vec![("show_rows", false)], 20.0, 12.5, false),
+        for (inputs, right, x, value, expected) in [
+            (vec![], false, 390.0, 10.0, false),
+            (vec![], false, 390.0, 16.0, false),
+            (vec![("show_vah", true)], false, 390.0, 16.0, true),
+            (vec![("show_vah", true)], false, 390.0, 10.0, false),
+            (vec![("show_val", true)], false, 390.0, 10.0, true),
+            (vec![("show_val", true)], false, 390.0, 16.0, false),
+            (vec![], false, 390.0, 10.5, true),
+            (vec![("show_poc", false)], false, 390.0, 10.5, false),
+            (vec![], false, 20.0, 12.5, true),
+            (vec![("show_rows", false)], false, 20.0, 12.5, false),
+            (vec![], true, 390.0, 15.5, true),
+            (vec![], true, 10.0, 15.5, false),
         ] {
             let mut study = VolProfileSession::new(10);
+            study
+                .set_input("placement", InputValue::Choice(usize::from(right)))
+                .unwrap();
             for (id, value) in inputs {
                 study.set_input(id, InputValue::Toggle(value)).unwrap();
             }
@@ -4098,7 +4129,130 @@ mod rendering_tests {
                 1,
                 true,
             ),
+        ])
+        .map(|(a, b, c, d, e, f, g, h, i, j, k)| {
+            (a, b, c, d, e, f, g, h, i, j, k, 0.0, None::<Vec<String>>)
+        })
+        .chain([
+            (
+                Box::new(VolProfileVisible::new(10)) as Box<dyn Indicator>,
+                &light,
+                None,
+                defaults,
+                light.ui.text,
+                None,
+                400.0,
+                vec![],
+                true,
+                1,
+                false,
+                280.0,
+                None,
+            ),
+            (
+                Box::new(VolProfileVisible::new(10)) as Box<dyn Indicator>,
+                &light,
+                None,
+                defaults,
+                light.ui.text,
+                Some(50.0),
+                400.0,
+                vec![],
+                true,
+                1,
+                false,
+                200.0,
+                None,
+            ),
+            (
+                Box::new(VolProfileVisible::new(10)) as Box<dyn Indicator>,
+                &light,
+                None,
+                defaults,
+                light.ui.text,
+                None,
+                120.0,
+                vec![("placement", InputValue::Choice(0))],
+                true,
+                1,
+                false,
+                0.0,
+                None,
+            ),
+            (
+                session(),
+                &light,
+                None,
+                defaults,
+                light.ui.text,
+                None,
+                400.0,
+                vec![("placement", InputValue::Choice(1))],
+                true,
+                1,
+                false,
+                280.0,
+                None,
+            ),
+            (
+                session(),
+                &light,
+                None,
+                defaults,
+                light.ui.text,
+                None,
+                120.0,
+                vec![
+                    ("show_values", InputValue::Toggle(true)),
+                    ("display", InputValue::Choice(0)),
+                ],
+                true,
+                1,
+                false,
+                0.0,
+                Some([vec!["60.00".to_owned(); 2], vec!["22.50".to_owned(); 8]].concat()),
+            ),
+            (
+                session(),
+                &light,
+                None,
+                defaults,
+                light.ui.text,
+                None,
+                120.0,
+                vec![("show_values", InputValue::Toggle(true))],
+                true,
+                1,
+                false,
+                0.0,
+                Some(
+                    [
+                        vec!["50.00 / 10.00".to_owned(); 2],
+                        vec!["12.50 / 10.00".to_owned(); 8],
+                    ]
+                    .concat(),
+                ),
+            ),
+            (
+                session(),
+                &light,
+                None,
+                defaults,
+                light.ui.text,
+                None,
+                80.0,
+                vec![
+                    ("show_values", InputValue::Toggle(true)),
+                    ("display", InputValue::Choice(2)),
+                ],
+                true,
+                1,
+                false,
+                0.0,
+                Some([vec!["+40.00".to_owned(); 2], vec!["+2.50".to_owned(); 8]].concat()),
+            ),
         ]);
+
         for (
             mut study,
             theme,
@@ -4111,6 +4265,8 @@ mod rendering_tests {
             rows_drawn,
             line_count,
             vah,
+            left_edge,
+            texts,
         ) in cases
         {
             for (id, value) in inputs {
@@ -4125,6 +4281,12 @@ mod rendering_tests {
                     .set_input("width", InputValue::Number(width))
                     .expect("width");
             }
+            let display = study
+                .inputs()
+                .into_iter()
+                .find(|input| input.id == "display")
+                .unwrap()
+                .value;
             study.calculate(&bars);
             let indicators = vec![study];
             let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 200.0));
@@ -4157,6 +4319,35 @@ mod rendering_tests {
                     _ => None,
                 })
                 .collect();
+            let leftmost = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(row) => Some(row.rect.left()),
+                    _ => None,
+                })
+                .fold(f32::MAX, f32::min);
+            if rows_drawn {
+                assert!(
+                    (leftmost - left_edge).abs() < 1e-3,
+                    "{leftmost} to {left_edge}"
+                );
+            }
+            if let Some(mut expected) = texts {
+                let mut got: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(t) if t.galley.text() != "Estimated from bars" => {
+                            Some(t.galley.text().to_owned())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                got.sort();
+                expected.sort();
+                assert_eq!(got, expected);
+            }
             let widest = output
                 .shapes
                 .iter()
@@ -4206,7 +4397,9 @@ mod rendering_tests {
                 "{widest} to {right_edge}"
             );
             assert_eq!(!fills.is_empty(), rows_drawn);
-            for [r, g, b, a] in rows.into_iter().filter(|_| rows_drawn) {
+            for (_, [r, g, b, a]) in rows.into_iter().enumerate().filter(|(side, _)| {
+                rows_drawn && (display == InputValue::Choice(1) || side % 2 == 0)
+            }) {
                 // Colours pass through the study's stored and painted forms as Color32 does.
                 let [r, g, b, a] =
                     Color32::from_rgba_unmultiplied(r, g, b, a).to_srgba_unmultiplied();

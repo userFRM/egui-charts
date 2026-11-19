@@ -12,8 +12,16 @@ pub(crate) fn profile_span(plot: &StudyProfile, coords: &super::ChartMapping) ->
     if plot.bars.is_empty() {
         return 0.0..0.0;
     }
-    if plot.right_aligned {
-        coords.rect.right() - coords.rect.width() * 0.3..coords.rect.right()
+    if let Some(share) = plot.strip {
+        if share.is_nan() || share <= 0.0 {
+            return 0.0..0.0;
+        }
+        let width = coords.rect.width() * share.min(1.0);
+        if plot.right_aligned {
+            coords.rect.right() - width..coords.rect.right()
+        } else {
+            coords.rect.left()..coords.rect.left() + width
+        }
     } else if plot.profile.source() == ProfileSource::Options {
         // Strikes have no bars to stand beside.
         coords.rect.left()..coords.rect.left() + coords.rect.width() * 0.3
@@ -54,7 +62,7 @@ pub(crate) fn hit_profile(
         // The point of control of a profile of the bars in view crosses the plot, past its rows.
         if !in_span
             && (profile.exposure.is_some()
-                || !crate::painting::volume_profile::measures_view(profile, plot.right_aligned))
+                || !crate::painting::volume_profile::measures_view(profile, plot.strip.is_some()))
         {
             return None;
         }

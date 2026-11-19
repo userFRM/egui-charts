@@ -20,10 +20,12 @@ pub struct StudyProfile {
     /// Colour of the point of control and value-area lines, `Color32::PLACEHOLDER` as bytes
     /// following the theme's foreground.
     pub color: [u8; 4],
-    /// Draw in the right 30% of the plot instead of beside the first source bar. A profile of
-    /// [`VolumeProfile::from_options`] rows, which has no source bars, otherwise takes the left
-    /// 30%.
+    /// Grow rows from the right edge of their span instead of its left edge.
     pub right_aligned: bool,
+    /// Share of the plot width for an edge strip, right with `right_aligned`, left otherwise.
+    /// `None` places the profile beside its source bars. A strip over bars carries its point
+    /// of control across the plot; an options strip measures strikes instead.
+    pub strip: Option<f32>,
     /// Share of the span, from 0 to 1, that the row with the most volume takes. An options
     /// exposure overlay's largest bar takes half of it on each side of its centre.
     pub width: f32,
@@ -108,6 +110,8 @@ pub struct VolumeProfileConfig {
     pub show_value_area_lines: bool,
     /// Draw the price rows; hiding them leaves the profile's levels.
     pub show_rows: bool,
+    /// Write each row's volume beside it, following `display`.
+    pub show_values: bool,
     /// Draw the point of control line.
     pub show_poc: bool,
     /// Draw the value area high even without `show_value_area_lines`.
@@ -139,6 +143,8 @@ struct VolumeProfileFields {
     show_value_area_lines: bool,
     #[serde(default = "profile_shown")]
     show_rows: bool,
+    #[serde(default)]
+    show_values: bool,
     #[serde(default = "profile_shown")]
     show_poc: bool,
     #[serde(default)]
@@ -163,6 +169,7 @@ impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
         config.value_area_colors = fields.value_area_colors;
         config.show_value_area_lines = fields.show_value_area_lines;
         config.show_rows = fields.show_rows;
+        config.show_values = fields.show_values;
         config.show_poc = fields.show_poc;
         config.show_value_area_high = fields.show_value_area_high;
         config.show_value_area_low = fields.show_value_area_low;
@@ -241,6 +248,7 @@ impl Default for VolumeProfileConfig {
             value_area_colors: None,
             show_value_area_lines: false,
             show_rows: true,
+            show_values: false,
             show_poc: true,
             show_value_area_high: false,
             show_value_area_low: false,
@@ -1213,6 +1221,7 @@ mod tests {
                         100.0..300.0,
                         crate::painting::volume_profile::ProfileStyle::Study {
                             right_aligned,
+                            strip: right_aligned,
                             width: 0.9,
                         },
                         &|price| price as f32 * direction,
