@@ -2817,6 +2817,7 @@ mod tests {
                     Some(true),
                     Some(true),
                     Some(true),
+                    Some(true),
                     Some(PriceLineSource::LastVisible),
                     Some(ThousandsSeparator::Apostrophe),
                     None,
