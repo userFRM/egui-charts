@@ -53,7 +53,8 @@
 //! ## Support / resistance
 //! [`PivotPoints`], [`IntradayPivotPoints`], [`ProjectedPivotPoints`], [`PivotPointsHighLow`],
 //! [`MissedPivots`], [`KeyLevels`], [`AutoKeyLevels`], [`ElliottWave`], [`Reversal`], [`BookerReversal`],
-//! [`RisingWedge`], [`FallingWedge`], [`WilliamsFractals`], [`Gaps`], [`ZigZag`], [`PriceChannel`]
+//! [`ZivGhostPivots`], [`RisingWedge`], [`FallingWedge`], [`WilliamsFractals`], [`Gaps`], [`ZigZag`],
+//! [`PriceChannel`]
 //!
 //! ## Patterns
 //! [`CandlestickPatterns`], [`ChartPatterns`]
@@ -185,6 +186,7 @@ mod swings;
 mod wedge;
 mod williams_fractals;
 mod zigzag;
+mod ziv_ghost_pivots;
 
 // Oscillator/Momentum indicators (additional)
 mod connors_rsi;
@@ -409,6 +411,7 @@ pub use rsi_divergence::RsiDivergence;
 pub use wedge::{FallingWedge, RisingWedge, Wedge};
 pub use williams_fractals::WilliamsFractals;
 pub use zigzag::{ZigZag, ZigZagChange, ZigZagMode, ZigZagPivot};
+pub use ziv_ghost_pivots::ZivGhostPivots;
 
 // Re-exports - Additional Oscillator/Momentum indicators
 pub use connors_rsi::ConnorsRSI;

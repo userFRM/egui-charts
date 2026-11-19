@@ -342,47 +342,48 @@ fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
     assert_eq!(duplicates, ["ADX and DMI", "Donchian and Price Channel"]);
 }
 
-/// The study browser opens these studies with the lengths most often used for them.
+/// The study browser opens these studies with the lengths and switches most often used for them.
 #[test]
 fn catalogue_studies_open_with_their_usual_lengths() {
+    use crate::studies::InputValue::{Length, Toggle};
     let rows = [
-        ("SMA", "period", 9),
-        ("EMA", "period", 9),
-        ("WMA", "period", 9),
-        ("HMA", "period", 9),
-        ("DEMA", "period", 9),
-        ("TEMA", "period", 9),
-        ("LSMA", "period", 25),
-        ("SMMA", "period", 7),
-        ("ROC", "period", 9),
-        ("TRIX", "period", 18),
-        ("CMO", "period", 9),
-        ("HV", "period", 10),
-        ("TSI", "signal_period", 13),
-        ("Knoxville Divergence", "momentum_period", 20),
-        ("Knoxville Divergence", "rsi_period", 21),
-        ("Knoxville Divergence", "lookback", 150),
-        ("Advance/Decline", "period", 10),
-        ("Booker Reversal", "fast_period", 12),
-        ("Booker Reversal", "slow_period", 26),
-        ("Booker Reversal", "k_period", 70),
-        ("Booker Reversal", "slowing", 10),
-        ("Booker Reversal", "stoch_upper", 70),
-        ("Booker Reversal", "stoch_lower", 30),
+        ("SMA", "period", Length(9)),
+        ("EMA", "period", Length(9)),
+        ("WMA", "period", Length(9)),
+        ("HMA", "period", Length(9)),
+        ("DEMA", "period", Length(9)),
+        ("TEMA", "period", Length(9)),
+        ("LSMA", "period", Length(25)),
+        ("SMMA", "period", Length(7)),
+        ("ROC", "period", Length(9)),
+        ("TRIX", "period", Length(18)),
+        ("CMO", "period", Length(9)),
+        ("HV", "period", Length(10)),
+        ("TSI", "signal_period", Length(13)),
+        ("Knoxville Divergence", "momentum_period", Length(20)),
+        ("Knoxville Divergence", "rsi_period", Length(21)),
+        ("Knoxville Divergence", "lookback", Length(150)),
+        ("Advance/Decline", "period", Length(10)),
+        ("Booker Reversal", "fast_period", Length(12)),
+        ("Booker Reversal", "slow_period", Length(26)),
+        ("Booker Reversal", "k_period", Length(70)),
+        ("Booker Reversal", "slowing", Length(10)),
+        ("Booker Reversal", "stoch_upper", Length(70)),
+        ("Booker Reversal", "stoch_lower", Length(30)),
+        ("Ziv Ghost Pivots", "show_four_hour", Toggle(true)),
+        ("Ziv Ghost Pivots", "show_day", Toggle(true)),
+        ("Ziv Ghost Pivots", "show_week", Toggle(true)),
+        ("Ziv Ghost Pivots", "show_month", Toggle(true)),
     ];
     let factory = IndicatorFactory::new();
-    for (name, id, length) in rows {
+    for (name, id, value) in rows {
         assert!(
             factory.list().iter().any(|listed| listed == name),
             "{name} is not listed"
         );
         let inputs = factory.create(name).unwrap().inputs();
         let input = inputs.iter().find(|input| input.id == id);
-        assert_eq!(
-            input.map(|input| &input.value),
-            Some(&crate::studies::InputValue::Length(length)),
-            "{name} {id}"
-        );
+        assert_eq!(input.map(|input| &input.value), Some(&value), "{name} {id}");
     }
 }
 

@@ -317,6 +317,7 @@ impl IndicatorFactory {
                 AutoKeyLevels,
                 IntradayPivotPoints,
                 ProjectedPivotPoints,
+                ZivGhostPivots,
                 WilliamsFractals,
                 ZigZag,
             ],
