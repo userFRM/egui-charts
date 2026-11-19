@@ -1684,7 +1684,7 @@ mod tests {
     /// Label menus keep their actions, capability gates and explanations independent of buttons.
     #[test]
     fn label_menus_offer_what_the_account_supports() {
-        use crate::model::Capabilities;
+        use crate::model::{Capabilities, TakeProfitLevel};
         use egui_kittest::{
             Harness,
             kittest::{NodeT, Queryable},
@@ -1707,7 +1707,7 @@ mod tests {
             reverse: true,
             ..Capabilities::default()
         };
-        for row in 0..18 {
+        for row in 0..19 {
             let mut capabilities = full;
             match row {
                 5 => capabilities.modify = false,
@@ -1727,7 +1727,7 @@ mod tests {
             }
             if row == 15 {
                 request.order_type = OrderType::StopLimit {
-                    stop: 94.0,
+                    stop: 94.004,
                     limit: 95.0,
                 };
             }
@@ -1736,6 +1736,13 @@ mod tests {
             }
             if row == 17 {
                 request.position_bracket = Some(PositionBracket::TakeProfit);
+            }
+            if row == 18 {
+                let mut first = TakeProfitLevel::new(100.0, 0.5);
+                first.stop_loss = Some(90.0);
+                let mut second = TakeProfitLevel::new(105.0, 0.5);
+                second.stop_loss = Some(91.0);
+                request.take_profit_levels = vec![first, second];
             }
             let order = Order::new(OrderId::new("7"), request, OrderStatus::Working);
             let position = Position::new("SYM", 2.0, 105.0);
@@ -1772,10 +1779,11 @@ mod tests {
                         let mut options = TradingLineOptions::new("USD", 0.01);
                         options.label_alignment = TradingLabelAlignment::Left;
                         options.menu = state.capabilities;
+                        options.modify = row == 15;
                         let price = if state.position_menu {
                             105.0
                         } else if row == 15 {
-                            94.0
+                            94.004
                         } else {
                             95.0
                         };
@@ -1802,8 +1810,13 @@ mod tests {
                     pressed,
                     modifiers: egui::Modifiers::NONE,
                 });
+                harness.run_steps(1);
             }
             harness.run();
+            assert!(
+                harness.state().action.is_none(),
+                "secondary click changed row {row}"
+            );
             let (label, why) = match row {
                 0 => ("Cancel order", None),
                 1 | 5 => (
@@ -1815,7 +1828,7 @@ mod tests {
                     "Add take profit",
                     (row == 6).then_some("The account does not support adding exits to orders"),
                 ),
-                4 => ("Add stop loss", None),
+                4 | 18 => ("Add stop loss", None),
                 8 | 11 => (
                     "Close position",
                     (row == 11).then_some("The account does not support closing positions"),
@@ -1835,7 +1848,7 @@ mod tests {
                 ),
                 _ => unreachable!(),
             };
-            if [0, 7, 16, 17].contains(&row) {
+            if [0, 7, 16, 17, 18].contains(&row) {
                 assert!(harness.query_by_label(label).is_none(), "row {row}");
                 if row == 7 {
                     assert!(harness.query_by_label("Add stop loss").is_none());
