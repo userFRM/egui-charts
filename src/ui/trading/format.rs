@@ -2,8 +2,8 @@
 
 use super::widgets::grouped;
 
-/// Host text for the numbers of the order ticket, the depth ladder, the account tables, fill marks and
-/// the order and fill notifications.
+/// Host text for the numbers of the order ticket, the depth ladder, the account tables, fill
+/// marks and the order and fill notifications.
 ///
 /// Every method receives the symbol the number belongs to, so differently formatted instruments
 /// keep their own text. Return `None` to keep the built-in text: the symbol's price decimals for

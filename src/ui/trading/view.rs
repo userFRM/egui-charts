@@ -234,7 +234,7 @@ impl Trading {
             // Under the lines, so that no mark covers an order's or a position's label.
             if display.show_executions {
                 let fills = &self.account_panel.fills;
-                let fills: Vec<_> = fills
+                let marks: Vec<_> = fills
                     .executions
                     .iter()
                     .filter(|fill| fills.symbol(fill) == Some(symbol))
@@ -246,7 +246,7 @@ impl Trading {
                     decimals,
                     formatter: self.formatter.as_deref(),
                 };
-                executions::show(ui, chart, &fills, display, numbers);
+                executions::show(ui, chart, &marks, display, numbers);
             }
             render_trading_lines(
                 ui,

@@ -66,8 +66,8 @@ impl<'a> ExecutionMark<'a> {
     }
 }
 
-/// Draws host fills on the price pane, using the same marks as [`Trading::show`](super::Trading::show).
-/// Fills on the same side and bar share up to three stacked triangles and a count of the rest.
+/// Draws host fills on the price pane, using the same marks as
+/// [`Trading::show`](super::Trading::show). Fills on the same side and bar share up to three stacked triangles and a count of the rest.
 /// Buys point up below the bar's low; sells point down above its high. Hover lists the fills,
 /// and [`TradingSettings::show_execution_labels`] adds their side and total quantity.
 /// [`TradingSettings::show_execution_prices`] adds their quantity-weighted average fill price.
@@ -130,9 +130,9 @@ pub fn render_executions(
 /// Draws `marks` on the price pane of `chart`. The fills of one side in one bar form one mark: up
 /// to [`MAX_STACK`] triangles stacked outward, pointing up in the buy colour just under the bar's
 /// low, or down in the sell colour just over its high, and beyond them a "+N" line for the fills
-/// not drawn. With labels enabled, a line beyond the stack gives the side and total quantity. Text that
-/// would overlap newer text moves outward, up to [`MAX_LABEL_ROWS`] rows, or is left out. Hovering a
-/// mark lists its fills with their side, quantity, price and time, up to [`MAX_HOVER_FILLS`].
+/// not drawn. With labels enabled, a line beyond the stack gives the side and total quantity. Text
+/// that would overlap newer text moves outward, up to [`MAX_LABEL_ROWS`] rows, or is left out.
+/// Hovering a mark lists its fills with their side, quantity, price and time, up to [`MAX_HOVER_FILLS`].
 pub(super) fn show(
     ui: &mut Ui,
     chart: &Chart,
@@ -530,11 +530,13 @@ mod tests {
                             _ => None,
                         })
                         .collect();
-                    hovered |= output.shapes.iter().any(|shape| matches!(&shape.shape,
-                        Shape::Text(text) if text.galley.text() == "Imported\nBuy 1 at 101.50, Sun 18 Feb '24 10:13:20"));
+                    let hover = "Imported\nBuy 1 at 101.50, Sun 18 Feb '24 10:13:20";
+                    hovered |= output.shapes.iter().any(|shape| {
+                        matches!(&shape.shape, Shape::Text(text) if text.galley.text() == hover)
+                    });
                     labelled |= output.shapes.iter().any(|shape| {
                         matches!(&shape.shape,
-                        Shape::Text(text) if text.galley.text().starts_with("Buy 2") && Some(text.galley.text()) == label)
+                            Shape::Text(text) if Some(text.galley.text()) == label)
                     });
                     output.drop_without_applying_deltas();
                 }
