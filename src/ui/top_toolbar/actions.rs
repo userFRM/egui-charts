@@ -31,6 +31,10 @@ pub enum TopToolbarAction {
     /// [`Chart::apply_chosen_study_template_set`](crate::widget::Chart::apply_chosen_study_template_set),
     /// which keeps the studies the user may not edit.
     ApplyIndicatorTemplate(String),
+    /// Ask the host to apply the built-in indicator set with this id, chosen among
+    /// [`TopToolbar::builtin_indicator_templates`](super::TopToolbar::builtin_indicator_templates),
+    /// as it applies a saved one.
+    ApplyBuiltinIndicatorTemplate(String),
     /// Create a new price alert
     CreateAlert,
     /// Toggle replay mode on/off
