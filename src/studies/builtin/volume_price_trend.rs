@@ -4,9 +4,9 @@ use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
-/// Volume Price Trend (VPT)
-/// Cumulative volume indicator that considers price changes
-/// Similar to OBV but uses percentage changes
+/// Price Volume Trend (PVT)
+/// Cumulative volume weighted by the close's percentage change; the first bar, which has no
+/// previous close, has no value.
 #[derive(Clone, Debug)]
 pub struct VolumePriceTrend {
     values: IndicatorValues,
@@ -21,7 +21,7 @@ impl VolumePriceTrend {
         Self {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            color: palette::BLUE, // Teal
+            color: palette::BLUE,
             visible: true,
         }
     }
@@ -51,11 +51,11 @@ impl Indicator for VolumePriceTrend {
     }
 
     fn name(&self) -> &str {
-        "VPT"
+        "PVT"
     }
 
     fn desc(&self) -> &str {
-        "Volume Price Trend - Volume weighted by price change"
+        "Price Volume Trend - Cumulative volume weighted by the close's percentage change"
     }
 
     fn calculate(&mut self, data: &[Bar]) {
@@ -114,7 +114,7 @@ impl Indicator for VolumePriceTrend {
     }
 
     fn line_names(&self) -> Vec<String> {
-        vec!["VPT".to_string()]
+        vec!["PVT".to_string()]
     }
 }
 

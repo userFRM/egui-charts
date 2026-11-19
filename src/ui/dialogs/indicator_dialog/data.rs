@@ -121,6 +121,7 @@ impl IndicatorInfo {
             "Missed Pivot Levels" => &["Rob Booker Missed Pivot Points"],
             "Multi MA" => &["Moving Average Multiple"],
             "OHLC4" => &["Average Price"],
+            "PVT" => &["Volume Price Trend", "VPT"],
             "Price Momentum Oscillator" => &["PMO"],
             "SMA/EMA Cross" => &[
                 "MA with EMA Cross",
@@ -131,7 +132,6 @@ impl IndicatorInfo {
             "TEMA" => &["Triple EMA"],
             "Time Price Opportunity" => &["TPO", "Session Time Price Opportunity"],
             "Triple MA" => &["Triple Moving Average", "Moving Average Triple"],
-            "VPT" => &["Price Volume Trend", "PVT"],
             "VWMA" => &["Volume-Weighted Moving Average"],
             "Vol Profile Anchored" => &["Anchored Volume Profile"],
             "Vol Profile Auto Anchored" => &["Auto Anchored Volume Profile"],
