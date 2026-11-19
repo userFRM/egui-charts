@@ -1,8 +1,9 @@
 //! Volume delta candles from lower-interval candles supplied by the host.
 //!
-//! Each candle inside a chart bar adds its volume to the bar's delta when it closes above its
-//! open and subtracts it when it closes below; one that closes at its open adds it unless it
-//! closes below the previous candle, as [`UpDownVolume`](super::UpDownVolume) classifies them.
+//! Each candle inside a chart bar adds its volume to the bar's delta when it buys and subtracts
+//! it when it sells, as [`UpDownVolume`](super::UpDownVolume) classifies them: a candle buys when
+//! it closes above its open, or at its open above the previous candle's close, sells when it
+//! closes below either, and otherwise takes the side of the candle before it.
 //! [`VolumeDelta`] draws each bar as a candle that opens at zero, closes at the bar's delta and
 //! spans the lowest and highest running delta after each of its candles.
 //! [`CumulativeVolumeDelta`] adds the bar deltas from the first bar of each anchor period, the
@@ -135,12 +136,13 @@ impl DeltaCandles {
             .last()
             .map(|candle| (period(&data[candle.bars.start]), candle.bar.close));
         let ranges = lower_interval::nest(&self.clock, lower, data, candles, from);
+        let mut sides = lower_interval::Sides::new(candles);
         for (i, range) in (from..).zip(ranges) {
             let bar = &data[i];
             if range.is_empty() || !bar.close.is_finite() {
                 continue;
             }
-            let flow = lower_interval::flow(candles, range);
+            let flow = sides.flow(range);
             let key = period(bar);
             let open = match last {
                 Some((at, total)) if anchor.is_some() && at == key => total,
@@ -353,10 +355,10 @@ mod tests {
         let candles = [
             bar(0, 10.0, 11.0, 5.0),   // +5
             bar(60, 11.0, 10.0, 8.0),  // -8, running -3
-            bar(120, 10.0, 10.0, 5.0), // doji at the previous close: +5, running 2
+            bar(120, 10.0, 10.0, 5.0), // doji at the previous close takes the falling side: -5, running -8
             bar(300, 10.0, 9.0, 4.0),  // -4
-            bar(360, 9.0, 9.0, 1.0),   // doji at the previous close: +1, running -3
-            bar(900, 9.0, 8.0, 0.0),   // no volume
+            bar(360, 9.0, 9.0, 1.0), // doji at the previous close takes the falling side: -1, running -5
+            bar(900, 9.0, 8.0, 0.0), // no volume
         ];
         let mut delta = VolumeDelta::new();
         delta.set_bar_clock(&BarClock::new(Timeframe::Min5));
@@ -365,8 +367,8 @@ mod tests {
         assert_eq!(
             drawn(&delta),
             [
-                (0, 1, [0.0, 5.0, -3.0, 2.0]),
-                (1, 2, [0.0, 0.0, -4.0, -3.0]),
+                (0, 2, [0.0, 5.0, -8.0, -8.0]),
+                (1, 2, [0.0, 0.0, -5.0, -5.0]),
                 (3, 1, [0.0; 4]),
             ]
         );
@@ -374,16 +376,16 @@ mod tests {
         let values = delta.values();
         assert_eq!(
             (0..4).map(|i| values.value(0, i)).collect::<Vec<_>>(),
-            [Some(2.0), Some(-3.0), None, Some(0.0)]
+            [Some(-8.0), Some(-5.0), None, Some(0.0)]
         );
         assert_eq!(
             [
-                values.value(1, 0),
-                values.value(2, 0),
+                values.value(1, 3),
+                values.value(2, 3),
                 values.value(2, 1),
                 values.value(1, 1)
             ],
-            [Some(2.0), None, Some(-3.0), None]
+            [Some(0.0), None, Some(-5.0), None]
         );
 
         // Hourly bars from 22:00 on 1 January 1970 to 03:00 on the 2nd; 02:00 has no candles.
@@ -392,11 +394,11 @@ mod tests {
         let mut candles = vec![
             bar(79_200, 1.0, 2.0, 10.0), // 22:00 +10
             bar(79_260, 2.0, 1.0, 4.0),  // -4: bar delta 6, high 10
-            bar(82_800, 1.0, 1.0, 3.0),  // 23:00 doji at the previous close: +3
-            bar(82_860, 1.0, 0.0, 5.0),  // -5: bar delta -2, high 3, low -2
-            bar(86_400, 0.0, 2.0, 7.0),  // 00:00 +7
-            bar(90_000, 2.0, 1.0, 2.0),  // 01:00 -2
-            bar(97_200, 1.0, 2.0, 1.0),  // 03:00 +1
+            bar(82_800, 1.0, 1.0, 3.0), // 23:00 doji at the previous close takes the falling side: -3
+            bar(82_860, 1.0, 0.0, 5.0), // -5: bar delta -8, high 0, low -8
+            bar(86_400, 0.0, 2.0, 7.0), // 00:00 +7
+            bar(90_000, 2.0, 1.0, 2.0), // 01:00 -2
+            bar(97_200, 1.0, 2.0, 1.0), // 03:00 +1
         ];
         let mut cumulative = CumulativeVolumeDelta::new();
         cumulative.set_bar_clock(&BarClock::new(Timeframe::Hour1));
@@ -406,7 +408,7 @@ mod tests {
             drawn(&cumulative),
             [
                 (0, 1, [0.0, 10.0, 0.0, 6.0]),
-                (1, 2, [6.0, 9.0, 4.0, 4.0]),
+                (1, 2, [6.0, 6.0, -2.0, -2.0]),
                 (2, 1, [0.0, 7.0, 0.0, 7.0]),
                 (3, 2, [7.0, 7.0, 5.0, 5.0]),
                 (5, 1, [5.0, 6.0, 5.0, 6.0]),
@@ -431,11 +433,11 @@ mod tests {
         assert_eq!(
             drawn(&cumulative)[2..],
             [
-                (2, 1, [4.0, 11.0, 4.0, 11.0]),
-                (3, 1, [11.0, 13.0, 9.0, 13.0]),
-                (5, 1, [13.0, 14.0, 13.0, 14.0]),
+                (2, 1, [-2.0, 5.0, -2.0, 5.0]),
+                (3, 1, [5.0, 7.0, 3.0, 7.0]),
+                (5, 1, [7.0, 8.0, 7.0, 8.0]),
             ]
         );
-        assert_eq!(cumulative.values().value(0, 5), Some(14.0));
+        assert_eq!(cumulative.values().value(0, 5), Some(8.0));
     }
 }
