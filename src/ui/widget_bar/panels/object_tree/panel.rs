@@ -141,8 +141,8 @@ impl ObjectTreePanel {
                 .iter()
                 .filter(|s| self.state.is_selected(s.id))
                 .peekable();
-            let all_locked =
-                selected.peek().is_some() && selected.all(|s| s.is_drawing() && s.locked);
+            let all_locked = selected.peek().is_some()
+                && selected.all(|s| s.is_drawing() && (s.locked || !s.user_edit_enabled));
             self.show_header(ui, &mut action, can_group, all_locked);
 
             ui.separator();

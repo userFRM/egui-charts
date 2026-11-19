@@ -22,7 +22,7 @@ use std::collections::HashSet;
 pub(crate) const DRAWING_MENU_OFFSET: f32 = 6.0;
 
 /// The panes of `chart` other than the one drawing `drawing_id`, the price pane last, by their
-/// stable ids and titles. Empty for a locked drawing, which cannot move.
+/// stable ids and titles. Empty for a drawing that does not accept user edits.
 pub(crate) fn move_targets(
     ctx: Option<&Context>,
     chart: &Chart,
@@ -32,7 +32,7 @@ pub(crate) fn move_targets(
         .drawings()
         .drawings
         .iter()
-        .any(|d| d.id == drawing_id && d.locked)
+        .any(|d| d.id == drawing_id && !d.accepts_user_edits())
     {
         return Vec::new();
     }
@@ -81,6 +81,7 @@ pub enum DrawingContextMenuAction {
     /// Lock the selected drawings, or unlock them when the drawing the menu opened on is
     /// locked, for example with
     /// [`DrawingManager::set_selected_locked`](crate::drawings::DrawingManager::set_selected_locked).
+    /// The menu disables it on a drawing whose user edits are off.
     Lock,
     /// Hide the selected drawings, or show them when the drawing the menu opened on is hidden,
     /// for example with
@@ -93,7 +94,8 @@ pub enum DrawingContextMenuAction {
     /// Clone drawing with offset
     Clone,
     /// Delete the selected drawings, for example with [`Chart::delete_selected_drawings`], which
-    /// keeps locked drawings and reports them. The menu disables this entry on a locked drawing.
+    /// keeps locked drawings and reports them. The menu disables this entry on a locked drawing
+    /// and on one whose user edits are off.
     Delete,
 }
 
@@ -108,6 +110,8 @@ pub struct DrawingContextMenu {
     pub drawing_type: String,
     /// Whether the drawing is currently locked; its Delete entry is then disabled.
     pub is_locked: bool,
+    /// Whether the user can edit the drawing; off disables Lock, Reverse position and Delete.
+    pub user_edit_enabled: bool,
     /// Whether the drawing is currently visible
     pub is_visible: bool,
     /// The alert the Add alert entry offers; `None` leaves the entry out.
@@ -143,6 +147,7 @@ impl DrawingContextMenu {
             drawing_id: None,
             drawing_type: "Drawing".to_string(),
             is_locked: false,
+            user_edit_enabled: true,
             is_visible: true,
             alert: None,
             panes: Vec::new(),
@@ -179,6 +184,7 @@ impl DrawingContextMenu {
             .drawings
             .iter()
             .find(|d| d.id == drawing_id);
+        self.user_edit_enabled = drawing.is_none_or(|d| d.user_edit_enabled);
         if let Some(drawing) = drawing {
             self.set_context(drawing.tool_type.as_str(), drawing.locked, drawing.visible);
         }
@@ -346,7 +352,7 @@ impl DrawingContextMenu {
                     "Reverse position",
                     DrawingContextMenuAction::ReversePosition,
                 );
-                item.enabled = !self.is_locked;
+                item.enabled = !self.is_locked && self.user_edit_enabled;
                 MenuEntry::Item(item)
             }))
             .chain([
@@ -357,8 +363,8 @@ impl DrawingContextMenu {
                     entries: self.interval_items(),
                 },
                 // State toggles
-                MenuEntry::Item(
-                    MenuItem::new(
+                MenuEntry::Item({
+                    let mut item = MenuItem::new(
                         if self.is_locked { "Unlock" } else { "Lock" },
                         DrawingContextMenuAction::Lock,
                     )
@@ -366,8 +372,10 @@ impl DrawingContextMenu {
                         &embedded_icons::UNLOCK
                     } else {
                         &embedded_icons::LOCK
-                    }),
-                ),
+                    });
+                    item.enabled = self.user_edit_enabled;
+                    item
+                }),
                 MenuEntry::Item(
                     MenuItem::new(
                         if self.is_visible { "Hide" } else { "Show" },
@@ -393,7 +401,7 @@ impl DrawingContextMenu {
                         .with_icon(&embedded_icons::TRASH)
                         .with_shortcut(shortcuts.shortcut(KeyboardAction::DeleteSelectedDrawing))
                         .danger();
-                    item.enabled = !self.is_locked;
+                    item.enabled = !self.is_locked && self.user_edit_enabled;
                     item
                 }),
             ])
@@ -511,9 +519,9 @@ mod tests {
         }
     }
 
-    /// The Delete entry is disabled exactly while the right-clicked drawing is locked.
+    /// Delete and Move to follow editing permission; Lock also respects the host flag.
     #[test]
-    fn delete_follows_the_lock() {
+    fn delete_lock_and_move_to_follow_the_lock_and_user_edits() {
         let mut chart = Chart::new(BarData::default());
         let mut drawing = Drawing::new(7, DrawingToolType::TrendLine);
         drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(1.0, 110.0)];
@@ -521,9 +529,13 @@ mod tests {
         chart.drawings_mut().drawings.push(drawing);
         let pane = chart.add_pane();
         let mut menu = DrawingContextMenu::new();
-        for locked in [false, true, false] {
+        for (locked, user_edit) in [(false, true), (true, true), (false, false), (false, true)] {
             chart.drawings_mut().drawings[0].locked = locked;
+            chart.drawings_mut().drawings[0].user_edit_enabled = user_edit;
             menu.open_on(&Context::default(), &chart, Pos2::ZERO, 7);
+            let items =
+                menu.build_menu_items(&Context::default(), &crate::widget::ShortcutMap::default());
+            assert!(items.iter().any(|entry| matches!(entry, MenuEntry::Item(item) if item.action == DrawingContextMenuAction::Lock && item.enabled == user_edit)));
             let enabled = menu
                 .build_menu_items(&Context::default(), &crate::widget::ShortcutMap::default())
                 .into_iter()
@@ -534,10 +546,10 @@ mod tests {
                     _ => None,
                 })
                 .expect("Delete row");
-            assert_eq!(enabled, !locked, "locked {locked}");
+            assert_eq!(enabled, !locked && user_edit, "locked {locked}");
             assert_eq!(
                 menu.panes.iter().any(|(id, _)| *id == pane),
-                !locked,
+                !locked && user_edit,
                 "Move to, locked {locked}"
             );
         }

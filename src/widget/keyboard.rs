@@ -463,7 +463,7 @@ impl super::Chart {
             self.drawings
                 .drawings
                 .iter()
-                .any(|d| d.id == id && !d.locked)
+                .any(|d| d.id == id && d.accepts_user_edits())
         }) {
             return false;
         }
@@ -785,7 +785,12 @@ mod tests {
     fn arrows_nudge_selected_drawings_with_one_undo_per_press() {
         use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
         use crate::widget::test_frames::frame;
-        for (locked, selected) in [(false, true), (true, true), (false, false)] {
+        for (locked, selected, enabled) in [
+            (false, true, true),
+            (true, true, true),
+            (false, false, true),
+            (false, true, false),
+        ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
             chart.set_instrument(Some(
@@ -795,6 +800,7 @@ mod tests {
             drawing.chart_points = vec![ChartPoint::new(30.0, 14.0), ChartPoint::new(70.0, 17.0)];
             drawing.completed = true;
             drawing.locked = locked;
+            drawing.user_edit_enabled = enabled;
             chart.drawings_mut().drawings.push(drawing);
             if selected {
                 chart.drawings_mut().select(7);
@@ -829,14 +835,24 @@ mod tests {
                 {
                     assert_eq!(
                         point.bar_idx,
-                        old.bar_idx + if selected && !locked { bars } else { 0.0 }
+                        old.bar_idx
+                            + if selected && !locked && enabled {
+                                bars
+                            } else {
+                                0.0
+                            }
                     );
                     assert_eq!(
                         point.price,
-                        old.price + if selected && !locked { price } else { 0.0 }
+                        old.price
+                            + if selected && !locked && enabled {
+                                price
+                            } else {
+                                0.0
+                            }
                     );
                 }
-                if selected && !locked {
+                if selected && !locked && enabled {
                     assert_eq!(chart.get_time_scale_state(), view);
                     assert!(chart.undo());
                     assert_eq!(chart.drawings().drawings[0].chart_points, before);
@@ -936,8 +952,8 @@ mod tests {
         assert_eq!(chart.drawings().drawings.len(), 1);
     }
 
-    /// Delete removes the unlocked selected drawings, keeps the locked ones and reports how many
-    /// selected drawings it kept; locked drawings outside the selection are not counted.
+    /// Delete removes editable selected drawings, keeps protected drawings silently and reports
+    /// locked selected drawings it kept; locked drawings outside the selection are not counted.
     #[cfg(feature = "drawings")]
     #[test]
     fn delete_key_keeps_and_reports_locked_drawings() {
@@ -945,18 +961,21 @@ mod tests {
         use crate::widget::ChartEvent;
         use crate::widget::test_frames::frame;
         for (selected, left, reported) in [
-            (&[7][..], &[7, 8, 9][..], &[1][..]),
-            (&[7, 8, 9], &[7, 8], &[2]),
-            (&[9], &[7, 8], &[]),
+            (&[7][..], &[7, 8, 9, 10][..], &[1][..]),
+            (&[7, 8, 9], &[7, 8, 10], &[2]),
+            (&[9], &[7, 8, 10], &[]),
+            (&[10], &[7, 8, 9, 10], &[]),
+            (&[7, 8, 9, 10], &[7, 8, 10], &[2]),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
-            for id in [7, 8, 9] {
+            for id in [7, 8, 9, 10] {
                 let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
                 drawing.chart_points =
                     vec![ChartPoint::new(30.0, 14.0), ChartPoint::new(70.0, 17.0)];
                 drawing.completed = true;
-                drawing.locked = id != 9;
+                drawing.locked = matches!(id, 7 | 8);
+                drawing.user_edit_enabled = id != 10;
                 chart.drawings_mut().drawings.push(drawing);
             }
             frame(&ctx, &mut chart, 0.0, vec![]);
@@ -982,7 +1001,7 @@ mod tests {
                 (left, reported),
                 "selected {selected:?}"
             );
-            if left.len() == 3 {
+            if left.len() == 4 {
                 assert!(!chart.can_undo(), "nothing removed, so no undo step");
             }
         }

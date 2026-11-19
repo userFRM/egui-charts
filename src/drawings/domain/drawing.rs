@@ -142,6 +142,17 @@ pub struct Drawing {
     /// Whether host object lists should include this drawing. Rendering is independent.
     #[serde(default = "enabled")]
     pub listed: bool,
+    /// Whether the user can edit this drawing. Off, the chart, its drawing menu, the floating
+    /// toolbar, the properties dialog and the object tree offer no drag, nudge, style, text,
+    /// anchor or settings edit of it, no deletion, no lock or unlock and no move to another
+    /// pane; it can still be selected, hidden, renamed, filed, layered and copied. Host calls
+    /// that name the drawing, such as
+    /// [`DrawingManager::edit_drawing`](crate::drawings::DrawingManager::edit_drawing) and
+    /// [`Chart::set_drawing_points`](crate::Chart::set_drawing_points), still change it, and
+    /// undo and redo keep its current value. Independent of [`Self::locked`], the user's own
+    /// lock. Copies the user makes have it on. Older saved drawings have it on.
+    #[serde(default = "enabled")]
+    pub user_edit_enabled: bool,
     /// Host-defined group identity, retained through saving and undo.
     #[serde(default)]
     pub group: Option<String>,
@@ -589,6 +600,12 @@ impl Drawing {
         )
     }
 
+    /// Whether the user can edit this drawing now: it is not [locked](Self::locked) and
+    /// [user edits](Self::user_edit_enabled) are on.
+    pub fn accepts_user_edits(&self) -> bool {
+        self.user_edit_enabled && !self.locked
+    }
+
     /// Create a new drawing with default properties
     pub fn new(id: usize, tool_type: DrawingToolType) -> Self {
         let style = default_style(tool_type);
@@ -607,6 +624,7 @@ impl Drawing {
             selectable: true,
             saveable: true,
             listed: true,
+            user_edit_enabled: true,
             group: None,
             folder: Vec::new(),
             folder_sync: Vec::new(),

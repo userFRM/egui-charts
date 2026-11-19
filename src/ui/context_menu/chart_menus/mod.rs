@@ -423,7 +423,9 @@ impl ChartMenus {
                     && let RightClickTarget::Drawing { drawing_id, .. } = context.target
                 {
                     if *action == crate::ui::dialogs::DrawingContextMenuAction::ReversePosition {
-                        let _ = chart.reverse_position_drawing(drawing_id);
+                        if chart.drawings().user_can_edit(drawing_id) {
+                            let _ = chart.reverse_position_drawing(drawing_id);
+                        }
                     } else {
                         action.apply_interval_visibility(chart, drawing_id);
                     }

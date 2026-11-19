@@ -720,7 +720,7 @@ impl Chart {
                             self.drawings
                                 .drawings
                                 .iter()
-                                .any(|d| d.id == id && !d.locked)
+                                .any(|d| d.id == id && d.accepts_user_edits())
                         })
                 });
         #[cfg(feature = "drawings")]

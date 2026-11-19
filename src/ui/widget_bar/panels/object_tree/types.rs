@@ -115,6 +115,10 @@ pub struct SourceItem {
     pub visible: bool,
     /// Is locked (drawings only - prevents modification)
     pub locked: bool,
+    /// Whether the user can edit the drawing, copied from
+    /// [`crate::drawings::Drawing::user_edit_enabled`]. Off, the row offers no lock toggle and
+    /// no delete. Non-drawing rows ignore this field.
+    pub user_edit_enabled: bool,
     /// Is selected in the tree
     pub selected: bool,
     /// Is expanded (shows properties)
@@ -154,6 +158,7 @@ impl SourceItem {
             color,
             visible: true,
             locked: false,
+            user_edit_enabled: true,
             selected: false,
             expanded: false,
             z_index: id as i32,
@@ -186,6 +191,7 @@ impl SourceItem {
             color,
             visible: true,
             locked: false,
+            user_edit_enabled: true,
             selected: false,
             expanded: false,
             z_index: id as i32,
@@ -228,6 +234,7 @@ impl SourceItem {
             color: Color32::GRAY,
             visible: true,
             locked: false,
+            user_edit_enabled: true,
             selected: false,
             expanded: false,
             z_index: id as i32,
@@ -256,6 +263,7 @@ impl SourceItem {
             color: Color32::PLACEHOLDER, // Follows the panel theme
             visible: true,
             locked: true, // Data source is always locked
+            user_edit_enabled: true,
             selected: false,
             expanded: true, // Data source is expanded by default
             z_index: 0,     // Data source is always at z-index 0
