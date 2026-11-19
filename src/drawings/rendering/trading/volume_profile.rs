@@ -156,8 +156,8 @@ impl Drawing {
 
     /// The values at the last of `bars`, the pane's bars at `revision`, of the anchored VWAP's
     /// tracked lines, each with its style: the VWAP while its line shows, in the drawing's
-    /// colour, then the shown band lines of the enabled bands. Empty for other drawings or before
-    /// volume trades.
+    /// colour, then the shown band lines of the enabled bands. Empty for other drawings, before
+    /// volume trades and while the last bar has no value.
     pub(crate) fn anchored_vwap_tracked(
         &self,
         bars: &[Bar],
@@ -305,8 +305,10 @@ impl Drawing {
             let source = self.vwap.unwrap_or_default().source;
             let mut sums = VwapSums::default();
             let (i, (vwap, _)) = bars.iter().enumerate().find_map(|(i, bar)| {
-                sums.add(bar, source);
-                sums.value(VwapBandMode::Deviation).map(|value| (i, value))
+                sums.add(bar, source)
+                    .then(|| sums.value(VwapBandMode::Deviation))
+                    .flatten()
+                    .map(|value| (i, value))
             })?;
             let x = (view.bar_to_x)((first + i) as f32);
             return Some(vec![Pos2::new(x, (view.price_to_y)(vwap))]);
@@ -411,11 +413,16 @@ struct VwapSums {
 }
 
 impl VwapSums {
-    fn add(&mut self, bar: &Bar, source: PriceSource) {
+    /// Adds the bar at its source price; non-finite price or volume adds nothing and has no value.
+    fn add(&mut self, bar: &Bar, source: PriceSource) -> bool {
         let price = source.compute(bar.open, bar.high, bar.low, bar.close);
+        if !price.is_finite() || !bar.volume.is_finite() {
+            return false;
+        }
         self.volume += bar.volume;
         self.price_volume += price * bar.volume;
         self.square_volume += price * price * bar.volume;
+        true
     }
 
     /// VWAP and the unit of its bands in `mode`; `None` until volume trades.
@@ -432,11 +439,19 @@ impl VwapSums {
 }
 
 /// VWAP of `config`'s source over all of `bars`, from the anchor bar, with its band unit, as
-/// the painted line has it at the last of `bars`; `None` until volume trades.
+/// the painted line has it at the last of `bars`; `None` until volume trades and at a bar whose
+/// source price or volume is not finite.
 pub(crate) fn anchored_vwap_through(bars: &[Bar], config: &VwapConfig) -> Option<(f64, f64)> {
     let mut sums = VwapSums::default();
-    bars.iter().for_each(|bar| sums.add(bar, config.source));
-    sums.value(config.band_mode)
+    let mut counted = false;
+    for bar in bars {
+        counted = sums.add(bar, config.source);
+    }
+    if counted {
+        sums.value(config.band_mode)
+    } else {
+        None
+    }
 }
 
 /// The running sums at the start of the span and after every block of
@@ -446,7 +461,9 @@ fn vwap_checkpoints(prefix: &[Bar], source: PriceSource) -> Vec<VwapSums> {
     let mut sums = VwapSums::default();
     let mut checkpoints = vec![sums];
     for block in prefix.chunks(VWAP_CHECKPOINT) {
-        block.iter().for_each(|bar| sums.add(bar, source));
+        block.iter().for_each(|bar| {
+            sums.add(bar, source);
+        });
         checkpoints.push(sums);
     }
     checkpoints
@@ -481,11 +498,12 @@ fn anchored_vwap<'a>(
     let mut sums = checkpoints[checkpoint];
     bars[checkpoint * VWAP_CHECKPOINT..range.start]
         .iter()
-        .for_each(|bar| sums.add(bar, source));
-    bars[range].iter().map(move |bar| {
-        sums.add(bar, source);
-        sums.value(mode)
-    })
+        .for_each(|bar| {
+            sums.add(bar, source);
+        });
+    bars[range]
+        .iter()
+        .map(move |bar| sums.add(bar, source).then(|| sums.value(mode)).flatten())
 }
 
 /// Draws a line of an anchored VWAP at `points` as `plot` in `stroke`, the line, step line and
@@ -1176,6 +1194,28 @@ mod tests {
                 finals[i + 1..].iter().all(|b| (a - b).abs() > 1e-3),
                 "{finals:?}"
             );
+        }
+        // Non-finite inputs have no value and do not poison later bars.
+        let flat = |minute: i64, price: f64, volume: f64| {
+            let time = chrono::DateTime::from_timestamp(minute * 60, 0).unwrap();
+            Bar::new(time, price, price, price, price, volume)
+        };
+        for gap in [
+            flat(1, f64::NAN, 1.0),
+            flat(1, 11.0, f64::NAN),
+            flat(1, f64::INFINITY, 1.0),
+        ] {
+            let bars = [flat(0, 10.0, 1.0), gap, flat(2, 12.0, 1.0)];
+            let checkpoints = vwap_checkpoints(&[], typical.source);
+            let got: Vec<_> = anchored_vwap(&bars, &checkpoints, &typical, 0..3).collect();
+            assert_eq!(
+                got,
+                [Some((10.0, 0.0)), None, Some((11.0, 1.0))],
+                "{:?}",
+                bars[1]
+            );
+            assert_eq!(anchored_vwap_through(&bars[..2], &typical), None);
+            assert_eq!(anchored_vwap_through(&bars, &typical), Some((11.0, 1.0)));
         }
     }
 

@@ -11,8 +11,8 @@ impl Drawing {
     /// its painted lines, and is empty when the anchored range has fewer than two bars or
     /// invalid geometry. The anchored VWAP is level 0 and the upper and lower lines of each
     /// enabled band `n` (from zero) levels `2n + 1` and `2n + 2`, at the values the painted lines
-    /// have at `bar`; they are empty before the anchor, past the last bar and before volume
-    /// trades.
+    /// have at `bar`; they are empty before the anchor, past the last bar, before volume trades
+    /// and at a bar whose source price or volume is not finite.
     pub fn alert_levels_with_bars(
         &self,
         bar: f64,
