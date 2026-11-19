@@ -103,9 +103,10 @@ pub trait Broker: MaybeSend + 'static {
     /// sent, also when the answer arrives later.
     ///
     /// The terminal announces, with a notification and the execution sound for fills, a working
-    /// limit or stop order it has not seen on the stream, a rejected order and each execution,
-    /// when they are pushed after `connect` returned while the broker is live. What is pushed
-    /// before `connect` returns, or while the broker reports that it is not live, restates the
+    /// limit or stop order it has not seen on the stream, a rejected order, an order it listed
+    /// as working that ends cancelled without the user cancelling it in the terminal, and each
+    /// execution, when they are pushed after `connect` returned while the broker is live. What
+    /// is pushed before `connect` returns, or while the broker reports that it is not live, restates the
     /// account and is not announced: push the current state then, before returning or between
     /// [`FeedStatus::Connecting`] and [`FeedStatus::Live`].
     ///
@@ -113,7 +114,9 @@ pub trait Broker: MaybeSend + 'static {
     /// [`AccountEvent::Status`] with [`FeedStatus::Connecting`] or [`FeedStatus::Disconnected`],
     /// on each new stream too, and [`FeedStatus::Live`] once it is live again; until then the
     /// account panel and the order ticket mark the broker and the terminal reports it as not
-    /// connected. A broker that never pushes a status counts as connected. Meanwhile the terminal
+    /// connected. The terminal tells the user when the broker stops being live and when it is
+    /// live again after that, but not for a status pushed before `connect` returns.
+    /// A broker that never pushes a status counts as connected. Meanwhile the terminal
     /// sends no order, cancellation or change: it reports the ones the user confirms as refused,
     /// and a position order confirmed earlier that still waits for its trading rules too, and
     /// sends none of them later. It asks for [`rules`](Self::rules) and
