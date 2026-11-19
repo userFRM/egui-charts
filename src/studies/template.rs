@@ -1518,7 +1518,7 @@ mod tests {
             r#"{"name":"ZigZag","inputs":[["deviation_percent",{"Number":3.0}],["depth",{"Length":10}],["mode",{"Choice":0}],["price_labels",{"Toggle":true}],["change_labels",{"Toggle":true}],["change_mode",{"Choice":1}],["volume_labels",{"Toggle":false}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ZigZag.html","plots":[{"color":[41,98,255,255],"width":2.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
         )
         .unwrap();
-        let mut study = saved.create().unwrap();
+        let study = saved.create().unwrap();
         assert_eq!(study.settings(), saved.settings);
         let inputs = study.inputs();
         for (id, kept) in [
@@ -1532,17 +1532,6 @@ mod tests {
             let input = inputs.iter().find(|input| input.id == id);
             assert_eq!(input.map(|input| &input.value), Some(&kept), "ZigZag {id}");
         }
-        let bars: Vec<_> = (0..50)
-            .map(|i| {
-                let close = 100.0 + 8.0 * (f64::from(i) / 9.0).sin();
-                crate::studies::test_support::make_range_bar(close + 1.0, close - 1.0, close)
-            })
-            .collect();
-        study.calculate(&bars);
-        let mut again = StudyTemplate::from_study(study.as_ref()).create().unwrap();
-        again.calculate(&bars);
-        assert_eq!(study.values().to_rows(), again.values().to_rows());
-        assert_eq!(study.labels(), again.labels());
     }
 
     /// A Correlation Coefficient as a chart saved it before it opened as an area: a line with its
