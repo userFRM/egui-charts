@@ -169,7 +169,7 @@ impl FeedLink {
     }
 
     fn rebuild_paged_trade_rate(&self, input: &crate::data::OrderFlowInput, history: &[Bar]) {
-        if let Some(tf @ (Timeframe::Ticks(_) | Timeframe::Range(_))) = self.clock.timeframe()
+        if let Some(tf) = self.clock.timeframe().filter(|tf| tf.is_trade_based())
             && self.trades_from_start
             && self.pushed_from.is_none()
             && self.trades.live().next().is_none()
