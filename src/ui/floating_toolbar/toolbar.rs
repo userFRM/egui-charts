@@ -38,9 +38,13 @@ pub enum FloatingToolbarAction {
     Duplicate,
     /// Delete the selected object
     Delete,
-    /// Toggle lock state
+    /// Lock the selected drawings, or unlock them when the drawing the toolbar follows is
+    /// locked. [`FloatingSelectionToolbar::show_and_apply`] returns it as
+    /// [`DrawingContextMenuAction::Lock`].
     ToggleLock,
-    /// Toggle visibility
+    /// Hide the selected drawings, or show them when the drawing the toolbar follows is hidden.
+    /// [`FloatingSelectionToolbar::show_and_apply`] returns it as
+    /// [`DrawingContextMenuAction::Hide`].
     ToggleVisibility,
     /// Close the toolbar
     Close,

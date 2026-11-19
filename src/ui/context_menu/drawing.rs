@@ -78,9 +78,13 @@ pub enum DrawingContextMenuAction {
     /// Set the drawing's interval filter. Applied by `ChartMenus` and the floating toolbar
     /// as one undoable chart action; standalone menus call [`Self::apply_interval_visibility`].
     Intervals(IntervalRange),
-    /// Toggle drawing lock state
+    /// Lock the selected drawings, or unlock them when the drawing the menu opened on is
+    /// locked, for example with
+    /// [`DrawingManager::set_selected_locked`](crate::drawings::DrawingManager::set_selected_locked).
     Lock,
-    /// Toggle drawing visibility
+    /// Hide the selected drawings, or show them when the drawing the menu opened on is hidden,
+    /// for example with
+    /// [`DrawingManager::set_selected_visible`](crate::drawings::DrawingManager::set_selected_visible).
     Hide,
     /// Exchange a position's target and stop and switch between long and short.
     /// Applied by the mounted chart menu and floating toolbar through
