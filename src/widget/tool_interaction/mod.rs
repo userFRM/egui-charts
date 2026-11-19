@@ -1900,6 +1900,189 @@ mod tests {
         }
     }
 
+    /// A modified eraser sweep cuts only the crossed span, keeps style and sample anchors,
+    /// saves on release, and restores the whole stroke with one undo step without panning.
+    #[test]
+    fn a_modified_eraser_drag_erases_only_the_part_of_a_stroke_it_crosses() {
+        use crate::drawings::manager::DrawingSyncAction;
+        use egui::pos2;
+
+        for (tool, modifiers, locked, crossed, pieces) in [
+            (DrawingToolType::Brush, Modifiers::CTRL, false, 15, 2),
+            (
+                DrawingToolType::Highlighter,
+                Modifiers::COMMAND,
+                false,
+                15,
+                2,
+            ),
+            (DrawingToolType::Brush, Modifiers::CTRL, false, 0, 1),
+            (DrawingToolType::Brush, Modifiers::CTRL, true, 15, 0),
+            (DrawingToolType::Brush, Modifiers::NONE, false, 15, 0),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            let mut stroke = Drawing::new(1, tool);
+            stroke.chart_points = (20..=80)
+                .step_by(2)
+                .map(|bar| {
+                    let mut point = ChartPoint::new(bar as f32, 15.0);
+                    point.time_anchor = Some((
+                        chrono::DateTime::from_timestamp(1_700_000_000 + bar * 86400, 0).unwrap(),
+                        bar as f32,
+                    ));
+                    point
+                })
+                .collect();
+            stroke.locked = locked;
+            stroke.stored_id = Some("stroke".into());
+            stroke.created_at = Some(123);
+            chart.drawings_mut().drawings.push(stroke.clone());
+            chart.drawings_mut().set_eraser_mode(true);
+            chart.drawings_mut().set_sync_enabled(true);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let samples = &chart.drawings().drawings[0].points;
+            let px_per_bar = (samples[1].x - samples[0].x) / 2.0;
+            let (x, y) = (samples[crossed].x, samples[0].y);
+            let (p0, p1) = (pos2(x - 10.0, y - 40.0), pos2(x + 10.0, y + 40.0));
+            // At height y, distance to this diagonal is |dx| * 80 / sqrt(20² + 80²).
+            let reach = 5.0_f32.max(stroke.stroke_width / 2.0);
+            let delta = reach * 20.0_f32.hypot(80.0) / 80.0 / px_per_bar;
+            let center = stroke.chart_points[crossed].bar_idx;
+            let button = |pos, pressed, modifiers| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers,
+            };
+            chart.drawings().pending_sync.lock().unwrap().clear();
+            let view = chart.get_time_scale_state();
+            let frames = [
+                vec![Event::ModifiersChanged(modifiers), Event::PointerMoved(p0)],
+                vec![button(p0, true, modifiers)],
+                // The modifier belongs to the press; releasing it does not end the sweep.
+                vec![
+                    Event::ModifiersChanged(Modifiers::NONE),
+                    Event::PointerMoved(p1),
+                ],
+                vec![button(p1, false, Modifiers::NONE)],
+            ];
+            for (i, events) in frames.into_iter().enumerate() {
+                frame(&ctx, &mut chart, 0.1 * (i + 1) as f64, events);
+                if modifiers != Modifiers::NONE {
+                    assert_eq!(
+                        chart.get_time_scale_state(),
+                        view,
+                        "{tool:?}, frame {i}: no pan"
+                    );
+                }
+                if i < 3 {
+                    assert!(chart.drawings().pending_sync.lock().unwrap().is_empty());
+                }
+                if i == 2 && pieces > 0 {
+                    assert!(!chart.undo(), "history waits for the gesture to end");
+                }
+            }
+            let drawings = &chart.drawings().drawings;
+            if pieces == 0 {
+                assert_eq!(
+                    drawings.len(),
+                    1,
+                    "{tool:?}, {modifiers:?}, locked {locked}"
+                );
+                assert_eq!(drawings[0].chart_points, stroke.chart_points);
+                assert!(!chart.drawings_mut().undo());
+                continue;
+            }
+            assert_eq!(drawings.len(), pieces, "{tool:?}, sample {crossed}");
+            assert_eq!(drawings[0].id, 1);
+            assert_eq!(drawings[0].stored_id, stroke.stored_id);
+            assert_eq!(drawings[0].created_at, stroke.created_at);
+            for (i, piece) in drawings.iter().enumerate() {
+                assert_eq!(piece.tool_type, stroke.tool_type);
+                assert_eq!(piece.color, stroke.color);
+                assert_eq!(piece.stroke_width, stroke.stroke_width);
+                assert_eq!(piece.line_style, stroke.line_style);
+                let kept: Vec<_> = stroke
+                    .chart_points
+                    .iter()
+                    .filter(|p| {
+                        if pieces == 2 && i == 0 {
+                            p.bar_idx < center - delta
+                        } else {
+                            p.bar_idx > center + delta
+                        }
+                    })
+                    .copied()
+                    .collect();
+                let (originals, cut) = if pieces == 2 && i == 0 {
+                    (
+                        &piece.chart_points[..piece.chart_points.len() - 1],
+                        piece.chart_points.last().unwrap(),
+                    )
+                } else {
+                    (&piece.chart_points[1..], &piece.chart_points[0])
+                };
+                assert_eq!(originals, kept);
+                assert_eq!(
+                    originals.iter().map(|p| p.time_anchor).collect::<Vec<_>>(),
+                    kept.iter().map(|p| p.time_anchor).collect::<Vec<_>>()
+                );
+                let expected = if pieces == 2 && i == 0 {
+                    center - delta
+                } else {
+                    center + delta
+                };
+                assert!(
+                    (cut.bar_idx - expected).abs() < 1e-3,
+                    "{tool:?}: {} vs {expected}",
+                    cut.bar_idx
+                );
+                assert_eq!(cut.price, 15.0);
+                if i > 0 {
+                    assert_ne!(piece.id, 1);
+                    assert!(piece.stored_id.is_none());
+                    assert!(piece.created_at.is_none());
+                }
+            }
+            let sync = chart.drawings().pending_sync.lock().unwrap();
+            assert_eq!(sync.len(), pieces);
+            assert!(matches!(sync[0], DrawingSyncAction::UpdateDrawing(1)));
+            if pieces == 2 {
+                assert!(
+                    matches!(sync[1], DrawingSyncAction::SaveDrawing(id) if id == drawings[1].id)
+                );
+            }
+            drop(sync);
+            let after = drawings.clone();
+            assert!(chart.undo());
+            assert_eq!(chart.drawings().drawings.len(), 1);
+            assert_eq!(chart.drawings().drawings[0].id, 1);
+            assert_eq!(
+                chart.drawings().drawings[0].chart_points,
+                stroke.chart_points
+            );
+            assert!(!chart.undo(), "one undo step for the sweep");
+            assert!(chart.redo());
+            assert_eq!(
+                chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .map(|d| (d.id, &d.chart_points))
+                    .collect::<Vec<_>>(),
+                after
+                    .iter()
+                    .map(|d| (d.id, &d.chart_points))
+                    .collect::<Vec<_>>()
+            );
+            let saved = chart
+                .save_drawings()
+                .expect("pieces save like ordinary strokes");
+            assert!(saved.to_json().is_ok());
+        }
+    }
+
     /// A drawing shown only on the daily interval is neither drawn nor hit once the chart is
     /// set to another interval; price-based types retain interval visibility.
     #[test]

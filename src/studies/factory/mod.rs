@@ -495,6 +495,10 @@ impl IndicatorFactory {
     /// Capture a study with [`StudyTemplate::from_study`], edit its typed inputs or settings,
     /// then pass it here. A chooser supplied this factory through `IndicatorDialog::with_factory`
     /// uses the same defaults. Explicit edits to a created study take precedence.
+    /// A study this factory creates, also from a saved template with
+    /// [`StudyTemplate::create_with`], reports the value a new study starts with as the
+    /// [`default`](StudyInput::default) of each input that these defaults or that template name,
+    /// which resetting the inputs restores.
     ///
     /// ```
     /// use egui_charts::studies::{IndicatorFactory, InputValue, StudyTemplate};
@@ -541,6 +545,19 @@ impl IndicatorFactory {
             study.set_registered_name(name);
         }
         Some(study)
+    }
+
+    /// The inputs a study created under `name` starts with, or `None` without host defaults for
+    /// `name` or when its constructor no longer accepts them.
+    pub(crate) fn input_defaults(&self, name: &str) -> Option<Vec<(String, InputValue)>> {
+        let study = self.defaults.get(name)?.build(self, false).ok()?;
+        Some(
+            study
+                .inputs()
+                .into_iter()
+                .map(|input| (input.id, input.value))
+                .collect(),
+        )
     }
 
     /// Reconstruct saved state without applying defaults intended for new studies.

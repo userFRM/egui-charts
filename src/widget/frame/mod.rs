@@ -401,6 +401,10 @@ impl Chart {
             }
             ui.ctx().request_discard("Chart measured its axis labels");
         }
+        // The pass that is shown ends the refits of a range set before the first layout.
+        if self.prev_width.is_some() && !ui.ctx().will_discard() {
+            self.pending_visible_range = None;
+        }
         self.record_host_events(ui);
         let needs_info = response.clicked()
             || response.double_clicked()
@@ -707,6 +711,9 @@ impl Chart {
             || self.drawings.dragging_handle.is_some()
             || self.drawings.text_editor.is_some()
             || self.drawings.curr_drawing.is_some()
+            || self.drawings.partial_erase.is_some()
+            // A modified eraser press owns the drag even when it starts beside a stroke.
+            || (self.drawings.eraser_mode && ui.input(|i| i.modifiers.ctrl || i.modifiers.command))
             || ui
                 .input(|i| i.pointer.press_origin().or_else(|| i.pointer.hover_pos()))
                 .is_some_and(|origin| {

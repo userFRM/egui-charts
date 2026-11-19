@@ -313,7 +313,15 @@ impl IndicatorSettingsDialog {
                                                 | "wait_for_close"
                                         )
                                     {
-                                        input.value = input.default.clone();
+                                        // The chart's symbol and interval, which the host's
+                                        // defaults need not follow.
+                                        input.value = match input.id.as_str() {
+                                            "calculation_symbol" => {
+                                                InputValue::Symbol(String::new())
+                                            }
+                                            "calculation_timeframe" => InputValue::Timeframe(None),
+                                            _ => input.default.clone(),
+                                        };
                                         continue;
                                     }
                                     if !shown {
@@ -2604,5 +2612,96 @@ mod tests {
                 "{combo}, histories {histories}"
             );
         }
+    }
+
+    /// Reset inputs restores what a new study starts with: the host's default inputs for a study
+    /// that the factory created or restored under them, the constructor's otherwise. A study
+    /// output chosen as the source still makes the study follow the chart's interval when the
+    /// host's defaults calculate it on another one.
+    #[test]
+    fn reset_inputs_restores_the_host_defaults() {
+        use crate::studies::{IndicatorFactory, RSI, StudySource, StudyTemplate};
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let apply = |dialog: &mut IndicatorSettingsDialog, reset: bool| {
+            let mut edit = None;
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::vec2(1440.0, 900.0))
+                .build_ui(|ui| {
+                    if let Some(next) = dialog.show(ui.ctx(), &Theme::dark()) {
+                        edit = Some(next);
+                    }
+                });
+            harness.run();
+            if reset {
+                harness.get_by_label("Reset inputs").click();
+                harness.run();
+            }
+            harness.get_by_label("Apply").click();
+            harness.run();
+            drop(harness);
+            edit.expect("an applied edit")
+        };
+        let input = |edit: &StudyEdit, id: &str| {
+            edit.inputs
+                .iter()
+                .find(|(input, _)| input == id)
+                .map(|(_, value)| value.clone())
+                .unwrap()
+        };
+        let mut host = IndicatorFactory::new();
+        let mut defaults = StudyTemplate::from_study(host.create("SMA").unwrap().as_ref());
+        defaults.inputs = vec![("period".into(), InputValue::Length(5))];
+        host.set_defaults(std::slice::from_ref(&defaults)).unwrap();
+        let mut edited = host.create("SMA").unwrap();
+        edited.set_input("period", InputValue::Length(20)).unwrap();
+        let saved = StudyTemplate::from_study(edited.as_ref());
+        for (case, study, period) in [
+            (
+                "constructor",
+                IndicatorFactory::new().create("SMA").unwrap(),
+                9,
+            ),
+            ("host defaults", host.create("SMA").unwrap(), 5),
+            ("restored", saved.create_with(&host).unwrap(), 5),
+        ] {
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            let id = chart.add_indicator(study);
+            let mut dialog = IndicatorSettingsDialog::default();
+            assert!(dialog.open_for_chart(&chart, id));
+            dialog
+                .inputs
+                .iter_mut()
+                .find(|input| input.id == "period")
+                .unwrap()
+                .value = InputValue::Length(20);
+            let edit = apply(&mut dialog, true);
+            assert_eq!(input(&edit, "period"), InputValue::Length(period), "{case}");
+        }
+
+        defaults.inputs.push((
+            "calculation_timeframe".into(),
+            InputValue::Timeframe(Some(Timeframe::Hour1)),
+        ));
+        host.set_defaults(&[defaults]).unwrap();
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        let rsi = chart.add_indicator(Box::new(RSI::new(14)));
+        let id = chart.add_indicator(host.create("SMA").unwrap());
+        let mut dialog = IndicatorSettingsDialog::default();
+        assert!(dialog.open_for_chart(&chart, id));
+        dialog
+            .inputs
+            .iter_mut()
+            .find(|input| input.id == "source")
+            .unwrap()
+            .value = InputValue::Source(StudySource::Study { id: rsi.0, plot: 0 });
+        let edit = apply(&mut dialog, false);
+        assert_eq!(
+            input(&edit, "calculation_timeframe"),
+            InputValue::Timeframe(None)
+        );
+        let study = chart.indicator_mut(id).unwrap();
+        assert!(study.apply_settings(&edit.inputs, edit.settings).is_ok());
     }
 }

@@ -1820,7 +1820,18 @@ impl eframe::App for DemoApp {
                 ctx.request_repaint_after(delay);
             }
         }
-        self.order_flow.set_service(self.live.detectors());
+        let detectors = self.live.detectors();
+        let mut settings = detectors.settings();
+        let before = settings.clone();
+        // Footprint alerts read the imbalances the active chart shows.
+        settings
+            .footprint
+            .rule
+            .follow_chart(self.chart.chart_type_params());
+        if settings != before {
+            detectors.set_settings(settings);
+        }
+        self.order_flow.set_service(detectors);
         self.notification_host
             .watch_detectors(self.live.detectors());
         let sounds = self.order_flow.poll(&ctx, &mut self.toasts);
@@ -3989,11 +4000,14 @@ impl DemoApp {
                 self.object_tree
                     .apply_to_chart(&mut self.chart, &action, &[]);
             }
+            // The menu and the toolbar show the state of the drawing they opened on.
             DrawingContextMenuAction::Lock => {
-                let _ = dm.edit_drawing(id, |d| d.locked = !d.locked);
+                let locked = dm.drawings.iter().any(|d| d.id == id && d.locked);
+                dm.set_selected_locked(!locked);
             }
             DrawingContextMenuAction::Hide => {
-                let _ = dm.edit_drawing(id, |d| d.visible = !d.visible);
+                let visible = dm.drawings.iter().any(|d| d.id == id && d.visible);
+                dm.set_selected_visible(!visible);
             }
             DrawingContextMenuAction::BringToFront => dm.bring_to_front(id),
             DrawingContextMenuAction::SendToBack => dm.send_to_back(id),
@@ -6232,6 +6246,29 @@ mod tests {
     }
 
     #[test]
+    fn footprint_alerts_follow_the_active_chart() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let mut params = app.chart.chart_type_params().clone();
+        params.footprint_imbalance_ratio = 4.0;
+        params.footprint_diagonal = false;
+        params.footprint_imbalance_min_volume = 5.0;
+        params.footprint_stack = 2;
+        app.chart.set_chart_type_params(params);
+        settle(&mut app, &ctx);
+        let rule = app.live.detectors().settings().footprint.rule;
+        assert_eq!(
+            (
+                rule.imbalance_ratio,
+                rule.diagonal,
+                rule.imbalance_min_volume,
+                rule.stack
+            ),
+            (4.0, false, 5.0, 2)
+        );
+    }
+
+    #[test]
     fn opening_state_is_quiet_and_saved_features_restore() {
         use eframe::App;
         use egui_charts::services::{DetectionCounts, DetectionKind};
@@ -6886,6 +6923,53 @@ mod tests {
             app.chart.drawings().drawings[0].chart_points[0],
             ChartPoint::new(10.0, 100.0)
         );
+    }
+
+    /// Lock and Hide from the drawing menu and toolbar set every selected drawing to the opposite
+    /// of the menu drawing's state, mixed selections included, and one undo restores them all.
+    #[test]
+    fn drawing_menu_hides_and_locks_every_selected_drawing() {
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.chart.drawings_mut().drawings.clear();
+        // (id, locked, visible): 7 plain, 8 locked, 9 hidden.
+        for (id, locked, visible) in [(7, false, true), (8, true, true), (9, false, false)] {
+            let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+            let price = 100.0 + id as f64;
+            drawing.chart_points = vec![ChartPoint::new(10.0, price), ChartPoint::new(20.0, price)];
+            drawing.completed = true;
+            drawing.locked = locked;
+            drawing.visible = visible;
+            app.chart.drawings_mut().drawings.push(drawing);
+        }
+        let state = |app: &DemoApp| {
+            [7, 8, 9].map(|id| {
+                let drawings = &app.chart.drawings().drawings;
+                let drawing = drawings.iter().find(|d| d.id == id).unwrap();
+                (drawing.locked, drawing.visible)
+            })
+        };
+        let initial = [(false, true), (true, true), (false, false)];
+        for (action, expected) in [
+            (
+                DrawingContextMenuAction::Lock,
+                [(true, true), (true, true), (true, false)],
+            ),
+            (
+                DrawingContextMenuAction::Hide,
+                [(false, false), (true, false), (false, false)],
+            ),
+        ] {
+            // The menu opens on 7, which a right-click within the selection makes primary.
+            app.chart.drawings_mut().select_drawings([7, 8, 9]);
+            assert_eq!(app.chart.drawings().sel_drawing(), Some(7));
+            app.handle_drawing_context(&ctx, action.clone());
+            assert_eq!(state(&app), expected, "{action:?}");
+            assert!(app.chart.undo(), "{action:?}");
+            assert_eq!(state(&app), initial, "{action:?}");
+        }
     }
 
     #[test]
