@@ -1484,7 +1484,23 @@ mod tests {
                 "Smallest row with numbers",
                 "Expiry value",
                 "Expiry off",
+                "Keep host values",
+                "Fixed volume default",
+                "Expiry on",
             ] {
+                let mut seeded = seeded.clone();
+                if edit == "Fixed volume default" {
+                    seeded.footprint_intensity = FootprintIntensity::Bar;
+                }
+                if edit == "Expiry on" {
+                    seeded.footprint_extend_bars = None;
+                }
+                if edit == "Keep host values" {
+                    seeded.footprint_intensity = FootprintIntensity::Volume(-1.0);
+                    seeded.footprint_auto_row_height = 0.0;
+                    seeded.footprint_min_text_height = 100.0;
+                    seeded.footprint_extend_bars = Some(0);
+                }
                 let mut dialog = SettingsDialog::new();
                 dialog.set_control_visible(crate::ui::Control::Templates, false);
                 dialog.open(ChartSettingsState {
@@ -1511,17 +1527,30 @@ mod tests {
                 harness.run();
                 let mut expected = seeded.clone();
                 match edit {
-                    "Shading scale" => {
+                    "Shading scale" | "Fixed volume default" => {
+                        let label = "Shading scale";
                         harness
-                            .get_by_role_and_label(Role::ComboBox, edit)
+                            .get_by_role_and_label(Role::ComboBox, label)
                             .scroll_to_me();
                         harness.run();
-                        harness.get_by_role_and_label(Role::ComboBox, edit).click();
+                        harness.get_by_role_and_label(Role::ComboBox, label).click();
                         harness.run();
+                        let fixed = edit == "Fixed volume default";
                         harness
-                            .get_by_role_and_label(Role::Button, "Bars in view")
+                            .get_by_role_and_label(
+                                Role::Button,
+                                if fixed {
+                                    "Fixed volume"
+                                } else {
+                                    "Bars in view"
+                                },
+                            )
                             .click();
-                        expected.footprint_intensity = FootprintIntensity::Visible;
+                        expected.footprint_intensity = if fixed {
+                            FootprintIntensity::Volume(100.0)
+                        } else {
+                            FootprintIntensity::Visible
+                        };
                     }
                     "Automatic row height" | "Smallest row with numbers" => {
                         let value = if edit == "Automatic row height" {
@@ -1538,7 +1567,12 @@ mod tests {
                             expected.footprint_min_text_height = value as f32;
                         }
                     }
-                    "Expiry value" | "Expiry off" => {
+                    "Keep host values" => {
+                        harness.get_by_label("Annotations").scroll_to_me();
+                        harness.run();
+                        harness.get_by_label("Annotations").click();
+                    }
+                    "Expiry value" | "Expiry off" | "Expiry on" => {
                         harness.get_by_label("Annotations").scroll_to_me();
                         harness.run();
                         harness.get_by_label("Annotations").click();
@@ -1556,7 +1590,8 @@ mod tests {
                             harness
                                 .get_by_role_and_label(Role::CheckBox, "Expire after bars")
                                 .click();
-                            expected.footprint_extend_bars = None;
+                            expected.footprint_extend_bars =
+                                if edit == "Expiry on" { Some(50) } else { None };
                         }
                     }
                     _ => {
@@ -1572,7 +1607,6 @@ mod tests {
                     .click();
                 harness.run();
                 let (_, accepted) = harness.state();
-                let accepted: &Option<ChartSettingsState> = accepted;
                 assert_eq!(
                     accepted.as_ref().and_then(|s| s.chart_type_params.as_ref()),
                     accept.then_some(&expected),

@@ -181,9 +181,11 @@ impl SymbolTab {
             *value = enabled.then_some(default);
         }
         if let Some(value) = value {
+            // Whole-bar limits may be zero in host settings; opening the dialog keeps them.
             ui.add(
                 egui::DragValue::new(value)
                     .range(range)
+                    .clamp_existing_to_range(!N::INTEGRAL)
                     .speed(0.1)
                     .suffix(suffix),
             )
@@ -304,6 +306,7 @@ impl SymbolTab {
                 ui.add(
                     egui::DragValue::new(volume)
                         .range(0.001..=f64::MAX)
+                        .clamp_existing_to_range(false)
                         .speed(1.0),
                 )
                 .labelled_by(label.id);
@@ -355,6 +358,7 @@ impl SymbolTab {
                 ui.add(
                     egui::DragValue::new(&mut params.footprint_auto_row_height)
                         .range(10.0..=40.0)
+                        .clamp_existing_to_range(false)
                         .suffix(l10n::text(ui.ctx(), " pt")),
                 )
                 .labelled_by(label.id);
@@ -374,6 +378,7 @@ impl SymbolTab {
             ui.add(
                 egui::DragValue::new(&mut params.footprint_min_text_height)
                     .range(10.0..=40.0)
+                    .clamp_existing_to_range(false)
                     .suffix(l10n::text(ui.ctx(), " pt")),
             )
             .labelled_by(label.id);

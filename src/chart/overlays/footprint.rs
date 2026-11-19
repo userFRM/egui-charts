@@ -2363,7 +2363,7 @@ mod tests {
     #[test]
     fn chart_type_expiry_ends_an_unrevisited_poc_at_the_fifth_later_bar() {
         use crate::studies::{FootprintStudyKind, FootprintStudyState};
-        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let time: chrono::DateTime<chrono::Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
         let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
         let bars: Vec<_> = (0..7)
             .map(|i| {
@@ -2475,7 +2475,7 @@ mod tests {
     /// The third bar is in the loop's margin but its cells start beyond the plot.
     #[test]
     fn intensity_scales_shades_and_fonts_per_bar_in_view_or_to_a_volume() {
-        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let time: chrono::DateTime<chrono::Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
         let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
         let bars: Vec<_> = [(40.0, 0.0), (40_000.0, 10_000.0), (4_000_000.0, 0.0)]
             .into_iter()
@@ -2532,7 +2532,7 @@ mod tests {
             output.textures_delta.clear();
             output.shapes
         };
-        let rgba = |[r, g, b, a]| Color32::from_rgba_premultiplied(r, g, b, a);
+        let rgba = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_premultiplied(r, g, b, a);
         type FillCase = (FootprintColor, FootprintIntensity, [[u8; 4]; 3]);
         let cases: &[FillCase] = &[
             (
@@ -3347,13 +3347,11 @@ mod tests {
         }
     }
 
-    /// The same minimum gates grouped cells and zones, and changing it refreshes cached zones.
-    #[cfg(feature = "studies")]
     /// One tick is 160/3.5*0.25 = 11.43 points: automatic height 16 groups two,
     /// while height 10 leaves one. A minimum of 12 hides single-row numbers; 10 keeps them.
     #[test]
     fn chart_type_row_heights_choose_numbers_or_the_overview() {
-        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let time: chrono::DateTime<chrono::Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
         let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
         for (price, size, side) in [
             (100.0, 2.0, OrderSide::Sell),
@@ -3388,6 +3386,7 @@ mod tests {
         ] {
             let params = ChartTypeParams {
                 footprint_modes: vec![FootprintMode::BidAsk],
+                footprint_color_by: FootprintColor::Volume,
                 footprint_value_area: None,
                 footprint_auto_row_height: auto,
                 footprint_min_text_height: minimum,
@@ -3436,6 +3435,8 @@ mod tests {
         }
     }
 
+    /// The same minimum gates grouped cells and zones, and changing it refreshes cached zones.
+    #[cfg(feature = "studies")]
     #[test]
     fn imbalance_minimum_applies_after_grouping_to_cells_and_zones() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
