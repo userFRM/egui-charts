@@ -1,5 +1,5 @@
-//! The account panel: the connected account's summary, positions, working orders, order and
-//! balance history and trading journal, shown at the bottom of the terminal.
+//! The account panel: the connected account's summary, positions, working orders, order history,
+//! closed positions, balance history and trading journal, shown at the bottom of the terminal.
 
 mod history;
 mod view;
@@ -13,8 +13,8 @@ use history::Paging;
 
 use super::Trading;
 use crate::model::{
-    BalanceChange, Execution, JournalEntry, Order, OrderId, OrderRequest, OrderStatus, OrderType,
-    Position,
+    BalanceChange, ClosedPosition, Execution, JournalEntry, Order, OrderId, OrderRequest,
+    OrderStatus, OrderType, Position,
 };
 use crate::services::{AccountEvent, HistoryKind};
 
@@ -134,6 +134,10 @@ pub enum AccountPanelAction {
     SelectAccount(usize),
     /// Disconnect from the broker.
     Disconnect,
+    /// Open the host's broker picker, such as a
+    /// [`BrokerPicker`](crate::ui::trading::BrokerPicker), to choose another broker. The current
+    /// broker stays connected until the user picks another.
+    ChangeBroker,
     /// Open the account's settings, such as resetting a [paper
     /// account](crate::services::PaperAccount).
     Settings,
@@ -153,15 +157,16 @@ pub enum AccountPanelAction {
 /// The account panel of [`Trading`], shown with [`Trading::show_account_panel`].
 ///
 /// A tab named after the broker sits above the account selectors and the account's summary:
-/// balance, equity, realised and unrealised profit and loss, margin, available funds and the
-/// margin of working orders, each shown when the broker reports it. The tab marks a broker that
-/// reports that it is connecting or disconnected, until it reports that it is live. Below are the
-/// positions, working orders, finished orders, balance changes and trading journal the broker
-/// pushes, each with a column chooser and an export. Order History also lists individual
-/// executions. A position offers close, and an order offers edit and cancel on hover; each waits
-/// for the user's confirmation like the chart's lines. Clicking
-/// a symbol asks the host to show it. Each history keeps the most recent 1,000 entries; active
-/// orders are retained independently. Scrolling to the end of a history asks
+/// balance, equity, realised and unrealised profit and loss, margin, margin buffer, available
+/// funds and the margin of working orders, each shown when the broker reports it. The tab marks
+/// a broker that reports that it is connecting or disconnected, until it reports that it is live.
+/// Below are the positions, working orders, finished orders, closed positions, balance changes
+/// and trading journal the broker pushes, each with a column chooser and an export. Order History
+/// also lists individual executions. A position offers close, and an order offers edit and cancel
+/// on hover; each waits for the user's confirmation like the chart's lines. The broker menu asks
+/// the host to open its broker picker or disconnect. Clicking a symbol asks the host to show it.
+/// Each history keeps the most recent 1,000 entries; active orders are retained independently.
+/// Scrolling to the end of a history asks
 /// [`Broker::history`](crate::services::Broker::history) for the entries before its oldest
 /// one, a page at a time, until the broker has nothing older or the history lists 1,000
 /// entries. Each entry is listed once, whether a page or the broker's stream brings it first,
@@ -186,6 +191,10 @@ pub struct AccountPanel {
     journal: Vec<JournalEntry>,
     /// The same for `journal`.
     journal_paged: usize,
+    /// Closed positions, oldest first.
+    closed: Vec<ClosedPosition>,
+    /// How many closed positions at the front came from pages that the stream has not repeated.
+    closed_paged: usize,
     /// Paging through the broker's older history, by kind, since the stream started.
     paging: HashMap<HistoryKind, Paging>,
     /// The order whose edit dialog is open, and its changed request.
@@ -198,16 +207,18 @@ enum Tab {
     Positions,
     Orders,
     History,
+    Closed,
     Balance,
     Journal,
     Executions,
 }
 
 impl Tab {
-    const ALL: [Tab; 5] = [
+    const ALL: [Tab; 6] = [
         Tab::Positions,
         Tab::Orders,
         Tab::History,
+        Tab::Closed,
         Tab::Balance,
         Tab::Journal,
     ];
@@ -217,6 +228,7 @@ impl Tab {
             Tab::Positions => "Positions",
             Tab::Orders => "Orders",
             Tab::History => "Order History",
+            Tab::Closed => "Closed Positions",
             Tab::Balance => "Balance History",
             Tab::Journal => "Trading Journal",
             Tab::Executions => "Executions",
@@ -228,6 +240,7 @@ impl Tab {
         match self {
             Tab::History => Some(HistoryKind::Orders),
             Tab::Executions => Some(HistoryKind::Executions),
+            Tab::Closed => Some(HistoryKind::ClosedPositions),
             Tab::Balance => Some(HistoryKind::Balance),
             Tab::Journal => Some(HistoryKind::Journal),
             Tab::Positions | Tab::Orders => None,
@@ -297,6 +310,19 @@ impl Tab {
                     left("Placing Time", 130.0),
                     left("Closing Time", 130.0),
                     left("Order ID", 60.0),
+                ];
+                COLUMNS
+            }
+            Tab::Closed => {
+                const COLUMNS: &[Column] = &[
+                    left("Symbol", 134.0),
+                    left("Side", 44.0),
+                    right("Qty", 44.0),
+                    right("Avg Entry Price", 96.0),
+                    right("Avg Exit Price", 96.0),
+                    right("Realized P&L", 110.0),
+                    left("Opening Time", 130.0),
+                    left("Closing Time", 130.0),
                 ];
                 COLUMNS
             }
@@ -403,7 +429,7 @@ fn status(ctx: &egui::Context, status: &OrderStatus) -> String {
 }
 
 impl AccountPanel {
-    /// Keeps the history the broker pushes: finished orders, balance changes and the journal.
+    /// Keeps the broker's finished orders, closed positions, balance changes and journal.
     pub(super) fn record(&mut self, event: &AccountEvent) {
         if let AccountEvent::Order(order) = event
             && self
@@ -431,6 +457,9 @@ impl AccountPanel {
                 }
             }
             AccountEvent::Execution(fill) => self.fills.execution(fill),
+            AccountEvent::ClosedPosition(closed) => {
+                push_live(&mut self.closed, &mut self.closed_paged, closed);
+            }
             AccountEvent::Balance(change) => {
                 push_live(&mut self.balance, &mut self.balance_paged, change);
             }
@@ -449,6 +478,8 @@ impl AccountPanel {
         self.balance_paged = 0;
         self.journal.clear();
         self.journal_paged = 0;
+        self.closed.clear();
+        self.closed_paged = 0;
         self.paging.clear();
         self.editing = None;
     }
@@ -503,6 +534,137 @@ mod tests {
     use crate::model::OrderSide;
     use crate::ui::trading::tests::Recorder;
     use crate::ui_kit::notifications::Toasts;
+
+    /// A reported buffer, including a deficit, is shown beside the account margin; an absent
+    /// buffer has neither a label nor a value. The summary paints text rather than labels.
+    #[test]
+    fn the_summary_shows_the_margin_buffer_only_when_reported() {
+        use crate::model::{Account, Capabilities};
+        use std::sync::Mutex;
+
+        for (buffer, shown) in [(None, false), (Some(-250.5), true)] {
+            let mut trading = Trading::default();
+            let mut account = Account::new("USD", 1_000.0, Capabilities::default());
+            account.margin = Some(200.0);
+            account.margin_buffer = buffer;
+            trading.apply(
+                &egui::Context::default(),
+                AccountEvent::Account(account),
+                &mut Toasts::new(),
+            );
+            let keys = Arc::new(Mutex::new(Vec::new()));
+            let translated = keys.clone();
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(1440.0, 400.0))
+                .with_context_setup(move |ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::localization::set_translator(ctx, move |english| {
+                        translated.lock().unwrap().push(english.to_owned());
+                        None
+                    });
+                })
+                .build_ui_state(
+                    |ui, trading: &mut Trading| {
+                        trading.show_account_panel(ui, "SYM");
+                    },
+                    trading,
+                );
+            harness.run();
+            let keys = keys.lock().unwrap();
+            for key in ["Account margin", "200.00"] {
+                assert!(keys.iter().any(|text| text == key));
+            }
+            for key in ["Margin buffer", "-250.50"] {
+                assert_eq!(
+                    keys.iter().any(|text| text == key),
+                    shown,
+                    "{buffer:?}: {key}"
+                );
+            }
+        }
+    }
+
+    /// Menu entries ask the host for the chosen action while the current service stays live.
+    #[test]
+    fn the_broker_menu_asks_the_host_to_change_broker_or_disconnect() {
+        for (item, expected) in [
+            ("Change broker", AccountPanelAction::ChangeBroker),
+            ("Disconnect", AccountPanelAction::Disconnect),
+        ] {
+            let mut trading = Trading::default();
+            trading.set_service(Arc::new(Recorder::default()));
+            trading.poll(&egui::Context::default(), &mut Toasts::new());
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(1000.0, 400.0))
+                .with_context_setup(egui_extras::install_image_loaders)
+                .build_ui_state(
+                    |ui, state: &mut (Trading, Option<AccountPanelAction>)| {
+                        if let Some(action) = state.0.show_account_panel(ui, "SYM") {
+                            state.1 = Some(action);
+                        }
+                    },
+                    (trading, None),
+                );
+            harness.run();
+            harness
+                .get_by_role_and_label(egui::Role::Button, "Broker")
+                .click();
+            harness.run();
+            harness.get_by_label(item).click();
+            harness.run();
+            assert_eq!(harness.state().1, Some(expected));
+            assert!(harness.state().0.has_broker());
+            assert!(harness.state().0.is_connected());
+        }
+    }
+
+    /// Completed positions keep their column order, numeric units and missing opening time in
+    /// the export, with the newest position first.
+    #[test]
+    fn closed_positions_are_listed_newest_first_and_exported_by_column() {
+        let ctx = egui::Context::default();
+        let at = |seconds: i64| DateTime::from_timestamp(1_704_067_200 + seconds, 0).unwrap();
+        let mut trading = Trading::default();
+        trading.set_service(Arc::new(Recorder::default()));
+        trading.poll(&ctx, &mut Toasts::new());
+        let mut long = ClosedPosition::new("SYM", OrderSide::Buy, 3.0, 110.0, 125.0, 45.0, at(20));
+        long.opened = Some(at(0));
+        let short =
+            ClosedPosition::new("SYM", OrderSide::Sell, 0.5, 1_250.0, 1_311.0, -30.5, at(40));
+        for closed in [long, short] {
+            trading.apply(
+                &ctx,
+                AccountEvent::ClosedPosition(closed),
+                &mut Toasts::new(),
+            );
+        }
+        trading.account_panel.tab = Tab::Closed;
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1440.0, 400.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, state: &mut (Trading, Option<AccountPanelAction>)| {
+                    if let Some(action) = state.0.show_account_panel(ui, "SYM") {
+                        state.1 = Some(action);
+                    }
+                },
+                (trading, None),
+            );
+        harness.run();
+        harness.get_by_label("Columns and export").click();
+        harness.run();
+        harness.get_by_label("Export as CSV").click();
+        harness.run();
+        assert_eq!(
+            harness.state().1,
+            Some(AccountPanelAction::Export {
+                name: "Closed Positions".into(),
+                csv: "Symbol,Side,Qty,Avg Entry Price,Avg Exit Price,Realized P&L,Opening Time,Closing Time\n\
+SYM,Short,0.5,\"1,250.00\",\"1,311.00\",-30.50 USD,,2024-01-01 00:00:40\n\
+SYM,Long,3,110.00,125.00,+45.00 USD,2024-01-01 00:00:00,2024-01-01 00:00:20".into(),
+            })
+        );
+    }
 
     /// A position's full quantity and close button stay visible without hovering.
     #[test]
@@ -864,10 +1026,21 @@ mod tests {
                 time,
                 i.to_string(),
             )));
+            panel.record(&AccountEvent::ClosedPosition(ClosedPosition::new(
+                format!("NEW-{i}"),
+                OrderSide::Buy,
+                1.0,
+                100.0,
+                101.0,
+                1.0,
+                time,
+            )));
         }
         assert_eq!(panel.history.len(), 1_000);
         assert_eq!(panel.balance.len(), 1_000);
         assert_eq!(panel.journal.len(), 1_000);
+        assert_eq!(panel.closed.len(), 1_000);
+        assert_eq!(panel.closed[0].symbol, "NEW-1005");
         assert_eq!(panel.fills.executions.len(), 1_000);
         assert_eq!(panel.history[0].id.0, "1005");
         assert_eq!(panel.fills.executions[0].order.0, "1005");
@@ -902,6 +1075,7 @@ mod tests {
         assert_eq!(panel.fills.filled_quantity(&active), 1_006.0);
         panel.clear();
         assert!(panel.fills.orders.is_empty());
+        assert!(panel.closed.is_empty());
         assert_eq!(panel.fills.price("OLD"), None);
     }
 
