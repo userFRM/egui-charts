@@ -220,11 +220,15 @@ pub fn handle_active_tool<F1, F2>(
         }
     }
 
-    // Set crosshair cursor for drag-to-draw tools
+    // Drag-to-draw tools show the crosshair where a press places a point, and while they draw.
     if matches!(
         interaction_mode,
         DrawingInteractionMode::DragToDraw | DrawingInteractionMode::ContinuousDraw
-    ) {
+    ) && (drawing_manager.curr_drawing.is_some()
+        || ui
+            .input(|i| i.pointer.press_origin().or_else(|| i.pointer.hover_pos()))
+            .is_some_and(|pos| price_rect.contains(pos)))
+    {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
 }
