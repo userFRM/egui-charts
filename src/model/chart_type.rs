@@ -630,8 +630,30 @@ pub struct TradeProfileSettings {
     pub nodes: Option<NodeSensitivity>,
     /// Share of total volume shaded as the contiguous value area; `None` hides it.
     pub value_area: Option<f64>,
-    /// Draw guides at the outer edges of the value area.
+    /// Draw guides at the outer edges of the value area: the edges `value_area_high` and
+    /// `value_area_low` select.
     pub value_area_guides: bool,
+    /// Draw the POC line across each session. `extend_poc` extends it either way.
+    pub poc: bool,
+    /// Colour of the POC line and its extension; `None` follows the chart theme.
+    pub poc_color: Option<egui::Color32>,
+    /// With `value_area_guides`, draw the guide at the value area high.
+    pub value_area_high: bool,
+    /// Colour of the value area high guide and its extension; `None` follows the chart theme.
+    pub value_area_high_color: Option<egui::Color32>,
+    /// With `value_area_guides`, draw the guide at the value area low.
+    pub value_area_low: bool,
+    /// Colour of the value area low guide and its extension; `None` follows the chart theme.
+    pub value_area_low_color: Option<egui::Color32>,
+    /// Colour of up volume outside the value area, painted with its own opacity; `None` follows
+    /// the chart theme. In delta mode, rows of positive delta take the up colours.
+    pub up_volume_color: Option<egui::Color32>,
+    /// Colour of down volume outside the value area; `None` follows the chart theme.
+    pub down_volume_color: Option<egui::Color32>,
+    /// Colour of up volume inside the value area; `None` follows the chart theme.
+    pub value_area_up_color: Option<egui::Color32>,
+    /// Colour of down volume inside the value area; `None` follows the chart theme.
+    pub value_area_down_color: Option<egui::Color32>,
 }
 
 impl Default for TradeProfileSettings {
@@ -648,6 +670,16 @@ impl Default for TradeProfileSettings {
             nodes: None,
             value_area: Some(0.7),
             value_area_guides: false,
+            poc: true,
+            poc_color: None,
+            value_area_high: true,
+            value_area_high_color: None,
+            value_area_low: true,
+            value_area_low_color: None,
+            up_volume_color: None,
+            down_volume_color: None,
+            value_area_up_color: None,
+            value_area_down_color: None,
         }
     }
 }
@@ -1196,7 +1228,12 @@ mod tests {
             "tpo_letters": false,
             "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
                 "developing_value_area": true, "extend_poc": true, "extend_vah": true,
-                "extend_val": true,
+                "extend_val": true, "value_area_guides": true, "poc": false,
+                "poc_color": [12, 34, 56, 255], "value_area_high": false,
+                "value_area_high_color": [0, 200, 0, 255], "value_area_low": false,
+                "value_area_low_color": [0, 0, 100, 128], "up_volume_color": [60, 0, 0, 60],
+                "down_volume_color": [0, 60, 0, 60], "value_area_up_color": [0, 0, 120, 120],
+                "value_area_down_color": [120, 120, 0, 120],
                 "nodes": {"smoothing": 2, "prominence": 0.1}}
         });
         let params: ChartTypeParams = serde_json::from_value(settings.clone()).unwrap();
@@ -1233,40 +1270,56 @@ mod tests {
                 );
             }
         }
-        let legacy: ChartTypeParams = serde_json::from_str(r#"{"tpo_row_ticks":2}"#).unwrap();
-        let legacy = serde_json::to_value(legacy).unwrap();
-        assert_eq!(legacy["footprint_statistics"], false);
-        assert_eq!(legacy["footprint_row_ticks"], 0);
-        assert_eq!(legacy["footprint_row_atr"], false);
-        assert_eq!(legacy["footprint_row_atr_length"], 14);
-        assert_eq!(legacy["tpo_letters"], false);
-        assert_eq!(
-            legacy["footprint_colors"],
-            serde_json::json!([null, null, null, null])
-        );
-        assert_eq!(
-            legacy["footprint_imbalance_colors"],
-            serde_json::json!([null, null])
-        );
-        assert_eq!(legacy["footprint_session_cumulative_delta"], false);
-        for field in [
-            "footprint_stacked_imbalances",
-            "footprint_naked_poc",
-            "footprint_delta_poc",
-            "footprint_unfinished_auctions",
-            "footprint_extreme_ratio",
-            "footprint_pullback",
+        // A profile saved before level styles existed, including its enabled guides.
+        for (saved, guides) in [
+            (r#"{"tpo_row_ticks":2}"#, false),
+            (
+                r#"{"tpo_row_ticks":2,"profile":{"session":"Chart","rows":"Feed","mode":"BidAsk","developing_poc":false,"developing_value_area":false,"extend_poc":false,"extend_vah":false,"extend_val":false,"nodes":null,"value_area":0.7,"value_area_guides":true}}"#,
+                true,
+            ),
         ] {
-            assert_eq!(legacy[field], false);
-        }
-        assert_eq!(legacy["profile"]["value_area"], 0.7);
-        for field in [
-            "developing_value_area",
-            "extend_poc",
-            "extend_vah",
-            "extend_val",
-        ] {
-            assert_eq!(legacy["profile"][field], false);
+            let legacy: ChartTypeParams = serde_json::from_str(saved).unwrap();
+            assert_eq!(
+                legacy.profile,
+                TradeProfileSettings {
+                    value_area_guides: guides,
+                    ..Default::default()
+                }
+            );
+            let legacy = serde_json::to_value(legacy).unwrap();
+            assert_eq!(legacy["footprint_statistics"], false);
+            assert_eq!(legacy["footprint_row_ticks"], 0);
+            assert_eq!(legacy["footprint_row_atr"], false);
+            assert_eq!(legacy["footprint_row_atr_length"], 14);
+            assert_eq!(legacy["tpo_letters"], false);
+            assert_eq!(
+                legacy["footprint_colors"],
+                serde_json::json!([null, null, null, null])
+            );
+            assert_eq!(
+                legacy["footprint_imbalance_colors"],
+                serde_json::json!([null, null])
+            );
+            assert_eq!(legacy["footprint_session_cumulative_delta"], false);
+            for field in [
+                "footprint_stacked_imbalances",
+                "footprint_naked_poc",
+                "footprint_delta_poc",
+                "footprint_unfinished_auctions",
+                "footprint_extreme_ratio",
+                "footprint_pullback",
+            ] {
+                assert_eq!(legacy[field], false);
+            }
+            assert_eq!(legacy["profile"]["value_area"], 0.7);
+            for field in [
+                "developing_value_area",
+                "extend_poc",
+                "extend_vah",
+                "extend_val",
+            ] {
+                assert_eq!(legacy["profile"][field], false);
+            }
         }
     }
 

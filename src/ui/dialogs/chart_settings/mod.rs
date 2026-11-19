@@ -1146,7 +1146,7 @@ mod tests {
         type Row = fn(&mut ChartSettingsState) -> &mut Color32;
         let translucent = Color32::from_rgba_unmultiplied(255, 0, 255, 128);
         let theme = Theme::light();
-        let rows: [(&str, Row, Color32, u8); 18] = [
+        let rows: [(&str, Row, Color32, u8); 25] = [
             ("watermark", |s| &mut s.watermark.color, translucent, 128),
             (
                 "background",
@@ -1248,6 +1248,79 @@ mod tests {
                 translucent,
                 128,
             ),
+            (
+                "profile POC",
+                |s| {
+                    let profile = &mut s.chart_type_params.get_or_insert_default().profile;
+                    profile.poc_color.get_or_insert(Color32::TRANSPARENT)
+                },
+                translucent,
+                128,
+            ),
+            (
+                "profile value area high",
+                |s| {
+                    let profile = &mut s.chart_type_params.get_or_insert_default().profile;
+                    profile
+                        .value_area_high_color
+                        .get_or_insert(Color32::TRANSPARENT)
+                },
+                translucent,
+                128,
+            ),
+            (
+                "profile value area low",
+                |s| {
+                    let profile = &mut s.chart_type_params.get_or_insert_default().profile;
+                    profile
+                        .value_area_low_color
+                        .get_or_insert(Color32::TRANSPARENT)
+                },
+                translucent,
+                128,
+            ),
+            (
+                "profile up volume",
+                |s| {
+                    let profile = &mut s.chart_type_params.get_or_insert_default().profile;
+                    profile.up_volume_color.get_or_insert(Color32::TRANSPARENT)
+                },
+                translucent,
+                128,
+            ),
+            (
+                "profile down volume",
+                |s| {
+                    let profile = &mut s.chart_type_params.get_or_insert_default().profile;
+                    profile
+                        .down_volume_color
+                        .get_or_insert(Color32::TRANSPARENT)
+                },
+                translucent,
+                128,
+            ),
+            (
+                "profile up volume in value area",
+                |s| {
+                    let profile = &mut s.chart_type_params.get_or_insert_default().profile;
+                    profile
+                        .value_area_up_color
+                        .get_or_insert(Color32::TRANSPARENT)
+                },
+                translucent,
+                128,
+            ),
+            (
+                "profile down volume in value area",
+                |s| {
+                    let profile = &mut s.chart_type_params.get_or_insert_default().profile;
+                    profile
+                        .value_area_down_color
+                        .get_or_insert(Color32::TRANSPARENT)
+                },
+                translucent,
+                128,
+            ),
             ("alert", |s| &mut s.alerts.alert_color, translucent, 128),
         ];
         for (name, row, seeded, alpha) in rows {
@@ -1261,6 +1334,9 @@ mod tests {
             if name.starts_with("gradient") {
                 settings.chart_basic_styles.background_type = BackgroundType::VerticalGradient;
             }
+            if name.starts_with("profile") {
+                settings.chart_type = crate::model::ChartType::SessionVolumeProfile;
+            }
             settings.candle_colors.show_border = true;
             *row(&mut settings) = seeded;
             let mut dialog = SettingsDialog::new();
@@ -1272,6 +1348,7 @@ mod tests {
                     SettingsTab::ScalesAndLines
                 }
                 "alert" => SettingsTab::Alerts,
+                _ if name.starts_with("profile") => SettingsTab::Symbol,
                 _ => SettingsTab::Canvas,
             };
             let (shown_theme, setup_theme) = (theme.clone(), theme.clone());

@@ -297,7 +297,7 @@ total volume or signed delta through the first [`FootprintConfig::modes`](https:
 value area, POC, developing POC and volume nodes on the host's price mapping.
 [`developing_value_area`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradeProfile.html#method.developing_value_area) returns the inclusive value area rows after each
 contributing bar of the footprint the profile came from, by the final area's share and tie rules. The Profile section of the Symbol settings can trace that area and extend each
-completed session's POC, VAH and VAL to the first later bar that trades in their row; all are off by default, and sessions labelled "Partial executions" do not extend.
+completed session's POC, VAH and VAL to the first later bar that trades in their row; all are off by default, and sessions labelled "Partial executions" do not extend. The same section can hide the POC, choose the value area edges its guides draw, and colour the POC, each edge and the up and down volume inside and outside the value area; a level's colour also paints its extension.
 
 ## Stream studies
 
