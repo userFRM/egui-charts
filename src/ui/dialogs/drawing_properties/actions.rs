@@ -584,6 +584,20 @@ fn merge_edits(
                 }
             }
         }
+        // An RGBA colour's red, green and blue are one hue, replaced whole as the drawing
+        // colour's is, so that no drawing takes a mix of its own and the picked channels.
+        (Value::Array(own), Value::Array(original), Value::Array(edited))
+            if [&own[..], &original[..], &edited[..]].iter().all(|colour| {
+                colour.len() == 4 && colour.iter().all(|c| c.as_u64().is_some_and(|c| c <= 255))
+            }) =>
+        {
+            if original[..3] != edited[..3] {
+                own[..3].clone_from_slice(&edited[..3]);
+            }
+            if original[3] != edited[3] {
+                own[3] = edited[3].clone();
+            }
+        }
         (Value::Array(own), Value::Array(original), Value::Array(edited))
             if original.len() == edited.len() =>
         {
@@ -1382,6 +1396,20 @@ mod tests {
                     d.ghost_feed = Some(GhostFeedConfig {
                         average_range_ticks: 10.0,
                         noise_ticks: 0.0,
+                        ..Default::default()
+                    })
+                },
+            ),
+            (
+                "ghost feed body colour sharing a channel with the peer's",
+                DrawingToolType::GhostFeed,
+                |_| {},
+                |d| d.ghost_feed = None,
+                |d| d.ghost_feed.as_mut().unwrap().body_up = [38, 229, 154, 255],
+                |d| {
+                    d.ghost_feed = Some(GhostFeedConfig {
+                        body_up: [38, 229, 154, 255],
+                        ..Default::default()
                     })
                 },
             ),
