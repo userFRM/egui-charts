@@ -61,7 +61,7 @@
 //! ## Statistics
 //! [`LinearRegression`], [`TrendStrengthIndex`], [`StandardError`],
 //! [`RankCorrelationIndex`], [`RciRibbon`], [`MajorityRule`], [`Seasonality`], [`Ratio`], [`LunarPhases`],
-//! [`Spread`], [`Correlation`]
+//! [`Spread`], [`Correlation`], [`CorrelationLog`]
 //!
 //! ## Time
 //! [`TradingSessions`]
@@ -312,7 +312,7 @@ pub use market_breadth::{
 };
 mod special_k;
 mod woodies_cci;
-pub use symbol_pair::{Correlation, Ratio, Spread, SymbolPair};
+pub use symbol_pair::{Correlation, CorrelationLog, Ratio, Spread, SymbolPair};
 pub use technical_ratings::{RatingBasis, TechnicalRatings};
 // Time studies
 mod lower_interval;

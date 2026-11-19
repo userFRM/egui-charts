@@ -1353,6 +1353,31 @@ mod tests {
             [super::super::SeriesId::MAIN, new_spread]
         );
 
+        // A coefficient saved before the log study existed keeps its inputs and line/guide styles.
+        let correlation: StudyTemplate = serde_json::from_str(r#"{"name":"Correlation Coefficient","inputs":[["symbol_0",{"Symbol":""}],["source_0",{"Choice":3}],["symbol_1",{"Symbol":""}],["source_1",{"Choice":3}],["length",{"Length":20}],["log_returns",{"Toggle":false}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/type.Correlation.html","plots":[{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[{"value":null,"color":[255,152,0,255],"pattern":"Dotted","width":3.0,"visible":true,"price_line":true}],"fill_between_levels":false,"level_fill_color":[2,9,15,16],"untagged_plots":[],"price_line_plots":[0],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#).unwrap();
+        let mut legacy_correlation = snapshot.clone();
+        legacy_correlation.studies[0].study = correlation.clone();
+        restored
+            .restore_with(&legacy_correlation, &factory)
+            .unwrap();
+        let id = restored
+            .restored_series_id(legacy_correlation.studies[0].id)
+            .unwrap();
+        let study = restored.indicator_mut(id).unwrap();
+        assert_eq!(study.registered_name(), "Correlation Coefficient");
+        assert_eq!(study.settings(), correlation.settings);
+        for (id, value) in &correlation.inputs {
+            assert_eq!(
+                study
+                    .inputs()
+                    .into_iter()
+                    .find(|input| input.id == *id)
+                    .map(|input| input.value),
+                Some(value.clone()),
+                "{id}"
+            );
+        }
+
         // A host can store presentation itself without implementing the optional name setter.
         #[derive(Clone)]
         struct NativePresentation(ConfiguredStudy);
@@ -1547,6 +1572,62 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A Correlation - Log saves and restores under its own name with its edited inputs and
+    /// style.
+    #[test]
+    fn correlation_log_restores_under_its_own_name_with_its_inputs_and_style() {
+        use crate::studies::{IndicatorFactory, InputValue};
+        let bars: Vec<_> = (0..30)
+            .map(|i| {
+                Bar::new(
+                    Utc.timestamp_opt(i * 60, 0).unwrap(),
+                    10.0,
+                    11.0,
+                    9.0,
+                    10.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        let id = chart.add_indicator(IndicatorFactory::new().create("Correlation - Log").unwrap());
+        let study = chart.indicator_mut(id).unwrap();
+        for (input, value) in [
+            ("symbol_1", InputValue::Symbol("B".into())),
+            ("length", InputValue::Length(30)),
+            ("log_returns", InputValue::Toggle(false)),
+        ] {
+            study.set_input(input, value).unwrap();
+        }
+        let mut settings = study.settings();
+        settings.plots[0].width = 3.0;
+        settings.plots[0].color = egui::Color32::RED;
+        study.apply_settings(&[], settings).unwrap();
+        let saved = |chart: &Chart| {
+            let (_, study) = chart.indicators().next().unwrap();
+            let inputs: Vec<_> = study
+                .inputs()
+                .into_iter()
+                .map(|input| (input.id, input.value))
+                .collect();
+            (study.registered_name().to_owned(), inputs, study.settings())
+        };
+        let json = SavedLayout {
+            mode: ChartLayoutMode::Single,
+            charts: vec![chart.snapshot().unwrap()],
+            sizing: None,
+            link_groups: None,
+        }
+        .to_json()
+        .unwrap();
+        let mut restored = Chart::new(BarData::from_bars(bars));
+        restored
+            .restore(&SavedLayout::from_json(&json).unwrap().charts[0])
+            .unwrap();
+        assert_eq!(saved(&restored), saved(&chart));
+        assert_eq!(saved(&restored).0, "Correlation - Log");
     }
 
     /// A custom study saved with another study's output in a Source input its calculation never
