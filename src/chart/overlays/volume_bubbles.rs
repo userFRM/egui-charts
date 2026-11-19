@@ -11,7 +11,7 @@ use crate::tokens::DESIGN_TOKENS;
 use chrono::{DateTime, TimeDelta, Utc};
 use egui::{Color32, Mesh, Painter, Pos2, Shape, Vec2};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 /// The most bubbles the default large-trade rule draws in a view, so a dense view stays sparse.
@@ -49,8 +49,10 @@ pub struct VolumeBubblesConfig {
     /// Border color
     pub border_color: Color32,
     /// Bubbles with less volume are neither drawn nor scaled over. Without one,
-    /// [`Ungrouped`](BubbleGrouping::Ungrouped) draws at most the 20 largest visible trades of at
-    /// least the mean plus two standard deviations of the visible trades' sizes, the latest of
+    /// [`Ungrouped`](BubbleGrouping::Ungrouped) and
+    /// [`AggressiveOrder`](BubbleGrouping::AggressiveOrder) draw at most the 20 largest visible
+    /// trades of at least the mean plus two standard deviations of the visible trades' sizes,
+    /// the latest of
     /// those tied at the 20th size first, and the other groupings draw every bubble. `Some(0.0)`
     /// draws every trade. A trade is visible when it is centred inside the plot in price and time.
     pub min_size_filter: Option<f64>,
@@ -114,6 +116,14 @@ pub enum BubbleGrouping {
     /// volume-weighted price of all of them. The newest group grows until it is full. Groups
     /// count from the oldest held execution, and a count of zero counts as one.
     Executions(usize),
+    /// One bubble per aggressive order, the executions with one
+    /// [`aggressor_order_id`](crate::model::Tick::aggressor_order_id) at one exchange timestamp,
+    /// at that time and their volume-weighted price, as
+    /// [`SizeBasis::AggressiveOrder`](crate::data::SizeBasis::AggressiveOrder) measures orders.
+    /// An execution without an aggressor order id is a bubble of its own.
+    /// [`min_size_filter`](VolumeBubblesConfig::min_size_filter) applies to the combined size,
+    /// and without one the orders are ranked as [`Ungrouped`](Self::Ungrouped) ranks executions.
+    AggressiveOrder,
 }
 
 /// How to scale bubble sizes
@@ -188,19 +198,32 @@ impl Bubble {
         self.sells += other.sells;
     }
 
+    /// Adds an execution to a group drawn at the time of its last execution and at its
+    /// volume-weighted price, or the last price while no execution has volume.
+    fn add_execution(&mut self, trade: &Tick) {
+        let scale = self.volume.max(trade.size);
+        if scale > 0.0 {
+            let weight = (trade.size / scale) / (self.volume / scale + trade.size / scale);
+            let difference = trade.price - self.price;
+            self.price = if difference.is_finite() {
+                self.price + difference * weight
+            } else {
+                // Opposite finite extremes can have an infinite difference.
+                self.price * (1.0 - weight) + trade.price * weight
+            };
+        } else {
+            self.price = trade.price;
+        }
+        self.merge(&Self::of(trade));
+        self.at = trade.ts;
+    }
+
     /// The bubble of consecutive executions: at the time of the last, at their volume-weighted
     /// price, or the last price when none has volume.
     fn of_group<'a>(trades: impl Iterator<Item = &'a Tick>) -> Self {
-        let mut weighted = 0.0;
         let mut group = Self::default();
         for trade in trades {
-            weighted += trade.price * trade.size;
-            group.merge(&Self::of(trade));
-            group.at = trade.ts;
-            group.price = trade.price;
-        }
-        if group.volume > 0.0 {
-            group.price = weighted / group.volume;
+            group.add_execution(trade);
         }
         group
     }
@@ -303,7 +326,9 @@ impl VolumeBubbles {
     pub(crate) fn fold(&mut self, trade: &Tick, added: bool) {
         if matches!(
             self.config.grouping,
-            BubbleGrouping::Ungrouped | BubbleGrouping::Executions(_)
+            BubbleGrouping::Ungrouped
+                | BubbleGrouping::Executions(_)
+                | BubbleGrouping::AggressiveOrder
         ) {
             self.fold_trade(trade, added);
             return;
@@ -401,6 +426,34 @@ impl VolumeBubbles {
                     at = next;
                 }
             }
+            BubbleGrouping::AggressiveOrder => {
+                let from = self.trades.partition_point(|t| t.ts < first);
+                let to = self.trades.partition_point(|t| t.ts <= last);
+                // An order's fills share its instant, so each instant's fills are grouped on their own,
+                // in the order of each order's first fill.
+                let mut orders: Vec<Bubble> = Vec::new();
+                let mut index: HashMap<u64, usize> = HashMap::new();
+                let mut at = from;
+                while at < to {
+                    let instant = self.trades[at].ts;
+                    while at < to && self.trades[at].ts == instant {
+                        let fill = &self.trades[at];
+                        match fill.aggressor_order_id.and_then(|id| index.get(&id)) {
+                            Some(&i) => orders[i].add_execution(fill),
+                            None => {
+                                if let Some(id) = fill.aggressor_order_id {
+                                    index.insert(id, orders.len());
+                                }
+                                orders.push(Bubble::of_group(std::iter::once(fill)));
+                            }
+                        }
+                        at += 1;
+                    }
+                    shown.append(&mut orders);
+                    index.clear();
+                }
+            }
+
             _ => {
                 let lower = match self.config.grouping {
                     BubbleGrouping::TimeWindow(_) => first - TimeDelta::milliseconds(self.window),
@@ -506,7 +559,10 @@ impl VolumeBubbles {
             self.config.max_diameter
         };
         let ranked = self.config.min_size_filter.is_none()
-            && self.config.grouping == BubbleGrouping::Ungrouped;
+            && matches!(
+                self.config.grouping,
+                BubbleGrouping::Ungrouped | BubbleGrouping::AggressiveOrder
+            );
         if ranked {
             // Larger trades the plot cannot show must not raise the threshold or take the places.
             let plot = painter.clip_rect();
@@ -801,7 +857,9 @@ impl Scale {
 mod tests {
     use super::*;
     use crate::data::trades::Trades;
-    use BubbleGrouping::{Automatic, Executions, PriceStep, TimeWindow, Ungrouped};
+    use BubbleGrouping::{
+        AggressiveOrder, Automatic, Executions, PriceStep, TimeWindow, Ungrouped,
+    };
 
     /// A trade `second` seconds after 10:00.
     fn trade(second: i64, price: f64, size: f64, side: Option<OrderSide>) -> Tick {
@@ -1105,6 +1163,33 @@ mod tests {
             );
             assert_eq!(got, expected, "{name}");
         }
+        // Prices and sizes whose products overflow still average to their price.
+        let huge = [trade(1, 1e200, 1e200, buy), trade(2, 1e200, 1e200, buy)];
+        let config = VolumeBubblesConfig {
+            grouping: Executions(2),
+            ..VolumeBubblesConfig::default()
+        };
+        let bubbles = VolumeBubbles::new(config, BarClock::new(Timeframe::Min1), Some(1.0), &huge);
+        let prices: Vec<f64> = bubbles
+            .between(ten, ten + TimeDelta::minutes(1))
+            .map(|b| b.price)
+            .collect();
+        assert_eq!(prices, [1e200]);
+        let opposite = [trade(1, -1e308, 1.0, buy), trade(2, 1e308, 1.0, buy)];
+        let config = VolumeBubblesConfig {
+            grouping: Executions(2),
+            ..VolumeBubblesConfig::default()
+        };
+        let bubbles =
+            VolumeBubbles::new(config, BarClock::new(Timeframe::Min1), Some(1.0), &opposite);
+        assert_eq!(
+            bubbles
+                .between(ten, ten + TimeDelta::minutes(1))
+                .next()
+                .unwrap()
+                .price,
+            0.0
+        );
     }
 
     /// Guards the colour rules: the delta as a share of the volume with a side differs from the
@@ -1247,9 +1332,40 @@ mod tests {
                     .map(|(second, size)| trade(second, 100.0, size, buy)),
             )
         };
+        let orders = || {
+            let mut tape: Vec<_> = (100..=104)
+                .map(|price| trade(10, price as f64, 10.0, buy).with_aggressor_order_id(1))
+                .collect();
+            tape.extend([
+                trade(20, 100.0, 50.0, sell),
+                trade(30, 100.0, 20.0, buy).with_aggressor_order_id(2),
+                trade(30, 101.0, 30.0, sell).with_aggressor_order_id(3),
+                trade(30, 102.0, 30.0, buy).with_aggressor_order_id(2),
+                trade(30, 103.0, 10.0, sell).with_aggressor_order_id(3),
+                trade(40, 100.0, 30.0, buy),
+                trade(40, 100.0, 30.0, buy),
+                trade(50, 104.0, 40.0, sell).with_aggressor_order_id(1),
+            ]);
+            tape
+        };
+        let ranked = || {
+            let mut tape = orders()[..5].to_vec();
+            tape.extend((20..40).map(|second| trade(second, 90.0, 1.0, buy)));
+            tape
+        };
         let spots = [100.0, 180.0, 260.0].map(|x| (x, 100.0));
         #[rustfmt::skip]
         let cases = [
+("each fill alone: of an order's five 10-lot fills and a single 50-lot sell only the sell reaches 50",
+    VolumeBubblesConfig { min_size_filter: Some(50.0), ..config.clone() }, orders(),
+    vec![(86.666_67, 100.0, 40.0, red, None)]),
+("an aggressive order is its fills at one time, drawn at their volume-weighted price",
+    VolumeBubblesConfig { min_size_filter: Some(50.0), grouping: AggressiveOrder, ..config.clone() }, orders(),
+    vec![(73.333_33, 98.0, 40.0, green, None), (86.666_67, 100.0, 40.0, red, None), (100.0, 99.0, 40.0, green, None)]),
+("without a minimum the large-trade rule ranks the orders",
+    VolumeBubblesConfig { grouping: AggressiveOrder, ..config.clone() }, ranked(),
+    vec![(73.333_33, 98.0, 40.0, green, None)]),
+
             ("only the large prints draw, a quarter of the size at half the diameter",
                 VolumeBubblesConfig::default(), session,
                 vec![(100.0, 100.0, 20.0, green, None), (260.0, 140.0, 40.0, red, None)]),
