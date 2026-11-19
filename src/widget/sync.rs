@@ -228,7 +228,8 @@ impl Chart {
     /// Shows `range` across the plot width, `from` at the leftmost plot pixel and `to` at the
     /// rightmost, as [`Self::visible_time_range`] reports them. Like
     /// [`Self::set_visible_logical_range`], it ends tracking mode and pending scrolls, and before
-    /// the first frame the range is fitted again once the plot has its size.
+    /// the first frame the range is fitted again once the plot has its size, with the same dates
+    /// when bars are merged in between.
     ///
     /// Returns `false` without changing the view for empty data, reversed or zero ranges, a
     /// range that ends before the first bar's slot or starts after the last bar's period, or
@@ -255,7 +256,8 @@ impl Chart {
     /// spans. The minimum spacing and local edge constraints still apply, and the fit keeps a
     /// bar in view: a range longer than the plot at the minimum spacing shows the newest bars.
     /// Use [`Self::set_visible_time_range`] to show dates on this chart without the cap.
-    /// Before the first frame the range is fitted again once the plot has its size.
+    /// Before the first frame the range is fitted again once the plot has its size, with the
+    /// same dates when bars are merged in between.
     pub fn apply_synced_time_range(&mut self, range: VisibleTimeRange) -> bool {
         self.apply_synced_time_range_from(range, None)
     }
