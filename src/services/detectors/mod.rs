@@ -2000,6 +2000,27 @@ mod tests {
                 .total,
             4
         );
+        // A longer interval's bar is a new bar, even when it opens before the last one alerted.
+        let mut host = Host::new(Some(1_000.0));
+        host.detectors.set_settings(settings(0.0));
+        for (index, (second, price, size, side, _)) in stacked(&[]).into_iter().enumerate() {
+            let second = if index == 0 { second } else { second + 300 };
+            let trade = MarketEvent::Trade(fill(second, price, size, side, None));
+            host.detectors.push("ES", time(second), &trade);
+        }
+        assert_eq!(alerts(&host).len(), 2);
+        host.timeframe = Timeframe::Min5;
+        host.subscribe();
+        let trade = MarketEvent::Trade(fill(600, 100.0, 1.0, Buy, None));
+        host.detectors.push("ES", time(600), &trade);
+        assert_eq!(
+            alerts(&host),
+            [
+                "Buy imbalance: Buy imbalance on 3 rows",
+                "Stacked buy imbalance: Stacked buy imbalance of 3 rows"
+            ],
+            "the five-minute bar opened at 300"
+        );
     }
 
     /// On a daily chart with a session the detectors close the bars of trading dates, as the

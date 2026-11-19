@@ -154,8 +154,6 @@ struct Counter {
     total: u64,
     times: BTreeMap<DateTime<Utc>, u64>,
     last_episode: u64,
-    /// Latest bar per footprint condition, independent of chart marker retention.
-    bars: HashMap<String, DateTime<Utc>>,
     rule: Option<(CountWindow, u64)>,
     above: bool,
 }
@@ -297,10 +295,11 @@ impl Tracked {
                 && let SignalShape::Marker { time, .. } = &signal.shape
                 && let Some(label) = &signal.label
             {
-                if counter.bars.get(label).is_some_and(|last| *time <= *last) {
+                let bars = &mut self.stop_sweeps.conditions;
+                if bars.get(label).is_some_and(|last| *time <= *last) {
                     continue;
                 }
-                counter.bars.insert(label.clone(), *time);
+                bars.insert(label.clone(), *time);
             }
             counter.total = counter.total.saturating_add(1);
             let number = counter.times.entry(time).or_default();

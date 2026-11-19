@@ -1,6 +1,6 @@
 //! Same-side execution bursts and bars that sweep through diagonal imbalances.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use chrono::{DateTime, TimeDelta, Utc};
 
@@ -155,6 +155,9 @@ pub(super) struct StopSweeps {
     /// The open of that event's bar on the current clock. Footprint conditions of bars that
     /// open earlier are history and raise no alert.
     pub(super) live_open: Option<DateTime<Utc>>,
+    /// The latest bar of each footprint condition counted on the current clock, independent of
+    /// chart marker retention.
+    pub(super) conditions: HashMap<String, DateTime<Utc>>,
 }
 
 struct Prices {
@@ -180,6 +183,7 @@ impl StopSweeps {
             evicted: Placement::default(),
             live: None,
             live_open: None,
+            conditions: HashMap::new(),
         }
     }
 
@@ -190,6 +194,7 @@ impl StopSweeps {
             self.live_open = self.clock.as_ref().map(|clock| clock.instant_open(time));
         }
     }
+
     pub(super) fn set_clock(
         &mut self,
         clock: Option<BarClock>,
@@ -201,6 +206,7 @@ impl StopSweeps {
             .live
             .zip(self.clock.as_ref())
             .map(|(time, clock)| clock.instant_open(time));
+        self.conditions.clear();
         self.footprint = self.clock.clone().map(|clock| {
             let mut footprint = Footprint::new(clock, self.tick, 1).unwrap();
             footprint.set_budget(12, 100_000);
