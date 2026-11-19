@@ -2806,6 +2806,68 @@ pub(super) mod tests {
         }
     }
 
+    /// A bar-only study requests the chosen symbol and matches a chart of that symbol.
+    #[test]
+    fn a_study_without_a_source_reads_another_symbol() {
+        use crate::studies::{Indicator, ParabolicSAR};
+        let main = bars(&[1.0; 10], 60);
+        let other = bars(
+            &[10.0, 11.0, 12.5, 12.0, 13.5, 13.0, 15.0, 14.0, 16.5, 18.0],
+            60,
+        );
+        let mut chart = Chart::new(crate::model::BarData::from_bars(main.clone()));
+        chart.set_symbol("MAIN");
+        chart.set_timeframe(Timeframe::Hour1);
+        let id = chart.add_indicator(Box::new(ParabolicSAR::default()));
+        chart
+            .indicator_mut(id)
+            .unwrap()
+            .set_input("calculation_symbol", InputValue::Symbol("OTHER".into()))
+            .unwrap();
+        let request = StudyDataRequest {
+            symbol: "OTHER".into(),
+            timeframe: Some(Timeframe::Hour1),
+            metric: None,
+        };
+        assert_eq!(chart.study_data_requests(), [request.clone()]);
+        chart.set_study_data(request, other.clone(), None);
+        let mut reference = Chart::new(crate::model::BarData::from_bars(other));
+        reference.set_symbol("OTHER");
+        reference.set_timeframe(Timeframe::Hour1);
+        let reference_id = reference.add_indicator(Box::new(ParabolicSAR::default()));
+        let ctx = egui::Context::default();
+        let reference_ctx = egui::Context::default();
+        for frame in 0..10 {
+            shapes(&ctx, &mut chart, frame as f64, Vec::new());
+            shapes(&reference_ctx, &mut reference, frame as f64, Vec::new());
+        }
+        let study = chart
+            .indicators()
+            .find(|(candidate, _)| *candidate == id)
+            .unwrap()
+            .1;
+        let expected = reference
+            .indicators()
+            .find(|(candidate, _)| *candidate == reference_id)
+            .unwrap()
+            .1;
+        for line in 0..study.line_count() {
+            for bar in 0..10 {
+                assert_eq!(
+                    study.values().value(line, bar),
+                    expected.values().value(line, bar),
+                    "{line} {bar}"
+                );
+            }
+        }
+        let mut chart_symbol = ParabolicSAR::default();
+        chart_symbol.calculate(&main);
+        assert_ne!(
+            study.values().value(0, 9),
+            chart_symbol.values().value(0, 9)
+        );
+    }
+
     /// A study calculated on another interval reads the other symbol its input names on that
     /// interval, whether the symbol or the interval is chosen first, through `set_input` or
     /// `apply_settings`, in one Apply, and once restored from a save made before it read it.

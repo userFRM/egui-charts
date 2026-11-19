@@ -844,6 +844,24 @@ impl ConfiguredStudy {
                 && !self.study.needs_order_flow())
     }
 
+    /// Whether the study reads one source, or only the chart symbol's bars on an interval it
+    /// can calculate on, without order flow, metrics or a Symbol input of its own. `own` holds
+    /// the wrapped study's inputs. A chosen symbol stays available until it is cleared.
+    fn runs_on_other_symbol(&self, own: &[super::StudyInput]) -> bool {
+        !self.calculation_symbol.is_empty()
+            || self.study.source().is_some()
+            || (self.runs_on_other_bars()
+                && !self.study.needs_order_flow()
+                && self
+                    .study
+                    .data_requests()
+                    .iter()
+                    .all(|request| request.metric.is_none() && request.symbol.is_empty())
+                && !own
+                    .iter()
+                    .any(|input| matches!(input.kind, super::InputKind::Symbol)))
+    }
+
     /// The bars the study is calculated on while it runs on another symbol or interval.
     fn calculation_request(&self) -> super::StudyDataRequest {
         super::StudyDataRequest {
@@ -853,18 +871,15 @@ impl ConfiguredStudy {
         }
     }
 
-    /// The study's own requests it reads while it runs on another symbol or interval, each with
-    /// the request made for it. Price bars of the chart's interval are made on the calculation
-    /// interval, and the chart symbol's on the calculation symbol, as on a chart of them. Metrics,
-    /// other symbols' bars of a stated interval, the chart symbol's candles inside the Interval's
-    /// bars and every request of a study whose requests apply on any interval are made as stated.
-    /// The study reads no other request.
+    /// The study's own requests and the requests made for them on another symbol or interval.
+    /// Chart-interval price bars follow the calculation interval; chart-symbol price bars
+    /// follow the calculation symbol. Metrics and explicitly named symbols keep their identity.
+    /// Stated intervals stay when only the symbol changes, inside the calculation interval,
+    /// or for a study whose requests apply on any interval. No other histories are read.
     fn requests_on_other_bars(&self) -> Vec<(super::StudyDataRequest, super::StudyDataRequest)> {
-        // Bars inside the Interval's bars, on the chart symbol, are the candles a chart of
-        // that interval would read (24-hour Volume on 1W reads hourly candles).
+        // Finer bars are the candles a chart of that interval would read.
         let inside = |timeframe: Timeframe| {
-            self.calculation_symbol.is_empty()
-                && !timeframe.is_trade_based()
+            !timeframe.is_trade_based()
                 && self
                     .calculation_timeframe
                     .is_some_and(|interval| timeframe.duration_ms() < interval.duration_ms())
@@ -874,25 +889,28 @@ impl ConfiguredStudy {
             .data_requests()
             .into_iter()
             .filter_map(|request| {
-                if all
+                let mut made = if all
                     || request.metric.is_some()
                     || (!request.symbol.is_empty() && request.timeframe.is_some())
-                    || (request.symbol.is_empty() && request.timeframe.is_some_and(inside))
-                {
-                    return Some((request.clone(), request));
-                }
-                request.timeframe.is_none().then(|| {
-                    let made = super::StudyDataRequest {
-                        symbol: if request.symbol.is_empty() {
-                            self.calculation_symbol.clone()
-                        } else {
-                            request.symbol.clone()
-                        },
+                    || (request.symbol.is_empty()
+                        && request.timeframe.is_some_and(|timeframe| {
+                            self.calculation_timeframe.is_none() || inside(timeframe)
+                        })) {
+                    request.clone()
+                } else if request.timeframe.is_none() {
+                    super::StudyDataRequest {
+                        symbol: request.symbol.clone(),
                         timeframe: self.calculation_timeframe,
                         metric: None,
-                    };
-                    (request, made)
-                })
+                    }
+                } else {
+                    return None;
+                };
+                // As on a chart of the calculation symbol, all its price histories follow it.
+                if made.metric.is_none() && made.symbol.is_empty() {
+                    made.symbol = self.calculation_symbol.clone();
+                }
+                Some((request, made))
             })
             .collect()
     }
@@ -1007,7 +1025,7 @@ impl Indicator for ConfiguredStudy {
         }
         use super::{InputKind, StudyInput};
         if self.study.source().is_some() {
-            inputs.extend([
+            inputs.push(
                 StudyInput::new(
                     "plot_offset",
                     "Offset",
@@ -1015,6 +1033,10 @@ impl Indicator for ConfiguredStudy {
                     InputKind::Integer(i32::MIN, i32::MAX),
                 )
                 .with_default(InputValue::Integer(0)),
+            );
+        }
+        if self.runs_on_other_symbol(&inputs) {
+            inputs.push(
                 StudyInput::new(
                     "calculation_symbol",
                     "Symbol",
@@ -1022,7 +1044,7 @@ impl Indicator for ConfiguredStudy {
                     InputKind::Symbol,
                 )
                 .with_default(InputValue::Symbol(String::new())),
-            ]);
+            );
         }
         if self.runs_on_other_bars() {
             inputs.extend([
@@ -1063,7 +1085,7 @@ impl Indicator for ConfiguredStudy {
             return Ok(());
         }
         if match id {
-            "calculation_symbol" => self.study.source().is_some(),
+            "calculation_symbol" => self.runs_on_other_symbol(&self.study.inputs()),
             "calculation_timeframe" | "wait_for_close" => self.runs_on_other_bars(),
             _ => false,
         } {
@@ -1165,16 +1187,21 @@ impl Indicator for ConfiguredStudy {
         &self,
         request: &super::StudyDataRequest,
     ) -> Option<chrono::DateTime<chrono::Utc>> {
-        // The study's own histories keep their stated starts. The calculation bars load
-        // to the chart's first bar, including when a table slot names that same request.
-        if (self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none())
-            || (self.study.requests_allow_other_intervals()
-                && *request != self.calculation_request())
-        {
-            self.study.data_start(request)
-        } else {
-            None
+        if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
+            return self.study.data_start(request);
         }
+        // Own histories retain their starts under their original request. Calculation bars
+        // load to the chart's first bar, even when a table slot names that same request.
+        if *request == self.calculation_request()
+            || !(self.study.requests_allow_other_intervals()
+                || self.calculation_timeframe.is_none())
+        {
+            return None;
+        }
+        self.requests_on_other_bars()
+            .into_iter()
+            .find(|(_, made)| made == request)
+            .and_then(|(own, _)| self.study.data_start(&own))
     }
     fn update_data(&mut self, data: &[Bar], from: usize, sources: &[super::StudyData<'_>]) {
         self.kept = None;
@@ -2607,9 +2634,44 @@ mod tests {
         }
     }
 
-    /// Studies that read the bars alone offer the interval and close-wait inputs as well as the
-    /// single-source studies, keep their own inputs, and calculate on the interval they are given.
-    /// A study that requests data of its own, or reads trades, does not.
+    /// The listed controls and accepted edits agree for bar-only and multi-output studies.
+    #[test]
+    fn sourceless_studies_offer_symbol_and_offset_as_they_draw() {
+        for (name, symbol, offset) in [
+            ("PSAR", true, false),
+            ("MA Cross", true, false),
+            ("VWAP Auto Anchored", true, false),
+            ("Multi MA", true, false),
+            ("ZigZag", true, false),
+            ("Trading Sessions", true, false),
+            ("Donchian", true, false),
+            ("Volume", true, false),
+            ("Ratio", false, false),
+            ("Advance/Decline Ratio", false, false),
+            ("Quoted Spread", false, false),
+        ] {
+            let factory = super::super::IndicatorFactory::new();
+            let study = ConfiguredStudy::new(factory.create(name).unwrap());
+            let ids: Vec<_> = study.inputs().into_iter().map(|input| input.id).collect();
+            assert_eq!(
+                ids.iter().any(|id| id == "calculation_symbol"),
+                symbol,
+                "{name}"
+            );
+            assert_eq!(ids.iter().any(|id| id == "plot_offset"), offset, "{name}");
+            for (id, value, accepted) in [
+                ("calculation_symbol", InputValue::Symbol("X".into()), symbol),
+                ("plot_offset", InputValue::Integer(1), offset),
+            ] {
+                let mut study = study.clone();
+                assert_eq!(study.set_input(id, value).is_ok(), accepted, "{name} {id}");
+            }
+        }
+    }
+
+    /// Studies that read the chart symbol's bars offer Symbol, Interval and close-wait, keep
+    /// their own inputs, and calculate on the bars they are given. Studies reading other
+    /// symbols, metrics or trades keep their existing inputs.
     #[test]
     fn ohlc_studies_offer_a_calculation_interval() {
         use super::super::{ADX, ATR};
@@ -2625,7 +2687,11 @@ mod tests {
             let ids = ids(&study);
             assert_eq!(
                 &ids[own..],
-                ["calculation_timeframe", "wait_for_close"],
+                [
+                    "calculation_symbol",
+                    "calculation_timeframe",
+                    "wait_for_close"
+                ],
                 "{}",
                 study.name()
             );
@@ -2640,7 +2706,15 @@ mod tests {
             assert!(
                 study
                     .set_input("calculation_symbol", InputValue::Symbol("X".into()))
-                    .is_err()
+                    .is_ok()
+            );
+            assert_eq!(
+                study.data_requests(),
+                [super::super::StudyDataRequest {
+                    symbol: "X".into(),
+                    timeframe: Some(Timeframe::Hour1),
+                    metric: None,
+                }]
             );
         }
         let mut study = ConfiguredStudy::new(Box::new(super::super::TechnicalRatings::default()));
@@ -2652,7 +2726,11 @@ mod tests {
         let own = study.study.inputs().len();
         assert_eq!(
             &ids(&study)[own..],
-            ["calculation_timeframe", "wait_for_close"]
+            [
+                "calculation_symbol",
+                "calculation_timeframe",
+                "wait_for_close"
+            ]
         );
         study
             .set_input(
@@ -2742,6 +2820,33 @@ mod tests {
             study.data_start(&requests[1]),
             Some(hourly[1].time - chrono::TimeDelta::hours(8000))
         );
+        study
+            .set_input("calculation_symbol", InputValue::Symbol("X".into()))
+            .unwrap();
+        let other = study.data_requests();
+        assert_eq!(
+            other,
+            requests
+                .iter()
+                .map(|request| super::super::StudyDataRequest {
+                    symbol: "X".into(),
+                    ..request.clone()
+                })
+                .collect::<Vec<_>>()
+        );
+        study.update_data(
+            &chart,
+            0,
+            &[source(&other[0], &hourly[..]), source(&other[1], &[][..])],
+        );
+        assert_eq!(study.data_start(&other[0]), None);
+        assert_eq!(
+            study.data_start(&other[1]),
+            Some(hourly[1].time - chrono::TimeDelta::hours(8000))
+        );
+        study
+            .set_input("calculation_symbol", InputValue::Symbol(String::new()))
+            .unwrap();
         study.restore_settings(&before).unwrap();
         let values = study.inputs();
         for (id, value) in [
@@ -3336,7 +3441,19 @@ mod tests {
             assert_eq!(older.is_visible(), template.visible);
             assert_eq!(Some(older.scale()), template.scale);
             let mut expected = template.inputs.clone();
+            let controls = expected
+                .iter()
+                .position(|(id, _)| id == "calculation_timeframe")
+                .unwrap_or(expected.len());
+            expected.insert(
+                controls,
+                (
+                    "calculation_symbol".to_owned(),
+                    InputValue::Symbol(String::new()),
+                ),
+            );
             for (id, value) in [
+                ("calculation_symbol", InputValue::Symbol(String::new())),
                 ("calculation_timeframe", InputValue::Timeframe(interval)),
                 ("wait_for_close", InputValue::Toggle(true)),
             ] {
