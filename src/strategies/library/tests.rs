@@ -435,6 +435,35 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             ],
             expected: vec![(5, Sell, 11.5)],
         },
+        // SMA(3) +/- 1 population deviation: at bar 4 the close 11 crosses back above the
+        // lower band (32 - sqrt 2) / 3 = 10.195 and stays under the upper band 11.138. Bar 5
+        // stays at 10, under the stop, and inside its bands 9.862/10.805 without a crossing;
+        // bar 6 would reach the stop.
+        Case {
+            name: "Bollinger Bands",
+            prices: [
+                points(&[13., 12., 11., 10., 11., 10.]),
+                vec![[10., 11., 10., 11.]],
+            ]
+            .concat(),
+            inputs: vec![("period", Length(3)), ("std_dev", Number(1.))],
+            expected: vec![],
+        },
+        // The same bars mirrored around 10: bar 5 misses the short stop (28 + sqrt 2) / 3 = 9.805.
+        Case {
+            name: "Bollinger Bands Directed",
+            prices: [
+                points(&[7., 8., 9., 10., 9., 10.]),
+                vec![[10., 10., 9., 9.]],
+            ]
+            .concat(),
+            inputs: vec![
+                ("period", Length(3)),
+                ("std_dev", Number(1.)),
+                ("direction", Choice(1)),
+            ],
+            expected: vec![],
+        },
         // Simple basis(2), ATR(1), multiplier 1/4: upper[2]=9.5, lower[4]=10.5,
         // upper[6]=9.5. Each following bar starts before the stop and reaches it.
         Case {
@@ -456,6 +485,46 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
                 ("average", Choice(1)),
             ],
             expected: vec![(3, Buy, 9.5), (5, Sell, 10.5), (7, Buy, 9.5)],
+        },
+        // The close 10 crosses the upper band 9.5 at bar 2. Bar 3 misses the stop with a high
+        // of 9.45 and closes at 9.4, under the basis 9.7; bar 4 would reach 9.5.
+        Case {
+            name: "Keltner Channels",
+            prices: vec![
+                [10.; 4],
+                [8.; 4],
+                [10.; 4],
+                [9.4, 9.45, 8., 9.4],
+                [9.4, 9.6, 9.3, 9.5],
+            ],
+            inputs: vec![
+                ("ema_period", Length(2)),
+                ("atr_period", Length(1)),
+                ("multiplier", Number(0.25)),
+                ("average", Choice(1)),
+            ],
+            expected: vec![],
+        },
+        // Simple basis(3), ATR(1), multiplier 1/4: close 10 crosses the upper band
+        // 26/3 + 0.5 at bar 3. Bar 4 misses the stop with high 9.15 and closes at 9.1,
+        // above its basis 27.1/3; bar 5 reaches the original stop.
+        Case {
+            name: "Keltner Channels",
+            prices: vec![
+                [8.; 4],
+                [8.; 4],
+                [8.; 4],
+                [10.; 4],
+                [9.1, 9.15, 9.05, 9.1],
+                [9.1, 9.3, 9.1, 9.2],
+            ],
+            inputs: vec![
+                ("ema_period", Length(3)),
+                ("atr_period", Length(1)),
+                ("multiplier", Number(0.25)),
+                ("average", Choice(1)),
+            ],
+            expected: vec![(5, Buy, 26. / 3. + 0.5)],
         },
         // SMA(1)-SMA(2), SMA signal(2): histogram[2..=7] = -0.5,1,0,-1,0,1.
         Case {

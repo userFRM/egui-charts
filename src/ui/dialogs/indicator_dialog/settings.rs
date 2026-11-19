@@ -125,7 +125,9 @@ impl IndicatorSettingsDialog {
     }
 
     /// Open on a chart study and offer other studies' outputs, excluding cycles, to the input
-    /// `source` of a study that names a source.
+    /// `source` of a study that names a source, unless the study reads none and the chart holds
+    /// as many studies on studies as its
+    /// [chained study cap](crate::widget::Chart::set_chained_study_limit) allows.
     pub fn open_for_chart(&mut self, chart: &crate::widget::Chart, id: SeriesId) -> bool {
         let Some((_, study)) = chart.indicators().find(|(candidate, _)| *candidate == id) else {
             return false;
@@ -135,6 +137,14 @@ impl IndicatorSettingsDialog {
             return false;
         }
         if study.source().is_none() {
+            return true;
+        }
+        // A chart at its chained study cap takes no further study on a study.
+        if !matches!(
+            study.source(),
+            Some(crate::studies::StudySource::Study { .. })
+        ) && chart.chained_study_limit_reached()
+        {
             return true;
         }
         let studies: Vec<_> = chart.indicators().collect();
@@ -2610,6 +2620,45 @@ mod tests {
                 harness.query_by_label("RSI: RSI(14)").is_some(),
                 offered,
                 "{combo}, histories {histories}"
+            );
+        }
+    }
+
+    #[test]
+    fn study_outputs_are_withheld_at_the_chained_study_cap() {
+        use crate::studies::{RSI, StudySource};
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        for (linked, offered) in [(false, false), (true, true)] {
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            let rsi = chart.add_indicator(Box::new(RSI::new(14)));
+            let sma7 = chart.add_indicator(Box::new(SMA::new(7)));
+            let edited = chart.add_indicator(Box::new(SMA::new(3)));
+            chart
+                .set_indicator_source(
+                    if linked { edited } else { sma7 },
+                    StudySource::Study {
+                        id: if linked { sma7.0 } else { rsi.0 },
+                        plot: 0,
+                    },
+                )
+                .unwrap();
+            chart.set_chained_study_limit(Some(1));
+            let mut dialog = IndicatorSettingsDialog::default();
+            assert!(dialog.open_for_chart(&chart, edited));
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::vec2(1440.0, 900.0))
+                .build_ui(|ui| {
+                    let _ = dialog.show(ui.ctx(), &Theme::dark());
+                });
+            harness.run();
+            harness.get_by_label("Source").click();
+            harness.run();
+            assert_eq!(
+                harness.query_by_label("RSI: RSI(14)").is_some(),
+                offered,
+                "linked {linked}"
             );
         }
     }
