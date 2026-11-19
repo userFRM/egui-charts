@@ -170,12 +170,21 @@ impl Chart {
         }
     }
 
-    /// The anchor of a card published at `time`, at `price`: on the bar whose period holds
-    /// `time`, or on its slot in the whitespace after the last bar. A time before the first bar,
-    /// or a chart without bars, keeps the card on `time` until the bars arrive, as
-    /// [`Chart::create_drawing`] does.
+    /// The anchor of a card published at `time`, at `price`: on the bar or price-based element
+    /// whose period holds `time`, or on its slot in the whitespace after the last bar. A time
+    /// before the first bar, or a chart without bars, keeps the card on `time` until the bars
+    /// arrive, as [`Chart::create_drawing`] does.
     fn publication_anchor(&self, time: DateTime<Utc>, price: f64) -> ChartPoint {
-        match self.time_to_index(time) {
+        let index = crate::chart::rendering::candles::price_based::element_index_at(
+            &self.state,
+            self.chart_type,
+            &self.chart_type_params,
+            self.older_bars_drawn,
+            time,
+        )
+        .map(|index| index as f64)
+        .or_else(|| self.time_to_index(time));
+        match index {
             Some(index) if index >= 0.0 && index.is_finite() => {
                 ChartPoint::new(index.floor() as f32, price)
             }
@@ -210,7 +219,7 @@ mod tests {
     use crate::data::Reply;
     use crate::drawings::persistence::DrawingStorage;
     use crate::drawings::{ChartPoint, Drawing};
-    use crate::model::PostLink;
+    use crate::model::{Bar, BarData, ChartType, ChartTypeParams, PostLink};
     use crate::services::{Storage, StoreKind};
     use crate::widget::test_frames::{chart, frame, shapes};
     use chrono::{TimeZone, Utc};
@@ -530,6 +539,38 @@ mod tests {
             assert!(chart.redo());
             assert_eq!(chart.drawing_points(id).unwrap(), anchor);
         }
+    }
+
+    /// On a chart of price-based elements a card stands on the element whose period holds its
+    /// publication time, the one completed next, as signals and restored drawings do.
+    #[test]
+    fn a_card_on_price_based_elements_stands_on_the_element_holding_its_time() {
+        let minute = |i: i64| chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(i);
+        let bars = (0..10)
+            .map(|i| Bar::from_value(minute(i), 100.0 + 10.0 * i as f64))
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.set_chart_type(ChartType::Renko);
+        chart.set_chart_type_params(ChartTypeParams {
+            renko_brick_size: 10.0,
+            ..Default::default()
+        });
+        let ctx = Context::default();
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let published = minute(2) + chrono::TimeDelta::seconds(30);
+        let content = PostContent::new("Ada", published, "Rates hold");
+        chart.drawings_mut().start_post_insertion(
+            DrawingToolType::Tweet,
+            PostLink::resolved("https://example.invalid/p/1", content),
+        );
+        let rect = chart.get_rendered_price_rect();
+        let pos = rect.min + rect.size() * egui::vec2(0.2, 0.3);
+        frame(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)]);
+        frame(&ctx, &mut chart, 0.2, vec![button(pos, true)]);
+        frame(&ctx, &mut chart, 0.3, vec![button(pos, false)]);
+        let id = chart.drawings.drawings[0].id;
+        // One brick completes each minute; the brick completed at minute 3 holds 00:02:30.
+        assert_eq!(chart.drawing_points(id).unwrap()[0].0, minute(3));
     }
 
     fn button(pos: Pos2, pressed: bool) -> Event {
