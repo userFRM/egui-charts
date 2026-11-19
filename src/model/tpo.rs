@@ -135,8 +135,13 @@ pub struct TPOConfig {
     pub show_initial_balance: bool,
     /// Draw one and two initial balance ranges above its high and below its low.
     pub show_initial_balance_extensions: bool,
-    /// Mark the highest and lowest rows when they hold more than one TPO.
-    pub show_poor_highs_lows: bool,
+    /// Mark the highest row when it holds more than one TPO.
+    pub show_poor_high: bool,
+    /// Mark the lowest row when it holds more than one TPO.
+    pub show_poor_low: bool,
+    /// Extend marked extremes of completed profiles until a later bar trades strictly through
+    /// their price, or to the plot's right edge while no shown bar has.
+    pub extend_poor_extremes: bool,
     /// Show single prints
     pub show_single_prints: bool,
     /// Show the session statistics table below the profile
@@ -198,7 +203,9 @@ impl Default for TPOConfig {
             show_midpoint: false,
             show_initial_balance: true,
             show_initial_balance_extensions: false,
-            show_poor_highs_lows: false,
+            show_poor_high: false,
+            show_poor_low: false,
+            extend_poor_extremes: false,
             show_single_prints: false,
             show_statistics: false,
             show_opening_range: true,

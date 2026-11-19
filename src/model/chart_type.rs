@@ -896,8 +896,15 @@ pub struct ChartTypeParams {
     pub tpo_period_minutes: u32,
     /// TPO: minutes from the session open included in the initial balance, 60 by default.
     pub tpo_initial_balance_minutes: u32,
-    /// TPO: mark the highest and lowest rows when they hold more than one TPO.
+    /// TPO: saved by earlier releases for poor highs and lows together; when on, both are marked.
+    /// The settings write `tpo_poor_high` and `tpo_poor_low` and turn it off.
     pub tpo_poor_highs_lows: bool,
+    /// TPO: mark poor highs. Off by default.
+    pub tpo_poor_high: bool,
+    /// TPO: mark poor lows. Off by default.
+    pub tpo_poor_low: bool,
+    /// TPO: extend poor highs and lows until a later bar trades through them. Off by default.
+    pub tpo_extend_poor: bool,
     /// TPO: draw one and two initial balance ranges above its high and below its low.
     pub tpo_initial_balance_extensions: bool,
     /// TPO: instrument ticks per price row. Zero, or an instrument without a tick size, fits
@@ -1029,6 +1036,9 @@ impl Default for ChartTypeParams {
             tpo_period_minutes: 30,
             tpo_initial_balance_minutes: 60,
             tpo_poor_highs_lows: false,
+            tpo_poor_high: false,
+            tpo_poor_low: false,
+            tpo_extend_poor: false,
             tpo_initial_balance_extensions: false,
             tpo_row_ticks: 0,
             tpo_value_area: 70.0,
@@ -1073,7 +1083,9 @@ impl ChartTypeParams {
             show_value_area: self.tpo_value_area_levels,
             show_opening_range: self.tpo_open_price,
             show_closing_price: self.tpo_close_price,
-            show_poor_highs_lows: self.tpo_poor_highs_lows,
+            show_poor_high: self.tpo_poor_high || self.tpo_poor_highs_lows,
+            show_poor_low: self.tpo_poor_low || self.tpo_poor_highs_lows,
+            extend_poor_extremes: self.tpo_extend_poor,
             show_initial_balance_extensions: self.tpo_initial_balance_extensions,
             value_area_pct: self.tpo_value_area / 100.0,
             split_sessions: self.tpo_split_sessions,
@@ -1265,6 +1277,9 @@ mod tests {
             "tpo_value_area_levels": false,
             "tpo_open_price": false,
             "tpo_close_price": true,
+            "tpo_poor_high": true,
+            "tpo_poor_low": false,
+            "tpo_extend_poor": true,
             "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
                 "developing_value_area": true, "extend_poc": true, "extend_vah": true,
                 "extend_val": true,
@@ -1363,6 +1378,9 @@ mod tests {
         assert_eq!(legacy["tpo_value_area_levels"], true);
         assert_eq!(legacy["tpo_open_price"], true);
         assert_eq!(legacy["tpo_close_price"], false);
+        assert_eq!(legacy["tpo_poor_high"], false);
+        assert_eq!(legacy["tpo_poor_low"], false);
+        assert_eq!(legacy["tpo_extend_poor"], false);
         assert_eq!(
             legacy["footprint_colors"],
             serde_json::json!([null, null, null, null])
@@ -1556,6 +1574,8 @@ mod tests {
             let config = params.tpo_config(Some(1.0));
             assert!(config.splits.is_empty());
             assert_eq!(config.initial_balance_minutes, minutes);
+            assert_eq!(config.show_poor_high, enabled);
+            assert_eq!(config.show_poor_low, enabled);
             assert_eq!(config.show_single_prints, single_prints);
             assert_eq!(config.show_midpoint, midpoint);
             let profiles = to_tpo_profiles(&bars, &config, &Timeframe::Min30.into());
