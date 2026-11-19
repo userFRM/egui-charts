@@ -1711,6 +1711,22 @@ mod tests {
             loaded.drawings()[0].drawing.text.as_deref(),
             Some("Legacy trend")
         );
+        // Literal files from before pane layering keep drawings above every series and study.
+        for saved in [
+            include_str!("fixtures/storage_v2.json"),
+            include_str!("fixtures/storage_v10_channels.json"),
+        ] {
+            let (storage, skipped) = DrawingStorage::from_json(saved).unwrap();
+            assert!(skipped.is_empty(), "{skipped:?}");
+            for stored in storage.drawings() {
+                assert_eq!(restore(stored, 1).series_layer, None);
+                assert!(
+                    !serde_json::to_string(&stored.drawing)
+                        .unwrap()
+                        .contains("series_layer")
+                );
+            }
+        }
         let v1_json = include_str!("fixtures/storage_v1.json");
         let (v1, skipped) = DrawingStorage::from_json(v1_json).unwrap();
         assert!(skipped.is_empty(), "{skipped:?}");

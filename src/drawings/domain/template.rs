@@ -27,6 +27,7 @@ impl DrawingTemplate {
         settings.screen_anchor = None;
         settings.text_zoom_spacing = None;
         settings.pane = None;
+        settings.series_layer = None;
         settings.group = None;
         settings.folder.clear();
         settings.folder_sync.clear();
@@ -78,6 +79,7 @@ impl DrawingTemplate {
             user_edit_enabled: drawing.user_edit_enabled,
             closed: drawing.closed,
             z_order: drawing.z_order,
+            series_layer: drawing.series_layer,
             locked: drawing.locked,
             visible: drawing.visible,
             modified_at: drawing.modified_at,

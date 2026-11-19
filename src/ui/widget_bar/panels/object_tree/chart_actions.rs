@@ -1,7 +1,7 @@
 //! Apply object tree operations to the attached chart.
 
 use crate::Chart;
-use crate::widget::SeriesId;
+use crate::widget::{SeriesId, VisualOrder};
 
 use super::{ObjectTreeAction, ObjectTreePanel, SourceItem, SourceType};
 
@@ -289,34 +289,14 @@ impl ObjectTreePanel {
                     };
                     return chart.set_series_order(series, order);
                 }
-                let mut order: Vec<_> = chart
-                    .drawings()
-                    .drawings
-                    .iter()
-                    .map(|d| (d.id, d.z_order))
-                    .collect();
-                order.sort_by_key(|(_, z)| *z);
-                let Some(index) = order.iter().position(|(candidate, _)| candidate == id) else {
+                let order = match action {
+                    ObjectTreeAction::BringToFront(_) => VisualOrder::BringToFront,
+                    ObjectTreeAction::SendToBack(_) => VisualOrder::SendToBack,
+                    ObjectTreeAction::MoveUp(_) => VisualOrder::BringForward,
+                    _ => VisualOrder::SendBackward,
+                };
+                if !chart.reorder_drawing(*id, order) {
                     return false;
-                };
-                let other = match action {
-                    ObjectTreeAction::BringToFront(_) => Some(order.len() - 1),
-                    ObjectTreeAction::SendToBack(_) => Some(0),
-                    ObjectTreeAction::MoveUp(_) => {
-                        index.checked_add(1).filter(|next| *next < order.len())
-                    }
-                    _ => index.checked_sub(1),
-                };
-                if let Some(other) = other.filter(|other| *other != index) {
-                    let target = order.remove(index);
-                    order.insert(other, target);
-                    // Normalise tied layers so exactly one neighbour is crossed.
-                    let layers: Vec<_> = order
-                        .into_iter()
-                        .enumerate()
-                        .filter_map(|(z, (id, _))| i32::try_from(z).ok().map(|z| (id, z)))
-                        .collect();
-                    chart.drawings_mut().reorder_drawings(*id, &layers);
                 }
             }
             ObjectTreeAction::ZoomTo(id) => {
