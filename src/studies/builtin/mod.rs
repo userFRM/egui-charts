@@ -169,6 +169,9 @@ mod std_dev;
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod auto_drawing;
 mod auto_key_levels;
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+mod auto_trend_lines;
 mod booker_reversal;
 mod elliott_wave;
 mod gaps;
@@ -395,6 +398,9 @@ pub use std_dev::StandardDeviation;
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 pub use auto_drawing::{AutoDrawing, AutoDrawingKind};
 pub use auto_key_levels::AutoKeyLevels;
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+pub use auto_trend_lines::AutoTrendLines;
 pub use booker_reversal::BookerReversal;
 pub use elliott_wave::ElliottWave;
 pub use gaps::Gaps;
