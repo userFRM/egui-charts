@@ -51,6 +51,14 @@ impl StyleTab {
             // The regression trend styles its fitted line, which takes the drawing's colour and
             // width, beside its bands.
             let regression = tool == Some(DrawingToolType::RegressionTrend);
+            let projection = tool == Some(DrawingToolType::ProjectionTool);
+            if projection {
+                projection_rows(
+                    ui,
+                    props,
+                    [&mut *color_picker, &mut *fill_picker, &mut *glyph_picker],
+                );
+            }
             if regression {
                 regression_rows(
                     ui,
@@ -71,6 +79,7 @@ impl StyleTab {
                 )
                 && !position
                 && !regression
+                && !projection
             {
                 ui.label(l10n::text(ui.ctx(), "Color"));
                 color_picker.sel_color = props.color;
@@ -98,7 +107,7 @@ impl StyleTab {
                 ui.end_row();
             }
 
-            if tool.is_none_or(|tool| tool.supports_line_width()) && !regression {
+            if tool.is_none_or(|tool| tool.supports_line_width()) && !regression && !projection {
                 ui.label(l10n::text(ui.ctx(), "Line width"));
                 line_width_row(ui, &mut props.line_width);
                 ui.end_row();
@@ -796,8 +805,66 @@ fn regression_rows(ui: &mut Ui, props: &mut DrawingProps, pickers: [&mut ColorPi
     }
 }
 
-/// One regression trend line's row: its switch named `name` in the label column, then its colour
-/// (a palette swatch keeps the opacity, the custom editor sets it), pattern and width.
+/// The projection's leg row, which takes the drawing's colour and width, and its background
+/// switch with the colours of the zone's near and far halves. A palette colour keeps the
+/// opacity in use; the custom editor sets it.
+fn projection_rows(ui: &mut Ui, props: &mut DrawingProps, pickers: [&mut ColorPickerState; 3]) {
+    let Some(template) = &props.tool_settings else {
+        return;
+    };
+    let original = template.settings.projection_config().into_owned();
+    let mut config = original.clone();
+    let opened = props.color_rgba();
+    let mut leg = opened;
+    let mut width = props.line_width;
+    let [leg_picker, near_picker, far_picker] = pickers;
+    regression_line_row(
+        ui,
+        "Trend line",
+        leg_picker,
+        &mut config.trend_visible,
+        &mut leg,
+        &mut config.trend_line_style,
+        &mut width,
+    );
+    let label = ui.checkbox(
+        &mut config.show_background,
+        l10n::text(ui.ctx(), "Background"),
+    );
+    ui.label_inputs_by(label.id, |ui| {
+        ui.horizontal(|ui| {
+            for (color, picker, id) in [
+                (0, &mut *near_picker, "projection_background_near"),
+                (1, &mut *far_picker, "projection_background_far"),
+            ] {
+                let [r, g, b, a] = config.background_colors[color];
+                let shown = Color32::from_rgba_unmultiplied(r, g, b, a);
+                if let Some(picked) = color_swatch(ui, picker, shown, id) {
+                    config.background_colors[color] =
+                        keep_opacity(picked, shown, picker.custom_mode).to_srgba_unmultiplied();
+                }
+            }
+        });
+    });
+    ui.end_row();
+    props.line_width = width;
+    if leg != opened {
+        let [r, g, b, a] = leg;
+        props.color = Color32::from_rgba_unmultiplied(r, g, b, a);
+    }
+    if let Some(template) = &mut props.tool_settings {
+        if leg != opened {
+            template.settings.color = leg;
+        }
+        if config != original {
+            template.settings.projection = Some(config);
+        }
+    }
+}
+
+/// One line's row, for the regression trend's lines and the projection's leg: its switch named
+/// `name` in the label column, then its colour (a palette swatch keeps the opacity, the custom
+/// editor sets it), pattern and width.
 fn regression_line_row(
     ui: &mut Ui,
     name: &str,
