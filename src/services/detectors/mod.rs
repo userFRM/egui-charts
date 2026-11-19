@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 
 use super::{Events, SignalEvent, Signals};
 use crate::data::depth::Book;
@@ -217,6 +218,12 @@ impl DetectorSettings {
                 "iceberg refills must be positive".into(),
             ));
         }
+        let min_size = self.stop_runs.rule.min_size;
+        if !min_size.is_finite() || min_size < 0.0 {
+            return Err(FeedError::InvalidData(
+                "stop run minimum size must be finite and not negative".into(),
+            ));
+        }
         for alert in [self.iceberg_count_alert, self.stop_run_count_alert]
             .into_iter()
             .flatten()
@@ -260,8 +267,22 @@ pub struct Detector<R> {
     pub alert: bool,
     /// Whether that alert should play a sound.
     pub sound: bool,
-    /// What the detector detects.
+    /// What the detector detects. A rule saved as `null`, as rules without settings were,
+    /// restores the default rule.
+    #[serde(
+        deserialize_with = "rule_or_default",
+        bound(deserialize = "R: serde::Deserialize<'de> + Default")
+    )]
     pub rule: R,
+}
+
+/// Reads a detector rule, `null` giving the default rule.
+fn rule_or_default<'de, D, R>(deserializer: D) -> Result<R, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    R: serde::Deserialize<'de> + Default,
+{
+    Ok(Option::<R>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 impl<R: Default> Default for Detector<R> {
@@ -718,8 +739,13 @@ impl Tracked {
                 out,
             );
         }
-        self.stop_runs
-            .trade(trade, self.tick, settings.stop_runs.enabled, out);
+        self.stop_runs.trade(
+            trade,
+            self.tick,
+            &settings.stop_runs.rule,
+            settings.stop_runs.enabled,
+            out,
+        );
         self.stop_sweeps.trade(trade, settings, out);
         let big = &settings.big_trades;
         (self.big_trades).trade(trade, &big.rule, big.enabled, out);
@@ -1423,6 +1449,15 @@ mod tests {
             assert!(
                 std::panic::catch_unwind(|| detectors.set_settings(settings)).is_err(),
                 "accepted {size}"
+            );
+            assert_eq!(detectors.settings(), DetectorSettings::default());
+        }
+        for size in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+            let mut settings = detectors.settings();
+            settings.stop_runs.rule.min_size = size;
+            assert!(
+                std::panic::catch_unwind(|| detectors.set_settings(settings)).is_err(),
+                "accepted stop run minimum {size}"
             );
             assert_eq!(detectors.settings(), DetectorSettings::default());
         }

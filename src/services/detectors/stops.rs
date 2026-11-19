@@ -12,19 +12,50 @@ use crate::model::{
 use crate::scales::{PriceFormatter, VolumeFormatter};
 use crate::services::SignalEvent;
 
-/// A burst of at least five same-side fills, at most 20 ms apart, travelling at least three
-/// ticks without reversing. If any fill identifies its aggressor, at least three distinct
-/// aggressors are required. Unknown-side fills are excluded.
+/// A burst of same-side fills, each at most [`max_gap_ms`](Self::max_gap_ms) after the one
+/// before, travelling at least [`min_ticks`](Self::min_ticks) from its first fill's price without
+/// reversing, with at least [`min_fills`](Self::min_fills) fills and a total size of at least
+/// [`min_size`](Self::min_size). If any fill identifies its aggressor, at least
+/// [`min_aggressors`](Self::min_aggressors) distinct aggressors are required. Unknown-side fills
+/// and fills of size zero are excluded. The default is five fills, 20 ms, three ticks, three
+/// aggressors and no size minimum, which settings saved before these fields existed restore.
 ///
 /// ```
 /// use egui_charts::services::{StopRunRule, StopSweepRule};
 ///
-/// let rules = (StopRunRule::default(), StopSweepRule::default());
-/// println!("{rules:?}");
+/// let mut stop_runs = StopRunRule::default();
+/// stop_runs.min_size = 50.0;
+/// println!("{:?}", (stop_runs, StopSweepRule::default()));
 /// ```
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 #[non_exhaustive]
-pub struct StopRunRule;
+pub struct StopRunRule {
+    /// Fewest fills in a burst; 0 counts as 1.
+    pub min_fills: u64,
+    /// Longest time between consecutive fills, in milliseconds; 0 joins only fills at one
+    /// instant.
+    pub max_gap_ms: u32,
+    /// Fewest ticks between the first fill's price and the latest fill's.
+    pub min_ticks: u64,
+    /// Fewest distinct aggressor order ids when any fill of the burst names one; 0 requires none.
+    pub min_aggressors: u8,
+    /// Smallest total size of the burst's fills, finite and not negative, checked by
+    /// [`DetectorSettings::validate`](super::DetectorSettings::validate); 0 for no minimum.
+    pub min_size: f64,
+}
+
+impl Default for StopRunRule {
+    fn default() -> Self {
+        Self {
+            min_fills: 5,
+            max_gap_ms: 20,
+            min_ticks: 3,
+            min_aggressors: 3,
+            min_size: 0.0,
+        }
+    }
+}
 
 /// A closed bar with directional delta of at least 25%, three diagonal imbalances at 3:1,
 /// a body at least 60% of its range, and volume at least 1.5 times the previous ten traded bars.
@@ -50,7 +81,7 @@ struct Burst {
     price: i64,
     fills: u64,
     size: f64,
-    // Only three distinct ids are needed, even for a session-long burst.
+    // Only the rule's minimum of distinct ids is needed, even for a session-long burst.
     ids: Vec<u64>,
     number: Option<u64>,
 }
@@ -71,6 +102,7 @@ impl StopRuns {
         &mut self,
         fill: &Tick,
         tick: f64,
+        rule: &StopRunRule,
         enabled: bool,
         out: &mut Vec<SignalEvent>,
     ) {
@@ -82,7 +114,7 @@ impl StopRuns {
             let gap = fill.ts - burst.last;
             side != burst.side
                 || gap < TimeDelta::zero()
-                || gap > TimeDelta::milliseconds(20)
+                || gap > TimeDelta::milliseconds(i64::from(rule.max_gap_ms))
                 || match side {
                     OrderSide::Buy => price < burst.price,
                     OrderSide::Sell => price > burst.price,
@@ -106,16 +138,17 @@ impl StopRuns {
         burst.fills = burst.fills.saturating_add(1);
         burst.size = (burst.size + fill.size).min(f64::MAX);
         if let Some(id) = fill.aggressor_order_id
-            && burst.ids.len() < 3
+            && burst.ids.len() < usize::from(rule.min_aggressors)
             && !burst.ids.contains(&id)
         {
             burst.ids.push(id);
         }
         let ticks = burst.price.abs_diff(burst.open);
         if !enabled
-            || burst.fills < 5
-            || ticks < 3
-            || (!burst.ids.is_empty() && burst.ids.len() < 3)
+            || burst.fills < rule.min_fills
+            || ticks < rule.min_ticks
+            || (!burst.ids.is_empty() && burst.ids.len() < usize::from(rule.min_aggressors))
+            || !meets_threshold(burst.size, rule.min_size)
         {
             return;
         }
@@ -398,6 +431,7 @@ mod tests {
     fn stop_runs_follow_each_limit_of_their_rule() {
         type Row = (
             &'static str,
+            fn(&mut StopRunRule),
             Vec<u64>,
             i64,
             Vec<i64>,
@@ -409,6 +443,7 @@ mod tests {
         let rows: Vec<Row> = vec![
             (
                 "three aggressors",
+                |_| {},
                 vec![1, 1, 2, 2, 3],
                 20,
                 prices.clone(),
@@ -418,6 +453,7 @@ mod tests {
             ),
             (
                 "no ids",
+                |_| {},
                 vec![],
                 10,
                 prices.clone(),
@@ -427,6 +463,7 @@ mod tests {
             ),
             (
                 "one aggressor",
+                |_| {},
                 vec![1; 5],
                 10,
                 prices.clone(),
@@ -434,9 +471,19 @@ mod tests {
                 true,
                 None,
             ),
-            ("gap", vec![], 21, prices.clone(), vec![2.0; 5], true, None),
+            (
+                "gap",
+                |_| {},
+                vec![],
+                21,
+                prices.clone(),
+                vec![2.0; 5],
+                true,
+                None,
+            ),
             (
                 "reversal",
+                |_| {},
                 vec![],
                 10,
                 vec![400, 401, 400, 402, 403],
@@ -446,6 +493,7 @@ mod tests {
             ),
             (
                 "unknown side",
+                |_| {},
                 vec![],
                 10,
                 prices.clone(),
@@ -455,15 +503,136 @@ mod tests {
             ),
             (
                 "fractional sizes",
+                |_| {},
                 vec![],
                 10,
-                prices,
+                prices.clone(),
                 vec![0.1, 0.2, 0.1, 0.2, 0.1],
                 true,
                 Some("5 fills, 3 ticks, size 0.7, 40 ms"),
             ),
+            (
+                "fills at limit",
+                |r| r.min_fills = 7,
+                vec![],
+                10,
+                (400..=406).collect(),
+                vec![2.0; 7],
+                true,
+                Some("7 fills, 6 ticks, size 14.0, 60 ms"),
+            ),
+            (
+                "fills beside limit",
+                |r| r.min_fills = 8,
+                vec![],
+                10,
+                (400..=406).collect(),
+                vec![2.0; 7],
+                true,
+                None,
+            ),
+            (
+                "gap at limit",
+                |r| r.max_gap_ms = 50,
+                vec![],
+                50,
+                prices.clone(),
+                vec![2.0; 5],
+                true,
+                Some("5 fills, 3 ticks, size 10.0, 200 ms"),
+            ),
+            (
+                "gap beside limit",
+                |r| r.max_gap_ms = 49,
+                vec![],
+                50,
+                prices.clone(),
+                vec![2.0; 5],
+                true,
+                None,
+            ),
+            (
+                "ticks at limit",
+                |r| r.min_ticks = 5,
+                vec![],
+                10,
+                vec![400, 401, 402, 403, 405],
+                vec![2.0; 5],
+                true,
+                Some("5 fills, 5 ticks, size 10.0, 40 ms"),
+            ),
+            (
+                "ticks beside limit",
+                |r| r.min_ticks = 6,
+                vec![],
+                10,
+                vec![400, 401, 402, 403, 405],
+                vec![2.0; 5],
+                true,
+                None,
+            ),
+            (
+                "aggressors at limit",
+                |r| r.min_aggressors = 5,
+                vec![1, 2, 3, 4, 5],
+                10,
+                prices.clone(),
+                vec![2.0; 5],
+                true,
+                Some("5 fills, 3 ticks, size 10.0, 40 ms"),
+            ),
+            (
+                "aggressors beside limit",
+                |r| r.min_aggressors = 5,
+                vec![1, 2, 3, 4, 4],
+                10,
+                prices.clone(),
+                vec![2.0; 5],
+                true,
+                None,
+            ),
+            (
+                "no aggressor minimum",
+                |r| r.min_aggressors = 0,
+                vec![1; 5],
+                10,
+                prices.clone(),
+                vec![2.0; 5],
+                true,
+                Some("5 fills, 3 ticks, size 10.0, 40 ms"),
+            ),
+            (
+                "size at limit",
+                |r| r.min_size = 10.0,
+                vec![],
+                10,
+                prices.clone(),
+                vec![2.0; 5],
+                true,
+                Some("5 fills, 3 ticks, size 10.0, 40 ms"),
+            ),
+            (
+                "size beside limit",
+                |r| r.min_size = 10.5,
+                vec![],
+                10,
+                prices.clone(),
+                vec![2.0; 5],
+                true,
+                None,
+            ),
+            (
+                "fractional size minimum",
+                |r| r.min_size = 1.8,
+                vec![],
+                10,
+                prices.clone(),
+                vec![0.1, 0.1, 0.2, 0.7, 0.7],
+                true,
+                Some("5 fills, 3 ticks, size 1.8, 40 ms"),
+            ),
         ];
-        for (name, ids, gap, prices, sizes, known, expected) in rows {
+        for (name, edit, ids, gap, prices, sizes, known, expected) in rows {
             for side in [OrderSide::Buy, OrderSide::Sell] {
                 let host = Host::tracking(
                     &Instrument::new("ES")
@@ -474,6 +643,7 @@ mod tests {
                 );
                 let mut settings = host.detectors.settings();
                 settings.stop_runs.enabled = true;
+                edit(&mut settings.stop_runs.rule);
                 host.detectors.set_settings(settings);
                 let mut events = Vec::new();
                 for (i, price) in prices.iter().enumerate() {
