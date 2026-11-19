@@ -121,8 +121,8 @@ pub(super) struct State {
     tape_symbol: String,
     /// Whether the listed trades came from the replay rather than the live chart.
     tape_in_replay: bool,
-    /// Distinguishes recordings of the same symbol without keeping the old recording alive.
-    tape_driver: Option<std::sync::Weak<egui_charts::data::ReplayDriver>>,
+    /// Identifies the retained chart tape the panel has been reading.
+    tape_generation: Option<u64>,
     /// The newest trade listed: its time and how many trades share that time.
     tape_cursor: Option<(DateTime<Utc>, usize)>,
     /// Open financials in place of the charts: the symbol and whether its figures had arrived
@@ -156,7 +156,7 @@ impl Default for State {
             adding_symbol: false,
             tape_symbol: String::new(),
             tape_in_replay: false,
-            tape_driver: None,
+            tape_generation: None,
             tape_cursor: None,
             financials: None,
         }
@@ -372,7 +372,7 @@ impl Terminal {
             market,
             tape_symbol,
             tape_in_replay,
-            tape_driver,
+            tape_generation,
             tape_cursor,
             returns_input,
             ..
@@ -427,13 +427,10 @@ impl Terminal {
 
         // Candle replay retains the whole tape; market replay delivers trades up to its cursor.
         let cutoff = chart.replay_time();
-        let driver = chart.replay_driver();
-        let changed_driver =
-            tape_driver.as_ref().map(std::sync::Weak::as_ptr) != driver.map(Arc::as_ptr);
-        if changed_driver {
-            *tape_driver = driver.map(Arc::downgrade);
-        }
-        let rebuild = changed_driver
+        let generation = chart.trade_generation(SeriesId::MAIN);
+        let changed_tape = tape_generation.is_some() && *tape_generation != generation;
+        *tape_generation = generation;
+        let rebuild = changed_tape
             || *tape_in_replay != cutoff.is_some()
             || cutoff
                 .zip(*tape_cursor)
@@ -1077,6 +1074,70 @@ mod tests {
         assert_eq!(listed, 1);
     }
 
+    // Read the panel's actual rows, not the trade store it follows.
+    fn listed_times(terminal: &mut Terminal) -> Vec<String> {
+        // Resolution, subscription and the asynchronous trade page span several frames.
+        for _ in 0..5 {
+            frame(terminal, SIZE, vec![]);
+        }
+        texts(terminal)
+            .into_iter()
+            .filter(|label| matches!(label.as_str(), "12:34:56" | "12:34:57" | "12:34:58"))
+            .collect()
+    }
+
+    #[test]
+    fn time_and_sales_replaces_rows_after_a_feed_reset() {
+        use egui_charts::data::{Sink, Subscription};
+        use std::sync::Mutex;
+
+        struct Feed(Mutex<Option<Sink>>);
+        impl Datafeed for Feed {
+            fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+                reply.send(Ok(Instrument::new(symbol)));
+            }
+            fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+                reply.send(Ok(HistoryPage::new(Vec::new(), true)));
+            }
+            fn subscribe(&self, subscription: Subscription) {
+                *self.0.lock().unwrap() = Some(subscription.sink);
+            }
+        }
+
+        let feed = Arc::new(Feed(Mutex::new(None)));
+        let mut terminal = Terminal::new(feed.clone()).with_symbol("AAPL");
+        terminal.run(Action::WidgetBar(WidgetBarAction::WidgetClicked(u64::MAX)));
+        assert!(listed_times(&mut terminal).is_empty());
+        let sink = feed.0.lock().unwrap().take().unwrap();
+        let start: DateTime<Utc> = "2026-01-01T12:34:56Z".parse().unwrap();
+        let push = |offsets: &[i64]| {
+            for (i, &offset) in offsets.iter().enumerate() {
+                let time = start + TimeDelta::seconds(offset);
+                sink.set_server_time(time);
+                sink.push_tick(Tick::new(time, 171.0, 7.0, None).with_id(i as u64 + 1));
+            }
+        };
+        push(&[1, 1, 1, 2, 2, 2]);
+        assert_eq!(
+            listed_times(&mut terminal),
+            [
+                "12:34:58", "12:34:58", "12:34:58", "12:34:57", "12:34:57", "12:34:57"
+            ]
+        );
+        sink.reset_replay(start);
+        push(&[1, 1, 1]);
+        assert_eq!(listed_times(&mut terminal), ["12:34:57"; 3]);
+        // Same count and newest time as before, but a different tape.
+        sink.reset_replay(start);
+        push(&[0, 1, 1]);
+        assert_eq!(
+            listed_times(&mut terminal),
+            ["12:34:57", "12:34:57", "12:34:56"]
+        );
+        sink.reset_replay(start);
+        assert!(listed_times(&mut terminal).is_empty());
+    }
+
     #[test]
     fn time_and_sales_follows_the_replay_cutoff_and_restores_live_trades() {
         use egui_charts::data::{MarketEvent, ReplayDriver, ReplayEvent};
@@ -1086,26 +1147,11 @@ mod tests {
         terminal.run(Action::WidgetBar(WidgetBarAction::WidgetClicked(u64::MAX)));
         let live: DateTime<Utc> = "2026-01-01T12:34:56Z".parse().unwrap();
         let second = TimeDelta::seconds(1);
-        // Read the panel's actual rows, not the trade store it follows.
-        let rows = |terminal: &mut Terminal| {
-            // Resolution, subscription and the asynchronous trade page span several frames.
-            for _ in 0..5 {
-                frame(terminal, SIZE, vec![]);
-            }
-            texts(terminal)
-                .into_iter()
-                .filter_map(|label| {
-                    ["12:34:56", "12:34:57", "12:34:58"]
-                        .into_iter()
-                        .find(|&time| label == time)
-                })
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(rows(&mut terminal), ["12:34:56"]);
+        assert_eq!(listed_times(&mut terminal), ["12:34:56"]);
         terminal.chart_mut().set_replay_time(Some(live));
-        assert!(rows(&mut terminal).is_empty());
+        assert!(listed_times(&mut terminal).is_empty());
         terminal.chart_mut().set_replay_time(Some(live + second));
-        assert_eq!(rows(&mut terminal), ["12:34:56"]);
+        assert_eq!(listed_times(&mut terminal), ["12:34:56"]);
 
         let tie = live + second * 2;
         let events = [live + second, tie, tie]
@@ -1126,14 +1172,14 @@ mod tests {
         driver.seek(tie);
         terminal.chart_mut().set_market_replay(Some(driver));
         let full = ["12:34:58", "12:34:58", "12:34:57"];
-        assert_eq!(rows(&mut terminal), full);
+        assert_eq!(listed_times(&mut terminal), full);
         for cutoff in [tie, tie + second, tie] {
             terminal.chart_mut().set_replay_time(Some(cutoff));
             let expected = if cutoff == tie { &full[2..] } else { &full[..] };
-            assert_eq!(rows(&mut terminal), expected);
+            assert_eq!(listed_times(&mut terminal), expected);
         }
         terminal.chart_mut().set_replay_time(None);
-        assert_eq!(rows(&mut terminal), ["12:34:56"]);
+        assert_eq!(listed_times(&mut terminal), ["12:34:56"]);
     }
 
     /// Unsupported feeds leave no entry; host figures open in place of the chart, and a late

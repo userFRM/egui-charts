@@ -22,7 +22,7 @@ impl EMACross {
 
 impl Default for EMACross {
     fn default() -> Self {
-        Self::new(12, 26)
+        Self::new(9, 26)
     }
 }
 

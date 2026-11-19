@@ -9,15 +9,19 @@
 //! CCI(n) = (close - SMA(close, n)) / (0.015 * mean absolute deviation of close over n)
 //! ```
 //!
-//! A window with no deviation gives 0. Lines, in order: the CCI 14 columns, the CCI Turbo (6) and
-//! the CCI 14 line. Levels at 100, 0 and -100.
+//! Lines, in order: the CCI 14 columns, the CCI Turbo (6) and the CCI 14 line. Levels at 100, 0
+//! and -100.
+//!
+//! A line has no value until its window holds `n` finite closes, on a bar whose close is not
+//! finite, which no window includes, and on a bar whose window holds `n` equal closes: that window
+//! has no mean deviation, so the ratio divides zero by zero.
 //!
 //! # Column stages
 //!
 //! A column's stage follows its run: the bar itself and the unbroken CCI 14 values just before it
-//! on the same side of zero. Bars without a value are not part of the series, and a value of
-//! exactly zero is on neither side, so it has no run and ends the run before it. A zero after five
-//! values on one side keeps the established colour of that side.
+//! on the same side of zero. Bars without a value are not part of the series, so a run continues
+//! across them. A value of exactly zero is on neither side, so it has no run and ends the run
+//! before it. A zero after five values on one side keeps the established colour of that side.
 //!
 //! | Run | Stage | Colour |
 //! |-----|-------|--------|
@@ -88,7 +92,8 @@ impl WoodiesCCI {
         }
     }
 
-    /// CCI of the close at bar `i`, or NaN before its window is full.
+    /// CCI of the close at bar `i`, or NaN before its window is full and where the window has no
+    /// deviation, which makes the ratio 0 / 0.
     fn cci(closes: &[f64], i: usize, length: usize) -> f64 {
         let Some(start) = (i + 1).checked_sub(length) else {
             return f64::NAN;
@@ -100,7 +105,7 @@ impl WoodiesCCI {
         let mean = mean + window.iter().map(|c| c - mean).sum::<f64>() / n;
         let deviation = window.iter().map(|c| (c - mean).abs()).sum::<f64>() / n;
         if deviation == 0.0 {
-            0.0
+            f64::NAN
         } else {
             (closes[i] - mean) / (0.015 * deviation)
         }
@@ -300,14 +305,60 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
 
-    /// A CCI of length 2 has the sign of the close change, and zero for equal closes, so the closes
-    /// set the runs. A run of one or a zero is neutral, two to five values are a transition and six
-    /// or more are established, above zero in the columns colour and below it in the down colour. A
-    /// non-finite bar is not part of the run, and a zero ends it. A zero after five values on one
-    /// side keeps that side's established colour.
+    /// Bars closing at `closes`, one minute apart.
+    fn bars_closing_at(closes: &[f64]) -> Vec<Bar> {
+        closes
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| {
+                Bar::new(
+                    Utc.timestamp_opt(i as i64 * 60, 0).unwrap(),
+                    c,
+                    c,
+                    c,
+                    c,
+                    1.0,
+                )
+            })
+            .collect()
+    }
+
+    /// Equal closes have no mean deviation, while a window still holding the first close has a
+    /// value. At 0.1 the corrected mean repairs rounding; at 1e-17 small deviations remain real.
+    #[test]
+    fn windows_of_equal_closes_have_no_value() {
+        for price in [100.0, 0.1, 1e-17] {
+            let bars = bars_closing_at(&[price / 2.0, price, price, price]);
+            let mut study = WoodiesCCI::new(2, 3);
+            study.calculate(&bars);
+            // Per bar: CCI 14 columns, CCI Turbo, CCI 14 line.
+            let present: Vec<_> = (0..bars.len())
+                .map(|bar| [0, 1, 2].map(|line| study.values().value(line, bar).is_some()))
+                .collect();
+            assert_eq!(
+                present,
+                [
+                    [false, false, false],
+                    [false, true, false],
+                    [true, false, true],
+                    [false, false, false],
+                ],
+                "closes at {price}"
+            );
+        }
+    }
+
+    /// A CCI of length 3 has the sign of the close against the mean of the last three closes,
+    /// which for these closes is the sign of the last change, so the closes set the runs. A close
+    /// halfway between the two before it equals that mean: a zero from a window with deviation. A
+    /// run of one or a zero is neutral, two to five values are a transition and six or more are
+    /// established, above zero in the columns colour and below it in the down colour. A non-finite
+    /// bar is not part of the run, and a zero ends it. A zero after five values on one side keeps
+    /// that side's established colour.
     #[test]
     fn columns_are_staged_by_the_run_on_one_side_of_zero() {
         let closes = [
+            -1.0,
             0.0,
             1.0,
             2.0,
@@ -325,33 +376,21 @@ mod tests {
             1.0,
             0.0,
             -1.0,
-            -1.0,
+            -0.5,
             -2.0,
             -1.0,
             0.0,
             1.0,
             2.0,
             3.0,
-            3.0,
+            2.5,
         ];
-        let bars: Vec<Bar> = closes
-            .iter()
-            .enumerate()
-            .map(|(i, &c)| {
-                Bar::new(
-                    Utc.timestamp_opt(i as i64 * 60, 0).unwrap(),
-                    c,
-                    c,
-                    c,
-                    c,
-                    1.0,
-                )
-            })
-            .collect();
-        let mut study = WoodiesCCI::new(2, 2);
+        let bars = bars_closing_at(&closes);
+        let mut study = WoodiesCCI::new(2, 3);
         study.calculate(&bars);
         let (g, r) = (study.colors[0], study.down_color);
         let expected = [
+            None,
             None,
             Some(r),
             Some(r),
@@ -399,6 +438,7 @@ mod tests {
         }
         study.calculate(&bars);
         let recoloured = [
+            None,
             None,
             Some(n),
             Some(t),

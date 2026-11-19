@@ -222,7 +222,7 @@ mod tests {
                         if edited {
                             egui::Color32::BLUE
                         } else {
-                            to.chart.grid_line_major
+                            to.chart.session_break
                         }
                     );
                     assert_eq!(
@@ -268,7 +268,7 @@ mod tests {
             assert_eq!(shared.config().bullish_color, theme.chart.candle_up);
             assert_eq!(
                 shared.config().session_break_color,
-                theme.chart.grid_line_major
+                theme.chart.session_break
             );
             assert_eq!(shared.config().watermark_color, watermark);
             assert_eq!(shared.config().bearish_color, egui::Color32::RED);

@@ -329,6 +329,9 @@ pub struct Chart {
     pub(crate) study_ids: Vec<SeriesId>,
     /// The most studies the chart takes through the interface, if capped.
     study_limit: Option<usize>,
+    /// The most studies reading another study's output the chart takes through the interface,
+    /// if capped.
+    chained_study_limit: Option<usize>,
     /// Whether each study in `studies` contributes to the main price auto-scale.
     pub(crate) study_autoscale: Vec<bool>,
     pub(crate) study_inputs: Vec<String>,
