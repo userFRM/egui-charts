@@ -212,10 +212,10 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] `Trading` connects order tickets, account tables and chart overlays to a supplied `Broker`.
 - [x] Market, limit, stop and stop-limit tickets, units/value sizing, risk-percent sizing on every order type, time in force, presets and attached stop-loss/take-profit levels. Switching between units and an amount preserves the order quantity; money exits show no price and keep their entered value when the quantity is zero or invalid.
 - [x] Validated one-click orders, chart context-menu entry and broker/account selection components.
-- [x] Order and position lines show levels and profit/loss; confirmed actions modify/cancel orders, close/reverse positions and edit brackets.
+- [x] Order and position lines show levels and profit/loss; confirmed actions modify/cancel orders, close/reverse positions and edit brackets. A confirmed position order waiting for its symbol's trading rules is reported as refused if the stream is replaced, the broker disconnects, the position changes or the account withdraws its order type; a late rules answer never sends it.
 - [x] A depth ladder supports order entry, drag modification and right-click cancellation through the broker interface.
 - [x] Account summary, positions, orders, history, executions, balance and journal tables, with CSV export.
-- [x] Execution markers, rejection/fill notifications and execution sound intents.
+- [x] Execution markers, rejection/fill notifications and execution sound intents. Order and fill notices use the order symbol's host price and quantity text in their titles, messages and cards, with the account tables' built-in text as the fallback.
 - [x] `StrategyReportPanel` accepts `StrategyReport` data and shows trade lists, equity/drawdown plots, performance metrics, supplied properties and chart navigation; trades export as CSV.
 - [x] `Backtest::update` processes new closed bars incrementally, retains observed forming-bar fills when tick recalculation is enabled, and rebuilds corrected history.
 - [x] `StrategyTester` selects factory strategies, reuses the study input editor, edits account and execution settings, requests history from the host and displays runs with labelled fill signals. Edits mark the report stale. The demo answers supported start-date and finer-fill requests from its synthetic history, explains interval and retention limits before execution, and preserves the last report on failure.
