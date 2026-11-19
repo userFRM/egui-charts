@@ -1,12 +1,135 @@
 //! Pointer interaction: handles and drags, tool selection and drawing creation.
 
-use super::{DrawingManager, DrawingSyncAction};
+use super::{DrawingManager, DrawingSyncAction, sync_id};
 use crate::drawings::domain::{
     ChartPoint, Drawing, DrawingInteractionMode, DrawingToolType, HandlePos,
 };
-use crate::drawings::services::HandleService;
+use crate::drawings::services::{DrawingCommand, HandleService, point_to_line_distance};
 use crate::model::PostLink;
-use egui::Pos2;
+use egui::{Pos2, Rect};
+
+/// What one Ctrl or Command eraser drag has changed so far.
+#[derive(Debug, Clone)]
+pub(crate) struct PartialErase {
+    /// The pane whose pointer owns this gesture.
+    pub(crate) pane: Option<usize>,
+    last: Pos2,
+    /// Original list order, before any stroke was split or removed.
+    order: Vec<usize>,
+    /// Each original stroke before the gesture first cut it.
+    pub(super) before: Vec<Drawing>,
+    /// Every added piece, including those erased again during the gesture.
+    added: Vec<usize>,
+}
+
+/// Parameters bounding the part of `a`..`b` within reach of the eraser segment.
+/// Distance to a segment is convex, so the erased part is a single interval.
+fn erased_span(a: Pos2, b: Pos2, e0: Pos2, e1: Pos2, reach: f32) -> Option<(f32, f32)> {
+    if !Rect::from_two_pos(a, b)
+        .expand(reach)
+        .intersects(Rect::from_two_pos(e0, e1))
+    {
+        return None;
+    }
+    let gap = |t: f32| point_to_line_distance(a.lerp(b, t), e0, e1);
+    let (mut lo, mut hi) = (0.0_f32, 1.0_f32);
+    for _ in 0..40 {
+        let (m1, m2) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
+        if gap(m1) < gap(m2) {
+            hi = m2;
+        } else {
+            lo = m1;
+        }
+    }
+    let closest = (lo + hi) / 2.0;
+    if gap(closest) > reach {
+        return None;
+    }
+    // Keep each cut end outside the reach so a stationary pointer does not cut it again.
+    let kept = |mut kept: f32, mut erased: f32| {
+        for _ in 0..40 {
+            let mid = (kept + erased) / 2.0;
+            if gap(mid) > reach {
+                kept = mid;
+            } else {
+                erased = mid;
+            }
+        }
+        kept
+    };
+    Some((kept(0.0, closest), kept(1.0, closest)))
+}
+
+fn push_stroke_sample(piece: &mut Vec<(Pos2, ChartPoint)>, sample: (Pos2, ChartPoint)) {
+    if piece.last().is_none_or(|last| last.0 != sample.0) {
+        piece.push(sample);
+    }
+}
+
+fn finish_stroke_piece(
+    original: &Drawing,
+    piece: &mut Vec<(Pos2, ChartPoint)>,
+    pieces: &mut Vec<Drawing>,
+) {
+    if piece.len() >= 2
+        && piece
+            .windows(2)
+            .map(|p| p[0].0.distance(p[1].0))
+            .sum::<f32>()
+            >= 1.0
+    {
+        let mut drawing = original.clone();
+        drawing.points = piece.iter().map(|p| p.0).collect();
+        drawing.chart_points = piece.iter().map(|p| p.1).collect();
+        pieces.push(drawing);
+    }
+    piece.clear();
+}
+
+/// `None` leaves the stroke exactly as it was, including duplicate samples.
+fn cut_stroke(drawing: &Drawing, from: Pos2, to: Pos2) -> Option<Vec<Drawing>> {
+    const ERASER_REACH: f32 = 5.0;
+    let reach = ERASER_REACH.max(drawing.stroke_width / 2.0);
+    let outside = |p| point_to_line_distance(p, from, to) > reach;
+    let mut piece = Vec::new();
+    let mut pieces = Vec::new();
+    let mut cut = false;
+    if outside(drawing.points[0]) {
+        piece.push((drawing.points[0], drawing.chart_points[0]));
+    }
+    for i in 0..drawing.points.len() - 1 {
+        let (a, b) = (drawing.points[i], drawing.points[i + 1]);
+        let (ca, cb) = (drawing.chart_points[i], drawing.chart_points[i + 1]);
+        let at = |t| {
+            // shortcut: the price is interpolated linearly, so on a log scale a cut end can sit slightly off the painted chord; map the screen point back through the price scale if that shows.
+            (
+                a.lerp(b, t),
+                ChartPoint::new(
+                    ca.bar_idx + (cb.bar_idx - ca.bar_idx) * t,
+                    ca.price + (cb.price - ca.price) * f64::from(t),
+                ),
+            )
+        };
+        if let Some((left, right)) = erased_span(a, b, from, to, reach) {
+            cut = true;
+            if outside(a) {
+                push_stroke_sample(&mut piece, at(left));
+                finish_stroke_piece(drawing, &mut piece, &mut pieces);
+            }
+            if outside(b) {
+                push_stroke_sample(&mut piece, at(right));
+                push_stroke_sample(&mut piece, (b, cb));
+            }
+        } else {
+            push_stroke_sample(&mut piece, (b, cb));
+        }
+    }
+    if !cut {
+        return None;
+    }
+    finish_stroke_piece(drawing, &mut piece, &mut pieces);
+    Some(pieces)
+}
 
 impl DrawingManager {
     /// Whether a modifier area gesture owns the pointer, including after modifier release
@@ -93,6 +216,107 @@ impl DrawingManager {
             .collect();
         drop(painted);
         self.selection.update_area(ids);
+    }
+
+    /// Erases the stroke parts crossed since the previous call, or since `start` for a new
+    /// gesture. [`Self::end_drag_handle`] records the whole gesture and queues its saves.
+    pub(crate) fn erase_strokes_to(&mut self, start: Pos2, to: Pos2, pane: Option<usize>) {
+        if !start.is_finite() || !to.is_finite() {
+            return;
+        }
+        let mut erase = self.partial_erase.take().unwrap_or_else(|| PartialErase {
+            pane,
+            last: start,
+            order: self.drawings.iter().map(|d| d.id).collect(),
+            before: Vec::new(),
+            added: Vec::new(),
+        });
+        let candidates: Vec<_> = self
+            .drawings
+            .iter()
+            .filter(|d| {
+                matches!(
+                    d.tool_type,
+                    DrawingToolType::Brush | DrawingToolType::Highlighter
+                ) && d.custom_tool.is_none()
+                    && !d.locked
+                    && d.selectable
+                    && self.shows(d)
+                    && self.owns_pane(d)
+                    && d.points.len() >= 2
+                    && d.points.len() == d.chart_points.len()
+                    && d.points.iter().all(|p| p.is_finite())
+                    && d.chart_points
+                        .iter()
+                        .all(|p| p.bar_idx.is_finite() && p.price.is_finite())
+            })
+            .map(|d| d.id)
+            .collect();
+        for id in candidates {
+            let Some(index) = self.drawings.iter().position(|d| d.id == id) else {
+                continue;
+            };
+            let Some(pieces) = cut_stroke(&self.drawings[index], erase.last, to) else {
+                continue;
+            };
+            let original = self.drawings.remove(index);
+            if !erase.before.iter().any(|d| d.id == id) && !erase.added.contains(&id) {
+                erase.before.push(original);
+            }
+            if pieces.is_empty() {
+                self.selection.deselect(id);
+            }
+            for (offset, mut piece) in pieces.into_iter().enumerate() {
+                if offset > 0 {
+                    piece.id = self.take_id();
+                    piece.stored_id = None;
+                    piece.created_at = None;
+                    erase.added.push(piece.id);
+                }
+                self.drawings.insert(index + offset, piece);
+            }
+        }
+        erase.last = to;
+        self.partial_erase = Some(erase);
+    }
+
+    fn end_partial_erase(&mut self) {
+        let Some(erase) = self.partial_erase.take() else {
+            return;
+        };
+        if erase.before.is_empty() {
+            return;
+        }
+        for old in &erase.before {
+            if self.drawings.iter().any(|d| d.id == old.id) {
+                self.queue_edit(old);
+            } else if old.saveable {
+                self.queue(DrawingSyncAction::Delete(sync_id(old)));
+            }
+        }
+        for id in &erase.added {
+            if self.drawings.iter().any(|d| d.id == *id) {
+                self.queue(DrawingSyncAction::SaveDrawing(*id));
+            }
+        }
+        let ids = erase
+            .before
+            .iter()
+            .map(|d| d.id)
+            .chain(erase.added)
+            .collect();
+        let mut drawings: Vec<_> = erase
+            .before
+            .into_iter()
+            .map(|d| {
+                // A stroke added while the drag ran goes back after the others.
+                let index = erase.order.iter().position(|id| *id == d.id);
+                (index.unwrap_or(erase.order.len()), d)
+            })
+            .collect();
+        drawings.sort_by_key(|(index, _)| *index);
+        self.history
+            .push_command(DrawingCommand::Snapshot { drawings, ids });
     }
 
     // === Handle delegation ===
@@ -519,10 +743,11 @@ impl DrawingManager {
         }
     }
 
-    /// Ends the current handle drag or [`Self::drag_edit_drawing`] gesture, pushing one modify
-    /// command to the undo history and queuing one update for the whole gesture.
+    /// Ends the current handle drag, [`Self::drag_edit_drawing`] gesture or Ctrl/Command
+    /// eraser drag, pushing one command to the undo history and queuing the whole edit for saving.
     /// A copy drag records the additions instead, so undo removes every copy.
     pub fn end_drag_handle(&mut self) {
+        self.end_partial_erase();
         if let Some(old_state) = self.drag_old_state.take() {
             if std::mem::take(&mut self.drag_copy) {
                 let mut ids: Vec<_> = std::mem::take(&mut self.drag_group)
@@ -600,7 +825,8 @@ impl DrawingManager {
     }
 
     /// Whether a click deletes the drawing under the pointer instead of selecting it. Switch
-    /// it with [`Self::set_eraser_mode`].
+    /// it with [`Self::set_eraser_mode`]. With Ctrl or Command held, a drag erases parts of
+    /// unlocked brush and highlighter strokes, keeping the rest in the same style as one undo step.
     pub fn is_eraser_mode(&self) -> bool {
         self.eraser_mode
     }
@@ -623,10 +849,10 @@ impl DrawingManager {
         self.dragging_handle
     }
 
-    /// Whether a drag or a continuous edit is in progress, which [`Self::end_drag_handle`] records
-    /// as one step from the state it started in.
+    /// Whether a drag, continuous edit or Ctrl/Command eraser drag is in progress, which
+    /// [`Self::end_drag_handle`] records as one step from the state it started in.
     pub(crate) fn drag_in_progress(&self) -> bool {
-        self.drag_old_state.is_some()
+        self.drag_old_state.is_some() || self.partial_erase.is_some()
     }
 
     /// Starts a registered tool's multi-click construction. One-anchor tools complete on the
@@ -666,7 +892,8 @@ impl DrawingManager {
     /// Switches eraser mode on or off. In eraser mode a click on the chart deletes the
     /// drawing under the pointer, unless it is locked. Switching it on leaves the active tool
     /// and cancels any in-progress drawing; choosing a tool with [`Self::set_active_tool`]
-    /// switches it off.
+    /// switches it off. With Ctrl or Command held at the press, a drag erases parts of unlocked
+    /// brush and highlighter strokes, keeping the rest in the same style as one undo step.
     pub fn set_eraser_mode(&mut self, on: bool) {
         self.eraser_mode = on;
         if on {
@@ -1181,6 +1408,26 @@ mod tests {
         assert!(manager.undo());
         assert_eq!(manager.drawings[0].text, None);
         assert!(!manager.undo());
+    }
+
+    /// A stroke added while an eraser drag runs, as a host or a storage read can, is cut like
+    /// the others, and undo of the drag puts it back whole.
+    #[test]
+    fn a_partial_erase_restores_a_stroke_added_during_the_drag() {
+        let mut manager = DrawingManager::new();
+        manager.erase_strokes_to(Pos2::ZERO, Pos2::ZERO, None);
+        let mut stroke = Drawing::new(0, DrawingToolType::Brush);
+        stroke.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(10.0, 100.0)];
+        let id = manager.add_drawing(stroke.clone()).unwrap();
+        // Where the next paint puts its samples.
+        manager.drawings[0].points = vec![Pos2::new(0.0, 100.0), Pos2::new(100.0, 100.0)];
+        manager.erase_strokes_to(Pos2::ZERO, Pos2::new(50.0, 200.0), None);
+        assert_eq!(manager.drawings.len(), 2);
+        manager.end_drag_handle();
+        assert!(manager.undo());
+        assert_eq!(manager.drawings.len(), 1);
+        assert_eq!(manager.drawings[0].id, id);
+        assert_eq!(manager.drawings[0].chart_points, stroke.chart_points);
     }
 
     /// Dragging the label of a tool that annotates a point leaves that point on its bar and price,
