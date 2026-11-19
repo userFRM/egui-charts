@@ -395,6 +395,8 @@ pub struct Chart {
     /// Current quote, independent of the historical readout.
     quote: Option<crate::model::Level1Quote>,
     quote_action: Option<QuoteSide>,
+    /// The quote panel's place as shares of its available horizontal and vertical room.
+    quote_panel_at: Option<[f32; 2]>,
     server_time_offset: Option<chrono::TimeDelta>,
     bar_close_time: Option<chrono::DateTime<chrono::Utc>>,
     pub(crate) indicator_settings_request: Option<SeriesId>,

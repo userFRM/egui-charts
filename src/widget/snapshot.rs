@@ -191,6 +191,10 @@ pub struct ChartSnapshot {
     /// each restored study starts with its columns shown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_by: Option<u64>,
+    /// Where the Buy and Sell panel sits, as the share of the room left of and above it, from
+    /// 0 to 1. `None` uses its default place, centred at the top, also in older saved layouts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote_panel: Option<[f32; 2]>,
 }
 
 /// Why [`Chart::restore`] did not show a snapshot.
@@ -395,6 +399,7 @@ impl Chart {
             drawings,
             other_symbol_drawings,
             saved_by: Some(self.data_table_identity),
+            quote_panel: self.quote_panel_at,
         };
         // A layout that restore would refuse is an error now rather than at the next load.
         check(&snapshot, factory, self.main_series_scale)
@@ -737,6 +742,7 @@ impl Chart {
             }
         }
         self.pane_layout.maximized = snapshot.maximized.map(|at| panes[&at]);
+        self.quote_panel_at = snapshot.quote_panel;
         if self.state.time_scale().numeric_positions().is_some() {
             let positions =
                 crate::model::numeric_positions(self.state.shown(), snapshot.numeric_unit);

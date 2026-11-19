@@ -360,6 +360,10 @@ pub struct ChartConfig {
     pub title_as_description: bool,
     /// Show the current bid and ask controls in the legend.
     pub show_quote_boxes: bool,
+    /// Show Buy and Sell in a panel over the price pane, moved by its grip, instead of in the
+    /// legend. Off by default and in configurations saved without it.
+    #[serde(default)]
+    pub quote_panel: bool,
     /// Show absolute bar change in the legend.
     pub show_ohlc_change: bool,
     /// Show percentage bar change in the legend.
@@ -575,6 +579,7 @@ impl Default for ChartConfig {
             show_ohlc_info: true,
             title_as_description: true,
             show_quote_boxes: true,
+            quote_panel: false,
             show_ohlc_change: true,
             show_ohlc_change_percent: true,
             show_legend_volume: true,

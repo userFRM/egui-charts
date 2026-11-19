@@ -1612,90 +1612,95 @@ mod tests {
     fn buy_and_sell_show_the_last_price_without_a_two_sided_quote() {
         use crate::model::Level1Quote;
         use crate::widget::QuoteSide;
-        for (bid_ask, broker, expected) in [
-            (None, true, Some("110.00")),
-            (Some((101.0, 99.0)), true, Some("110.00")),
-            (Some((f64::NAN, 101.0)), true, Some("110.00")),
-            (Some((99.0, f64::INFINITY)), true, Some("110.00")),
-            (Some((99.0, 101.0)), true, Some("101.00")),
-            (None, false, None),
-        ] {
-            let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
-            chart.symbol = "SYM".into();
-            chart.set_quote(bid_ask.map(|(bid, ask)| Level1Quote {
-                symbol: "SYM".into(),
-                ts: chart.bars(SeriesId::MAIN)[99].time,
-                bid,
-                ask,
-                bid_size: 1.0,
-                ask_size: 1.0,
-            }));
-            let mut trading = Trading::default();
-            if broker {
-                trading.set_service(Arc::new(Recorder::default()));
-            }
-            let ctx = egui::Context::default();
-            let frame = |trading: &mut Trading, chart: &mut Chart, events| {
-                let output = ctx.run_ui(
-                    egui::RawInput {
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        trading.poll(ui.ctx(), &mut Toasts::new());
-                        chart.show(ui);
-                        trading.show(ui, chart);
-                    },
-                );
-                let texts: Vec<_> = output
-                    .shapes
-                    .iter()
-                    .filter_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) => Some((
-                            text.galley.text().to_owned(),
-                            text.pos + text.galley.size() / 2.0,
-                        )),
-                        _ => None,
-                    })
-                    .collect();
-                output.drop_without_applying_deltas();
-                texts
-            };
-            frame(&mut trading, &mut chart, vec![]);
-            let texts = frame(&mut trading, &mut chart, vec![]);
-            let buy = texts
-                .iter()
-                .find(|(text, _)| text == "BUY")
-                .map(|(_, at)| *at);
-            let price = buy
-                .and_then(|buy| {
-                    texts.iter().find(|(_, at)| {
-                        (at.x - buy.x).abs() < 1.0 && at.y < buy.y && buy.y - at.y < 34.0
-                    })
-                })
-                .map(|(text, _)| text.as_str());
-            assert_eq!(price, expected, "quote {bid_ask:?}, broker {broker}");
-            if bid_ask.is_none() && broker {
-                let at = buy.unwrap();
-                for events in [
-                    vec![egui::Event::PointerMoved(at)],
-                    vec![egui::Event::PointerButton {
-                        pos: at,
-                        button: egui::PointerButton::Primary,
-                        pressed: true,
-                        modifiers: Default::default(),
-                    }],
-                    vec![egui::Event::PointerButton {
-                        pos: at,
-                        button: egui::PointerButton::Primary,
-                        pressed: false,
-                        modifiers: Default::default(),
-                    }],
-                    vec![],
-                ] {
-                    frame(&mut trading, &mut chart, events);
+        for panel in [false, true] {
+            for (bid_ask, broker, expected) in [
+                (None, true, Some("110.00")),
+                (Some((101.0, 99.0)), true, Some("110.00")),
+                (Some((f64::NAN, 101.0)), true, Some("110.00")),
+                (Some((99.0, f64::INFINITY)), true, Some("110.00")),
+                (Some((99.0, 101.0)), true, Some("101.00")),
+                (None, false, None),
+            ] {
+                let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+                chart.symbol = "SYM".into();
+                chart.config_mut().quote_panel = panel;
+                chart.set_quote(bid_ask.map(|(bid, ask)| Level1Quote {
+                    symbol: "SYM".into(),
+                    ts: chart.bars(SeriesId::MAIN)[99].time,
+                    bid,
+                    ask,
+                    bid_size: 1.0,
+                    ask_size: 1.0,
+                }));
+                let mut trading = Trading::default();
+                if broker {
+                    trading.set_service(Arc::new(Recorder::default()));
                 }
-                assert_eq!(chart.take_quote_action(), Some(QuoteSide::Buy));
+                let ctx = egui::Context::default();
+                let frame = |trading: &mut Trading, chart: &mut Chart, events| {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            trading.poll(ui.ctx(), &mut Toasts::new());
+                            chart.show(ui);
+                            trading.show(ui, chart);
+                        },
+                    );
+                    let texts: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) => Some((
+                                text.galley.text().to_owned(),
+                                text.pos + text.galley.size() / 2.0,
+                            )),
+                            _ => None,
+                        })
+                        .collect();
+                    output.drop_without_applying_deltas();
+                    texts
+                };
+                frame(&mut trading, &mut chart, vec![]);
+                // Trading supplies the fallback on the next frame; the panel then measures it.
+                frame(&mut trading, &mut chart, vec![]);
+                let texts = frame(&mut trading, &mut chart, vec![]);
+                let buy = texts
+                    .iter()
+                    .find(|(text, _)| text == "BUY")
+                    .map(|(_, at)| *at);
+                let price = buy
+                    .and_then(|buy| {
+                        texts.iter().find(|(_, at)| {
+                            (at.x - buy.x).abs() < 1.0 && at.y < buy.y && buy.y - at.y < 34.0
+                        })
+                    })
+                    .map(|(text, _)| text.as_str());
+                assert_eq!(price, expected, "quote {bid_ask:?}, broker {broker}");
+                if bid_ask.is_none() && broker {
+                    let at = buy.unwrap();
+                    for events in [
+                        vec![egui::Event::PointerMoved(at)],
+                        vec![egui::Event::PointerButton {
+                            pos: at,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: Default::default(),
+                        }],
+                        vec![egui::Event::PointerButton {
+                            pos: at,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: Default::default(),
+                        }],
+                        vec![],
+                    ] {
+                        frame(&mut trading, &mut chart, events);
+                    }
+                    assert_eq!(chart.take_quote_action(), Some(QuoteSide::Buy));
+                }
             }
         }
     }

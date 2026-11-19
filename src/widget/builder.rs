@@ -186,6 +186,7 @@ impl Chart {
             legend_statuses: Vec::new(),
             quote: None,
             quote_action: None,
+            quote_panel_at: None,
             server_time_offset: None,
             bar_close_time: None,
             indicator_settings_request: None,

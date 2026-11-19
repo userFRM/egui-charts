@@ -1,4 +1,4 @@
-use super::{Layout, QuoteSide, semibold};
+use super::{Layout, Legend, QuoteSide, StyleColors, semibold};
 use crate::localization as l10n;
 use crate::model::Level1Quote;
 use crate::theme::ThemeExt;
@@ -213,6 +213,135 @@ pub(super) fn paint_quotes(
     };
     let clicked = quantity.and_then(|(rect, clicked)| clicked.then_some(rect));
     (action, clicked)
+}
+
+/// What the user did with the quote panel this frame.
+pub(crate) struct QuotePanelResponse {
+    pub action: Option<QuoteSide>,
+    /// The quantity box, when clicked.
+    pub quantity: Option<Rect>,
+    /// The new place while the grip is dragged.
+    pub moved: Option<[f32; 2]>,
+    /// The grip was released this frame.
+    pub released: bool,
+}
+
+impl Legend<'_> {
+    /// The shared Sell and Buy controls inside `room`, at shares of its remaining room, with a
+    /// grip to move them. Dialogs and menus remain above the chart's own painting layer.
+    pub(crate) fn show_quote_panel(
+        &self,
+        ui: &mut Ui,
+        colors: &StyleColors,
+        room: Rect,
+        place: [f32; 2],
+        prices: QuotePrices,
+        id: egui::Id,
+    ) -> QuotePanelResponse {
+        let theme = ui.active_theme();
+        let size = ui
+            .data_mut(|data| data.get_temp::<Vec2>(id))
+            .unwrap_or(Vec2::ZERO);
+        let free = (room.size() - size).max(Vec2::ZERO);
+        let [x, y] = place.map(|v| {
+            if v.is_finite() {
+                v.clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        });
+        let at = room.min + egui::vec2(x * free.x, y * free.y);
+        let painter = ui
+            .painter()
+            .with_clip_rect(room.expand(8.0).intersect(ui.clip_rect()));
+        let background = painter.add(egui::Shape::Noop);
+        let grip = Rect::from_min_size(at + Vec2::splat(4.0), egui::vec2(14.0, 34.0));
+        let response = ui
+            .interact(
+                grip.intersect(painter.clip_rect()),
+                id.with("grip"),
+                Sense::drag(),
+            )
+            .on_hover_cursor(egui::CursorIcon::Grab)
+            .on_hover_text(l10n::text(ui.ctx(), "Move Buy and Sell"));
+        let label = l10n::text(ui.ctx(), "Move Buy and Sell");
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+        if response.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        }
+        let dots = &crate::tokens::DESIGN_TOKENS.sizing.floating_toolbar;
+        for col in 0..2 {
+            for row in 0..3 {
+                painter.circle_filled(
+                    grip.center()
+                        + egui::vec2(
+                            (col as f32 - 0.5) * dots.dot_spacing,
+                            (row as f32 - 1.0) * dots.dot_spacing,
+                        ),
+                    dots.dot_size,
+                    theme.ui.text.gamma_multiply(0.4),
+                );
+            }
+        }
+        let content = egui::pos2(grip.right(), grip.top());
+        let bounds = Rect::from_min_max(content, egui::pos2(f32::INFINITY, content.y + 34.0));
+        let chart_background = |_: Pos2| theme.chart.bg;
+        let mut layout = Layout::new(
+            &painter,
+            bounds,
+            colors,
+            f32::INFINITY,
+            &chart_background,
+            &[],
+        );
+        let (action, quantity) = paint_quotes(
+            ui,
+            &mut layout,
+            prices,
+            self.price_precision(prices.magnitude()),
+            self.thousands_sep,
+            self.formatters.price,
+            self.quantity.clone(),
+            id,
+        );
+        let measured = egui::vec2(layout.pos.x - 8.0 + 4.0 - at.x, 42.0);
+        painter.set(
+            background,
+            egui::Shape::Rect(egui::epaint::RectShape::new(
+                Rect::from_min_size(at, measured),
+                theme.radius.md,
+                theme.chart.bg,
+                Stroke::new(1.0, theme.ui.border),
+                egui::StrokeKind::Inside,
+            )),
+        );
+        if size != measured {
+            // shortcut: the first frame places by the top-left corner; measure first if visible.
+            ui.data_mut(|data| data.insert_temp(id, measured));
+            ui.ctx().request_repaint();
+        }
+        let moved = response.dragged().then(|| {
+            let moved = at + response.drag_delta() - room.min;
+            [
+                if free.x > 0.0 {
+                    (moved.x / free.x).clamp(0.0, 1.0)
+                } else {
+                    x
+                },
+                if free.y > 0.0 {
+                    (moved.y / free.y).clamp(0.0, 1.0)
+                } else {
+                    y
+                },
+            ]
+        });
+        QuotePanelResponse {
+            action,
+            quantity,
+            moved,
+            released: response.drag_stopped(),
+        }
+    }
 }
 
 fn quote_box(
