@@ -3646,7 +3646,13 @@ mod tests {
             let template = serde_json::from_str::<crate::studies::StudyTemplate>(saved).unwrap();
             let mut older = template.create().unwrap();
             older.set_timeframe(Timeframe::Hour1);
-            assert_eq!(older.settings(), template.settings);
+            // The developing plots added since are hidden.
+            let mut settings = older.settings();
+            assert_eq!(settings.plots.len(), 3);
+            assert!(settings.plots.iter().all(|plot| !plot.visible));
+            settings.plots.clear();
+            settings.plot_variants.clear();
+            assert_eq!(settings, template.settings);
             assert_eq!(older.is_visible(), template.visible);
             assert_eq!(Some(older.scale()), template.scale);
             let mut expected = template.inputs.clone();
@@ -3679,10 +3685,10 @@ mod tests {
                     value
                 );
             }
-            assert_eq!(
-                crate::studies::StudyTemplate::from_study(older.as_ref()).inputs,
-                expected
-            );
+            let inputs = crate::studies::StudyTemplate::from_study(older.as_ref()).inputs;
+            for input in &expected {
+                assert!(inputs.contains(input), "{input:?}");
+            }
         }
         // A template saved before the size basis existed keeps fill-based filtering and
         // its exact presentation; the missing toggle takes its declared false default.

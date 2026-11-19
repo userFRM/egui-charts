@@ -10,6 +10,11 @@ import textwrap
 with tempfile.TemporaryDirectory() as directory:
     work = Path(directory)
     script = Path(__file__).with_name("check-regressions.sh").resolve()
+    checked_script = work / script.name
+    checked_script.write_text(script.read_text())
+    baseline = work / "profiles.baseline"
+    baseline.write_text("profiles-tick-1000 200000\nprofiles-tick-4000 200000\n"
+                        "profiles-calculate-1000 200000\nprofiles-calculate-4000 1000000\n")
     valgrind = work / "valgrind"
     valgrind.write_text("""#!/usr/bin/env python3
 import os
@@ -24,13 +29,19 @@ if scenario == os.environ.get('TEST_FAIL'):
     sys.exit(1)
 assert binary.endswith(('/base/frame_time', '/head/frame_time'))
 samples = int(os.environ['FRAME_TIME_FRAMES'])
-assert samples in (0, 1 if scenario == 'trade-replay' else 20)
+assert samples in (0, 1 if scenario == 'trade-replay' or scenario.startswith('profiles-') else 20)
 delta = samples * (400000 if scenario == 'tpo-1600' else 100000)
+if scenario == 'profiles-calculate-4000':
+    delta *= 4
 if samples and Path(binary).read_text() == 'head':
     if scenario == 'frame-1000':
         delta += int(os.environ['TEST_GROWTH'])
     if scenario == 'tpo-1600':
         delta += int(os.environ['TEST_SCALING'])
+if scenario == 'profiles-tick-4000':
+    delta += samples * int(os.environ['TEST_PROFILE_TICK'])
+if scenario == 'profiles-calculate-4000':
+    delta += samples * int(os.environ['TEST_PROFILE_CALCULATE'])
 print(f'I refs: {1000 + delta:,}', file=sys.stderr)
 """)
     valgrind.chmod(0o755)
@@ -40,19 +51,22 @@ print(f'I refs: {1000 + delta:,}', file=sys.stderr)
 
     def run(*args):
         return subprocess.run(
-            ["bash", str(script), *map(str, args)],
+            ["bash", str(checked_script), *map(str, args)],
             env=env, capture_output=True, text=True, check=False,
         )
 
     # 100001 / 2000000 is above 5% even though the printed change rounds to +5.00%.
     cases = [
-        (0, 0, ""),
-        (100000, 400000, ""),
-        (100001, 0, "::error title=Performance regression::frame-1000 grew by +5.00% (tolerance +5%)"),
-        (0, 400001, "::error title=TPO scaling regression::Instructions per session grew by more than 5% from 400 to 1,600 sessions"),
+        (0, 0, 0, 0, ""),
+        (100000, 400000, 50000, 60000, ""),
+        (100001, 0, 0, 0, "::error title=Performance regression::frame-1000 grew by +5.00% (tolerance +5%)"),
+        (0, 400001, 0, 0, "::error title=TPO scaling regression::Instructions per session grew by more than 5% from 400 to 1,600 sessions"),
+        (0, 0, 50001, 0, "::error title=Profile scaling regression::Tail updates grew by more than 50% from 1,000 to 4,000 bars"),
+        (0, 0, 0, 60001, "::error title=Profile scaling regression::Calculation grew by more than linear growth plus 15% from 1,000 to 4,000 bars"),
     ]
-    for growth, scaling, error in cases:
-        env.update(TEST_GROWTH=str(growth), TEST_SCALING=str(scaling))
+    for growth, scaling, profile_tick, profile_calculate, error in cases:
+        env.update(TEST_GROWTH=str(growth), TEST_SCALING=str(scaling),
+                   TEST_PROFILE_TICK=str(profile_tick), TEST_PROFILE_CALCULATE=str(profile_calculate))
         direct = run(work / "base", work / "head")
         for revision in ("base", "head"):
             measured = run("--measure", work / revision)
@@ -66,6 +80,13 @@ print(f'I refs: {1000 + delta:,}', file=sys.stderr)
         assert compared.stdout == direct.stdout
         assert compared.stderr == direct.stderr
         assert not error or error in compared.stderr
+
+    # Profile budgets catch constant-factor regressions as well as quadratic scaling.
+    env.update(TEST_GROWTH="0", TEST_SCALING="0", TEST_PROFILE_TICK="0", TEST_PROFILE_CALCULATE="0")
+    baseline.write_text(baseline.read_text().replace("profiles-tick-4000 200000", "profiles-tick-4000 95238"))
+    rejected = run(work / "base", work / "head")
+    assert rejected.returncode == 1
+    assert "profiles-tick-4000 exceeded its profile instruction budget" in rejected.stderr
 
     # Incomplete or invalid job outputs must fail the required comparison check.
     for counts in ("", "frame-1000 invalid 2001000\n", "frame-1000 1000 1000\n"):
