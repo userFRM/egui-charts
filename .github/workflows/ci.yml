@@ -82,9 +82,10 @@ jobs:
           fi
           printf '%s\n' "rust=$rust" "terminal=$terminal" "native=$native" "fmt=$fmt" \
             "docs=$docs" "security=$security" "counts=$counts" >> "$GITHUB_OUTPUT"
-          # Branches of this repository run the Linux build and test jobs on the runner label the
-          # LINUX_RUNNER repository variable names, when it is set. Forks and Dependabot keep
-          # GitHub-hosted runners, and so do the timing jobs, whose baselines are measured there.
+          # Branches of this repository run the Linux check, feature, UI, terminal, format, documentation,
+          # API and security jobs on the runner label the LINUX_RUNNER repository variable names, when it
+          # is set. Forks and Dependabot keep GitHub-hosted runners, and so do the platform test matrix,
+          # the browser tests and the timing jobs, whose baselines are measured there.
           linux=ubuntu-latest
           if [[ -n $LINUX_RUNNER && $HEAD_REPO == "$GITHUB_REPOSITORY" && $PR_AUTHOR != 'dependabot[bot]' ]]; then
             linux=$LINUX_RUNNER
@@ -190,7 +191,7 @@ jobs:
     needs: changes
     if: "!cancelled() && github.event.pull_request.draft != true"
     name: Test (${{ matrix.os }}, ${{ matrix.rust }})
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && needs.changes.outputs.linux || matrix.os }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
       CARGO_INCREMENTAL: 0
