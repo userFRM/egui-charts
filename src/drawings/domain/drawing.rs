@@ -25,11 +25,19 @@ use serde::{Deserialize, Serialize};
 /// with other layouts.
 ///
 /// Leaving it unset follows [`ChartSyncOptions::sync_drawings`](crate::widget::ChartSyncOptions)
-/// within a layout. Charts on one drawing storage read each other's saved drawings whichever is
-/// set. A saved layout opened on a chart with drawing storage shows each drawing as stored, and
-/// one deleted from storage stays deleted, except that a drawing the layout holds in a folder set
-/// to [`Chart`](Self::Chart) or [`Layout`](Self::Layout) comes back as the layout holds it,
-/// unless storage holds it outside such a folder.
+/// within a layout. With drawing storage
+/// ([`Chart::set_storage`](crate::widget::Chart::set_storage)), the stored drawings of a symbol
+/// show on every chart of that storage, in every layout. Drawings in a folder set to
+/// [`Chart`](Self::Chart) or [`Layout`](Self::Layout) stay out of storage, on their chart or on
+/// the charts of their layout, and come back with a saved layout that holds them. Moving a
+/// drawing into such a folder takes it out of storage and off the other charts; moving it out
+/// stores it again. A drawing that a stored document already holds in such a folder, as earlier
+/// versions stored them, shows as stored until a chart changes it; that chart then keeps it.
+///
+/// A saved layout opened on a chart with drawing storage shows each drawing as stored, and one
+/// deleted from storage stays deleted, except that a drawing the layout holds in a folder set to
+/// [`Chart`](Self::Chart) or [`Layout`](Self::Layout) comes back as the layout holds it, unless
+/// storage holds it outside such a folder.
 ///
 /// ```
 /// use egui_charts::drawings::{ChartPoint, Drawing, DrawingManager, DrawingToolType, FolderSync};
@@ -46,9 +54,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum FolderSync {
-    /// Keep the drawings on this chart, even with layout-wide drawing sync on.
+    /// Keep the drawings on this chart, even with layout-wide drawing sync on or with drawing
+    /// storage shared with other charts.
     Chart,
-    /// Mirror the drawings across the layout, even with layout-wide drawing sync off.
+    /// Mirror the drawings across the layout, even with layout-wide drawing sync off, and keep
+    /// them off the charts of other layouts, also on the same drawing storage.
     Layout,
     /// Mirror the drawings across the layout as [`Layout`](Self::Layout) does, and show them as
     /// stored in every layout of their symbol, also in layouts saved before they were drawn.
@@ -165,7 +175,9 @@ pub struct Drawing {
     /// by [`Self::update_screen_coords`]
     #[serde(skip)]
     pub level_ys: Vec<f32>,
-    /// Position as fractions of the pane width and height for anchored text.
+    /// Position as fractions of the pane width and height for anchored text, which keeps its
+    /// place in the pane while the chart scrolls and zooms. The chart keeps
+    /// [`chart_points`](Self::chart_points) on the bar and price under it.
     /// `None` adopts the first displayed position, including for older saved drawings.
     /// A pin saved with one takes the bar and price under it the first time a chart draws it,
     /// and the chart then clears it.
@@ -566,6 +578,15 @@ impl Drawing {
             return None;
         }
         self.folder_sync.first().copied().flatten()
+    }
+
+    /// Whether the top-level folder of this drawing keeps it on one chart or in one layout,
+    /// which drawing storage does not hold.
+    pub(crate) fn confined(&self) -> bool {
+        matches!(
+            self.folder_sync_mode(),
+            Some(FolderSync::Chart | FolderSync::Layout)
+        )
     }
 
     /// Create a new drawing with default properties

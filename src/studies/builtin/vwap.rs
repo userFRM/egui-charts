@@ -516,7 +516,7 @@ impl Indicator for VolumeWeightedAvgPrice {
     }
 
     fn desc(&self) -> &str {
-        "Volume Weighted Avg Price - Trading benchmark indicator"
+        "Volume Weighted Average Price - Trading benchmark indicator"
     }
 
     fn calculate(&mut self, data: &[Bar]) {

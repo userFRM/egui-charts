@@ -11,6 +11,7 @@ use crate::drawings::services::{
 use crate::tokens::DESIGN_TOKENS;
 use egui::epaint::ClippedShape;
 use egui::{Pos2, Rect};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 mod edit;
@@ -750,23 +751,21 @@ impl DrawingManager {
         id
     }
 
-    /// What [`Self::keep_across_read`] needs of the drawings about to be replaced.
-    pub(crate) fn before_read(&self) -> BeforeRead {
+    /// What [`Self::keep_across_read`] needs of the drawings about to be replaced. With
+    /// `keep_confined`, the saveable drawings in a top-level folder kept on one chart or in one
+    /// layout stay too, as drawing storage does not hold them.
+    pub(crate) fn before_read(&self, keep_confined: bool) -> BeforeRead {
+        let stays = |d: &&Drawing| !d.saveable || (keep_confined && d.confined());
         BeforeRead {
-            // A drawing that is not saveable is in no document, so its id is no stored id.
+            // A drawing that stays is in no document read, so its id is no stored id.
             ids: self
                 .drawings
                 .iter()
-                .filter(|d| d.saveable)
+                .filter(|d| !stays(d))
                 .map(|d| (sync_id(d), d.id))
                 .collect(),
             next_id: self.next_id,
-            unsaved: self
-                .drawings
-                .iter()
-                .filter(|d| !d.saveable)
-                .cloned()
-                .collect(),
+            unsaved: self.drawings.iter().filter(stays).cloned().collect(),
             identity: self.identity,
         }
     }
@@ -775,10 +774,12 @@ impl DrawingManager {
     /// to a drawing by its local id, such as an open properties dialog, keeps referring to it.
     /// Every other read drawing gets an id that no drawing of the manager has or had, so that it
     /// is not taken for one removed elsewhere. Drawings that are never stored stay, since no
-    /// document holds them.
+    /// document holds them, and so do the confined drawings [`Self::before_read`] kept, unless
+    /// one was read again (see [`read_again`]); one that has the stored id of another read
+    /// drawing takes a free one, so that a later write keeps both.
     pub(crate) fn keep_across_read(&mut self, previous: BeforeRead) {
         let BeforeRead {
-            ids,
+            mut ids,
             next_id,
             unsaved,
             identity,
@@ -786,9 +787,25 @@ impl DrawingManager {
         // The same drawings to a layout that mirrors them, as their ids are.
         self.identity = identity;
         self.next_id = self.next_id.max(next_id);
-        // The drawings that stay are in place before ids are handed out, so none gets theirs.
         let read = self.drawings.len();
-        self.drawings.extend(unsaved);
+        let mut taken: HashSet<String> = self.drawings.iter().map(sync_id).collect();
+        taken.extend(unsaved.iter().filter(|d| d.saveable).map(sync_id));
+        // The drawings that stay are in place before ids are handed out, so none gets theirs.
+        for mut drawing in unsaved {
+            if drawing.saveable
+                && let Some(other) = self.drawings[..read]
+                    .iter()
+                    .find(|other| other.stored_id.as_deref() == Some(sync_id(&drawing).as_str()))
+            {
+                if read_again(&drawing, other) {
+                    ids.insert(sync_id(&drawing), drawing.id);
+                    continue;
+                }
+                drawing.stored_id = Some(free_stored_id(&drawing, &taken));
+                taken.insert(sync_id(&drawing));
+            }
+            self.drawings.push(drawing);
+        }
         let mut fresh = Vec::new();
         for (at, drawing) in self.drawings[..read].iter_mut().enumerate() {
             match drawing.stored_id.as_ref().and_then(|id| ids.get(id)) {
@@ -881,6 +898,24 @@ pub(crate) fn sync_id(drawing: &Drawing) -> String {
         .stored_id
         .clone()
         .unwrap_or_else(|| drawing.id.to_string())
+}
+
+/// Whether `kept`, a drawing that storage does not hold, is `read`, the drawing read under its
+/// stored id: one stored in a folder kept on one chart or in one layout, as earlier versions
+/// stored such drawings, or one stored with the same creation time.
+pub(crate) fn read_again(kept: &Drawing, read: &Drawing) -> bool {
+    kept.stored_id.is_some()
+        && kept.stored_id == read.stored_id
+        && (read.confined() || kept.created_at == read.created_at)
+}
+
+/// The stored id of `drawing`, with `-local` appended until no id in `taken` is the same.
+pub(crate) fn free_stored_id(drawing: &Drawing, taken: &HashSet<String>) -> String {
+    let mut id = sync_id(drawing);
+    while taken.contains(&id) {
+        id.push_str("-local");
+    }
+    id
 }
 
 #[cfg(test)]
