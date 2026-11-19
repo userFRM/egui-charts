@@ -1086,6 +1086,10 @@ mod tests {
             });
             let before = drawing.clone();
             manager.drawings.push(drawing);
+            // A strong magnet would size the drawing by the distance to its target.
+            manager.options.magnet_mode = true;
+            manager.options.strong_magnet = true;
+            manager.snap_targets = vec![pos2(0.0, 0.0)];
             manager.start_drag_handle(1, HandlePos::BottomRight);
             manager.update_drag_handle(pointer, x_to_bar, y_to_price, |p, from, to| {
                 p + f64::from(from - to)
@@ -1128,6 +1132,10 @@ mod tests {
                 let drawing = create_test_drawing(tool, vec![pos2(100.0, 200.0)]);
                 let (anchors, size_before) = (drawing.chart_points.clone(), drawing.font_size);
                 manager.drawings.push(drawing);
+                // A strong magnet would size the drawing by the distance to its target.
+                manager.options.magnet_mode = true;
+                manager.options.strong_magnet = true;
+                manager.snap_targets = vec![pos2(0.0, 0.0)];
                 manager.start_drag_handle(1, handle);
                 // A corner is half a diagonal from the centre: side = radius * sqrt(2).
                 // Offsets (30, 40) have radius 50, giving side 70.710678.
