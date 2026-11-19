@@ -947,8 +947,10 @@ pub struct ChartSyncOptions {
     /// Study-owned drawings stay local because study ids and scales belong to each chart.
     /// Charts that keep their drawings in the same storage are left to it: they read each other's
     /// stored drawings whether this is on or off, so a drawing reaches them once a chart history
-    /// edit writes it. Only drawings that are not saveable still sync between them here.
-    /// A top-level folder's `FolderSync` overrides this for its drawings.
+    /// edit writes it. Drawings that are not saveable still sync between them here, and so do
+    /// drawings in a top-level folder kept in the layout, which storage does not hold.
+    /// A top-level folder's `FolderSync` overrides this for its drawings: one kept on the chart
+    /// reaches no other chart, one kept in the layout reaches the charts of this layout only.
     pub sync_drawings: bool,
     /// Synchronize symbol changes for fields following the layout setting.
     /// Explicit individual groups work independently. A host without a feed supplies bars.
