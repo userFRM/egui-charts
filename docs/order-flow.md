@@ -318,11 +318,13 @@ accepted heartbeat when replaying retained executions. Quotes seed the movement 
 lost book breaks it so the next quote does not count an unobserved jump. A loss leaves book size missing until
 a new synchronized snapshot arrives, including recovery within the same bar.
 
-On history-only tick-count and range intervals, Trade Rate uses the recorded executions
+On history-only tick-count, range, volume and delta intervals, Trade Rate uses the recorded executions
 when the tape reaches its start without a gap and reproduces every candle's key and OHLCV.
 Range intervals use the instrument's tick size; without it the study stays blank. The
 last candle may be unfinished. Each rate stops at its candle's last execution, even when
-the next candle starts at the same provider timestamp. A partial tape or a mismatched
+the next candle starts at the same provider timestamp. When a fill spans candles, each
+candle counts the fill once (or just its allocated lots in volume mode). Both rate windows
+count the original execution or its full size only once. A partial tape or a mismatched
 candle leaves a gap; candle volume alone never supplies an execution count.
 
 [`Indicator::order_flow_inputs`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.order_flow_inputs) returns the study's [`OrderFlowInput`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowInput.html) sources. Charts connect quote and
