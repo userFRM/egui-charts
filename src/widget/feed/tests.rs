@@ -8406,11 +8406,7 @@ fn profile_drawings_read_shared_prepared_rows() {
                 .registry
                 .register(
                     "capture",
-                    RegisteredDrawingTool {
-                        name: "Capture".into(),
-                        anchors: 2,
-                        implementation: Arc::new(Capture(captured.clone())),
-                    },
+                    RegisteredDrawingTool::new("Capture", 2, Arc::new(Capture(captured.clone()))),
                 )
                 .unwrap();
             let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);

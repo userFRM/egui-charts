@@ -15,14 +15,16 @@ pub trait DrawingRenderer: Send + Sync {
     /// Tests the tool's geometry in screen points. This result is authoritative, including
     /// after painting; returning false keeps custom decorative areas out of selection.
     fn hit_test(&self, drawing: &Drawing, point: Pos2, tolerance: f32) -> bool;
-    /// Edits the tool's settings and returns whether they changed. The manager retains undo,
-    /// lock checks and persistence notifications. Tools without settings keep the default.
+    /// Edits the tool's settings and returns whether they changed. The properties dialog shows
+    /// this below the rows [`RegisteredDrawingTool::style`] keeps and applies all edits together.
+    /// `DrawingManager::show_custom_settings` shows it alone as one undoable edit. Tools without
+    /// settings keep the default.
     fn settings(&self, _ui: &mut Ui, _settings: &mut serde_json::Value) -> bool {
         false
     }
 }
 
-/// Whether a built-in tool appears in a picker and can create new drawings. Existing drawings
+/// Whether a tool appears in a picker and can create new drawings. Existing drawings
 /// remain visible and editable, so hiding a tool never makes a saved annotation disappear.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -42,8 +44,58 @@ impl Default for ToolAvailability {
     }
 }
 
-/// A registered tool's host-facing name, anchor count and implementation.
+/// Built-in style rows offered for a registered tool. Turn off values the renderer does not
+/// read; every row is on by default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct StyleControls {
+    /// The line colour.
+    pub color: bool,
+    /// The line width.
+    pub line_width: bool,
+    /// The line pattern.
+    pub line_style: bool,
+    /// The start and end styles.
+    pub line_ends: bool,
+    /// The fill switch and colour.
+    pub fill: bool,
+}
+
+impl Default for StyleControls {
+    fn default() -> Self {
+        Self {
+            color: true,
+            line_width: true,
+            line_style: true,
+            line_ends: true,
+            fill: true,
+        }
+    }
+}
+
+/// A registered tool's name, anchor count, implementation and style controls. Build with
+/// [`Self::new`] and assign the optional presentation fields.
+///
+/// ```
+/// use egui_charts::drawings::{Drawing, DrawingRenderer, DrawingToolRegistry, RegisteredDrawingTool};
+/// use egui_charts::drawings::rendering::ChartView;
+/// use std::sync::Arc;
+///
+/// struct Dot;
+/// impl DrawingRenderer for Dot {
+///     fn render(&self, _: &Drawing, _: &egui::Painter, _: egui::Rect, _: &ChartView) {}
+///     fn hit_test(&self, _: &Drawing, _: egui::Pos2, _: f32) -> bool { false }
+/// }
+/// let mut tool = RegisteredDrawingTool::new("Dot", 1, Arc::new(Dot));
+/// tool.style.fill = false;
+/// tool.category = Some("Lines".into());
+/// # #[cfg(feature = "icons")]
+/// # { tool.icon = Some(egui_charts::icons::Icon::new("host/dot.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>")); }
+/// let mut registry = DrawingToolRegistry::default();
+/// registry.register("dot", tool).unwrap();
+/// ```
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct RegisteredDrawingTool {
     /// Picker label supplied by the host.
     pub name: String,
@@ -51,14 +103,48 @@ pub struct RegisteredDrawingTool {
     pub anchors: usize,
     /// Shared implementation, separate from each drawing's saved settings.
     pub implementation: Arc<dyn DrawingRenderer>,
+    /// Built-in style rows the properties dialog offers; all by default.
+    pub style: StyleControls,
+    /// Toolbar category: "Lines", "Fibonacci", "Patterns", "Projection", "Brushes/Shapes" or
+    /// "Text/Annotations". `None` or any other name keeps the tool off the toolbar.
+    pub category: Option<String>,
+    /// Toolbar and favourites picture, tinted as built-in icons are; `None` uses the polyline.
+    /// Images are cached by name, so use a unique name such as `host/<tool id>.svg`.
+    #[cfg(feature = "icons")]
+    pub icon: Option<crate::icons::Icon>,
+}
+
+impl RegisteredDrawingTool {
+    /// A tool named `name` that completes after `anchors` clicks, with all style rows enabled,
+    /// no toolbar category and no picture of its own.
+    pub fn new(
+        name: impl Into<String>,
+        anchors: usize,
+        implementation: Arc<dyn DrawingRenderer>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            anchors,
+            implementation,
+            style: StyleControls::default(),
+            category: None,
+            #[cfg(feature = "icons")]
+            icon: None,
+        }
+    }
 }
 
 impl std::fmt::Debug for RegisteredDrawingTool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RegisteredDrawingTool")
+        let mut debug = f.debug_struct("RegisteredDrawingTool");
+        debug
             .field("name", &self.name)
             .field("anchors", &self.anchors)
-            .finish_non_exhaustive()
+            .field("style", &self.style)
+            .field("category", &self.category);
+        #[cfg(feature = "icons")]
+        debug.field("icon", &self.icon);
+        debug.finish_non_exhaustive()
     }
 }
 
@@ -69,6 +155,7 @@ impl std::fmt::Debug for RegisteredDrawingTool {
 pub struct DrawingToolRegistry {
     custom: BTreeMap<String, RegisteredDrawingTool>,
     builtins: HashMap<DrawingToolType, ToolAvailability>,
+    custom_availability: HashMap<String, ToolAvailability>,
 }
 
 impl DrawingToolRegistry {
@@ -99,6 +186,23 @@ impl DrawingToolRegistry {
         self.custom.iter().map(|(id, tool)| (id.as_str(), tool))
     }
 
+    /// The tool name for a drawing: its registered name, or its saved id if the tool is
+    /// missing or unnamed, otherwise the built-in name. Lists may put the drawing's label first.
+    pub fn tool_name<'a>(&'a self, drawing: &'a Drawing) -> &'a str {
+        match drawing.custom_tool.as_deref() {
+            Some(id) if !id.trim().is_empty() => self.custom_name(id),
+            _ => drawing.tool_type.as_str(),
+        }
+    }
+
+    /// A registered tool's picker name, or its id when missing or unnamed.
+    pub(crate) fn custom_name<'a>(&'a self, id: &'a str) -> &'a str {
+        self.get(id)
+            .map(|tool| tool.name.as_str())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or(id)
+    }
+
     /// Hides or disables a built-in tool. Hidden tools may still be created by the host when
     /// enabled; disabling rejects new creation through the manager and chart APIs. Duplicates,
     /// pastes and copies of its drawings are left out; restoring and syncing them is not affected.
@@ -109,6 +213,32 @@ impl DrawingToolRegistry {
     /// Availability of a built-in tool; all tools are visible and enabled by default.
     pub fn availability(&self, tool: DrawingToolType) -> ToolAvailability {
         self.builtins.get(&tool).copied().unwrap_or_default()
+    }
+
+    /// Hides or disables a registered tool as [`Self::set_availability`] does a built-in one.
+    /// The id need not be registered yet.
+    pub fn set_custom_availability(
+        &mut self,
+        id: impl Into<String>,
+        availability: ToolAvailability,
+    ) {
+        self.custom_availability.insert(id.into(), availability);
+    }
+
+    /// Availability of a registered tool id; visible and enabled by default.
+    pub fn custom_availability(&self, id: &str) -> ToolAvailability {
+        self.custom_availability
+            .get(id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Whether a new drawing of the registered or built-in tool may be created.
+    pub(crate) fn creates(&self, custom: Option<&str>, tool: DrawingToolType) -> bool {
+        match custom {
+            Some(id) => self.custom_availability(id).enabled,
+            None => self.availability(tool).enabled,
+        }
     }
 
     /// Built-in picker entries, excluding hidden tools and including disabled entries.
@@ -123,11 +253,15 @@ impl DrawingToolRegistry {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::drawings::{ChartPoint, DrawingManager};
 
-    struct Midpoint;
+    pub(crate) struct Midpoint;
+
+    pub(crate) fn midpoint() -> RegisteredDrawingTool {
+        RegisteredDrawingTool::new("Midpoint", 2, Arc::new(Midpoint))
+    }
     impl DrawingRenderer for Midpoint {
         fn render(&self, drawing: &Drawing, painter: &Painter, _rect: Rect, _view: &ChartView) {
             if let [a, b] = drawing.points.as_slice() {
@@ -140,26 +274,141 @@ mod tests {
                 _ => false,
             }
         }
-        fn settings(&self, _ui: &mut Ui, settings: &mut serde_json::Value) -> bool {
+        fn settings(&self, ui: &mut Ui, settings: &mut serde_json::Value) -> bool {
+            ui.label("Radius");
             *settings = serde_json::json!({"radius": 10});
             true
         }
     }
 
+    /// Registered names reach the dialog and inventory; labels still come first in lists.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn registered_tool_drawings_carry_the_registered_name() {
+        let mut registry = DrawingToolRegistry::default();
+        registry.register("midpoint", midpoint()).unwrap();
+        let mut chart = crate::ChartBuilder::new()
+            .with_drawing_registry(registry)
+            .build();
+        chart.set_symbol("AAPL");
+        chart.set_data(
+            crate::widget::SeriesId::MAIN,
+            crate::widget::test_frames::chart(&[90.0], &[110.0])
+                .bars(crate::widget::SeriesId::MAIN)
+                .to_vec(),
+        );
+        let mut drawing = Drawing::custom("midpoint");
+        drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(0.0, 105.0)];
+        let id = chart.drawings_mut().add_drawing(drawing).unwrap();
+        let mut dialog = crate::ui::dialogs::drawing_properties::DrawingPropertiesDialog::new();
+        assert!(dialog.open_for_chart(
+            &chart,
+            crate::ui::dialogs::drawing_properties::DrawingId(id)
+        ));
+        assert_eq!(dialog.drawing_name, "Midpoint");
+        let inventory = crate::widget::ChartLayout::default().drawing_inventory(&[&mut chart]);
+        assert_eq!(inventory[0].drawings[0].name(), "Midpoint");
+        use crate::ui::widget_bar::panels::object_tree::SourceItem;
+        let d = &chart.drawings().drawings[0];
+        assert_eq!(
+            SourceItem::for_drawing(&chart, d).display_name(),
+            "Midpoint"
+        );
+        chart.drawings_mut().drawings[0].label = Some("Mine".into());
+        let d = &chart.drawings().drawings[0];
+        assert_eq!(SourceItem::for_drawing(&chart, d).display_name(), "Mine");
+        for (id, name) in [("gone", "gone"), ("", "Polyline"), ("  ", "Polyline")] {
+            assert_eq!(
+                chart.drawings().registry.tool_name(&Drawing::custom(id)),
+                name
+            );
+        }
+        let mut blank = midpoint();
+        blank.name = "  ".into();
+        chart
+            .drawings_mut()
+            .registry
+            .register("blank", blank)
+            .unwrap();
+        assert_eq!(
+            chart
+                .drawings()
+                .registry
+                .tool_name(&Drawing::custom("blank")),
+            "blank"
+        );
+    }
+
+    /// A saved polyline default leaves registered tools in their own starting style.
+    #[test]
+    fn registered_tools_keep_their_own_default_style() {
+        let mut manager = DrawingManager::new();
+        manager.registry.register("midpoint", midpoint()).unwrap();
+        let mut polyline = Drawing::new(0, DrawingToolType::Polyline);
+        polyline.stroke_width = 7.0;
+        polyline.color = [1, 2, 3, 255];
+        manager.tool_defaults.insert(
+            DrawingToolType::Polyline,
+            crate::drawings::DrawingTemplate::from_drawing(&polyline),
+        );
+        let place = |manager: &mut DrawingManager| {
+            manager.set_custom_tool("midpoint").unwrap();
+            manager.start_drawing_with_coords(
+                DrawingToolType::Polyline,
+                egui::pos2(100., 100.),
+                |x| x,
+                f64::from,
+            );
+            manager.add_point_with_coords(egui::pos2(200., 100.), |x| x, f64::from);
+            manager.drawings.last().unwrap().clone()
+        };
+        let first = place(&mut manager);
+        assert_eq!(
+            (first.color, first.stroke_width, first.fill_color),
+            ([0, 188, 212, 255], 2.0, Some([0, 188, 212, 51]))
+        );
+        let mut own = first.clone();
+        own.stroke_width = 4.0;
+        own.custom_settings = serde_json::json!({"radius": 3});
+        manager.save_tool_default(crate::drawings::DrawingTemplate::from_drawing(&own));
+        let second = place(&mut manager);
+        assert_eq!(
+            (second.stroke_width, second.custom_settings),
+            (4.0, serde_json::json!({"radius": 3}))
+        );
+        assert_eq!(
+            manager
+                .new_drawing(0, DrawingToolType::Polyline)
+                .stroke_width,
+            7.0
+        );
+        // Templates are checked against their identity even if the host used the wrong key.
+        manager.custom_tool_defaults.insert(
+            "other".into(),
+            crate::drawings::DrawingTemplate::from_drawing(&own),
+        );
+        assert_eq!(manager.new_custom_drawing(0, "other").stroke_width, 2.0);
+        let mut chart = crate::ChartBuilder::new()
+            .with_drawing_registry(manager.registry.clone())
+            .build();
+        chart.drawings_mut().custom_tool_defaults = manager.custom_tool_defaults.clone();
+        chart.set_symbol("A");
+        chart.set_symbol("B");
+        let saved = chart.save_drawings().unwrap().to_json().unwrap();
+        assert!(chart.load_drawings(&saved).unwrap().is_empty());
+        assert_eq!(
+            chart
+                .drawings()
+                .new_custom_drawing(0, "midpoint")
+                .stroke_width,
+            4.0
+        );
+    }
+
     #[test]
     fn registered_tools_use_host_geometry_and_retain_settings_through_history_and_storage() {
         let mut manager = DrawingManager::new();
-        manager
-            .registry
-            .register(
-                "midpoint",
-                RegisteredDrawingTool {
-                    name: "Midpoint".into(),
-                    anchors: 2,
-                    implementation: Arc::new(Midpoint),
-                },
-            )
-            .unwrap();
+        manager.registry.register("midpoint", midpoint()).unwrap();
         manager.set_custom_tool("midpoint").unwrap();
         manager.start_drawing_with_coords(
             DrawingToolType::Polyline,
