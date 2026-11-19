@@ -118,7 +118,7 @@ pub(crate) use resample::resample_periods;
 pub use resample::{resample, resample_with_session};
 pub use study::{StudyData, StudyDataRequest};
 pub use targets::PriceTargets;
-pub use trades::{CombinedTrade, ConsumedOrder, combine_trades};
+pub use trades::{CombinedTrade, ConsumedOrder, SizeBasis, combine_trades};
 pub use volume_profile::{
     ProfileDisplay, ProfileLevel, ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile,
     VolumeProfileConfig,

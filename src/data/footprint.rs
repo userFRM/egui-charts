@@ -1,5 +1,6 @@
 //! Trade volume at integer price levels. No volume or side is inferred from OHLC bars.
 
+use super::trades::{OrderSizes, SizeBasis};
 use super::{FeedError, FootprintBarView, FootprintRows};
 use crate::model::{BarClock, OrderSide, Placement, Tick, next_revision};
 use chrono::{DateTime, Utc};
@@ -291,6 +292,10 @@ pub struct Footprint {
     last: Option<DateTime<Utc>>,
     min_size: f64,
     max_size: f64,
+    /// What the size bounds measure.
+    basis: SizeBasis,
+    /// Orders of the newest timestamp; empty with fill-based filtering.
+    pending: PendingInstant,
     max_bars: usize,
     max_rows: usize,
     /// Bars opening up to this time lack executions that were dropped or never received.
@@ -312,6 +317,39 @@ pub struct Footprint {
     #[cfg(feature = "widget")]
     prepared: Option<(DateTime<Utc>, Option<FootprintBar>)>,
     revision: u64,
+}
+
+/// What one counted part of a fill changed, so it can be taken back.
+#[derive(Clone, Debug)]
+struct Undo {
+    /// Open of the part's bar.
+    time: DateTime<Utc>,
+    level: i64,
+    /// The bar's ask, bid, unknown, min_delta and max_delta before the part, or `None` when the
+    /// part opened the bar.
+    bar: Option<[f64; 5]>,
+    /// The row before the part, or `None` when the part added it.
+    row: Option<FootprintLevel>,
+}
+
+/// One fill of the newest timestamp, while the size filter measures aggressive orders.
+#[derive(Clone, Debug)]
+struct PendingFill {
+    trade: Tick,
+    level: i64,
+    /// Bar open and allocated size of each part.
+    parts: Vec<(DateTime<Utc>, f64)>,
+    /// Index in `PendingInstant::undo` of this fill's first record.
+    undo_from: usize,
+}
+
+/// The fills of the newest timestamp, whose orders can still grow.
+#[derive(Clone, Debug, Default)]
+struct PendingInstant {
+    sizes: OrderSizes,
+    fills: Vec<PendingFill>,
+    /// What the counted parts changed, in the order they were added.
+    undo: Vec<Undo>,
 }
 
 impl Footprint {
@@ -397,6 +435,8 @@ impl Footprint {
             last: None,
             min_size: 0.0,
             max_size: f64::MAX,
+            basis: SizeBasis::Fill,
+            pending: PendingInstant::default(),
             max_bars: usize::MAX,
             max_rows: usize::MAX,
             incomplete_through: None,
@@ -791,6 +831,7 @@ impl Footprint {
                 trade_starts: BTreeMap::new(),
                 rows: 0,
                 last: None,
+                pending: PendingInstant::default(),
                 missing: Vec::new(),
                 partial_slots: None,
                 missing_bars: Vec::new(),
@@ -832,6 +873,7 @@ impl Footprint {
         while self.bars.len() > 1 && (self.bars.len() > self.max_bars || self.rows > self.max_rows)
         {
             if let Some((time, bar)) = self.bars.pop_first() {
+                self.pending = PendingInstant::default();
                 self.rows -= bar.levels.len();
                 self.trade_starts.remove(&time);
                 self.incomplete_through = self.incomplete_through.max(Some(time));
@@ -877,7 +919,8 @@ impl Footprint {
         self.enforce_budget();
     }
 
-    /// Restricts executions to this inclusive size range, before aggregation.
+    /// Restricts executions to this inclusive size range, before aggregation, measured as
+    /// [`set_size_basis`](Self::set_size_basis) says.
     /// Must be called before adding trades. Invalid ranges return an error without changing it.
     pub fn set_size_filter(&mut self, min: f64, max: f64) -> Result<(), FeedError> {
         if self.last.is_some() || self.trade_bars.forming.is_some() {
@@ -902,6 +945,39 @@ impl Footprint {
         }
         self.min_size = min;
         self.max_size = max;
+        Ok(())
+    }
+
+    /// Measures the size filter of [`set_size_filter`](Self::set_size_filter) on each execution's
+    /// own size, the default, or on the combined size of its aggressive order, as [`SizeBasis`]
+    /// describes. Must be called before adding trades; otherwise returns an error without changing
+    /// it.
+    ///
+    /// ```
+    /// use egui_charts::{
+    ///     data::{Footprint, SizeBasis},
+    ///     model::{BarClock, OrderSide, Tick, Timeframe},
+    /// };
+    ///
+    /// let time = "2026-01-05T10:00:00Z".parse()?;
+    /// let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1)?;
+    /// flow.set_size_filter(50.0, f64::MAX)?;
+    /// flow.set_size_basis(SizeBasis::AggressiveOrder)?;
+    /// let fill = |price| {
+    ///     Tick::new(time, price, 25.0, Some(OrderSide::Buy)).with_aggressor_order_id(7)
+    /// };
+    /// assert!(!flow.push(&fill(100.0))?);
+    /// assert!(flow.push(&fill(101.0))?);
+    /// assert_eq!(flow.bars()[&time].ask, 50.0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn set_size_basis(&mut self, basis: SizeBasis) -> Result<(), FeedError> {
+        if self.last.is_some() || self.trade_bars.forming.is_some() {
+            return Err(FeedError::InvalidData(
+                "footprint size basis must be set before the first trade".into(),
+            ));
+        }
+        self.basis = basis;
         Ok(())
     }
 
@@ -957,11 +1033,13 @@ impl Footprint {
         profile
     }
 
-    /// Adds an execution, returning whether it passed the size filter. Invalid, out-of-order
+    /// Adds an execution, returning whether it passed the size filter: with
+    /// [`SizeBasis::AggressiveOrder`], whether its order so far passes it. Invalid, out-of-order
     /// or overflowing input returns an error and changes nothing. Unknown side stays unknown.
     /// Trade-based intervals use the same grouping anchor and fill splits as `aggregate_trades`;
     /// push every execution, including those outside the size filter. A filter tests the original
-    /// execution size before summing its allocated parts. Zero-sized executions add no volume
+    /// execution size, or its order's combined size, before summing its allocated parts.
+    /// Zero-sized executions add no volume
     /// but count toward tick-bar boundaries. On a daily or longer clock with a session an
     /// execution joins the bar of its trading date, as the chart's candles and
     /// `data::resample_with_session` date it.
@@ -1113,6 +1191,10 @@ impl Footprint {
         } else {
             std::slice::from_ref(&single)
         };
+        if self.basis == SizeBasis::AggressiveOrder {
+            let parts = parts.to_vec();
+            return self.push_order_fill(trade, level, allocation, parts);
+        }
         let accepted =
             trade.size >= self.min_size && trade.size <= self.max_size && trade.size > 0.0;
         if accepted
@@ -1138,6 +1220,129 @@ impl Footprint {
         self.last = Some(trade.ts);
         self.enforce_budget();
         Ok(true)
+    }
+
+    fn in_range(&self, size: f64) -> bool {
+        size >= self.min_size && size <= self.max_size
+    }
+
+    fn push_order_fill(
+        &mut self,
+        trade: &Tick,
+        level: i64,
+        allocation: super::inbox::TradeBars,
+        parts: Vec<(DateTime<Utc>, f64)>,
+    ) -> Result<bool, FeedError> {
+        if !self.pending.sizes.holds(trade) {
+            self.pending = PendingInstant::default();
+        }
+        let earlier = trade.aggressor_order_id.and_then(|id| {
+            self.pending
+                .fills
+                .iter()
+                .position(|fill| fill.trade.aggressor_order_id == Some(id))
+        });
+        let before = earlier.map_or(0.0, |_| self.pending.sizes.of(trade));
+        let after = (before + trade.size).min(f64::MAX);
+        let flip_from = earlier.filter(|_| self.in_range(before) != self.in_range(after));
+        let counted = self.in_range(after) && trade.size > 0.0;
+        let overflows = |time: &DateTime<Utc>, level| {
+            self.bars.get(time).is_some_and(|bar| {
+                !(bar.volume() + after).is_finite()
+                    || bar
+                        .levels
+                        .get(&level)
+                        .is_some_and(|row| !(row.volume() + after).is_finite())
+            })
+        };
+        if counted
+            && (parts.iter().any(|(time, _)| overflows(time, level))
+                || (flip_from.is_some()
+                    && self
+                        .pending
+                        .fills
+                        .iter()
+                        .filter(|fill| fill.trade.aggressor_order_id == trade.aggressor_order_id)
+                        .any(|fill| {
+                            fill.parts
+                                .iter()
+                                .any(|(time, _)| overflows(time, fill.level))
+                        })))
+        {
+            return Err(FeedError::InvalidData("footprint volume overflow".into()));
+        }
+        self.trade_bars = allocation;
+        self.pending.sizes.add(trade);
+        self.pending.fills.push(PendingFill {
+            trade: trade.clone(),
+            level,
+            parts,
+            undo_from: self.pending.undo.len(),
+        });
+        if let Some(k) = flip_from {
+            self.undo_from(k);
+            self.apply_from(k);
+        } else {
+            self.apply_from(self.pending.fills.len() - 1);
+        }
+        self.enforce_budget();
+        Ok(counted)
+    }
+
+    /// Takes back what the counted parts of the pending fills from `k` on added, newest first.
+    fn undo_from(&mut self, k: usize) {
+        let start = self.pending.fills[k].undo_from;
+        let undone: Vec<Undo> = self.pending.undo.drain(start..).collect();
+        for undo in undone.into_iter().rev() {
+            // Every record names a held bar: `enforce_budget` clears the records when it drops one.
+            let Some(bar) = self.bars.get_mut(&undo.time) else {
+                continue;
+            };
+            match undo.row {
+                Some(row) => {
+                    bar.levels.insert(undo.level, row);
+                }
+                None => {
+                    bar.levels.remove(&undo.level);
+                    self.rows -= 1;
+                }
+            }
+            match undo.bar {
+                Some([ask, bid, unknown, min_delta, max_delta]) => {
+                    (bar.ask, bar.bid, bar.unknown) = (ask, bid, unknown);
+                    (bar.min_delta, bar.max_delta) = (min_delta, max_delta);
+                }
+                None => {
+                    self.bars.remove(&undo.time);
+                    self.trade_starts.remove(&undo.time);
+                }
+            }
+            self.revision = next_revision();
+        }
+    }
+
+    /// Adds the counted parts of the pending fills from `k` on, each measured by its order's
+    /// size so far, recording how to take each back.
+    fn apply_from(&mut self, k: usize) {
+        for i in k..self.pending.fills.len() {
+            self.pending.fills[i].undo_from = self.pending.undo.len();
+            let fill = self.pending.fills[i].clone();
+            let size = self.pending.sizes.of(&fill.trade);
+            if !self.in_range(size) || fill.trade.size <= 0.0 {
+                continue;
+            }
+            for &(time, part) in &fill.parts {
+                let bar = self.bars.get(&time);
+                self.pending.undo.push(Undo {
+                    time,
+                    level: fill.level,
+                    bar: bar.map(|b| [b.ask, b.bid, b.unknown, b.min_delta, b.max_delta]),
+                    row: bar.and_then(|b| b.levels.get(&fill.level).cloned()),
+                });
+                self.add_part(&fill.trade, fill.level, time, part);
+            }
+            self.last = self.last.max(Some(fill.trade.ts));
+        }
     }
 
     fn add_part(&mut self, trade: &Tick, level: i64, time: DateTime<Utc>, size: f64) {
@@ -2042,6 +2247,7 @@ mod tests {
             (fresh().set_size_filter(-1.0, 1.0), "footprint size filter min must be finite and at least 0, got -1.0"),
             (fresh().set_size_filter(0.0, f64::NAN), "footprint size filter max must be finite, got NaN"),
             (fresh().set_size_filter(5.0, 1.0), "footprint size filter max 1.0 is below min 5.0"),
+            (started.clone().set_size_basis(SizeBasis::AggressiveOrder), "footprint size basis must be set before the first trade"),
             (started.clone().push(&trade(t1, f64::NAN, 1.0)).map(drop), "footprint trade price must be finite, got NaN"),
             (started.clone().push(&trade(t1, 100.0, -1.0)).map(drop), "footprint trade size must be finite and at least 0, got -1.0"),
             (Footprint::new(clock(), 1e-300, u32::MAX).unwrap().push(&trade(t1, 1e6, 1.0)).map(drop), "footprint trade price 1000000.0 is outside the grid of step 4.294967295e-291"),
