@@ -21,6 +21,7 @@ const tables = areas.map((area) => {
 >
 <div class="feature-map" set:html={progressSvg()} />
 <p>Generated from <a href={`${repo}/docs/progress/features.csv`}>docs/progress/features.csv</a> by <a href={`${repo}/docs/site/src/lib/progress-svg.ts`}>docs/site/src/lib/progress-svg.ts</a> on every push to <code>main</code>.</p>
+<p>Library features are grouped by the area that owns their code, including host interfaces and UI. Terminal contains only features implemented solely in <code>terminal/</code>.</p>
 <p>In the map, green means verified by an independent check of every option, default and interaction; blue means implemented but unverified; yellow means incomplete; grey means missing. Percentages and badges count only verified features. For host features, verification covers the library interface and UI; the application supplies data, accounts and storage. <a href={`${repo}/CONTRIBUTING.md#feature-status`}>Counting rules</a>.</p>
 {tables.map((table) => (
   <section aria-labelledby={slug(table.area)}>

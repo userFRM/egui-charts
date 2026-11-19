@@ -491,6 +491,14 @@ impl DrawingManager {
             .or_else(|| self.selected_ids().next())
     }
 
+    /// Whether drawing `id` exists and [accepts user edits](Drawing::accepts_user_edits).
+    #[cfg(feature = "ui")]
+    pub(crate) fn user_can_edit(&self, id: usize) -> bool {
+        self.drawings
+            .iter()
+            .any(|d| d.id == id && d.accepts_user_edits())
+    }
+
     /// Selects the drawing with the given ID (deselects all others).
     pub fn select(&mut self, id: usize) {
         self.select_drawings([id]);
@@ -529,9 +537,9 @@ impl DrawingManager {
         }
     }
 
-    /// Apply a style edit to every unlocked selected drawing as one undo step. An edit after which
-    /// saving would refuse one of them, as [`Self::edit_drawing`] describes, changes none of them,
-    /// records no undo step and returns the reason.
+    /// Apply a style edit to every selected drawing that accepts user edits as one undo step.
+    /// An edit after which saving would refuse one of them, as [`Self::edit_drawing`] describes,
+    /// changes none of them, records no undo step and returns the reason.
     pub fn edit_selected(&mut self, edit: impl FnMut(&mut Drawing)) -> Result<(), &'static str> {
         self.edit_selected_as(false, edit)
     }
@@ -546,7 +554,9 @@ impl DrawingManager {
             .drawings
             .iter()
             .enumerate()
-            .filter(|(_, d)| d.selectable && self.selection.is_selected(d.id) && !d.locked)
+            .filter(|(_, d)| {
+                d.selectable && self.selection.is_selected(d.id) && d.accepts_user_edits()
+            })
             .map(|(index, d)| (index, d.clone()))
             .collect();
         if before.is_empty() {
@@ -615,11 +625,13 @@ impl DrawingManager {
     }
 
     /// Undoes the last drawing operation. Returns `true` if an operation was undone.
+    /// A drawing keeps its current [`Drawing::user_edit_enabled`].
     pub fn undo(&mut self) -> bool {
         self.step_history(false)
     }
 
     /// Redoes the last undone operation. Returns `true` if an operation was redone.
+    /// A drawing keeps its current [`Drawing::user_edit_enabled`].
     pub fn redo(&mut self) -> bool {
         self.step_history(true)
     }
@@ -631,6 +643,12 @@ impl DrawingManager {
             .iter()
             .filter(|d| d.saveable)
             .map(|d| (d.id, sync_id(d)))
+            .collect();
+        // Editing permission belongs to the host, independently of user history.
+        let permissions: Vec<_> = self
+            .drawings
+            .iter()
+            .map(|d| (d.id, d.user_edit_enabled))
             .collect();
         let (ids, moved) = self.history.peek(redo).unwrap_or_default();
         let old: Vec<Drawing> = self
@@ -663,9 +681,6 @@ impl DrawingManager {
             }
         }
         let affected = self.history.affected_ids().to_vec();
-        for &id in &affected {
-            self.report_change(id, old.iter().find(|d| d.id == id), moved);
-        }
         // A state recorded before the drawing's first edit comes back without an edit time.
         let now = chrono::Utc::now().timestamp_millis();
         for drawing in self
@@ -674,6 +689,12 @@ impl DrawingManager {
             .filter(|d| affected.contains(&d.id))
         {
             drawing.modified_at.get_or_insert(now);
+            if let Some(&(_, enabled)) = permissions.iter().find(|(id, _)| *id == drawing.id) {
+                drawing.user_edit_enabled = enabled;
+            }
+        }
+        for &id in &affected {
+            self.report_change(id, old.iter().find(|d| d.id == id), moved);
         }
         // A step that hides a selected drawing deselects it, as hiding it by an edit does.
         self.selection.prune(
@@ -1214,6 +1235,125 @@ mod tests {
                 ChartPoint::new(10.0, 10.0)
             );
         }
+    }
+
+    /// User commands leave protected drawings alone, while id-based host edits and their
+    /// history still work. Permissions survive undo, and user copies are editable.
+    #[test]
+    fn user_commands_leave_a_drawing_without_user_edits_alone() {
+        fn fixture(enabled: bool) -> DrawingManager {
+            let mut manager = DrawingManager::new();
+            for id in [3, 4] {
+                let mut line = Drawing::new(id, DrawingToolType::TrendLine);
+                let first = if id == 3 { 10.0 } else { 30.0 };
+                line.chart_points = vec![
+                    ChartPoint::new(first, f64::from(first)),
+                    ChartPoint::new(first + 10.0, f64::from(first + 10.0)),
+                ];
+                line.update_screen_coords(|bar| bar, |price| price as f32);
+                line.completed = true;
+                line.user_edit_enabled = id != 3 || enabled;
+                manager.drawings.push(line);
+            }
+            manager.select_drawings([3, 4]);
+            manager
+        }
+        fn state(manager: &DrawingManager, id: usize) -> Option<(String, Vec<ChartPoint>)> {
+            manager
+                .drawings
+                .iter()
+                .find(|d| d.id == id)
+                .map(|d| (serde_json::to_string(d).unwrap(), d.chart_points.clone()))
+        }
+        fn drag(manager: &mut DrawingManager) {
+            manager.update_drag_handle(
+                Pos2::new(50.0, 50.0),
+                |x| x,
+                f64::from,
+                |price, from, to| price + f64::from(to - from),
+            );
+            manager.end_drag_handle();
+        }
+        type Command = fn(&mut DrawingManager);
+        let commands: &[(&str, Command)] = &[
+            ("handle drag", |m| {
+                m.start_drag_handle(3, HandlePos::Start);
+                drag(m);
+            }),
+            ("body drag", |m| {
+                m.start_drag_body(3, Pos2::new(15.0, 15.0));
+                drag(m);
+            }),
+            ("group drag", |m| {
+                m.start_drag_body(4, Pos2::new(35.0, 35.0));
+                drag(m);
+            }),
+            ("edit selected", |m| {
+                m.edit_selected(|d| d.font_size = 30.0).unwrap();
+            }),
+            ("delete selected", |m| m.delete_selected()),
+            ("lock all", |m| m.toggle_lock_all()),
+            ("clear all", |m| m.clear_all()),
+            ("clear all with locked", |m| m.clear_all_with_locked(true)),
+            ("set selected locked", |m| m.set_selected_locked(true)),
+        ];
+        for &(name, command) in commands {
+            for enabled in [true, false] {
+                let mut manager = fixture(enabled);
+                let before = state(&manager, 3);
+                let neighbour = state(&manager, 4);
+                command(&mut manager);
+                assert_eq!(
+                    state(&manager, 3) == before,
+                    !enabled,
+                    "{name}, enabled {enabled}"
+                );
+                if matches!(name, "lock all" | "clear all" | "clear all with locked") {
+                    assert_ne!(state(&manager, 4), neighbour, "{name}");
+                }
+            }
+        }
+        let mut manager = fixture(false);
+        manager.edit_drawing(3, |d| d.font_size = 30.0).unwrap();
+        assert_eq!(manager.drawings[0].font_size, 30.0);
+        assert!(manager.undo());
+        assert_eq!(manager.drawings[0].font_size, 14.0);
+        manager.delete_drawing(3);
+        assert!(!manager.drawings.iter().any(|d| d.id == 3));
+        assert!(manager.undo());
+        let original = manager.drawings.iter().find(|d| d.id == 3).unwrap().clone();
+        assert!(!original.user_edit_enabled);
+        manager.duplicate_drawing(3);
+        assert!(manager.drawings.last().unwrap().user_edit_enabled);
+        manager.paste_drawings(&[original]);
+        assert!(manager.drawings.last().unwrap().user_edit_enabled);
+
+        let mut manager = fixture(true);
+        manager.edit_drawing(3, |d| d.font_size = 30.0).unwrap();
+        manager.drawings[0].user_edit_enabled = false;
+        assert!(manager.undo());
+        assert_eq!(
+            (
+                manager.drawings[0].font_size,
+                manager.drawings[0].user_edit_enabled
+            ),
+            (14.0, false)
+        );
+        assert!(manager.redo());
+        assert_eq!(
+            (
+                manager.drawings[0].font_size,
+                manager.drawings[0].user_edit_enabled
+            ),
+            (30.0, false)
+        );
+        // A permission revoked during a gesture takes effect on its next update.
+        let mut manager = fixture(true);
+        manager.start_drag_handle(3, HandlePos::Start);
+        manager.drawings[0].user_edit_enabled = false;
+        let before = state(&manager, 3);
+        drag(&mut manager);
+        assert_eq!(state(&manager, 3), before);
     }
 
     /// A bulk command on drawing 2 records only that drawing, so its undo and redo keep
