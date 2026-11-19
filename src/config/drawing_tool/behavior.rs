@@ -154,6 +154,8 @@ impl DrawingToolType {
                     | Self::Rect
                     | Self::Circle
                     | Self::Ellipse
+                    | Self::DateRange
+                    | Self::DateAndPriceRange
                     | Self::Arrow
                     | Self::ArrowMarker
                     | Self::ArrowMarkUp
