@@ -2602,7 +2602,7 @@ mod tests {
     }
 
     /// Retention edits apply only with Ok; releasing memory is immediate and keeps editing open,
-    /// including while the heatmap is hidden. Cancel leaves the accepted retention unchanged.
+    /// including while the heatmap is hidden. Cancel returns its action.
     #[test]
     fn order_flow_retention_and_release_memory() {
         use chrono::TimeDelta;
@@ -2666,7 +2666,7 @@ mod tests {
         );
         let accepted = settings.clone();
         let (dialog, actions) = harness.state_mut();
-        dialog.open(*accepted.clone());
+        dialog.open(*accepted);
         dialog.active_tab = SettingsTab::OrderFlow;
         actions.clear();
         harness.run();
@@ -2679,10 +2679,6 @@ mod tests {
         harness.get_by_label("Cancel").click();
         harness.run();
         assert!(matches!(&harness.state().1[..], [SettingsAction::Cancel]));
-        assert_eq!(
-            accepted.order_flow.heatmap_retention,
-            Some(TimeDelta::hours(1))
-        );
     }
 
     /// Choosing a pane separator colour on the Canvas tab paints the separator above the study
