@@ -812,7 +812,8 @@ impl Chart {
     /// study, they are deleted with the pane's own drawings, locked ones included, as
     /// [`remove_pane`](Self::remove_pane) deletes them, and undo of the user action brings them
     /// back. A drawing being placed in the pane follows the same rule: the pane's next owner
-    /// takes it, or it is cancelled with the pane, and the drawing tool stays selected.
+    /// takes it, or it is cancelled with the pane, and the drawing tool stays selected. Drawings
+    /// of the pane stay over and under the same remaining series and studies.
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
         #[cfg(feature = "drawings")]
         let placed = self.placement_pane();
@@ -831,11 +832,17 @@ impl Chart {
     /// Removes `id` alone and releases the drawings it owned.
     fn remove_one_series(&mut self, id: SeriesId) -> bool {
         #[cfg(feature = "drawings")]
+        let stack = self.pane_stack(id);
+        #[cfg(feature = "drawings")]
         let pane = self.series_pane(id).filter(|_| id != SeriesId::MAIN);
         let removed = self.remove_series_keeping_drawings(id);
         #[cfg(feature = "drawings")]
         if let Some(pane) = pane.filter(|_| removed) {
             self.release_drawings(id, pane);
+        }
+        #[cfg(feature = "drawings")]
+        if let Some(stack) = stack.filter(|_| removed) {
+            self.keep_stack(stack);
         }
         removed
     }
@@ -894,7 +901,7 @@ impl Chart {
         if let Some(at) = self.price_series.iter().position(|item| item.id == id) {
             let removed = self.price_series.remove(at);
             self.retain_removed_series(removed);
-            self.host_events.push(super::ChartEvent::SeriesRemoved(id));
+            self.push_event(super::ChartEvent::SeriesRemoved(id));
             if self.selection.selected_id() == Some(ChartElementId::Series(id)) {
                 self.selection.deselect();
             }
