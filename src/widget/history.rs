@@ -70,7 +70,10 @@ struct Action {
     panes: Option<super::pane::PaneLayout>,
     chart_type: Option<(ChartType, ChartTypeParams)>,
     interval: Option<Option<Timeframe>>,
-    extended_hours: Option<bool>,
+    hours: Option<(bool, bool)>,
+    /// Execution profile merges and splits, including the symbol and calendar they belong to.
+    #[cfg(feature = "studies")]
+    trade_profiles: Option<super::trade_profile::TradeProfiles>,
     studies: Vec<StudyChange>,
     #[cfg(feature = "drawings")]
     drawings: HistoryService,
@@ -95,6 +98,10 @@ impl Action {
             self.drawings.can_undo() || self.unshown.is_some() || self.drawings_hidden.is_some();
         #[cfg(not(feature = "drawings"))]
         let drawings_changed = false;
+        #[cfg(feature = "studies")]
+        let profiles_changed = self.trade_profiles.is_some();
+        #[cfg(not(feature = "studies"))]
+        let profiles_changed = false;
         self.layout_sizes.is_none()
             && self.layout_links.is_none()
             && self.layout_edit.is_none()
@@ -113,9 +120,10 @@ impl Action {
             && self.panes.is_none()
             && self.chart_type.is_none()
             && self.interval.is_none()
-            && self.extended_hours.is_none()
+            && self.hours.is_none()
             && self.studies.is_empty()
             && !drawings_changed
+            && !profiles_changed
     }
 }
 
@@ -491,7 +499,9 @@ impl Chart {
                 panes: Some(self.pane_layout.clone()),
                 chart_type: Some((self.chart_type, self.chart_type_params.clone())),
                 interval: Some(self.timeframe),
-                extended_hours: Some(self.extended_hours),
+                hours: Some((self.extended_hours, self.overnight_hours)),
+                #[cfg(feature = "studies")]
+                trade_profiles: Some(self.trade_profiles.clone()),
                 ..Action::default()
             },
             #[cfg(feature = "drawings")]
@@ -591,8 +601,12 @@ impl Chart {
         if action.interval == Some(self.timeframe) {
             action.interval = None;
         }
-        if action.extended_hours == Some(self.extended_hours) {
-            action.extended_hours = None;
+        if action.hours == Some((self.extended_hours, self.overnight_hours)) {
+            action.hours = None;
+        }
+        #[cfg(feature = "studies")]
+        if action.trade_profiles.as_ref() == Some(&self.trade_profiles) {
+            action.trade_profiles = None;
         }
         if action.config.is_some() || action.chart_type.is_some() {
             action.palette = Some(palette);
@@ -916,6 +930,7 @@ impl Chart {
     }
 
     /// Undo the most recent chart user action, across drawings, studies and settings.
+    /// A drawing being placed is cancelled when the step takes away the pane that draws it.
     /// Returns false while a user action or a drawing drag is in progress, or a layout divider
     /// is pressed or dragged; finish it first.
     pub fn undo(&mut self) -> bool {
@@ -923,6 +938,7 @@ impl Chart {
     }
 
     /// Redo the most recently undone chart user action.
+    /// A drawing being placed is cancelled as [`undo`](Self::undo) cancels it.
     /// Returns false while a user action or a drawing drag is in progress, or a layout divider
     /// is pressed or dragged; finish it first.
     pub fn redo(&mut self) -> bool {
@@ -930,8 +946,8 @@ impl Chart {
     }
 
     /// Drain a notification that undo/redo changed chart state. Hosts that own the data must
-    /// reload it if [`Self::timeframe`], [`Self::bar_clock`] or [`Self::extended_hours`] changed,
-    /// and synchronize their UI.
+    /// reload it if [`Self::timeframe`], [`Self::bar_clock`], [`Self::extended_hours`] or
+    /// [`Self::overnight_hours`] changed, and synchronize their UI.
     /// Added series that the step removed or brought back are reported by
     /// [`drain_events`](Self::drain_events) as [`ChartEvent::SeriesRemoved`] and
     /// [`ChartEvent::SeriesAdded`].
@@ -982,6 +998,8 @@ impl Chart {
         if self.history_blocked() {
             return false;
         }
+        #[cfg(feature = "drawings")]
+        let placed = self.placement_pane();
         let stack = if redo {
             &mut self.history.redo
         } else {
@@ -1059,6 +1077,10 @@ impl Chart {
             self.apply_chart_type_params(params.clone());
             (*kind, *params) = current;
         }
+        #[cfg(feature = "studies")]
+        if let Some(profiles) = &mut action.trade_profiles {
+            std::mem::swap(&mut self.trade_profiles, profiles);
+        }
         if let Some(interval) = &mut action.interval {
             let current = self.timeframe;
             if let Some(timeframe) = *interval {
@@ -1070,11 +1092,12 @@ impl Chart {
             }
             *interval = current;
         }
-        if let Some(extended_hours) = &mut action.extended_hours {
-            let current = self.extended_hours;
-            // The setter reloads the history and the subscription of the restored session.
-            self.set_extended_hours(*extended_hours);
-            *extended_hours = current;
+        if let Some(hours) = &mut action.hours {
+            let current = (self.extended_hours, self.overnight_hours);
+            // The setters reload history and subscriptions for the restored hours.
+            self.set_extended_hours(hours.0);
+            self.set_overnight_hours(hours.1);
+            *hours = current;
         }
         if let Some(config) = &mut action.config {
             std::mem::swap(&mut self.config, config);
@@ -1215,6 +1238,7 @@ impl Chart {
             if let Some(deletion) = &mut action.unshown {
                 self.step_unshown_deletion(deletion, redo);
             }
+            self.keep_placement_in(placed);
         }
         self.history.edits += 1;
         #[cfg(feature = "drawings")]

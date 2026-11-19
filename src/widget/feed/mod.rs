@@ -42,8 +42,9 @@ pub(crate) struct FeedLink {
     inbox: Arc<Inbox>,
     /// Slots of the chart's timeframe, by which history, live bars and ticks merge.
     pub(super) clock: BarClock,
-    /// Hours choice of the retained executions.
+    /// Hours choice of the retained executions: extended and overnight hours.
     extended_hours: bool,
+    overnight_hours: bool,
     /// Currency or unit of the retained executions, as `extended_hours` is their hours choice.
     conversion: Option<String>,
     initial_bars: usize,
@@ -167,8 +168,8 @@ impl FeedLink {
         }
     }
 
-    fn rebuild_paged_tick_rate(&self, input: &crate::data::OrderFlowInput, history: &[Bar]) {
-        if let Some(Timeframe::Ticks(count)) = self.clock.timeframe()
+    fn rebuild_paged_trade_rate(&self, input: &crate::data::OrderFlowInput, history: &[Bar]) {
+        if let Some(tf @ (Timeframe::Ticks(_) | Timeframe::Range(_))) = self.clock.timeframe()
             && self.trades_from_start
             && self.pushed_from.is_none()
             && self.trades.live().next().is_none()
@@ -177,7 +178,8 @@ impl FeedLink {
             && self.trades.retained_until().is_none()
             && self.trades.left_out().is_empty()
         {
-            input.rebuild_paged_tick_rate(count, &self.trades, history);
+            let tick_size = self.instrument.as_ref().and_then(|i| i.tick_size);
+            input.rebuild_paged_trade_rate(tf, tick_size, &self.trades, history);
         }
     }
 
@@ -197,7 +199,7 @@ impl FeedLink {
         }
         input.set_tick_size(self.instrument.as_ref().and_then(|i| i.tick_size));
         input.replace_trades(&self.clock, &self.trades, history, self.footprint.as_ref());
-        self.rebuild_paged_tick_rate(input, history);
+        self.rebuild_paged_trade_rate(input, history);
         if let Some(now) = self.time {
             input.advance_time(&self.clock, now);
         }
@@ -211,6 +213,7 @@ impl FeedLink {
             inbox: Arc::default(),
             clock: self.clock.clone(),
             extended_hours: self.extended_hours,
+            overnight_hours: self.overnight_hours,
             conversion: self.conversion.clone(),
             initial_bars: self.initial_bars,
             adjusted: self.adjusted,
@@ -607,6 +610,7 @@ impl Chart {
             inbox: Arc::default(),
             clock: BarClock::new(timeframe),
             extended_hours: self.extended_hours,
+            overnight_hours: self.overnight_hours,
             conversion: self.conversion.clone(),
             initial_bars,
             adjusted: false,
@@ -818,7 +822,9 @@ impl Chart {
     /// Returns `false` for the current symbol or while local drawing edits await a storage
     /// read or write acknowledgement. Otherwise returns `true`, also for an uncached symbol.
     /// Stored documents are left in host storage and read again on the next visit. Without
-    /// storage, forgotten drawings and markers are lost, including pending sync notifications.
+    /// storage, forgotten drawings and markers are lost, including pending sync notifications;
+    /// with it, so are the drawings kept on the chart or in the layout, which storage does not
+    /// hold.
     pub fn forget_symbol(&mut self, symbol: &str) -> bool {
         if symbol == self.symbol {
             return false;
@@ -880,11 +886,26 @@ impl Chart {
     }
 
     /// Requests regular hours (`false`, the default) or regular and extended hours (`true`).
+    /// Turning extended hours off also turns [overnight hours](Self::set_overnight_hours) off.
     /// A changed choice reloads history and replaces the live subscription on the next frame.
     /// Without a feed the host supplies the selected bars with `set_data`.
     pub fn set_extended_hours(&mut self, extended_hours: bool) {
-        if self.extended_hours != extended_hours {
+        self.set_hours(extended_hours, extended_hours && self.overnight_hours);
+    }
+
+    /// Requests all hours, including the instrument's overnight windows (`true`), or leaves
+    /// overnight hours out (`false`, the default). Turning this on also turns
+    /// [extended hours](Self::set_extended_hours) on. A changed choice reloads history and
+    /// replaces the live subscription on the next frame. Without a feed the host supplies the
+    /// selected bars with `set_data`.
+    pub fn set_overnight_hours(&mut self, overnight_hours: bool) {
+        self.set_hours(self.extended_hours || overnight_hours, overnight_hours);
+    }
+
+    fn set_hours(&mut self, extended_hours: bool, overnight_hours: bool) {
+        if (self.extended_hours, self.overnight_hours) != (extended_hours, overnight_hours) {
             self.extended_hours = extended_hours;
+            self.overnight_hours = overnight_hours;
             self.study_data.clear_feed();
             if let Some(link) = &mut self.feed_link {
                 link.reload_pending = true;
@@ -954,6 +975,11 @@ impl Chart {
     /// Whether history and subscriptions request extended hours.
     pub fn extended_hours(&self) -> bool {
         self.extended_hours
+    }
+
+    /// Whether history and subscriptions request overnight hours, with extended hours.
+    pub fn overnight_hours(&self) -> bool {
+        self.overnight_hours
     }
 
     /// The symbol the chart shows.
@@ -1232,7 +1258,12 @@ impl Chart {
                 instrument.session.clone()?,
             ))
         }) {
-            Some((zone, session)) => clock.with_session(zone, session, self.extended_hours()),
+            Some((zone, session)) => clock.with_session_hours(
+                zone,
+                session,
+                self.extended_hours(),
+                self.overnight_hours(),
+            ),
             None => clock,
         }
     }

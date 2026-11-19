@@ -73,7 +73,9 @@
 //! Bearish at the high of a bar with a bearish one (a downward triangle) and Neutral at the
 //! high of a bar with a doji or spinning top (a circle). Each mark is labelled with the
 //! abbreviations of the patterns found on the bar, one per line; on a bar with a bearish
-//! pattern the neutral ones join the bearish label, so the two never overlap. Every pattern has a toggle,
+//! pattern the neutral ones join the bearish label, so the two never overlap. Hovering a mark
+//! shows the full name of each pattern it labels, such as "Three White Soldiers - Bullish",
+//! each followed by its rule in words, in the label's order. Every pattern has a toggle,
 //! all on by default, and the pattern type marks both sides (the default, neutral patterns
 //! included) or only the bullish or only the bearish patterns.
 //!
@@ -105,6 +107,17 @@ pub enum PatternTrend {
     NoDetection,
 }
 
+impl PatternTrend {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Sma50 => "SMA50",
+            Self::Sma50Sma200 => "SMA50, SMA200",
+            Self::NoDetection => "No detection",
+        }
+    }
+}
+
 /// Which signals [`CandlestickPatterns`] marks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PatternType {
@@ -115,6 +128,17 @@ pub enum PatternType {
     Bullish,
     /// Bearish patterns only.
     Bearish,
+}
+
+impl PatternType {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Both => "Both",
+            Self::Bullish => "Bullish",
+            Self::Bearish => "Bearish",
+        }
+    }
 }
 
 mod rules;
@@ -183,6 +207,23 @@ impl CandlestickPatterns {
             .enumerate()
             .filter(move |(k, p)| bits >> k & 1 == 1 && p.side == side)
             .map(|(_, p)| p)
+    }
+
+    /// The patterns one line labels at a source bar: its side's, and on the bearish line the
+    /// neutral ones too, which the neutral line then leaves out.
+    fn labelled(&self, line: usize, bar: usize) -> Vec<&'static Pattern> {
+        let Some(side) = [Bullish, Bearish, Neutral].get(line).copied() else {
+            return Vec::new();
+        };
+        match side {
+            // The bearish and neutral marks share the high, so one label names both.
+            Bearish => self
+                .found(bar, Bearish)
+                .chain(self.found(bar, Neutral))
+                .collect(),
+            Neutral if self.found(bar, Bearish).next().is_some() => Vec::new(),
+            _ => self.found(bar, side).collect(),
+        }
     }
 }
 
@@ -262,19 +303,17 @@ impl Indicator for CandlestickPatterns {
     }
 
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
-        let side = [Bullish, Bearish, Neutral].get(line).copied()?;
-        let bearish = self.found(bar, Bearish).next().is_some();
-        let text: Vec<&str> = match side {
-            // The bearish and neutral marks share the high, so one label names both.
-            Bearish => self
-                .found(bar, Bearish)
-                .chain(self.found(bar, Neutral))
-                .map(|p| p.abbr)
-                .collect(),
-            Neutral if bearish => Vec::new(),
-            _ => self.found(bar, side).map(|p| p.abbr).collect(),
-        };
+        let text: Vec<&str> = self.labelled(line, bar).iter().map(|p| p.abbr).collect();
         (!text.is_empty()).then(|| text.join("\n"))
+    }
+
+    fn plot_tooltip(&self, line: usize, bar: usize) -> Option<String> {
+        let names: Vec<String> = self
+            .labelled(line, bar)
+            .iter()
+            .map(|p| format!("{}\n{}", p.label, p.rule))
+            .collect();
+        (!names.is_empty()).then(|| names.join("\n\n"))
     }
 
     fn name(&self) -> &str {

@@ -90,17 +90,25 @@ chart.config_mut().show_session_breaks = true;
 
 [`SessionWindow`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.SessionWindow.html)
 uses exchange-local opening and closing times with an inclusive open and
-exclusive close. Overnight windows are named by their **closing** weekday.
+exclusive close. A window spanning midnight is named by its **closing** weekday.
 [`Session`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Session.html)
-also carries extended windows, holidays and date-specific overrides for early
+also carries extended windows, overnight windows, holidays and date-specific overrides for early
 closes or exceptional openings. An override replaces that date's weekly hours
 and holiday; an empty override closes the date. The host supplies an accurate
 calendar and its updates. The library does not fetch exchange hours or data.
 
+Overnight trading, such as 20:00 to 04:00 between the post-market close and the next
+pre-market open, belongs in
+[`overnight_windows`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Session.html#structfield.overnight_windows).
+Its market status and shading distinguish it from pre-market and post-market activity.
+[`Chart::set_overnight_hours`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_overnight_hours)
+selects all hours, including extended hours. History and live requests carry both
+`extended_hours` and `overnight_hours`; hosts supply data for that choice.
+
 Enable [`show_session_breaks`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html#structfield.show_session_breaks)
 for boundary lines and
 [`show_extended_hours`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html#structfield.show_extended_hours)
-for shading of supplied bars outside regular hours. Shading does not fetch or
+for shading of supplied bars outside regular hours, with a separate overnight tint. Shading does not fetch or
 filter bars. [`set_session_provider`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_session_provider)
 accepts host-defined break detection; `None` restores metadata-based breaks.
 This replaces boundary detection, not the instrument's trading calendar.
