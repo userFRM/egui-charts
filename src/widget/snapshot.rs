@@ -106,8 +106,8 @@ pub struct SavedPane {
 
 /// What a chart shows and how: everything a user sets on it, without the bars, which come from
 /// the host's feed. Take one with [`Chart::snapshot`] and apply it with [`Chart::restore`].
-/// The trading and alert settings of the settings dialog belong to the host and are not part
-/// of it.
+/// The trading and alert settings and futures data choices of the settings dialog belong to
+/// the host and are not part of it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ChartSnapshot {
@@ -317,6 +317,7 @@ impl Chart {
             settings: {
                 let mut settings = ChartSettingsState::from_chart(self);
                 settings.adjust_for_dividends = self.dividend_adjusted();
+                settings.extended_hours = None;
                 settings
             },
             config: Some(self.config.clone()),
@@ -491,13 +492,13 @@ impl Chart {
         self.main_series_style.alerts = snapshot.main_series_alerts;
         self.main_series_style.display_format = snapshot.main_series_display_format;
         let mut settings = snapshot.settings.clone();
+        // The snapshot's own field holds the session, set above.
+        settings.extended_hours = None;
         // Layouts saved before a precision could be chosen hold the one shown, which followed
-        // the next instrument; the saved scale holds the chosen one.
-        settings.precision = super::settings::PrecisionMode::from_decimals(
-            snapshot
-                .price_scale
-                .as_ref()
-                .and_then(crate::scales::PriceScale::chosen_precision),
+        // the next instrument; the saved scale holds the chosen decimals or fraction.
+        settings.precision = snapshot.price_scale.as_ref().map_or(
+            super::settings::PrecisionMode::Default,
+            super::settings::PrecisionMode::from_scale,
         );
         if settings.chart_type == crate::model::ChartType::HollowCandles {
             // Settings saved before hollow candles had a style hold the switches of the candles.
