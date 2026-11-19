@@ -681,6 +681,8 @@ pub struct ConfiguredStudy {
     settings: StudySettings,
     timeframe: Option<Timeframe>,
     instrument_precision: Option<u8>,
+    /// The instrument's volume decimals: the automatic precision of values in volume units.
+    volume_decimals: Option<u8>,
     formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     overlay: Option<bool>,
     scale: Option<super::StudyScale>,
@@ -740,6 +742,7 @@ impl ConfiguredStudy {
             settings: self.settings.clone(),
             timeframe: self.timeframe,
             instrument_precision: self.instrument_precision,
+            volume_decimals: self.volume_decimals,
             formatter: self.formatter.clone(),
             overlay: self.overlay,
             scale: self.scale,
@@ -794,6 +797,7 @@ impl ConfiguredStudy {
             settings,
             timeframe: None,
             instrument_precision: None,
+            volume_decimals: None,
             formatter: None,
             overlay: None,
             scale: None,
@@ -1198,6 +1202,9 @@ impl Indicator for ConfiguredStudy {
         self.instrument_precision = source
             .instrument
             .and_then(crate::scales::instrument_price_precision);
+        self.volume_decimals = source
+            .instrument
+            .and_then(|instrument| instrument.volume_decimals);
         self.study.set_instrument(source.instrument);
         self.study.set_timeframe(source.timeframe);
         self.study.set_bar_clock(&source.clock);
@@ -1337,6 +1344,7 @@ impl Indicator for ConfiguredStudy {
         if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
             self.instrument_precision =
                 instrument.and_then(crate::scales::instrument_price_precision);
+            self.volume_decimals = instrument.and_then(|instrument| instrument.volume_decimals);
             self.study.set_instrument(instrument)
         } else {
             false
@@ -1884,10 +1892,13 @@ impl Indicator for ConfiguredStudy {
         self.settings
             .precision
             .or_else(|| self.study.precision())
-            .or_else(|| {
-                (self.value_format() == crate::scales::StudyFormat::Price)
-                    .then_some(self.instrument_precision.map(usize::from))
-                    .flatten()
+            .or_else(|| match self.value_format() {
+                crate::scales::StudyFormat::Price => self.instrument_precision.map(usize::from),
+                // Capped as `StudyFormat` caps them, so exported columns match the legend.
+                crate::scales::StudyFormat::Volume => self
+                    .volume_decimals
+                    .map(|decimals| usize::from(decimals).min(12)),
+                _ => None,
             })
     }
     fn line_count(&self) -> usize {
@@ -2553,6 +2564,53 @@ mod tests {
             bounded.apply_settings(&[], settings).unwrap();
             assert_eq!(bounded.precision(), precision);
         }
+    }
+
+    /// Automatic volume units follow the instrument, while a chosen precision wins. With
+    /// three decimals, 0.375 stays fractional and 1234.5 / 1000 rounds to 1.234 in binary;
+    /// without metadata the same values keep their former 0 and 1.23K text.
+    #[test]
+    fn volume_units_follow_the_instrument_volume_decimals() {
+        type Row = (Option<u8>, Option<usize>, Option<usize>, [&'static str; 2]);
+        let rows: [Row; 4] = [
+            (None, None, None, ["0", "1.23K"]),
+            (Some(3), None, Some(3), ["0.375", "1.234K"]),
+            (Some(3), Some(1), Some(1), ["0.4", "1.2K"]),
+            (Some(0), None, Some(0), ["0", "1K"]),
+        ];
+        let mut wrong = Vec::new();
+        for (decimals, chosen, precision, expected) in rows {
+            for study in [
+                Box::new(super::super::Volume::default()) as Box<dyn Indicator>,
+                Box::new(super::super::OnBalanceVolume::default()),
+            ] {
+                let name = study.name().to_owned();
+                let mut study = ConfiguredStudy::new(study);
+                let mut settings = study.settings();
+                settings.precision = chosen;
+                study.apply_settings(&[], settings).unwrap();
+                let mut instrument = Instrument::new("COIN");
+                instrument.volume_decimals = decimals;
+                study.set_instrument(Some(&instrument));
+                let values = [0.375, 1234.5];
+                let got = (
+                    study.precision(),
+                    values.map(|value| study.format_value(value)),
+                    values.map(|value| study.format_plot_value(0, value)),
+                );
+                let want = (
+                    precision,
+                    expected.map(String::from),
+                    expected.map(String::from),
+                );
+                if got != want {
+                    wrong.push(format!(
+                        "{name}, {decimals:?}, {chosen:?}: got {got:?}, want {want:?}"
+                    ));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
     /// Net Volume starts as a line; PPO and PVO keep columns for their differences.
