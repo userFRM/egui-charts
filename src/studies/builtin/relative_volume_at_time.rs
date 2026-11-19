@@ -64,6 +64,15 @@ pub enum RelativeVolumeAnchor {
 }
 
 impl RelativeVolumeAnchor {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Day => "Day",
+            Self::Week => "Week",
+            Self::Month => "Month",
+        }
+    }
+
     /// The period that holds trading day `day`, and the days from the period's first day.
     fn locate(self, day: NaiveDate) -> ((i32, u32), u32) {
         match self {
@@ -85,6 +94,16 @@ pub enum RelativeVolumeMode {
     Cumulative,
     /// The volume of the bar alone.
     Regular,
+}
+
+impl RelativeVolumeMode {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Cumulative => "Cumulative",
+            Self::Regular => "Regular",
+        }
+    }
 }
 
 /// Volume relative to its average at the same point of the previous periods, as columns
