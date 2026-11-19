@@ -215,7 +215,7 @@ validated points for rendering.
 
 Drawdown and run-up are reported separately from closing marks and from equity inside each bar.
 Close-to-close drawdown is the largest fall below an earlier closing peak. Intrabar drawdown
-also uses `StrategyReport::equity_ranges`, one `EquityRange` per mark: its bar's low, high,
+also uses [`StrategyReport::equity_ranges`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#structfield.equity_ranges), one [`EquityRange`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.EquityRange.html) per mark: its bar's low, high,
 largest fall and largest rise along the execution path, including finer bars and the close.
 Each bar's depth is the larger of the earlier peak less its low and its own fall. Peak-relative
 percentages take the larger of `(earlier peak - low) / earlier peak` and
