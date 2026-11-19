@@ -232,7 +232,8 @@ impl StudyTemplate {
     }
 
     /// Reconstruct a study through `factory`, which resolves [`name`](Self::name) to a built-in
-    /// or host-registered study. Uses the saved settings rather than the factory's host defaults.
+    /// or host-registered study. Uses the saved settings rather than the factory's host defaults,
+    /// which each input the template names reports as its default instead.
     /// Fails like [`create`](Self::create).
     /// A saved metric is reconstructed from its descriptor, even without a catalogue entry.
     /// The study retains the factory key it was restored under, including a built-in's new key
@@ -240,6 +241,16 @@ impl StudyTemplate {
     pub fn create_with(
         &self,
         factory: &IndicatorFactory,
+    ) -> Result<Box<dyn Indicator>, crate::studies::StudyError> {
+        self.build(factory, true)
+    }
+
+    /// [`create_with`](Self::create_with), with the inputs reporting the factory's host defaults
+    /// as their defaults only when `host_defaults` is set.
+    pub(crate) fn build(
+        &self,
+        factory: &IndicatorFactory,
+        host_defaults: bool,
     ) -> Result<Box<dyn Indicator>, crate::studies::StudyError> {
         // A host study registered under a built-in's name takes its own template as saved,
         // where an upgrade for that built-in would rename or convert its inputs.
@@ -290,6 +301,15 @@ impl StudyTemplate {
             .into_iter()
             .chain(template.inputs.iter().cloned())
             .collect();
+        // Resetting the inputs restores what a study created under the host's defaults starts
+        // with. An input the template leaves out, such as one added after it was saved, keeps its
+        // constructor's value and declared default, which a drawing stored with the study matches
+        // to find its pane.
+        let mut defaults = host_defaults
+            .then(|| factory.input_defaults(registered))
+            .flatten()
+            .unwrap_or_default();
+        defaults.retain(|(id, _)| inputs.iter().any(|(named, _)| named == id));
         // Keep a host's presentation wrapper when it can retain the factory key too.
         let mut study = if study.has_settings()
             && (study.registered_name() == registered || study.set_registered_name(registered))
@@ -299,6 +319,9 @@ impl StudyTemplate {
             Box::new(ConfiguredStudy::new(study))
         };
         study.set_registered_name(registered);
+        if !defaults.is_empty() {
+            study.set_input_defaults(&defaults);
+        }
         // A study's own Source input once kept another study's output that never reached its
         // calculation, which read the input's default instead. An output the study now refuses
         // there, or in `source` while it runs on other bars, keeps that default.
