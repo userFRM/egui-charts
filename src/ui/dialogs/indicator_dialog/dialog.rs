@@ -1520,7 +1520,7 @@ mod tests {
         use IndicatorTab::*;
         // (tab, category, search, studies listed, studies not listed). A search covers every
         // built-in page.
-        let cases: [(_, _, _, &[&str], &[&str]); 9] = [
+        let cases: [(_, _, _, &[&str], &[&str]); 10] = [
             (
                 Indicators,
                 BuiltIns,
@@ -1529,6 +1529,7 @@ mod tests {
                 &[
                     "Vol Profile VR",
                     "All Candlestick Patterns",
+                    "Engulfing - Bearish",
                     "Execution Delta",
                     "Cumulative Execution Delta",
                     "Host flow",
@@ -1547,8 +1548,21 @@ mod tests {
                 Patterns,
                 BuiltIns,
                 "",
-                &["All Candlestick Patterns"],
+                &[
+                    "All Candlestick Patterns",
+                    "Engulfing - Bearish",
+                    "All Chart Patterns",
+                    "Bull Flag",
+                    "Double Bottom",
+                ],
                 &["RSI", "Vol Profile VR"],
+            ),
+            (
+                Indicators,
+                BuiltIns,
+                "Cup and Handle",
+                &["Cup and Handle", "Inverted Cup and Handle"],
+                &["Double Top", "Reversal Chart Patterns"],
             ),
             (
                 OrderFlow,
@@ -2100,6 +2114,19 @@ mod tests {
                 "Session Time Price Opportunity",
                 &["Time Price Opportunity"],
                 &["Vol Profile Session"],
+            ),
+            (
+                "Engulfing - Bearish",
+                &["Engulfing - Bearish"],
+                &["Engulfing - Bullish", "All Candlestick Patterns"],
+            ),
+            (
+                "Tasuki",
+                &[
+                    "Downside Tasuki Gap - Bearish",
+                    "Upside Tasuki Gap - Bullish",
+                ],
+                &["All Candlestick Patterns"],
             ),
         ];
         let ctx = egui::Context::default();
