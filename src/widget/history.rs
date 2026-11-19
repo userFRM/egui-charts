@@ -71,6 +71,8 @@ struct Action {
     chart_type: Option<(ChartType, ChartTypeParams)>,
     interval: Option<Option<Timeframe>>,
     extended_hours: Option<bool>,
+    /// The pane separator colour, `None` inside while the separators follow the theme.
+    pane_separator_color: Option<Option<egui::Color32>>,
     studies: Vec<StudyChange>,
     #[cfg(feature = "drawings")]
     drawings: HistoryService,
@@ -114,6 +116,7 @@ impl Action {
             && self.chart_type.is_none()
             && self.interval.is_none()
             && self.extended_hours.is_none()
+            && self.pane_separator_color.is_none()
             && self.studies.is_empty()
             && !drawings_changed
     }
@@ -492,6 +495,7 @@ impl Chart {
                 chart_type: Some((self.chart_type, self.chart_type_params.clone())),
                 interval: Some(self.timeframe),
                 extended_hours: Some(self.extended_hours),
+                pane_separator_color: Some(self.pane_options.separator_color),
                 ..Action::default()
             },
             #[cfg(feature = "drawings")]
@@ -593,6 +597,9 @@ impl Chart {
         }
         if action.extended_hours == Some(self.extended_hours) {
             action.extended_hours = None;
+        }
+        if action.pane_separator_color == Some(self.pane_options.separator_color) {
+            action.pane_separator_color = None;
         }
         if action.config.is_some() || action.chart_type.is_some() {
             action.palette = Some(palette);
@@ -1075,6 +1082,9 @@ impl Chart {
             // The setter reloads the history and the subscription of the restored session.
             self.set_extended_hours(*extended_hours);
             *extended_hours = current;
+        }
+        if let Some(color) = &mut action.pane_separator_color {
+            std::mem::swap(&mut self.pane_options.separator_color, color);
         }
         if let Some(config) = &mut action.config {
             std::mem::swap(&mut self.config, config);

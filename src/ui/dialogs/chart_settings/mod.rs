@@ -92,6 +92,7 @@ struct ColorPickerStates {
     background_gradient_bottom: ColorPickerState,
     grid_h: ColorPickerState,
     grid_v: ColorPickerState,
+    pane_separator: ColorPickerState,
     crosshair: ColorPickerState,
     watermark: ColorPickerState,
     scales_text: ColorPickerState,
@@ -131,6 +132,7 @@ impl SettingsDialog {
                 ),
                 grid_h: ColorPickerState::new(settings.grid_lines.horizontal_color),
                 grid_v: ColorPickerState::new(settings.grid_lines.vertical_color),
+                pane_separator: ColorPickerState::default(),
                 crosshair: ColorPickerState::new(settings.crosshair.color),
                 watermark: ColorPickerState::new(settings.watermark.color),
                 scales_text: ColorPickerState::new(settings.scales_appearance.text_color),
@@ -343,6 +345,12 @@ impl SettingsDialog {
                 color
             };
         }
+
+        // Until a colour is chosen the well shows the theme's, which the separators follow.
+        self.color_picker_states.pane_separator.sel_color = self
+            .settings
+            .pane_separator_color
+            .unwrap_or(theme.chart.grid_line);
 
         let mut is_open = self.is_open;
         let fixed_height = (self.config.height > 0.0).then_some(self.config.height);
@@ -953,6 +961,7 @@ mod tests {
                 crate::theme::apply_to_egui(&ctx, &app);
                 let mut chart = crate::ChartBuilder::new().with_theme(theme.clone()).build();
                 let expected = ChartSettingsState::from_chart(&chart);
+                chart.pane_options_mut().separator_color = Some(Color32::GREEN);
                 // A customised last price line, which Reset returns to a new chart's.
                 if let Some(style) = chart.series_style_mut(crate::widget::SeriesId::MAIN) {
                     style.price_line_width = 3.0;
@@ -966,6 +975,7 @@ mod tests {
                 settings.watermark.color = Color32::RED;
                 settings.margins.top_percent = 12.5;
                 settings.margins.bottom_percent = 7.5;
+                settings.pane_separator_color = Some(Color32::GREEN);
                 let mut dialog = SettingsDialog::new();
                 dialog.set_control_visible(Control::Templates, templates_visible);
                 dialog.open(settings);
@@ -1065,6 +1075,11 @@ mod tests {
                         theme.chart.crosshair_line,
                     ),
                     (
+                        "pane separator swatch",
+                        dialog.color_picker_states.pane_separator.sel_color,
+                        theme.chart.grid_line,
+                    ),
+                    (
                         "candle up",
                         actual.candle_colors.body_up,
                         expected.candle_colors.body_up,
@@ -1116,6 +1131,11 @@ mod tests {
                 assert!(
                     mismatches.is_empty(),
                     "{preset}, templates visible: {templates_visible}, {size:?}: {mismatches:?}"
+                );
+                assert_eq!(
+                    chart.pane_options().separator_color,
+                    None,
+                    "{preset}, templates visible: {templates_visible}, {size:?}: pane separators"
                 );
                 // A new chart keeps a tenth of the pane free above and below, and 2.5 bars after
                 // the last one.
@@ -2287,6 +2307,70 @@ mod tests {
         }
     }
 
+    /// Choosing a pane separator colour on the Canvas tab paints the separator above the study
+    /// pane at the opacity its well showed, in one undoable step.
+    #[test]
+    fn pane_separator_colour_is_chosen_in_the_dialog() {
+        use crate::widget::test_frames::{chart, frame, shapes};
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+        chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+        // Half opaque, and the only well of the tab labelled #FF00FF.
+        let had = Color32::from_rgba_unmultiplied(255, 0, 255, 128);
+        chart.pane_options_mut().separator_color = Some(had);
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        let mut dialog = SettingsDialog::new();
+        dialog.open(ChartSettingsState::from_chart(&chart));
+        dialog.active_tab = SettingsTab::Canvas;
+        let theme = Theme::light();
+        let mut harness = Harness::builder()
+            .with_context_setup(|ctx| {
+                egui_extras::install_image_loaders(ctx);
+                crate::theme::apply_to_egui(ctx, &Theme::light());
+            })
+            .with_size(Vec2::new(1440.0, 900.0))
+            .build_ui_state(
+                move |ui, (dialog, accepted): &mut (SettingsDialog, _)| {
+                    if let SettingsAction::Apply(settings) = dialog.show(ui.ctx(), &theme) {
+                        *accepted = Some(settings);
+                    }
+                },
+                (dialog, None),
+            );
+        harness.run();
+        for well in ["#FF00FF", "#311B92"] {
+            harness.get_by_role_and_label(Role::ColorWell, well).click();
+            harness.run();
+        }
+        harness.get_by_label("Ok").click();
+        harness.run();
+        let settings = harness
+            .state_mut()
+            .1
+            .take()
+            .expect("Ok applies the settings");
+        chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
+        frame(&ctx, &mut chart, 0.1, Vec::new());
+        let painted = shapes(&ctx, &mut chart, 0.2, Vec::new());
+        // The palette swatch rgb(49, 27, 146) retains the well's alpha of 128.
+        let chosen = Color32::from_rgba_unmultiplied(49, 27, 146, 128);
+        let top = chart.get_rendered_indicator_panes()[0].panel_rect.top();
+        assert!(
+            painted
+                .iter()
+                .any(|shape| matches!(shape, egui::Shape::Rect(rect)
+                if rect.fill == chosen && (rect.rect.bottom() - top).abs() < 1.0)),
+            "no separator in {chosen:?} at {top}"
+        );
+        assert!(chart.undo());
+        assert_eq!(chart.pane_options().separator_color, Some(had));
+        assert!(!chart.undo(), "only the separator changed");
+        assert!(chart.redo());
+        assert_eq!(chart.pane_options().separator_color, Some(chosen));
+    }
+
     /// Choosing a thousands separator on the Scales and lines tab groups the digits of the last
     /// price tag with it, or leaves them plain.
     #[test]
@@ -2334,7 +2418,8 @@ mod tests {
     /// family, the thousands separator, session breaks and the bar of the last price could be
     /// chosen, holds the whole bars of a margin and none of those choices. Loaded on a chart
     /// with a margin in bars or in pixels, it shows what it can of the chart's and Ok keeps the
-    /// chart's margin and choices.
+    /// chart's margin and choices. Its pane separators follow the theme, as they did when such
+    /// a template was saved.
     #[test]
     fn old_templates_keep_the_right_margin_and_the_choices_they_lack() {
         use crate::model::PriceLineSource;
@@ -2365,6 +2450,7 @@ mod tests {
             chart.config_mut().axis_font_family = FontFamily::Monospace;
             chart.config_mut().thousands_sep = Some('\'');
             chart.config_mut().show_session_breaks = true;
+            chart.pane_options_mut().separator_color = Some(Color32::RED);
             let style = chart.series_style_mut(SeriesId::MAIN).unwrap();
             style.price_line_source = PriceLineSource::LastVisible;
             let margin = chart.chart_options().time_scale.clone();
@@ -2383,11 +2469,13 @@ mod tests {
                     shown.show_session_breaks,
                     shown.scales_and_lines.price_line_source,
                     shown.scales_and_lines.thousands_sep,
+                    shown.pane_separator_color,
                 ),
                 (
                     Some(true),
                     Some(PriceLineSource::LastVisible),
                     Some(ThousandsSeparator::Apostrophe),
+                    None,
                 ),
                 "{pixels:?}"
             );
@@ -2399,6 +2487,7 @@ mod tests {
             assert!(config.show_session_breaks);
             let style = chart.series_style(SeriesId::MAIN).unwrap();
             assert_eq!(style.price_line_source, PriceLineSource::LastVisible);
+            assert_eq!(chart.pane_options().separator_color, None, "{pixels:?}");
         }
     }
 
