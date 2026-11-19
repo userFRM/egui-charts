@@ -17,6 +17,9 @@ const LINK_CONTROLS_MIN_WIDTH: f32 = 352.0;
 /// Distance of the selectors from the chart's right edge, which ends the status line's first row.
 pub(super) const LINK_CONTROLS_INSET: f32 = 220.0;
 
+/// The keys a layout of more than one chart takes from its charts' requests.
+const LAYOUT_KEYS: &[KeyboardAction] = &[KeyboardAction::MaximizeChart];
+
 const LINK_MARKERS: [(&str, egui::Color32); 5] = [
     ("🔶", egui::Color32::from_rgb(240, 150, 0)),
     ("🍀", egui::Color32::from_rgb(110, 160, 70)),
@@ -1672,6 +1675,12 @@ impl ChartLayout {
         let count = total.min(self.mode.chart_count());
         if count == 0 {
             return ui.allocate_response(Vec2::ZERO, Sense::hover());
+        }
+        // Keep the layout's keys queued when a host drains requests before `show`.
+        let pass = ui.ctx().cumulative_pass_nr();
+        let keys = (count > 1 && self.mode != ChartLayoutMode::Tabs).then_some(LAYOUT_KEYS);
+        for (index, chart) in charts.iter_mut().enumerate() {
+            chart.keyboard.layout_keys = keys.filter(|_| index < count).map(|keys| (pass, keys));
         }
         self.active = self.active.min(count - 1);
         if self.maximized.is_some_and(|index| index >= count) {
@@ -4776,51 +4785,68 @@ mod tests {
         layout.set_sync_group(2, Some("B".into()));
         layout.set_active(2);
         let mut time = 0.0;
-        let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart; 4], pressed: bool| {
-            time += 0.1;
-            let events = if pressed {
-                vec![Event::Key {
-                    key: egui::Key::Enter,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::ALT,
-                }]
-            } else {
-                vec![]
+        let mut frame =
+            |layout: &mut ChartLayout, charts: &mut [Chart; 4], pressed: bool, host_first: bool| {
+                let mut requests = Vec::new();
+                time += 0.1;
+                let events = if pressed {
+                    vec![Event::Key {
+                        key: egui::Key::Enter,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::ALT,
+                    }]
+                } else {
+                    vec![]
+                };
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        if host_first {
+                            charts[2].dispatch_shortcuts(ui.ctx());
+                            requests = charts[2].take_shortcut_requests();
+                        }
+                        layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                    },
+                )
+                .drop_without_applying_deltas();
+                requests
             };
-            ctx.run_ui(
-                RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
-                    time: Some(time),
-                    events,
-                    ..Default::default()
-                },
-                |ui| {
-                    layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
-                },
-            )
-            .drop_without_applying_deltas();
-        };
         for _ in 0..3 {
-            frame(&mut layout, &mut charts, false);
+            frame(&mut layout, &mut charts, false, false);
         }
         let tile = charts[2].get_rendered_price_rect();
         let viewport = charts[2].get_time_scale_state();
-        frame(&mut layout, &mut charts, true);
+        frame(&mut layout, &mut charts, true, false);
         // The chart's widget id follows its rect, so focus moves over to it on the next frames.
-        frame(&mut layout, &mut charts, false);
-        frame(&mut layout, &mut charts, false);
+        frame(&mut layout, &mut charts, false, false);
+        frame(&mut layout, &mut charts, false, false);
         assert_eq!((layout.maximized, layout.active()), (Some(2), 2));
         assert!(charts[2].get_rendered_price_rect().width() > tile.width() * 1.8);
         assert_eq!(layout.sync_group(2), Some("B"));
         assert!(charts[2].take_shortcut_requests().is_empty());
-        frame(&mut layout, &mut charts, true);
-        frame(&mut layout, &mut charts, false);
-        frame(&mut layout, &mut charts, false);
+        frame(&mut layout, &mut charts, true, false);
+        frame(&mut layout, &mut charts, false, false);
+        frame(&mut layout, &mut charts, false, false);
         assert_eq!((layout.maximized, layout.active()), (None, 2));
         assert_eq!(charts[2].get_rendered_price_rect(), tile);
         assert_eq!(charts[2].get_time_scale_state(), viewport);
+        for maximized in [Some(2), None] {
+            let requests = frame(&mut layout, &mut charts, true, true);
+            frame(&mut layout, &mut charts, false, true);
+            frame(&mut layout, &mut charts, false, true);
+            assert_eq!((layout.maximized, layout.active()), (maximized, 2));
+            assert!(
+                requests.is_empty(),
+                "layout keys reached the host: {requests:?}"
+            );
+        }
     }
 
     /// A border drag changes only the charts beside it and leaves the dragged border under the
