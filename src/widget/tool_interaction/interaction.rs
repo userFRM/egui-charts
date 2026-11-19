@@ -112,42 +112,13 @@ pub fn handle_active_tool<F1, F2>(
                     x_to_bar,
                     y_to_price,
                 );
-                if matches!(
-                    active_tool,
-                    DrawingToolType::Rect | DrawingToolType::Ellipse
-                ) && ui.input(|i| i.modifiers.shift)
+                if DrawingManager::squares_box(active_tool)
+                    && ui.input(|i| i.modifiers.shift)
                     && let Some(drawing) = &mut drawing_manager.curr_drawing
                     && let [anchor, end] = drawing.points.as_slice()
                 {
-                    let delta = *end - *anchor;
-                    let direction = egui::vec2(
-                        if delta.x < 0.0 { -1.0 } else { 1.0 },
-                        if delta.y < 0.0 { -1.0 } else { 1.0 },
-                    );
-                    let room = egui::vec2(
-                        if direction.x < 0.0 {
-                            anchor.x - price_rect.left()
-                        } else {
-                            price_rect.right() - anchor.x
-                        },
-                        if direction.y < 0.0 {
-                            anchor.y - price_rect.top()
-                        } else {
-                            price_rect.bottom() - anchor.y
-                        },
-                    );
-                    let side = delta
-                        .x
-                        .abs()
-                        .max(delta.y.abs())
-                        .min(room.x)
-                        .min(room.y)
-                        .max(0.0);
-                    drawing.update_last_point_with_chart_coords(
-                        *anchor + direction * side,
-                        x_to_bar,
-                        y_to_price,
-                    );
+                    let corner = DrawingManager::square_corner(*anchor, *end, price_rect);
+                    drawing.update_last_point_with_chart_coords(corner, x_to_bar, y_to_price);
                 }
                 let second_click = response.clicked()
                     && !ui
@@ -292,7 +263,7 @@ mod tests {
     #[test]
     fn modifier_placement_constrains_shapes_and_temporarily_inverts_magnet() {
         use egui::{Modifiers, pos2, vec2};
-        for (tool, modifiers, magnet, expected) in [
+        for ((tool, modifiers, magnet, expected), clicks) in [
             (
                 DrawingToolType::TrendLine,
                 Modifiers::SHIFT,
@@ -318,6 +289,42 @@ mod tests {
                 pos2(250.0, 250.0),
             ),
             (
+                DrawingToolType::FibonacciCircles,
+                Modifiers::SHIFT,
+                false,
+                pos2(250.0, 250.0),
+            ),
+            (
+                DrawingToolType::GannBox,
+                Modifiers::SHIFT,
+                false,
+                pos2(250.0, 250.0),
+            ),
+            (
+                DrawingToolType::GannSquare,
+                Modifiers::SHIFT,
+                false,
+                pos2(250.0, 250.0),
+            ),
+            (
+                DrawingToolType::GannFixed,
+                Modifiers::SHIFT,
+                false,
+                pos2(250.0, 250.0),
+            ),
+            (
+                DrawingToolType::GannFan,
+                Modifiers::SHIFT,
+                false,
+                pos2(250.0, 250.0),
+            ),
+            (
+                DrawingToolType::GannBox,
+                Modifiers::NONE,
+                false,
+                pos2(250.0, 170.0),
+            ),
+            (
                 DrawingToolType::TrendLine,
                 Modifiers::CTRL,
                 false,
@@ -329,7 +336,10 @@ mod tests {
                 true,
                 pos2(250.0, 170.0),
             ),
-        ] {
+        ]
+        .into_iter()
+        .flat_map(|row| [false, true].map(move |clicks| (row, clicks)))
+        {
             let ctx = Context::default();
             let pane = Rect::from_min_size(Pos2::ZERO, vec2(500.0, 400.0));
             let mut manager = DrawingManager::new();
@@ -343,12 +353,17 @@ mod tests {
                 pressed,
                 modifiers,
             };
-            for events in [
+            let mut frames = vec![
                 vec![Event::PointerMoved(from)],
                 vec![button(from, true)],
                 vec![Event::PointerMoved(to)],
                 vec![button(to, false)],
-            ] {
+            ];
+            if clicks {
+                frames.insert(2, vec![button(from, false)]);
+                frames.insert(4, vec![button(to, true)]);
+            }
+            for events in frames {
                 manager.snap_targets = vec![pos2(251.0, 172.0)];
                 ctx.run_ui(
                     RawInput {
@@ -376,7 +391,7 @@ mod tests {
             }
             assert_eq!(
                 manager.drawings[0].points[1], expected,
-                "{tool:?}, {modifiers:?}, magnet {magnet}"
+                "{tool:?}, {modifiers:?}, magnet {magnet}, clicks {clicks}"
             );
             assert_eq!(manager.options.magnet_mode, magnet);
         }
