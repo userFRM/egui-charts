@@ -22,12 +22,20 @@ use std::collections::HashSet;
 pub(crate) const DRAWING_MENU_OFFSET: f32 = 6.0;
 
 /// The panes of `chart` other than the one drawing `drawing_id`, the price pane last, by their
-/// stable ids and titles.
+/// stable ids and titles. Empty for a locked drawing, which cannot move.
 pub(crate) fn move_targets(
     ctx: Option<&Context>,
     chart: &Chart,
     drawing_id: usize,
 ) -> Vec<(PaneId, String)> {
+    if chart
+        .drawings()
+        .drawings
+        .iter()
+        .any(|d| d.id == drawing_id && d.locked)
+    {
+        return Vec::new();
+    }
     let current = chart.drawing_pane(drawing_id);
     let mut panes = super::study::other_panes(ctx, chart, current);
     if current.is_some_and(|pane| pane != PaneId::MAIN) && chart.panes().contains(&PaneId::MAIN) {
@@ -507,6 +515,7 @@ mod tests {
         drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(1.0, 110.0)];
         drawing.completed = true;
         chart.drawings_mut().drawings.push(drawing);
+        let pane = chart.add_pane();
         let mut menu = DrawingContextMenu::new();
         for locked in [false, true, false] {
             chart.drawings_mut().drawings[0].locked = locked;
@@ -522,6 +531,11 @@ mod tests {
                 })
                 .expect("Delete row");
             assert_eq!(enabled, !locked, "locked {locked}");
+            assert_eq!(
+                menu.panes.iter().any(|(id, _)| *id == pane),
+                !locked,
+                "Move to, locked {locked}"
+            );
         }
     }
 
