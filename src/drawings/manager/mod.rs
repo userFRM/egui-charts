@@ -17,6 +17,7 @@ mod edit;
 mod interaction;
 mod paint;
 
+use interaction::PartialErase;
 pub(crate) use paint::DrawingAxisTag;
 use paint::Tessellated;
 
@@ -286,6 +287,8 @@ pub struct DrawingManager {
     drag_group: Vec<Drawing>,
     /// The current drag creates copies instead of modifying the original selection.
     drag_copy: bool,
+    /// The Ctrl or Command eraser drag, recorded as one undo step when it ends.
+    pub(crate) partial_erase: Option<PartialErase>,
     /// Current chart input, separate from the toolbar magnet setting.
     pub(crate) interaction_modifiers: egui::Modifiers,
     /// A line tool chosen by its shortcut this frame, placed by the pane under the pointer.
@@ -298,8 +301,9 @@ pub struct DrawingManager {
     /// neither drawn nor hit. [`Chart::set_timeframe`](crate::widget::Chart::set_timeframe)
     /// keeps it in step with the chart.
     pub curr_timeframe: String,
-    /// Whether a click deletes the drawing under the pointer instead of selecting it. Set it
-    /// with [`Self::set_eraser_mode`].
+    /// Whether a click deletes the drawing under the pointer instead of selecting it, and a
+    /// Ctrl or Command drag erases the parts of brush and highlighter strokes it passes over.
+    /// Set it with [`Self::set_eraser_mode`].
     pub(crate) eraser_mode: bool,
     /// Whether every drawing is hidden as a group; see [`Self::set_hidden`].
     hidden: bool,
@@ -381,6 +385,7 @@ impl DrawingManager {
             drag_origin: None,
             drag_group: Vec::new(),
             drag_copy: false,
+            partial_erase: None,
             interaction_modifiers: egui::Modifiers::NONE,
             place_at_pointer: false,
             stay_in_drawing_mode: false,
@@ -822,6 +827,11 @@ impl DrawingManager {
             .chain(&mut self.measurement)
             .chain(&mut self.drag_old_state)
             .chain(&mut self.drag_group)
+            .chain(
+                self.partial_erase
+                    .iter_mut()
+                    .flat_map(|erase| &mut erase.before),
+            )
         {
             drawing.chart_points.iter_mut().for_each(&mut *visit);
         }
