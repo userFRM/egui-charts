@@ -331,6 +331,7 @@ impl IndicatorFactory {
                 Ratio,
                 Spread,
                 Correlation,
+                CorrelationLog,
                 RciRibbon,
                 MajorityRule,
                 AccumulationSwingIndex,
@@ -410,7 +411,7 @@ impl IndicatorFactory {
                 ),
             );
         }
-        register_builtins!(@help self, "type", SMIErgodicIndicator, SMIErgodicOscillator, RisingWedge, FallingWedge, Ratio, Spread, Correlation, AdvanceDeclineRatio, AdvanceDeclineLine, CumulativeVolumeIndex);
+        register_builtins!(@help self, "type", SMIErgodicIndicator, SMIErgodicOscillator, RisingWedge, FallingWedge, Ratio, Spread, Correlation, CorrelationLog, AdvanceDeclineRatio, AdvanceDeclineLine, CumulativeVolumeIndex);
         for cumulative in [false, true] {
             let name = OrderFlowStudy::execution_delta(cumulative)
                 .name()
