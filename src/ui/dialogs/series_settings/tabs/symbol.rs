@@ -3,9 +3,9 @@
 use crate::chart::series::SeriesSettings;
 use crate::localization as l10n;
 use crate::model::{
-    BaselineLevel, BoxSizeMethod, ChartType, ChartTypeParams, FootprintColor, FootprintMode,
-    FootprintStatistic, HighLowStyle, LinePlotStyle, LineStyle, PriceBasedSource, PriceSource,
-    ProfileRows, ProfileSession, TPOProfilePeriod, TimezoneId,
+    BaselineLevel, BoxSizeMethod, ChartType, ChartTypeParams, FootprintColor, FootprintIntensity,
+    FootprintMode, FootprintStatistic, HighLowStyle, LinePlotStyle, LineStyle, PriceBasedSource,
+    PriceSource, ProfileRows, ProfileSession, TPOProfilePeriod, TimezoneId,
 };
 use crate::theme::ThemeExt;
 use crate::ui_kit::color_picker::keep_opacity;
@@ -274,6 +274,41 @@ impl SymbolTab {
                 );
             });
             ui.end_row();
+            let label = ui.label(l10n::text(ui.ctx(), "Shading scale"));
+            let mut scale = match params.footprint_intensity {
+                FootprintIntensity::Visible => 1,
+                FootprintIntensity::Volume(_) => 2,
+                _ => 0,
+            };
+            let previous = scale;
+            ui.label_inputs_by(label.id, |ui| {
+                ui.combo_select("footprint_intensity", &mut scale, [0, 1, 2], |scale| {
+                    match scale {
+                        0 => "Each bar",
+                        1 => "Bars in view",
+                        _ => "Fixed volume",
+                    }
+                    .to_owned()
+                });
+            });
+            if scale != previous {
+                params.footprint_intensity = match scale {
+                    0 => FootprintIntensity::Bar,
+                    1 => FootprintIntensity::Visible,
+                    _ => FootprintIntensity::Volume(100.0),
+                };
+            }
+            ui.end_row();
+            if let FootprintIntensity::Volume(volume) = &mut params.footprint_intensity {
+                let label = ui.label(l10n::text(ui.ctx(), "Full shade volume"));
+                ui.add(
+                    egui::DragValue::new(volume)
+                        .range(0.001..=f64::MAX)
+                        .speed(1.0),
+                )
+                .labelled_by(label.id);
+                ui.end_row();
+            }
             let text = ui.active_theme().chart.axis_text;
             for (i, (name, default)) in [
                 ("Buy colour", up),

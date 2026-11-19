@@ -1462,4 +1462,79 @@ mod tests {
             .high_to_close_fill;
         assert_eq!(picked.to_srgba_unmultiplied(), [255, 255, 255, 51]);
     }
+
+    /// Every footprint edit is staged until Ok; Cancel leaves the opening settings intact.
+    #[test]
+    fn footprint_symbol_settings_apply_only_when_accepted() {
+        use crate::model::{ChartTypeParams, FootprintIntensity};
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let seeded = ChartTypeParams {
+            footprint_intensity: FootprintIntensity::Volume(500.0),
+            footprint_naked_poc: true,
+            ..Default::default()
+        };
+        for accept in [false, true] {
+            for edit in ["Shading scale", "Full shade volume"] {
+                let mut dialog = SettingsDialog::new();
+                dialog.set_control_visible(crate::ui::Control::Templates, false);
+                dialog.open(ChartSettingsState {
+                    chart_type: ChartType::VolumeFootprint,
+                    chart_type_params: Some(seeded.clone()),
+                    ..Default::default()
+                });
+                let theme = Theme::light();
+                let setup_theme = theme.clone();
+                let mut harness = Harness::builder()
+                    .with_context_setup(move |ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &setup_theme);
+                    })
+                    .with_size(Vec2::new(1440.0, 900.0))
+                    .build_ui_state(
+                        move |ui, (dialog, accepted): &mut (SettingsDialog, _)| {
+                            if let SettingsAction::Apply(settings) = dialog.show(ui.ctx(), &theme) {
+                                *accepted = Some(settings);
+                            }
+                        },
+                        (dialog, None),
+                    );
+                harness.run();
+                let mut expected = seeded.clone();
+                match edit {
+                    "Shading scale" => {
+                        harness
+                            .get_by_role_and_label(Role::ComboBox, edit)
+                            .scroll_to_me();
+                        harness.run();
+                        harness.get_by_role_and_label(Role::ComboBox, edit).click();
+                        harness.run();
+                        harness
+                            .get_by_role_and_label(Role::Button, "Bars in view")
+                            .click();
+                        expected.footprint_intensity = FootprintIntensity::Visible;
+                    }
+                    _ => {
+                        harness
+                            .get_by_role_and_label(Role::SpinButton, edit)
+                            .set_value_accesskit(2000.0);
+                        expected.footprint_intensity = FootprintIntensity::Volume(2000.0);
+                    }
+                }
+                harness.run();
+                harness
+                    .get_by_label(if accept { "Ok" } else { "Cancel" })
+                    .click();
+                harness.run();
+                let (_, accepted) = harness.state();
+                let accepted: &Option<ChartSettingsState> = accepted;
+                assert_eq!(
+                    accepted.as_ref().and_then(|s| s.chart_type_params.as_ref()),
+                    accept.then_some(&expected),
+                    "{edit}, accept {accept}"
+                );
+            }
+        }
+    }
 }

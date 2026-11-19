@@ -54,7 +54,7 @@ estimating their aggressor from candles. Replay chronological historical trades 
 new executions with [`push`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Footprint.html#method.push); rebuild on corrections. Unknown aggressors contribute to total
 volume and remain outside bid/ask delta. [`Chart::show_footprint`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show_footprint) draws volume, delta, trade count and
 average size columns, profiles, grouped rows, imbalances, POC and value area in place of the price series. Its
-[`FootprintConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/overlays/struct.FootprintConfig.html) controls the presentation: cell colour, number abbreviation and zero display,
+[`FootprintConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/overlays/struct.FootprintConfig.html) controls the presentation: cell colour and whether its shades and value-sized fonts compare within each bar, across the bars in view or to a set volume, number abbreviation and zero display,
 value-sized fonts, extreme ask/bid ratios, the pullback range and the summary below each bar. Automatic grouping affects
 display only. By default a bar is a ladder: sell volume left and buy volume right of a narrow candle body, each
 side shaded in four strengths by where its volume falls in that side's range. The POC row is filled, a side that

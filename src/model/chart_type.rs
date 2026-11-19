@@ -380,7 +380,7 @@ pub enum FootprintMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum FootprintColor {
-    /// Volume relative to the largest row of this bar.
+    /// Volume relative to the largest row of the [`FootprintIntensity`] scale, by default this bar's.
     Volume,
     /// Delta as a fraction of the row's classified volume.
     Delta,
@@ -389,14 +389,42 @@ pub enum FootprintColor {
     /// The neutral colour for every cell, whatever was traded.
     Fixed,
     /// The buy colour for a positive delta and the sell colour for a negative one, with the
-    /// opacity growing with the delta's absolute size relative to the bar's largest. A zero delta
-    /// takes the neutral colour at full opacity.
+    /// opacity growing with the delta's absolute size relative to the largest of the
+    /// [`FootprintIntensity`] scale, by default the bar's. A zero delta takes the neutral colour at full opacity.
     DeltaOpacity,
     /// Sell and buy volume shaded separately, each in one of four strengths of its own colour by
     /// the quarter it falls in between the smallest and the largest volume of its side in the
-    /// bar. The POC row takes the text colour, the value area is two dotted lines, and a side
+    /// bar, or in the bars in view, or between zero and an entered volume, as
+    /// [`FootprintIntensity`] chooses. The POC row takes the text colour, the value area is two
+    /// dotted lines, and a side
     /// that dominates under the imbalance settings gets a strip along its outer edge.
     VolumeSteps,
+}
+
+/// What footprint cell shades and number sizes are measured against: the shades of
+/// [`FootprintColor::Volume`], [`FootprintColor::DeltaOpacity`] and
+/// [`FootprintColor::VolumeSteps`], and each row's size within the font size range.
+///
+/// ```
+/// use egui_charts::model::{ChartTypeParams, FootprintIntensity};
+///
+/// let mut params = ChartTypeParams::default();
+/// params.footprint_intensity = FootprintIntensity::Volume(500.0);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum FootprintIntensity {
+    /// Each bar against its own rows; its busiest row takes the full shade.
+    #[default]
+    Bar,
+    /// Complete bars whose cells are in view share a scale over all their rows. Without such a
+    /// bar, each bar uses its own rows. Vertical panning leaves the scale unchanged.
+    Visible,
+    /// All bars against this volume after row grouping. A row's volume or absolute delta at or
+    /// above it takes the full shade and largest font; smaller rows take their share. Volume
+    /// steps divide zero to this volume into quarters. Non-finite or non-positive values use
+    /// each bar's own rows instead.
+    Volume(f64),
 }
 
 /// How `studies::TradeProfile::nodes` (requires `studies`) chooses volume nodes.
@@ -783,6 +811,8 @@ pub struct ChartTypeParams {
     pub footprint_profile: bool,
     /// Footprint: cell colouring rule.
     pub footprint_color_by: FootprintColor,
+    /// Footprint: what cell shades and number sizes are measured against.
+    pub footprint_intensity: FootprintIntensity,
     /// Footprint: buy, sell, text and neutral colours. None follows the chart theme.
     pub footprint_colors: [Option<egui::Color32>; 4],
     /// Footprint: buy and sell colours of imbalance strips, imbalance colouring and stacked
@@ -966,6 +996,7 @@ impl Default for ChartTypeParams {
             footprint_modes: vec![FootprintMode::Ladder],
             footprint_profile: false,
             footprint_color_by: FootprintColor::VolumeSteps,
+            footprint_intensity: FootprintIntensity::Bar,
             footprint_colors: [None; 4],
             footprint_imbalance_colors: [None; 2],
             footprint_row_ticks: 0,
@@ -1230,6 +1261,7 @@ mod tests {
     fn saved_execution_settings_keep_choices_and_legacy_defaults() {
         let settings = serde_json::json!({
             "footprint_modes": ["Delta", "BidAskTrades", "Trades", "AverageSize"], "footprint_row_ticks": 2,
+            "footprint_intensity": {"Volume": 2500.0},
             "footprint_row_atr": true, "footprint_row_atr_length": 30,
             "footprint_value_area": 0.010003969988090037,
             "footprint_statistics": true,
@@ -1316,6 +1348,7 @@ mod tests {
         }
         let legacy: ChartTypeParams = serde_json::from_str(r#"{"tpo_row_ticks":2}"#).unwrap();
         let legacy = serde_json::to_value(legacy).unwrap();
+        assert_eq!(legacy["footprint_intensity"], "Bar");
         assert_eq!(legacy["footprint_statistics"], false);
         assert_eq!(legacy["footprint_row_ticks"], 0);
         assert_eq!(legacy["footprint_row_atr"], false);
