@@ -670,10 +670,11 @@ impl StudySettingsSnapshot {
 /// A study with editable presentation, used automatically by the chart.
 /// Hosts composing their own chart can wrap built-in or custom studies the same way.
 ///
-/// Calculated on another interval or symbol, a study's volume profiles and zones span the chart
-/// bars that share time with their bars, its markers sit on the last such chart bar once the
-/// values on the chart reach their bar, and its labels are hidden. Its visible range is the range
-/// of its own bars that share time with the chart bars in view.
+/// Calculated on another interval or symbol, a study's volume profiles, zones and candles span
+/// the chart bars that share time with their bars, its markers sit on the last such chart bar
+/// once the values on the chart reach their bar, and its labels, price segments, drawings and
+/// projections are hidden. Its visible range is the range of its own bars that share time with
+/// the chart bars in view.
 pub struct ConfiguredStudy {
     study: Box<dyn Indicator>,
     /// The stable factory key, independent of the wrapped study's display name.
@@ -694,13 +695,14 @@ pub struct ConfiguredStudy {
     aligned: Option<IndicatorValues>,
     aligned_bars: Vec<Option<usize>>,
     /// For each chart bar, the bars of another interval or symbol that share its time, by which
-    /// the study's profiles, zones and markers are placed on chart bars.
+    /// the study's profiles, zones, candles and markers are placed on chart bars.
     spans: Vec<std::ops::Range<usize>>,
     /// The chart bars in view, from `set_visible_range`.
     visible: Option<std::ops::Range<usize>>,
-    /// The study's markers and zones on chart bars while it runs on another interval or symbol.
+    /// The study's marks on chart bars while it runs on another interval or symbol.
     aligned_markers: Vec<super::IndicatorMarker>,
     aligned_zones: Vec<super::StudyZone>,
+    aligned_candles: Vec<super::StudyCandle>,
     /// The values kept on the bars that remain after the chart evicted the oldest bars, until
     /// the study is calculated again.
     kept: Option<Kept>,
@@ -756,6 +758,7 @@ impl ConfiguredStudy {
             visible: self.visible.clone(),
             aligned_markers: self.aligned_markers.clone(),
             aligned_zones: self.aligned_zones.clone(),
+            aligned_candles: self.aligned_candles.clone(),
             kept: self.kept.clone(),
             input_defaults: self.input_defaults.clone(),
         }
@@ -810,6 +813,7 @@ impl ConfiguredStudy {
             visible: None,
             aligned_markers: Vec::new(),
             aligned_zones: Vec::new(),
+            aligned_candles: Vec::new(),
             kept: None,
             input_defaults: Vec::new(),
         }
@@ -933,7 +937,12 @@ impl ConfiguredStudy {
 
 impl Indicator for ConfiguredStudy {
     fn projections(&self) -> &[super::StudyProjection] {
-        self.study.projections()
+        // Source bars of a study on another interval or symbol are not chart bars.
+        if self.aligned.is_some() {
+            &[]
+        } else {
+            self.study.projections()
+        }
     }
 
     fn table(&self) -> Option<&super::StudyTable> {
@@ -1193,6 +1202,7 @@ impl Indicator for ConfiguredStudy {
             self.spans.clear();
             self.aligned_markers.clear();
             self.aligned_zones.clear();
+            self.aligned_candles.clear();
             return;
         };
         self.instrument_precision = source
@@ -1281,6 +1291,17 @@ impl Indicator for ConfiguredStudy {
                 Some(super::StudyZone {
                     bars: chart_bars(&self.spans, &zone.bars)?,
                     ..zone.clone()
+                })
+            })
+            .collect();
+        self.aligned_candles = self
+            .study
+            .candles()
+            .iter()
+            .filter_map(|candle| {
+                Some(super::StudyCandle {
+                    bars: chart_bars(&self.spans, &candle.bars)?,
+                    ..candle.clone()
                 })
             })
             .collect();
@@ -1387,7 +1408,12 @@ impl Indicator for ConfiguredStudy {
     }
     #[cfg(feature = "drawings")]
     fn drawings(&self) -> &[crate::drawings::Drawing] {
-        self.study.drawings()
+        // Source bars of a study on another interval or symbol are not chart bars.
+        if self.aligned.is_some() {
+            &[]
+        } else {
+            self.study.drawings()
+        }
     }
     #[cfg(feature = "drawings")]
     fn drawings_use_plot_style(&self) -> bool {
@@ -1398,7 +1424,11 @@ impl Indicator for ConfiguredStudy {
         self.study.drawing_plot(index)
     }
     fn candles(&self) -> &[super::StudyCandle] {
-        self.study.candles()
+        if self.aligned.is_some() {
+            &self.aligned_candles
+        } else {
+            self.study.candles()
+        }
     }
     fn solid_candles(&self) -> bool {
         self.study.solid_candles()
@@ -2749,14 +2779,14 @@ mod tests {
         assert!(!ids(&breadth).contains(&"calculation_timeframe".to_owned()));
     }
 
-    /// Volume profiles, zones and markers of a study calculated on a finer or a coarser interval
+    /// Volume profiles, zones, candles and markers calculated on a finer or a coarser interval
     /// lie on the chart bars that share time with their bars, a marker once the values on the chart
-    /// reach its bar, and none are left when the other history is missing.
+    /// reach its bar. Projections are hidden, and no marks remain when the history is missing.
     #[test]
     fn profiles_zones_and_markers_of_another_interval_lie_on_their_chart_bars() {
         use super::super::{
-            CrossDirection, IndicatorMarker, StudyData, StudyZone, VolProfileSession,
-            VolProfileVisible,
+            CrossDirection, IndicatorMarker, StudyCandle, StudyData, StudyProjection, StudyZone,
+            VolProfileSession, VolProfileVisible,
         };
         // Markers on the second and the last bar, and a zone from the one to the other.
         #[derive(Clone, Default)]
@@ -2764,6 +2794,8 @@ mod tests {
             values: IndicatorValues,
             markers: Vec<IndicatorMarker>,
             zones: Vec<StudyZone>,
+            candles: Vec<StudyCandle>,
+            projections: Vec<StudyProjection>,
         }
         impl Indicator for Marks {
             fn name(&self) -> &str {
@@ -2771,6 +2803,21 @@ mod tests {
             }
             fn calculate(&mut self, data: &[Bar]) {
                 self.values = IndicatorValues::missing(data.len());
+                self.candles = data
+                    .iter()
+                    .enumerate()
+                    .map(|(i, bar)| StudyCandle {
+                        bars: i..i + 1,
+                        bar: bar.clone(),
+                        plot: 0,
+                    })
+                    .collect();
+                self.projections = vec![StudyProjection {
+                    bars: 1.0..2.0,
+                    top: 101.0,
+                    bottom: 100.0,
+                    plot: 0,
+                }];
                 let last = data.len().saturating_sub(1);
                 let marker = |bar| IndicatorMarker {
                     bar,
@@ -2803,6 +2850,12 @@ mod tests {
             fn zones(&self) -> &[StudyZone] {
                 &self.zones
             }
+            fn candles(&self) -> &[StudyCandle] {
+                &self.candles
+            }
+            fn projections(&self) -> &[StudyProjection] {
+                &self.projections
+            }
             fn clone_box(&self) -> Box<dyn Indicator> {
                 Box::new(self.clone())
             }
@@ -2829,7 +2882,7 @@ mod tests {
                 })
                 .collect()
         };
-        for (name, [chart, other], sessions, (view, visible), markers, zones, levels) in [
+        for (name, [chart, other], sessions, (view, visible), markers, zones, levels, candles) in [
             (
                 "finer",
                 [(4, Timeframe::Min5), (20, Timeframe::Min1)],
@@ -2841,6 +2894,7 @@ mod tests {
                 vec![0, 3],
                 0..4,
                 (2..4, 105.0),
+                (0..20).map(|i| i / 5..i / 5 + 1).collect::<Vec<_>>(),
             ),
             (
                 "coarser",
@@ -2853,6 +2907,7 @@ mod tests {
                 vec![9],
                 5..20,
                 (10..20, 101.0),
+                (0..4).map(|i| 5 * i..5 * i + 5).collect(),
             ),
         ] {
             let (interval, source_interval) = (chart.1, other.1);
@@ -2902,6 +2957,16 @@ mod tests {
                 plot: 0,
             };
             assert_eq!(studies[2].zones(), [zone], "{name}");
+            assert_eq!(
+                studies[2]
+                    .candles()
+                    .iter()
+                    .map(|candle| candle.bars.clone())
+                    .collect::<Vec<_>>(),
+                candles,
+                "{name}"
+            );
+            assert!(studies[2].projections().is_empty(), "{name}");
             for study in &mut studies {
                 study.update_data(&chart, 0, &[]);
             }
@@ -2909,7 +2974,9 @@ mod tests {
                 assert!(profiles(study, 0..chart.len()).is_empty(), "{name}");
                 assert!(study.profile_levels(0..chart.len()).is_empty(), "{name}");
                 assert!(
-                    study.markers().is_empty() && study.zones().is_empty(),
+                    study.markers().is_empty()
+                        && study.zones().is_empty()
+                        && study.candles().is_empty(),
                     "{name}"
                 );
             }
