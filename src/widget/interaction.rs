@@ -34,6 +34,13 @@ pub(super) fn touch_crosshair(ui: &Ui, id: Id) -> TouchCrosshair {
     })
 }
 
+impl TouchCrosshair {
+    /// Whether touch input shows this readout instead of following the pointer.
+    pub(super) fn tracking(&self, options: &crate::config::TooltipOptions) -> bool {
+        self.touch_input && options.enabled && options.touch_long_press
+    }
+}
+
 impl Chart {
     /// Returns whether a held readout owns this frame's drag, including its release.
     pub(super) fn handle_touch_crosshair(
@@ -80,7 +87,7 @@ impl Chart {
                 state = TouchCrosshair::default();
             }
             if !options.enabled
-                || !options.on_long_press
+                || !options.touch_long_press
                 || blocked
                 || input.events.contains(&Event::WindowFocused(false))
                 || input.multi_touch().is_some()

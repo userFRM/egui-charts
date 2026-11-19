@@ -6,8 +6,10 @@ use serde::{Deserialize, Serialize};
 /// The most candles one Ghost Feed projects.
 pub const MAX_GHOST_CANDLES: usize = 1000;
 
-/// How a Ghost Feed builds its projected candles from the clicked path.
-/// Older saved `spacing` and `wick` settings are ignored and use these defaults.
+/// How a Ghost Feed builds its projected candles from the clicked path, and how it paints them.
+/// Older saved `spacing` and `wick` settings are ignored and use these defaults. The defaults
+/// paint the candles in the colours of feeds saved before these could be set; a new Ghost Feed
+/// starts from [`Self::drawing_default`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -18,6 +20,23 @@ pub struct GhostFeedConfig {
     /// Maximum close displacement from the path, and range variation, in ticks.
     /// Zero follows the path exactly. Must be nonnegative and finite.
     pub noise_ticks: f64,
+    /// Body colour of a candle that closes at or above its open, as unmultiplied RGBA.
+    pub body_up: [u8; 4],
+    /// Body colour of a candle that closes below its open, as unmultiplied RGBA.
+    pub body_down: [u8; 4],
+    /// Whether the bodies are outlined.
+    pub show_border: bool,
+    /// Border colour of a rising candle, as unmultiplied RGBA.
+    pub border_up: [u8; 4],
+    /// Border colour of a falling candle, as unmultiplied RGBA.
+    pub border_down: [u8; 4],
+    /// Whether the line from each candle's high to its low is drawn.
+    pub show_wick: bool,
+    /// Wick colour, as unmultiplied RGBA.
+    pub wick_color: [u8; 4],
+    /// How far the candles fade, in percent: 0 paints their colours as they are and 100, or
+    /// more, hides them.
+    pub transparency: u8,
 }
 
 impl Default for GhostFeedConfig {
@@ -25,6 +44,14 @@ impl Default for GhostFeedConfig {
         Self {
             average_range_ticks: 10.0,
             noise_ticks: 5.0,
+            body_up: [184, 227, 220, 255],
+            body_down: [237, 165, 166, 255],
+            show_border: true,
+            border_up: [8, 153, 129, 255],
+            border_down: [242, 54, 69, 255],
+            show_wick: true,
+            wick_color: [128, 128, 128, 255],
+            transparency: 50,
         }
     }
 }
@@ -47,6 +74,17 @@ pub struct GhostCandle {
 }
 
 impl GhostFeedConfig {
+    /// Settings a new Ghost Feed starts with: light teal `#ACE5DC` rising and pink `#FAA1A4`
+    /// falling bodies, and otherwise the defaults, with teal and red borders and a grey wick at
+    /// 50% transparency.
+    pub fn drawing_default() -> Self {
+        Self {
+            body_up: [172, 229, 220, 255],
+            body_down: [250, 161, 164, 255],
+            ..Self::default()
+        }
+    }
+
     /// Whether the range is positive and finite and the noise nonnegative and finite.
     pub fn is_valid(&self) -> bool {
         self.average_range_ticks.is_finite()
@@ -168,6 +206,7 @@ mod tests {
         let config = GhostFeedConfig {
             average_range_ticks: 48.0,
             noise_ticks: 0.0,
+            ..Default::default()
         };
         let got = config.candles(&path, 0.25, "1404");
         let want = [

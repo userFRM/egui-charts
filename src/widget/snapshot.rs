@@ -1809,10 +1809,14 @@ mod tests {
             assert_eq!(restored.config(), chart.config());
         }
         let mut legacy: serde_json::Value = serde_json::from_str(&json).unwrap();
-        legacy["charts"][0]["options"]["tooltip"]
+        let tooltip = legacy["charts"][0]["options"]["tooltip"]
             .as_object_mut()
-            .unwrap()
-            .remove("show_volume_details");
+            .unwrap();
+        tooltip.remove("show_volume_details");
+        // Layouts saved before `touch_long_press` existed hold a touch for its readout.
+        assert!(tooltip.remove("touch_long_press").is_some());
+        // A saved exit choice survives the new default, including the former default.
+        tooltip.insert("touch_exit_mode".into(), "OnTouchEnd".into());
         let config = &mut legacy["charts"][0]["config"];
         config["watermark_text"] = "A · Apple".into();
         config
@@ -1847,6 +1851,11 @@ mod tests {
         let migrated = SavedLayout::from_json(&legacy.to_string()).unwrap();
         restored.restore(&migrated.charts[0]).unwrap();
         assert!(!restored.chart_options().tooltip.show_volume_details);
+        assert!(restored.chart_options().tooltip.touch_long_press);
+        assert_eq!(
+            restored.chart_options().tooltip.touch_exit_mode,
+            crate::config::TouchTrackingExitMode::OnTouchEnd
+        );
         assert_eq!(restored.config().thousands_sep, Some(','));
         assert!(restored.config().show_market_status);
         assert_eq!(restored.config().watermark_text, None);

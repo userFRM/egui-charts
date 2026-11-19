@@ -60,4 +60,4 @@ impl TabLabel for PropertiesTab {
     }
 }
 
-pub(super) use inputs::InputsTab;
+pub(super) use inputs::{InputsTab, pitchfork_shown};

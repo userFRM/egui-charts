@@ -1514,6 +1514,10 @@ mod tests {
             drawing.ghost_feed = Some(crate::drawings::GhostFeedConfig {
                 average_range_ticks: 2.5,
                 noise_ticks: 0.5,
+                show_wick: false,
+                border_down: [1, 2, 3, 4],
+                transparency: 80,
+                ..Default::default()
             });
             if tool == DrawingToolType::Image {
                 drawing.image = Some(crate::drawings::ImageConfig {
@@ -1522,7 +1526,7 @@ mod tests {
                 });
             }
             drawing.bars_pattern = Some(crate::drawings::BarsPatternConfig {
-                mode: crate::drawings::BarsPatternMode::Line,
+                mode: crate::drawings::BarsPatternMode::MidpointLine,
                 mirrored: true,
                 flipped: true,
             });
@@ -1534,7 +1538,8 @@ mod tests {
             drawing.pitchfork = Some(fork);
             drawing.channel_midline = true;
             drawing.closed = true;
-            drawing.elliott_degree = ElliottDegree::Minuette;
+            drawing.elliott_degree = ElliottDegree::Submicro;
+            drawing.elliott_show_wave = false;
             drawing.selectable = false;
             drawing.listed = false;
             drawing.group = Some("levels".into());
@@ -1745,6 +1750,24 @@ mod tests {
         assert_eq!(
             (drawing.tool_type, drawing.line_style, drawing.vwap),
             (DrawingToolType::AnchoredVWAP, LineStyle::Solid, None)
+        );
+        // A version 10 Elliott wave saved before Show wave keeps its degree and shows its legs.
+        let mut value: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/storage_v10_channels.json")).unwrap();
+        let records = value["drawings"].as_array_mut().unwrap();
+        records.truncate(1);
+        records[0]["drawing"]["tool_type"] = "ElliottImpulse".into();
+        records[0]["drawing"]["elliott_degree"] = "Cycle".into();
+        let (loaded, skipped) = DrawingStorage::from_json(&value.to_string()).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let drawing = &loaded.drawings[0].drawing;
+        assert_eq!(
+            (
+                drawing.tool_type,
+                drawing.elliott_degree,
+                drawing.elliott_show_wave
+            ),
+            (DrawingToolType::ElliottImpulse, ElliottDegree::Cycle, true)
         );
 
         let (v2, skipped) =
