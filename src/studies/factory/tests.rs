@@ -376,6 +376,8 @@ fn catalogue_studies_open_with_their_usual_lengths() {
         ("CMO", "period", Length(9)),
         ("HV", "period", Length(10)),
         ("TSI", "signal_period", Length(13)),
+        ("Correlation Coefficient", "length", Length(20)),
+        ("Correlation - Log", "length", Length(25)),
         ("Knoxville Divergence", "momentum_period", Length(20)),
         ("Knoxville Divergence", "rsi_period", Length(21)),
         ("Knoxville Divergence", "lookback", Length(150)),

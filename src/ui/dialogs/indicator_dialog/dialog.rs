@@ -1939,7 +1939,7 @@ mod tests {
     }
 
     /// The browser finds a study by its conventional full and short names, also with the
-    /// qualifier last, without catching its neighbours.
+    /// qualifier last, without catching its neighbours, and lists a full name holding a dash whole.
     #[test]
     fn search_finds_studies_by_their_full_names() {
         // (search, studies listed, studies not listed)
@@ -2021,6 +2021,11 @@ mod tests {
                 "MA with EMA Cross",
                 &["SMA/EMA Cross"],
                 &["MA Cross", "EMA Cross"],
+            ),
+            (
+                "Correlation - Log",
+                &["Correlation - Log"],
+                &["Correlation Coefficient"],
             ),
             ("Klinger Oscillator", &["Klinger"], &[]),
             ("Linear Regression Curve", &["LinReg"], &["LinReg Slope"]),
@@ -2158,6 +2163,16 @@ mod tests {
             }
         }
         assert!(misses.is_empty(), "{misses:?}");
+        // A full name holding a dash is listed whole, in the coefficient's category.
+        let log = dialog
+            .indicators
+            .iter()
+            .find(|ind| ind.id == "Correlation - Log")
+            .unwrap();
+        assert_eq!(
+            (log.name.as_str(), log.category.as_str()),
+            ("Correlation - Log", "Statistics")
+        );
     }
 
     /// Each study is added with the parameters the factory creates it with until the user
