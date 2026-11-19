@@ -73,9 +73,7 @@ impl TablePosition {
         Self::BottomCenter,
         Self::BottomRight,
     ];
-}
 
-impl TablePosition {
     /// The label study inputs show for this choice.
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -135,9 +133,7 @@ impl TableTextSize {
             Self::Huge => 18.0,
         }
     }
-}
 
-impl TableTextSize {
     /// The label study inputs show for this choice.
     pub(crate) fn label(self) -> &'static str {
         match self {

@@ -15,6 +15,8 @@ pub enum MajorityMode {
 }
 
 impl MajorityMode {
+    const ALL: [Self; 2] = [Self::Percentage, Self::Direction];
+
     /// The label study inputs show for this choice.
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -22,10 +24,6 @@ impl MajorityMode {
             Self::Direction => "Direction",
         }
     }
-}
-
-impl MajorityMode {
-    const ALL: [Self; 2] = [Self::Percentage, Self::Direction];
 }
 
 /// Majority Rule: the share of the last `period` bars whose close rose above the close before.

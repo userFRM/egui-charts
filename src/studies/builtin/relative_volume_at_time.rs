@@ -72,9 +72,7 @@ impl RelativeVolumeAnchor {
             Self::Month => "Month",
         }
     }
-}
 
-impl RelativeVolumeAnchor {
     /// The period that holds trading day `day`, and the days from the period's first day.
     fn locate(self, day: NaiveDate) -> ((i32, u32), u32) {
         match self {

@@ -38,9 +38,7 @@ impl AnchorPeriod {
             Self::Century => "Century",
         }
     }
-}
 
-impl AnchorPeriod {
     /// Identifies the period that holds trading day `day`.
     pub(super) fn key(self, day: NaiveDate) -> (i32, u32) {
         match self {
