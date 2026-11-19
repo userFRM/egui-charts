@@ -533,7 +533,7 @@ impl super::Chart {
             .collect();
         self.user_action(|chart| {
             // A nudge that would take an anchor out of range moves nothing.
-            let _ = chart.drawings.edit_selected(|drawing| {
+            let _ = chart.drawings.edit_selected_as(true, |drawing| {
                 if let Some([x, y]) = drawing.screen_anchor
                     && let Some(anchor) = drawing.chart_points.first()
                 {

@@ -227,6 +227,9 @@ impl StoredDrawing {
         if !d.position_style.is_valid() {
             return Some("position_style".into());
         }
+        if !d.range_settings.is_valid() {
+            return Some("range_settings".into());
+        }
         if !d.marker.is_valid() {
             return Some("marker".into());
         }
@@ -1193,12 +1196,19 @@ mod v1 {
             _ => drawing.font_size,
         };
         drawing.font_weight = FontWeight::Normal;
+        // Released measuring readouts used the fixed size above.
+        drawing.range_settings.font_size = drawing.font_size;
         drawing.text_color = None;
         drawing.background = true;
         drawing.border = true;
         drawing.border_color = None;
         drawing.channel_midline = false;
         drawing.theme_shade = false;
+        drawing.regression_trend = None;
+        drawing.position_size = None;
+        drawing.position_target_color = None;
+        drawing.position_stop_color = None;
+        drawing.elliott_degree = crate::drawings::ElliottDegree::default();
         // Info lines already displayed readouts; other lines keep their old text placement.
         drawing.line_measurements = if tool_type == DrawingToolType::InfoLine {
             LineMeasurements::for_tool(tool_type)
@@ -1473,6 +1483,24 @@ mod tests {
             glyph: "🚀".into(),
             show_glyph: true,
             glyph_color: Some([21, 22, 23, 24]),
+        };
+        d.range_settings = crate::drawings::RangeSettings {
+            price_change: false,
+            percent_change: false,
+            pip_change: false,
+            bar_count: false,
+            elapsed_time: false,
+            volume: false,
+            text_color: Some([25, 26, 27, 28]),
+            font_size: 18.0,
+            background: false,
+            background_color: Some([29, 30, 31, 32]),
+            border: false,
+            border_color: Some([33, 34, 35, 36]),
+            border_width: Some(2.5),
+            border_style: Some(LineStyle::Dashed),
+            extend_top: true,
+            extend_bottom: true,
         };
         d.z_order = -3;
         d.update_screen_coords(bar_to_x, price_to_y);
@@ -1758,6 +1786,8 @@ mod tests {
             want.line_style = LineStyle::Solid;
             // Only the text label rendered text here, in a fixed 14 pt font.
             want.font_size = 14.0;
+            want.elliott_degree = ElliottDegree::default(); // Version 1 waves read at Minor.
+            want.range_settings.font_size = 14.0;
             want.text_color = None;
             want.background = true;
             want.border = true;
@@ -1807,6 +1837,17 @@ mod tests {
             (DrawingToolType::ElliottImpulse, ElliottDegree::Cycle, true)
         );
 
+        value["drawings"][0]["drawing"]
+            .as_object_mut()
+            .unwrap()
+            .remove("elliott_degree");
+        let (loaded, skipped) = DrawingStorage::from_json(&value.to_string()).unwrap();
+        assert!(skipped.is_empty());
+        assert_eq!(
+            loaded.drawings[0].drawing.elliott_degree,
+            ElliottDegree::Minor
+        );
+
         // A version 10 sticker saved before glyph angles still loads upright.
         let mut value: serde_json::Value =
             serde_json::from_str(include_str!("fixtures/storage_v10_channels.json")).unwrap();
@@ -1831,6 +1872,9 @@ mod tests {
             want.user_edit_enabled = true; // Older files allow user edits.
             want.label = None; // Earlier files have no object name.
             want.position_sizing = PositionSizing::default(); // Earlier files use unit sizing.
+            // Earlier positions keep their greyed zones when no colours were stored.
+            want.position_target_color = None;
+            want.position_stop_color = None;
             want.position_readout.persistent = true; // Earlier files always showed statistics.
             want.vwap = None; // Earlier files use the default bands.
             want.theme_shade = false; // Earlier files draw their stored colours on every theme.
@@ -1851,6 +1895,11 @@ mod tests {
             // Earlier files draw no channel prices and the default middle line.
             want.anchor_price_style = None;
             want.middle_line = crate::drawings::MiddleLineStyle::default();
+            // Earlier files draw every readout at their saved font size.
+            want.range_settings = crate::drawings::RangeSettings {
+                font_size: want.font_size,
+                ..Default::default()
+            };
             // Earlier files show a pin's text and carry no glyph on a signpost.
             want.marker = crate::drawings::AnnotationMarker {
                 show_text: true,
@@ -2492,6 +2541,23 @@ mod tests {
             assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
             let (twice, skipped) = DrawingStorage::from_json(&once.to_json().unwrap()).unwrap();
             assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
+            if matches!(tool, T::DateRange | T::DateAndPriceRange) {
+                let mut saved: serde_json::Value =
+                    serde_json::from_str(&once.to_json().unwrap()).unwrap();
+                saved["drawings"][0]["drawing"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("range_settings");
+                let (loaded, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+                assert!(skipped.is_empty());
+                assert_eq!(
+                    loaded.drawings[0].drawing.range_settings,
+                    crate::drawings::RangeSettings {
+                        font_size: font.unwrap(),
+                        ..Default::default()
+                    }
+                );
+            }
             for storage in [&once, &twice] {
                 let drawing = &storage.drawings[0].drawing;
                 let tint = if prices[1] < prices[0] {
@@ -2979,7 +3045,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 42] = [
+        let cases: [(Spoil, &str); 44] = [
             (
                 |s| {
                     first(s)
@@ -3033,6 +3099,14 @@ mod tests {
             (
                 |s| first(s).drawing.position_style.font_size = f32::NAN,
                 "invalid position_style",
+            ),
+            (
+                |s| first(s).drawing.range_settings.font_size = f32::NAN,
+                "invalid range_settings",
+            ),
+            (
+                |s| first(s).drawing.range_settings.border_width = Some(0.0),
+                "invalid range_settings",
             ),
             (|s| first(s).drawing.marker.glyph.clear(), "invalid marker"),
             (

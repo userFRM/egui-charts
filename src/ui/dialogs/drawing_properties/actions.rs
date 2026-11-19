@@ -357,6 +357,22 @@ impl DrawingProps {
                     line_measurements.text_vertical_align,
                     line_measurements.text_orientation,
                     line_measurements.across_panes,
+                    range_settings.price_change,
+                    range_settings.percent_change,
+                    range_settings.pip_change,
+                    range_settings.bar_count,
+                    range_settings.elapsed_time,
+                    range_settings.volume,
+                    range_settings.text_color,
+                    range_settings.font_size,
+                    range_settings.background,
+                    range_settings.background_color,
+                    range_settings.border,
+                    range_settings.border_color,
+                    range_settings.border_width,
+                    range_settings.border_style,
+                    range_settings.extend_top,
+                    range_settings.extend_bottom,
                     price_axis_label,
                     time_axis_label,
                     elliott_degree,
@@ -549,6 +565,11 @@ impl DrawingProps {
             }
             if !settings.position_style.is_valid() {
                 return Err("Position line width must be 1 to 100 and font size 1 to 256");
+            }
+            if !settings.range_settings.is_valid() {
+                return Err(
+                    "Range label size must be 1 to 256 and border width above 0 and at most 100",
+                );
             }
             if !settings.marker.is_valid() {
                 return Err("Glyph must be 1 to 32 bytes");

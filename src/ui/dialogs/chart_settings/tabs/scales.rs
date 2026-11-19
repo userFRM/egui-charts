@@ -2,7 +2,10 @@
 
 use super::super::SettingsDialog;
 use super::canvas::line_style_preview;
-use super::{pick_color, price_line_dropdown, styled_checkbox, styled_dropdown, trading_option};
+use super::{
+    pick_color, price_line_dropdown, price_line_dropdown_pinning, styled_checkbox, styled_dropdown,
+    trading_option,
+};
 use crate::localization as l10n;
 use crate::model::{LineStyle, PriceLineSource};
 use crate::scales::WeekdayNames;
@@ -399,29 +402,24 @@ impl SettingsDialog {
                 );
                 self.draw_setting_row_with_controls(ui, "Bid and ask", theme, |ui, dialog| {
                     let scales = &mut dialog.settings.scales_and_lines;
-                    let before = (
-                        scales.show_bid_ask,
-                        scales.show_bid_ask_lines.unwrap_or(scales.show_bid_ask),
-                    );
-                    let mut line = before.1;
-                    price_line_dropdown(
+                    price_line_dropdown_pinning(
                         ui,
                         "bid_ask_mode",
                         theme.ui.text,
                         &mut scales.show_bid_ask,
-                        &mut line,
+                        &mut scales.show_bid_ask_lines,
                     );
-                    // Any choice pins the lines, which otherwise follow the tags.
-                    if (scales.show_bid_ask, line) != before {
-                        scales.show_bid_ask_lines = Some(line);
-                    }
                 });
-                styled_checkbox(
-                    ui,
-                    &mut self.settings.scales_and_lines.show_high_low,
-                    "High and low price labels",
-                    theme.ui.text,
-                );
+                self.draw_setting_row_with_controls(ui, "High and low", theme, |ui, dialog| {
+                    let scales = &mut dialog.settings.scales_and_lines;
+                    price_line_dropdown_pinning(
+                        ui,
+                        "high_low_mode",
+                        theme.ui.text,
+                        &mut scales.show_high_low,
+                        &mut scales.show_high_low_lines,
+                    );
+                });
                 ui.add_space(theme.spacing.xxxl);
                 self.draw_section_header(ui, "SCALE MODES", theme);
                 if styled_checkbox(

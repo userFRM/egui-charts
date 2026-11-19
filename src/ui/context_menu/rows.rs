@@ -200,8 +200,10 @@ pub enum MenuRowId {
     BidAndAsk,
     /// "Bid and ask lines".
     BidAndAskLines,
-    /// "High and low".
+    /// "High and low labels".
     HighAndLow,
+    /// "High and low lines".
+    HighAndLowLines,
     /// "Scale settings" in the price axis menu.
     ScaleSettings,
     /// "UTC" in the time axis menu.

@@ -33,6 +33,9 @@ use paint::Tessellated;
 /// [`drawing_to_stored`](crate::drawings::persistence::drawing_to_stored). A host that writes
 /// to [`DrawingManager::drawings`] directly queues nothing. Automatic chart storage disables
 /// these notifications; use [`DrawingManager::set_sync_enabled`] to consume both paths.
+///
+/// These actions say what to store. [`ChartEvent::Drawing`](crate::widget::ChartEvent::Drawing)
+/// says what happened to each drawing, by its id and without coalescing.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum DrawingSyncAction {
@@ -45,6 +48,39 @@ pub enum DrawingSyncAction {
     /// A batch of drawings should be restored from backend storage. The manager never
     /// queues it.
     RestoreDrawings(Vec<crate::drawings::persistence::StoredDrawing>),
+}
+
+/// What happened to a drawing, reported by
+/// [`ChartEvent::Drawing`](crate::widget::ChartEvent::Drawing).
+///
+/// One edit of one drawing can report several kinds, in the order of this list: `Hidden` or
+/// `Shown`, then `Moved` or `AnchorsChanged`, then `PropertiesChanged`. An edit that leaves the
+/// drawing as it was reports nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DrawingEventKind {
+    /// The drawing joined [`DrawingManager::drawings`]: completed with a tool, pasted,
+    /// duplicated, copied by a drag, added by the host, left over by a partial erase, or brought
+    /// back by undo or redo. Drawings restored from storage are not reported.
+    Created,
+    /// The drawing left [`DrawingManager::drawings`]: deleted, erased, removed with its pane, or
+    /// taken out by undo or redo.
+    Removed,
+    /// [`Drawing::visible`] turned off. Hiding every drawing with
+    /// [`DrawingManager::set_hidden`] changes no drawing and reports nothing.
+    Hidden,
+    /// [`Drawing::visible`] turned on.
+    Shown,
+    /// The drawing was moved as a whole: its body or middle handle dragged, the arrow keys pressed
+    /// while it was selected, or such a move undone or redone. Anchors that stay at the point they
+    /// annotate, such as a callout's, keep their place.
+    Moved,
+    /// Its anchors changed in any other way, such as a dragged handle, a partial erase or a host
+    /// edit of [`Drawing::chart_points`].
+    AnchorsChanged,
+    /// Any other saved setting changed, such as its style, text, lock, layer, pane, group,
+    /// folder, name, notes or the intervals it shows on.
+    PropertiesChanged,
 }
 
 /// Snapshot of drawing-related state from the central application state.
@@ -323,6 +359,11 @@ pub struct DrawingManager {
     pub pending_sync: Arc<Mutex<Vec<DrawingSyncAction>>>,
     /// Whether edits emit per-drawing storage notifications.
     pub(crate) sync_enabled: bool,
+    /// Drawing changes for the chart to report as `ChartEvent::Drawing`, oldest first, at most
+    /// 1024: a manager outside a chart keeps only the newest.
+    pub(crate) events: std::collections::VecDeque<(usize, DrawingEventKind)>,
+    /// Changes left out of `events` once it held 1024.
+    pub(crate) events_dropped: usize,
     /// Tells this manager from one that replaced it, such as `Chart::load_drawings` makes, whose
     /// drawing ids start again: unique to each manager, and kept when the manager moves or reads
     /// its drawings from storage again.
@@ -405,6 +446,8 @@ impl DrawingManager {
             hidden: false,
             pending_sync: Arc::new(Mutex::new(Vec::new())),
             sync_enabled: true,
+            events: std::collections::VecDeque::new(),
+            events_dropped: 0,
             identity: crate::model::next_revision(),
             mapped_bars: None,
             mapped_key: None,
@@ -497,8 +540,14 @@ impl DrawingManager {
     /// Apply a style edit to every selected drawing that accepts user edits as one undo step.
     /// An edit after which saving would refuse one of them, as [`Self::edit_drawing`] describes,
     /// changes none of them, records no undo step and returns the reason.
-    pub fn edit_selected(
+    pub fn edit_selected(&mut self, edit: impl FnMut(&mut Drawing)) -> Result<(), &'static str> {
+        self.edit_selected_as(false, edit)
+    }
+
+    /// [`Self::edit_selected`]; `moved` records the edit as a move of the drawings as a whole.
+    pub(crate) fn edit_selected_as(
         &mut self,
+        moved: bool,
         mut edit: impl FnMut(&mut Drawing),
     ) -> Result<(), &'static str> {
         let before: Vec<_> = self
@@ -535,13 +584,17 @@ impl DrawingManager {
             return Err(reason);
         }
         for (_, old) in &before {
-            self.queue_edit(old);
+            self.queue_change(old, moved);
         }
         self.painted
             .get_mut()
             .unwrap_or_else(|e| e.into_inner())
             .retain(|p| !before.iter().any(|(_, d)| d.id == p.id));
-        self.history.push_snapshot(before);
+        if moved {
+            self.history.push_moved_snapshot(before);
+        } else {
+            self.history.push_snapshot(before);
+        }
         Ok(())
     }
 
@@ -574,20 +627,17 @@ impl DrawingManager {
     /// Undoes the last drawing operation. Returns `true` if an operation was undone.
     /// A drawing keeps its current [`Drawing::user_edit_enabled`].
     pub fn undo(&mut self) -> bool {
-        self.step_history(HistoryService::undo)
+        self.step_history(false)
     }
 
     /// Redoes the last undone operation. Returns `true` if an operation was redone.
     /// A drawing keeps its current [`Drawing::user_edit_enabled`].
     pub fn redo(&mut self) -> bool {
-        self.step_history(HistoryService::redo)
+        self.step_history(true)
     }
 
     /// Runs an undo or redo step and queues the change it made to its drawing.
-    fn step_history(
-        &mut self,
-        step: fn(&mut HistoryService, &mut Vec<Drawing>) -> Option<usize>,
-    ) -> bool {
+    fn step_history(&mut self, redo: bool) -> bool {
         let before: Vec<_> = self
             .drawings
             .iter()
@@ -600,7 +650,19 @@ impl DrawingManager {
             .iter()
             .map(|d| (d.id, d.user_edit_enabled))
             .collect();
-        let Some(_) = step(&mut self.history, &mut self.drawings) else {
+        let (ids, moved) = self.history.peek(redo).unwrap_or_default();
+        let old: Vec<Drawing> = self
+            .drawings
+            .iter()
+            .filter(|d| ids.contains(&d.id))
+            .cloned()
+            .collect();
+        let stepped = if redo {
+            self.history.redo(&mut self.drawings)
+        } else {
+            self.history.undo(&mut self.drawings)
+        };
+        let Some(_) = stepped else {
             return false;
         };
         self.painted
@@ -618,9 +680,9 @@ impl DrawingManager {
                 (None, false) => {}
             }
         }
+        let affected = self.history.affected_ids().to_vec();
         // A state recorded before the drawing's first edit comes back without an edit time.
         let now = chrono::Utc::now().timestamp_millis();
-        let affected = self.history.affected_ids().to_vec();
         for drawing in self
             .drawings
             .iter_mut()
@@ -630,6 +692,9 @@ impl DrawingManager {
             if let Some(&(_, enabled)) = permissions.iter().find(|(id, _)| *id == drawing.id) {
                 drawing.user_edit_enabled = enabled;
             }
+        }
+        for &id in &affected {
+            self.report_change(id, old.iter().find(|d| d.id == id), moved);
         }
         // A step that hides a selected drawing deselects it, as hiding it by an edit does.
         self.selection.prune(
@@ -647,6 +712,30 @@ impl DrawingManager {
     fn stamp(&mut self, id: usize) {
         if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
             drawing.modified_at = Some(chrono::Utc::now().timestamp_millis());
+        }
+    }
+
+    /// Records a change of drawing `id` for the chart to report.
+    fn report(&mut self, id: usize, kind: DrawingEventKind) {
+        if self.events.len() == 1024 {
+            self.events.pop_front();
+            self.events_dropped = self.events_dropped.saturating_add(1);
+        }
+        self.events.push_back((id, kind));
+    }
+
+    /// Records how drawing `id` changed from `old`, `None` when it did not exist, to its current
+    /// state. `moved` says the change of its anchors moved it as a whole.
+    fn report_change(&mut self, id: usize, old: Option<&Drawing>, moved: bool) {
+        let new = self.drawings.iter().find(|d| d.id == id);
+        let kinds = match (old, new) {
+            (None, Some(_)) => [Some(DrawingEventKind::Created), None, None],
+            (Some(_), None) => [Some(DrawingEventKind::Removed), None, None],
+            (Some(old), Some(new)) => changes(old, new, moved),
+            (None, None) => [None, None, None],
+        };
+        for kind in kinds.into_iter().flatten() {
+            self.report(id, kind);
         }
     }
 
@@ -741,6 +830,11 @@ impl DrawingManager {
     }
 
     fn queue_edit(&mut self, old: &Drawing) {
+        self.queue_change(old, false);
+    }
+
+    /// Queues the storage action for an edit of `old` and records what it changed.
+    fn queue_change(&mut self, old: &Drawing, moved: bool) {
         if let Some(drawing) = self.drawings.iter().find(|d| d.id == old.id) {
             let action = match (old.saveable, drawing.saveable) {
                 (true, false) => DrawingSyncAction::Delete(sync_id(old)),
@@ -748,6 +842,7 @@ impl DrawingManager {
                 _ => DrawingSyncAction::UpdateDrawing(old.id),
             };
             self.queue(action);
+            self.report_change(old.id, Some(old), moved);
         }
     }
 
@@ -929,6 +1024,63 @@ pub(crate) fn sync_id(drawing: &Drawing) -> String {
         .stored_id
         .clone()
         .unwrap_or_else(|| drawing.id.to_string())
+}
+
+/// What a change from `old` to `new` reports, in the order of `DrawingEventKind`.
+fn changes(old: &Drawing, new: &Drawing, moved: bool) -> [Option<DrawingEventKind>; 3] {
+    use DrawingEventKind as Kind;
+    let visibility = match (old.visible, new.visible) {
+        (true, false) => Some(Kind::Hidden),
+        (false, true) => Some(Kind::Shown),
+        _ => None,
+    };
+    let anchors = anchors_differ(old, new).then_some(if moved {
+        Kind::Moved
+    } else {
+        Kind::AnchorsChanged
+    });
+    let properties = properties_differ(old, new).then_some(Kind::PropertiesChanged);
+    [visibility, anchors, properties]
+}
+
+/// Whether the anchors differ. A NaN matches a NaN, so a drawing that saving already refuses
+/// reports no change it did not make.
+fn anchors_differ(old: &Drawing, new: &Drawing) -> bool {
+    let same = |a: f64, b: f64| a == b || (a.is_nan() && b.is_nan());
+    let same_screen = match (old.screen_anchor, new.screen_anchor) {
+        (Some(a), Some(b)) => a
+            .into_iter()
+            .zip(b)
+            .all(|(a, b)| same(f64::from(a), f64::from(b))),
+        (None, None) => true,
+        _ => false,
+    };
+    !same_screen
+        || old.chart_points.len() != new.chart_points.len()
+        || old
+            .chart_points
+            .iter()
+            .zip(&new.chart_points)
+            .any(|(a, b)| {
+                !same(f64::from(a.bar_idx), f64::from(b.bar_idx)) || !same(a.price, b.price)
+            })
+}
+
+/// Whether a saved setting other than visibility and anchors differs. Compares the saved form,
+/// so a setting added to `Drawing` later is covered without a change here.
+fn properties_differ(old: &Drawing, new: &Drawing) -> bool {
+    let saved = |drawing: &Drawing| {
+        let mut value = serde_json::to_value(drawing).ok()?;
+        let fields = value.as_object_mut()?;
+        fields.remove("visible");
+        fields.remove("screen_anchor");
+        Some(value)
+    };
+    old.notes != new.notes
+        || match (saved(old), saved(new)) {
+            (Some(old), Some(new)) => old != new,
+            _ => true,
+        }
 }
 
 /// Whether `kept`, a drawing that storage does not hold, is `read`, the drawing read under its
