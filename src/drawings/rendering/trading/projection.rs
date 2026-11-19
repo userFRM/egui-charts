@@ -1,7 +1,7 @@
 //! Projection sector rendering.
 
 use crate::drawings::domain::Drawing;
-use crate::drawings::rendering::style::ellipse_arc;
+use crate::drawings::rendering::shapes::projection_arc;
 use crate::drawings::validation::MAX_PROJECTION_LEVEL;
 use crate::model::LineStyle;
 use crate::painting::dashed_line::draw_dashed_polyline;
@@ -72,15 +72,16 @@ impl Drawing {
             level.visible && level.coefficient > 0.0 && level.coefficient <= MAX_PROJECTION_LEVEL
         });
         for level in levels.clone() {
+            let width = level.width.unwrap_or(self.stroke_width);
             stroke(
-                ellipse_arc(
+                projection_arc(
                     center,
-                    Vec2::splat(radius * level.coefficient),
+                    radius * level.coefficient,
                     range,
-                    clip,
+                    painter.clip_rect().expand(width + 2.0),
                     ppp,
                 ),
-                Stroke::new(level.width.unwrap_or(self.stroke_width), rgba(level.color)),
+                Stroke::new(width, rgba(level.color)),
                 level.line_style,
                 false,
             );
@@ -153,6 +154,131 @@ mod tests {
     use crate::drawings::DrawingToolType;
     use egui::{Rect, Shape, epaint::ColorMode};
     use serde_json::{Value, json};
+
+    /// A wide level can enter the pane while its centreline is outside the sampling clip.
+    #[test]
+    fn wide_projection_levels_keep_detail_at_the_pane_edge() {
+        let pane = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+        for (center, coefficient, radius) in [
+            (egui::pos2(552.2, 450.0), 4.0, 400.0),
+            (egui::pos2(-23.5, 1100.0), 12.0, 1200.0),
+        ] {
+            let mut drawing = Drawing::new(1, DrawingToolType::ProjectionTool);
+            drawing.points = vec![
+                center,
+                center + egui::vec2(100.0, 0.0),
+                center - egui::vec2(0.0, 100.0),
+            ];
+            let level = &mut drawing.projection.as_mut().unwrap().levels[0];
+            level.coefficient = coefficient;
+            level.color = [200, 0, 0, 255];
+            level.width = Some(100.0);
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(2.0);
+            let mut paint_space = (Rect::NOTHING, 0.0);
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, pane.size() * 2.0)),
+                    ..Default::default()
+                },
+                |ui| {
+                    let painter = ui.painter().with_clip_rect(pane);
+                    paint_space = (painter.clip_rect(), painter.pixels_per_point());
+                    drawing.render_projection_tool(&painter);
+                },
+            );
+            let points = output
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    Shape::Path(path)
+                        if path.stroke
+                            == Stroke::new(100.0, Color32::from_rgb(200, 0, 0)).into() =>
+                    {
+                        Some(path.points.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            output.drop_without_applying_deltas();
+            assert_eq!(paint_space, (pane, 2.0));
+            assert!(
+                points
+                    .iter()
+                    .all(|p| (center.distance(*p) - radius).abs() < 0.01)
+            );
+            // A circular chord's sagitta is its radius minus its midpoint's distance to the centre.
+            // A quarter physical pixel at 2x is 0.125 points, including the visible stroke's fringe.
+            for edge in points.windows(2) {
+                if Rect::from_two_pos(edge[0], edge[1])
+                    .expand(50.0)
+                    .intersects(pane)
+                {
+                    let error = radius - center.distance(edge[0].lerp(edge[1], 0.5));
+                    assert!(
+                        error <= 0.125,
+                        "visible level chord has {error} points of error: {edge:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// An offscreen outer arc still determines the radial colours visible inside the pane.
+    #[test]
+    fn projection_gradient_stays_radial_when_arc_is_offscreen() {
+        let mut drawing = Drawing::new(1, DrawingToolType::ProjectionTool);
+        drawing.points = vec![
+            egui::pos2(400.0, 300.0),
+            egui::pos2(1600.0, 300.0),
+            egui::pos2(400.0, -900.0),
+        ];
+        let config = drawing.projection.as_mut().unwrap();
+        config.levels.clear();
+        config.trend_visible = false;
+        config.background_colors = [[255, 0, 0, 255], [0, 0, 255, 255]];
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                ..Default::default()
+            },
+            |ui| drawing.render_projection_tool(ui.painter()),
+        );
+        let mesh = output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                Shape::Mesh(mesh) => Some(mesh.clone()),
+                _ => None,
+            })
+            .unwrap();
+        output.drop_without_applying_deltas();
+        // Radius 400 at -22.5 degrees is one third of the 1200 radius, hence blue = 255 / 3.
+        let point = egui::pos2(769.5518, 146.9266);
+        let cross = |a: Vec2, b: Vec2| a.x * b.y - a.y * b.x;
+        let blue = mesh
+            .indices
+            .chunks_exact(3)
+            .find_map(|triangle| {
+                let [a, b, c] =
+                    [triangle[0], triangle[1], triangle[2]].map(|i| mesh.vertices[i as usize]);
+                let area = cross(b.pos - a.pos, c.pos - a.pos);
+                let wb = cross(point - a.pos, c.pos - a.pos) / area;
+                let wc = cross(b.pos - a.pos, point - a.pos) / area;
+                let wa = 1.0 - wb - wc;
+                (wa >= 0.0 && wb >= 0.0 && wc >= 0.0).then_some(
+                    wa * f32::from(a.color.b())
+                        + wb * f32::from(b.color.b())
+                        + wc * f32::from(c.color.b()),
+                )
+            })
+            .unwrap();
+        assert!(
+            (blue - 85.0).abs() < 0.5,
+            "blue at one third radius: {blue}"
+        );
+    }
 
     /// Radii, level arcs and the radial gradient follow the sector settings in screen space.
     #[test]
