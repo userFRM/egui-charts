@@ -462,9 +462,10 @@ impl CustomProfileSession {
 /// Which hours divide a session volume profile chart into sessions.
 ///
 /// Only intraday charts are divided this way: daily and longer bars profile by trading date.
-/// Bars outside regular, extended or custom hours still join the session before them, so a host
-/// that wants them left out should not supply them. The pre-market, post-market and segment
-/// choices profile only the bars of their hours, each bar in the hours it opens in.
+/// Every choice but [`Self::Chart`] profiles only the bars of its hours, each bar in the hours it
+/// opens in: a profile takes a day's bars from its first in those hours to its last, so the bars
+/// of a midday break inside them stay in it, and the bars before and after, such as the
+/// post-market of a regular-hours profile, join no profile.
 ///
 /// ```
 /// use egui_charts::model::{ProfileSession, TradeProfileSettings};
@@ -497,13 +498,13 @@ pub enum ProfileSession {
     Segments,
 }
 
-#[cfg(feature = "studies")]
 impl ProfileSession {
     /// `clock` dividing intraday bars at the opens of the hours this choice selects, for an
     /// instrument trading `hours` in `zone`: a window opening every day, in its own zone or else
     /// `zone`, or `hours` with or without their extended windows. `None` for [`Self::Chart`],
     /// for regular or extended hours without `hours`, for pre-market or post-market without
     /// extended windows, and for segments without extended or overnight windows.
+    #[cfg(any(feature = "widget", feature = "studies"))]
     pub(crate) fn session_clock(
         &self,
         clock: &super::BarClock,
@@ -887,6 +888,21 @@ pub struct ChartTypeParams {
     pub pnf_reversal: u32,
     /// Line Break: the number of lines a close must break through to reverse, 1 to 10.
     pub line_break_count: usize,
+    /// Point and Figure: with a reversal of one box, draw a reversal that follows a column of one
+    /// symbol in that column, which then holds both symbols. No effect at larger reversals.
+    pub pnf_one_step_back: bool,
+    /// Renko: label the last real price on the price scale; `false` labels the close of the
+    /// newest brick.
+    pub renko_real_price: bool,
+    /// Kagi: label the last real price on the price scale; `false` labels the end of the newest
+    /// line.
+    pub kagi_real_price: bool,
+    /// Line Break: label the last real price on the price scale; `false` labels the close of
+    /// the newest line.
+    pub line_break_real_price: bool,
+    /// Point and Figure: label the last real price on the price scale; `false` labels the end
+    /// of the newest column.
+    pub pnf_real_price: bool,
     /// Baseline: where the base line is drawn.
     pub baseline: BaselineLevel,
     /// Columns: the price the columns rise above or fall below; `None` draws them up from the
@@ -1016,6 +1032,11 @@ impl Default for ChartTypeParams {
             pnf_box_size: 1.0,
             pnf_reversal: 3,
             line_break_count: 3,
+            pnf_one_step_back: false,
+            renko_real_price: true,
+            kagi_real_price: true,
+            line_break_real_price: true,
+            pnf_real_price: true,
             baseline: BaselineLevel::PercentOfPane(50.0),
             columns_base: None,
             tpo_period_minutes: 30,
@@ -1092,6 +1113,20 @@ impl ChartTypeParams {
         Self {
             renko_brick_size: atr * multiplier,
             ..Default::default()
+        }
+    }
+
+    /// Whether the price scale of `chart_type` labels the close of its newest element instead
+    /// of the last real price.
+    #[cfg(feature = "widget")]
+    pub(crate) fn labels_element_price(&self, chart_type: super::ChartType) -> bool {
+        use super::ChartType::{Kagi, LineBreak, PointAndFigure, Renko};
+        match chart_type {
+            Renko => !self.renko_real_price,
+            Kagi => !self.kagi_real_price,
+            LineBreak => !self.line_break_real_price,
+            PointAndFigure => !self.pnf_real_price,
+            _ => false,
         }
     }
 
