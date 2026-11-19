@@ -468,7 +468,8 @@ impl Drawing {
 
         let icon_size = crate::styles::typography::font_size(self.font_size);
         let rect = egui::Rect::from_center_size(pos, egui::Vec2::splat(icon_size));
-        if crate::drawings::glyphs::paint(painter, icon, rect, color) {
+        let angle = self.glyph_radians();
+        if crate::drawings::glyphs::paint(painter, icon, rect, color, angle) {
             return;
         }
 
@@ -491,14 +492,20 @@ impl Drawing {
             );
         }
 
-        // Icon
-        painter.text(
-            pos,
-            egui::Align2::CENTER_CENTER,
-            icon,
+        let galley = painter.layout_no_wrap(
+            icon.to_owned(),
             egui::FontId::proportional(icon_size),
             color,
         );
+        if !galley.is_empty() {
+            let min = egui::Align2::CENTER_CENTER
+                .anchor_size(pos, galley.size())
+                .min;
+            painter.add(
+                egui::epaint::TextShape::new(min, galley, color)
+                    .with_angle_and_anchor(angle, egui::Align2::CENTER_CENTER),
+            );
+        }
     }
 }
 

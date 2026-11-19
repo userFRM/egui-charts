@@ -57,8 +57,9 @@ impl BarClock {
         self.with_session_hours(zone, session, extended_hours, extended_hours)
     }
 
-    /// As [`Self::with_session`], with overnight windows only when both flags are set.
-    pub(crate) fn with_session_hours(
+    /// As [`Self::with_session`], with overnight windows only when both flags are set, as a
+    /// [`HistoryRequest`](crate::data::HistoryRequest) selects them.
+    pub fn with_session_hours(
         mut self,
         zone: super::TimezoneId,
         mut session: super::Session,
@@ -408,6 +409,13 @@ impl BarClock {
         sessions
             .with_calendar_zone(self.timezone.clone())
             .with_timeframe(self.timeframe.unwrap_or(Timeframe::Min1))
+    }
+
+    /// The trading hours this clock keeps, as [`with_session_hours`](Self::with_session_hours)
+    /// selected them.
+    #[cfg(feature = "studies")]
+    pub(crate) fn session(&self) -> Option<&super::Session> {
+        self.session.as_deref()?.session()
     }
 
     /// Whether this clock restricts bars to exchange trading windows.
