@@ -2682,7 +2682,7 @@ mod tests {
             preset.stop_loss = Some(Bracket::new(BracketMode::BalancePercent, 1.0));
             trading
                 .presets
-                .entry(broker.account_id().to_owned())
+                .entry(trading.account_id.clone())
                 .or_default()
                 .push(preset);
             let frame = |trading: &mut Trading, events| {
