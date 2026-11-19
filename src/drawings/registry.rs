@@ -393,7 +393,8 @@ pub(crate) mod tests {
         chart.drawings_mut().custom_tool_defaults = manager.custom_tool_defaults.clone();
         chart.set_symbol("A");
         chart.set_symbol("B");
-        assert!(chart.replace_drawings(Vec::new()).is_empty());
+        let saved = chart.save_drawings().unwrap().to_json().unwrap();
+        assert!(chart.load_drawings(&saved).unwrap().is_empty());
         assert_eq!(
             chart
                 .drawings()
