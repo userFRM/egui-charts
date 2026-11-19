@@ -145,7 +145,9 @@ macro_rules! input_spec {
             crate::studies::InputValue::Choice(
                 choices.iter().position(|v| *v == $value).unwrap_or(0),
             ),
-            crate::studies::InputKind::Choice(choices.iter().map(|v| format!("{v:?}")).collect()),
+            crate::studies::InputKind::Choice(
+                choices.iter().map(|v| v.label().to_owned()).collect(),
+            ),
         )
     }};
     ($id:expr, $value:expr, toggle($label:expr)) => {
@@ -162,6 +164,14 @@ macro_rules! input_spec {
             $label,
             crate::studies::InputValue::Timeframe($value),
             crate::studies::InputKind::Timeframe,
+        )
+    };
+    ($id:expr, $value:expr, text($label:expr)) => {
+        crate::studies::StudyInput::new(
+            $id,
+            $label,
+            crate::studies::InputValue::Text($value.clone()),
+            crate::studies::InputKind::Text,
         )
     };
     ($id:expr, $value:expr, color($label:expr)) => {
@@ -212,6 +222,12 @@ macro_rules! input_assign {
     ($value:expr, timeframe($label:expr)) => {
         match $value {
             crate::studies::InputValue::Timeframe(v) => v,
+            _ => unreachable!(),
+        }
+    };
+    ($value:expr, text($label:expr)) => {
+        match $value {
+            crate::studies::InputValue::Text(v) => v,
             _ => unreachable!(),
         }
     };

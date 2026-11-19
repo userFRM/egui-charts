@@ -236,6 +236,8 @@ pub(crate) struct Market<'a> {
     pub session_open: Option<chrono::DateTime<chrono::Utc>>,
     /// The latest account fill for this symbol.
     pub last_fill: Option<f64>,
+    /// The position profit unit, shared by its chart label and the depth ladder.
+    pub pnl_unit: crate::chart::PnlUnit,
     /// URI of the symbol logo, from the chart instrument or the host description of the symbol.
     pub logo: Option<&'a str>,
 }
@@ -262,6 +264,8 @@ pub(crate) enum Action {
     Cancel(Vec<OrderId>),
     /// Ask the user to confirm this change before sending it.
     Confirm(Box<TradingLineAction>),
+    /// Open this working order on the Order tab to modify it.
+    Edit(Order),
 }
 
 /// The state of the order ticket panel.
@@ -296,6 +300,8 @@ pub(crate) struct OrderTicket {
     cancel: Option<Vec<OrderId>>,
     /// Why the ladder refused its last order, shown on the DOM tab.
     dom_error: Option<String>,
+    /// The working order the Order tab modifies instead of placing a new one.
+    pub(super) editing: Option<Order>,
 }
 
 impl Default for OrderTicket {
@@ -326,6 +332,7 @@ impl Default for OrderTicket {
             confirm: None,
             cancel: None,
             dom_error: None,
+            editing: None,
         }
     }
 }
@@ -333,6 +340,7 @@ impl Default for OrderTicket {
 impl OrderTicket {
     /// Fills the ticket from `request` and opens it on its Order tab.
     pub fn open(&mut self, request: &OrderRequest) {
+        self.editing = None;
         self.confirm = None;
         self.cancel = None;
         if self.symbol != request.symbol {
@@ -389,6 +397,12 @@ impl OrderTicket {
     pub(super) fn change_symbol(&mut self, symbol: &str) {
         let request = OrderRequest::new(symbol, self.side, self.quantity, OrderType::Market);
         self.open(&request);
+    }
+
+    /// Opens the working order with its quantity, prices, time in force and brackets.
+    pub(super) fn edit(&mut self, order: &Order) {
+        self.open(&order.request);
+        self.editing = Some(order.clone());
     }
 
     /// The ask for a buy and the bid for a sell, if the market quotes them.
@@ -479,7 +493,14 @@ impl OrderTicket {
                     return Err(l10n::format_text(
                         ctx,
                         "Each take-profit level needs at least the minimum quantity of {minimum}",
-                        &[("minimum", rules.min_quantity.to_string())],
+                        &[(
+                            "minimum",
+                            limit_text(
+                                &market.numbers(),
+                                rules.min_quantity,
+                                decimals(rules.quantity_step),
+                            ),
+                        )],
                     ));
                 }
                 let per_point = quantity * rules.point_value;
@@ -550,14 +571,14 @@ impl OrderTicket {
             Kind::StopLimit => return Err("Enter a positive stop price".into()),
         };
         let rules = market.rules;
+        let reason = |limit: QuantityLimit| {
+            limit.message(ctx, &market.numbers(), decimals(rules.quantity_step))
+        };
         // Units and value size the order before its exits; risk sizing needs the stop loss first.
         let mut quantity = match self.sizing {
-            Sizing::Units => {
-                Some(order_quantity(self.quantity, rules).map_err(|limit| limit.message(ctx))?)
-            }
+            Sizing::Units => Some(order_quantity(self.quantity, rules).map_err(reason)?),
             Sizing::Value => Some(
-                order_quantity(self.amount / (entry * rules.point_value), rules)
-                    .map_err(|limit| limit.message(ctx))?,
+                order_quantity(self.amount / (entry * rules.point_value), rules).map_err(reason)?,
             ),
             Sizing::Risk => None,
         };
@@ -572,7 +593,7 @@ impl OrderTicket {
                     .ok_or("Sizing by risk needs the account's balance")?;
                 let risk = balance * self.amount / 100.0;
                 order_quantity(risk / ((entry - stop).abs() * rules.point_value), rules)
-                    .map_err(|limit| limit.message(ctx))?
+                    .map_err(reason)?
             }
         };
         let (take_profit, levels) = self.take_profits(ctx, market, self.side, entry, quantity)?;
@@ -676,21 +697,33 @@ pub(crate) enum QuantityLimit {
 }
 
 impl QuantityLimit {
-    /// What the ticket shows for this limit, translated for `ctx`.
-    pub(crate) fn message(self, ctx: &egui::Context) -> String {
+    /// What the ticket shows for this limit, translated for `ctx`, with the limit written as
+    /// [`limit_text`] writes it.
+    pub(crate) fn message(
+        self,
+        ctx: &egui::Context,
+        numbers: &Numbers<'_>,
+        decimals: usize,
+    ) -> String {
         match self {
             Self::Minimum(minimum) => l10n::format_text(
                 ctx,
                 "The quantity is below the minimum of {minimum}",
-                &[("minimum", minimum.to_string())],
+                &[("minimum", limit_text(numbers, minimum, decimals))],
             ),
             Self::Maximum(maximum) => l10n::format_text(
                 ctx,
                 "The quantity is above the maximum of {maximum}",
-                &[("maximum", maximum.to_string())],
+                &[("maximum", limit_text(numbers, maximum, decimals))],
             ),
         }
     }
+}
+
+/// A quantity limit in the host's quantity text, or at `decimals`, the quantity decimals the
+/// panel shows, and as many more as the limit needs to read exactly.
+fn limit_text(numbers: &Numbers<'_>, limit: f64, decimals: usize) -> String {
+    numbers.quantity(limit, decimals.max(crate::scales::decimals(limit)))
 }
 
 /// Rounds a quantity down to the symbol's step and checks its bounds.
@@ -877,6 +910,7 @@ mod tests {
             trades: &[],
             session_open: None,
             last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
         };
         for quantity in [0.0, f64::NAN, -1.0] {
@@ -1016,6 +1050,7 @@ mod tests {
             trades: &[],
             session_open: None,
             last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
         };
         let ticks = |value| {
@@ -1134,6 +1169,7 @@ mod tests {
             trades: &[],
             session_open: None,
             last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
         };
         let ticks = |value| Bracket {
@@ -1480,6 +1516,102 @@ mod tests {
             };
             let request = ticket.request(&egui::Context::default(), &market).unwrap();
             assert_eq!(request.quantity, expected, "amount from {quantity}");
+        }
+    }
+
+    /// Guards the reasons the ticket gives for a quantity outside the symbol's limits: the limit
+    /// is written as the panel writes quantities, grouped at the step's decimals and exact when
+    /// it is finer, or in the host's quantity text. A regression writes it with `to_string` or
+    /// passes it by the price decimals.
+    #[test]
+    fn quantity_limit_reasons_use_the_panel_quantity_text() {
+        struct Lots;
+        impl TradingFormatter for Lots {
+            fn quantity(&self, symbol: &str, quantity: f64) -> Option<String> {
+                (symbol == "EURUSD").then(|| format!("{:.2} lots", quantity / 1_000.0))
+            }
+        }
+        let mut rules = TradingRules::new("EURUSD");
+        rules.min_quantity = 1_000.0;
+        let mut capabilities = Capabilities::default();
+        (
+            capabilities.market,
+            capabilities.brackets,
+            capabilities.take_profit_levels,
+        ) = (true, true, true);
+        let ticks = |value| Bracket {
+            mode: BracketMode::Ticks,
+            value,
+        };
+        let below = "The quantity is below the minimum of ";
+        let above = "The quantity is above the maximum of ";
+        let level = "Each take-profit level needs at least the minimum quantity of ";
+        // (maximum, units, a second take-profit level with half, formatter) -> reason
+        let cases: [(f64, f64, bool, bool, String); 7] = [
+            (5_000.0, 500.0, false, false, format!("{below}1,000")),
+            (5_000.0, 6_000.0, false, false, format!("{above}5,000")),
+            // 1,500 split in half leaves 750 for each level, below 1,000.
+            (5_000.0, 1_500.0, true, false, format!("{level}1,000")),
+            // A limit finer than the step keeps its decimals.
+            (2_500.5, 3_000.0, false, false, format!("{above}2,500.5")),
+            (5_000.0, 500.0, false, true, format!("{below}1.00 lots")),
+            (5_000.0, 6_000.0, false, true, format!("{above}5.00 lots")),
+            (5_000.0, 1_500.0, true, true, format!("{level}1.00 lots")),
+        ];
+        for (maximum, quantity, split, host, expected) in cases {
+            rules.max_quantity = Some(maximum);
+            let market = Market {
+                symbol: "EURUSD",
+                formatter: host.then_some(&Lots as &dyn TradingFormatter),
+                pip_value: None,
+                last: Some(1.1),
+                bid: None,
+                ask: None,
+                tick: 0.00001,
+                decimals: 5,
+                currency: "USD",
+                balance: None,
+                capabilities,
+                rules: &rules,
+                rules_ready: true,
+                offline: None,
+                ladder: None,
+                ladder_unavailable: None,
+                highlights: Vec::new(),
+                orders: &[],
+                positions: &[],
+                trades: &[],
+                session_open: None,
+                last_fill: None,
+                pnl_unit: crate::chart::PnlUnit::Money,
+                logo: None,
+            };
+            let ticket = OrderTicket {
+                symbol: "EURUSD".into(),
+                quantity,
+                take_profit: (split, ticks(10.0)),
+                levels: if split {
+                    vec![(ticks(20.0), 50.0)]
+                } else {
+                    Vec::new()
+                },
+                ..OrderTicket::default()
+            };
+            let reason = ticket.request(&egui::Context::default(), &market);
+            assert_eq!(reason, Err(expected), "{quantity} of at most {maximum}");
+        }
+        let numbers = Numbers {
+            symbol: "EURUSD",
+            decimals: 5,
+            formatter: None,
+        };
+        for (limit, step, expected) in [
+            (10.0, 0.5, "10.0"),
+            (1_000.0, 0.01, "1,000.00"),
+            (1e-8, 1e-8, "0.00000001"),
+            (1e15, 1.0, "1,000,000,000,000,000"),
+        ] {
+            assert_eq!(limit_text(&numbers, limit, decimals(step)), expected);
         }
     }
 }

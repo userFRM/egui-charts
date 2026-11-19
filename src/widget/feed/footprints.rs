@@ -116,6 +116,7 @@ impl Chart {
                 link.initial_bars
             },
             extended_hours: self.extended_hours,
+            overnight_hours: self.overnight_hours,
             adjusted: link.adjusted,
             conversion: self.conversion.clone(),
         };

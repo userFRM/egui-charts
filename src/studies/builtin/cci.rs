@@ -8,6 +8,7 @@
 //! - Readings above +100: Overbought, potential reversal
 //! - Readings below -100: Oversold, potential reversal
 //! - Zero crossings can signal trend changes
+//! - The pane opens with guides at 100, 0 and -100 and the band between 100 and -100 filled
 //!
 //! # Calculation
 //! Typical Price (TP) = (High + Low + Close) / 3
@@ -160,6 +161,27 @@ impl Indicator for CCI {
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if !colors.is_empty() {
             self.color = colors[0];
+        }
+    }
+
+    /// The band between the outer band guides, whatever the middle guide's value.
+    fn level_fill_indices(&self) -> Option<[usize; 2]> {
+        Some([0, 1])
+    }
+
+    fn level_fill_color(&self) -> Color32 {
+        Color32::from_rgba_unmultiplied(self.color.r(), self.color.g(), self.color.b(), 26)
+    }
+
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            levels: vec![
+                (100.0, palette::MUTED, "Upper Band"),
+                (-100.0, palette::MUTED, "Lower Band"),
+                (0.0, palette::MUTED.gamma_multiply_u8(128), "Middle Band"),
+            ],
+            fill_between_levels: true,
+            ..Default::default()
         }
     }
 

@@ -40,6 +40,17 @@ pub enum CVDMode {
     Simple,
 }
 
+impl CVDMode {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::ClosePosition => "Close position",
+            Self::BodyRatio => "Body ratio",
+            Self::Simple => "Simple",
+        }
+    }
+}
+
 impl CVD {
     /// Create a new CVD indicator
     pub fn new() -> Self {

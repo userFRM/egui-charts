@@ -440,6 +440,7 @@ impl Chart {
                 self.scroll_animation = None;
                 self.stop_at_oldest_bar(right_edge);
                 self.move_drag_start(right_edge);
+                self.move_pending_range(right_edge, &merge_clock);
             }
             #[cfg(feature = "drawings")]
             self.project_drawing_points();
@@ -793,20 +794,42 @@ impl Chart {
         merged
     }
 
-    /// Removes a bar series or study and clears its selection. Removing the main series retains
-    /// the time axis for the remaining series and drawings and pauses its feed; on a chart without
-    /// the original pane its bars stay live instead, as [`remove_pane`](Self::remove_pane)
-    /// describes. Undo of the [`user_action`](Self::user_action) that removed a bar series
-    /// restores it with its markers, price lines, formatter and bar limit, and for the main
-    /// series the feed follows [`set_feed_paused`](Self::set_feed_paused) again. Returns `false`
-    /// for an unknown or already removed id.
+    /// Removes a bar series or study and clears its selection. Removing a study also removes the
+    /// studies that read its output ([`StudySource::Study`](crate::model::StudySource::Study)),
+    /// directly or through other studies, except a study whose
+    /// [user edits](Self::set_indicator_user_edit_enabled) are off: it keeps the removed id as its
+    /// source and shows no values until the host removes it or gives it another source. Removing
+    /// the main series retains the time axis for the remaining series and drawings and pauses its
+    /// feed; on a chart without the original pane its bars stay live instead, as
+    /// [`remove_pane`](Self::remove_pane) describes. Undo of the [`user_action`](Self::user_action)
+    /// that removed a bar series restores it with its markers, price lines, formatter and bar
+    /// limit, and for the main series the feed follows [`set_feed_paused`](Self::set_feed_paused)
+    /// again; undo of one that removed studies restores all of them, each reading its source
+    /// again. Returns `false` for an unknown or already removed id.
     ///
     /// The drawings that an added series or a study owns stay drawn in its pane, which takes
     /// them over as it takes a drawing moved into it. When the pane goes with the series or
     /// study, they are deleted with the pane's own drawings, locked ones included, as
     /// [`remove_pane`](Self::remove_pane) deletes them, and undo of the user action brings them
-    /// back.
+    /// back. A drawing being placed in the pane follows the same rule: the pane's next owner
+    /// takes it, or it is cancelled with the pane, and the drawing tool stays selected.
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
+        #[cfg(feature = "drawings")]
+        let placed = self.placement_pane();
+        let dependents = self.study_dependents(id);
+        let removed = self.remove_one_series(id);
+        if removed {
+            for dependent in dependents {
+                self.remove_one_series(dependent);
+            }
+        }
+        #[cfg(feature = "drawings")]
+        self.keep_placement_in(placed);
+        removed
+    }
+
+    /// Removes `id` alone and releases the drawings it owned.
+    fn remove_one_series(&mut self, id: SeriesId) -> bool {
         #[cfg(feature = "drawings")]
         let pane = self.series_pane(id).filter(|_| id != SeriesId::MAIN);
         let removed = self.remove_series_keeping_drawings(id);
@@ -817,15 +840,19 @@ impl Chart {
         removed
     }
 
-    /// Keeps drawn the drawings that `id`, just removed from `pane`, owned: the pane takes them
-    /// over as it takes a drawing moved into it. When the pane went with `id`, they are deleted
-    /// with the pane's own drawings, locked ones included, as `remove_pane` deletes them.
+    /// Keeps drawn the drawings that `id`, just removed from `pane`, owned, and the drawing being
+    /// placed there: the pane takes them over as it takes a drawing moved into it. When the pane
+    /// went with `id`, they are deleted with the pane's own drawings, locked ones included, as
+    /// `remove_pane` deletes them.
     #[cfg(feature = "drawings")]
     fn release_drawings(&mut self, id: SeriesId, pane: super::PaneId) {
         let held = |drawing: &crate::drawings::Drawing| {
             drawing.pane == Some(id.0) || drawing.pane == Some(pane.0)
         };
-        if !self.drawings.drawings.iter().any(held) {
+        // The drawing being placed counts from its first anchor, as its gesture does.
+        let placing = (self.drawings.curr_drawing.as_ref())
+            .is_some_and(|drawing| !drawing.chart_points.is_empty() && held(drawing));
+        if !placing && !self.drawings.drawings.iter().any(held) {
             return;
         }
         self.sync_panes();
@@ -835,6 +862,12 @@ impl Chart {
             let owner = (pane != self.main_series_pane())
                 .then(|| item.members.first().map_or(pane.0, |member| member.0));
             self.drawings.reassign_owner(id.0, owner);
+            // It follows the pane's finished drawings; it has no undo entry of its own.
+            if let Some(drawing) = (self.drawings.curr_drawing.as_mut())
+                .filter(|drawing| placing && drawing.pane == Some(id.0))
+            {
+                drawing.pane = owner;
+            }
         } else {
             let ids: Vec<_> = self
                 .drawings
@@ -1001,6 +1034,7 @@ impl Chart {
             && (appended || shift_for_whitespace);
         if follow {
             self.scroll_to_live_edge();
+            self.move_pending_range(before.right_edge, clock);
         } else if !self.state.shows_elements() && before.tail.is_some() {
             self.keep_bars_in_view(clock, before.right_edge);
         }
@@ -1030,9 +1064,11 @@ impl Chart {
         });
         if appended && self.chart_options.time_scale.shift_visible_range_on_new_bar && near_live {
             self.scroll_to_live_edge();
+            self.move_pending_range(right_edge, &self.clock());
         } else if in_place {
             self.stop_at_oldest_bar(right_edge);
             self.move_drag_start(right_edge);
+            self.move_pending_range(right_edge, &self.clock());
         } else {
             self.keep_bars_in_view(&self.clock(), right_edge);
         }
@@ -1069,6 +1105,35 @@ impl Chart {
         }
         self.stop_at_oldest_bar(right_edge);
         self.move_drag_start(right_edge);
+        self.move_pending_range(right_edge, clock);
+    }
+
+    /// Keeps a range set before the first layout across the bars that changed since `before`, as
+    /// the view moved with them, so that the first layout fits it again: a time range keeps its
+    /// dates, and a logical range moves by as many indices as the slot the view keeps, or the
+    /// newest slot before it once that one is gone, so that it shows the same bars. Call it once
+    /// per change, after the view moved.
+    fn move_pending_range(&mut self, before: ViewEdge, clock: &BarClock) {
+        let view = self.time_scale_view();
+        let shown = self.state.shown();
+        let shift = before
+            .kept
+            .filter(|_| !shown.is_empty())
+            .map_or(0.0, |(time, after)| {
+                let slot = clock.bar_open(time);
+                // One past the kept slot now, against one past it before.
+                let at = shown.partition_point(|bar| clock.bar_open(bar.time) <= slot);
+                at as f32 - (before.slots - after) as f32
+            });
+        // Only a range the view still showed before the change: any other is dropped at layout.
+        if let Some((range, stamp)) = &mut self.pending_visible_range
+            && *stamp == (view.0, before.offset, view.2)
+        {
+            if let super::time_scale::PendingRange::Logical(logical) = range {
+                *logical = LogicalRange::new(logical.left + shift, logical.right + shift);
+            }
+            *stamp = view;
+        }
     }
 
     /// Moves the right offset a drag on the time axis or the plot started with by as much as the
@@ -1096,6 +1161,7 @@ impl Chart {
         };
         ViewEdge {
             right,
+            slots: shown.len(),
             offset: scale.right_offset_precise(),
             first: shown.first().map(|bar| bar.time),
             kept: shown.get(at).map(|bar| (bar.time, last - at)),
@@ -1136,6 +1202,8 @@ impl Chart {
 #[derive(Clone, Copy)]
 pub(super) struct ViewEdge {
     right: f64,
+    /// The number of slots shown.
+    slots: usize,
     offset: f64,
     first: Option<DateTime<Utc>>,
     /// The time of the bar in the slot the view keeps in place and the number of bars after it,

@@ -393,8 +393,10 @@ impl DrawingManager {
         }
     }
 
+    /// Swaps a body or move handle drag onto copies of the drawings it moves, leaving the
+    /// originals in place. An anchor handle drag reshapes its drawing and copies nothing.
     pub(crate) fn copy_dragged_drawings(&mut self) {
-        let Some((_, handle)) = self.dragging_handle else {
+        let Some((_, handle @ HandlePos::Middle)) = self.dragging_handle else {
             return;
         };
         let Some(old) = self.drag_old_state.take() else {
@@ -456,6 +458,75 @@ impl DrawingManager {
                 | T::RegressionTrend
                 | T::FibonacciChannel
         )
+    }
+
+    /// Tools whose first two anchors span a box that Shift keeps square on screen, while the
+    /// drawing is placed and while one of its corners is dragged: a Fib circle comes out round
+    /// and a Gann 1x1 line runs at 45 degrees.
+    pub(crate) fn squares_box(tool: DrawingToolType) -> bool {
+        use DrawingToolType as T;
+        matches!(
+            tool,
+            T::Rect
+                | T::Ellipse
+                | T::FibonacciCircles
+                | T::GannBox
+                | T::GannSquare
+                | T::GannFixed
+                | T::GannFan
+        )
+    }
+
+    /// The far corner of the square on `anchor` toward `point`: its side is the larger of the
+    /// two distances, cut to the room a positive `bounds` leaves in that direction.
+    pub(crate) fn square_corner(anchor: Pos2, point: Pos2, bounds: egui::Rect) -> Pos2 {
+        let delta = point - anchor;
+        let direction = egui::vec2(
+            if delta.x < 0.0 { -1.0 } else { 1.0 },
+            if delta.y < 0.0 { -1.0 } else { 1.0 },
+        );
+        let mut side = delta.x.abs().max(delta.y.abs());
+        if bounds.is_positive() {
+            let room = egui::vec2(
+                if direction.x < 0.0 {
+                    anchor.x - bounds.left()
+                } else {
+                    bounds.right() - anchor.x
+                },
+                if direction.y < 0.0 {
+                    anchor.y - bounds.top()
+                } else {
+                    bounds.bottom() - anchor.y
+                },
+            );
+            side = side.min(room.x).min(room.y).max(0.0);
+        }
+        anchor + direction * side
+    }
+
+    /// The corner a Shift drag of `handle` keeps fixed while it squares the box, and the price at
+    /// that corner's screen y: the other anchor, or for a box's mixed corner the opposite one.
+    fn square_anchor(&self, drawing: &Drawing, handle: HandlePos) -> Option<(Pos2, f64)> {
+        if !self.interaction_modifiers.shift
+            || drawing.custom_tool.is_some()
+            || !Self::squares_box(drawing.tool_type)
+        {
+            return None;
+        }
+        let ([first, second, ..], [a, b, ..]) =
+            (drawing.points.as_slice(), drawing.chart_points.as_slice())
+        else {
+            return None;
+        };
+        match handle {
+            HandlePos::Start | HandlePos::Point(0) | HandlePos::TopLeft => Some((*second, b.price)),
+            HandlePos::End | HandlePos::Point(1) | HandlePos::BottomRight => {
+                Some((*first, a.price))
+            }
+            HandlePos::TopRight => Some((Pos2::new(first.x, second.y), b.price)),
+            HandlePos::BottomLeft => Some((Pos2::new(second.x, first.y), a.price)),
+            _ => None,
+        }
     }
 
     // Project onto the nearest 45-degree direction. Integer directions keep diagonals exact.
@@ -554,8 +625,22 @@ impl DrawingManager {
             {
                 return;
             }
-            // Compute snapped position before mutable borrow
-            let mut snapped = self.snap_point(new_pos, &self.drawings);
+            // Size and rotation handles follow the pointer rather than a bar's price.
+            let free = handle != HandlePos::Middle
+                && self.drawings.iter().any(|d| {
+                    d.id == id
+                        && matches!(
+                            d.tool_type,
+                            DrawingToolType::FontIcon
+                                | DrawingToolType::Sticker
+                                | DrawingToolType::Image
+                        )
+                });
+            let mut snapped = if free {
+                new_pos
+            } else {
+                self.snap_point(new_pos, &self.drawings)
+            };
             let mut constrained_price = None;
             if self.interaction_modifiers.shift
                 && let Some(origin) = self.drag_origin
@@ -588,9 +673,13 @@ impl DrawingManager {
                         constrained_price = Some((chart_anchor.price, anchor.y));
                     }
                 }
+                if let Some((anchor, price)) = self.square_anchor(drawing, handle) {
+                    snapped = Self::square_corner(anchor, snapped, self.pane_rect);
+                    constrained_price = Some((price, anchor.y));
+                }
             }
-            // Shift edits receive precise bars for the angle; other Shift edits keep whole bars
-            // while anchors snap to bars in time.
+            // Shift edits receive precise bars for the angle or the square; other Shift edits
+            // keep whole bars while anchors snap to bars in time.
             let whole_bars = self.interaction_modifiers.shift
                 && constrained_price.is_none()
                 && self.options.snap_to_time;
@@ -698,6 +787,53 @@ impl DrawingManager {
                         (pos.x - self.pane_rect.left()) / self.pane_rect.width(),
                         (pos.y - self.pane_rect.top()) / self.pane_rect.height(),
                     ]);
+                }
+            }
+        }
+    }
+
+    /// Keeps each anchored text of this pane on the bar and price under the point it is drawn
+    /// at, so its coordinates follow its pane position through pans, zooms and resizes. A bar or
+    /// price already within half a pixel of that point is kept, so an exact time or price set
+    /// from code stays exact, and a whole bar within half a pixel is taken over a fraction.
+    /// Called by the chart after the pane's screen coordinates are updated; the pane position is
+    /// left as it is, and nothing is queued for saving.
+    pub(crate) fn place_anchored_text(
+        &mut self,
+        bar_to_x: impl Fn(f32) -> f32,
+        x_to_bar: impl Fn(f32) -> f32,
+        price_to_y: impl Fn(f64) -> f32,
+        y_to_price: impl Fn(f32) -> f64,
+    ) {
+        let near = |a: f32, b: f32| (a - b).abs() <= 0.5;
+        for drawing in self.drawings.iter_mut().chain(&mut self.curr_drawing) {
+            if drawing.tool_type != DrawingToolType::AnchoredText
+                || drawing.screen_anchor.is_none()
+                || !self.pane_members.contains(&drawing.pane)
+            {
+                continue;
+            }
+            let (Some(&pos), Some(point)) =
+                (drawing.points.first(), drawing.chart_points.first_mut())
+            else {
+                continue;
+            };
+            if !near(bar_to_x(point.bar_idx), pos.x) {
+                let index = x_to_bar(pos.x);
+                let whole = index.round();
+                let bar = if near(bar_to_x(whole), pos.x) {
+                    whole
+                } else {
+                    index
+                };
+                if bar.is_finite() {
+                    point.bar_idx = bar;
+                }
+            }
+            if !near(price_to_y(point.price), pos.y) {
+                let price = y_to_price(pos.y);
+                if price.is_finite() {
+                    point.price = price;
                 }
             }
         }
