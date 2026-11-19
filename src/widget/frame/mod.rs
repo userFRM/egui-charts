@@ -684,7 +684,8 @@ impl Chart {
         #[cfg(not(feature = "drawings"))]
         let drawing_tool_active = false;
         #[cfg(not(feature = "drawings"))]
-        let (is_drawing_interaction, drawing_gesture, marking) = (false, false, false);
+        let (is_drawing_interaction, drawing_gesture, edit_interaction, marking) =
+            (false, false, false, false);
         #[cfg(feature = "drawings")]
         if self.drawings.selection_area().is_some_and(|area| {
             area.pane
@@ -719,9 +720,9 @@ impl Chart {
                 && !navigation_interaction
                 && !realtime_interaction,
         );
+        // The gestures that own the pointer wherever they began.
         #[cfg(feature = "drawings")]
-        let drawing_gesture = self.drawings.active_tool.is_some()
-            || marking
+        let edit_gesture = marking
             || self.drawings.dragging_handle.is_some()
             || self.drawings.text_editor.is_some()
             || self.drawings.curr_drawing.is_some()
@@ -741,6 +742,10 @@ impl Chart {
                                 .any(|d| d.id == id && !d.locked)
                         })
                 });
+        #[cfg(feature = "drawings")]
+        let drawing_gesture = drawing_tool_active || edit_gesture;
+        #[cfg(feature = "drawings")]
+        let edit_interaction = box_selection || edit_gesture;
         #[cfg(feature = "drawings")]
         let is_drawing_interaction = box_selection || drawing_gesture;
         let show_price_button =
@@ -884,9 +889,16 @@ impl Chart {
         // Handle double-click to reset axes
         self.handle_double_click(&time_response, time_axis_rect);
 
+        // A selected tool places drawings in the plot only, so a press on the main price axis or
+        // the time axis zooms that axis, as a study pane's axis does.
+        let axis_press = ui
+            .input(|i| i.pointer.press_origin().or_else(|| i.pointer.hover_pos()))
+            .is_some_and(|pos| price_axis_rect.contains(pos) || time_axis_rect.contains(pos));
+        let owns_drag =
+            touch_readout_interaction || edit_interaction || (drawing_tool_active && !axis_press);
         // The price axis: a drawing or a touch readout that owns the drag keeps it, as on the plot.
         let mut axis_response = time_response.clone();
-        if is_drawing_interaction || touch_readout_interaction {
+        if owns_drag {
             axis_response.flags.remove(egui::response::Flags::DRAGGED);
         }
         let price_axis_gestures = self.price_axis_gestures(ui, &axis_response, price_axis_rect);
@@ -916,7 +928,7 @@ impl Chart {
             price_axis_rect,
             time_axis_rect,
             chart_rect.min.x,
-            is_drawing_interaction || touch_readout_interaction,
+            owns_drag,
         );
 
         // Apply kinetic scrolling
@@ -944,7 +956,7 @@ impl Chart {
         else if response.hovered() {
             let at = ui
                 .input(|i| i.pointer.press_origin().or(i.pointer.hover_pos()))
-                .filter(|_| !(is_drawing_interaction || touch_readout_interaction));
+                .filter(|_| !owns_drag);
             let cursor = match at {
                 Some(pos) if price_axis_rect.contains(pos) => self.price_axis_cursor(),
                 Some(pos) if time_axis_rect.contains(pos) => self.time_axis_cursor(),
@@ -1018,6 +1030,7 @@ impl Chart {
         let volume_rect = layout.volume_rect;
 
         // Get visible range
+        let logical = self.state.time_scale().visible_data_range();
         let (start_idx, end_idx) = self.state.visible_range();
         let cutoff = self.replay_time();
         let (registry, bars) = if self.chart_type.is_time_independent() {
@@ -1032,7 +1045,10 @@ impl Chart {
             .indicators_mut()
             .iter_mut()
             .enumerate()
-            .filter_map(|(at, study)| study.set_visible_range(start_idx..end_idx).then_some(at))
+            .filter_map(|(at, study)| {
+                study.set_visible_logical_range(logical);
+                study.set_visible_range(start_idx..end_idx).then_some(at)
+            })
             .collect();
         if !changed.is_empty() {
             let requests = registry
