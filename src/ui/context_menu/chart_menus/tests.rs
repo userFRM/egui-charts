@@ -1395,7 +1395,7 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
         assert_eq!(profiles(&split), parts);
         let layout = SavedLayout::new(ChartLayoutMode::Single, vec![split.snapshot().unwrap()]);
         let layout = SavedLayout::from_json(&layout.to_json().unwrap()).unwrap();
-        let mut restored = Chart::new(BarData::from_bars(bars));
+        let mut restored = Chart::new(BarData::from_bars(bars.clone()));
         restored.restore(&layout.charts[0]).unwrap();
         assert_eq!(restored.chart_type_params().tpo_splits, [at(60)]);
         assert_eq!(profiles(&restored), parts);
@@ -1425,6 +1425,61 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
             a.x < map.idx_to_x(4) - map.bar_spacing * 0.5,
             "the next session's letters join the split part's displayed profile"
         );
+        let mut columns = Chart::new(BarData::from_bars(bars.clone()));
+        columns.set_timeframe(Timeframe::Min30);
+        columns.set_chart_type(ChartType::TimePriceOpportunity);
+        columns.set_chart_type_params(crate::model::ChartTypeParams {
+            tpo_split_periods: true,
+            ..Default::default()
+        });
+        columns.set_visible_logical_range(crate::model::LogicalRange::new(-1.0, 9.0));
+        let mut column_menus = ChartMenus::default();
+        frame(&mut columns, &mut column_menus, vec![]);
+        let (_, shapes) = frame(&mut columns, &mut column_menus, vec![]);
+        let map = columns.get_chart_mapping();
+        let day0 = map.rect.left()..map.idx_to_x(4) - map.bar_spacing * 0.5;
+        let c = letter(&shapes, "C", day0, map.price_to_y(103.0)).unwrap();
+        pick_at(
+            &mut columns,
+            &mut column_menus,
+            c,
+            "Split profile at selected period",
+        );
+        assert_eq!(profiles(&columns), parts);
+
+        let bars = (0..14)
+            .map(|i| {
+                Bar::new(
+                    day(i / 2) + Duration::minutes(i % 2 * 30),
+                    100.0,
+                    102.0,
+                    100.0,
+                    102.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut weekly = Chart::new(BarData::from_bars(bars));
+        weekly.set_timeframe(Timeframe::Min30);
+        weekly.set_chart_type(ChartType::TimePriceOpportunity);
+        weekly.set_chart_type_params(crate::model::ChartTypeParams {
+            tpo_profile_period: crate::model::TPOProfilePeriod::Week,
+            ..Default::default()
+        });
+        let mut weekly_menus = ChartMenus::default();
+        weekly.set_visible_logical_range(crate::model::LogicalRange::new(-1.0, 15.0));
+        frame(&mut weekly, &mut weekly_menus, vec![]);
+        assert_eq!(counts(&weekly), [8, 6]);
+        pick(
+            &mut weekly,
+            &mut weekly_menus,
+            8,
+            "Merge with previous profile",
+        );
+        assert_eq!(counts(&weekly), [14]);
+        assert_eq!(weekly.chart_type_params().tpo_composites, [day(0)..=day(6)]);
+        assert!(weekly.undo());
+        assert_eq!(counts(&weekly), [8, 6]);
     }
 }
 
