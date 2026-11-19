@@ -494,6 +494,27 @@ impl StyleTab {
             if let Some(template) = &mut props.tool_settings
                 && matches!(
                     template.settings.tool_type,
+                    DrawingToolType::Pitchfork
+                        | DrawingToolType::SchiffPitchfork
+                        | DrawingToolType::ModifiedSchiffPitchfork
+                        | DrawingToolType::InsidePitchfork
+                )
+            {
+                // A fork saved without levels shows the ones it is drawn with.
+                let mut config = super::pitchfork_shown(&template.settings);
+                let label = ui.label(l10n::text(ui.ctx(), "Extend lines"));
+                if ui
+                    .checkbox(&mut config.extend_lines, "")
+                    .labelled_by(label.id)
+                    .changed()
+                {
+                    template.settings.pitchfork = Some(config);
+                }
+                ui.end_row();
+            }
+            if let Some(template) = &mut props.tool_settings
+                && matches!(
+                    template.settings.tool_type,
                     DrawingToolType::DateRange | DrawingToolType::DateAndPriceRange
                 )
             {

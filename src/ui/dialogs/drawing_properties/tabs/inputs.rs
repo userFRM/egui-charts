@@ -1338,6 +1338,7 @@ pub(crate) fn pitchfork_shown(drawing: &Drawing) -> PitchforkConfig {
         let mut config = PitchforkConfig::legacy();
         for level in &mut config.levels {
             level.color = drawing.color;
+            level.line_style = drawing.line_style;
             level.width = Some(if level.value == 1.0 {
                 crate::styles::stroke::HAIRLINE
             } else {

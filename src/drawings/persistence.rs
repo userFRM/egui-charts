@@ -1571,6 +1571,7 @@ mod tests {
             fork.levels[0].line_style = LineStyle::Dotted;
             fork.levels[1].visible = false;
             fork.show_background = false;
+            fork.extend_lines = false;
             drawing.pitchfork = Some(fork);
             drawing.projection = Some(crate::drawings::ProjectionConfig {
                 show_coefficients: false,
@@ -1753,11 +1754,17 @@ mod tests {
         for saved in [
             include_str!("fixtures/storage_v2.json"),
             include_str!("fixtures/storage_v10_channels.json"),
+            // A fork saved on main before the forward-extension option existed.
+            r#"{"version":10,"symbol":"SAMPLE","timeframe":null,"drawings":[{"id":"0","points":[{"ts_ms":0,"price":100.0},{"ts_ms":600000,"price":200.0},{"ts_ms":1200000,"price":50.0}],"drawing":{"label":null,"pane":null,"selectable":true,"saveable":true,"listed":true,"user_edit_enabled":true,"group":null,"folder":[],"custom_tool":null,"custom_settings":null,"tool_type":"Pitchfork","screen_anchor":null,"color":[242,54,69,255],"stroke_width":2.0,"text":null,"post":null,"line_style":"Solid","fill_color":null,"locked":false,"visible":true,"font_size":14.0,"font_weight":"Normal","italic":false,"text_color":null,"background":true,"border":true,"border_color":null,"text_wrap":false,"text_wrap_width":200.0,"text_follows_zoom":false,"text_zoom_spacing":null,"note_text_style":null,"extend_left":false,"extend_right":false,"arrow_start_style":"None","arrow_end_style":"None","timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"price_axis_label":true,"time_axis_label":true,"line_measurements":{"persistent":false,"price_change":false,"percent_change":false,"pip_change":false,"bar_count":false,"elapsed_time":false,"length":false,"inclination":false,"midpoint":false,"price_labels":false,"position":"Right","text_horizontal_align":"Center","text_vertical_align":"Bottom","text_orientation":"Vertical","across_panes":false},"range_settings":{"price_change":true,"percent_change":true,"pip_change":true,"bar_count":true,"elapsed_time":true,"volume":true,"text_color":null,"font_size":12.0,"background":true,"background_color":null,"border":true,"border_color":null,"border_width":null,"border_style":null,"extend_top":false,"extend_bottom":false},"position_size":null,"position_sizing":{"point_value":1.0,"lot_size":1.0,"quantity_step":0.0,"leverage":1.0},"position_readout":{"persistent":false,"condensed":false,"account_currency":null,"conversion_rate":null,"quantity_decimals":null},"position_target_color":null,"position_stop_color":null,"position_style":{"line_color":null,"line_width":1.0,"text_color":null,"font_size":12.0,"label_background":true,"label_color":null,"fill":true,"border":false,"border_color":[102,123,139,255]},"marker":{"show_text":true,"glyph":"🙂","show_glyph":false,"glyph_color":null},"fib_config":null,"volume_profile":null,"regression_trend":null,"vwap":null,"gann":null,"ghost_feed":null,"channel_midline":false,"anchor_price_style":null,"middle_line":{"color":null,"width":1.0,"line_style":"Dashed"},"theme_shade":true,"image":null,"glyph_angle":0.0,"closed":false,"pitchfork":{"levels":[{"value":0.0,"visible":true,"color":[242,54,69,255],"line_style":"Solid","width":null},{"value":0.25,"visible":false,"color":[255,183,77,255],"line_style":"Solid","width":null},{"value":0.382,"visible":false,"color":[129,199,132,255],"line_style":"Solid","width":null},{"value":0.5,"visible":true,"color":[8,153,129,255],"line_style":"Solid","width":null},{"value":0.618,"visible":false,"color":[8,153,129,255],"line_style":"Solid","width":null},{"value":0.75,"visible":false,"color":[0,188,212,255],"line_style":"Solid","width":null},{"value":1.0,"visible":true,"color":[41,98,255,255],"line_style":"Solid","width":null},{"value":1.5,"visible":false,"color":[156,39,176,255],"line_style":"Solid","width":null},{"value":1.75,"visible":false,"color":[233,30,99,255],"line_style":"Solid","width":null},{"value":2.0,"visible":false,"color":[247,124,128,255],"line_style":"Solid","width":null}],"show_background":true,"background_opacity":51},"elliott_degree":"Minor","elliott_show_wave":true,"bars_pattern":null,"projection":null,"z_order":0},"created_at":1795124995927,"modified_at":1795124995927,"notes":null}],"metadata":{"created_at":1795124995927,"modified_at":1795124995927,"app_version":null}}"#,
         ] {
             let (storage, skipped) = DrawingStorage::from_json(saved).unwrap();
             assert!(skipped.is_empty(), "{skipped:?}");
             for stored in storage.drawings() {
-                assert_eq!(restore(stored, 1).series_layer, None);
+                let drawing = restore(stored, 1);
+                assert_eq!(drawing.series_layer, None);
+                if let Some(config) = &drawing.pitchfork {
+                    assert!(config.extend_lines, "older forks retain forward extension");
+                }
                 assert!(
                     !serde_json::to_string(&stored.drawing)
                         .unwrap()

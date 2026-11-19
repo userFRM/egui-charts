@@ -424,7 +424,7 @@ pub struct Drawing {
     pub series_layer: Option<usize>,
 }
 
-fn enabled() -> bool {
+pub(super) fn enabled() -> bool {
     true
 }
 
