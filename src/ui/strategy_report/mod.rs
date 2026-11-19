@@ -151,12 +151,14 @@ impl StrategyReportPanel {
     }
 
     /// Draw the report and return this frame's host intent. No report draws nothing.
+    /// A report with [`StrategyReport::unavailable`] shows that reason instead of its summary and exports.
     pub fn show(&mut self, ui: &mut Ui) -> StrategyReportAction {
         let Some(data) = &self.data else {
             return StrategyReportAction::None;
         };
         let mut action = StrategyReportAction::None;
         let theme = ui.active_theme();
+        let unavailable = data.report.unavailable.as_deref();
         ui.horizontal_wrapped(|ui| {
             ui.label(
                 RichText::new(l10n::text(ui.ctx(), "Strategy report"))
@@ -168,18 +170,22 @@ impl StrategyReportPanel {
                 "{} · {}",
                 data.report.symbol, data.report.timeframe
             ));
-            if Button::new("Export trades CSV").show(ui).clicked() {
-                action = StrategyReportAction::ExportCsv(data.report.trades_csv());
-            }
-            if Button::new("Export summary CSV").show(ui).clicked() {
-                action = StrategyReportAction::ExportSummaryCsv {
-                    filename: summary_filename(&data.report),
-                    content: data.report.summary_csv(&data.performance, &data.comparison),
-                };
+            if unavailable.is_none() {
+                if Button::new("Export trades CSV").show(ui).clicked() {
+                    action = StrategyReportAction::ExportCsv(data.report.trades_csv());
+                }
+                if Button::new("Export summary CSV").show(ui).clicked() {
+                    action = StrategyReportAction::ExportSummaryCsv {
+                        filename: summary_filename(&data.report),
+                        content: data.report.summary_csv(&data.performance, &data.comparison),
+                    };
+                }
             }
         });
         TabBar::new(&[Tab::Summary, Tab::Trades, Tab::Properties], &mut self.tab).show(ui);
-        if data.performance.skipped_trades
+        if let Some(reason) = unavailable {
+            ui.colored_label(theme.ui.warning, l10n::text(ui.ctx(), reason));
+        } else if data.performance.skipped_trades
             + data.performance.skipped_equity_points
             + data.comparison.skipped_bars
             > 0
@@ -199,12 +205,14 @@ impl StrategyReportPanel {
         }
         match self.tab {
             Tab::Summary => {
-                egui::ScrollArea::vertical()
-                    .id_salt("summary")
-                    .show(ui, |ui| {
-                        summary(ui, data, &mut self.compare);
-                    })
-                    .inner
+                if unavailable.is_none() {
+                    egui::ScrollArea::vertical()
+                        .id_salt("summary")
+                        .show(ui, |ui| {
+                            summary(ui, data, &mut self.compare);
+                        })
+                        .inner;
+                }
             }
             Tab::Trades => {
                 if let Some(index) = trades(ui, data, &mut self.selected) {

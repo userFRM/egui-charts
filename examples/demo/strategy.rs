@@ -183,6 +183,9 @@ impl DemoApp {
         if self.strategy_report.report().is_none() {
             return;
         }
+        self.strategy_report.set_instrument_currency(
+            self.chart.instrument().and_then(|instrument| instrument.currency.clone()),
+        );
         let chart_type = self.chart.chart_type();
         if self.live_strategy.is_none() && self.strategy_report.settings().chart_type != chart_type
         {

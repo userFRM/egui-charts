@@ -70,6 +70,16 @@ their unallocated entry fees, already deducted from equity. Market and stop orde
 against their side once per fill, by ticks times tick size, ticks of the price increment or an
 absolute-price fraction. Limits, including the limit execution of a stop-limit order, never slip.
 
+A report is in `settings.currency`, or in `Backtest::instrument_currency`, the currency of the
+prices, when that is unset. When the settings name another currency, the engine converts what it
+derives from prices into it: sizing, funding, margin and liquidation, fraction commissions,
+profits and equity, at the rate in force at each fill and at the last price of each equity mark.
+Supply `Backtest::exchange_rates`, the host's answer to `Backtest::exchange_rate_request`; each
+point's close applies from its time until the next point. The initial capital, cash order sizes
+and per-unit and per-order commissions are account amounts already. A run that needs a rate where
+none applies, or where it is not finite and positive, reports `StrategyReport::unavailable`
+instead of trades and equity. Excursions and the buy-and-hold benchmark stay unconverted.
+
 Long and short exposure fund separately. [`long_funding`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.long_funding) and [`short_funding`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.short_funding)
 are the fractions of absolute position market value that equity must cover, one over leverage
 when unset. Zero disables that side's checks and values above one are accepted. An entry is
