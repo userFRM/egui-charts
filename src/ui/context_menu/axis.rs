@@ -60,6 +60,7 @@ impl Action {
             Self::BidAsk => MenuRowId::BidAndAsk,
             Self::BidAskLines => MenuRowId::BidAndAskLines,
             Self::HighLow => MenuRowId::HighAndLow,
+            Self::HighLowLines => MenuRowId::HighAndLowLines,
             Self::Timezone(zone) => match zone {
                 TimezoneMode::Utc => MenuRowId::Utc,
                 TimezoneMode::Local => MenuRowId::LocalTime,
