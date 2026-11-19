@@ -576,7 +576,7 @@ Studies,Indicators,52 Week High/Low,unverified,library,src/studies/builtin/week5
 Studies,Indicators,Accelerator Oscillator,unverified,library,src/studies/builtin/accelerator_oscillator.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/studies/template.rs,3275
 Studies,Indicators,Accumulation Distribution,unverified,library,src/studies/builtin/acc_dist.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/chart/indicators/plots.rs,2648
 Studies,Indicators,Accumulative Swing Index,unverified,library,src/studies/builtin/accumulation_swing.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/ui/dialogs/indicator_dialog/data.rs,3251
-Studies,Indicators,Advance/Decline,incomplete,library,src/studies/builtin/advance_decline_ratio_bars.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/widget/studies.rs,3252
+Studies,Indicators,Advance/Decline,unverified,library,src/studies/builtin/advance_decline.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,3252
 Studies,Indicators,Advance/Decline Line,verified,host,src/studies/builtin/market_breadth.rs;src/widget/studies_data.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Advance/Decline Ratio,verified,host,src/studies/builtin/market_breadth.rs;src/widget/studies_data.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Advance/Decline Ratio bars,unverified,library,src/studies/builtin/advance_decline_ratio_bars.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/studies/settings.rs,3252
