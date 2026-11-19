@@ -139,6 +139,15 @@ pub struct TPOConfig {
     /// profile. Adding a range over adjacent sessions merges them, removing it splits them back,
     /// and a range over many sessions builds a composite profile.
     pub composites: Vec<RangeInclusive<DateTime<Utc>>>,
+    /// Instants that start another profile at the first bar at or after them, until the next
+    /// session or split. Periods still count from the session's open: splitting at its third
+    /// period leaves A and B in the first profile and C and D in the second. Each part holds
+    /// the initial balance of its own bars, with none after the balance window.
+    /// An instant at or before the session's first bar changes nothing; one beyond the last
+    /// bar takes effect when later bars reach it. A part joins a composite if its first bar
+    /// lies in the range. A split inside a period, for example after changing the period
+    /// length, leaves that period's letter in both parts.
+    pub splits: Vec<DateTime<Utc>>,
     /// Draw only the newest session's profile instead of every visible one
     pub latest_session_only: bool,
     /// The instrument's minimum price increment. When set, rows are whole ticks counted as
@@ -169,6 +178,7 @@ impl Default for TPOConfig {
             session: ProfileSession::Chart,
             custom_letters: None,
             composites: Vec::new(),
+            splits: Vec::new(),
             latest_session_only: false,
             instrument_tick: None,
         }
@@ -364,11 +374,13 @@ fn key_to_price(key: i64, tick_size: f64) -> f64 {
     key as f64 * tick_size
 }
 
-/// First usable bars of the profiles before composites, shared by the model, cache and menus.
+/// First usable bars of profiles before composites, including starts from `splits`, shared by
+/// the model, cache and menus.
 pub(crate) fn session_starts(
     bars: &[Bar],
     sessions: &crate::model::ExchangeSessionProvider,
     split_sessions: bool,
+    splits: &[DateTime<Utc>],
 ) -> Vec<usize> {
     let mut starts: Vec<_> = std::iter::once(0)
         .chain(sessions.session_breaks(bars).into_iter().map(|(i, _)| i))
@@ -380,6 +392,12 @@ pub(crate) fn session_starts(
             .collect();
         starts.extend((1..bars.len()).filter(|&i| extended[i] != extended[i - 1]));
     }
+    starts.extend(
+        splits
+            .iter()
+            .map(|split| bars.partition_point(|bar| bar.time < *split))
+            .filter(|&i| i > 0 && i < bars.len()),
+    );
     starts.sort_unstable();
     starts.dedup();
     starts.push(bars.len());
@@ -394,33 +412,56 @@ pub(crate) fn session_starts(
         .collect()
 }
 
-/// The bars of each profile before composites: from each start of [`session_starts`] to the
-/// next for [`ProfileSession::Chart`], otherwise the parts of each trading day that
-/// `config.session` keeps ([`ProfileSession::profiled`]).
+/// The bars of each profile before composites, and whether it opens a session: from each start
+/// of [`session_starts`] to the next for [`ProfileSession::Chart`], otherwise the parts of each
+/// trading day that `config.session` keeps ([`ProfileSession::profiled`]). `config.splits` cut
+/// these further into profiles that keep counting periods from the open of the part they split.
 fn profile_parts(
     bars: &[Bar],
     sessions: &crate::model::ExchangeSessionProvider,
     config: &TPOConfig,
-) -> Vec<Range<usize>> {
-    if config.session == ProfileSession::Chart {
-        let starts = session_starts(bars, sessions, config.split_sessions);
+) -> Vec<(Range<usize>, bool)> {
+    let parts = if config.session == ProfileSession::Chart {
+        let starts = session_starts(bars, sessions, config.split_sessions, &[]);
         let ends = starts.iter().skip(1).copied().chain([bars.len()]);
-        return starts
+        starts
             .iter()
             .copied()
             .zip(ends)
             .map(|(start, end)| start..end)
+            .collect()
+    } else {
+        // Whole trading days, unusable bars included: a day of them must not join the day before.
+        let breaks: Vec<_> = (sessions.session_breaks(bars).into_iter())
+            .map(|(i, _)| i)
             .collect();
-    }
-    // Whole trading days, unusable bars included: a day of them must not join the day before.
-    let breaks: Vec<_> = (sessions.session_breaks(bars).into_iter())
-        .map(|(i, _)| i)
+        let starts = std::iter::once(0).chain(breaks.iter().copied());
+        let ends = breaks.iter().copied().chain([bars.len()]);
+        starts
+            .zip(ends)
+            .flat_map(|(start, end)| config.session.profiled(bars, start..end, sessions, true))
+            .collect::<Vec<_>>()
+    };
+    let mut cuts: Vec<_> = (config.splits.iter())
+        .map(|split| bars.partition_point(|bar| bar.time < *split))
         .collect();
-    let starts = std::iter::once(0).chain(breaks.iter().copied());
-    let ends = breaks.iter().copied().chain([bars.len()]);
-    starts
-        .zip(ends)
-        .flat_map(|(start, end)| config.session.profiled(bars, start..end, sessions, true))
+    cuts.sort_unstable();
+    cuts.dedup();
+    parts
+        .into_iter()
+        .flat_map(|part| {
+            let inside = cuts
+                .iter()
+                .copied()
+                .filter(|&i| part.start < i && i < part.end);
+            let starts = std::iter::once(part.start).chain(inside.clone());
+            let ends = inside.chain([part.end]);
+            starts
+                .zip(ends)
+                .enumerate()
+                .map(|(n, (start, end))| (start..end, n == 0))
+                .collect::<Vec<_>>()
+        })
         .collect()
 }
 
@@ -429,7 +470,8 @@ fn profile_parts(
 /// Sessions are the trading days of `clock`: the exchange sessions it carries,
 /// or calendar days in its time zone, split further at the moves between
 /// extended and regular hours with `config.split_sessions` and combined over
-/// `config.composites`. A session's periods are whole multiples of
+/// `config.composites`. `config.splits` divides a session into further profiles that keep its
+/// periods. A session's periods are whole multiples of
 /// `config.period_minutes`, or of the clock's interval when longer, since its
 /// open: that of its trading day with intraday bars and trading hours, or of
 /// its stretch of extended or regular hours when split, whatever time its
@@ -451,7 +493,7 @@ fn profile_parts(
 /// * `clock` - Interval and calendar of the bars, such as the chart's `Chart::bar_clock`
 ///
 /// # Returns
-/// Vector of TPO profiles, one per session
+/// Vector of TPO profiles after splits and composites
 ///
 /// ```
 /// use egui_charts::model::{Bar, BarClock, TPOConfig, Timeframe, to_tpo_profiles};
@@ -521,15 +563,18 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
 
         // A profile starting at a skipped bar starts at the next usable one.
         let mut is_new_session = current_profile.is_none();
-        while let Some(part) = parts.next_if(|part| part.start <= i) {
+        // A split starts a profile, while its periods keep counting from the session's open.
+        let mut opens_session = is_new_session;
+        while let Some((part, opens)) = parts.next_if(|(part, _)| part.start <= i) {
             part_end = part.end;
             is_new_session = true;
+            opens_session |= opens;
         }
         // Bars outside the chosen hours join no profile.
         if i >= part_end {
             continue;
         }
-        if is_new_session {
+        if opens_session {
             session_open = sessions.session_open(bar.time, split).unwrap_or(bar.time);
         }
         let elapsed = (bar.time - session_open).num_minutes().max(0);
@@ -1037,21 +1082,23 @@ mod tests {
         // 2024-03-05 is a Tuesday, 13:00 UTC is 08:00 in New York
         let start = Utc.with_ymd_and_hms(2024, 3, 5, 13, 0, 0).unwrap();
         let both_days = start..=start + Duration::days(1);
-        // (case, clock, bar minutes from `start`, split, composites, profiles as (open, letters))
+        // (case, clock, bar minutes from `start`, split, composites, splits, profiles as (open, letters))
         type Case<'a> = (
             &'a str,
             BarClock,
             Vec<i64>,
             bool,
             Vec<RangeInclusive<DateTime<Utc>>>,
+            Vec<i64>,
             &'a [(i64, &'a str)],
         );
-        let cases: [Case; 8] = [
+        let cases: [Case; 11] = [
             (
                 "exchange day across UTC midnight",
                 overnight,
                 vec![600, 630, 690, 1950, 2040],
                 false,
+                vec![],
                 vec![],
                 &[(600, "ABDt"), (2040, "A")],
             ),
@@ -1061,6 +1108,7 @@ mod tests {
                 (0..19).map(|i| i * 30).collect(),
                 false,
                 vec![],
+                vec![],
                 // Pre-market opens at 04:00, eight periods before the first bar at 08:00
                 &[(0, "IJKLMNOPQRSTUVWXYZa")],
             ),
@@ -1069,6 +1117,7 @@ mod tests {
                 stock,
                 (0..19).map(|i| i * 30).collect(),
                 true,
+                vec![],
                 vec![],
                 &[(0, "IJK"), (90, "ABCDEFGHIJKLM"), (480, "ABC")],
             ),
@@ -1083,6 +1132,7 @@ mod tests {
                 ),
                 vec![540, 570],
                 true,
+                vec![],
                 vec![],
                 &[(540, "CD")],
             ),
@@ -1100,6 +1150,7 @@ mod tests {
                 vec![300],
                 true,
                 vec![],
+                vec![],
                 &[(300, "I")],
             ),
             (
@@ -1107,6 +1158,7 @@ mod tests {
                 BarClock::new(Timeframe::Hour1),
                 vec![0, 60, 120],
                 false,
+                vec![],
                 vec![],
                 &[(0, "ABC")],
             ),
@@ -1116,6 +1168,7 @@ mod tests {
                 vec![0, 30, 1440, 1470],
                 false,
                 vec![],
+                vec![],
                 &[(0, "AB"), (1440, "AB")],
             ),
             (
@@ -1124,10 +1177,38 @@ mod tests {
                 vec![0, 30, 1440, 1470],
                 false,
                 vec![both_days],
+                vec![],
                 &[(0, "ABAB")],
             ),
+            (
+                "UTC day split at its third period",
+                Timeframe::Min30.into(),
+                vec![0, 30, 60, 90],
+                false,
+                vec![],
+                vec![60],
+                &[(0, "AB"), (60, "CD")],
+            ),
+            (
+                "a split keeps the session's periods across a gap",
+                Timeframe::Min30.into(),
+                vec![0, 30, 90],
+                false,
+                vec![],
+                vec![60],
+                &[(0, "AB"), (90, "D")],
+            ),
+            (
+                "a split between sessions changes nothing",
+                Timeframe::Min30.into(),
+                vec![0, 30, 1440, 1470],
+                false,
+                vec![],
+                vec![1000],
+                &[(0, "AB"), (1440, "AB")],
+            ),
         ];
-        for (case, clock, minutes, split_sessions, composites, expected) in cases {
+        for (case, clock, minutes, split_sessions, composites, splits, expected) in cases {
             let bars: Vec<_> = minutes
                 .iter()
                 .map(|&m| bar_at(start, m, 100.0, 100.0, 100.0, 100.0))
@@ -1136,6 +1217,10 @@ mod tests {
                 tick_size: 1.0,
                 split_sessions,
                 composites,
+                splits: splits
+                    .into_iter()
+                    .map(|m| start + Duration::minutes(m))
+                    .collect(),
                 ..Default::default()
             };
             let profiles: Vec<_> = to_tpo_profiles(&bars, &config, &clock)

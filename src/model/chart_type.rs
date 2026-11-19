@@ -919,6 +919,21 @@ pub struct ChartTypeParams {
     /// TPO: sessions combined into one profile, as in
     /// [`TPOConfig::composites`](super::TPOConfig::composites).
     pub tpo_composites: Vec<std::ops::RangeInclusive<chrono::DateTime<chrono::Utc>>>,
+    /// TPO: instants that divide a session's profile, as in
+    /// [`TPOConfig::splits`](super::TPOConfig::splits).
+    ///
+    /// ```
+    /// use chrono::{TimeZone, Utc};
+    /// use egui_charts::model::ChartTypeParams;
+    ///
+    /// let split = Utc.with_ymd_and_hms(2024, 3, 5, 15, 0, 0).unwrap();
+    /// let params = ChartTypeParams {
+    ///     tpo_splits: vec![split],
+    ///     ..Default::default()
+    /// };
+    /// assert_eq!(params.tpo_config(None).splits, [split]);
+    /// ```
+    pub tpo_splits: Vec<chrono::DateTime<chrono::Utc>>,
 }
 
 /// What a missing `tpo_midpoint` reads: every profile drew its midpoint before it had a setting.
@@ -996,6 +1011,7 @@ impl Default for ChartTypeParams {
             tpo_letters: true,
             tpo_statistics: false,
             tpo_composites: Vec::new(),
+            tpo_splits: Vec::new(),
         }
     }
 }
@@ -1022,6 +1038,7 @@ impl ChartTypeParams {
                 super::TPODisplayMode::Blocks
             },
             composites: self.tpo_composites.clone(),
+            splits: self.tpo_splits.clone(),
             instrument_tick: tick_size,
             ..Default::default()
         }
@@ -1410,7 +1427,12 @@ mod tests {
             ),
         ] {
             let params: ChartTypeParams = serde_json::from_str(saved).unwrap();
+            assert!(
+                params.tpo_splits.is_empty(),
+                "older settings keep whole sessions"
+            );
             let config = params.tpo_config(Some(1.0));
+            assert!(config.splits.is_empty());
             assert_eq!(config.initial_balance_minutes, minutes);
             assert_eq!(config.show_single_prints, single_prints);
             assert_eq!(config.show_midpoint, midpoint);

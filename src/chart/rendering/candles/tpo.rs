@@ -153,6 +153,7 @@ fn same_profiles(old: &TPOConfig, new: &TPOConfig) -> bool {
         && old.split_sessions == new.split_sessions
         && old.session == new.session
         && old.composites == new.composites
+        && old.splits == new.splits
         && old.instrument_tick.map(f64::to_bits) == new.instrument_tick.map(f64::to_bits)
 }
 
@@ -281,12 +282,26 @@ fn build_profiles(
     };
     let mut ends = Vec::new();
     let mut open = 0;
-    let starts = crate::model::tpo::session_starts(bars, sessions, config.split_sessions);
+    // Keep whole sessions in each unit so split parts can count periods from their session's open.
+    let starts = crate::model::tpo::session_starts(bars, sessions, config.split_sessions, &[]);
+    let parts = (!config.splits.is_empty()).then(|| {
+        crate::model::tpo::session_starts(bars, sessions, config.split_sessions, &config.splits)
+    });
     let mut profile_open = starts.first().copied().unwrap_or(0);
     let breaks = starts.into_iter().skip(1);
     for end in breaks.chain([bars.len()]) {
+        // A session's last split part can join the next session while its first part stays apart.
+        let last_open = parts
+            .as_ref()
+            .and_then(|parts| {
+                parts
+                    .partition_point(|&i| i < end)
+                    .checked_sub(1)
+                    .map(|i| parts[i])
+            })
+            .unwrap_or(profile_open);
         if bars.get(end).is_some_and(|next| {
-            composite(&bars[profile_open]).is_some_and(|group| composite(next) == Some(group))
+            composite(&bars[last_open]).is_some_and(|group| composite(next) == Some(group))
         }) {
             continue;
         }
@@ -582,7 +597,8 @@ fn place_profiles(
     }
 }
 
-/// The displayed profile at a menu click, including a profile anchored at the plot's edge.
+/// The displayed profile at a menu click, including one anchored at the plot's edge: its first
+/// bar time and, when a letter or block is clicked, the first bar time of that period.
 #[cfg(feature = "ui")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn profile_at(
@@ -594,7 +610,10 @@ pub(crate) fn profile_at(
     clock: &BarClock,
     mapping: &crate::chart::coords::ChartMapping,
     pos: Pos2,
-) -> Option<chrono::DateTime<chrono::Utc>> {
+) -> Option<(
+    chrono::DateTime<chrono::Utc>,
+    Option<chrono::DateTime<chrono::Utc>>,
+)> {
     if !mapping.rect.contains(pos) || visible.is_empty() || visible.end > full_data.len() {
         return None;
     }
@@ -629,7 +648,15 @@ pub(crate) fn profile_at(
             // Keep the gutter beside occupied rows in the profile's context-menu target.
             let left = anchor - if labels { LABEL_ROOM_PX } else { 0.0 };
             if count > 0 && pos.x >= left && pos.x < anchor + count as f32 * column {
-                hit = Some(profile.session_date);
+                // Each row's letters are left-justified in time order, as painted.
+                let period = (pos.x >= anchor)
+                    .then(|| ((pos.x - anchor) / column) as usize)
+                    .and_then(|col| {
+                        let mut letters = profile.letters_at(row);
+                        letters.sort_by_key(|letter| letter.ts);
+                        letters.get(col).map(|letter| letter.ts)
+                    });
+                hit = Some((profile.session_date, period));
             }
         },
     );
