@@ -486,10 +486,7 @@ impl Trading {
                 self.ticket.open = false;
                 self.place(request);
             }
-        
-pnl_unit: crate::chart::PnlUnit::Money,
-account: "",
-}
+        }
     }
 
     /// Sends a confirmed change to the broker, or reports it as refused while the broker is not
