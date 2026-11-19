@@ -566,6 +566,11 @@ pub struct Capabilities {
     pub max_take_profit_levels: Option<usize>,
     /// Closes a position with an opposite market order, so the Close and Flatten controls work.
     pub close: bool,
+    /// Closes part of a position with a smaller opposite market order. With
+    /// [`close`](Self::close), Close on a position line, unless orders are instant, and on an
+    /// account row asks for the quantity to close; without this flag it closes the whole
+    /// position.
+    pub partial_close: bool,
     /// Reverses a position with an opposite market order of twice its size, so the Reverse
     /// controls work.
     pub reverse: bool,
