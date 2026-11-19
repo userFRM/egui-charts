@@ -439,7 +439,7 @@ impl ChartMenus {
                 if let Some(ChartContextAction::Chart(action)) = &picked
                     && let Some(profile) = &self.trade_profile
                 {
-                    profile.apply(chart, action);
+                    chart.user_action(|chart| profile.apply(chart, action));
                 }
                 if let Some(ChartContextAction::Chart(ContextMenuAction::DrawHorizontalLine(price))) =
                     &picked

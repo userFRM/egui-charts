@@ -55,6 +55,7 @@ pub(super) struct TradeProfileMenu {
     time: DateTime<Utc>,
     symbol: String,
     clock: BarClock,
+    edited: bool,
 }
 
 impl TradeProfileMenu {
@@ -74,6 +75,7 @@ impl TradeProfileMenu {
             time,
             symbol: chart.symbol().to_owned(),
             clock: chart.profile_clock(),
+            edited: chart.has_trade_profile_edits(),
         })
     }
 
@@ -93,6 +95,11 @@ impl TradeProfileMenu {
                 "Split profile at selected bar",
                 ContextMenuAction::SplitTradeProfile,
                 self.time > self.ranges[self.index].start,
+            ),
+            (
+                "Reset merges and splits",
+                ContextMenuAction::ResetProfileEdits,
+                self.edited,
             ),
         ]
         .into_iter()
@@ -126,6 +133,7 @@ impl TradeProfileMenu {
             ContextMenuAction::SplitTradeProfile => {
                 chart.split_trade_profile(self.index, self.time);
             }
+            ContextMenuAction::ResetProfileEdits => chart.reset_trade_profile_ranges(),
             _ => {}
         }
     }
@@ -145,7 +153,8 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    /// The runtime painter and the actual chart menu share execution ranges, including a
+    /// Guards #3200 and #3422: menu edits and reset are undoable, and the runtime painter
+    /// and actual chart menu share execution ranges, including a
     /// selected later session, a composite scrolled partly out of view, evicted history and
     /// bars timestamped inside their slots.
     #[test]
@@ -378,6 +387,32 @@ mod tests {
                     .unwrap_or_else(|| panic!("no {label} row"));
                 click(chart, menus, row, PointerButton::Primary)
             };
+            let starts = |chart: &Chart| {
+                chart
+                    .trade_profile_ranges()
+                    .unwrap()
+                    .ranges()
+                    .iter()
+                    .map(|r| r.start)
+                    .collect::<Vec<_>>()
+            };
+            let reset_enabled = |chart: &Chart| {
+                let map = chart.get_chart_mapping();
+                let time = chart.bars(SeriesId::MAIN)[2].time;
+                TradeProfileMenu::open(
+                    chart,
+                    Pos2::new(map.idx_to_x(2).max(map.rect.left()), map.price_to_y(101.0)),
+                    Some(time),
+                )
+                .unwrap()
+                .entries()
+                .iter()
+                .any(|e| {
+                    matches!(e, MenuEntry::Item(item)
+                        if item.label == "Reset merges and splits" && item.enabled)
+                })
+            };
+            assert!(!reset_enabled(&chart));
             assert_eq!(chart.trade_profile_ranges().unwrap().ranges().len(), 3);
             assert!(matches!(
                 pick(&mut chart, &mut menus, 2, "Merge with next profile"),
@@ -388,6 +423,13 @@ mod tests {
             let ranges = chart.trade_profile_ranges().unwrap();
             assert_eq!(ranges.ranges().len(), 2);
             assert_eq!(ranges.ranges()[1].start, time(1, 0));
+            assert!(reset_enabled(&chart));
+            assert!(chart.undo());
+            assert_eq!(starts(&chart), [time(0, 0), time(1, 0), time(2, 0)]);
+            assert!(!reset_enabled(&chart));
+            assert!(chart.redo());
+            assert_eq!(starts(&chart), [time(0, 0), time(1, 0)]);
+
             chart
                 .export_layout_svg(
                     &ctx,
@@ -426,28 +468,53 @@ mod tests {
                 ))
             ));
             assert_eq!(chart.trade_profile_ranges().unwrap().ranges().len(), 3);
-            let (_, split) = frame(&mut chart, &mut menus, vec![]);
-            let map = chart.get_chart_mapping();
-            assert!(has_line(
-                &split,
-                Pos2::new(map.idx_to_x(2), map.price_to_y(100.0)),
-                Pos2::new(map.idx_to_x(3), map.price_to_y(101.0))
-            ));
-            let left = (map.idx_to_x(2) - map.bar_spacing * 0.45).max(map.rect.left());
-            let width = map.idx_to_x(3) + map.bar_spacing * 0.5 - left;
-            let centre = left + width * 0.5;
-            for (price, delta) in [(100.0, 4.0), (101.0, 5.0)] {
-                assert!(
-                    split
-                        .iter()
-                        .any(|shape| matches!(&shape.shape, Shape::Rect(r)
+            let session_one_alone = |chart: &mut Chart, menus: &mut ChartMenus| {
+                let (_, split) = frame(chart, menus, vec![]);
+                let map = chart.get_chart_mapping();
+                assert!(has_line(
+                    &split,
+                    Pos2::new(map.idx_to_x(2), map.price_to_y(100.0)),
+                    Pos2::new(map.idx_to_x(3), map.price_to_y(101.0))
+                ));
+                let left = (map.idx_to_x(2) - map.bar_spacing * 0.45).max(map.rect.left());
+                let width = map.idx_to_x(3) + map.bar_spacing * 0.5 - left;
+                let centre = left + width * 0.5;
+                for (price, delta) in [(100.0, 4.0), (101.0, 5.0)] {
+                    assert!(
+                        split
+                            .iter()
+                            .any(|shape| matches!(&shape.shape, Shape::Rect(r)
                     if (r.rect.left() - centre).abs() < 0.001
                     && (r.rect.width() - width * 0.5 * delta / 7.0).abs() < 0.001
                     && r.rect.contains(Pos2::new(r.rect.center().x, map.price_to_y(price)))))
-                );
-            }
+                    );
+                }
+            };
+            session_one_alone(&mut chart, &mut menus);
+            assert!(chart.undo());
+            assert_eq!(starts(&chart), [time(0, 0), time(1, 0)]);
+            assert!(chart.redo());
+            assert_eq!(starts(&chart), [time(0, 0), time(1, 0), time(2, 0)]);
             assert!(!chart.split_trade_profile(1, time(1, 0) + TimeDelta::seconds(30)));
             assert!(chart.merge_trade_profile(1));
+            // One merge and one split return together when reset is undone.
+            assert!(chart.split_trade_profile(0, time(0, 1)));
+            let edited = [time(0, 0), time(0, 1), time(1, 0)];
+            assert_eq!(starts(&chart), edited);
+            assert!(matches!(
+                pick(&mut chart, &mut menus, 4, "Reset merges and splits"),
+                Some(ChartContextAction::Chart(
+                    ContextMenuAction::ResetProfileEdits
+                ))
+            ));
+            assert_eq!(starts(&chart), [time(0, 0), time(1, 0), time(2, 0)]);
+            session_one_alone(&mut chart, &mut menus);
+            assert!(!reset_enabled(&chart));
+            assert!(chart.undo());
+            assert_eq!(starts(&chart), edited);
+            assert!(chart.redo());
+            assert!(chart.merge_trade_profile(1));
+
             let mut extended = bars.clone();
             extended.push(Bar::new(time(3, 0), 99.0, 104.0, 97.0, 102.0, 0.0));
             chart.set_data(SeriesId::MAIN, extended);
