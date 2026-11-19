@@ -98,9 +98,17 @@ pub struct ToolbarState {
     /// Whether the Hide menu has hidden indicators.
     pub hide_indicators: bool,
     /// Whether the Hide menu has hidden positions.
+    /// [`Trading::sync_hide_menu`](crate::ui::trading::Trading::sync_hide_menu) refreshes it
+    /// from the trading display settings.
     pub hide_positions: bool,
     /// Whether the Hide menu has hidden orders.
+    /// [`Trading::sync_hide_menu`](crate::ui::trading::Trading::sync_hide_menu) refreshes it
+    /// from the trading display settings.
     pub hide_orders: bool,
+    /// Whether the Hide menu has hidden executions.
+    /// [`Trading::sync_hide_menu`](crate::ui::trading::Trading::sync_hide_menu) refreshes it
+    /// from the trading display settings.
+    pub hide_executions: bool,
     /// Whether zoom history exists (for showing/hiding Zoom Out button)
     pub has_zoom_history: bool,
     /// Whether zoom-in mode is currently active (for button highlighting)
@@ -159,6 +167,7 @@ impl Default for ToolbarState {
             hide_indicators: false,
             hide_positions: false,
             hide_orders: false,
+            hide_executions: false,
             has_zoom_history: false,
             zoom_mode_active: false,
             current_cursor_type: CursorType::Arrow, // Default: Arrow
@@ -171,14 +180,22 @@ impl Default for ToolbarState {
 
 impl ToolbarState {
     /// Whether every supported visibility group is hidden. Hosts refresh the group flags
-    /// from their active chart before drawing the menu.
+    /// from their active chart, and the trading flags with
+    /// [`Trading::sync_hide_menu`](crate::ui::trading::Trading::sync_hide_menu), before drawing
+    /// the menu.
     pub fn all_hidden(&self, trading: bool) -> bool {
         self.hide_drawings
             && self.hide_indicators
-            && (!trading || self.hide_positions && self.hide_orders)
+            && (!trading || self.hide_positions && self.hide_orders && self.hide_executions)
     }
 
     /// Create new toolbar state with defaults
+    ///
+    /// ```
+    /// use egui_charts::ui::drawing_toolbar::ToolbarState;
+    /// let state = ToolbarState { hide_executions: true, ..ToolbarState::new() };
+    /// assert!(state.hide_executions && !state.all_hidden(true));
+    /// ```
     pub fn new() -> Self {
         Self::default()
     }
