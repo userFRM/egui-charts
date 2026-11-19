@@ -94,6 +94,7 @@ impl Trading {
             trades: &[],
             session_open: None,
             last_fill: self.account_panel.fills.price(symbol),
+            pnl_unit: self.display.position_pnl_unit,
             logo: instrument.and_then(|instrument| instrument.logo.as_deref()),
         }
     }
@@ -174,7 +175,8 @@ impl Trading {
                 }
             }
             Some(Action::Confirm(change)) => self.pending = Some(*change),
-            None => {}
+            // The ticket opens its own edits.
+            Some(Action::Edit(_)) | None => {}
         }
     }
 
@@ -418,7 +420,8 @@ impl Trading {
             return;
         }
         let market = self.market(chart, &colors);
-        if let Ok(request) = self.ticket.request(ui.ctx(), &market)
+        if self.ticket.editing.is_none()
+            && let Ok(request) = self.ticket.request(ui.ctx(), &market)
             && request.order_type != OrderType::Market
         {
             let _theme = chart
