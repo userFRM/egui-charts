@@ -18,15 +18,18 @@
 //! ```
 //!
 //! A signal is marked on its confirmation bar, `right` bars after the pivot `p`, at the momentum
-//! of `p`, and never moves. A pivot or momentum without a value, in the warm-up, takes no part.
+//! of `p`, and never moves. On that bar, [`price_segments`](Indicator::price_segments) joins
+//! the lows of `q` and `p` (highs for a bearish signal) on the price chart in the signal's style.
+//! A pivot or momentum without a value, in the warm-up, takes no part.
 //! Bars with a non-finite high, low or close are skipped. The defaults are a momentum of 20 bars, an
 //! RSI of 14, 5 bars on each side of a pivot, a lookback of 50 bars, and an RSI of 30 and 70.
+//! Price divergence lines start enabled; older saves keep them off until enabled.
 
 use super::rsi::State as RsiState;
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
-use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues, StudySegment};
 use egui::Color32;
 use std::collections::VecDeque;
 
@@ -40,6 +43,7 @@ pub struct KnoxvilleDivergence {
     lookback: usize,
     oversold: usize,
     overbought: usize,
+    price_lines: bool,
     values: IndicatorValues,
     stepper: Stepper<State>,
     colors: [Color32; 3],
@@ -49,6 +53,8 @@ pub struct KnoxvilleDivergence {
 #[derive(Clone, Copy, Debug)]
 struct Pivot {
     position: usize,
+    /// Its source bar.
+    bar: usize,
     high: f64,
     low: f64,
     momentum: f64,
@@ -57,6 +63,10 @@ struct Pivot {
 
 #[derive(Clone, Debug, Default)]
 struct State {
+    /// Source bars stepped, non-finite ones included.
+    bars: usize,
+    /// The divergence lines confirmed so far.
+    segments: Vec<StudySegment>,
     position: usize,
     rsi: RsiState,
     closes: VecDeque<f64>,
@@ -84,6 +94,7 @@ impl KnoxvilleDivergence {
             lookback: lookback.max(1),
             oversold: 30,
             overbought: 70,
+            price_lines: true,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: [palette::ACCENT, palette::GREEN, palette::RED],
@@ -107,7 +118,8 @@ impl Indicator for KnoxvilleDivergence {
         right: length("Pivot bars right", 1, usize::MAX),
         lookback: length("Bars between pivots", 1, usize::MAX),
         oversold: length("RSI oversold", 0, 100),
-        overbought: length("RSI overbought", 0, 100)
+        overbought: length("RSI overbought", 0, 100),
+        price_lines: toggle("Price divergence lines")
     ; {});
 
     fn name(&self) -> &str {
@@ -126,6 +138,8 @@ impl Indicator for KnoxvilleDivergence {
         let keep = self.left.saturating_add(self.right).saturating_add(1);
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
+                let index = state.bars;
+                state.bars += 1;
                 if ![bar.high, bar.low, bar.close].iter().all(|v| v.is_finite()) {
                     return IndicatorValue::None;
                 }
@@ -144,6 +158,7 @@ impl Indicator for KnoxvilleDivergence {
                 };
                 state.window.push_back(Pivot {
                     position: state.position,
+                    bar: index,
                     high: bar.high,
                     low: bar.low,
                     momentum,
@@ -195,6 +210,13 @@ impl Indicator for KnoxvilleDivergence {
                         // A NaN momentum or RSI fails every comparison above.
                         if diverges && p.position - q.position <= self.lookback {
                             row[1 + usize::from(high)] = p.momentum;
+                            state.segments.push(StudySegment {
+                                start_bar: q.bar,
+                                start_price: price(&q),
+                                end_bar: p.bar,
+                                end_price: price(&p),
+                                plot: 1 + usize::from(high),
+                            });
                         }
                     }
                 }
@@ -217,6 +239,14 @@ impl Indicator for KnoxvilleDivergence {
                 _ => crate::studies::PlotType::TriangleDown,
             },
             visible: true,
+        }
+    }
+
+    fn price_segments(&self) -> &[StudySegment] {
+        if self.price_lines {
+            &self.stepper.state().segments
+        } else {
+            &[]
         }
     }
 
@@ -301,6 +331,34 @@ mod tests {
             [none, none, none, none, Some(1.5)]
         );
         assert_eq!(signal(&bearish, &study, 1), [none; 5]);
+        let line = |start_bar, start_price, end_price, plot| StudySegment {
+            start_bar,
+            start_price,
+            end_bar: start_bar + 2,
+            end_price,
+            plot,
+        };
+        let segments = |bars: &[Bar], study: &KnoxvilleDivergence| {
+            let mut study = study.clone();
+            study.calculate(bars);
+            study.price_segments().to_vec()
+        };
+        assert_eq!(segments(&bullish, &study), [line(1, 8.0, 7.5, 1)]);
+        assert_eq!(segments(&bearish, &study), [line(1, -8.0, -7.5, 2)]);
+        assert!(segments(&bullish[..4], &study).is_empty());
+        let mut gapped = super::super::hlc_bars(&[(f64::NAN, f64::NAN, f64::NAN)]);
+        gapped.extend(bullish.iter().cloned());
+        assert_eq!(segments(&gapped, &study), [line(2, 8.0, 7.5, 1)]);
+        let mut live = study.clone();
+        live.calculate(&bullish);
+        let mut tick = bullish.clone();
+        (tick[4].high, tick[4].low, tick[4].close) = (7.0, 7.0, 7.0);
+        live.update(&tick, 4);
+        assert!(live.price_segments().is_empty());
+        live.update(&bullish, 4);
+        assert_eq!(live.price_segments(), [line(1, 8.0, 7.5, 1)]);
+        live.calculate(&[]);
+        assert!(live.price_segments().is_empty());
         // The pivots are 2 bars apart, the RSI 16.67 is over a limit of 10, and the mirror's 83.33 under 90.
         let limit = |id: &str, value: usize| {
             let mut study = study.clone();
@@ -313,6 +371,81 @@ mod tests {
             (limit("overbought", 90), &bearish, 2),
         ] {
             assert_eq!(signal(bars, &study, line), [none; 5]);
+            assert!(segments(bars, &study).is_empty());
         }
+    }
+
+    /// A price line appears only when the chart receives the bar confirming the later pivot.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn divergence_lines_are_drawn_on_the_price_chart() {
+        use crate::model::{BarData, LogicalRange};
+        use crate::widget::{Chart, SeriesId};
+
+        let bars = super::super::hlc_bars(&[10.0, 8.0, 9.0, 7.5, 8.5].map(|c| (c, c, c)));
+        let mut chart = Chart::new(BarData::from_bars(bars[..4].to_vec()));
+        let id = chart.add_indicator(Box::new(KnoxvilleDivergence::new(1, 2, 1, 1, 10)));
+        let ctx = egui::Context::default();
+        let frame = |chart: &mut Chart| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800., 600.),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                },
+            );
+            let lines: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Path(path)
+                        if !path.closed
+                            && path.points.len() == 2
+                            && path.stroke.color
+                                == egui::epaint::ColorMode::Solid(palette::GREEN) =>
+                    {
+                        Some([path.points[0], path.points[1]])
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            lines
+        };
+        frame(&mut chart);
+        chart.set_visible_logical_range(LogicalRange::new(-1.0, 6.0));
+        assert!(
+            frame(&mut chart).is_empty(),
+            "no line before the confirmation bar"
+        );
+        chart.update(SeriesId::MAIN, bars[4].clone());
+        frame(&mut chart);
+        let lines = frame(&mut chart);
+        assert_eq!(lines.len(), 1);
+        let [start, end] = lines[0];
+        let x = |bar: f64| chart.index_to_x(bar).unwrap();
+        assert!(
+            (start.x - x(1.0)).abs() < 0.5 && (end.x - x(3.0)).abs() < 0.5,
+            "{lines:?}"
+        );
+        assert!(start.y < end.y, "the low of 8 lies above the low of 7.5");
+        let price = chart.get_rendered_price_rect();
+        assert!(
+            price.contains(start) && price.contains(end),
+            "{lines:?} in {price:?}"
+        );
+        let study = chart.indicator_mut(id).unwrap();
+        let mut settings = study.settings();
+        settings.plots[1].visible = false;
+        study.apply_settings(&[], settings).unwrap();
+        assert!(
+            frame(&mut chart).is_empty(),
+            "hiding the signal also hides its price line"
+        );
     }
 }

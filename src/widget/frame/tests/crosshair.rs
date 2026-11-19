@@ -686,7 +686,8 @@ fn crosshair_skips_ineligible_indices_without_removing_data() {
 }
 
 /// An update starts one last price pulse, loading does not, and a continuous pulse always
-/// runs; the crosshair marker sits on the line at the hovered bar's close.
+/// runs; the crosshair marker sits on the line at the hovered bar's close. Both take the line's
+/// colour at their bar, also on a gradient line.
 #[test]
 fn line_pulse_and_crosshair_marker_follow_their_bars() {
     use crate::model::{ChartType, LastPriceAnimation};
@@ -733,6 +734,38 @@ fn line_pulse_and_crosshair_marker_follow_their_bars() {
         ),
         vec![Pos2::new(map.idx_to_x(70), map.price_to_y(110.0))]
     );
+    // On a gradient line the marker takes the colour of the segment starting at the hovered
+    // bar, between the start and end colours, and the pulse at the newest bar the end colour.
+    let (start, end) = (Color32::from_rgb(0, 0, 200), Color32::from_rgb(250, 0, 0));
+    let mut gradient = chart.chart_type_params().clone();
+    gradient.styles.line_gradient = true;
+    gradient.styles.line_gradient_start = start;
+    gradient.styles.line_gradient_end = end;
+    chart.set_chart_type_params(gradient);
+    let painted = shapes(&ctx, &mut chart, 5.15, vec![Event::PointerMoved(hover)]);
+    let at_70 = Pos2::new(map.idx_to_x(70), map.price_to_y(110.0));
+    let segment = painted
+        .iter()
+        .find_map(|shape| match shape {
+            Shape::Path(path) if path.points[0].distance(at_70) < 0.5 => match path.stroke.color {
+                egui::epaint::ColorMode::Solid(color) => Some(color),
+                egui::epaint::ColorMode::UV(_) => None,
+            },
+            _ => None,
+        })
+        .unwrap();
+    assert!(segment != start && segment != end, "{segment:?}");
+    let fills = |radius: f32| {
+        painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Circle(dot) if dot.radius == radius => Some(dot.fill),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(fills(5.0).contains(&segment), "{:?}", fills(5.0));
+    assert!(fills(3.0).contains(&end), "{:?}", fills(3.0));
     // Trailing whitespace leaves the pulse on the last valued bar; both dots use that
     // bar's own colour, and a hovered empty slot has no dot. Vary the hover height to
     // stay outside the price-action button beside the last bars.
@@ -989,38 +1022,39 @@ fn crosshair_marker_is_suppressed_for_hidden_and_missing_bars() {
 }
 
 /// Held values appear only for a pressed pointer and disappear on release or disable. A
-/// hidden crosshair keeps them and shows no axis label while the pointer is held.
+/// hidden crosshair keeps them and shows no axis label while the pointer is held. Without its
+/// own long press, a finger holds values as the mouse button does.
 #[test]
 fn held_values_follow_press_release_and_switch() {
-    for (_, theme) in crate::theme::presets() {
-        let ctx = egui::Context::default();
-        crate::theme::apply_to_egui(&ctx, &theme);
-        let mut chart = chart(&[100.0], &[110.0, 120.0]);
-        chart.config.bullish_color = egui::Color32::BLUE;
-        chart.config.show_ohlc_info = true;
-        chart.chart_options.crosshair.style = crate::config::CrosshairStyle::Hidden;
-        chart.chart_options.tooltip.on_long_press = true;
-        chart.chart_options.tooltip.show_time = false;
-        #[cfg(feature = "studies")]
-        chart.add_indicator(Box::new(crate::studies::SMA::new(3)));
-        frame(&ctx, &mut chart, 0.0, vec![]);
-        let map = chart.get_chart_mapping();
-        let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
-        for (step, enabled, pressed, expected, volume_details) in [
-            (1, true, false, false, false),
-            (2, true, true, true, false),
-            (3, true, true, true, true),
-            (4, true, false, false, false),
-            (5, false, true, false, false),
-            (6, false, false, false, false),
-        ] {
-            chart.set_tooltip_enabled(enabled);
-            chart.chart_options.tooltip.show_volume_details = volume_details;
-            let painted = shapes(
-                &ctx,
-                &mut chart,
-                step as f64 * 0.1,
-                vec![
+    for touch in [false, true] {
+        for (_, theme) in crate::theme::presets() {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut chart = chart(&[100.0], &[110.0, 120.0]);
+            chart.config.bullish_color = egui::Color32::BLUE;
+            chart.config.show_ohlc_info = true;
+            chart.chart_options.crosshair.style = crate::config::CrosshairStyle::Hidden;
+            chart.chart_options.tooltip.on_long_press = true;
+            if touch {
+                chart.chart_options.tooltip.touch_long_press = false;
+            }
+            chart.chart_options.tooltip.show_time = false;
+            #[cfg(feature = "studies")]
+            chart.add_indicator(Box::new(crate::studies::SMA::new(3)));
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.get_chart_mapping();
+            let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+            for (step, enabled, pressed, expected, volume_details) in [
+                (1, true, false, false, false),
+                (2, true, true, true, false),
+                (3, true, true, true, true),
+                (4, true, false, false, false),
+                (5, false, true, false, false),
+                (6, false, false, false, false),
+            ] {
+                chart.set_tooltip_enabled(enabled);
+                chart.chart_options.tooltip.show_volume_details = volume_details;
+                let mut events = vec![
                     Event::PointerMoved(pos),
                     Event::PointerButton {
                         pos,
@@ -1028,53 +1062,70 @@ fn held_values_follow_press_release_and_switch() {
                         pressed,
                         modifiers: Default::default(),
                     },
-                ],
-            );
-            let labels: Vec<_> = painted
-                .iter()
-                .filter_map(|shape| match shape {
-                    Shape::Text(text) => Some(text.galley.text()),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(
-                labels.contains(&"Open"),
-                expected,
-                "step {step}: {labels:?}"
-            );
-            assert_eq!(chart.axis_hover, None, "step {step}");
-            assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
-                if text.galley.text() == "O 100.00" && text.galley.job.sections[1].format.color == egui::Color32::BLUE)));
-            if expected {
-                assert_eq!(
-                    labels.iter().any(|label| label.starts_with("Volume:")),
-                    volume_details && cfg!(feature = "studies"),
-                    "volume study details are opt-in"
-                );
-                assert!(labels.contains(&"Time"));
-                assert!(!labels.contains(&"Change"));
-                assert!(labels.contains(&"Vol"));
-                #[cfg(feature = "studies")]
-                {
-                    assert!(labels.contains(&"SMA"), "other study values remain visible");
-                    assert!(
-                        chart
-                            .study_values_at(50)
-                            .iter()
-                            .any(|row| row.study == "Volume")
+                ];
+                if touch {
+                    events.insert(
+                        0,
+                        Event::Touch {
+                            device_id: egui::TouchDeviceId(1),
+                            id: egui::TouchId(1),
+                            phase: if pressed {
+                                egui::TouchPhase::Start
+                            } else {
+                                egui::TouchPhase::End
+                            },
+                            pos,
+                            force: None,
+                        },
                     );
                 }
-                let legend = labels
+                let painted = shapes(&ctx, &mut chart, step as f64 * 0.1, events);
+                let labels: Vec<_> = painted
                     .iter()
-                    .position(|label| *label == "O 100.00")
-                    .unwrap();
-                let tooltip = labels.iter().position(|label| *label == "Open").unwrap();
-                assert!(
-                    tooltip > legend,
-                    "the floating readout must paint above the legend"
+                    .filter_map(|shape| match shape {
+                        Shape::Text(text) => Some(text.galley.text()),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    labels.contains(&"Open"),
+                    expected,
+                    "touch {touch}, step {step}: {labels:?}"
                 );
+                assert_eq!(chart.axis_hover, None, "touch {touch}, step {step}");
                 assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
-                    if text.galley.text() == "110.00" && text.galley.job.sections[0].format.color == egui::Color32::BLUE)));
+                    if text.galley.text() == "O 100.00" && text.galley.job.sections[1].format.color == egui::Color32::BLUE)));
+                if expected {
+                    assert_eq!(
+                        labels.iter().any(|label| label.starts_with("Volume:")),
+                        volume_details && cfg!(feature = "studies"),
+                        "volume study details are opt-in"
+                    );
+                    assert!(labels.contains(&"Time"));
+                    assert!(!labels.contains(&"Change"));
+                    assert!(labels.contains(&"Vol"));
+                    #[cfg(feature = "studies")]
+                    {
+                        assert!(labels.contains(&"SMA"), "other study values remain visible");
+                        assert!(
+                            chart
+                                .study_values_at(50)
+                                .iter()
+                                .any(|row| row.study == "Volume")
+                        );
+                    }
+                    let legend = labels
+                        .iter()
+                        .position(|label| *label == "O 100.00")
+                        .unwrap();
+                    let tooltip = labels.iter().position(|label| *label == "Open").unwrap();
+                    assert!(
+                        tooltip > legend,
+                        "the floating readout must paint above the legend"
+                    );
+                    assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+                        if text.galley.text() == "110.00" && text.galley.job.sections[0].format.color == egui::Color32::BLUE)));
+                }
             }
         }
     }
@@ -1091,7 +1142,6 @@ fn added_series_row_follows_the_held_readout() {
     let ctx = egui::Context::default();
     ctx.options_mut(|options| options.input_options.max_click_duration = 0.3);
     let mut chart = chart(&[100.0], &[110.0, 120.0]);
-    chart.chart_options.tooltip.on_long_press = true;
     chart.chart_options.tooltip.long_press_delay = std::time::Duration::from_millis(800);
     chart.chart_options.tooltip.touch_exit_mode = crate::config::TouchTrackingExitMode::OnNextTap;
     let id = chart.add_series(SeriesOptions {
@@ -1193,25 +1243,27 @@ fn heikin_ashi_readouts_describe_the_drawn_candle() {
     assert_eq!(chart.indicator_value_at(average, 50), Some((0, 149.25)));
 }
 
-/// Touch holds respect their delay, move without panning, and exit by release or a later tap.
-/// Short taps, cancelled contacts and a pan started before the delay cannot latch a readout.
+/// Default options track a touch held for its delay, keep its values until the next tap and
+/// leave mouse hover unchanged; `OnTouchEnd` exits on release. Short taps, cancelled contacts
+/// and a pan started before the delay cannot latch a readout.
 #[test]
 fn touch_readout_tracks_and_exits_without_following_the_live_edge() {
     use crate::config::TouchTrackingExitMode;
     use egui::TouchPhase::{Cancel, End, Move, Start};
 
     for panes in [false, true] {
-        for mode in [
-            TouchTrackingExitMode::OnTouchEnd,
-            TouchTrackingExitMode::OnNextTap,
-        ] {
+        // None keeps the default exit.
+        for mode in [None, Some(TouchTrackingExitMode::OnTouchEnd)] {
             let ctx = egui::Context::default();
             ctx.options_mut(|options| options.input_options.max_click_duration = 0.3);
             let mut chart = chart(&[100.0], &[110.0, 120.0]);
             chart.config.show_volume = false;
-            chart.chart_options.tooltip.on_long_press = true;
+            #[cfg(feature = "studies")]
+            chart.add_indicator(Box::new(crate::studies::SMA::new(2)));
             chart.chart_options.tooltip.long_press_delay = std::time::Duration::from_millis(800);
-            chart.chart_options.tooltip.touch_exit_mode = mode;
+            if let Some(mode) = mode {
+                chart.chart_options.tooltip.touch_exit_mode = mode;
+            }
             chart.chart_options.crosshair.vert_line_color = egui::Color32::MAGENTA;
             let pane_series = panes.then(|| {
                 let id = chart.add_series(Default::default());
@@ -1254,7 +1306,7 @@ fn touch_readout_tracks_and_exits_without_following_the_live_edge() {
                 }
                 events
             };
-            let latched = mode == TouchTrackingExitMode::OnNextTap;
+            let latched = mode.is_none();
             let jitter = point(50) + egui::vec2(2.0, 1.0);
             for (time, events, expected, index) in [
                 (1.0, touch(Start, 50), false, 50),
@@ -1338,12 +1390,36 @@ fn touch_readout_tracks_and_exits_without_following_the_live_edge() {
                     let close = chart.state.shown()[index].close;
                     assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
                         if text.galley.text() == format!("{close:.2}"))));
+                    #[cfg(feature = "studies")]
+                    for label in ["SMA", "115.00"] {
+                        // Alternating closes of 110 and 120 average to 115 at every held bar.
+                        assert!(
+                            painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+                            if text.galley.text() == label)),
+                            "study {label}: {mode:?}, panes {panes}, time {time}"
+                        );
+                    }
+                    // The held layout has no change row; the mouse hover card below has one.
+                    assert!(
+                        !painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+                            if text.galley.text() == "Change")),
+                        "held layout: {mode:?}, panes {panes}, time {time}"
+                    );
                 }
                 assert_eq!(chart.get_time_scale_state(), viewport, "time {time}");
                 assert!(!chart.tracking_mode_active);
                 assert!(
                     chart.take_right_click().is_none(),
                     "a hold belongs to the readout"
+                );
+            }
+            // A mouse shows values on hover, without a held button, while touch holds.
+            let hover = shapes(&ctx, &mut chart, 9.5, vec![Event::PointerMoved(point(60))]);
+            for label in ["Open", "Change"] {
+                assert!(
+                    hover.iter().any(|shape| matches!(shape, Shape::Text(text)
+                        if text.galley.text() == label)),
+                    "mouse hover {label}: {mode:?}, panes {panes}"
                 );
             }
             frame(&ctx, &mut chart, 10.0, touch(Start, 50));
@@ -2164,6 +2240,72 @@ fn hidden_series_markers_allocate_nothing_on_hover() {
     );
 }
 
+/// A touch taken by a drawing tool or the eraser shows the crosshair under the finger at once,
+/// in the main plot and in a pane, since it never starts a long-press readout.
+#[cfg(feature = "drawings")]
+#[test]
+fn drawing_touch_keeps_the_crosshair_under_the_finger() {
+    for panes in [false, true] {
+        for eraser in [false, true] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[100.0], &[110.0, 120.0]);
+            chart.config.show_volume = false;
+            let crosshair = &mut chart.chart_options.crosshair;
+            crosshair.vert_line_color = egui::Color32::MAGENTA;
+            crosshair.horz_line_color = egui::Color32::MAGENTA;
+            crosshair.vert_line_style = crate::model::LineStyle::Solid;
+            crosshair.horz_line_style = crate::model::LineStyle::Solid;
+            let pane_series = panes.then(|| {
+                let id = chart.add_series(Default::default());
+                chart.set_data(id, chart.bars(crate::widget::SeriesId::MAIN).to_vec());
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(id, pane));
+                id
+            });
+            if eraser {
+                chart.drawings_mut().eraser_mode = true;
+            } else {
+                chart
+                    .drawings_mut()
+                    .set_active_tool(Some(crate::config::DrawingToolType::TrendLine));
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.get_chart_mapping();
+            let y = pane_series.map_or(map.rect.center().y, |id| {
+                chart.series_price_map(id).unwrap().price_to_y(115.0)
+            });
+            let pos = Pos2::new(map.idx_to_x(50), y);
+            let painted = shapes(
+                &ctx,
+                &mut chart,
+                1.0,
+                touch_events(egui::TouchPhase::Start, pos),
+            );
+            // The eraser's arrow crosshair keeps only the axis labels.
+            for vertical in [true, false] {
+                assert_eq!(
+                    painted.iter().any(|shape| matches!(shape,
+                        Shape::LineSegment { points, stroke }
+                            if stroke.color == egui::Color32::MAGENTA
+                                && if vertical {
+                                    points[0].x == points[1].x
+                                } else {
+                                    points[0].y == points[1].y
+                                }
+                    )),
+                    !eraser,
+                    "vertical {vertical}, panes {panes}, eraser {eraser}"
+                );
+            }
+            assert_eq!(
+                chart.last_hover_bar_idx,
+                Some(50.0),
+                "panes {panes}, eraser {eraser}"
+            );
+        }
+    }
+}
+
 fn touch_events(phase: egui::TouchPhase, pos: Pos2) -> Vec<Event> {
     use egui::TouchPhase::{Cancel, End, Move, Start};
     let mut events = vec![
@@ -2204,7 +2346,6 @@ fn touch_hold_released_before_the_click_limit_is_not_a_click() {
                 let ctx = egui::Context::default();
                 let mut chart = chart(&[100.0], &[110.0, 120.0]);
                 chart.config.show_volume = false;
-                chart.chart_options.tooltip.on_long_press = true;
                 chart.chart_options.tooltip.touch_exit_mode = mode;
                 let selected = if pane {
                     let id = chart.add_series(Default::default());
@@ -2262,7 +2403,6 @@ fn moving_a_touch_readout_keeps_live_edge_following() {
             let ctx = egui::Context::default();
             let mut chart = chart(&[100.0], &[110.0, 120.0]);
             chart.config.show_volume = false;
-            chart.chart_options.tooltip.on_long_press = true;
             chart.chart_options.tracking_mode.exit_mode = exit_mode;
             if pane {
                 let id = chart.add_series(Default::default());
@@ -2332,7 +2472,6 @@ fn touch_readout_activates_without_keyboard_focus() {
     for cancel in [false, true] {
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[110.0, 120.0]);
-        chart.chart_options.tooltip.on_long_press = true;
         let size = egui::vec2(800.0, 600.0);
         touch_frame(&ctx, &mut chart, 0.0, vec![], size, false);
         chart.apply_synced_time_scale(6.0, -10.0);
@@ -2365,7 +2504,6 @@ fn latched_touch_readout_left_outside_the_plot_does_not_capture_a_swipe() {
     for (width, held) in [(300.0, false), (780.0, false), (300.0, true), (780.0, true)] {
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[110.0, 120.0]);
-        chart.chart_options.tooltip.on_long_press = true;
         chart.chart_options.tooltip.touch_exit_mode =
             crate::config::TouchTrackingExitMode::OnNextTap;
         frame(&ctx, &mut chart, 0.0, vec![]);
@@ -2413,7 +2551,6 @@ fn tapping_the_price_button_of_a_latched_touch_readout_opens_its_action() {
     for button in [true, false] {
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[110.0, 120.0]);
-        chart.chart_options.tooltip.on_long_press = true;
         chart.chart_options.tooltip.touch_exit_mode =
             crate::config::TouchTrackingExitMode::OnNextTap;
         frame(&ctx, &mut chart, 0.0, vec![]);
@@ -2454,7 +2591,7 @@ fn latched_touch_readout_is_the_reported_crosshair() {
     for enabled in [true, false] {
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[110.0, 120.0]);
-        chart.chart_options.tooltip.on_long_press = enabled;
+        chart.chart_options.tooltip.touch_long_press = enabled;
         chart.chart_options.tooltip.touch_exit_mode =
             crate::config::TouchTrackingExitMode::OnNextTap;
         frame(&ctx, &mut chart, 0.0, vec![]);
@@ -2504,10 +2641,10 @@ fn latched_touch_readout_is_the_reported_crosshair() {
             }
         }
     }
-    for on_long_press in [true, false] {
+    for touch_long_press in [true, false] {
         let ctx = egui::Context::default();
         let mut chart = crate::widget::Chart::new(Default::default());
-        chart.chart_options.tooltip.on_long_press = on_long_press;
+        chart.chart_options.tooltip.touch_long_press = touch_long_press;
         frame(&ctx, &mut chart, 0.0, vec![]);
         let pos = chart.last_rendered_price_rect.center();
         chart.drain_events().for_each(drop);
@@ -2516,7 +2653,7 @@ fn latched_touch_readout_is_the_reported_crosshair() {
             chart
                 .drain_events()
                 .any(|event| matches!(event, ChartEvent::CrosshairMoved(Some(_)))),
-            !on_long_press,
+            !touch_long_press,
             "an empty plot has no held readout"
         );
     }
@@ -2590,4 +2727,211 @@ fn study_titles_reach_the_translator_apart_from_plot_names() {
             ("Williams Alligator".to_owned(), "Lips".to_owned()),
         ]
     );
+}
+
+/// The scale font sizes and styles the crosshair's time label like the other scale text, which
+/// stays inside the time axis at every size the settings offer, and leaves other chart text,
+/// such as the jump-to-latest button's, at the theme's sizes.
+#[test]
+fn scale_font_reaches_the_crosshair_time_label_and_nothing_else() {
+    use egui::{Color32, FontFamily, FontId};
+
+    const TAG: Color32 = Color32::from_rgb(1, 2, 3);
+    for (size, family) in [
+        (10.0, FontFamily::Proportional),
+        (20.0, FontFamily::Proportional),
+        (20.0, FontFamily::Monospace),
+    ] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.config.show_volume = false;
+        chart.chart_options.tooltip.enabled = false;
+        chart.chart_options.crosshair.vert_label_background_color = TAG;
+        chart.config_mut().axis_font_size = Some(size);
+        chart.config_mut().axis_font_family = family.clone();
+        chart.config_mut().realtime_button_text = Some("Latest".into());
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        // Scrolled back from the latest bar, the chart offers the jump-to-latest button.
+        chart.scroll_to_position(-20.0, false);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let plot = chart.get_rendered_price_rect();
+        let pos = plot.center();
+        let label = chart.format_time(chart.x_to_time(pos.x).unwrap());
+        let painted = shapes(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(pos)]);
+        let font = |text: &str| {
+            painted
+                .iter()
+                .find_map(|shape| match shape {
+                    Shape::Text(shape) if shape.galley.text() == text => {
+                        Some(shape.galley.job.sections[0].format.font_id.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{text:?} is painted"))
+        };
+        // The button keeps the default theme's label size.
+        assert_eq!(
+            (font(&label), font("Latest")),
+            (
+                FontId::new(size, family.clone()),
+                FontId::proportional(12.0)
+            )
+        );
+        let tag = painted
+            .iter()
+            .find_map(|shape| match shape {
+                Shape::Rect(rect) if rect.fill == TAG => Some(rect.rect),
+                _ => None,
+            })
+            .unwrap();
+        let axis = chart.time_axis_rect;
+        assert!(
+            axis.contains_rect(tag),
+            "{tag:?} in {axis:?} at {size} {family:?}"
+        );
+    }
+}
+
+/// Hovering a study's mark or boundary shows the full name of every pattern it labels, and
+/// hovering where none is shows no name. Names of studies marking the same spot stack.
+#[cfg(all(feature = "studies", feature = "drawings"))]
+#[test]
+fn pattern_marks_and_boundaries_name_their_patterns_on_hover() {
+    use crate::model::{Bar, BarData};
+    use crate::studies::{
+        CandlestickPatterns, ChartPatterns, Indicator, PatternFamily, PatternTrend,
+    };
+    use chrono::{TimeZone, Utc};
+
+    /// The texts painted on the third frame with the pointer over `price` at `bar`, with their
+    /// screen bounds.
+    fn hovered(
+        ohlc: &[(f64, f64, f64, f64)],
+        studies: Vec<Box<dyn Indicator>>,
+        bar: usize,
+        price: f64,
+    ) -> Vec<(String, egui::Rect)> {
+        let bars = ohlc
+            .iter()
+            .enumerate()
+            .map(|(i, &(open, high, low, close))| {
+                let t = Utc
+                    .timestamp_opt(1_700_000_000 + i as i64 * 86_400, 0)
+                    .unwrap();
+                Bar::new(t, open, high, low, close, 1.0)
+            })
+            .collect();
+        let ctx = egui::Context::default();
+        let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+        chart.config.show_volume = false;
+        chart.chart_options.tooltip.enabled = false;
+        for study in studies {
+            chart.add_indicator(study);
+        }
+        frame(&ctx, &mut chart, 0.0, vec![Event::PointerGone]);
+        let map = chart.get_chart_mapping();
+        let pos = Pos2::new(map.idx_to_x(bar), map.price_to_y(price));
+        assert!(
+            map.rect.contains(pos),
+            "{bar} {price}: {pos:?} outside {:?}",
+            map.rect
+        );
+        // A tooltip is sized unseen on its first frame.
+        let mut painted = Vec::new();
+        for time in [0.1, 0.2, 0.3] {
+            painted = shapes(&ctx, &mut chart, time, vec![Event::PointerMoved(pos)]);
+        }
+        painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text) => Some((
+                    text.galley.text().to_owned(),
+                    text.galley.rect.translate(text.pos.to_vec2()),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // Seven bars leave the 14-bar body average undefined, so only rules free of it fire: bar 1
+    // a dragonfly doji with a long lower shadow, bar 3 a white spinning top, bar 5 a doji gapping
+    // below bar 4, a falling window.
+    let candles = [
+        (99.5, 100.75, 99.25, 100.5),
+        (100.0, 100.0, 96.0, 100.0),
+        (99.5, 100.75, 99.25, 100.5),
+        (99.0, 102.0, 97.0, 100.0),
+        (99.5, 100.75, 99.25, 100.5),
+        (90.0, 92.0, 88.0, 90.0),
+        (90.5, 91.75, 90.25, 91.5),
+    ];
+    let rows: [(usize, f64, &[&str]); 6] = [
+        (
+            1,
+            96.0,
+            &["Dragonfly Doji - Bullish", "Long Lower Shadow - Bullish"],
+        ),
+        (1, 100.0, &[]),
+        (3, 102.0, &["Spinning Top White"]),
+        (5, 92.0, &["Falling Window - Bearish", "Doji"]),
+        (2, 100.75, &[]),
+        (2, 99.25, &[]),
+    ];
+    for (bar, price, names) in rows {
+        let study = CandlestickPatterns::new(PatternTrend::NoDetection);
+        let texts: Vec<String> = hovered(&candles, vec![Box::new(study)], bar, price)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        // Each pattern is its name over a line with its rule, a blank line apart.
+        let named = |t: &String| {
+            let entries: Vec<Vec<&str>> = t.split("\n\n").map(|e| e.lines().collect()).collect();
+            entries.len() == names.len()
+                && entries
+                    .iter()
+                    .zip(names)
+                    .all(|(e, name)| matches!(e[..], [n, rule] if n == *name && !rule.is_empty()))
+        };
+        match names {
+            [_, ..] => assert!(texts.iter().any(named), "{bar} {price}: {texts:?}"),
+            [] => assert!(
+                !texts.iter().any(|t| {
+                    [" - Bullish", " - Bearish", "Doji", "Spinning Top"]
+                        .iter()
+                        .any(|name| t.contains(name))
+                }),
+                "{bar} {price}: {texts:?}"
+            ),
+        }
+    }
+
+    // Legs of five flat bars through 100, 120, 105, 119, 60: a double top over the valley at 105
+    // on bar 10, confirmed bearish on bar 18, whose neckline runs from bar 10 to bar 18. Bar 18
+    // is a gravestone doji, so a candlestick mark shares its high with the formation's mark.
+    let anchors = [100.0, 120.0, 105.0, 119.0, 60.0];
+    let closes: Vec<f64> = anchors
+        .windows(2)
+        .flat_map(|leg| (0..5).map(move |k| leg[0] + (leg[1] - leg[0]) * k as f64 / 5.0))
+        .chain([60.0])
+        .collect();
+    let mut flat: Vec<_> = closes.iter().map(|&c| (c, c, c, c)).collect();
+    flat[18].1 = 90.0;
+    for (bar, price) in [(18, 90.0), (14, 105.0)] {
+        let studies: Vec<Box<dyn Indicator>> = vec![
+            Box::new(ChartPatterns::new(PatternFamily::Reversal)),
+            Box::new(CandlestickPatterns::new(PatternTrend::NoDetection)),
+        ];
+        let texts = hovered(&flat, studies, bar, price);
+        let formation = texts.iter().find(|(t, _)| t == "Double Top");
+        assert!(formation.is_some(), "{bar} {price}: {texts:?}");
+        if bar == 18 {
+            let candle = texts
+                .iter()
+                .find(|(t, _)| t.starts_with("Gravestone Doji - Bearish\n"));
+            assert!(
+                candle.is_some_and(|(_, at)| !at.intersects(formation.unwrap().1)),
+                "{texts:?}"
+            );
+        }
+    }
 }

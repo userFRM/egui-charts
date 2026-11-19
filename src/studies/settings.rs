@@ -650,6 +650,8 @@ pub struct ConfiguredStudy {
     /// The values kept on the bars that remain after the chart evicted the oldest bars, until
     /// the study is calculated again.
     kept: Option<Kept>,
+    /// Defaults by input id that replace the declared ones, from `set_input_defaults`.
+    input_defaults: Vec<(String, InputValue)>,
 }
 
 impl Clone for ConfiguredStudy {
@@ -701,6 +703,7 @@ impl ConfiguredStudy {
             aligned_markers: self.aligned_markers.clone(),
             aligned_zones: self.aligned_zones.clone(),
             kept: self.kept.clone(),
+            input_defaults: self.input_defaults.clone(),
         }
     }
 
@@ -748,6 +751,7 @@ impl ConfiguredStudy {
             aligned_markers: Vec::new(),
             aligned_zones: Vec::new(),
             kept: None,
+            input_defaults: Vec::new(),
         }
     }
     /// Attach a host-chosen help article to this study, retained in saved presentation.
@@ -782,6 +786,18 @@ impl ConfiguredStudy {
     fn shift(&self) -> usize {
         self.kept.as_ref().map_or(0, |kept| kept.shift)
     }
+
+    /// The inner study's bar for a bar this study is asked about, through its shift and its
+    /// alignment to another interval.
+    fn inner_bar(&self, bar: usize) -> Option<usize> {
+        let bar = bar.checked_add(self.shift())?;
+        if self.aligned.is_some() {
+            self.aligned_bars.get(bar).copied().flatten()
+        } else {
+            Some(bar)
+        }
+    }
+
     fn update_price(&mut self, data: &[Bar], from: usize) {
         self.aligned = None;
         self.kept = None;
@@ -833,6 +849,9 @@ impl Indicator for ConfiguredStudy {
     fn set_registered_name(&mut self, name: &str) -> bool {
         self.registered = name.to_owned();
         true
+    }
+    fn set_input_defaults(&mut self, defaults: &[(String, InputValue)]) {
+        self.input_defaults = defaults.to_vec();
     }
     fn metric(&self) -> Option<&crate::data::MetricSeries> {
         self.study.metric()
@@ -906,6 +925,13 @@ impl Indicator for ConfiguredStudy {
                 )
                 .with_default(InputValue::Toggle(true)),
             ]);
+        }
+        for input in &mut inputs {
+            if let Some((_, value)) = self.input_defaults.iter().find(|(id, _)| *id == input.id)
+                && input.accepts(value)
+            {
+                input.default = value.clone();
+            }
         }
         inputs
     }
@@ -1176,6 +1202,7 @@ impl Indicator for ConfiguredStudy {
             || !self.zones().is_empty()
             || !self.markers().is_empty()
             || !self.labels().is_empty()
+            || !self.price_segments().is_empty()
             || !self.projections().is_empty()
             || (0..self.line_count()).any(|line| self.provisional_after(line).is_some());
         #[cfg(feature = "drawings")]
@@ -1386,13 +1413,10 @@ impl Indicator for ConfiguredStudy {
         self.study.plot_color(line, bar)
     }
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
-        let bar = bar.checked_add(self.shift())?;
-        let bar = if self.aligned.is_some() {
-            self.aligned_bars.get(bar).copied().flatten()?
-        } else {
-            bar
-        };
-        self.study.plot_text(line, bar)
+        self.study.plot_text(line, self.inner_bar(bar)?)
+    }
+    fn plot_tooltip(&self, line: usize, bar: usize) -> Option<String> {
+        self.study.plot_tooltip(line, self.inner_bar(bar)?)
     }
     fn fills(&self) -> Vec<super::StudyFill> {
         self.study
@@ -1823,6 +1847,14 @@ impl Indicator for ConfiguredStudy {
     }
     fn labels_on_price(&self) -> bool {
         self.study.labels_on_price()
+    }
+    fn price_segments(&self) -> &[super::StudySegment] {
+        // Source bars of a study on another interval or symbol are not chart bars.
+        if self.aligned.is_some() {
+            &[]
+        } else {
+            self.study.price_segments()
+        }
     }
     fn set_label_precision(&mut self, precision: Option<usize>) {
         self.study.set_label_precision(precision);

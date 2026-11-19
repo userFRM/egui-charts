@@ -12,6 +12,10 @@ fn default_long_press_delay() -> std::time::Duration {
     std::time::Duration::from_millis(500)
 }
 
+fn default_touch_long_press() -> bool {
+    true
+}
+
 /// Tooltip display mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum TooltipMode {
@@ -42,6 +46,14 @@ impl std::fmt::Display for TooltipMode {
 }
 
 /// Tooltip configuration options
+///
+/// ```
+/// use egui_charts::config::{TooltipOptions, TouchTrackingExitMode};
+///
+/// let mut options = TooltipOptions::default();
+/// options.touch_long_press = false;
+/// options.touch_exit_mode = TouchTrackingExitMode::OnTouchEnd;
+/// ```
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct TooltipOptions {
@@ -52,16 +64,24 @@ pub struct TooltipOptions {
     /// data tooltip independently of the crosshair.
     pub enabled: bool,
 
-    /// Show values while the primary pointer is held. Touch waits for `long_press_delay`
-    /// and exits according to `touch_exit_mode`, independently of live-edge following.
+    /// Show values beside the bar only while the primary button is held, instead of on hover.
+    /// Touch follows this only while `touch_long_press` is off.
     pub on_long_press: bool,
+
+    /// Show touch values after a long press. A touch held still for `long_press_delay` shows
+    /// the crosshair and the values beside the bar, which follow the finger and end as
+    /// `touch_exit_mode` says; a shorter touch shows nothing, and a drag before the delay
+    /// pans. When `false`, touch follows `on_long_press` as the mouse does. Mouse input is
+    /// unaffected. Default: true.
+    #[serde(default = "default_touch_long_press")]
+    pub touch_long_press: bool,
 
     /// Time a touch must remain still before activating the readout. Default: 500 ms.
     #[serde(default = "default_long_press_delay")]
     pub long_press_delay: std::time::Duration,
 
-    /// When to exit a touch readout activated by `on_long_press`.
-    /// Default: hide on release, preserving held-value behaviour.
+    /// When a touch readout shown by `touch_long_press` ends. Default: at the next tap, so
+    /// the values stay after release. Live-edge following ends independently.
     #[serde(default)]
     pub touch_exit_mode: super::TouchTrackingExitMode,
 
@@ -127,6 +147,7 @@ impl Default for TooltipOptions {
         Self {
             enabled: true,
             on_long_press: false,
+            touch_long_press: default_touch_long_press(),
             long_press_delay: default_long_press_delay(),
             touch_exit_mode: super::TouchTrackingExitMode::default(),
             mode: TooltipMode::Floating,

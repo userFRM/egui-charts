@@ -8,6 +8,7 @@ use crate::model::PriceLine;
 use crate::painting::dashed_line::draw_dashed_line;
 use crate::scales::PriceMap;
 use crate::theme::{ThemeExt, contrast};
+pub(crate) use currency::currency_menu_id;
 pub use currency::render_axis_currency;
 use egui::{Align2, Color32, CornerRadius, FontFamily, FontId, Painter, Pos2, Rect, Stroke, Vec2};
 pub(super) use labels::semibold;
@@ -25,20 +26,27 @@ fn axis_font_id() -> egui::Id {
     egui::Id::NULL.with("axis_font")
 }
 
-/// Restores the axis font after painting one chart, including during unwinding.
+/// Sets the axis font while painting one chart and restores it afterwards, including during
+/// unwinding.
 pub(crate) struct AxisFontScope {
     ctx: egui::Context,
     previous: Option<FontId>,
 }
 
 impl AxisFontScope {
-    pub(crate) fn new(ctx: &egui::Context, family: &FontFamily) -> Self {
+    /// The axis font is `family`, proportional while it is not installed, at `size` within the
+    /// drawable font sizes, else at the active theme's label size.
+    pub(crate) fn new(ctx: &egui::Context, size: Option<f32>, family: &FontFamily) -> Self {
         let family = if ctx.fonts(|fonts| fonts.definitions().families.contains_key(family)) {
             family.clone()
         } else {
             FontFamily::Proportional
         };
-        let font = FontId::new(ctx.active_theme().text.label, family);
+        let size = size.map_or_else(
+            || ctx.active_theme().text.label,
+            crate::styles::typography::font_size,
+        );
+        let font = FontId::new(size, family);
         let previous = ctx.data_mut(|data| {
             data.get_temp_mut_or_default::<Option<FontId>>(axis_font_id())
                 .replace(font)
@@ -59,7 +67,7 @@ impl Drop for AxisFontScope {
     }
 }
 
-/// The chart's axis family at the theme's label size, proportional outside a chart.
+/// The chart's scale font, or the theme's label size in proportional outside a chart.
 pub(crate) fn axis_font(ctx: &egui::Context) -> FontId {
     ctx.data(|data| data.get_temp::<Option<FontId>>(axis_font_id()))
         .flatten()
@@ -660,8 +668,8 @@ pub fn render_quote_tags(
     )
 }
 
-/// The chart's current-value stack, optionally including the supplied quote's bar countdown.
-/// A non-empty `close_name` leads the current close's tag.
+/// The chart's current-value stack, with `below` written under the close's price: lines such
+/// as its change and the bar countdown. A non-empty `close_name` leads the current close's tag.
 pub(crate) fn render_quote_tags_with_countdown(
     painter: &Painter,
     price_rect: Rect,
@@ -670,7 +678,7 @@ pub(crate) fn render_quote_tags_with_countdown(
     session: Option<(&crate::model::quote::SessionQuote, Color32)>,
     volume: Option<(f64, Color32)>,
     axis_right: f32,
-    countdown: Option<&str>,
+    below: Option<&str>,
     volume_precision: Option<u8>,
     reserved_top: f32,
     formatter: Option<&dyn crate::scales::PriceFormatter>,
@@ -714,7 +722,7 @@ pub(crate) fn render_quote_tags_with_countdown(
                         formatter,
                     ),
                 );
-                countdown.map_or_else(|| price.clone(), |time| format!("{price}\n{time}"))
+                below.map_or_else(|| price.clone(), |below| format!("{price}\n{below}"))
             },
             close.color,
         ));
@@ -734,12 +742,11 @@ pub(crate) fn render_quote_tags_with_countdown(
             axis_right,
         );
         let mut y = price_map.price_to_y(quote.price);
+        // A close tag of `1 + n` lines clears the session tag at `height + n * line / 2`.
         let separation = height
-            + if countdown.is_some() {
-                (height - TAG_PADDING.y * 2.0) / 2.0
-            } else {
-                0.0
-            };
+            + below.map_or(0.0, |below| {
+                below.lines().count() as f32 * (height - TAG_PADDING.y * 2.0) / 2.0
+            });
         if !allow_overlap && !rows.is_empty() && (y - close_y).abs() < separation {
             y = close_y - separation;
         }
@@ -982,14 +989,14 @@ mod tests {
             theme.text.label = size;
             {
                 let _theme = crate::theme::ThemeScope::new(&ctx, &theme);
-                let _font = AxisFontScope::new(&ctx, &FontFamily::Monospace);
+                let _font = AxisFontScope::new(&ctx, None, &FontFamily::Monospace);
                 assert_eq!(axis_font(&ctx), FontId::monospace(size));
                 assert_eq!(axis_font(&other), default);
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     theme.text.label = 30.0;
                     let _theme = crate::theme::ThemeScope::new(&ctx, &theme);
                     let family = FontFamily::Name("Nested".into());
-                    let _font = AxisFontScope::new(&ctx, &family);
+                    let _font = AxisFontScope::new(&ctx, None, &family);
                     assert_eq!(axis_font(&ctx), FontId::new(30.0, family));
                     panic!("unwind the nested chart");
                 }));

@@ -9,11 +9,11 @@
 //! This keeps the domain layer pure and testable.
 
 use super::{
-    AnnotationMarker, ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree,
-    FibonacciConfig, FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig,
-    LineMeasurements, MiddleLineStyle, NoteTextStyle, PitchforkConfig, PositionReadout,
-    PositionSize, PositionSizing, PositionStyle, RegressionTrendConfig, TimeframeVisibility,
-    VwapConfig,
+    AnnotationMarker, ArrowStyle, BarsPatternConfig, BarsPatternMode, ChartPoint, DrawingToolType,
+    ElliottDegree, FibonacciConfig, FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig,
+    ImageConfig, LineMeasurements, MiddleLineStyle, NoteTextStyle, PitchforkConfig,
+    PositionReadout, PositionSize, PositionSizing, PositionStyle, RegressionTrendConfig,
+    TimeframeVisibility, VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -83,8 +83,9 @@ pub enum FolderSync {
 ///
 /// let mut arrow = Drawing::new(1, DrawingToolType::TrendLine);
 /// arrow.arrow_end_style = ArrowStyle::Arrow;
-/// let mut feed = GhostFeedConfig::default();
+/// let mut feed = GhostFeedConfig::drawing_default();
 /// feed.noise_ticks = 2.0;
+/// feed.show_wick = false;
 /// let mut ghost = Drawing::new(2, DrawingToolType::GhostFeed);
 /// ghost.ghost_feed = Some(feed);
 /// let mut fib = Drawing::new(3, DrawingToolType::FibonacciRetracement);
@@ -164,7 +165,9 @@ pub struct Drawing {
     /// by [`Self::update_screen_coords`]
     #[serde(skip)]
     pub level_ys: Vec<f32>,
-    /// Position as fractions of the pane width and height for anchored text.
+    /// Position as fractions of the pane width and height for anchored text, which keeps its
+    /// place in the pane while the chart scrolls and zooms. The chart keeps
+    /// [`chart_points`](Self::chart_points) on the bar and price under it.
     /// `None` adopts the first displayed position, including for older saved drawings.
     /// A pin saved with one takes the bar and price under it the first time a chart draws it,
     /// and the chart then clears it.
@@ -311,7 +314,9 @@ pub struct Drawing {
     /// [`GannConfig::for_tool`].
     #[serde(default)]
     pub gann: Option<GannConfig>,
-    /// Average range and noise, in ticks, of the candles a Ghost Feed projects.
+    /// Average range and noise, in ticks, and colours of the candles a Ghost Feed projects. New
+    /// feeds start from [`GhostFeedConfig::drawing_default`]; `None` uses the defaults, the
+    /// colours of feeds saved before these settings.
     #[serde(default)]
     pub ghost_feed: Option<GhostFeedConfig>,
     /// Whether a rectangle or parallel channel draws its halfway line; a channel's takes
@@ -347,9 +352,14 @@ pub struct Drawing {
     /// Notation of the wave labels of the Elliott wave tools. Older drawings use the default.
     #[serde(default)]
     pub elliott_degree: ElliottDegree,
+    /// Whether the Elliott wave tools draw the legs between their wave points. Off leaves the
+    /// wave labels where they are, and the drawing is selected by its labels only. New drawings
+    /// and drawings saved before this setting show their legs; other tools ignore it.
+    #[serde(default = "enabled")]
+    pub elliott_show_wave: bool,
 
-    /// Draw mode, mirroring and flipping of a bars pattern's copy. `None` uses the defaults,
-    /// as drawings saved before this setting do.
+    /// Draw mode, mirroring and flipping of a bars pattern's copy. New patterns draw high-low
+    /// bars; `None` uses the defaults, OHLC bars, as drawings saved before this setting do.
     #[serde(default)]
     pub bars_pattern: Option<BarsPatternConfig>,
 
@@ -684,6 +694,7 @@ impl Drawing {
             )
             .then(|| PitchforkConfig::for_tool(tool_type)),
             elliott_degree: ElliottDegree::default(),
+            elliott_show_wave: true,
             channel_midline: tool_type == DrawingToolType::ParallelChannel,
             anchor_price_style: None,
             middle_line: MiddleLineStyle::default(),
@@ -691,8 +702,12 @@ impl Drawing {
             image: None,
             closed: false,
             gann: None,
-            ghost_feed: None,
-            bars_pattern: None,
+            ghost_feed: (tool_type == DrawingToolType::GhostFeed)
+                .then(GhostFeedConfig::drawing_default),
+            bars_pattern: (tool_type == DrawingToolType::BarsPattern).then(|| BarsPatternConfig {
+                mode: BarsPatternMode::HighLowBars,
+                ..Default::default()
+            }),
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
         }

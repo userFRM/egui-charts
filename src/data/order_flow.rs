@@ -933,9 +933,10 @@ impl OrderFlowInput {
     /// Require the complete tape to reproduce each candle with the sink's allocator. A short
     /// final bar is valid. The historical grouping is not a live allocation anchor.
     #[cfg(feature = "widget")]
-    pub(crate) fn rebuild_paged_tick_rate(
+    pub(crate) fn rebuild_paged_trade_rate(
         &self,
-        count: std::num::NonZeroU64,
+        timeframe: crate::model::Timeframe,
+        tick_size: Option<f64>,
         trades: &super::trades::Trades,
         history: &[crate::model::Bar],
     ) {
@@ -951,20 +952,21 @@ impl OrderFlowInput {
         }
         let mut grouped = super::inbox::TradeBars::default();
         let mut tape = trades.iter();
-        let timeframe = crate::model::Timeframe::Ticks(count);
         let matched = history.iter().all(|expected| {
             let mut last = None;
-            for _ in 0..count.get() {
-                let Some(trade) = tape.next() else { break };
-                let Ok(parts) = grouped.push(timeframe, trade, None) else {
+            for trade in tape.by_ref() {
+                let Ok(parts) = grouped.push(timeframe, trade, tick_size) else {
                     return false;
                 };
-                // Tick intervals allocate the whole execution to exactly one bar.
+                // Both tick and range intervals allocate each fill to exactly one bar.
                 let Some((bar, size)) = parts.into_iter().next() else {
                     return false;
                 };
                 state.add_trade(trade, bar.time, size, true);
                 last = Some(bar);
+                if grouped.closed {
+                    break;
+                }
             }
             last.is_some_and(|bar| super::merge::same_values(&bar, expected))
         }) && tape.next().is_none();
