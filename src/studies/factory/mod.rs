@@ -218,6 +218,7 @@ impl IndicatorFactory {
                 AroonOscillator,
                 BullBearPower,
                 AdvanceDeclineRatioBars,
+                AdvanceDecline,
                 PriceMomentumOscillator,
                 PringsSpecialK,
                 SMIErgodicIndicator,

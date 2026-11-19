@@ -289,6 +289,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(ChaikinOscillator::new(l(0), l(1))),
         Box::new(BullBearPower::new(l(0))),
         Box::new(AdvanceDeclineRatioBars::new(l(0))),
+        Box::new(AdvanceDecline::new(l(0))),
         Box::new(AdvanceDeclineRatio::default()),
         Box::new(AdvanceDeclineLine::default()),
         Box::new(CumulativeVolumeIndex::default()),
