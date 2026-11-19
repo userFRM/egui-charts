@@ -41,6 +41,7 @@ struct Subject {
     metric: Option<String>,
     timezone: Option<crate::model::TimezoneId>,
     extended_hours: bool,
+    overnight_hours: bool,
     conversion: Option<String>,
     count: usize,
     start: Option<DateTime<Utc>>,
@@ -164,6 +165,7 @@ impl Evaluation {
             metric: request.and_then(|request| request.metric.clone()),
             timezone: self.inputs.timezone.clone(),
             extended_hours: self.inputs.extended_hours,
+            overnight_hours: self.inputs.overnight_hours,
             conversion: self.inputs.conversion.clone(),
             count: self.inputs.count.max(1),
             start: self.inputs.start,
@@ -297,6 +299,7 @@ impl Subject {
             None => request.clock.with_local_timezone(),
         };
         request.extended_hours = self.extended_hours;
+        request.overnight_hours = self.overnight_hours;
         request.conversion = self.conversion.clone();
         request.count = self.count.max(1000);
         request
