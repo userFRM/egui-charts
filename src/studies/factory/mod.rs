@@ -313,6 +313,7 @@ impl IndicatorFactory {
                 FallingWedge,
                 MissedPivots,
                 KeyLevels,
+                AutoKeyLevels,
                 IntradayPivotPoints,
                 ProjectedPivotPoints,
                 WilliamsFractals,
@@ -419,6 +420,22 @@ impl IndicatorFactory {
                 (
                     Some(Self::PATTERNS),
                     Box::new(move || Box::new(ChartPatterns::new(family))),
+                ),
+            );
+        }
+        self.constructors.insert(
+            ChartPatterns::all().name().to_owned(),
+            (
+                Some(Self::PATTERNS),
+                Box::new(|| Box::new(ChartPatterns::all())),
+            ),
+        );
+        for &kind in PatternFamily::ALL.iter().flat_map(|family| family.kinds()) {
+            self.constructors.insert(
+                ChartPatterns::only(kind).name().to_owned(),
+                (
+                    Some(Self::PATTERNS),
+                    Box::new(move || Box::new(ChartPatterns::only(kind))),
                 ),
             );
         }

@@ -286,6 +286,14 @@ fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
         if study.needs_order_flow() {
             continue;
         }
+        // A single chart formation repeats its family's study with the other formations off.
+        if PatternFamily::ALL
+            .iter()
+            .flat_map(|family| family.kinds())
+            .any(|&kind| ChartPatterns::only(kind).name() == name)
+        {
+            continue;
+        }
         // External series have no values until the host supplies their distinct inputs.
         if !study.data_requests().is_empty() {
             continue;
@@ -744,6 +752,19 @@ fn catalogue_choices_read_in_words_and_restore() {
         ("CVD", "mode", 1, "Body ratio"),
         ("ZigZag", "mode", 0, "High/Low"),
         ("Keltner", "band", 0, "Average True Range"),
+        ("Auto Key Levels", "start", 0, "Start of period"),
+        ("Auto Key Levels", "start", 1, "Current bar"),
+        ("Auto Key Levels", "anchor", 0, "Custom"),
+        ("Auto Key Levels", "anchor", 1, "Earnings"),
+        ("Auto Key Levels", "anchor", 2, "Split"),
+        ("Auto Key Levels", "anchor", 3, "Dividends"),
+        ("Auto Key Levels", "unit", 0, "Days"),
+        ("Auto Key Levels", "unit", 1, "Weeks"),
+        ("Auto Key Levels", "unit", 2, "Months"),
+        ("Missed Pivot Levels", "period", 0, "Swings"),
+        ("Missed Pivot Levels", "period", 1, "Daily"),
+        ("Missed Pivot Levels", "period", 2, "Weekly"),
+        ("Missed Pivot Levels", "period", 3, "Monthly"),
     ];
     let got: Vec<_> = saved
         .iter()

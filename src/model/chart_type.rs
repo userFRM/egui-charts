@@ -462,9 +462,10 @@ impl CustomProfileSession {
 /// Which hours divide a session volume profile chart into sessions.
 ///
 /// Only intraday charts are divided this way: daily and longer bars profile by trading date.
-/// Bars outside regular, extended or custom hours still join the session before them, so a host
-/// that wants them left out should not supply them. The pre-market, post-market and segment
-/// choices profile only the bars of their hours, each bar in the hours it opens in.
+/// Every choice but [`Self::Chart`] profiles only the bars of its hours, each bar in the hours it
+/// opens in: a profile takes a day's bars from its first in those hours to its last, so the bars
+/// of a midday break inside them stay in it, and the bars before and after, such as the
+/// post-market of a regular-hours profile, join no profile.
 ///
 /// ```
 /// use egui_charts::model::{ProfileSession, TradeProfileSettings};
@@ -497,13 +498,13 @@ pub enum ProfileSession {
     Segments,
 }
 
-#[cfg(feature = "studies")]
 impl ProfileSession {
     /// `clock` dividing intraday bars at the opens of the hours this choice selects, for an
     /// instrument trading `hours` in `zone`: a window opening every day, in its own zone or else
     /// `zone`, or `hours` with or without their extended windows. `None` for [`Self::Chart`],
     /// for regular or extended hours without `hours`, for pre-market or post-market without
     /// extended windows, and for segments without extended or overnight windows.
+    #[cfg(any(feature = "widget", feature = "studies"))]
     pub(crate) fn session_clock(
         &self,
         clock: &super::BarClock,
@@ -636,8 +637,30 @@ pub struct TradeProfileSettings {
     pub nodes: Option<NodeSensitivity>,
     /// Share of total volume shaded as the contiguous value area; `None` hides it.
     pub value_area: Option<f64>,
-    /// Draw guides at the outer edges of the value area.
+    /// Draw guides at the outer edges of the value area: the edges `value_area_high` and
+    /// `value_area_low` select.
     pub value_area_guides: bool,
+    /// Draw the POC line across each session. `extend_poc` extends it either way.
+    pub poc: bool,
+    /// Colour of the POC line and its extension; `None` follows the chart theme.
+    pub poc_color: Option<egui::Color32>,
+    /// With `value_area_guides`, draw the guide at the value area high.
+    pub value_area_high: bool,
+    /// Colour of the value area high guide and its extension; `None` follows the chart theme.
+    pub value_area_high_color: Option<egui::Color32>,
+    /// With `value_area_guides`, draw the guide at the value area low.
+    pub value_area_low: bool,
+    /// Colour of the value area low guide and its extension; `None` follows the chart theme.
+    pub value_area_low_color: Option<egui::Color32>,
+    /// Colour of up volume outside the value area, painted with its own opacity; `None` follows
+    /// the chart theme. In delta mode, rows of positive delta take the up colours.
+    pub up_volume_color: Option<egui::Color32>,
+    /// Colour of down volume outside the value area; `None` follows the chart theme.
+    pub down_volume_color: Option<egui::Color32>,
+    /// Colour of up volume inside the value area; `None` follows the chart theme.
+    pub value_area_up_color: Option<egui::Color32>,
+    /// Colour of down volume inside the value area; `None` follows the chart theme.
+    pub value_area_down_color: Option<egui::Color32>,
 }
 
 impl Default for TradeProfileSettings {
@@ -654,6 +677,16 @@ impl Default for TradeProfileSettings {
             nodes: None,
             value_area: Some(0.7),
             value_area_guides: false,
+            poc: true,
+            poc_color: None,
+            value_area_high: true,
+            value_area_high_color: None,
+            value_area_low: true,
+            value_area_low_color: None,
+            up_volume_color: None,
+            down_volume_color: None,
+            value_area_up_color: None,
+            value_area_down_color: None,
         }
     }
 }
@@ -887,6 +920,21 @@ pub struct ChartTypeParams {
     pub pnf_reversal: u32,
     /// Line Break: the number of lines a close must break through to reverse, 1 to 10.
     pub line_break_count: usize,
+    /// Point and Figure: with a reversal of one box, draw a reversal that follows a column of one
+    /// symbol in that column, which then holds both symbols. No effect at larger reversals.
+    pub pnf_one_step_back: bool,
+    /// Renko: label the last real price on the price scale; `false` labels the close of the
+    /// newest brick.
+    pub renko_real_price: bool,
+    /// Kagi: label the last real price on the price scale; `false` labels the end of the newest
+    /// line.
+    pub kagi_real_price: bool,
+    /// Line Break: label the last real price on the price scale; `false` labels the close of
+    /// the newest line.
+    pub line_break_real_price: bool,
+    /// Point and Figure: label the last real price on the price scale; `false` labels the end
+    /// of the newest column.
+    pub pnf_real_price: bool,
     /// Baseline: where the base line is drawn.
     pub baseline: BaselineLevel,
     /// Columns: the price the columns rise above or fall below; `None` draws them up from the
@@ -1016,6 +1064,11 @@ impl Default for ChartTypeParams {
             pnf_box_size: 1.0,
             pnf_reversal: 3,
             line_break_count: 3,
+            pnf_one_step_back: false,
+            renko_real_price: true,
+            kagi_real_price: true,
+            line_break_real_price: true,
+            pnf_real_price: true,
             baseline: BaselineLevel::PercentOfPane(50.0),
             columns_base: None,
             tpo_period_minutes: 30,
@@ -1092,6 +1145,20 @@ impl ChartTypeParams {
         Self {
             renko_brick_size: atr * multiplier,
             ..Default::default()
+        }
+    }
+
+    /// Whether the price scale of `chart_type` labels the close of its newest element instead
+    /// of the last real price.
+    #[cfg(feature = "widget")]
+    pub(crate) fn labels_element_price(&self, chart_type: super::ChartType) -> bool {
+        use super::ChartType::{Kagi, LineBreak, PointAndFigure, Renko};
+        match chart_type {
+            Renko => !self.renko_real_price,
+            Kagi => !self.kagi_real_price,
+            LineBreak => !self.line_break_real_price,
+            PointAndFigure => !self.pnf_real_price,
+            _ => false,
         }
     }
 
@@ -1247,7 +1314,12 @@ mod tests {
             "tpo_initial_balance": false,
             "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
                 "developing_value_area": true, "extend_poc": true, "extend_vah": true,
-                "extend_val": true,
+                "extend_val": true, "value_area_guides": true, "poc": false,
+                "poc_color": [12, 34, 56, 255], "value_area_high": false,
+                "value_area_high_color": [0, 200, 0, 255], "value_area_low": false,
+                "value_area_low_color": [0, 0, 100, 128], "up_volume_color": [60, 0, 0, 60],
+                "down_volume_color": [0, 60, 0, 60], "value_area_up_color": [0, 0, 120, 120],
+                "value_area_down_color": [120, 120, 0, 120],
                 "nodes": {"smoothing": 2, "prominence": 0.1}}
         });
         let params: ChartTypeParams = serde_json::from_value(settings.clone()).unwrap();
@@ -1314,58 +1386,74 @@ mod tests {
             restored.restore(&saved.charts[0]).unwrap();
             assert_eq!(restored.chart_type_params(), &applied);
         }
-        let legacy: ChartTypeParams = serde_json::from_str(r#"{"tpo_row_ticks":2}"#).unwrap();
-        let legacy = serde_json::to_value(legacy).unwrap();
-        assert_eq!(legacy["footprint_statistics"], false);
-        assert_eq!(legacy["footprint_row_ticks"], 0);
-        assert_eq!(legacy["footprint_row_atr"], false);
-        assert_eq!(legacy["footprint_row_atr_length"], 14);
-        assert_eq!(legacy["tpo_letters"], false);
-        assert_eq!(legacy["tpo_colored_blocks"], true);
-        assert_eq!(
-            legacy["tpo_block_colors"],
-            serde_json::json!([
-                [214, 56, 100, 255],
-                [90, 197, 97, 255],
-                [84, 185, 209, 255],
-                [93, 36, 245, 255]
-            ])
-        );
-        assert_eq!(
-            legacy["tpo_block_color"],
-            serde_json::json!([189, 189, 189, 255])
-        );
-        assert_eq!(legacy["tpo_outside_value_area_opacity"], 45);
-        assert_eq!(legacy["tpo_profile_period"], "Session");
-        assert_eq!(legacy["tpo_split_periods"], false);
-        assert_eq!(legacy["tpo_initial_balance"], true);
-        assert_eq!(
-            legacy["footprint_colors"],
-            serde_json::json!([null, null, null, null])
-        );
-        assert_eq!(
-            legacy["footprint_imbalance_colors"],
-            serde_json::json!([null, null])
-        );
-        assert_eq!(legacy["footprint_session_cumulative_delta"], false);
-        for field in [
-            "footprint_stacked_imbalances",
-            "footprint_naked_poc",
-            "footprint_delta_poc",
-            "footprint_unfinished_auctions",
-            "footprint_extreme_ratio",
-            "footprint_pullback",
+        // A profile saved before level styles existed, including its enabled guides.
+        for (saved, guides) in [
+            (r#"{"tpo_row_ticks":2}"#, false),
+            (
+                r#"{"tpo_row_ticks":2,"profile":{"session":"Chart","rows":"Feed","mode":"BidAsk","developing_poc":false,"developing_value_area":false,"extend_poc":false,"extend_vah":false,"extend_val":false,"nodes":null,"value_area":0.7,"value_area_guides":true}}"#,
+                true,
+            ),
         ] {
-            assert_eq!(legacy[field], false);
-        }
-        assert_eq!(legacy["profile"]["value_area"], 0.7);
-        for field in [
-            "developing_value_area",
-            "extend_poc",
-            "extend_vah",
-            "extend_val",
-        ] {
-            assert_eq!(legacy["profile"][field], false);
+            let legacy: ChartTypeParams = serde_json::from_str(saved).unwrap();
+            assert_eq!(
+                legacy.profile,
+                TradeProfileSettings {
+                    value_area_guides: guides,
+                    ..Default::default()
+                }
+            );
+            let legacy = serde_json::to_value(legacy).unwrap();
+            assert_eq!(legacy["footprint_statistics"], false);
+            assert_eq!(legacy["footprint_row_ticks"], 0);
+            assert_eq!(legacy["footprint_row_atr"], false);
+            assert_eq!(legacy["footprint_row_atr_length"], 14);
+            assert_eq!(legacy["tpo_letters"], false);
+            assert_eq!(legacy["tpo_colored_blocks"], true);
+            assert_eq!(
+                legacy["tpo_block_colors"],
+                serde_json::json!([
+                    [214, 56, 100, 255],
+                    [90, 197, 97, 255],
+                    [84, 185, 209, 255],
+                    [93, 36, 245, 255]
+                ])
+            );
+            assert_eq!(
+                legacy["tpo_block_color"],
+                serde_json::json!([189, 189, 189, 255])
+            );
+            assert_eq!(legacy["tpo_outside_value_area_opacity"], 45);
+            assert_eq!(legacy["tpo_profile_period"], "Session");
+            assert_eq!(legacy["tpo_split_periods"], false);
+            assert_eq!(legacy["tpo_initial_balance"], true);
+            assert_eq!(
+                legacy["footprint_colors"],
+                serde_json::json!([null, null, null, null])
+            );
+            assert_eq!(
+                legacy["footprint_imbalance_colors"],
+                serde_json::json!([null, null])
+            );
+            assert_eq!(legacy["footprint_session_cumulative_delta"], false);
+            for field in [
+                "footprint_stacked_imbalances",
+                "footprint_naked_poc",
+                "footprint_delta_poc",
+                "footprint_unfinished_auctions",
+                "footprint_extreme_ratio",
+                "footprint_pullback",
+            ] {
+                assert_eq!(legacy[field], false);
+            }
+            assert_eq!(legacy["profile"]["value_area"], 0.7);
+            for field in [
+                "developing_value_area",
+                "extend_poc",
+                "extend_vah",
+                "extend_val",
+            ] {
+                assert_eq!(legacy["profile"][field], false);
+            }
         }
     }
 

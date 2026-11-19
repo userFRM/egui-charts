@@ -1520,7 +1520,7 @@ mod tests {
         use IndicatorTab::*;
         // (tab, category, search, studies listed, studies not listed). A search covers every
         // built-in page.
-        let cases: [(_, _, _, &[&str], &[&str]); 9] = [
+        let cases: [(_, _, _, &[&str], &[&str]); 10] = [
             (
                 Indicators,
                 BuiltIns,
@@ -1547,8 +1547,20 @@ mod tests {
                 Patterns,
                 BuiltIns,
                 "",
-                &["All Candlestick Patterns"],
+                &[
+                    "All Candlestick Patterns",
+                    "All Chart Patterns",
+                    "Bull Flag",
+                    "Double Bottom",
+                ],
                 &["RSI", "Vol Profile VR"],
+            ),
+            (
+                Indicators,
+                BuiltIns,
+                "Cup and Handle",
+                &["Cup and Handle", "Inverted Cup and Handle"],
+                &["Double Top", "Reversal Chart Patterns"],
             ),
             (
                 OrderFlow,
