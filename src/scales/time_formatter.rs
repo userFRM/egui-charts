@@ -401,7 +401,11 @@ fn chrono_locale(locale: &str) -> Option<chrono::Locale> {
     let mut parts = tag.split('_');
     let language = parts.next()?.to_ascii_lowercase();
     let region = parts.next();
-    if parts.next().is_some() {
+    if parts.next().is_some()
+        || region.is_some_and(|part| {
+            part.len() == 4 && part.bytes().all(|byte| byte.is_ascii_alphabetic())
+        })
+    {
         return None;
     }
     if let Some(region) = region {
@@ -913,6 +917,7 @@ mod tests {
             ("sr-rs@latin", time, localized("mar", "Mar")),
             // A script never falls back to the language's default script, Cyrillic "мар".
             ("sr@latin", time, "Mar"),
+            ("sr-Latn", time, "Mar"),
             ("sr-Latn-RS", time, "Mar"),
         ] {
             assert_eq!(
