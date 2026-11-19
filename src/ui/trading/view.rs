@@ -224,6 +224,7 @@ impl Trading {
             take_profit: capabilities.limit,
             stop_loss: capabilities.stop,
             order_exits: capabilities.brackets && capabilities.modify,
+            coverage: capabilities.brackets,
             pnl: display.position_pnl.then_some(display.position_pnl_unit),
             bracket_pnl: display.bracket_pnl.then_some(display.bracket_pnl_unit),
             last_price: last,
@@ -500,6 +501,7 @@ impl Trading {
                 take_profit: false,
                 stop_loss: false,
                 order_exits: self.capabilities().brackets,
+                coverage: self.capabilities().brackets,
                 pnl: None,
                 bracket_pnl: self
                     .display
@@ -793,14 +795,17 @@ fn describe(
             ));
         }
         for level in &request.take_profit_levels {
-            text.push_str(&l10n::format_text(
-                ctx,
-                ", take profit {price} for {quantity}",
-                &[
-                    ("price", price(level.price).as_str()),
-                    ("quantity", quantity_text(level.quantity).as_str()),
-                ],
-            ));
+            let mut values = vec![
+                ("price", price(level.price)),
+                ("quantity", quantity_text(level.quantity)),
+            ];
+            let key = if let Some(stop) = level.stop_loss {
+                values.push(("stop", price(stop)));
+                ", take profit {price} for {quantity} with a stop loss at {stop}"
+            } else {
+                ", take profit {price} for {quantity}"
+            };
+            text.push_str(&l10n::format_text(ctx, key, &values));
         }
         if let Some(stop_loss) = request.stop_loss {
             text.push_str(&l10n::format_text(
@@ -918,6 +923,14 @@ mod tests {
         bracketed.take_profit = Some(110.0);
         bracketed.stop_loss = Some(95.0);
         let working = Order::new(OrderId::new("7"), bracketed, OrderStatus::Working);
+        let mut stopped_levels = request(OrderSide::Buy, OrderType::Limit(101.0));
+        stopped_levels.take_profit_levels = vec![
+            TakeProfitLevel::new(110.0, 1.0),
+            TakeProfitLevel::new(120.0, 1.0),
+        ];
+        stopped_levels.take_profit_levels[0].stop_loss = Some(96.0);
+        stopped_levels.stop_loss = Some(95.0);
+        let stopped_levels = Order::new(OrderId::new("8"), stopped_levels, OrderStatus::Working);
         let long = Position::new("1301", 2.0, 100.0);
         let mut levels = OrderRequest::new("1301", OrderSide::Buy, 3_000.0, OrderType::Market);
         levels.take_profit_levels = vec![
@@ -926,6 +939,10 @@ mod tests {
         ];
         let levels = Order::new(OrderId::new("levels"), levels, OrderStatus::Working);
         for (action, expected) in [
+            (
+                TradingLineAction::Cancel(stopped_levels),
+                "~~2~1301~101.00~~110.00~1~96.00~~120.00~1~~95.00~~",
+            ),
             (
                 TradingLineAction::Cancel(working.clone()),
                 "~~2~1301~101.00~~110.00~~95.00~~",
@@ -1159,6 +1176,7 @@ mod tests {
                         ("Place stop loss", false, false, ""),
                         ("Modify order", false, false, "levels entry"),
                         ("Modify order", false, true, "levels drag"),
+                        ("Modify order", false, true, "level stop drag"),
                         ("Modify order", false, false, "levels remove"),
                         ("Modify order", false, false, "add TP"),
                         ("Modify order", false, false, "add SL"),
@@ -1170,11 +1188,12 @@ mod tests {
                         let mut request =
                             OrderRequest::new("SYM", OrderSide::Sell, 1.0, OrderType::Limit(105.0));
                         let add = gesture.starts_with("add");
-                        if gesture.starts_with("levels") {
+                        if gesture.starts_with("levels") || gesture == "level stop drag" {
                             request.take_profit_levels = vec![
                                 TakeProfitLevel::new(102.0, 0.5),
                                 TakeProfitLevel::new(101.0, 0.5),
                             ];
+                            request.take_profit_levels[1].stop_loss = Some(107.0);
                         } else if !add {
                             request.take_profit = Some(102.0);
                         }
@@ -1276,15 +1295,15 @@ mod tests {
                                 .any(|(_, color)| *color == theme.chart.candle_down)
                         );
                         let mapping = chart.get_chart_mapping();
-                        let y = mapping.price_to_y(
-                            if matches!(gesture, "levels drag" | "levels remove") {
-                                101.0
-                            } else if operation.ends_with("order") {
-                                105.0
-                            } else {
-                                100.0
-                            },
-                        );
+                        let y = mapping.price_to_y(if gesture == "level stop drag" {
+                            107.0
+                        } else if matches!(gesture, "levels drag" | "levels remove") {
+                            101.0
+                        } else if operation.ends_with("order") {
+                            105.0
+                        } else {
+                            100.0
+                        });
                         // Hovering the label shows the reverse button.
                         let texts = frame(&mut trading, &mut chart, vec![]);
                         let right = texts
@@ -1349,6 +1368,8 @@ mod tests {
                             egui::pos2(x, mapping.rect.top())
                         } else if gesture == "levels remove" {
                             start
+                        } else if gesture == "level stop drag" {
+                            egui::pos2(x, mapping.price_to_y(106.5))
                         } else if gesture == "levels drag" {
                             egui::pos2(x, mapping.price_to_y(100.5))
                         } else if gesture == "add TP" {
@@ -1460,7 +1481,11 @@ mod tests {
                                             TakeProfitLevel::new(100.07, 0.5),
                                             TakeProfitLevel::new(99.07, 0.5),
                                         ];
+                                        expected.take_profit_levels[1].stop_loss = Some(105.07);
                                         expected.stop_loss = Some(stop_loss);
+                                    }
+                                    "level stop drag" => {
+                                        expected.take_profit_levels[1].stop_loss = Some(106.5)
                                     }
                                     "levels drag" => expected.take_profit_levels[1].price = 100.5,
                                     "levels remove" => {

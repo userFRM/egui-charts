@@ -4146,6 +4146,7 @@ fn history_only_tick_trade_rate_uses_proven_receipts() {
     let bar = |at, volume| Bar::new(at, 100.0, 100.0, 100.0, 100.0, volume);
     check_history_only_trade_rate(
         "2t",
+        false,
         &tape,
         &[
             bar(start, 3.0),
@@ -4173,6 +4174,7 @@ fn history_only_range_trade_rate_uses_proven_receipts() {
     // Three executions reach the range, two overshoot it, and the last stays open.
     check_history_only_trade_rate(
         "2r",
+        false,
         &tape,
         &[
             Bar::new(start, 100.0, 100.25, 100.0, 100.25, 7.0),
@@ -4191,10 +4193,107 @@ fn history_only_range_trade_rate_uses_proven_receipts() {
 }
 
 #[cfg(feature = "studies")]
-fn check_history_only_trade_rate(interval: &str, tape: &[Tick], bars: &[Bar], want: &[[f64; 3]]) {
+#[test]
+fn history_only_trade_rate_splits_tied_buys_of_6_7_8_lots() {
+    let start = bars(1)[0].time;
+    let tape = [6.0, 7.0, 8.0]
+        .map(|size| Tick::new(start, 100.0, size, Some(crate::model::OrderSide::Buy)));
+    let bar = |i, lots| {
+        Bar::new(
+            start + TimeDelta::nanoseconds(i),
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            lots,
+        )
+    };
+    // 6+4, 3+7, then the last lot of the third buy.
+    let candles = [bar(0, 10.0), bar(1, 10.0), bar(2, 1.0)];
+    for interval in ["10v", "10delta"] {
+        check_history_only_trade_rate(
+            interval,
+            false,
+            &tape,
+            &candles,
+            &[[2.0, 1.0, 2.0], [2.0, 1.5, 3.0], [1.0, 1.5, 3.0]],
+        );
+        check_history_only_trade_rate(
+            interval,
+            true,
+            &tape,
+            &candles,
+            &[[10.0, 6.5, 13.0], [10.0, 10.5, 21.0], [1.0, 10.5, 21.0]],
+        );
+    }
+}
+
+#[cfg(feature = "studies")]
+#[test]
+fn history_only_split_trade_rate_counts_each_print_once_in_the_windows() {
+    use crate::model::OrderSide::{Buy, Sell};
+
+    let start = bars(1)[0].time;
+    let later = start + TimeDelta::seconds(1);
+    let end = start + TimeDelta::seconds(2);
+    for (interval, buy) in [("10v", 7.0), ("10delta", 13.0)] {
+        // The sell of 27 puts 4, 10, 10 and 3 lots into consecutive candles.
+        // The buy then closes the fourth candle at 10 volume or +10 delta.
+        let tape = [
+            Tick::new(start, 100.0, 6.0, Some(Sell)),
+            Tick::new(start, 99.0, 27.0, Some(Sell)),
+            Tick::new(later, 101.0, buy, Some(Buy)),
+            Tick::new(end, 102.0, 2.0, None),
+        ];
+        let open = |i| start + TimeDelta::nanoseconds(i);
+        let candles = [
+            Bar::new(start, 100.0, 100.0, 99.0, 99.0, 10.0),
+            Bar::new(open(1), 99.0, 99.0, 99.0, 99.0, 10.0),
+            Bar::new(open(2), 99.0, 99.0, 99.0, 99.0, 10.0),
+            Bar::new(open(3), 99.0, 101.0, 99.0, 101.0, 3.0 + buy),
+            Bar::new(end, 102.0, 102.0, 102.0, 102.0, 2.0),
+        ];
+        check_history_only_trade_rate(
+            interval,
+            false,
+            &tape,
+            &candles,
+            &[
+                [2.0, 1.0, 2.0],
+                [1.0, 1.0, 2.0],
+                [1.0, 1.0, 2.0],
+                [2.0, 1.5, 1.0],
+                [1.0, 1.0, 1.0],
+            ],
+        );
+        check_history_only_trade_rate(
+            interval,
+            true,
+            &tape,
+            &candles,
+            &[
+                [10.0, 16.5, 33.0],
+                [10.0, 16.5, 33.0],
+                [10.0, 16.5, 33.0],
+                [3.0 + buy, (33.0 + buy) / 2.0, buy],
+                [2.0, (buy + 2.0) / 2.0, 2.0],
+            ],
+        );
+    }
+}
+
+#[cfg(feature = "studies")]
+fn check_history_only_trade_rate(
+    interval: &str,
+    volume: bool,
+    tape: &[Tick],
+    bars: &[Bar],
+    want: &[[f64; 3]],
+) {
     use crate::data::OrderFlowKind;
     use crate::studies::OrderFlowStudy;
 
+    let tf: Timeframe = interval.parse().unwrap();
     for (trades_first, complete, mismatch, grid) in [
         (false, true, None, Some(0.125)),
         (true, true, None, Some(0.125)),
@@ -4205,9 +4304,9 @@ fn check_history_only_trade_rate(interval: &str, tape: &[Tick], bars: &[Bar], wa
     ] {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
-        chart.set_timeframe(interval.parse().unwrap());
+        chart.set_timeframe(tf);
         let rate = chart.add_indicator(Box::new(OrderFlowStudy::new(OrderFlowKind::TradeRate {
-            volume: false,
+            volume,
             seconds: 2,
             instant: 1,
         })));
@@ -4246,7 +4345,8 @@ fn check_history_only_trade_rate(interval: &str, tape: &[Tick], bars: &[Bar], wa
         frames.run(&mut chart);
         let study = chart.indicators().find(|(id, _)| *id == rate).unwrap().1;
         let values = |i| [0, 1, 2].map(|line| study.values().value(line, i));
-        if complete && mismatch.is_none() && (interval == "2t" || grid.is_some()) {
+        if complete && mismatch.is_none() && (!matches!(tf, Timeframe::Range(_)) || grid.is_some())
+        {
             // Window rates use provider times through the last receipt of this bar,
             // not the allocated bar open or later receipts sharing that timestamp.
             for (i, row) in want.iter().enumerate() {
@@ -4255,13 +4355,16 @@ fn check_history_only_trade_rate(interval: &str, tape: &[Tick], bars: &[Bar], wa
 
             // The sink allocates this fill to the last bar key independently. The page
             // proves no join there: neither its count nor its windows carry over.
-            feed.sink().push_tick(tape.last().unwrap().clone());
+            let mut live = tape.last().unwrap().clone();
+            live.ts = bars.last().unwrap().time;
+            let x = if volume { live.size } else { 1.0 };
+            feed.sink().push_tick(live);
             frames.run(&mut chart);
             frames.run(&mut chart);
             let study = chart.indicators().find(|(id, _)| *id == rate).unwrap().1;
             assert_eq!(
                 [0, 1, 2].map(|line| study.values().value(line, bars.len() - 1)),
-                [1.0, 0.5, 1.0].map(Some)
+                [x, x / 2.0, x].map(Some)
             );
         } else {
             // A truncated tape, mismatched candle or missing range grid proves no run.

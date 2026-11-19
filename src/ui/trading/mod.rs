@@ -16,7 +16,7 @@ pub use account_panel::{AccountPanel, AccountPanelAction};
 pub use broker_picker::{BrokerFact, BrokerPicker, BrokerPickerAction, BrokerTile};
 pub use dom::DepthPanel;
 pub use format::TradingFormatter;
-pub use ticket::{Bracket, BracketMode, OrderPreset};
+pub use ticket::{Bracket, BracketMode, OrderPreset, PresetLevel};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -521,6 +521,7 @@ mod tests {
                 preview: true,
                 brackets: self.brackets,
                 partial_close: self.partial_close,
+                take_profit_level_stops: self.brackets,
                 ..Capabilities::default()
             };
             events.push(AccountEvent::Account(Account::new(
