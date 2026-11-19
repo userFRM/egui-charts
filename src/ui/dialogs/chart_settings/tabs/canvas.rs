@@ -115,6 +115,15 @@ impl SettingsDialog {
                     }
                 });
 
+                // Pane separators
+                self.draw_setting_row_with_controls(ui, "Pane separators", theme, |ui, dialog| {
+                    let state = &mut dialog.color_picker_states.pane_separator;
+                    let mut color = state.sel_color;
+                    if pick_color(ui, state, "pane_separator", &mut color) {
+                        dialog.settings.pane_separator_color = Some(color);
+                    }
+                });
+
                 // Crosshair
                 self.draw_setting_row_with_controls(ui, "Crosshair", theme, |ui, dialog| {
                     pick_color(

@@ -261,6 +261,7 @@ impl ChartSettingsState {
         settings.grid_lines.horizontal_color = config.grid_color;
         settings.grid_lines.vertical_color =
             config.vertical_grid_color.unwrap_or(config.grid_color);
+        settings.pane_separator_color = chart.pane_options().separator_color;
         settings.status_line.show_logo = config.show_legend_badge;
         settings.status_line.show_market_status = config.show_market_status;
         settings.status_line.show_symbol = config.show_symbol_labels;
@@ -486,7 +487,10 @@ impl ChartSettingsState {
     /// Apply the display controls offered by the dialog without rebuilding the chart or feed.
     /// Host-owned trading and alerts are left to their providers. Invalid timezone,
     /// margins or crosshair width returns an error before changing the chart. The optional
-    /// choices that hold `None`, as in settings saved before they existed, keep the chart's.
+    /// choices that hold `None`, as in settings saved before they existed, keep the chart's,
+    /// while the optional colours apply as they are: `None` gives the last price its candle
+    /// direction colour, study values their plot colours and pane separators the theme's grid
+    /// line colour.
     pub fn apply_to_chart(&self, chart: &mut Chart) -> Result<(), ChartSettingsError> {
         let timezone = self.validate()?;
         if let Some(params) = &self.chart_type_params {
@@ -545,6 +549,7 @@ impl ChartSettingsState {
         crosshair.vert_line_width = self.crosshair.line_width;
         crosshair.horz_line_style = self.crosshair.line_style;
         crosshair.vert_line_style = crosshair.horz_line_style;
+        chart.pane_options_mut().separator_color = self.pane_separator_color;
         let mut axis_layout = self.scales_and_lines.axis_layout;
         if self.scales_and_lines.price_scale_left != chart.main_axis_on_left()
             && axis_layout.side.is_some()
