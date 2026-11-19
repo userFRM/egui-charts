@@ -26,6 +26,16 @@ impl OrderTicket {
         presets: &mut Vec<OrderPreset>,
         one_click: &mut bool,
     ) -> Option<Action> {
+        if let Some(editing) = &self.editing {
+            self.editing = market
+                .orders
+                .iter()
+                .find(|order| order.id == editing.id)
+                .cloned();
+            if self.editing.is_none() {
+                self.tab = Tab::Dom;
+            }
+        }
         if !market.rules.time_in_force.contains(&self.time_in_force) {
             self.time_in_force = market.rules.time_in_force[0];
         }
@@ -80,6 +90,10 @@ impl OrderTicket {
                             }
                             Err(_) => None,
                         }
+                    }
+                    Some(Action::Edit(order)) => {
+                        self.edit(&order);
+                        None
                     }
                     Some(Action::Cancel(ids)) => {
                         self.cancel = Some(ids);
@@ -172,6 +186,7 @@ impl OrderTicket {
                     .clicked()
                 {
                     self.open = false;
+                    self.editing = None;
                 }
                 let more = IconButton::new(&icons::UI_MORE_HORIZONTAL)
                     .icon_scale(1.0)
@@ -316,7 +331,55 @@ impl OrderTicket {
     /// The full-width send button in the side's colour, or what keeps the order from being sent.
     fn send(&mut self, ui: &mut Ui, market: &Market<'_>) -> Option<Action> {
         let theme = ui.active_theme();
-        let request = self.request(ui.ctx(), market);
+        let editing = self.editing.clone();
+        let request = self.request(ui.ctx(), market).and_then(|request| {
+            let Some(order) = &editing else {
+                return Ok(request);
+            };
+            let mut changed = order.request.clone();
+            changed.quantity = request.quantity;
+            changed.order_type = request.order_type;
+            changed.time_in_force = request.time_in_force;
+            // An account without bracket support keeps the working order's own exits.
+            if market.capabilities.brackets {
+                changed.take_profit = request.take_profit;
+                changed.take_profit_levels = request.take_profit_levels;
+                changed.stop_loss = request.stop_loss;
+            }
+            if !market.capabilities.modify {
+                return Err("The account does not support modifying orders".into());
+            }
+            if changed.quantity <= order.filled {
+                return Err(l10n::format_text(
+                    ui.ctx(),
+                    "Enter more than the filled quantity of {quantity}",
+                    &[(
+                        "quantity",
+                        market
+                            .numbers()
+                            .quantity(order.filled, decimals(market.rules.quantity_step)),
+                    )],
+                ));
+            }
+            if changed == order.request {
+                return Err("Change the order to modify it".into());
+            }
+            Ok(changed)
+        });
+        if let Some(order) = &editing {
+            ui.weak(l10n::format_text(
+                ui.ctx(),
+                "Modifying order {id}",
+                &[("id", &order.id.0)],
+            ));
+            if ui
+                .small_button(l10n::text(ui.ctx(), "Stop editing"))
+                .clicked()
+            {
+                self.editing = None;
+                return None;
+            }
+        }
         if let Err(reason) = &request {
             ui.label(
                 RichText::new(l10n::text(ui.ctx(), reason))
@@ -326,6 +389,7 @@ impl OrderTicket {
         }
         let mut preview = None;
         if market.capabilities.preview
+            && editing.is_none()
             && ui
                 .add_enabled(
                     request.is_ok(),
@@ -339,7 +403,11 @@ impl OrderTicket {
         }
         let (rect, response) =
             ui.allocate_exact_size(vec2(ui.available_width(), 58.0), Sense::click());
-        let name = side_name(self.side);
+        let name = if editing.is_some() {
+            "Modify order"
+        } else {
+            side_name(self.side)
+        };
         let detail = request.as_ref().map_or(String::new(), |request| {
             summary(
                 ui.ctx(),
@@ -379,7 +447,16 @@ impl OrderTicket {
         (response.clicked())
             .then_some(request.ok())
             .flatten()
-            .map(Action::Place)
+            .map(|request| match editing {
+                Some(order) => {
+                    self.editing = None;
+                    self.tab = Tab::Dom;
+                    Action::Confirm(Box::new(crate::chart::TradingLineAction::Modify(
+                        order, request,
+                    )))
+                }
+                None => Action::Place(request),
+            })
             .or(preview)
     }
 }
@@ -440,6 +517,7 @@ mod tests {
                     trades: &[],
                     session_open: None,
                     last_fill: None,
+                    pnl_unit: crate::chart::PnlUnit::Money,
                     logo: None,
                 };
                 ticket.tab = tab;
@@ -527,7 +605,7 @@ mod tests {
             formatter: None,
             pip_value: None,
             last: Some(100.0),
-            bid: Some(99.75),
+            bid: Some(100.0),
             ask: Some(100.25),
             tick: 0.25,
             decimals: 2,
@@ -545,69 +623,117 @@ mod tests {
             trades: &[],
             session_open: None,
             last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
         };
         let cases = [
+            ("Bid size", "99.50", "ctrl", false, true, None),
             (
                 "Bid size",
                 "99.50",
+                "click",
+                false,
                 true,
-                OrderSide::Buy,
-                OrderType::Limit(99.5),
-            ),
-            (
-                "Bid size",
-                "100.25",
-                true,
-                OrderSide::Buy,
-                OrderType::Limit(100.25),
+                Some((OrderSide::Buy, OrderType::Limit(99.5))),
             ),
             (
                 "Bid size",
                 "100.50",
+                "click",
+                false,
                 true,
-                OrderSide::Buy,
-                OrderType::Stop(100.5),
+                Some((OrderSide::Buy, OrderType::Limit(100.5))),
             ),
+            (
+                "Bid size",
+                "100.50",
+                "ctrl",
+                false,
+                true,
+                Some((OrderSide::Buy, OrderType::Stop(100.5))),
+            ),
+            ("Bid size", "100.25", "ctrl", false, true, None),
             (
                 "Ask size",
-                "100.50",
+                "99.50",
+                "ctrl",
+                false,
                 true,
-                OrderSide::Sell,
-                OrderType::Limit(100.5),
+                Some((OrderSide::Sell, OrderType::Stop(99.5))),
             ),
+            ("Ask size", "100.00", "ctrl", false, true, None),
             (
                 "Ask size",
                 "99.75",
+                "click",
+                false,
                 true,
-                OrderSide::Sell,
-                OrderType::Limit(99.75),
-            ),
-            (
-                "Ask size",
-                "99.50",
-                true,
-                OrderSide::Sell,
-                OrderType::Stop(99.5),
+                Some((OrderSide::Sell, OrderType::Limit(99.75))),
             ),
             (
                 "Bid size",
                 "99.50",
+                "Buy limit 99.50",
                 false,
-                OrderSide::Buy,
-                OrderType::Limit(99.5),
+                true,
+                Some((OrderSide::Buy, OrderType::Limit(99.5))),
             ),
-            ("CXL All", "", true, OrderSide::Buy, OrderType::Market),
+            (
+                "Bid size",
+                "99.50",
+                "Sell stop 99.50",
+                false,
+                true,
+                Some((OrderSide::Sell, OrderType::Stop(99.5))),
+            ),
+            ("Bid size", "99.50", "Buy stop 99.50", false, true, None),
+            (
+                "View",
+                "99.50",
+                "Sell stop limit 99.50",
+                true,
+                true,
+                Some((
+                    OrderSide::Sell,
+                    OrderType::StopLimit {
+                        stop: 99.5,
+                        limit: 99.5,
+                    },
+                )),
+            ),
+            (
+                "Bid size",
+                "99.50",
+                "click",
+                false,
+                false,
+                Some((OrderSide::Buy, OrderType::Limit(99.5))),
+            ),
+            ("CXL All", "", "click", false, true, None),
         ];
-        for (column, row, one_click, side, order_type) in cases {
+        for (column, row, gesture, stop_limit, instant, expected) in cases {
             let ctx = egui::Context::default();
+            ctx.all_styles_mut(|style| {
+                style.interaction.tooltip_delay = 0.0;
+                style.interaction.show_tooltips_only_when_still = false;
+            });
+            let market = Market {
+                capabilities: Capabilities {
+                    stop_limit,
+                    ..capabilities
+                },
+                offline: market.offline.clone(),
+                ladder: market.ladder.clone(),
+                highlights: market.highlights.clone(),
+                ..market
+            };
             let mut ticket = OrderTicket {
                 open: true,
                 symbol: "ES".into(),
                 tab: Tab::Dom,
                 ..OrderTicket::default()
             };
-            let mut one_click = one_click;
+            let mut one_click = instant;
             let mut frame = |events| {
                 let mut action = None;
                 let output = ctx.run_ui(
@@ -621,46 +747,310 @@ mod tests {
                     },
                     |ui| action = ticket.show(ui, &market, &mut vec![], &mut one_click),
                 );
-                let centre = |label: &str| {
-                    output.shapes.iter().find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text() == label => {
-                            Some(text.galley.rect.translate(text.pos.to_vec2()).center())
-                        }
+                let labels: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some((
+                            text.galley.text().to_owned(),
+                            text.galley.rect.translate(text.pos.to_vec2()).center(),
+                        )),
                         _ => None,
                     })
-                };
-                let cell = if row.is_empty() {
-                    centre(column)
-                } else {
-                    centre(column).zip(centre(row)).map(|(x, y)| pos2(x.x, y.y))
-                };
+                    .collect();
                 output.drop_without_applying_deltas();
-                (action, cell)
+                (action, labels)
             };
-            let cell = frame(vec![]).1.expect(row);
-            frame(vec![egui::Event::PointerMoved(cell)]);
-            let click = |pressed| egui::Event::PointerButton {
-                pos: cell,
+            let find = |labels: &[(String, egui::Pos2)], label: &str| {
+                labels
+                    .iter()
+                    .find(|(text, _)| text == label)
+                    .unwrap_or_else(|| panic!("missing {label}: {labels:?}"))
+                    .1
+            };
+            frame(vec![]);
+            let labels = frame(vec![]).1;
+            let cell = if row.is_empty() {
+                find(&labels, column)
+            } else {
+                pos2(find(&labels, column).x, find(&labels, row).y)
+            };
+            let modifiers = if gesture == "ctrl" {
+                egui::Modifiers::COMMAND
+            } else {
+                egui::Modifiers::NONE
+            };
+            frame(vec![
+                egui::Event::ModifiersChanged(modifiers),
+                egui::Event::PointerMoved(cell),
+            ]);
+            frame(vec![]);
+            if expected.is_none() && matches!(gesture, "click" | "ctrl") && !row.is_empty() {
+                let labels = frame(vec![]).1;
+                let reason = if column == "Bid size" {
+                    "A buy stop must lie above the market"
+                } else {
+                    "A sell stop must lie below the market"
+                };
+                assert!(labels.iter().any(|(text, _)| text == reason), "{labels:?}");
+            }
+            let button = |pos, button, pressed| egui::Event::PointerButton {
+                pos,
+                button,
+                pressed,
+                modifiers,
+            };
+            let menu = !matches!(gesture, "click" | "ctrl");
+            let kind = if menu {
+                egui::PointerButton::Secondary
+            } else {
+                egui::PointerButton::Primary
+            };
+            frame(vec![button(cell, kind, true)]);
+            let (mut action, _) = frame(vec![button(cell, kind, false)]);
+            if menu {
+                let labels = frame(vec![]).1;
+                for label in [
+                    "Buy limit 99.50",
+                    "Sell limit 99.50",
+                    "Buy stop 99.50",
+                    "Sell stop 99.50",
+                ] {
+                    find(&labels, label);
+                }
+                assert_eq!(
+                    labels
+                        .iter()
+                        .any(|(text, _)| text == "Sell stop limit 99.50"),
+                    stop_limit
+                );
+                let choice = find(&labels, gesture);
+                frame(vec![egui::Event::PointerMoved(choice)]);
+                frame(vec![button(choice, egui::PointerButton::Primary, true)]);
+                action = frame(vec![button(choice, egui::PointerButton::Primary, false)]).0;
+            }
+            let expected =
+                expected.map(|(side, order_type)| OrderRequest::new("ES", side, 1.0, order_type));
+            if row.is_empty() {
+                assert_eq!(action, None, "bulk cancellation waits for confirmation");
+                assert_eq!(ticket.cancel, Some(vec![OrderId::new("bid")]));
+            } else if instant {
+                assert_eq!(
+                    action,
+                    expected.map(Action::Place),
+                    "{gesture}: {column} at {row}"
+                );
+                assert_eq!(ticket.confirm, None);
+            } else {
+                assert_eq!(action, None);
+                assert_eq!(ticket.confirm, expected);
+            }
+        }
+    }
+    /// Tag gestures open one modification, keep order metadata, and respect account support.
+    #[test]
+    fn ladder_tags_open_their_order_for_one_modification() {
+        use crate::chart::TradingLineAction;
+        use crate::model::{OrderStatus, PositionBracket};
+        for (gesture, modify) in [
+            ("tab-double-click", true),
+            ("double-click", true),
+            ("menu", true),
+            ("double-click", false),
+            ("menu", false),
+        ] {
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|style| {
+                style.interaction.tooltip_delay = 0.0;
+                style.interaction.show_tooltips_only_when_still = false;
+            });
+            let rules = TradingRules::new("ES");
+            let mut request = OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Limit(99.5));
+            request.position_bracket = Some(PositionBracket::TakeProfit);
+            request.take_profit = Some(110.0);
+            let order = Order::new(OrderId::new("bid"), request, OrderStatus::Working);
+            let orders = [order.clone()];
+            let market = Market {
+                symbol: "ES",
+                formatter: None,
+                pip_value: None,
+                last: Some(100.0),
+                bid: Some(100.0),
+                ask: Some(100.25),
+                tick: 0.25,
+                decimals: 2,
+                currency: "USD",
+                balance: None,
+                capabilities: Capabilities {
+                    market: true,
+                    limit: true,
+                    stop: true,
+                    modify,
+                    ..Default::default()
+                },
+                rules: &rules,
+                rules_ready: true,
+                offline: None,
+                ladder: None,
+                ladder_unavailable: None,
+                highlights: Vec::new(),
+                orders: &orders,
+                positions: &[],
+                trades: &[],
+                session_open: None,
+                last_fill: None,
+                pnl_unit: crate::chart::PnlUnit::Money,
+                logo: None,
+            };
+            let mut ticket = OrderTicket {
+                open: true,
+                symbol: "ES".into(),
+                tab: if gesture == "tab-double-click" {
+                    Tab::Order
+                } else {
+                    Tab::Dom
+                },
+                ..Default::default()
+            };
+            let frame = |ticket: &mut OrderTicket, market: &Market<'_>, events| {
+                let mut action = None;
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(340.0, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| action = ticket.show(ui, market, &mut vec![], &mut true),
+                );
+                let labels: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some((
+                            text.galley.text().to_owned(),
+                            text.galley.rect.translate(text.pos.to_vec2()).center(),
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                (action, labels)
+            };
+            let find = |labels: &[(String, egui::Pos2)], label: &str| {
+                labels
+                    .iter()
+                    .find(|(text, _)| text == label)
+                    .unwrap_or_else(|| panic!("missing {label}: {labels:?}"))
+                    .1
+            };
+            let click = |pos, pressed| egui::Event::PointerButton {
+                pos,
                 button: egui::PointerButton::Primary,
                 pressed,
-                modifiers: Default::default(),
+                modifiers: egui::Modifiers::NONE,
             };
-            frame(vec![click(true)]);
-            let (action, _) = frame(vec![click(false)]);
-            let mut expected = OrderRequest::new("ES", side, 1.0, order_type);
-            expected.time_in_force = TimeInForce::Day;
-            if row.is_empty() {
-                assert_eq!(
-                    action, None,
-                    "bulk cancellation always waits for confirmation"
-                );
-                assert_eq!(ticket.cancel, Some(vec![OrderId::new("bid")]));
-            } else if one_click {
-                assert_eq!(action, Some(Action::Place(expected)), "{column} at {row}");
-            } else {
-                assert_eq!(action, None, "{column} at {row} waits for confirmation");
-                assert_eq!(ticket.confirm, Some(expected));
+            frame(&mut ticket, &market, vec![]);
+            let mut labels = frame(&mut ticket, &market, vec![]).1;
+            if gesture == "tab-double-click" {
+                let tab = find(&labels, "DOM");
+                frame(&mut ticket, &market, vec![egui::Event::PointerMoved(tab)]);
+                frame(&mut ticket, &market, vec![click(tab, true)]);
+                frame(&mut ticket, &market, vec![click(tab, false)]);
+                labels = frame(&mut ticket, &market, vec![]).1;
             }
+            let tag = find(&labels, "LIMIT");
+            frame(&mut ticket, &market, vec![egui::Event::PointerMoved(tag)]);
+            let labels = frame(&mut ticket, &market, vec![]).1;
+            if gesture != "tab-double-click" {
+                let hint = labels
+                    .iter()
+                    .find(|(text, _)| text.contains("right-click to cancel"))
+                    .expect("order hint");
+                assert_eq!(hint.0.contains("Drag to move"), modify);
+                assert_eq!(
+                    hint.0
+                        .contains("The account does not support modifying orders"),
+                    !modify
+                );
+            }
+            frame(&mut ticket, &market, vec![click(tag, true)]);
+            frame(&mut ticket, &market, vec![click(tag, false)]);
+            if gesture != "menu" {
+                frame(&mut ticket, &market, vec![click(tag, true)]);
+                frame(&mut ticket, &market, vec![click(tag, false)]);
+            } else {
+                let labels = frame(&mut ticket, &market, vec![]).1;
+                let edit = find(&labels, "Edit order");
+                frame(&mut ticket, &market, vec![egui::Event::PointerMoved(edit)]);
+                frame(&mut ticket, &market, vec![click(edit, true)]);
+                frame(&mut ticket, &market, vec![click(edit, false)]);
+            }
+            assert_eq!(
+                ticket.tab,
+                if modify { Tab::Order } else { Tab::Dom },
+                "{gesture}"
+            );
+            assert_eq!(ticket.editing.as_ref(), modify.then_some(&order));
+            if !modify || gesture == "menu" {
+                continue;
+            }
+            frame(&mut ticket, &market, vec![]);
+            let labels = frame(&mut ticket, &market, vec![]).1;
+            assert!(
+                labels
+                    .iter()
+                    .any(|(text, _)| text == "Change the order to modify it"),
+                "{labels:?}"
+            );
+            let send = find(&labels, "Modify order");
+            frame(&mut ticket, &market, vec![egui::Event::PointerMoved(send)]);
+            frame(&mut ticket, &market, vec![click(send, true)]);
+            assert_eq!(
+                frame(&mut ticket, &market, vec![click(send, false)]).0,
+                None
+            );
+            ticket.quantity = 2.0;
+            let labels = frame(&mut ticket, &market, vec![]).1;
+            let send = find(&labels, "Modify order");
+            frame(&mut ticket, &market, vec![egui::Event::PointerMoved(send)]);
+            frame(&mut ticket, &market, vec![click(send, true)]);
+            let action = frame(&mut ticket, &market, vec![click(send, false)]).0;
+            let mut changed = order.request.clone();
+            changed.quantity = 2.0;
+            assert_eq!(
+                action,
+                Some(Action::Confirm(Box::new(TradingLineAction::Modify(
+                    order.clone(),
+                    changed
+                ))))
+            );
+            assert_eq!(ticket.editing, None);
+            assert_eq!(ticket.tab, Tab::Dom);
+
+            ticket.edit(&order);
+            let without_modify = Market {
+                capabilities: Capabilities {
+                    modify: false,
+                    ..market.capabilities
+                },
+                ..market
+            };
+            let labels = frame(&mut ticket, &without_modify, vec![]).1;
+            assert!(
+                labels
+                    .iter()
+                    .any(|(text, _)| text == "The account does not support modifying orders")
+            );
+            let gone = Market {
+                orders: &[],
+                ..without_modify
+            };
+            assert_eq!(frame(&mut ticket, &gone, vec![]).0, None);
+            assert_eq!(ticket.editing, None);
+            assert_eq!(ticket.tab, Tab::Dom);
         }
     }
 }
