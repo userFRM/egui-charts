@@ -791,7 +791,7 @@ fn host_rows_take_any_place_in_the_chart_and_price_axis_menus() {
         });
         frame(&mut chart, &mut menus, vec![]);
         let actions = menus
-            .build_menu_items(&ctx, chart.shortcuts(), menus.context.unwrap())
+            .build_menu_items(&ctx, &chart, menus.context.unwrap())
             .into_iter()
             .map(|entry| match entry {
                 MenuEntry::Item(item) => Some(item.action),
