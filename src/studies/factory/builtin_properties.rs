@@ -385,11 +385,20 @@ fn every_update_equals_a_fresh_calculate() {
                 .with_lines(true, true, true),
         )
     };
+    // The catalogue's extension finds its swings by bars, here 2 on each side.
+    #[cfg(feature = "drawings")]
+    let bar_swings = || -> Box<dyn Indicator> {
+        let mut study = AutoDrawing::catalogue(AutoDrawingKind::FibonacciExtension);
+        study.set_input("depth", InputValue::Length(4)).unwrap();
+        Box::new(study)
+    };
     let mut studies = builtins_with(|k| 3 + 2 * k, |v| v);
     studies.push(tokyo_week());
     studies.push(pivot_labels());
     studies.push(zigzag_labels());
     studies.push(session_labels());
+    #[cfg(feature = "drawings")]
+    studies.push(bar_swings());
     for study in &studies {
         if matches!(
             study.name(),
@@ -407,6 +416,8 @@ fn every_update_equals_a_fresh_calculate() {
     twins.push(pivot_labels());
     twins.push(zigzag_labels());
     twins.push(session_labels());
+    #[cfg(feature = "drawings")]
+    twins.push(bar_swings());
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
     let mut data = Vec::<Bar>::new();
     for event in 0..200 {
