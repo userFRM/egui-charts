@@ -62,7 +62,9 @@ pub use session_breaks::{
 };
 pub(crate) use session_breaks::{exchange_session, render_extended_hours};
 #[cfg(feature = "ui")]
-pub(crate) use trading_lines::entry_price;
+pub(crate) use trading_lines::{
+    COVERAGE_CELL, coverage_text, entry_price, exit_coverage, paint_coverage,
+};
 pub use trading_lines::{
     PnlUnit, TradingLabelAlignment, TradingLineAction, TradingLineOptions, TradingLines,
     render_trading_lines,

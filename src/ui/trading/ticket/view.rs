@@ -1,6 +1,9 @@
 //! The order ticket's panel: its header, tabs and menu, and the button that sends the order.
 
-use super::{Action, Market, OrderPreset, OrderTicket, Tab, confirmation, order_quantity, summary};
+use super::{
+    Action, Market, OrderPreset, OrderTicket, Tab, confirmation, levels_accepted, order_quantity,
+    summary,
+};
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::painting::symbol_mark::paint_symbol_mark;
@@ -99,7 +102,16 @@ impl OrderTicket {
                     || request.take_profit.is_some()
                     || !request.take_profit_levels.is_empty())
                     && !market.capabilities.brackets
-                || !request.take_profit_levels.is_empty() && !market.capabilities.take_profit_levels
+                || !request.take_profit_levels.is_empty() && !levels_accepted(&market.capabilities)
+                || market
+                    .capabilities
+                    .max_take_profit_levels
+                    .is_some_and(|max| request.take_profit_levels.len() > max)
+                || request
+                    .take_profit_levels
+                    .iter()
+                    .any(|level| level.stop_loss.is_some())
+                    && !market.capabilities.take_profit_level_stops
         }) {
             self.confirm = None;
         }

@@ -209,7 +209,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 ## Trading and Strategy Reports
 
 - [x] `Trading` connects order tickets, account tables and chart overlays to a supplied `Broker`.
-- [x] Market, limit, stop and stop-limit tickets, units/value sizing, risk-percent sizing on every order type, time in force, presets and attached stop-loss/take-profit levels.
+- [x] Market, limit, stop and stop-limit tickets, units/value sizing, risk-percent sizing on every order type, time in force, presets and attached stop-loss/take-profit levels. Accounts can cap the levels and accept a stop per level; presets retain their distances, shares and stops. The Modify order dialog edits level quantities at the symbol step and keeps their sum as the order quantity. Entry and position labels and the ticket mark exit coverage; risk readouts count each part at its own stop, while risk sizing needs one whole-order stop.
 - [x] Validated one-click orders, chart context-menu entry and broker/account selection components.
 - [x] Order and position lines show levels and profit/loss; confirmed actions modify/cancel orders, close/reverse positions and edit brackets.
 - [x] A depth ladder supports order entry, drag modification and right-click cancellation through the broker interface.

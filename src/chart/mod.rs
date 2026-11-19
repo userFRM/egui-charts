@@ -26,7 +26,9 @@ pub(crate) mod rendering;
 pub use rendering::axes::{axis_settings_button, crosshair_price_action};
 pub use rendering::axes::{price_axis_width, render_quote_tags};
 #[cfg(feature = "ui")]
-pub(crate) use rendering::entry_price;
+pub(crate) use rendering::{
+    COVERAGE_CELL, coverage_text, entry_price, exit_coverage, paint_coverage,
+};
 pub use rendering::{
     PnlUnit, RenderContext, TradingLabelAlignment, TradingLineAction, TradingLineOptions,
     TradingLines, alert_shortcut_price, render_alert_levels, render_axis_currency,
