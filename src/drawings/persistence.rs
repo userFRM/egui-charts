@@ -1701,16 +1701,6 @@ mod tests {
     /// written by this format's first implementation, which was never released.
     #[test]
     fn from_json_reads_saved_files_and_skips_the_drawings_it_cannot_read() {
-        // This literal record is from origin/main, before the host editing option existed.
-        let old = r#"{"version":10,"symbol":"LEGACY","timeframe":null,"drawings":[{"id":"7","points":[{"ts_ms":120000,"price":100.0},{"ts_ms":480000,"price":200.0}],"drawing":{"label":null,"pane":null,"selectable":true,"saveable":true,"listed":true,"group":null,"folder":[],"custom_tool":null,"custom_settings":null,"tool_type":"RegressionTrend","screen_anchor":null,"color":[242,54,69,255],"stroke_width":3.0,"text":"Legacy trend","post":null,"line_style":"Solid","fill_color":[41,98,255,51],"locked":false,"visible":true,"font_size":14.0,"font_weight":"Normal","italic":false,"text_color":null,"background":true,"border":true,"border_color":null,"text_wrap":false,"text_wrap_width":200.0,"text_follows_zoom":false,"text_zoom_spacing":null,"note_text_style":null,"extend_left":false,"extend_right":false,"arrow_start_style":"None","arrow_end_style":"None","timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"price_axis_label":true,"time_axis_label":true,"line_measurements":{"persistent":false,"price_change":false,"percent_change":false,"pip_change":false,"bar_count":false,"elapsed_time":false,"length":false,"inclination":false,"midpoint":false,"price_labels":false,"position":"Right","text_horizontal_align":"Center","text_vertical_align":"Bottom","text_orientation":"Vertical","across_panes":false},"position_size":null,"position_sizing":{"point_value":1.0,"lot_size":1.0,"quantity_step":0.0,"leverage":1.0},"position_readout":{"persistent":false,"condensed":false,"account_currency":null,"conversion_rate":null,"quantity_decimals":null},"position_target_color":null,"position_stop_color":null,"position_style":{"line_color":null,"line_width":1.0,"text_color":null,"font_size":12.0,"label_background":true,"label_color":null,"fill":true,"border":false,"border_color":[102,123,139,255]},"marker":{"show_text":true,"glyph":"🙂","show_glyph":false,"glyph_color":null},"fib_config":null,"volume_profile":null,"regression_trend":{"upper":2.0,"lower":2.0,"use_upper":true,"use_lower":true,"source":"Close","line_style":"Dashed","precision":null},"vwap":null,"gann":null,"ghost_feed":null,"channel_midline":false,"anchor_price_style":null,"middle_line":{"color":null,"width":1.0,"line_style":"Dashed"},"theme_shade":true,"image":null,"closed":false,"pitchfork":null,"elliott_degree":"Minor","bars_pattern":null,"z_order":0},"created_at":1795031062320,"modified_at":1795031062320,"notes":null}],"metadata":{"created_at":1795031062320,"modified_at":1795031062320,"app_version":null}}"#;
-        let (loaded, skipped) = DrawingStorage::from_json(old).unwrap();
-        assert!(skipped.is_empty(), "{skipped:?}");
-        assert!(loaded.drawings()[0].drawing.user_edit_enabled);
-        assert_eq!(loaded.drawings()[0].drawing.stroke_width, 3.0);
-        assert_eq!(
-            loaded.drawings()[0].drawing.text.as_deref(),
-            Some("Legacy trend")
-        );
         // Literal files from before pane layering keep drawings above every series and study.
         for saved in [
             include_str!("fixtures/storage_v2.json"),

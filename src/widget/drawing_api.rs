@@ -1256,6 +1256,7 @@ mod tests {
         restored.set_symbol("LEGACY");
         restored.load_drawings(old).unwrap();
         let drawing = &restored.drawings().drawings[0];
+        assert!(drawing.user_edit_enabled);
         assert_eq!(
             drawing.regression_trend,
             Some(RegressionTrendConfig::default())
