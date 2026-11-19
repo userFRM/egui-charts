@@ -812,6 +812,18 @@ mod tests {
                 "~~3,000~1301~~110.00~1,000~~111.00~2,000~~",
             ),
             (TradingLineAction::Close(long.clone()), "~~2~1301~~"),
+            (
+                TradingLineAction::Close(Position::new("1301", 1e-8, 100.0)),
+                "~~0.00000001~1301~~",
+            ),
+            (
+                TradingLineAction::Close(Position::new("1301", 1.0000001, 100.0)),
+                "~~1.0000001~1301~~",
+            ),
+            (
+                TradingLineAction::Close(Position::new("1301", 0.1 + 0.2, 100.0)),
+                "~~0.3~1301~~",
+            ),
             // Quantities are grouped as the account tables write them.
             (
                 TradingLineAction::Close(Position::new("1301", 2_000.5, 100.0)),

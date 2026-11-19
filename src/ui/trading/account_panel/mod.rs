@@ -455,12 +455,7 @@ impl AccountPanel {
 
 /// Decimals that show `quantity` without rounding, up to 8.
 pub(super) fn quantity_decimals(quantity: f64) -> usize {
-    (0..8)
-        .find(|&decimals| {
-            let scaled = quantity * 10f64.powi(decimals as i32);
-            (scaled - scaled.round()).abs() < 1e-6
-        })
-        .unwrap_or(8)
+    crate::scales::decimals(quantity).min(8)
 }
 
 /// The rows in view as comma-separated values, with the shown columns' titles as the header.
