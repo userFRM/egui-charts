@@ -26,9 +26,9 @@ pub enum ElliottDegree {
     Cycle,
     /// Waves ((1)) to ((5)) and ((A)), ((B)), ((C)).
     Primary,
-    /// Waves (1) to (5) and (A), (B), (C).
+    /// Waves (1) to (5) and (A), (B), (C), the degree of a new drawing.
     Intermediate,
-    /// Waves 1 to 5 and A, B, C, the degree of a new drawing.
+    /// Waves 1 to 5 and A, B, C, the degree of drawings saved without one.
     #[default]
     Minor,
     /// Waves ((i)) to ((v)) and ((a)), ((b)), ((c)).
