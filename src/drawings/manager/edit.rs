@@ -1,6 +1,6 @@
 //! Editing the drawing collection: add, delete, layer, group, file, edit, show, hide and lock.
 
-use super::{DrawingManager, DrawingSyncAction, queue_sync, sync_id};
+use super::{DrawingEventKind, DrawingManager, DrawingSyncAction, queue_sync, sync_id};
 use crate::drawings::domain::{Drawing, DrawingToolType, FolderSync};
 use crate::drawings::services::{ZOrderService, in_z_order};
 use crate::model::PostContent;
@@ -15,6 +15,7 @@ impl DrawingManager {
     /// The deleted drawing is pushed to the undo history and a cloud sync
     /// delete action is queued. If the deleted drawing was selected, the
     /// selection is cleared. A locked drawing is not deleted.
+    /// [`Drawing::user_edit_enabled`] does not limit it: hosts edit drawings the user cannot.
     pub fn delete_drawing(&mut self, id: usize) {
         if self.drawings.iter().any(|d| d.id == id && d.locked) {
             return;
@@ -24,6 +25,7 @@ impl DrawingManager {
             if drawing.saveable {
                 self.queue(DrawingSyncAction::Delete(sync_id(&drawing)));
             }
+            self.report(id, DrawingEventKind::Removed);
             self.history.push_delete(drawing, index);
         }
         self.selection.deselect(id);
@@ -48,23 +50,35 @@ impl DrawingManager {
         }
         match text {
             Some(text) => {
+                let changed = self.drawings[index].text.as_deref() != Some(text.as_str());
                 self.drawings[index].text = Some(text);
                 self.history.push_add(self.drawings[index].clone());
                 self.queue_update(id);
+                if changed {
+                    self.report(id, DrawingEventKind::PropertiesChanged);
+                }
             }
             None => {
                 let drawing = self.drawings.remove(index);
                 if drawing.saveable {
                     self.queue(DrawingSyncAction::Delete(sync_id(&drawing)));
                 }
+                self.report(id, DrawingEventKind::Removed);
                 self.selection.deselect(id);
             }
         }
     }
 
-    /// Deletes the selected drawings, keeping any locked ones.
+    /// Deletes the selected drawings, keeping locked ones and those whose user edits are off.
     pub fn delete_selected(&mut self) {
-        let ids: Vec<_> = self.selected_ids().collect();
+        let ids: Vec<_> = self
+            .selected_ids()
+            .filter(|&id| {
+                self.drawings
+                    .iter()
+                    .any(|d| d.id == id && d.user_edit_enabled)
+            })
+            .collect();
         self.delete_drawings(&ids);
     }
 
@@ -77,9 +91,12 @@ impl DrawingManager {
 
     /// Locks or unlocks the selected drawings as one undo step and queues the ones that change to
     /// be saved. Drawings already in that state are left alone; without such a drawing nothing is
-    /// recorded.
+    /// recorded. Drawings whose user edits are off stay as they are.
     pub fn set_selected_locked(&mut self, locked: bool) {
-        self.edit_selected_where(|d| d.locked != locked, |d| d.locked = locked);
+        self.edit_selected_where(
+            |d| d.locked != locked && d.user_edit_enabled,
+            |d| d.locked = locked,
+        );
     }
 
     /// Applies `edit` as one undo step to the selected drawings that `differs` picks, locked ones
@@ -100,6 +117,7 @@ impl DrawingManager {
     }
 
     /// Deletes the given drawings as one undo step, keeping any locked ones.
+    /// [`Drawing::user_edit_enabled`] does not limit it: hosts edit drawings the user cannot.
     pub fn delete_drawings(&mut self, ids: &[usize]) {
         let unlocked: Vec<_> = self
             .drawings
@@ -126,6 +144,7 @@ impl DrawingManager {
             if drawing.saveable {
                 self.queue(DrawingSyncAction::Delete(sync_id(drawing)));
             }
+            self.report(drawing.id, DrawingEventKind::Removed);
         }
         self.drawings
             .retain(|d| !before.iter().any(|(_, old)| old.id == d.id));
@@ -146,6 +165,7 @@ impl DrawingManager {
         }
         for (_, old) in &before {
             self.queue_update(old.id);
+            self.report_change(old.id, Some(old), false);
         }
         self.history.push_snapshot(before);
     }
@@ -172,7 +192,8 @@ impl DrawingManager {
         }
     }
 
-    /// Removes every drawing that is not locked and clears the current drawing and selection.
+    /// Removes every drawing that is neither locked nor kept from user edits and clears the
+    /// current drawing and selection.
     ///
     /// Queues a `Delete` for each drawing it removes, so the host deletes their stored records.
     /// To unload drawings without deleting them, clear [`Self::drawings`], then call
@@ -183,21 +204,34 @@ impl DrawingManager {
 
     /// Bulk removal with explicit permission to include locked drawings. Preserves locks in
     /// undo and queues deletion of stored records exactly as [`Self::clear_all`] does.
+    /// Drawings whose user edits are off always stay.
     pub fn clear_all_with_locked(&mut self, include_locked: bool) {
         self.history.push_snapshot(
             self.drawings
                 .iter()
                 .enumerate()
-                .filter(|(_, drawing)| include_locked || !drawing.locked)
+                .filter(|(_, drawing)| {
+                    drawing.user_edit_enabled && (include_locked || !drawing.locked)
+                })
                 .map(|(index, drawing)| (index, drawing.clone()))
                 .collect(),
         );
-        for drawing in self.drawings.iter().filter(|d| include_locked || !d.locked) {
+        let mut removed = Vec::new();
+        for drawing in self
+            .drawings
+            .iter()
+            .filter(|d| d.user_edit_enabled && (include_locked || !d.locked))
+        {
             if drawing.saveable {
                 self.notify(DrawingSyncAction::Delete(sync_id(drawing)));
             }
+            removed.push(drawing.id);
         }
-        self.drawings.retain(|d| d.locked && !include_locked);
+        for id in removed {
+            self.report(id, DrawingEventKind::Removed);
+        }
+        self.drawings
+            .retain(|d| !d.user_edit_enabled || (d.locked && !include_locked));
         self.cancel_curr_drawing();
         self.selection.deselect_all();
     }
@@ -211,7 +245,8 @@ impl DrawingManager {
     /// highest z-order.
     pub fn bring_to_front(&mut self, id: usize) {
         if let Some(drawing) = self.drawings.iter().find(|drawing| drawing.id == id) {
-            self.history.push_modify(id, drawing.clone());
+            let old = drawing.clone();
+            self.history.push_modify(id, old.clone());
             ZOrderService::bring_to_front(&mut self.drawings, id);
             self.drawings
                 .iter_mut()
@@ -219,6 +254,7 @@ impl DrawingManager {
                 .unwrap()
                 .series_layer = None;
             self.queue_update(id);
+            self.report_change(id, Some(&old), false);
         }
     }
 
@@ -226,7 +262,8 @@ impl DrawingManager {
     /// lowest z-order.
     pub fn send_to_back(&mut self, id: usize) {
         if let Some(drawing) = self.drawings.iter().find(|drawing| drawing.id == id) {
-            self.history.push_modify(id, drawing.clone());
+            let old = drawing.clone();
+            self.history.push_modify(id, old.clone());
             ZOrderService::send_to_back(&mut self.drawings, id);
             self.drawings
                 .iter_mut()
@@ -234,6 +271,7 @@ impl DrawingManager {
                 .unwrap()
                 .series_layer = Some(0);
             self.queue_update(id);
+            self.report_change(id, Some(&old), false);
         }
     }
 
@@ -268,6 +306,7 @@ impl DrawingManager {
                 drawing.z_order = z_order;
                 // Only the moved drawing is edited; tied layers around it are just renumbered.
                 self.notify(DrawingSyncAction::UpdateDrawing(id));
+                self.report(id, DrawingEventKind::PropertiesChanged);
             }
         }
         if !previous.is_empty() {
@@ -277,13 +316,15 @@ impl DrawingManager {
     }
 
     /// Duplicate a drawing three bars to the right, recording its creation for undo and saving.
-    /// Adds nothing for a drawing of a disabled tool or a copy that saving would refuse.
+    /// The copy has user edits on. Adds nothing for a drawing of a disabled tool or a copy that
+    /// saving would refuse.
     pub fn duplicate_drawing(&mut self, id: usize) {
         let Some(mut copy) = self.drawings.iter().find(|d| d.id == id).cloned() else {
             return;
         };
         copy.stored_id = None;
         copy.created_at = None;
+        copy.user_edit_enabled = true;
         copy.screen_anchor = copy.screen_anchor.map(|[x, y]| [x + 0.02, y]);
         let first = copy.first_moved_anchor();
         for point in copy.chart_points.iter_mut().skip(first) {
@@ -294,7 +335,8 @@ impl DrawingManager {
         }
     }
 
-    /// Paste copies three bars to the right with fresh identities, selecting them as one undoable addition.
+    /// Paste copies three bars to the right with fresh identities and user edits on, selecting
+    /// them as one undoable addition.
     /// The caller maps clipboard anchors into this manager's chart coordinates first. Leaves out a
     /// copy of a disabled tool or an unregistered custom tool and a copy that saving would refuse;
     /// when it leaves out every copy, it selects nothing and records no undo step.
@@ -304,6 +346,7 @@ impl DrawingManager {
             let mut copy = drawing.clone();
             copy.stored_id = None;
             copy.created_at = None;
+            copy.user_edit_enabled = true;
             copy.screen_anchor = copy.screen_anchor.map(|[x, y]| [x + 0.02, y]);
             copy.points.clear();
             copy.level_ys.clear();
@@ -321,6 +364,7 @@ impl DrawingManager {
             let id = copy.id;
             self.drawings.push(copy);
             self.queue(DrawingSyncAction::SaveDrawing(id));
+            self.report(id, DrawingEventKind::Created);
         }
         if ids.is_empty() {
             return;
@@ -330,6 +374,7 @@ impl DrawingManager {
             .push_command(crate::drawings::services::DrawingCommand::Snapshot {
                 drawings: Vec::new(),
                 ids,
+                moved: false,
             });
     }
 
@@ -380,6 +425,7 @@ impl DrawingManager {
         }
         for (_, drawing) in &removed {
             self.queue(DrawingSyncAction::Delete(sync_id(drawing)));
+            self.report(drawing.id, DrawingEventKind::Removed);
         }
         let gone: HashSet<usize> = removed.iter().map(|(_, drawing)| drawing.id).collect();
         self.drawings.retain(|drawing| !gone.contains(&drawing.id));
@@ -387,6 +433,7 @@ impl DrawingManager {
             let id = drawing.id;
             self.drawings.push(drawing);
             self.queue(DrawingSyncAction::SaveDrawing(id));
+            self.report(id, DrawingEventKind::Created);
         }
         self.selection
             .prune(&self.drawings.iter().map(|d| d.id).collect());
@@ -394,6 +441,7 @@ impl DrawingManager {
             .push_command(crate::drawings::services::DrawingCommand::Snapshot {
                 drawings: removed,
                 ids,
+                moved: false,
             });
     }
 
@@ -412,6 +460,7 @@ impl DrawingManager {
     /// records no undo step and returns the reason. A drawing that saving refuses already, such
     /// as one changed directly through [`Self::drawings`], accepts edits to its anchors and
     /// settings even if they remain invalid.
+    /// [`Drawing::user_edit_enabled`] does not limit it: hosts edit drawings the user cannot.
     pub fn edit_drawing(
         &mut self,
         id: usize,
@@ -486,6 +535,7 @@ impl DrawingManager {
         }
         for &id in &updated {
             self.queue_update(id);
+            self.report(id, DrawingEventKind::PropertiesChanged);
         }
         !updated.is_empty()
     }
@@ -495,6 +545,7 @@ impl DrawingManager {
     /// The drawings the edit hides are deselected. An edit after which saving would refuse one of
     /// the drawings, as [`Self::edit_drawing`] describes, changes none of them, records no undo
     /// step and returns the reason. Ids of no drawing are skipped.
+    /// [`Drawing::user_edit_enabled`] does not limit it: hosts edit drawings the user cannot.
     pub fn edit_drawings(
         &mut self,
         ids: &[usize],
@@ -763,16 +814,20 @@ impl DrawingManager {
         self.hidden
     }
 
-    /// Toggles the lock state of all drawings. If all are locked, unlocks them
-    /// all; otherwise locks them all.
+    /// Toggles the lock of every drawing whose user edits are on: unlocks them all if all are
+    /// locked, otherwise locks them all.
     pub fn toggle_lock_all(&mut self) {
-        let all_locked = self.drawings.iter().all(|d| d.locked);
+        let all_locked = self
+            .drawings
+            .iter()
+            .filter(|d| d.user_edit_enabled)
+            .all(|d| d.locked);
         let mut before = Vec::new();
         for (index, drawing) in self
             .drawings
             .iter_mut()
             .enumerate()
-            .filter(|(_, d)| d.locked == all_locked)
+            .filter(|(_, d)| d.user_edit_enabled && d.locked == all_locked)
         {
             before.push((index, drawing.clone()));
             drawing.locked = !all_locked;
@@ -789,6 +844,7 @@ impl DrawingManager {
         }
         for (_, drawing) in &before {
             self.stamp(drawing.id);
+            self.report_change(drawing.id, Some(drawing), false);
         }
         self.history.push_snapshot(before);
     }
@@ -811,6 +867,7 @@ impl DrawingManager {
         self.history.push_add(drawing.clone());
         self.drawings.push(drawing);
         self.queue(DrawingSyncAction::SaveDrawing(id));
+        self.report(id, DrawingEventKind::Created);
         Ok(id)
     }
 
@@ -891,6 +948,7 @@ impl DrawingManager {
         }
         for (_, old) in &before {
             self.queue_update(old.id);
+            self.report_change(old.id, Some(old), false);
         }
         self.history.push_snapshot(before);
     }
@@ -1025,7 +1083,11 @@ impl DrawingManager {
             }
             self.history.push_add(drawing.clone());
         }
+        let created = drawing.stored_id.is_none();
         self.drawings.push(drawing);
+        if created {
+            self.report(id, DrawingEventKind::Created);
+        }
         if stamp {
             self.stamp(id);
         }

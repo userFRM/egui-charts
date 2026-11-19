@@ -3,9 +3,8 @@
 //! Intraday charts (1-minute, hourly, …) show a thin vertical divider wherever
 //! the calendar day, or the configured trading session, changes between two
 //! consecutive bars, following the common day-separator convention on intraday
-//! charts. On daily-and-higher charts the same machinery draws the next coarser
-//! boundary (week, month, then year) so the dividers stay meaningful rather than
-//! landing on every bar.
+//! charts. Daily and longer charts draw none, since each of their bars spans a
+//! session or more.
 //!
 //! Boundaries are detected with [`find_session_breaks`] over the *visible* bar
 //! slice and placed with the chart's canonical [`ChartMapping::idx_to_x`], so
@@ -162,16 +161,6 @@ pub struct SessionBreakRenderConfig {
     pub line_width: f32,
     /// Line style (solid / dashed / dotted).
     pub style: LineStyle,
-}
-
-impl Default for SessionBreakRenderConfig {
-    fn default() -> Self {
-        Self {
-            line_color: Color32::from_gray(80),
-            line_width: 1.0,
-            style: LineStyle::Dashed,
-        }
-    }
 }
 
 /// Renderer for session-break divider lines: a vertical line in the configured colour,

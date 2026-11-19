@@ -269,11 +269,11 @@ impl HeatmapStrip {
         if intensity > 0.5 {
             // Bullish (green) gradient
             let t = (intensity - 0.5) * 2.0; // 0.0 to 1.0
-            lerp_color(neutral, bullish, t)
+            neutral.lerp_to_gamma(bullish, t)
         } else {
             // Bearish (red) gradient
             let t = (0.5 - intensity) * 2.0; // 0.0 to 1.0
-            lerp_color(neutral, bearish, t)
+            neutral.lerp_to_gamma(bearish, t)
         }
     }
 
@@ -287,25 +287,6 @@ impl HeatmapStrip {
             Color32::TRANSPARENT
         }
     }
-}
-
-/// Linear interpolation between two colors
-fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
-    let t = t.clamp(0.0, 1.0);
-    let [ar, ag, ab, aa] = a.to_array();
-    let [br, bg, bb, ba] = b.to_array();
-
-    Color32::from_rgba_unmultiplied(
-        lerp_u8(ar, br, t),
-        lerp_u8(ag, bg, t),
-        lerp_u8(ab, bb, t),
-        lerp_u8(aa, ba, t),
-    )
-}
-
-/// Linear interpolation between two u8 values
-fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
-    (a as f32 + (b as f32 - a as f32) * t).round() as u8
 }
 
 #[cfg(test)]
@@ -491,12 +472,35 @@ mod tests {
 
     #[test]
     fn test_color_lerp() {
-        let white = Color32::WHITE;
-        let black = Color32::BLACK;
-
-        let mid = lerp_color(white, black, 0.5);
-        assert_eq!(mid.r(), 128);
-        assert_eq!(mid.g(), 128);
-        assert_eq!(mid.b(), 128);
+        let up = Color32::from_rgba_unmultiplied(0, 200, 0, 128);
+        let down = Color32::from_rgba_unmultiplied(200, 0, 0, 64);
+        let strip = HeatmapStrip::new();
+        for (bullish, bearish, intensity, expected) in [
+            (
+                Color32::BLACK,
+                Color32::BLACK,
+                0.75,
+                Color32::from_gray(128),
+            ),
+            (up, down, 1.0, up),
+            (up, down, 0.0, down),
+            (up, down, 0.5, Color32::WHITE),
+            (
+                up,
+                down,
+                0.75,
+                Color32::from_rgba_premultiplied(128, 178, 128, 192),
+            ),
+        ] {
+            let cell = HeatmapCell {
+                intensity,
+                ..HeatmapCell::new(0, 0.0, 0.0)
+            };
+            assert_eq!(
+                strip.gradient_color(&cell, bullish, bearish, Color32::WHITE),
+                expected,
+                "intensity {intensity}"
+            );
+        }
     }
 }

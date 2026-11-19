@@ -233,7 +233,7 @@ impl Drawing {
                 egui::FontId::proportional(typography::font_size(config.label_size)),
                 level_color(level),
             );
-            if text.text().is_empty() && config.show_text && selected && !self.locked {
+            if text.text().is_empty() && config.show_text && selected && self.accepts_user_edits() {
                 let hint = painter.layout_no_wrap(
                     crate::localization::text(painter.ctx(), "Add text"),
                     egui::FontId::proportional(typography::font_size(config.label_size)),

@@ -1,6 +1,6 @@
 //! Pointer interaction: handles and drags, tool selection and drawing creation.
 
-use super::{DrawingManager, DrawingSyncAction, sync_id};
+use super::{DrawingEventKind, DrawingManager, DrawingSyncAction, sync_id};
 use crate::drawings::domain::{
     ChartPoint, Drawing, DrawingInteractionMode, DrawingToolType, HandlePos,
 };
@@ -239,7 +239,7 @@ impl DrawingManager {
                     d.tool_type,
                     DrawingToolType::Brush | DrawingToolType::Highlighter
                 ) && d.custom_tool.is_none()
-                    && !d.locked
+                    && d.accepts_user_edits()
                     && d.selectable
                     && self.shows(d)
                     && self.owns_pane(d)
@@ -290,13 +290,17 @@ impl DrawingManager {
         for old in &erase.before {
             if self.drawings.iter().any(|d| d.id == old.id) {
                 self.queue_edit(old);
-            } else if old.saveable {
-                self.queue(DrawingSyncAction::Delete(sync_id(old)));
+            } else {
+                if old.saveable {
+                    self.queue(DrawingSyncAction::Delete(sync_id(old)));
+                }
+                self.report(old.id, DrawingEventKind::Removed);
             }
         }
         for id in &erase.added {
             if self.drawings.iter().any(|d| d.id == *id) {
                 self.queue(DrawingSyncAction::SaveDrawing(*id));
+                self.report(*id, DrawingEventKind::Created);
             }
         }
         let ids = erase
@@ -315,8 +319,11 @@ impl DrawingManager {
             })
             .collect();
         drawings.sort_by_key(|(index, _)| *index);
-        self.history
-            .push_command(DrawingCommand::Snapshot { drawings, ids });
+        self.history.push_command(DrawingCommand::Snapshot {
+            drawings,
+            ids,
+            moved: false,
+        });
     }
 
     // === Handle delegation ===
@@ -332,7 +339,7 @@ impl DrawingManager {
     /// Returns the [`HandlePos`] if a handle was hit, `None` otherwise.
     pub fn hit_test_handle(&self, drawing: &Drawing, point: Pos2) -> Option<HandlePos> {
         if !drawing.selectable
-            || drawing.locked
+            || !drawing.accepts_user_edits()
             || !self.shows(drawing)
             || (!self.pane_clips.is_empty()
                 && !self
@@ -350,12 +357,12 @@ impl DrawingManager {
     }
 
     /// Begins a handle drag operation, saving the drawing's current state for undo. A locked
-    /// drawing is not dragged.
+    /// drawing, or one whose user edits are off, is not dragged.
     pub fn start_drag_handle(&mut self, drawing_id: usize, handle: HandlePos) {
         if let Some(drawing) = self
             .drawings
             .iter()
-            .find(|d| d.id == drawing_id && d.selectable && !d.locked && self.shows(d))
+            .find(|d| d.id == drawing_id && d.selectable && d.accepts_user_edits() && self.shows(d))
         {
             self.dragging_handle = Some((drawing_id, handle));
             self.drag_old_state = Some(drawing.clone());
@@ -372,7 +379,8 @@ impl DrawingManager {
 
     /// Begins moving the anchors that move with the body (all but a bars pattern's source)
     /// from a grab at `origin`, retaining the grab offset.
-    /// Locked drawings ignore the grab. The move shares the handle drag's undo and sync lifecycle.
+    /// Locked drawings and those whose user edits are off ignore the grab. The move shares the
+    /// handle drag's undo and sync lifecycle.
     pub fn start_drag_body(&mut self, drawing_id: usize, origin: Pos2) {
         self.start_drag_handle(drawing_id, HandlePos::Middle);
         if self.dragging_handle == Some((drawing_id, HandlePos::Middle)) {
@@ -385,7 +393,7 @@ impl DrawingManager {
                         && self.pane_members.contains(&d.pane)
                         && d.selectable
                         && self.selection.is_selected(d.id)
-                        && !d.locked
+                        && d.accepts_user_edits()
                         && self.shows(d)
                 })
                 .cloned()
@@ -693,7 +701,7 @@ impl DrawingManager {
                     if let Some(drawing) = self
                         .drawings
                         .iter_mut()
-                        .find(|d| d.id == old.id && !d.locked)
+                        .find(|d| d.id == old.id && d.accepts_user_edits())
                     {
                         let first = old.first_moved_anchor();
                         for (point, before) in drawing
@@ -721,7 +729,11 @@ impl DrawingManager {
                     }
                 }
             }
-            if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id && !d.locked) {
+            if let Some(drawing) = self
+                .drawings
+                .iter_mut()
+                .find(|d| d.id == id && d.accepts_user_edits())
+            {
                 if let (Some(origin), Some(old)) = (self.drag_origin, &self.drag_old_state) {
                     let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
                     // Dragging a label leaves the point it annotates; a selection, a copy or a
@@ -876,6 +888,9 @@ impl DrawingManager {
         }
         for id in converted {
             self.queue_update(id);
+            if self.drawings.iter().any(|d| d.id == id) {
+                self.report(id, DrawingEventKind::AnchorsChanged);
+            }
         }
     }
 
@@ -884,6 +899,7 @@ impl DrawingManager {
     /// A copy drag records the additions instead, so undo removes every copy.
     pub fn end_drag_handle(&mut self) {
         self.end_partial_erase();
+        let moved = self.drag_origin.is_some();
         if let Some(old_state) = self.drag_old_state.take() {
             if std::mem::take(&mut self.drag_copy) {
                 let mut ids: Vec<_> = std::mem::take(&mut self.drag_group)
@@ -894,23 +910,29 @@ impl DrawingManager {
                 ids.sort_by_key(|id| self.drawings.iter().position(|d| d.id == *id));
                 for &id in &ids {
                     self.queue(DrawingSyncAction::SaveDrawing(id));
+                    self.report(id, DrawingEventKind::Created);
                 }
                 self.history
                     .push_command(crate::drawings::services::DrawingCommand::Snapshot {
                         drawings: Vec::new(),
                         ids,
+                        moved: false,
                     });
                 self.dragging_handle = None;
                 self.drag_origin = None;
                 return;
             }
-            self.queue_edit(&old_state);
+            self.queue_change(&old_state, moved);
             if self.drag_group.is_empty() {
-                self.history.push_modify(old_state.id, old_state);
+                if moved {
+                    self.history.push_moved(old_state.id, old_state);
+                } else {
+                    self.history.push_modify(old_state.id, old_state);
+                }
             } else {
                 let mut before = std::mem::take(&mut self.drag_group);
                 for drawing in &before {
-                    self.queue_update(drawing.id);
+                    self.queue_change(drawing, true);
                 }
                 before.push(old_state);
                 let snapshot = self
@@ -922,7 +944,7 @@ impl DrawingManager {
                         Some((index, old.clone()))
                     })
                     .collect();
-                self.history.push_snapshot(snapshot);
+                self.history.push_moved_snapshot(snapshot);
             }
         }
         self.dragging_handle = None;
@@ -1005,9 +1027,14 @@ impl DrawingManager {
     }
 
     /// Shows a registered tool's settings and records a changed draft as one undoable edit.
-    /// Unknown tools and locked drawings show no editor and return false.
+    /// Unknown tools, locked drawings and drawings whose user edits are off show no editor and
+    /// return false.
     pub fn show_custom_settings(&mut self, ui: &mut egui::Ui, id: usize) -> bool {
-        let Some(drawing) = self.drawings.iter().find(|d| d.id == id && !d.locked) else {
+        let Some(drawing) = self
+            .drawings
+            .iter()
+            .find(|d| d.id == id && d.accepts_user_edits())
+        else {
             return false;
         };
         let Some(tool) = drawing
@@ -1330,6 +1357,7 @@ impl DrawingManager {
             self.drawings.push(drawing);
             self.select(id);
             self.queue(DrawingSyncAction::SaveDrawing(id));
+            self.report(id, DrawingEventKind::Created);
             if !self.stay_in_drawing_mode {
                 self.active_tool = None;
                 self.active_custom_tool = None;
