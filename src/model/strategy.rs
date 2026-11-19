@@ -774,7 +774,8 @@ impl StrategyReport {
         }
         let bar_of = |time: DateTime<Utc>| bars.partition_point(|b| b.time <= time).checked_sub(1);
         let holding = |side: Option<OrderSide>| {
-            let mut sums = [(0_usize, 0_usize); 3];
+            // Span totals can exceed an index's range even when their average fits.
+            let mut sums = [(0_u128, 0_usize); 3];
             for trade in self
                 .trades
                 .iter()
@@ -791,13 +792,13 @@ impl StrategyReport {
                     .zip(&mut sums)
                 {
                     if counted {
-                        sum.0 += exit_bar - entry_bar;
+                        sum.0 += (exit_bar - entry_bar) as u128;
                         sum.1 += 1;
                     }
                 }
             }
             let average =
-                |(bars, trades): (usize, usize)| (trades > 0).then(|| bars as f64 / trades as f64);
+                |(bars, trades): (u128, usize)| (trades > 0).then(|| bars as f64 / trades as f64);
             StrategyHolding {
                 average_bars: average(sums[0]),
                 average_winning_bars: average(sums[1]),
@@ -1999,6 +2000,33 @@ mod tests {
                 "{case}"
             );
         }
+    }
+
+    #[test]
+    fn holding_totals_preserve_averages_beyond_32_bit_range() {
+        // Invalid prices keep excursions short; timestamps still count toward holding.
+        let bars: Vec<_> = (0..100_000)
+            .map(|i| {
+                Bar::new(
+                    t0() + TimeDelta::minutes(i),
+                    f64::NAN,
+                    f64::NAN,
+                    f64::NAN,
+                    f64::NAN,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut r = report(1_000.0);
+        r.timeframe = Timeframe::Min1;
+        let mut trade = closed(0.0, 0.0);
+        trade.exit.as_mut().unwrap().time = bars.last().unwrap().time;
+        r.trades = vec![trade; 50_000];
+        // 50,000 * 99,999 = 4,999,950,000 held bars, beyond a 32-bit index.
+        let c = r.comparison(&bars);
+        assert_eq!(c.all.average_bars, Some(99_999.0));
+        assert_eq!(c.long, c.all);
+        assert_eq!(c.short, StrategyHolding::default());
     }
 
     #[test]
