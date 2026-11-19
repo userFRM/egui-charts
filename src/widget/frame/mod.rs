@@ -3534,6 +3534,13 @@ impl Chart {
                 let order_quantity = self.order_quantity.take();
                 #[cfg(feature = "ui")]
                 let order_quantity_text = self.order_quantity_text.take();
+                // Trading prices market orders at the last price, so Buy and Sell need no quote.
+                #[cfg(feature = "ui")]
+                let last_price = order_quantity.and_then(|_| {
+                    crate::model::last_with_value(self.bars(SeriesId::MAIN)).map(|bar| bar.close)
+                });
+                #[cfg(not(feature = "ui"))]
+                let last_price = None;
                 let mut legend = super::Legend::new(&self.symbol, &timeframe, &bar);
                 let statuses: Vec<_> = self
                     .legend_statuses
@@ -3563,6 +3570,8 @@ impl Chart {
                     .quote
                     .as_ref()
                     .filter(|_| self.main_series_visible && self.config.show_quote_boxes);
+                legend.last_price =
+                    last_price.filter(|_| self.main_series_visible && self.config.show_quote_boxes);
                 legend.show_title = self.main_series_present && self.config.show_symbol_labels;
                 legend.show_market_status = self.config.show_market_status;
                 legend.replaying = self.replay_time().is_some();

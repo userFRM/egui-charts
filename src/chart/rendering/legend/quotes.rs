@@ -1,8 +1,39 @@
 use super::{Layout, QuoteSide, semibold};
 use crate::localization as l10n;
+use crate::model::Level1Quote;
 use crate::theme::ThemeExt;
 use egui::{Color32, FontId, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 use std::sync::Arc;
+
+/// The prices the Sell and Buy buttons show.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum QuotePrices {
+    /// Sell at the bid, Buy at the ask, with their spread between them.
+    BidAsk { bid: f64, ask: f64 },
+    /// Both buttons show the last price, without a spread.
+    Last(f64),
+}
+
+impl QuotePrices {
+    pub(super) fn magnitude(self) -> f64 {
+        match self {
+            Self::BidAsk { bid, ask } => bid.abs().max(ask.abs()),
+            Self::Last(price) => price.abs(),
+        }
+    }
+}
+
+/// A valid two-sided quote, else the last price when finite.
+pub(crate) fn quote_prices(quote: Option<&Level1Quote>, last: Option<f64>) -> Option<QuotePrices> {
+    if let Some(quote) = quote {
+        let (bid, ask) = (quote.bid, quote.ask);
+        if bid.is_finite() && ask.is_finite() && bid <= ask && quote.spread().is_finite() {
+            return Some(QuotePrices::BidAsk { bid, ask });
+        }
+    }
+    last.filter(|price| price.is_finite())
+        .map(QuotePrices::Last)
+}
 
 /// The Sell and Buy buttons with the spread between them and, under it, `quantity` in a box.
 /// Prices and the spread use `formatter`, else `precision` decimals grouped by `thousands_sep`.
@@ -10,8 +41,7 @@ use std::sync::Arc;
 pub(super) fn paint_quotes(
     ui: &mut Ui,
     layout: &mut Layout<'_>,
-    bid: f64,
-    ask: f64,
+    prices: QuotePrices,
     precision: usize,
     thousands_sep: Option<char>,
     formatter: Option<&dyn crate::scales::PriceFormatter>,
@@ -24,7 +54,18 @@ pub(super) fn paint_quotes(
             |formatter| formatter.format(price),
         )
     };
-    let spread = text(ask - bid);
+    let (bid, ask, spread, sell_name, buy_name) = match prices {
+        QuotePrices::BidAsk { bid, ask } => {
+            (bid, ask, text(ask - bid), "Sell at bid", "Buy at ask")
+        }
+        QuotePrices::Last(price) => (
+            price,
+            price,
+            String::new(),
+            "Sell at market",
+            "Buy at market",
+        ),
+    };
 
     let theme = ui.active_theme();
     let spread_galley = layout.painter.layout_no_wrap(
@@ -76,7 +117,7 @@ pub(super) fn paint_quotes(
         sell_rect,
         sell,
         theme.chart.candle_down,
-        &l10n::text(ui.ctx(), "Sell at bid"),
+        &l10n::text(ui.ctx(), sell_name),
         id.with("sell"),
     );
     let spread_rect = Rect::from_min_size(
@@ -130,7 +171,7 @@ pub(super) fn paint_quotes(
         buy_rect,
         buy,
         theme.ui.accent,
-        &l10n::text(ui.ctx(), "Buy at ask"),
+        &l10n::text(ui.ctx(), buy_name),
         id.with("buy"),
     );
     layout.pos.x = buy_rect.right() + 8.0;
@@ -183,7 +224,9 @@ fn quote_box(
     name: &str,
     id: egui::Id,
 ) -> Response {
-    let response = ui.interact(rect.intersect(painter.clip_rect()), id, Sense::click());
+    let response = ui
+        .interact(rect.intersect(painter.clip_rect()), id, Sense::click())
+        .on_hover_text(name);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
     painter.rect(
         rect,

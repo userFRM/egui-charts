@@ -6,6 +6,7 @@ mod study_controls;
 pub(crate) use study_controls::{controls_width, study_controls};
 
 use quotes::paint_quotes;
+pub(crate) use quotes::quote_prices;
 
 use crate::chart::rendering::StyleColors;
 use crate::chart::rendering::axes::semibold;
@@ -54,9 +55,9 @@ impl<'a> LegendStatus<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum QuoteSide {
-    /// Sell at the displayed bid.
+    /// Sell at the displayed bid, or at market where the buttons show the last price.
     Sell,
-    /// Buy at the displayed ask.
+    /// Buy at the displayed ask, or at market where the buttons show the last price.
     Buy,
     /// Open the order ticket without placing an order.
     Ticket,
@@ -168,6 +169,9 @@ pub struct Legend<'a> {
     /// The order quantity and the host's text for it, shown under the quote buttons' spread,
     /// which the user clicks to change it.
     pub(crate) quantity: Option<(f64, Option<String>)>,
+    /// The last price the Sell and Buy buttons show without a two-sided quote; the chart sets
+    /// it while trading draws on it.
+    pub(crate) last_price: Option<f64>,
     /// Groups the thousands of built-in price values; the chart sets it from
     /// `ChartConfig::thousands_sep`.
     pub(crate) thousands_sep: Option<char>,
@@ -242,6 +246,7 @@ impl<'a> Legend<'a> {
             day_change: None,
             study_backdrop: 0.6,
             quantity: None,
+            last_price: None,
             thousands_sep: None,
             price_decimals: None,
             extended_hours: &[],
@@ -681,27 +686,23 @@ impl<'a> Legend<'a> {
             layout.new_row();
         }
 
-        let (action, quantity) = self.quote.map_or((None, None), |quote| {
-            let (bid, ask) = (quote.bid, quote.ask);
-            if !bid.is_finite() || !ask.is_finite() || bid > ask || !quote.spread().is_finite() {
-                return (None, None);
-            }
-            let precision = self.price_precision(bid.abs().max(ask.abs()));
-            let action = paint_quotes(
-                ui,
-                &mut layout,
-                bid,
-                ask,
-                precision,
-                self.thousands_sep,
-                self.formatters.price,
-                self.quantity.clone(),
-                id,
-            );
-            layout.new_row();
-            layout.pos.y += 4.0;
-            action
-        });
+        let (action, quantity) =
+            quote_prices(self.quote, self.last_price).map_or((None, None), |prices| {
+                let precision = self.price_precision(prices.magnitude());
+                let action = paint_quotes(
+                    ui,
+                    &mut layout,
+                    prices,
+                    precision,
+                    self.thousands_sep,
+                    self.formatters.price,
+                    self.quantity.clone(),
+                    id,
+                );
+                layout.new_row();
+                layout.pos.y += 4.0;
+                action
+            });
 
         layout.backdrop = self.study_backdrop.clamp(0.0, 1.0);
         let mut study_settings = None;
