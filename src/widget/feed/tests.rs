@@ -4194,6 +4194,42 @@ fn history_only_range_trade_rate_uses_proven_receipts() {
 
 #[cfg(feature = "studies")]
 #[test]
+fn history_only_trade_rate_splits_tied_buys_of_6_7_8_lots() {
+    let start = bars(1)[0].time;
+    let tape = [6.0, 7.0, 8.0]
+        .map(|size| Tick::new(start, 100.0, size, Some(crate::model::OrderSide::Buy)));
+    let bar = |i, lots| {
+        Bar::new(
+            start + TimeDelta::nanoseconds(i),
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            lots,
+        )
+    };
+    // 6+4, 3+7, then the last lot of the third buy.
+    let candles = [bar(0, 10.0), bar(1, 10.0), bar(2, 1.0)];
+    for interval in ["10v", "10delta"] {
+        check_history_only_trade_rate(
+            interval,
+            false,
+            &tape,
+            &candles,
+            &[[2.0, 1.0, 2.0], [2.0, 1.5, 3.0], [1.0, 1.5, 3.0]],
+        );
+        check_history_only_trade_rate(
+            interval,
+            true,
+            &tape,
+            &candles,
+            &[[10.0, 6.5, 13.0], [10.0, 10.5, 21.0], [1.0, 10.5, 21.0]],
+        );
+    }
+}
+
+#[cfg(feature = "studies")]
+#[test]
 fn history_only_split_trade_rate_counts_each_print_once_in_the_windows() {
     use crate::model::OrderSide::{Buy, Sell};
 
@@ -4319,15 +4355,13 @@ fn check_history_only_trade_rate(
 
             // The sink allocates this fill to the last bar key independently. The page
             // proves no join there: neither its count nor its windows carry over.
-            feed.sink().push_tick(tape.last().unwrap().clone());
+            let mut live = tape.last().unwrap().clone();
+            live.ts = bars.last().unwrap().time;
+            let x = if volume { live.size } else { 1.0 };
+            feed.sink().push_tick(live);
             frames.run(&mut chart);
             frames.run(&mut chart);
             let study = chart.indicators().find(|(id, _)| *id == rate).unwrap().1;
-            let x = if volume {
-                tape.last().unwrap().size
-            } else {
-                1.0
-            };
             assert_eq!(
                 [0, 1, 2].map(|line| study.values().value(line, bars.len() - 1)),
                 [x, x / 2.0, x].map(Some)
