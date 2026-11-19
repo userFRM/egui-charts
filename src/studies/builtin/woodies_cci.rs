@@ -16,13 +16,14 @@
 //!
 //! A column's stage follows its run: the bar itself and the unbroken CCI 14 values just before it
 //! on the same side of zero. Bars without a value are not part of the series, and a value of
-//! exactly zero is on neither side, so it has no run and ends the run before it.
+//! exactly zero is on neither side, so it has no run and ends the run before it. A zero after five
+//! values on one side keeps the established colour of that side.
 //!
 //! | Run | Stage | Colour |
 //! |-----|-------|--------|
-//! | 6 or more | established | columns colour above zero, established down colour below |
+//! | 6 or more, or a zero after 5 on one side | established | columns colour above zero, established down colour below |
 //! | 2 to 5 | transition | transition colour |
-//! | 1, or the value is zero | neutral | neutral colour |
+//! | 1, or any other zero | neutral | neutral colour |
 //!
 //! The columns colour is the first plot colour of the settings; the other three are study inputs.
 //! Setting the transition or neutral colour to a new value sets that stage on both sides of zero;
@@ -61,7 +62,8 @@ pub struct WoodiesCCI {
     /// Column colour of that stage below zero, set with the stage colour when that changes and
     /// kept in `colors()` after the plot colours.
     transition_negative: Color32,
-    /// Column colour of a first value on a side of zero, or of zero.
+    /// Column colour of a first value on a side of zero, or of a zero that follows no established
+    /// run.
     neutral_color: Color32,
     /// Column colour of that stage below zero, set with the stage colour when that changes and
     /// kept in `colors()` after the plot colours.
@@ -175,8 +177,21 @@ impl Indicator for WoodiesCCI {
         }
         let value = self.values.value(0, bar)?;
         // Bars without a value, skipped as non-finite, are not in the run.
-        let previous = (0..bar).rev().filter_map(|bar| self.values.value(0, bar));
-        let run = 1 + previous.take_while(|p| p * value > 0.0).take(5).count();
+        let previous = (0..bar)
+            .rev()
+            .filter_map(|bar| self.values.value(0, bar))
+            .take(5);
+        // A zero crosses to neither side, so it keeps the colour of an established run before it.
+        if value == 0.0 {
+            return Some(if previous.clone().filter(|&p| p > 0.0).count() == 5 {
+                self.colors[0]
+            } else if previous.filter(|&p| p < 0.0).count() == 5 {
+                self.down_color
+            } else {
+                self.neutral_color
+            });
+        }
+        let run = 1 + previous.take_while(|p| p * value > 0.0).count();
         Some(match run {
             1 if value < 0.0 => self.neutral_negative,
             1 => self.neutral_color,
@@ -288,7 +303,8 @@ mod tests {
     /// A CCI of length 2 has the sign of the close change, and zero for equal closes, so the closes
     /// set the runs. A run of one or a zero is neutral, two to five values are a transition and six
     /// or more are established, above zero in the columns colour and below it in the down colour. A
-    /// non-finite bar is not part of the run, and a zero ends it.
+    /// non-finite bar is not part of the run, and a zero ends it. A zero after five values on one
+    /// side keeps that side's established colour.
     #[test]
     fn columns_are_staged_by_the_run_on_one_side_of_zero() {
         let closes = [
@@ -311,6 +327,12 @@ mod tests {
             -1.0,
             -1.0,
             -2.0,
+            -1.0,
+            0.0,
+            1.0,
+            2.0,
+            3.0,
+            3.0,
         ];
         let bars: Vec<Bar> = closes
             .iter()
@@ -349,6 +371,12 @@ mod tests {
             Some(r),
             Some(r),
             Some(g),
+            Some(r),
+            Some(r),
+            Some(r),
+            Some(r),
+            Some(r),
+            Some(g),
         ];
         let colours = |study: &WoodiesCCI| -> Vec<_> {
             (0..bars.len())
@@ -356,16 +384,47 @@ mod tests {
                 .collect()
         };
         assert_eq!(colours(&study), expected);
-        // The columns colour of the plot and the three stage inputs replace the defaults.
-        study.set_color(0, Color32::BLUE);
-        for id in ["down_color", "transition_color", "neutral_color"] {
+        // The columns colour of the plot and the three stage inputs replace the defaults, each
+        // distinct, so a zero cannot pass in a colour two stages share.
+        let (b, d, t, n) = (Color32::BLUE, Color32::GOLD, Color32::KHAKI, Color32::BROWN);
+        study.set_color(0, b);
+        for (id, color) in [
+            ("down_color", d),
+            ("transition_color", t),
+            ("neutral_color", n),
+        ] {
             study
-                .set_input(id, crate::studies::InputValue::Color(Color32::GOLD))
+                .set_input(id, crate::studies::InputValue::Color(color))
                 .unwrap();
         }
         study.calculate(&bars);
-        let mut recoloured = expected.map(|c| c.map(|_| Color32::GOLD));
-        recoloured[7] = Some(Color32::BLUE);
+        let recoloured = [
+            None,
+            Some(n),
+            Some(t),
+            None,
+            Some(t),
+            Some(t),
+            Some(t),
+            Some(b),
+            Some(n),
+            Some(t),
+            Some(n),
+            Some(n),
+            Some(t),
+            Some(t),
+            Some(t),
+            Some(t),
+            Some(d),
+            Some(d),
+            Some(n),
+            Some(n),
+            Some(t),
+            Some(t),
+            Some(t),
+            Some(t),
+            Some(b),
+        ];
         assert_eq!(colours(&study), recoloured);
     }
 }
