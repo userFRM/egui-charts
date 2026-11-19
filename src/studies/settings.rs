@@ -270,7 +270,10 @@ pub(super) fn declared_levels<S: Indicator + ?Sized>(
 /// Missing style lists inherit the study's declared presentation.
 fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
     let (levels, fill, color) = declared_levels(study);
-    if study.name() == "Stochastic" && settings.levels.len() == 2 && levels.len() == 3 {
+    if (study.name() == "Stochastic" || (study.name() == "MFI" && guides_since(study)))
+        && settings.levels.len() == 2
+        && levels.len() == 3
+    {
         // Keep the two saved guides and the old appearance when adding the middle guide.
         let mut middle = levels[2];
         middle.visible = false;
@@ -400,7 +403,7 @@ fn guides_since(study: &dyn Indicator) -> bool {
     let since: &[f64] = match study.name() {
         "%B" => &[1.0, 0.0, 0.5],
         "CCI" => &[100.0, -100.0, 0.0],
-        "MFI" => &[80.0, 20.0],
+        "MFI" => &[80.0, 20.0, 50.0],
         "Aroon Oscillator" => &[90.0, 0.0, -90.0],
         _ => return false,
     };
@@ -3518,9 +3521,9 @@ mod tests {
             ),
             (
                 "MFI",
-                vec![(80.0, gray), (20.0, gray)],
+                vec![(80.0, gray), (20.0, gray), (50.0, faint)],
                 true,
-                None,
+                Some([0, 1]),
                 Some((0.0, 100.0)),
                 Color32::from_rgba_unmultiplied(126, 87, 194, 26),
             ),
@@ -3566,11 +3569,20 @@ mod tests {
                         vec![hidden(declared[0]), declared[1], hidden(declared[2])],
                     ),
                 ]
+            } else if name == "MFI" {
+                vec![
+                    (
+                        declared[..2].to_vec(),
+                        vec![declared[0], declared[1], hidden(declared[2])],
+                    ),
+                    (Vec::new(), declared.iter().copied().map(hidden).collect()),
+                ]
             } else {
                 vec![(Vec::new(), declared.iter().copied().map(hidden).collect())]
             };
             for (saved, restored) in older {
                 let mut settings = defaults.clone();
+                let empty = saved.is_empty();
                 settings.levels = saved;
                 settings.fill_between_levels = false;
                 study.apply_settings(&[], settings).unwrap();
@@ -3578,7 +3590,7 @@ mod tests {
                 assert!(!study.pane().fill_between_levels, "{name}");
                 assert_eq!(
                     study.pane().range,
-                    if name == "MFI" { None } else { range },
+                    if name == "MFI" && empty { None } else { range },
                     "{name}"
                 );
                 let shown: Vec<_> = study.pane().levels.iter().map(|level| level.1).collect();
