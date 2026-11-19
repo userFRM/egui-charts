@@ -3469,7 +3469,7 @@ impl DemoApp {
                     self.layout.apply_date_range(&mut charts, range);
                 }
             }
-            TimeframeToolbarAction::OpenDatePicker => self.date_picker.open(),
+            TimeframeToolbarAction::OpenDatePicker => self.date_picker.open_for_chart(&self.chart),
             TimeframeToolbarAction::OpenTimezoneMenu => {
                 // On own data the zone of the profile is offered too, to return to it.
                 let mut zones = default_time_zones();
@@ -4251,7 +4251,7 @@ impl DemoApp {
                 self.interval_entry = Some(String::new());
                 self.interval_focus = true;
             }
-            A::GoToDate => self.date_picker.open(),
+            A::GoToDate => self.date_picker.open_for_chart(&self.chart),
             A::Snapshot => self.handle_top_toolbar(ctx, TopToolbarAction::TakeScreenshot),
             A::SaveLayout => self.handle_top_toolbar(ctx, TopToolbarAction::Save),
             A::OpenLayout => {

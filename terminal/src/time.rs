@@ -104,7 +104,9 @@ impl Terminal {
                     self.time.bar.state.sel_range = range;
                     self.fit_date_range(range);
                 }
-                TimeframeToolbarAction::OpenDatePicker => self.time.picker.open(),
+                TimeframeToolbarAction::OpenDatePicker => {
+                    self.time.picker.open_for_chart(&self.charts[self.active])
+                }
                 TimeframeToolbarAction::OpenTimezoneMenu => {
                     self.time.bar.state.timezone_menu_open = true;
                 }
@@ -123,7 +125,7 @@ impl Terminal {
                 self.open_entry(String::new());
             }
             Action::Shortcut(ShortcutRequest::Action(KeyboardAction::GoToDate)) => {
-                self.time.picker.open();
+                self.time.picker.open_for_chart(&self.charts[self.active]);
             }
             Action::Shortcut(ShortcutRequest::Action(KeyboardAction::ToggleSession)) => {
                 if has_session(self.chart()) {

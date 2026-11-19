@@ -181,7 +181,7 @@ Chart,Crosshair and interaction,Double-click on axes to reset,verified,library,s
 Chart,Crosshair and interaction,Drag on the time axis to zoom,verified,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs;src/config/interaction.rs;src/widget/interaction.rs;src/widget/tool_interaction/interaction.rs,1888;2786;3056;3266;3526
 Chart,Crosshair and interaction,Drag or wheel on the price axis to zoom,verified,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs;src/config/interaction.rs;src/widget/pane/controls.rs;src/widget/series/paint.rs;src/scales/pricescale.rs;src/widget/interaction.rs;src/widget/tool_interaction/interaction.rs,1888;2570;2787;2788;3266;3526
 Chart,Crosshair and interaction,Drag to pan,verified,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs;src/config/interaction.rs;src/widget/pane/render/mod.rs;src/drawings/manager/interaction.rs,1888;2226;2488;2542;3056
-Chart,Crosshair and interaction,Go to date,incomplete,library,src/widget/builder.rs;src/widget/pan_zoom/mod.rs;terminal/src/time.rs,
+Chart,Crosshair and interaction,Go to date,incomplete,library,src/ui/timeframe_toolbar/date_picker.rs;src/widget/builder.rs;src/widget/pan_zoom/mod.rs;terminal/src/time.rs,3571
 Chart,Crosshair and interaction,Horizontal scroll,verified,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs;src/config/interaction.rs,1888;2488
 Chart,Crosshair and interaction,Hover tooltip and floating data window,verified,library,src/chart/rendering/overlays/tooltip.rs;src/widget/readout.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;src/widget/frame/mod.rs;examples/demo/annotations.rs;src/widget/format.rs;src/config/tooltip.rs;terminal/src/drawings.rs,1938;2293;2475;2512;2483;2818;3242
 Chart,Crosshair and interaction,Kinetic scroll,incomplete,library,src/widget/pan_zoom/mod.rs;src/widget/pan_zoom/state.rs;src/widget/keyboard.rs;src/config/kinetic.rs;src/widget/mod.rs;src/widget/builder.rs;src/config/interaction.rs,1888;2790;2791;2792;3203;3266
@@ -200,7 +200,7 @@ Chart,Keyboard shortcuts,Ctrl+Left/Right move further,verified,library,src/confi
 Chart,Keyboard shortcuts,Delete and Escape on a selected drawing,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/drawing_api.rs;src/widget/events.rs,3225
 Chart,Keyboard shortcuts,Digits or comma to change interval,incomplete,library,src/widget/keyboard.rs;src/config/keyboard.rs;terminal/src/time.rs;examples/demo/interval.rs,3023
 Chart,Keyboard shortcuts,Drawing tool hotkeys,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/ui/drawing_toolbar/shortcuts.rs;src/widget/tool_interaction/mod.rs,
-Chart,Keyboard shortcuts,Go to date,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;terminal/src/time.rs,
+Chart,Keyboard shortcuts,Go to date,unverified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/ui/timeframe_toolbar/date_picker.rs;terminal/src/time.rs,3571
 Chart,Keyboard shortcuts,Hide all drawings,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/drawings/manager/edit.rs,2802;2803;3152
 Chart,Keyboard shortcuts,Jump to latest bar,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/time_scale.rs,
 Chart,Keyboard shortcuts,Keyboard zoom,verified,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/model/timescale.rs,

@@ -4,12 +4,13 @@
 //! range of dates.
 use crate::icons::icons;
 use crate::localization as l10n;
+use crate::scales::TimezoneMode;
 use crate::styles::focus::draw_focus_ring;
 use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
 use crate::ui_kit::dialog::DialogFooter;
 use crate::ui_kit::modal::Modal;
-use chrono::{Datelike, Days, Months, NaiveDate};
+use chrono::{DateTime, Datelike, Days, Months, NaiveDate, Utc};
 use egui::text::CCursorRange;
 use egui::{
     Align, Align2, FontId, Key, Label, Layout, Modifiers, RichText, Role, Sense, Stroke,
@@ -24,9 +25,13 @@ const LINE: f32 = 16.0;
 /// Format of the date field.
 const DATE_FORMAT: &str = "%Y-%m-%d";
 
-/// Today in UTC, the time zone the chart shows times in by default.
-fn today() -> NaiveDate {
-    chrono::Utc::now().date_naive()
+/// The date at `now` in `timezone`.
+fn today_in(now: DateTime<Utc>, timezone: &TimezoneMode) -> NaiveDate {
+    match timezone {
+        TimezoneMode::Local => crate::model::local_time(chrono::Local, now),
+        zone => crate::model::local_time(zone.to_tz().unwrap_or_default(), now),
+    }
+    .date()
 }
 
 /// The date in `text`, if it is a valid date between the years 1 and 9999.
@@ -57,6 +62,10 @@ pub struct DatePicker {
     pub is_open: bool,
     /// Selected date
     pub sel_date: NaiveDate,
+    /// The zone whose date is today, from the last open.
+    timezone: TimezoneMode,
+    /// The date of the last Go, which the next open shows.
+    went_to: Option<NaiveDate>,
     /// Currently displayed month
     displayed_month: NaiveDate,
     /// Date input text
@@ -80,10 +89,12 @@ impl Default for DatePicker {
 impl DatePicker {
     /// Create a [`DatePicker`] with default settings.
     pub fn new() -> Self {
-        let today = today();
+        let today = today_in(Utc::now(), &TimezoneMode::Utc);
         Self {
             is_open: false,
             sel_date: today,
+            timezone: TimezoneMode::Utc,
+            went_to: None,
             displayed_month: today,
             date_input: today.format(DATE_FORMAT).to_string(),
             custom_range_mode: false,
@@ -93,14 +104,27 @@ impl DatePicker {
         }
     }
 
-    /// Open the date picker
-    pub fn open(&mut self) {
+    /// Opens on today in `timezone`, the zone the chart shows its times in, or on the date
+    /// the picker last went to once Go was used.
+    pub fn open_in(&mut self, timezone: TimezoneMode) {
+        self.timezone = timezone;
+        self.sel_date = self.went_to.unwrap_or_else(|| self.today());
         self.is_open = true;
         self.date_input = self.sel_date.format(DATE_FORMAT).to_string();
         self.displayed_month = self.sel_date;
         self.range_start = None;
         self.range_end = None;
         self.focus_field = true;
+    }
+
+    /// [`open_in`](Self::open_in) the zone `chart` shows: its
+    /// [`display_timezone`](crate::widget::Chart::display_timezone).
+    pub fn open_for_chart(&mut self, chart: &crate::widget::Chart) {
+        self.open_in(chart.display_timezone());
+    }
+
+    fn today(&self) -> NaiveDate {
+        today_in(Utc::now(), &self.timezone)
     }
 
     /// Close the date picker
@@ -302,7 +326,7 @@ impl DatePicker {
                 today_clicked = Button::new("Today").ghost().show(ui).clicked();
             });
         if today_clicked {
-            self.pick(today());
+            self.pick(self.today());
         }
 
         // Enter applies Go unless a focused control takes it; the field gives up its focus on Enter.
@@ -313,9 +337,13 @@ impl DatePicker {
         if go || enter {
             match range {
                 Some((start, end)) if self.custom_range_mode => {
+                    self.went_to = Some(start);
                     DatePickerAction::SetRange(start, end)
                 }
-                _ => DatePickerAction::GoToDate(self.sel_date),
+                _ => {
+                    self.went_to = Some(self.sel_date);
+                    DatePickerAction::GoToDate(self.sel_date)
+                }
             }
         } else if cancel {
             DatePickerAction::Cancel
@@ -342,7 +370,7 @@ impl DatePicker {
     /// Six weeks from the Sunday on or before the first of the displayed month.
     fn draw_calendar(&mut self, ui: &mut Ui) -> Option<NaiveDate> {
         let theme = ui.active_theme();
-        let today = today();
+        let today = self.today();
         let first = self.displayed_month.with_day(1)?;
         let grid_start =
             first.checked_sub_days(Days::new(first.weekday().num_days_from_sunday().into()))?;
@@ -431,5 +459,36 @@ impl DatePicker {
             }
         });
         picked
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// EST is UTC-5 in November; Tokyo is UTC+9, including when used as exchange time.
+    #[cfg(feature = "timezones")]
+    #[test]
+    fn today_is_the_date_in_the_chart_time_zone() {
+        use crate::model::TimezoneId;
+        for (now, zone, expected) in [
+            (
+                "2026-11-19T02:00:00Z",
+                TimezoneMode::Timezone(TimezoneId::named("America/New_York").unwrap()),
+                "2026-11-18",
+            ),
+            (
+                "2026-11-18T23:00:00Z",
+                TimezoneMode::Exchange(TimezoneId::named("Asia/Tokyo").unwrap()),
+                "2026-11-19",
+            ),
+            ("2026-11-18T23:00:00Z", TimezoneMode::Utc, "2026-11-18"),
+        ] {
+            assert_eq!(
+                today_in(now.parse().unwrap(), &zone).to_string(),
+                expected,
+                "{zone:?}"
+            );
+        }
     }
 }
