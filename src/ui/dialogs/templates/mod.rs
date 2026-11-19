@@ -91,12 +91,18 @@ mod tests {
         (source.locked, source.visible, source.modified_at) = (true, false, Some(5));
         let mut picture = image("https://example.invalid/b.png", [40.0, 30.0], 255);
         picture.modified_at = Some(9);
+        picture.user_edit_enabled = false;
         DrawingTemplate::from_drawing(&source)
             .apply_to(&mut picture)
             .unwrap();
         assert_eq!(
-            (picture.locked, picture.visible, picture.modified_at),
-            (false, true, Some(9))
+            (
+                picture.locked,
+                picture.visible,
+                picture.user_edit_enabled,
+                picture.modified_at
+            ),
+            (false, true, false, Some(9))
         );
         assert_eq!(
             picture.text.as_deref(),

@@ -739,7 +739,7 @@ impl Chart {
                             self.drawings
                                 .drawings
                                 .iter()
-                                .any(|d| d.id == id && !d.locked)
+                                .any(|d| d.id == id && d.accepts_user_edits())
                         })
                 });
         #[cfg(feature = "drawings")]
@@ -3442,6 +3442,7 @@ impl Chart {
                 ui.active_theme().chart.axis_text_secondary,
                 self.state.shown(),
                 self.state.revision(),
+                self.drawing_executions(),
             ) {
                 match tag {
                     crate::drawings::manager::DrawingAxisTag::Price {
