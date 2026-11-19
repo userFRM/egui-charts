@@ -853,6 +853,7 @@ mod tests {
         use crate::chart::TradingLineAction;
         use crate::model::{OrderStatus, PositionBracket};
         for (gesture, modify) in [
+            ("tab-double-click", true),
             ("double-click", true),
             ("menu", true),
             ("double-click", false),
@@ -904,7 +905,11 @@ mod tests {
             let mut ticket = OrderTicket {
                 open: true,
                 symbol: "ES".into(),
-                tab: Tab::Dom,
+                tab: if gesture == "tab-double-click" {
+                    Tab::Order
+                } else {
+                    Tab::Dom
+                },
                 ..Default::default()
             };
             let frame = |ticket: &mut OrderTicket, market: &Market<'_>, events| {
@@ -948,23 +953,32 @@ mod tests {
                 modifiers: egui::Modifiers::NONE,
             };
             frame(&mut ticket, &market, vec![]);
-            let labels = frame(&mut ticket, &market, vec![]).1;
+            let mut labels = frame(&mut ticket, &market, vec![]).1;
+            if gesture == "tab-double-click" {
+                let tab = find(&labels, "DOM");
+                frame(&mut ticket, &market, vec![egui::Event::PointerMoved(tab)]);
+                frame(&mut ticket, &market, vec![click(tab, true)]);
+                frame(&mut ticket, &market, vec![click(tab, false)]);
+                labels = frame(&mut ticket, &market, vec![]).1;
+            }
             let tag = find(&labels, "LIMIT");
             frame(&mut ticket, &market, vec![egui::Event::PointerMoved(tag)]);
             let labels = frame(&mut ticket, &market, vec![]).1;
-            let hint = labels
-                .iter()
-                .find(|(text, _)| text.contains("right-click to cancel"))
-                .expect("order hint");
-            assert_eq!(hint.0.contains("Drag to move"), modify);
-            assert_eq!(
-                hint.0
-                    .contains("The account does not support modifying orders"),
-                !modify
-            );
+            if gesture != "tab-double-click" {
+                let hint = labels
+                    .iter()
+                    .find(|(text, _)| text.contains("right-click to cancel"))
+                    .expect("order hint");
+                assert_eq!(hint.0.contains("Drag to move"), modify);
+                assert_eq!(
+                    hint.0
+                        .contains("The account does not support modifying orders"),
+                    !modify
+                );
+            }
             frame(&mut ticket, &market, vec![click(tag, true)]);
             frame(&mut ticket, &market, vec![click(tag, false)]);
-            if gesture == "double-click" {
+            if gesture != "menu" {
                 frame(&mut ticket, &market, vec![click(tag, true)]);
                 frame(&mut ticket, &market, vec![click(tag, false)]);
             } else {

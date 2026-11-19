@@ -1189,7 +1189,8 @@ impl Ladder {
                             "{0} {1} @ {2} {label} · {3}. The account does not support modifying orders; right-click to cancel. {4} order(s) here; click for the menu"
                         };
                         let tag_response = tag_response.on_hover_text(l10n::format_text(ui.ctx(), hint, &[("0", side.label().to_string()), ("1", numbers.quantity(working.request.quantity - working.filled, quantity_decimals)), ("2", numbers.price(at)), ("label", label.to_string()), ("3", working.id.0.to_string()), ("4", format!("{}", group.len()))]));
-                        if tag_response.double_clicked() {
+                        // A recent tab click can count a tag's double click as three clicks.
+                        if tag_response.double_clicked() || tag_response.triple_clicked() {
                             egui::Popup::close_id(ui.ctx(), menu_id);
                             if market.capabilities.modify {
                                 action = Some(Action::Edit(working.clone()));
