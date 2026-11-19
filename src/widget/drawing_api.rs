@@ -117,7 +117,7 @@ impl Chart {
     /// midpoint, price labels and text placement as one undoable edit. A horizontal line or ray
     /// and a regression trend draw only the text placement, and a vertical line the text
     /// placement, the text's orientation and the reach across panes. Unknown, locked and other
-    /// drawing types leave drawings and history untouched.
+    /// drawing types, and the drawing's own measurements, leave drawings and history untouched.
     pub fn set_line_measurements(
         &mut self,
         id: usize,
@@ -144,6 +144,9 @@ impl Chart {
             return Err(DrawingError::Invalid(
                 "Drawing is not a trend line, ray, extended line, info line, trend angle, horizontal line, horizontal ray, vertical line or regression trend",
             ));
+        }
+        if drawing.line_measurements == measurements {
+            return Ok(());
         }
         self.user_action(|chart| {
             chart.drawings_mut().edit_drawing(id, |drawing| {
@@ -899,7 +902,7 @@ mod tests {
     }
 
     /// Host edits retain measurements in saved records and templates and undo in one step;
-    /// old records keep every readout hidden. Rejected edits do not add history.
+    /// old records keep every readout hidden. Rejected and unchanged edits do not add history.
     #[test]
     fn line_measurements_survive_host_edits_templates_and_saved_records() {
         use crate::drawings::persistence::{StoredDrawing, drawing_to_stored, stored_to_drawing};
@@ -928,6 +931,7 @@ mod tests {
             text_orientation: crate::drawings::LineTextOrientation::Horizontal,
             across_panes: true,
         };
+        chart.set_line_measurements(1, measurements).unwrap();
         chart.set_line_measurements(1, measurements).unwrap();
         assert_eq!(chart.drawings().drawings[0].line_measurements, measurements);
         assert!(chart.undo());
