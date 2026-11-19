@@ -56,7 +56,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] The Scale Price Chart Only setting keeps overlay studies and their primitives out of the main price scale's autoscale range, and the left-axis scale mode applies when the main scale is drawn on the left axis alone.
 - [x] Added-series value tags and last-value queries use configured scale precision when no formatter is supplied, otherwise the nearest tick label's decimals with at least two; saved numeric display declarations also control their tags and readouts.
 - [ ] Draw symbol-name and study-name tags on the price scale while their value tags are hidden; the names otherwise appear only inside shown value tags.
-- [x] Scale font size, axis line colour and pane-button visibility settings apply to the price, study and time axes and the pane controls.
+- [x] Scale font size, axis line colour and pane-button visibility settings apply to the price, study and time axes and the pane controls. The scale font size and family reach every label and tag on those axes, the crosshair's included, and no other chart text.
 
 ## Drawing Tools
 
