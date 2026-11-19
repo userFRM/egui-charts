@@ -720,6 +720,16 @@ pub struct ChartSettingsState {
     /// Show analyst estimates answered by the host feed.
     #[serde(default)]
     pub show_price_targets: bool,
+    /// Colour of the analyst targets above their publication close, as
+    /// [`ChartConfig::price_target_positive_color`](crate::config::ChartConfig::price_target_positive_color).
+    /// `None`, as in settings saved before it existed, keeps the chart's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_target_positive_color: Option<Color32>,
+    /// Colour of the analyst targets below their publication close, as
+    /// [`ChartConfig::price_target_negative_color`](crate::config::ChartConfig::price_target_negative_color).
+    /// `None`, as in settings saved before it existed, keeps the chart's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_target_negative_color: Option<Color32>,
     /// Ask the host for history adjusted for dividends. The host owns the data, so
     /// [`apply_to_chart`](Self::apply_to_chart) leaves it to the host, which reloads the
     /// adjusted history; [`from_chart`](Self::from_chart) leaves it off.
@@ -812,6 +822,8 @@ impl Default for ChartSettingsState {
             precision: PrecisionMode::Default,
             timezone: "UTC".to_string(),
             show_price_targets: false,
+            price_target_positive_color: None,
+            price_target_negative_color: None,
             adjust_for_dividends: false,
 
             order_flow: OrderFlowSettings::default(),

@@ -1555,6 +1555,62 @@ mod tests {
         }
     }
 
+    /// A Correlation - Log saves and restores under its own name with its edited inputs and
+    /// style.
+    #[test]
+    fn correlation_log_restores_under_its_own_name_with_its_inputs_and_style() {
+        use crate::studies::{IndicatorFactory, InputValue};
+        let bars: Vec<_> = (0..30)
+            .map(|i| {
+                Bar::new(
+                    Utc.timestamp_opt(i * 60, 0).unwrap(),
+                    10.0,
+                    11.0,
+                    9.0,
+                    10.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        let id = chart.add_indicator(IndicatorFactory::new().create("Correlation - Log").unwrap());
+        let study = chart.indicator_mut(id).unwrap();
+        for (input, value) in [
+            ("symbol_1", InputValue::Symbol("B".into())),
+            ("length", InputValue::Length(30)),
+            ("log_returns", InputValue::Toggle(false)),
+        ] {
+            study.set_input(input, value).unwrap();
+        }
+        let mut settings = study.settings();
+        settings.plots[0].width = 3.0;
+        settings.plots[0].color = egui::Color32::RED;
+        study.apply_settings(&[], settings).unwrap();
+        let saved = |chart: &Chart| {
+            let (_, study) = chart.indicators().next().unwrap();
+            let inputs: Vec<_> = study
+                .inputs()
+                .into_iter()
+                .map(|input| (input.id, input.value))
+                .collect();
+            (study.registered_name().to_owned(), inputs, study.settings())
+        };
+        let json = SavedLayout {
+            mode: ChartLayoutMode::Single,
+            charts: vec![chart.snapshot().unwrap()],
+            sizing: None,
+            link_groups: None,
+        }
+        .to_json()
+        .unwrap();
+        let mut restored = Chart::new(BarData::from_bars(bars));
+        restored
+            .restore(&SavedLayout::from_json(&json).unwrap().charts[0])
+            .unwrap();
+        assert_eq!(saved(&restored), saved(&chart));
+        assert_eq!(saved(&restored).0, "Correlation - Log");
+    }
+
     /// A custom study saved with another study's output in a Source input its calculation never
     /// read, or in `source` while it ran on another interval, restores through a snapshot and a
     /// study template set on that input's default, as it calculated when it was saved.
