@@ -2,11 +2,11 @@
 //!
 //! [`ChartPatterns`] detects continuation formations (flags, pennants, rectangles and
 //! triangles), reversal formations (cup and handle, double and triple tops and bottoms,
-//! head and shoulders), or every formation together, including wedges, in a bar history. It returns
-//! each one's anchors, boundary segments,
-//! direction and confirmation time through [`ChartPatterns::formations`]. Developing formations are
-//! told apart from confirmed ones, and every confirmed formation is marked on the bar that
-//! confirms it. The factory also offers each formation under its own name.
+//! head and shoulders), or every formation together, including wedges, in a bar history, and
+//! returns each one's anchors, boundary segments, direction and confirmation time through
+//! [`ChartPatterns::formations`]. Developing formations are told apart from confirmed ones, and
+//! every confirmed formation is marked on the bar that confirms it. The factory also offers
+//! each formation under its own name.
 
 use super::clamp_param;
 use super::swings::{Swing, Swings};
@@ -813,16 +813,25 @@ impl State {
             ]);
         }
         let slot_of = |kind| scope.kinds().iter().position(|&k| k == kind);
-        // A pennant's last four pivots are also a symmetrical triangle; only the pennant is kept.
-        let pennant = found.iter().flatten().any(|c| {
+        // A pennant's last four pivots are also a symmetrical triangle, and a narrowing flag's
+        // a wedge; only the flag or pennant is kept.
+        let pole = found.iter().flatten().any(|c| {
             matches!(
                 c.kind,
-                FormationKind::BullPennant | FormationKind::BearPennant
+                FormationKind::BullFlag
+                    | FormationKind::BearFlag
+                    | FormationKind::BullPennant
+                    | FormationKind::BearPennant
             ) && slot_of(c.kind).is_some_and(|slot| enabled[slot])
         });
         for candidate in found.into_iter().flatten() {
-            if pennant
-                && candidate.kind == FormationKind::SymmetricalTriangle
+            if pole
+                && matches!(
+                    candidate.kind,
+                    FormationKind::SymmetricalTriangle
+                        | FormationKind::RisingWedge
+                        | FormationKind::FallingWedge
+                )
                 && candidate.anchors.len() == 4
             {
                 continue;
@@ -896,9 +905,9 @@ impl State {
 /// confirm bullish above their upper boundary; a bear flag, bear pennant and descending
 /// triangle confirm bearish below their lower boundary. A
 /// rectangle and a symmetrical triangle confirm in the direction of the break. A pennant's
-/// last four pivots also form a symmetrical triangle, which is then not reported, and a triple
-/// top or bottom follows the double top or bottom of its first two tops. Each pivot
-/// belongs to at most one formation of a kind. At most 16 pivots, 8 developing and 64
+/// last four pivots also form a symmetrical triangle, and a narrowing flag's a wedge; neither is
+/// then reported. A triple top or bottom follows the double top or bottom of its first two tops.
+/// Each pivot belongs to at most one formation of a kind. At most 16 pivots, 8 developing and 64
 /// confirmed formations are kept, twice as many formations for every formation at once.
 /// Wedges here follow these shared pivot, length and tolerance rules; the standalone
 /// [`RisingWedge`](crate::studies::RisingWedge) and [`FallingWedge`](crate::studies::FallingWedge)
@@ -1700,13 +1709,27 @@ mod tests {
                 (DoubleBottom, Bullish, 28)
             ]
         );
+        // A parallel rising channel breaking down is no rising wedge.
         assert!(
             confirmed(
                 &mut ChartPatterns::all(),
-                &path(&[105.0, 110.0, 100.0, 113.0, 103.0, 116.0])
+                &path(&[105.0, 110.0, 100.0, 113.0, 103.0, 106.0, 90.0])
             )
             .iter()
             .all(|f| f.kind != RisingWedge)
+        );
+        // A narrowing flag's four pivots also make a falling wedge, reported only without the flag.
+        let narrowing = path(&[105.0, 100.0, 130.0, 122.0, 127.0, 120.0, 135.0]);
+        let kinds = |study: &mut ChartPatterns| -> Vec<_> {
+            confirmed(study, &narrowing)
+                .iter()
+                .map(|f| f.kind)
+                .collect()
+        };
+        assert_eq!(kinds(&mut ChartPatterns::all()), [BullFlag]);
+        assert_eq!(
+            kinds(&mut ChartPatterns::all().with_patterns(|label| label != "Bull Flag")),
+            [FallingWedge]
         );
         for family in PatternFamily::ALL {
             assert!(
