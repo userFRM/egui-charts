@@ -1499,7 +1499,9 @@ mod tests {
 
     #[test]
     fn position_alerts_report_the_entry_then_the_first_exit_and_end() {
+        use crate::model::{NotificationSchedule, NotificationWindow, TimezoneId};
         use AlertPositionProgress::{AwaitingEntry, Entered, StopReached, TargetReached};
+        use chrono::{NaiveTime, Weekday};
         type PositionRow = (
             [f64; 3],
             f64,
@@ -1596,68 +1598,94 @@ mod tests {
         ];
         for (index, (levels, history, updates, triggers, progress)) in rows.into_iter().enumerate()
         {
-            let condition = AlertCondition::Position {
-                levels: Box::new(["p", "p#1", "p#2"].map(|id| AlertSource::Drawing(id.into()))),
-                progress: AwaitingEntry,
-            };
-            let host = Host::new(vec![alert(condition, AlertFrequency::Once)]);
-            host.events();
-            let mut bars = vec![bar(0, history, 1.0)];
-            for (i, close) in updates.into_iter().enumerate() {
-                bars.push(bar(i as i64 + 1, close, 1.0));
-                host.engine.update(
-                    "SYM",
-                    None,
-                    Timeframe::Min1,
-                    &bars,
-                    time(1_000 + i as i64),
-                    |source, _| {
-                        let AlertSource::Drawing(id) = source else {
-                            return None;
-                        };
-                        ["p", "p#1", "p#2"]
-                            .iter()
-                            .position(|name| *name == id)
-                            .map(|n| levels[n])
-                    },
+            // Outside the schedule the same triggers are only logged, and progress still moves.
+            for silent in [false, true] {
+                let condition = AlertCondition::Position {
+                    levels: Box::new(["p", "p#1", "p#2"].map(|id| AlertSource::Drawing(id.into()))),
+                    progress: AwaitingEntry,
+                };
+                let mut watching = alert(condition, AlertFrequency::Once);
+                if silent {
+                    watching.schedule = Some(Box::new(NotificationSchedule {
+                        timezone: TimezoneId::utc(),
+                        days: vec![Weekday::Thu],
+                        windows: vec![NotificationWindow {
+                            start: NaiveTime::from_hms_opt(0, 1, 0).unwrap(),
+                            end: NaiveTime::from_hms_opt(0, 2, 0).unwrap(),
+                        }],
+                    }));
+                }
+                let host = Host::new(vec![watching]);
+                host.events();
+                let mut bars = vec![bar(0, history, 1.0)];
+                for (i, &close) in updates.iter().enumerate() {
+                    bars.push(bar(i as i64 + 1, close, 1.0));
+                    host.engine.update(
+                        "SYM",
+                        None,
+                        Timeframe::Min1,
+                        &bars,
+                        time(1_000 + i as i64),
+                        |source, _| {
+                            let AlertSource::Drawing(id) = source else {
+                                return None;
+                            };
+                            ["p", "p#1", "p#2"]
+                                .iter()
+                                .position(|name| *name == id)
+                                .map(|n| levels[n])
+                        },
+                    );
+                }
+                let events = host.events();
+                let fired: Vec<_> = events
+                    .iter()
+                    .filter_map(|event| match event {
+                        AlertEvent::TriggeredForSymbol {
+                            message,
+                            price: Some(price),
+                            ..
+                        } if !silent => Some((message.as_str(), *price)),
+                        AlertEvent::SilentTriggered {
+                            message,
+                            price: Some(price),
+                            ..
+                        } if silent => Some((message.as_str(), *price)),
+                        _ => None,
+                    })
+                    .collect();
+                let reported: Vec<_> = events
+                    .iter()
+                    .filter_map(|event| match event {
+                        AlertEvent::Upsert(alert) => match alert.condition {
+                            AlertCondition::Position { progress, .. } => Some(progress),
+                            _ => None,
+                        },
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(fired, triggers, "row {index}, silent {silent}");
+                assert_eq!(reported, progress, "row {index}, silent {silent}");
+                assert_eq!(
+                    host.delivered.lock().unwrap().len(),
+                    if silent { 0 } else { triggers.len() },
+                    "row {index}, silent {silent}"
+                );
+                let saved = host.engine.alerts().remove(0);
+                let last = progress.last().copied().unwrap_or(AwaitingEntry);
+                assert!(
+                    matches!(
+                        saved.condition,
+                        AlertCondition::Position { progress, .. } if progress == last
+                    ),
+                    "row {index}, silent {silent}"
+                );
+                assert_eq!(
+                    saved.status == AlertStatus::Triggered,
+                    matches!(last, TargetReached | StopReached),
+                    "row {index}, silent {silent}"
                 );
             }
-            let events = host.events();
-            let fired: Vec<_> = events
-                .iter()
-                .filter_map(|event| match event {
-                    AlertEvent::TriggeredForSymbol {
-                        message,
-                        price: Some(price),
-                        ..
-                    } => Some((message.as_str(), *price)),
-                    _ => None,
-                })
-                .collect();
-            let reported: Vec<_> = events
-                .iter()
-                .filter_map(|event| match event {
-                    AlertEvent::Upsert(alert) => match alert.condition {
-                        AlertCondition::Position { progress, .. } => Some(progress),
-                        _ => None,
-                    },
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(fired, triggers, "row {index}");
-            assert_eq!(reported, progress, "row {index}");
-            let saved = host.engine.alerts().remove(0);
-            assert!(
-                matches!(saved.condition,AlertCondition::Position {progress:p,..} if p == progress.last().copied().unwrap_or(AwaitingEntry)),
-                "row {index}"
-            );
-            assert_eq!(
-                saved.status == AlertStatus::Triggered,
-                progress
-                    .last()
-                    .is_some_and(|p| matches!(p, TargetReached | StopReached)),
-                "row {index}"
-            );
         }
     }
 
@@ -1707,7 +1735,8 @@ mod tests {
         assert_eq!(
             saved["condition"],
             serde_json::json!({"Position": {
-                "levels": [{"Drawing":"p"},{"Drawing":"p#1"},{"Drawing":"p#2"}], "progress":"Entered"
+                "levels": [{"Drawing": "p"}, {"Drawing": "p#1"}, {"Drawing": "p#2"}],
+                "progress": "Entered"
             }})
         );
         let host = Host::new(vec![serde_json::from_value(saved).unwrap()]);

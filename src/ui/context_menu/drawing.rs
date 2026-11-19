@@ -50,7 +50,8 @@ pub enum DrawingContextMenuAction {
     None,
     /// Open the alert dialog on this alert: the price, or the first output of the study leading a
     /// study pane, crossing the drawing's first visible level, or on a long or short position a
-    /// [`Position`](crate::model::AlertCondition::Position) alert on its entry, target and stop, for example with [`AlertDialog::edit`](crate::ui::dialogs::AlertDialog::edit),
+    /// [`Position`](crate::model::AlertCondition::Position) alert on its entry, target and stop,
+    /// for example with [`AlertDialog::edit`](crate::ui::dialogs::AlertDialog::edit),
     /// listing the levels of [`Drawing::alert_levels_with_bars`](crate::drawings::Drawing::alert_levels_with_bars)
     /// as its sources.
     AddAlert(Box<Alert>),
@@ -159,7 +160,7 @@ impl DrawingContextMenu {
         self.is_visible = visible;
     }
 
-    /// Open the menu on drawing `drawing_id` of `chart`, offering an alert (on a position, from entry to first exit) when the chart has a
+    /// Open the menu on drawing `drawing_id` of `chart`, offering an alert when the chart has a
     /// symbol, the drawing has levels and its pane marks the price or a study, as
     /// `Chart::drawing_subject` gives, and the chart's other panes.
     pub(crate) fn open_on(&mut self, ctx: &Context, chart: &Chart, pos: Pos2, drawing_id: usize) {
