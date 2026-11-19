@@ -854,7 +854,10 @@ impl ProfileStudy {
             }
             level.searched = level.searched.min(from);
         }
+        // A change of instrument or bar calendar reaches the study as an update from bar 0 over
+        // the same bars.
         if times_changed
+            || from == 0
             || (self.kind == Kind::Auto
                 && matches!(
                     self.anchor,
@@ -3054,6 +3057,37 @@ mod tests {
                 study.name()
             );
         }
+    }
+
+    /// A session profile finds its sessions again when the chart's instrument arrives after the
+    /// bars, without new bars: hourly bars from 20:00 UTC on 5 March to 03:00 on 6 March span
+    /// two UTC days and one day at UTC-5.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn session_profiles_follow_an_instrument_given_after_the_bars() {
+        use crate::model::BarData;
+        use crate::widget::{Chart, test_frames::shapes};
+        let first: DateTime<Utc> = "2026-03-05T20:00:00Z".parse().unwrap();
+        let bars: Vec<_> = (0..8)
+            .map(|hour| Bar::new(first + TimeDelta::hours(hour), 10.0, 11.0, 9.0, 10.0, 100.0))
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.add_indicator(Box::new(VolProfileSession::new(24)));
+        let ctx = egui::Context::default();
+        let ranges = |chart: &Chart| -> Vec<Range<usize>> {
+            let study = chart.indicators().next().unwrap().1;
+            study
+                .volume_profiles(0..8)
+                .into_iter()
+                .map(|profile| profile.bars)
+                .collect()
+        };
+        shapes(&ctx, &mut chart, 1.0, Vec::new());
+        assert_eq!(ranges(&chart), [0..4, 4..8]);
+        let zone = TimezoneId::fixed_offset(-5 * 3600).unwrap();
+        chart.set_instrument(Some(Instrument::new("X").with_time_zone(zone)));
+        shapes(&ctx, &mut chart, 2.0, Vec::new());
+        assert_eq!(ranges(&chart), [0..8]);
     }
 }
 
