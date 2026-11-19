@@ -1175,6 +1175,10 @@ impl Chart {
         link.heatmap = link.heatmap.take().map(|_| Default::default());
         link.depth_complete = false;
         link.depth_cursor = None;
+        link.pending
+            .retain(|(_, r, _)| !matches!(r, Request::Depth(_)));
+        link.retries
+            .retain(|(_, r, _)| !matches!(r, Request::Depth(_)));
     }
 
     /// Shows resting liquidity behind the price series. A feed and instrument tick size are

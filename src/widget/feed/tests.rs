@@ -6410,6 +6410,87 @@ fn clearing_depth_history_frees_textures_and_refills() {
     output.textures_delta.clear();
 }
 
+/// Releasing history forgets scroll-back pages and their retries so paging starts at the newest.
+#[test]
+fn clearing_depth_history_discards_old_pages_and_retries() {
+    for retry in [false, true] {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_depth_history(Some(DepthHistory::new(Default::default()).unwrap()));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(0.25)));
+        let bars = bars(1000);
+        feed.page().send(page(bars.clone(), true));
+        frames.run(&mut chart);
+        let column = |index: usize| crate::data::DepthColumn {
+            time: bars[index].time,
+            span: TimeDelta::seconds(60),
+            bids: vec![(400, 2.0)],
+            ..Default::default()
+        };
+        chart.set_visible_logical_range(crate::model::LogicalRange {
+            left: 950.0,
+            right: 999.0,
+        });
+        feed.depth
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(DepthPage::new(vec![column(900)], false)));
+        frames.run(&mut chart);
+        feed.calls();
+        chart.set_visible_logical_range(crate::model::LogicalRange {
+            left: 850.0,
+            right: 899.0,
+        });
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        assert!(matches!(
+            &feed.calls()[..],
+            [Call::Depth(r)] if r.before == Some(bars[900].time)
+        ));
+        let old = feed.depth.lock().unwrap().remove(0);
+        if retry {
+            old.send(Err(FeedError::Network("offline".into())));
+            frames.run(&mut chart);
+            chart.clear_depth_history();
+        } else {
+            chart.clear_depth_history();
+            old.send(Ok(DepthPage::new(vec![column(899)], false)));
+        }
+        frames.time += 2.0;
+        frames.run(&mut chart);
+        assert_eq!(
+            chart
+                .depth_history(SeriesId::MAIN)
+                .unwrap()
+                .columns()
+                .count(),
+            0,
+            "a released page must not refill history (retry: {retry})"
+        );
+        assert!(
+            matches!(&feed.calls()[..], [Call::Depth(r)] if r.before.is_none()),
+            "release must request the newest page (retry: {retry})"
+        );
+        feed.depth
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(DepthPage::new(vec![column(999)], true)));
+        frames.run(&mut chart);
+        let held: Vec<_> = chart
+            .depth_history(SeriesId::MAIN)
+            .unwrap()
+            .columns()
+            .map(|c| c.time)
+            .collect();
+        assert_eq!(held, [bars[999].time]);
+    }
+}
+
 /// A history filter that needs metadata absent from every held order samples no column, and the
 /// pane says why whatever the book profile shows. Two different failures each get one notice.
 #[test]
