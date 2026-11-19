@@ -138,7 +138,8 @@ impl IndicatorInfo {
             "Vol Profile Auto Anchored" => &["Auto Anchored Volume Profile"],
             "Vol Profile FR" => &["Fixed Range Volume Profile"],
             "Vol Profile Periodic" => &["Periodic Volume Profile"],
-            "Vol Profile Session" => &["Session Volume Profile", "Session Volume Profile HD"],
+            "Vol Profile Session" => &["Session Volume Profile"],
+            "Vol Profile Session HD" => &["Session Volume Profile HD"],
             "Vol Profile VR" => &[
                 "Visible Range Volume Profile",
                 "Volume Profile Visible Range",

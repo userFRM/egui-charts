@@ -162,6 +162,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(VolProfileVisible::new(l(0))),
         Box::new(VolProfileFixed::new(l(0))),
         Box::new(VolProfileSession::new(l(0))),
+        Box::new(VolProfileSessionHd::default()),
         Box::new(VolProfilePeriodic::new(l(0))),
         Box::new(VolProfileAnchored::new(l(0))),
         Box::new(VolProfileAutoAnchored::new(l(0))),
