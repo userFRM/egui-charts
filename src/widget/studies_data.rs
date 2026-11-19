@@ -2934,7 +2934,11 @@ pub(super) mod tests {
                 timeframe: Some(Timeframe::Min30),
                 metric: None,
             };
-            assert_eq!(chart.study_data_requests(), [request.clone()], "{name}");
+            assert_eq!(
+                chart.study_data_requests(),
+                std::slice::from_ref(&request),
+                "{name}"
+            );
             let history: Vec<_> = other
                 .iter()
                 .enumerate()
