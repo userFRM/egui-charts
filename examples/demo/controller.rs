@@ -3378,6 +3378,7 @@ impl DemoApp {
         match action {
             Some(AccountPanelAction::SelectSymbol(symbol)) => self.open_catalog_symbol(&symbol),
             Some(AccountPanelAction::Disconnect) => self.trading.disconnect(),
+            Some(AccountPanelAction::ChangeBroker) => self.broker_picker.open(),
             Some(AccountPanelAction::Settings) => self.paper_reset = true,
             Some(AccountPanelAction::Minimize) => {
                 self.account_panel = if self.account_panel == AccountPanelSize::Minimized {
