@@ -72,9 +72,9 @@ pub(super) fn show(
         );
     }
     let count = ((plot.width() / 140.0) as usize).clamp(2, 6);
-    let format = if span >= 2.0 * 86_400.0 {
+    let format = if span >= (count - 1) as f64 * 86_400.0 {
         "%Y-%m-%d"
-    } else if span >= 60.0 {
+    } else if span >= (count - 1) as f64 * 60.0 {
         "%Y-%m-%d %H:%M"
     } else {
         "%H:%M:%S%.f"
