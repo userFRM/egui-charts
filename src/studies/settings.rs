@@ -3710,6 +3710,14 @@ mod tests {
             assert_eq!(again.settings().levels, edited.levels, "{name}");
             assert_eq!(again.pane().range, study.pane().range, "{name}");
         }
+        // A single-line CCI saved before smoothing retains its plot and independent band style.
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"CCI","inputs":[["period",{"Length":20}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CCI.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[60,62,67,128],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":true,"level_fill_color":[4,10,26,26],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#).unwrap();
+        let older = saved.create().unwrap();
+        assert_eq!(older.line_names(), ["CCI(20)"]);
+        assert_eq!(older.settings(), saved.settings);
+        let again = StudyTemplate::from_study(older.as_ref()).create().unwrap();
+        assert_eq!(again.line_names(), older.line_names());
+        assert_eq!(again.settings(), saved.settings);
         // Saved as a histogram, an Awesome Oscillator stays a histogram; saved smoothed over 14 bars,
         // a Balance of Power keeps its smoothing.
         let mut ao = ConfiguredStudy::new(factory.create("AO").unwrap());
