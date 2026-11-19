@@ -201,6 +201,7 @@ impl Chart {
             series_formatters: Default::default(),
             study_formatters: Default::default(),
             extended_hours: false,
+            overnight_hours: false,
             conversion: None,
             measured_axis_width: 0.0,
             last_layout: None,
