@@ -457,7 +457,8 @@ impl Drawing {
     /// with thousands grouped by `thousands_sep`, its percentage and its whole number of pips, or
     /// else ticks, the bars between them and, on a `time_axis`, the time they span, and the volume
     /// traded over them.
-    /// Volume drops trailing zeros. Each anchor counts at its nearest bar: anchors N bars apart
+    /// Volume takes the instrument's volume decimals, or else two decimals without trailing
+    /// zeros. Each anchor counts at its nearest bar: anchors N bars apart
     /// span N bars of time and the volume of the N + 1 bars from one to the other, both included.
     /// Each date range readout follows its [`RangeSettings`](crate::drawings::RangeSettings)
     /// switch. A percentage alone has no parentheses; no enabled readouts returns `None`.
@@ -518,15 +519,10 @@ impl Drawing {
                     .map(|bar| bar.volume)
                     .filter(|v| v.is_finite())
                     .sum();
-                let text = VolumeFormatter::default().format(volume);
-                let digits = text.trim_end_matches(char::is_alphabetic);
-                let unit = &text[digits.len()..];
-                // Precision 2 writes a point, so trimming zeros never eats an integer digit.
-                let digits = digits.trim_end_matches('0').trim_end_matches('.');
                 l10n::format_text(
                     ctx,
                     "Vol {volume}",
-                    &[("volume", format!("{digits}{unit}"))],
+                    &[("volume", volume_text(volume, instrument))],
                 )
             })
             .unwrap_or_default();
@@ -600,6 +596,23 @@ fn change_text(
         "+"
     };
     format!("{sign}{text}")
+}
+
+/// Measured volume as the chart's volume readouts write it: with the instrument's volume
+/// decimals, else two decimals without trailing zeros.
+fn volume_text(volume: f64, instrument: Option<&crate::model::Instrument>) -> String {
+    if let Some(decimals) = instrument.and_then(|instrument| instrument.volume_decimals) {
+        return VolumeFormatter {
+            precision: usize::from(decimals),
+        }
+        .format(volume);
+    }
+    let text = VolumeFormatter::default().format(volume);
+    let digits = text.trim_end_matches(char::is_alphabetic);
+    let unit = &text[digits.len()..];
+    // Precision 2 writes a point, so trimming zeros never eats an integer digit.
+    let digits = digits.trim_end_matches('0').trim_end_matches('.');
+    format!("{digits}{unit}")
 }
 
 /// Pips when supplied by the instrument, otherwise ticks; omit unavailable or inexact counts.
@@ -1347,6 +1360,52 @@ mod tests {
             !label.contains("ticks") && !label.contains("pips"),
             "{label}"
         );
+        // Inclusive volume is 0.375 + 1234.5 = 1234.875: 1.235K at three decimals,
+        // 1K at zero, or the former 1.23K without metadata. Explicit decimals keep zeros.
+        let mut fractional = bars[..2].to_vec();
+        fractional[0].volume = 0.375;
+        fractional[1].volume = 1234.5;
+        for (decimals, to, want) in [
+            (None, 1.0, "Vol 1.23K"),
+            (Some(3), 1.0, "Vol 1.235K"),
+            (Some(0), 1.0, "Vol 1K"),
+            (None, 0.0, "Vol 0.38"),
+            (Some(3), 0.0, "Vol 0.375"),
+            (Some(0), 0.0, "Vol 0"),
+        ] {
+            let mut drawing = Drawing::new(1, DrawingToolType::DateAndPriceRange);
+            drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(to, 110.0)];
+            let mut instrument = crate::model::Instrument::new("COIN");
+            instrument.volume_decimals = decimals;
+            let label = drawing.measurement_label(
+                &egui::Context::default(),
+                &fractional,
+                Some(&instrument),
+                true,
+                None,
+                None,
+            );
+            if label.as_deref().and_then(|label| label.lines().last()) != Some(want) {
+                wrong.push(format!(
+                    "{decimals:?} to {to}: got {label:?}, want {want:?}"
+                ));
+            }
+        }
+        // The original range totals 1100 and must keep three explicit fractional zeros.
+        let mut instrument = crate::model::Instrument::new("COIN");
+        instrument.volume_decimals = Some(3);
+        drawing.chart_points = vec![ChartPoint::new(2.0, 100.0), ChartPoint::new(5.0, 100.0)];
+        let label = drawing.measurement_label(
+            &egui::Context::default(),
+            &bars,
+            Some(&instrument),
+            true,
+            None,
+            None,
+        );
+        if label.as_deref().and_then(|label| label.lines().last()) != Some("Vol 1.100K") {
+            wrong.push(format!("explicit trailing zeros: got {label:?}"));
+        }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 

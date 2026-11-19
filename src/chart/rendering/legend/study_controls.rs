@@ -25,6 +25,25 @@ pub(crate) fn controls_width(study: &dyn crate::studies::Indicator, settings: bo
         .count() as f32
 }
 
+/// Keeps controls where they were drawn while their row is hovered or touch-selected.
+/// `row_top` follows rows above that wrap; `None` clears a hidden legend's held position.
+pub(crate) fn held_study_controls(ui: &Ui, id: egui::Id, row_top: Option<f32>) -> Option<Rect> {
+    let held_id = id.with("held");
+    let Some(row_top) = row_top else {
+        ui.ctx()
+            .data_mut(|data| data.remove::<(Rect, Rect)>(held_id));
+        return None;
+    };
+    let (controls, row) = ui
+        .ctx()
+        .data(|data| data.get_temp::<(Rect, Rect)>(held_id))?;
+    let selected = ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(id).unwrap_or(false));
+    (ui.rect_contains_pointer(row) || selected)
+        .then(|| controls.translate(Vec2::new(0.0, row_top - row.top())))
+}
+
 /// The row outline and its hide, settings, remove, more-actions and help buttons. Returns the first
 /// three buttons and, when the more-actions button is clicked or the row secondary-clicked, the
 /// corner of the study menu. `backdrop`, the chart background behind the controls, fills them
@@ -39,6 +58,8 @@ pub(crate) fn study_controls(
     study: &dyn crate::studies::Indicator,
     settings: bool,
 ) -> ([Response; 3], Option<Pos2>) {
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(id.with("held"), (controls, row)));
     let theme = ui.active_theme();
     let visible = study.is_visible();
     let help = study.help_url();

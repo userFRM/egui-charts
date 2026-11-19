@@ -707,7 +707,18 @@ impl IndicatorPane {
                 chart_rect.bottom(),
             );
         }
-        let controls = self.legend_controls_rect(painter, chart_rect, indicator);
+        let controls_id = response.id.with("study_controls");
+        // shortcut: only x is held; a row above that rewraps still moves this row, hold
+        // legend_offset too if that shows up.
+        let held_x = crate::chart::rendering::held_study_controls(
+            ui,
+            controls_id,
+            self.config
+                .show_legend
+                .then_some(chart_rect.top() + self.legend_offset),
+        )
+        .map(|controls| controls.left());
+        let controls = self.legend_controls_rect(painter, chart_rect, indicator, held_x);
         let responses = controls.map(|controls| {
             let row = Rect::from_min_max(
                 chart_rect.min + egui::vec2(0.0, self.legend_offset),
@@ -718,7 +729,7 @@ impl IndicatorPane {
                 row,
                 controls,
                 Some(self.background_at(ui.ctx(), controls.center())),
-                response.id.with("study_controls"),
+                controls_id,
                 indicator,
                 self.show_settings,
             )

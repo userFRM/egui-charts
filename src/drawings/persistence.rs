@@ -1393,6 +1393,7 @@ mod tests {
         d.line_style = LineStyle::Dotted;
         d.fill_color = Some([5, 6, 7, 8]);
         d.locked = true;
+        d.user_edit_enabled = false;
         d.visible = false;
         d.font_size = 18.0;
         d.font_weight = FontWeight::Bold;
@@ -1868,6 +1869,7 @@ mod tests {
         assert_eq!(v2.drawings().len(), tools.len());
         for (stored, tool) in v2.drawings().iter().zip(tools) {
             let mut want = non_default_drawing(tool);
+            want.user_edit_enabled = true; // Older files allow user edits.
             want.label = None; // Earlier files have no object name.
             want.position_sizing = PositionSizing::default(); // Earlier files use unit sizing.
             // Earlier positions keep their greyed zones when no colours were stored.
