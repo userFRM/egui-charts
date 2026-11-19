@@ -3108,7 +3108,8 @@ mod tests {
                 false,
             ),
         ];
-        for (breaks, source, date_format, use_24_hour, weekday_names, labels, line, lines) in &rows {
+        for (breaks, source, date_format, use_24_hour, weekday_names, labels, line, lines) in &rows
+        {
             let mut settings = ChartSettingsState::from_chart(&chart);
             settings.show_session_breaks = Some(*breaks);
             let scales = &mut settings.scales_and_lines;
@@ -3121,7 +3122,13 @@ mod tests {
             chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
             assert_eq!(
                 read(&chart),
-                (*breaks, *source, *line, Some(*lines), labels.map(String::from))
+                (
+                    *breaks,
+                    *source,
+                    *line,
+                    Some(*lines),
+                    labels.map(String::from)
+                )
             );
             let settings = ChartSettingsState::from_chart(&chart);
             let scales = &settings.scales_and_lines;
