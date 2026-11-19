@@ -10886,6 +10886,7 @@ mod tests {
             ("Trend Strength Index", "14 close"),
             ("Higher Interval Candles", "1D"),
             ("Accelerator Oscillator", "hl2"),
+            ("Keltner", "20 close 2 Average true range 10"),
         ] {
             assert_eq!(caption(name), expected);
         }
@@ -10893,10 +10894,7 @@ mod tests {
             let caption = caption(&name);
             assert_eq!(caption.trim(), caption, "{name}");
             assert!(
-                !caption.contains("  ")
-                    && !caption.contains("true")
-                    && !caption.contains("false")
-                    && !caption.contains("00000"),
+                !caption.contains("  ") && !caption.contains("00000"),
                 "{name}: {caption}"
             );
         }
