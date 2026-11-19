@@ -886,6 +886,7 @@ mod tests {
             let start_label = SessionType::from_chart(&chart).tooltip();
             let mut harness = Harness::builder()
                 .with_context_setup(egui_extras::install_image_loaders)
+                .allow_missing_glyphs()
                 .with_size(egui::vec2(900.0, 600.0))
                 .build_ui_state(
                     |ui, (toolbar, chart): &mut (TimeframeToolbar, crate::Chart)| {
