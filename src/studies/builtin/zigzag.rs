@@ -18,6 +18,17 @@ pub enum ZigZagMode {
     Typical,
 }
 
+impl ZigZagMode {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::HighLow => "High/Low",
+            Self::Close => "Close",
+            Self::Typical => "Typical",
+        }
+    }
+}
+
 /// How a Zig Zag label writes the change from the previous pivot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[non_exhaustive]
@@ -27,6 +38,16 @@ pub enum ZigZagChange {
     /// The percentage of the previous pivot's price, signed.
     #[default]
     Percent,
+}
+
+impl ZigZagChange {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Price => "Price",
+            Self::Percent => "Percent",
+        }
+    }
 }
 
 /// One swing extreme in source-bar order. The last pivot is provisional and can move.

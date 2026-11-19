@@ -62,6 +62,7 @@ struct Action {
     drawings_hidden: Option<bool>,
     event_visibility: Option<crate::model::EventVisibility>,
     options: Option<ChartOptions>,
+    date_format: Option<Option<String>>,
     order_flow: Option<FeedDisplay>,
     view: Option<(f32, f32)>,
     scale: Option<PriceScale>,
@@ -114,6 +115,7 @@ impl Action {
             && self.price_targets_visible.is_none()
             && self.event_visibility.is_none()
             && self.options.is_none()
+            && self.date_format.is_none()
             && self.order_flow.is_none()
             && self.scale.is_none()
             && self.series_scales.is_empty()
@@ -489,6 +491,7 @@ impl Chart {
                 drawings_hidden: Some(self.drawings.is_hidden()),
                 event_visibility: Some(self.event_visibility.clone()),
                 options: Some(self.chart_options.clone()),
+                date_format: Some(self.date_format.clone()),
                 order_flow: FeedDisplay::capture(self),
                 view: Some(self.get_time_scale_state()),
                 scale: Some(self.state.price_scale().clone()),
@@ -592,6 +595,9 @@ impl Chart {
         }
         if action.options.as_ref() == Some(&self.chart_options) {
             action.options = None;
+        }
+        if action.date_format.as_ref() == Some(&self.date_format) {
+            action.date_format = None;
         }
         if action.order_flow == FeedDisplay::capture(self) {
             action.order_flow = None;
@@ -931,6 +937,7 @@ impl Chart {
     }
 
     /// Undo the most recent chart user action, across drawings, studies and settings.
+    /// A drawing being placed is cancelled when the step takes away the pane that draws it.
     /// Returns false while a user action or a drawing drag is in progress, or a layout divider
     /// is pressed or dragged; finish it first.
     pub fn undo(&mut self) -> bool {
@@ -938,6 +945,7 @@ impl Chart {
     }
 
     /// Redo the most recently undone chart user action.
+    /// A drawing being placed is cancelled as [`undo`](Self::undo) cancels it.
     /// Returns false while a user action or a drawing drag is in progress, or a layout divider
     /// is pressed or dragged; finish it first.
     pub fn redo(&mut self) -> bool {
@@ -997,6 +1005,8 @@ impl Chart {
         if self.history_blocked() {
             return false;
         }
+        #[cfg(feature = "drawings")]
+        let placed = self.placement_pane();
         let stack = if redo {
             &mut self.history.redo
         } else {
@@ -1150,6 +1160,9 @@ impl Chart {
                 None,
             );
         }
+        if let Some(date_format) = &mut action.date_format {
+            std::mem::swap(&mut self.date_format, date_format);
+        }
         if let Some(view) = &mut action.view {
             self.apply_synced_time_scale(view.0, view.1);
             *view = current_view;
@@ -1235,6 +1248,7 @@ impl Chart {
             if let Some(deletion) = &mut action.unshown {
                 self.step_unshown_deletion(deletion, redo);
             }
+            self.keep_placement_in(placed);
         }
         self.history.edits += 1;
         #[cfg(feature = "drawings")]
