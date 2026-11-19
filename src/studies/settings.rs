@@ -285,6 +285,34 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
         let mut guide = levels[0];
         guide.visible = false;
         settings.levels.push(guide);
+    } else if study.name() == "Aroon Oscillator" && settings.levels.len() < 2 && guides_since(study)
+    {
+        // Keep the saved zero style at its new position and add the outer guides hidden.
+        let zero = settings.levels.first().copied().unwrap_or(levels[1]);
+        settings.levels = vec![
+            LevelStyle {
+                visible: false,
+                ..levels[0]
+            },
+            zero,
+            LevelStyle {
+                visible: false,
+                ..levels[2]
+            },
+        ];
+        settings.fill_between_levels = false;
+    } else if settings.levels.is_empty() && guides_since(study) {
+        // Older saves drew no guides or band; showing them later uses the declared styles.
+        settings.levels = levels
+            .into_iter()
+            .map(|level| LevelStyle {
+                visible: false,
+                ..level
+            })
+            .collect();
+        settings.fill_between_levels = false;
+        settings.level_fill_color = color;
+        settings.mfi_auto_range = study.name() == "MFI";
     } else if settings.levels.len() != levels.len()
         && former_guides(study, settings.levels.len()).is_none()
     {
@@ -365,6 +393,25 @@ fn former_guides(study: &dyn Indicator, saved: usize) -> Option<(Guides, Option<
     (study.pane().levels == current).then_some((former, fill))
 }
 
+/// Whether a built-in gained guides after settings were saved without them. Compare its
+/// declared values so a host study under the same name keeps its own guide handling.
+fn guides_since(study: &dyn Indicator) -> bool {
+    // Built-in types are available only with the `studies` feature.
+    let since: &[f64] = match study.name() {
+        "%B" => &[1.0, 0.0, 0.5],
+        "CCI" => &[100.0, -100.0, 0.0],
+        "MFI" => &[80.0, 20.0],
+        "Aroon Oscillator" => &[90.0, 0.0, -90.0],
+        _ => return false,
+    };
+    study
+        .pane()
+        .levels
+        .iter()
+        .map(|level| level.0)
+        .eq(since.iter().copied())
+}
+
 /// Reads [`StudySettings::timeframe_visibility`], or the interval range that settings saved
 /// before it hold: every interval, the saved interval only, or also those above or below it.
 fn saved_timeframe_visibility<'de, D: serde::Deserializer<'de>>(
@@ -438,7 +485,10 @@ pub struct StudySettings {
     /// editable, and settings with another number of levels, take the study's own levels and fill.
     /// Only the guide declared since is added, hidden, to a Stochastic saved with two levels or a
     /// Know Sure Thing, Chaikin Money Flow, Force Index or Advance/Decline Ratio (Bars) saved
-    /// with none. A Connors RSI or a Correlation Coefficient with three levels keeps the guides it
+    /// with none. A Bollinger Bands %b, Commodity Channel Index or Money Flow Index saved with
+    /// none restores its guides hidden and its band unfilled, and an Aroon Oscillator saved with
+    /// its zero guide alone, or with none, keeps that guide and adds those at 90 and -90 hidden.
+    /// A Connors RSI or a Correlation Coefficient with three levels keeps the guides it
     /// opened with before: 70, 50 and 30 with the band between 70 and 30, or 1, -1 and 0.
     #[serde(default)]
     pub levels: Vec<LevelStyle>,
@@ -449,6 +499,9 @@ pub struct StudySettings {
     /// Colour of the band between the boundary levels.
     #[serde(default)]
     pub level_fill_color: Color32,
+    /// Keep automatic fitting for an MFI saved before it declared a fixed range.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) mfi_auto_range: bool,
     /// Plots, as indices into [`plots`](Self::plots), whose last value has no tag on the price
     /// scale while the chart shows study values; the legend still shows it. A study starts
     /// with the plots its [`Indicator::plot_tagged`] leaves out, every plot of a study with more
@@ -498,6 +551,7 @@ impl Default for StudySettings {
             levels: Vec::new(),
             fill_between_levels: false,
             level_fill_color: Color32::TRANSPARENT,
+            mfi_auto_range: false,
             untagged_plots: Vec::new(),
             price_line_plots: Vec::new(),
             plot_variants: Vec::new(),
@@ -713,6 +767,12 @@ impl ConfiguredStudy {
         let mut pane = self.study.pane();
         if let Some((levels, _)) = former_guides(self.study.as_ref(), self.settings.levels.len()) {
             pane.levels = levels;
+        }
+        if self.settings.mfi_auto_range
+            && self.study.name() == "MFI"
+            && guides_since(self.study.as_ref())
+        {
+            pane.range = None;
         }
         pane
     }
@@ -3364,11 +3424,194 @@ mod tests {
         });
         assert_eq!(older.settings(), expected);
         assert_eq!(older.pane().levels[0].1, Color32::TRANSPARENT);
+        // A literal Aroon Oscillator template saved on origin/main keeps its zero guide alone.
+        let saved = r#"{"name":"Aroon Oscillator","inputs":[["period",{"Length":14}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.AroonOscillator.html","plots":[{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":false,"level_fill_color":[5,11,5,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let template = serde_json::from_str::<crate::studies::StudyTemplate>(saved).unwrap();
+        let older = template.create().unwrap();
+        let mut expected = template.settings.clone();
+        let hidden = LevelStyle {
+            visible: false,
+            ..zero
+        };
+        expected.levels = vec![hidden, expected.levels[0], hidden];
+        assert_eq!(older.settings(), expected);
+        assert_eq!(
+            older.pane().levels,
+            [
+                (90.0, Color32::TRANSPARENT, "Upper guide"),
+                (0.0, palette::GRAY, "Zero"),
+                (-90.0, Color32::TRANSPARENT, "Lower guide"),
+            ]
+        );
+        // An older MFI retains automatic fitting, including after saving its upgraded guides.
+        let saved = r#"{"name":"MFI","inputs":[["period",{"Length":14}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MoneyFlowIndex.html","plots":[{"color":[126,87,194,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[8,5,12,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let mut template = serde_json::from_str::<crate::studies::StudyTemplate>(saved).unwrap();
+        for _ in 0..2 {
+            let older = template.create().unwrap();
+            assert_eq!(older.pane().range, None);
+            assert!(older.settings().levels.iter().all(|level| !level.visible));
+            assert!(!older.pane().fill_between_levels);
+            template = serde_json::from_str(
+                &serde_json::to_string(&crate::studies::StudyTemplate::from_study(older.as_ref()))
+                    .unwrap(),
+            )
+            .unwrap();
+        }
         let mut adx = ConfiguredStudy::new(Box::new(AdxBreakout::default()));
         let settings = adx.settings();
         adx.apply_settings(&[("threshold".into(), InputValue::Length(25))], settings)
             .unwrap();
         assert_eq!(values(&adx), [25.0]);
+    }
+
+    /// The Aroon Oscillator, Bollinger Bands %b, CCI and Money Flow Index open with their usual
+    /// guides and band. Settings saved before they had them restore as they were drawn, with the
+    /// new guides hidden and no band; shown since, a guide keeps its style through a template.
+    /// Older Awesome Oscillator columns and Balance of Power smoothing restore as saved.
+    #[test]
+    fn oscillator_guides_open_declared_and_older_saves_restore_as_drawn() {
+        use crate::studies::{IndicatorFactory, PlotType, StudyTemplate, palette};
+        type Row = (
+            &'static str,
+            Vec<(f64, Color32)>,
+            bool,
+            Option<[usize; 2]>,
+            Option<(f64, f64)>,
+            Color32,
+        );
+        let factory = IndicatorFactory::new();
+        let (gray, faint) = (palette::MUTED, palette::MUTED.gamma_multiply_u8(128));
+        let blue = Color32::from_rgba_unmultiplied(41, 98, 255, 26);
+        let rows: [Row; 4] = [
+            (
+                "Aroon Oscillator",
+                vec![(90.0, gray), (0.0, gray), (-90.0, gray)],
+                false,
+                None,
+                Some((-100.0, 100.0)),
+                Color32::TRANSPARENT,
+            ),
+            (
+                "%B",
+                vec![(1.0, gray), (0.0, gray), (0.5, faint)],
+                true,
+                Some([0, 1]),
+                None,
+                blue,
+            ),
+            (
+                "CCI",
+                vec![(100.0, gray), (-100.0, gray), (0.0, faint)],
+                true,
+                Some([0, 1]),
+                None,
+                blue,
+            ),
+            (
+                "MFI",
+                vec![(80.0, gray), (20.0, gray)],
+                true,
+                None,
+                Some((0.0, 100.0)),
+                Color32::from_rgba_unmultiplied(126, 87, 194, 26),
+            ),
+        ];
+        let hidden = |level: LevelStyle| LevelStyle {
+            visible: false,
+            ..level
+        };
+        for (name, guides, fill, indices, range, band) in rows {
+            let mut study = ConfiguredStudy::new(factory.create(name).unwrap());
+            let pane = study.pane();
+            let drawn: Vec<_> = pane.levels.iter().map(|level| (level.0, level.1)).collect();
+            assert_eq!(drawn, guides, "{name}");
+            assert_eq!(pane.range, range, "{name}");
+            let defaults = study.settings();
+            assert!(
+                defaults.levels.iter().all(|level| level.value.is_none()
+                    && level.visible
+                    && level.pattern == LineStyle::Dashed
+                    && level.width == 1.0),
+                "{name}"
+            );
+            assert_eq!(defaults.fill_between_levels, fill, "{name}");
+            assert_eq!(study.level_fill_indices(), indices, "{name}");
+            if fill {
+                assert_eq!(defaults.level_fill_color, band, "{name}");
+            }
+            // The Aroon Oscillator drew its zero guide before; the others drew none.
+            let declared = defaults.levels.clone();
+            let older: Vec<(Vec<LevelStyle>, Vec<LevelStyle>)> = if name == "Aroon Oscillator" {
+                let moved = LevelStyle {
+                    value: Some(5.0),
+                    width: 2.0,
+                    ..declared[1]
+                };
+                vec![
+                    (
+                        vec![moved],
+                        vec![hidden(declared[0]), moved, hidden(declared[2])],
+                    ),
+                    (
+                        Vec::new(),
+                        vec![hidden(declared[0]), declared[1], hidden(declared[2])],
+                    ),
+                ]
+            } else {
+                vec![(Vec::new(), declared.iter().copied().map(hidden).collect())]
+            };
+            for (saved, restored) in older {
+                let mut settings = defaults.clone();
+                settings.levels = saved;
+                settings.fill_between_levels = false;
+                study.apply_settings(&[], settings).unwrap();
+                assert_eq!(study.settings().levels, restored, "{name}");
+                assert!(!study.pane().fill_between_levels, "{name}");
+                assert_eq!(
+                    study.pane().range,
+                    if name == "MFI" { None } else { range },
+                    "{name}"
+                );
+                let shown: Vec<_> = study.pane().levels.iter().map(|level| level.1).collect();
+                let expected: Vec<_> = restored
+                    .iter()
+                    .zip(&guides)
+                    .map(|(level, &(_, color))| {
+                        if level.visible {
+                            color
+                        } else {
+                            Color32::TRANSPARENT
+                        }
+                    })
+                    .collect();
+                assert_eq!(shown, expected, "{name}");
+            }
+            // A guide shown since keeps its style, and the restore does not run again.
+            let mut edited = study.settings();
+            edited.levels[0].visible = true;
+            edited.levels[0].width = 3.0;
+            study.apply_settings(&[], edited.clone()).unwrap();
+            let again = StudyTemplate::from_study(&study).create().unwrap();
+            assert_eq!(again.settings().levels, edited.levels, "{name}");
+            assert_eq!(again.pane().range, study.pane().range, "{name}");
+        }
+        // Saved as columns, an Awesome Oscillator stays columns; saved smoothed over 14 bars,
+        // a Balance of Power keeps its smoothing.
+        let mut ao = ConfiguredStudy::new(factory.create("AO").unwrap());
+        let mut columns = ao.settings();
+        columns.plots[0].plot_type = PlotType::Columns;
+        ao.apply_settings(&[], columns).unwrap();
+        let again = StudyTemplate::from_study(&ao).create().unwrap();
+        assert_eq!(again.plot_style(0).plot_type, PlotType::Columns);
+        let mut bop = ConfiguredStudy::new(factory.create("BoP").unwrap());
+        let settings = bop.settings();
+        bop.apply_settings(
+            &[("smooth_period".into(), InputValue::Length(14))],
+            settings,
+        )
+        .unwrap();
+        let again = StudyTemplate::from_study(&bop).create().unwrap();
+        assert_eq!(again.line_names(), ["BoP(14)"]);
     }
 
     /// A palette set on a chart study recolours its band, as it recolours its plots.

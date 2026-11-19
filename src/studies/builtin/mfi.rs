@@ -7,6 +7,7 @@
 //! - MFI > 80: Overbought (potential reversal down)
 //! - MFI < 20: Oversold (potential reversal up)
 //! - Divergence between MFI and price can signal trend changes
+//! - The pane opens on a 0 to 100 scale with guides at 80 and 20 and the band between them filled
 //!
 //! # Calculation
 //! Raw Money Flow = |Typical Price| * Volume, assigned to positive or negative flow by
@@ -182,6 +183,22 @@ impl Indicator for MoneyFlowIndex {
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if !colors.is_empty() {
             self.color = colors[0];
+        }
+    }
+
+    fn level_fill_color(&self) -> Color32 {
+        Color32::from_rgba_unmultiplied(self.color.r(), self.color.g(), self.color.b(), 26)
+    }
+
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            range: Some((0.0, 100.0)),
+            levels: vec![
+                (80.0, palette::MUTED, "Overbought"),
+                (20.0, palette::MUTED, "Oversold"),
+            ],
+            fill_between_levels: true,
+            ..Default::default()
         }
     }
 

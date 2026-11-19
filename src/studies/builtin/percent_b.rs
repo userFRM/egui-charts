@@ -5,9 +5,9 @@ use crate::studies::stepper::update_window;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
-/// Percent B (%B)
-/// Shows where price is relative to Bollinger Bands
-/// 0 = at lower band, 1 = at upper band
+/// Percent B (%B): where the close sits within its Bollinger Bands, 0 at the lower band and
+/// 1 at the upper band. The pane opens with dashed guides at 1 and 0, a faint guide at 0.5 and
+/// the band between 1 and 0 filled.
 #[derive(Clone, Debug)]
 pub struct PercentB {
     /// Period for Bollinger Bands (typically 20)
@@ -138,6 +138,27 @@ impl Indicator for PercentB {
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if !colors.is_empty() {
             self.color = colors[0];
+        }
+    }
+
+    /// The band between the outer band guides, whatever the middle guide's value.
+    fn level_fill_indices(&self) -> Option<[usize; 2]> {
+        Some([0, 1])
+    }
+
+    fn level_fill_color(&self) -> Color32 {
+        Color32::from_rgba_unmultiplied(self.color.r(), self.color.g(), self.color.b(), 26)
+    }
+
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            levels: vec![
+                (1.0, palette::MUTED, "Upper Band"),
+                (0.0, palette::MUTED, "Lower Band"),
+                (0.5, palette::MUTED.gamma_multiply_u8(128), "Middle Band"),
+            ],
+            fill_between_levels: true,
+            ..Default::default()
         }
     }
 

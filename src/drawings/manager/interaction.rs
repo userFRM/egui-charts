@@ -556,8 +556,22 @@ impl DrawingManager {
             {
                 return;
             }
-            // Compute snapped position before mutable borrow
-            let mut snapped = self.snap_point(new_pos, &self.drawings);
+            // Size and rotation handles follow the pointer rather than a bar's price.
+            let free = handle != HandlePos::Middle
+                && self.drawings.iter().any(|d| {
+                    d.id == id
+                        && matches!(
+                            d.tool_type,
+                            DrawingToolType::FontIcon
+                                | DrawingToolType::Sticker
+                                | DrawingToolType::Image
+                        )
+                });
+            let mut snapped = if free {
+                new_pos
+            } else {
+                self.snap_point(new_pos, &self.drawings)
+            };
             let mut constrained_price = None;
             if self.interaction_modifiers.shift
                 && let Some(origin) = self.drag_origin
