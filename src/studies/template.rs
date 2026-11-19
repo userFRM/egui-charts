@@ -2,7 +2,9 @@
 
 use crate::model::Timeframe;
 use crate::studies::{
-    ConfiguredStudy, Indicator, IndicatorFactory, InputValue, StudyInput, StudyScale, StudySettings,
+    BollingerBands, CCI, ConfiguredStudy, EMA, Indicator, IndicatorFactory, InputValue, MACD,
+    MARibbon, MoneyFlowIndex, OnBalanceVolume, RSI, Stochastic, StochasticRSI, StudyInput,
+    StudyScale, StudySettings, Volume, WilliamsAlligator,
 };
 
 /// Serializable inputs and presentation of one study. Hosts may resolve `name` through their
@@ -115,6 +117,90 @@ impl<'de> serde::Deserialize<'de> for StudyTemplateSet {
             }
         }
         deserializer.deserialize_any(Visitor)
+    }
+}
+
+impl StudyTemplateSet {
+    /// The built-in sets with their names, in the order a menu lists them, for a host to offer
+    /// beside the user's own sets and apply as it applies those, for example with
+    /// `Chart::apply_chosen_study_template_set`:
+    ///
+    /// - "Williams Alligator": [`WilliamsAlligator`].
+    /// - "Displaced EMA": an [`EMA`] drawn 5 bars ahead.
+    /// - "Moving average ribbon": [`MARibbon`].
+    /// - "Oscillators": [`RSI`], [`StochasticRSI`] and [`CCI`].
+    /// - "Swing trading": [`BollingerBands`], [`MACD`] and [`Stochastic`].
+    /// - "Volume analysis": [`OnBalanceVolume`] and [`MoneyFlowIndex`].
+    ///
+    /// Each set starts with a [`Volume`] study, so that applying it keeps the chart's volume,
+    /// and its studies take their default inputs, apart from the displaced EMA's offset. The
+    /// overlays are drawn on the price pane and every other study has a pane of its own. No set
+    /// keeps a symbol or an interval.
+    pub fn builtin() -> Vec<(&'static str, Self)> {
+        let mut displaced = ConfiguredStudy::new(Box::new(EMA::default()));
+        displaced
+            .set_input("plot_offset", InputValue::Integer(5))
+            .expect("an EMA reads a price, so it takes an offset");
+        let sets: [(&'static str, Vec<Box<dyn Indicator>>); 6] = [
+            (
+                "Williams Alligator",
+                vec![Box::new(WilliamsAlligator::default())],
+            ),
+            ("Displaced EMA", vec![Box::new(displaced)]),
+            ("Moving average ribbon", vec![Box::new(MARibbon::default())]),
+            (
+                "Oscillators",
+                vec![
+                    Box::new(RSI::default()),
+                    Box::new(StochasticRSI::default()),
+                    Box::new(CCI::default()),
+                ],
+            ),
+            (
+                "Swing trading",
+                vec![
+                    Box::new(BollingerBands::default()),
+                    Box::new(MACD::default()),
+                    Box::new(Stochastic::default()),
+                ],
+            ),
+            (
+                "Volume analysis",
+                vec![
+                    Box::new(OnBalanceVolume::default()),
+                    Box::new(MoneyFlowIndex::default()),
+                ],
+            ),
+        ];
+        sets.into_iter()
+            .map(|(name, studies)| {
+                // Configured as a chart configures a study it adds, so that the set applies as one
+                // saved from a chart: a bare volume study would keep its average plot hidden.
+                let studies: Vec<Box<dyn Indicator>> =
+                    std::iter::once(Box::new(Volume::default()) as Box<dyn Indicator>)
+                        .chain(studies)
+                        .map(|study| {
+                            if study.has_settings() {
+                                study
+                            } else {
+                                Box::new(ConfiguredStudy::new(study))
+                            }
+                        })
+                        .collect();
+                let (price_pane, own): (Vec<_>, Vec<_>) =
+                    (0..studies.len()).partition(|&at| studies[at].is_overlay());
+                let set = Self {
+                    studies: studies
+                        .iter()
+                        .map(|study| StudyTemplate::from_study(study.as_ref()))
+                        .collect(),
+                    price_pane,
+                    panes: own.into_iter().map(|at| vec![at]).collect(),
+                    ..Self::default()
+                };
+                (name, set)
+            })
+            .collect()
     }
 }
 
