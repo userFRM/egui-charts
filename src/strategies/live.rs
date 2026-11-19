@@ -110,7 +110,7 @@ impl Backtest {
         finish_now(self.advance(strategy, bars, lower, closed, &mut None))
     }
 
-    /// Continues a run on closed bars, yielding between batches of 256 chart or finer bars as
+    /// Continues a run on closed bars, yielding after every 256 chart or finer bars as
     /// [`Self::run_async`] does. Pass the same strategy and full history, oldest first, each time.
     ///
     /// The first call leaves [`Self::report`] equal to [`Self::run`] over the same bars; later
