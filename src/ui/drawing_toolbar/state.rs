@@ -190,6 +190,12 @@ impl ToolbarState {
     }
 
     /// Create new toolbar state with defaults
+    ///
+    /// ```
+    /// use egui_charts::ui::drawing_toolbar::ToolbarState;
+    /// let state = ToolbarState { hide_executions: true, ..ToolbarState::new() };
+    /// assert!(state.hide_executions && !state.all_hidden(true));
+    /// ```
     pub fn new() -> Self {
         Self::default()
     }
