@@ -1035,7 +1035,11 @@ impl DemoApp {
             .state
             .set_display_timezone(&self.chart.display_timezone());
         let clock_changed = self.timeframe_toolbar.state.timezone != clock;
+        // A bar reload must keep the session restored by history.
+        let extended = self.chart.extended_hours();
         self.follow_chart_symbol(clock_changed);
+        self.chart.set_extended_hours(extended);
+        self.follow_chart_session(false);
     }
 
     /// Loads the bars of the symbol and interval the chart shows after it changed them itself.
@@ -1162,6 +1166,26 @@ impl DemoApp {
             params.range_size = size;
             params.range_size_method = BoxSizeMethod::Fixed;
             self.chart.set_chart_type_params(params);
+        }
+    }
+
+    /// Follows a session chosen by the chart settings or undo with the toolbar and demo feed,
+    /// reloading the bars when it changed or `reload` asks for it.
+    fn follow_chart_session(&mut self, reload: bool) {
+        let extended = self.chart.extended_hours();
+        let changed = self.own_data.is_none()
+            && DemoSymbol::has_hours(&self.state.symbol)
+            && extended != (self.timeframe_toolbar.state.session_type != SessionType::RTH);
+        if changed {
+            self.timeframe_toolbar.set_session(if extended {
+                SessionType::ETH
+            } else {
+                SessionType::RTH
+            });
+        }
+        if changed || reload {
+            self.stop_replay();
+            self.apply_session();
         }
     }
 
@@ -1490,11 +1514,10 @@ impl DemoApp {
         if news_changed {
             self.annotate();
         }
-        if state.adjust_for_dividends != self.timeframe_toolbar.state.adjust_for_dividends {
-            self.timeframe_toolbar.state.adjust_for_dividends = state.adjust_for_dividends;
-            self.stop_replay();
-            self.apply_session();
-        }
+        let dividends_changed =
+            state.adjust_for_dividends != self.timeframe_toolbar.state.adjust_for_dividends;
+        self.timeframe_toolbar.state.adjust_for_dividends = state.adjust_for_dividends;
+        self.follow_chart_session(dividends_changed);
     }
 
     /// Whether the current preset shows other charts to copy to.
@@ -2434,6 +2457,7 @@ impl DemoApp {
         self.drawing_toolbar
             .sync_from_domain_state(&DrawingToolbarDomainState {
                 sel_tool: dm.active_tool(),
+                sel_custom_tool: dm.active_custom_tool().map(str::to_owned),
                 magnet_mode: dm.options.magnet_mode,
                 snap_to_indicators: dm.options.snap_to_indicators,
                 magnet_type,
@@ -7690,6 +7714,78 @@ mod tests {
             assert_eq!(app.chart.extended_hours(), expected != SessionType::RTH);
             assert_eq!(app.live.view(app.chart.extended_hours()).0, expected);
         }
+    }
+
+    /// Settings and their undo keep the session in the chart, toolbar and demo feed together,
+    /// including when a restored clock change or a dividend choice also reloads the bars.
+    #[test]
+    fn settings_session_follows_undo_with_a_clock_change() {
+        for zone in [None, Some("Europe/Zurich")] {
+            let ctx = egui::Context::default();
+            let now = "2026-11-18T15:30:00Z".parse().unwrap();
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                now,
+                true,
+            );
+            settle(&mut app, &ctx);
+            app.timeframe_toolbar.set_session(SessionType::RTH);
+            app.apply_session();
+            let mut settings = app.chart_settings_state();
+            settings.extended_hours = Some(true);
+            if let Some(zone) = zone {
+                settings.timezone = zone.into();
+            }
+            app.apply_chart_settings(settings);
+            let session = |app: &DemoApp| {
+                (
+                    app.chart.extended_hours(),
+                    app.timeframe_toolbar.state.session_type,
+                    app.live.view(app.chart.extended_hours()).0,
+                )
+            };
+            assert_eq!(
+                session(&app),
+                (true, SessionType::ETH, SessionType::ETH),
+                "{zone:?}: apply"
+            );
+            assert!(app.chart.undo());
+            app.sync_chart_history();
+            assert_eq!(
+                session(&app),
+                (false, SessionType::RTH, SessionType::RTH),
+                "{zone:?}: undo"
+            );
+            assert!(app.chart.redo());
+            app.sync_chart_history();
+            assert_eq!(
+                session(&app),
+                (true, SessionType::ETH, SessionType::ETH),
+                "{zone:?}: redo"
+            );
+        }
+
+        // A dividend reload keeps a 24/7 view, which the chart holds as extended hours.
+        let ctx = egui::Context::default();
+        let now = "2026-11-18T15:30:00Z".parse().unwrap();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        settle(&mut app, &ctx);
+        app.timeframe_toolbar.set_session(SessionType::Full24x7);
+        app.apply_session();
+        let mut settings = app.chart_settings_state();
+        settings.adjust_for_dividends = !settings.adjust_for_dividends;
+        app.apply_chart_settings(settings);
+        assert_eq!(
+            (
+                app.timeframe_toolbar.state.session_type,
+                app.live.view(app.chart.extended_hours()).0,
+            ),
+            (SessionType::Full24x7, SessionType::Full24x7)
+        );
     }
 
     /// Bars outside regular hours are shaded only in the extended session, and a saved layout
