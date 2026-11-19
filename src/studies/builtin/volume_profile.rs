@@ -233,9 +233,9 @@ enum Anchor {
 /// then the chart events.
 const ANCHORS: [(Anchor, &str); 14] = [
     (Anchor::Bars(AutoAnchor::Auto), "Auto"),
-    (Anchor::Bars(AutoAnchor::HighestHigh), "HighestHigh"),
-    (Anchor::Bars(AutoAnchor::LowestLow), "LowestLow"),
-    (Anchor::Bars(AutoAnchor::HighestVolume), "HighestVolume"),
+    (Anchor::Bars(AutoAnchor::HighestHigh), "Highest high"),
+    (Anchor::Bars(AutoAnchor::LowestLow), "Lowest low"),
+    (Anchor::Bars(AutoAnchor::HighestVolume), "Highest volume"),
     (Anchor::Bars(AutoAnchor::Session), "Session"),
     (Anchor::Bars(AutoAnchor::Week), "Week"),
     (Anchor::Bars(AutoAnchor::Month), "Month"),
@@ -401,7 +401,7 @@ impl ProfileStudy {
                 InputKind::Length(1, 10_000),
             ));
             let units = PERIOD_UNITS.iter().map(|unit| match unit {
-                PeriodUnit::Calendar(period) => format!("{period:?}"),
+                PeriodUnit::Calendar(period) => period.label().to_owned(),
                 PeriodUnit::Bar => "Bar".into(),
                 PeriodUnit::Minute => "Minute".into(),
                 PeriodUnit::Hour => "Hour".into(),

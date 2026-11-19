@@ -15,6 +15,16 @@ pub enum MajorityMode {
 }
 
 impl MajorityMode {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Percentage => "Percentage",
+            Self::Direction => "Direction",
+        }
+    }
+}
+
+impl MajorityMode {
     const ALL: [Self; 2] = [Self::Percentage, Self::Direction];
 }
 

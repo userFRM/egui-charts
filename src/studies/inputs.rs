@@ -145,7 +145,9 @@ macro_rules! input_spec {
             crate::studies::InputValue::Choice(
                 choices.iter().position(|v| *v == $value).unwrap_or(0),
             ),
-            crate::studies::InputKind::Choice(choices.iter().map(|v| format!("{v:?}")).collect()),
+            crate::studies::InputKind::Choice(
+                choices.iter().map(|v| v.label().to_owned()).collect(),
+            ),
         )
     }};
     ($id:expr, $value:expr, toggle($label:expr)) => {

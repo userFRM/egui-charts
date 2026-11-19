@@ -92,13 +92,20 @@ pub enum RatingBasis {
     Oscillators,
 }
 
-impl std::fmt::Debug for RatingBasis {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+impl RatingBasis {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
             Self::All => "All",
             Self::MovingAverages => "Moving averages",
             Self::Oscillators => "Oscillators",
-        })
+        }
+    }
+}
+
+impl std::fmt::Debug for RatingBasis {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
     }
 }
 

@@ -51,6 +51,17 @@ pub enum KeltnerBand {
     Range,
 }
 
+impl KeltnerBand {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::AverageTrueRange => "Average true range",
+            Self::TrueRange => "True range",
+            Self::Range => "Range",
+        }
+    }
+}
+
 /// Keltner Channels indicator
 #[derive(Clone, Debug)]
 pub struct KeltnerChannels {

@@ -75,9 +75,10 @@ impl TablePosition {
     ];
 }
 
-impl std::fmt::Debug for TablePosition {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+impl TablePosition {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
             Self::TopLeft => "Top left",
             Self::TopCenter => "Top center",
             Self::TopRight => "Top right",
@@ -87,7 +88,13 @@ impl std::fmt::Debug for TablePosition {
             Self::BottomLeft => "Bottom left",
             Self::BottomCenter => "Bottom center",
             Self::BottomRight => "Bottom right",
-        })
+        }
+    }
+}
+
+impl std::fmt::Debug for TablePosition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
     }
 }
 
@@ -130,15 +137,22 @@ impl TableTextSize {
     }
 }
 
-impl std::fmt::Debug for TableTextSize {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+impl TableTextSize {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
             Self::Tiny => "Tiny",
             Self::Small => "Small",
             Self::Normal => "Normal",
             Self::Large => "Large",
             Self::Huge => "Huge",
-        })
+        }
+    }
+}
+
+impl std::fmt::Debug for TableTextSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
     }
 }
 
