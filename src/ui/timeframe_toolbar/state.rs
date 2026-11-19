@@ -43,6 +43,35 @@ impl SessionType {
         }
     }
 
+    /// The choices offered, including overnight hours when available or already selected.
+    pub(crate) fn choices(overnight: bool) -> &'static [Self] {
+        if overnight {
+            &[Self::RTH, Self::ETH, Self::Overnight]
+        } else {
+            &[Self::RTH, Self::ETH]
+        }
+    }
+
+    /// The name of this choice in a session selector.
+    pub(crate) fn choice_label(self) -> &'static str {
+        match self {
+            Self::RTH => "Regular trading hours",
+            Self::ETH => "Extended trading hours",
+            Self::Overnight => "Overnight trading hours",
+            Self::Full24x7 => "24/7 trading",
+        }
+    }
+
+    /// The requested extended and overnight flags, absent for an always-open instrument.
+    pub(crate) fn hours(self) -> Option<(bool, bool)> {
+        match self {
+            Self::RTH => Some((false, false)),
+            Self::ETH => Some((true, false)),
+            Self::Overnight => Some((true, true)),
+            Self::Full24x7 => None,
+        }
+    }
+
     /// Get display label
     pub fn label(&self) -> &'static str {
         match self {
@@ -75,6 +104,19 @@ pub(crate) fn has_trading_hours(instrument: Option<&crate::model::Instrument>) -
                 || !session.overrides.is_empty()
         })
     })
+}
+
+/// Whether weekly or date-specific overnight windows exist, as the time axis menu checks.
+pub(crate) fn has_overnight_windows(instrument: Option<&crate::model::Instrument>) -> bool {
+    instrument
+        .and_then(|instrument| instrument.session.as_ref())
+        .is_some_and(|session| {
+            !session.overnight_windows.is_empty()
+                || session
+                    .overrides
+                    .iter()
+                    .any(|date| !date.overnight_windows.is_empty())
+        })
 }
 
 /// Bottom panel state
