@@ -332,8 +332,11 @@ impl Style<'_> {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct LocaleTimeFormatter {
-    /// Locale identifier: language and region, such as `"en-US"`, `"ja-JP"` or
-    /// `"de-DE"` (`"de_DE"` also works). Unknown identifiers use English names.
+    /// Locale identifier: a language code, alone or with a region, such as `"de"`, `"ja-JP"` or
+    /// `"de-AT"`, in any letter case and with `-` or `_` between the parts. A language alone, or
+    /// with a region that has no names of its own, uses its most common region's names: `"de"`
+    /// as `"de-DE"`, `"en"` as `"en-US"`, `"pt"` as `"pt-BR"`. Other forms, such as the script
+    /// subtag in `"zh-Hant-TW"`, and languages without names use English names.
     pub locale: String,
 
     /// Whether to use 24-hour format
@@ -351,7 +354,9 @@ pub struct LocaleTimeFormatter {
 }
 
 impl LocaleTimeFormatter {
-    /// Create a new locale-aware formatter
+    /// A formatter for `locale`, in the forms [`locale`](Self::locale) accepts. The clock
+    /// defaults to 12 hours for `"en"`, `"en-US"` and `"en-CA"` in any letter case, and to
+    /// 24 hours otherwise.
     pub fn new(locale: impl Into<String>) -> Self {
         let locale_str = locale.into();
         let use_24_hour = Self::default_24hour_for_locale(&locale_str);
@@ -364,9 +369,12 @@ impl LocaleTimeFormatter {
         }
     }
 
-    /// Determine default 24-hour preference for locale
+    /// 12 hours for `en` (as `en-US`), `en-US` and `en-CA` in any case, 24 hours otherwise.
     fn default_24hour_for_locale(locale: &str) -> bool {
-        !matches!(locale.replace('_', "-").as_str(), "en-US" | "en-CA")
+        !matches!(
+            locale.replace('_', "-").to_ascii_lowercase().as_str(),
+            "en" | "en-us" | "en-ca"
+        )
     }
 
     fn style(&self) -> Style<'_> {
@@ -376,10 +384,7 @@ impl LocaleTimeFormatter {
             date_format: self.date_format.as_deref(),
             weekday_names: self.weekday_names,
             #[cfg(feature = "locales")]
-            locale: Some(
-                chrono::Locale::try_from(self.locale.replace('-', "_").as_str())
-                    .unwrap_or(chrono::Locale::POSIX),
-            ),
+            locale: Some(chrono_locale(&self.locale).unwrap_or(chrono::Locale::POSIX)),
         }
     }
 }
@@ -396,6 +401,68 @@ impl TimeFormatter for LocaleTimeFormatter {
     fn clone_box(&self) -> Box<dyn TimeFormatter> {
         Box::new(self.clone())
     }
+}
+
+/// The locale of each language chrono names, at the language's most likely region in CLDR
+/// (`ber`, which CLDR lacks, at its first region), for identifiers without a usable region.
+// shortcut: lists the languages of chrono 0.4.45; a chrono update that adds one needs a row.
+#[cfg(feature = "locales")]
+const PRIMARY_LOCALES: &[&str] = &[
+    "aa_ET", "af_ZA", "agr_PE", "ak_GH", "am_ET", "an_ES", "anp_IN", "ar_EG", "as_IN", "ast_ES",
+    "ayc_PE", "az_AZ", "be_BY", "bem_ZM", "ber_DZ", "bg_BG", "bhb_IN", "bho_IN", "bi_VU", "bn_BD",
+    "bo_CN", "br_FR", "brx_IN", "bs_BA", "byn_ER", "ca_ES", "ce_RU", "chr_US", "cmn_TW", "crh_UA",
+    "cs_CZ", "csb_PL", "cv_RU", "cy_GB", "da_DK", "de_DE", "doi_IN", "dsb_DE", "dv_MV", "dz_BT",
+    "el_GR", "en_US", "eo", "es_ES", "et_EE", "eu_ES", "fa_IR", "ff_SN", "fi_FI", "fil_PH",
+    "fo_FO", "fr_FR", "fur_IT", "fy_NL", "ga_IE", "gd_GB", "gez_ET", "gl_ES", "gu_IN", "gv_GB",
+    "ha_NG", "hak_TW", "he_IL", "hi_IN", "hif_FJ", "hne_IN", "hr_HR", "hsb_DE", "ht_HT", "hu_HU",
+    "hy_AM", "ia_FR", "id_ID", "ig_NG", "ik_CA", "is_IS", "it_IT", "iu_CA", "ja_JP", "ka_GE",
+    "kab_DZ", "kk_KZ", "kl_GL", "km_KH", "kn_IN", "ko_KR", "kok_IN", "ks_IN", "ku_TR", "kw_GB",
+    "ky_KG", "lb_LU", "lg_UG", "li_NL", "lij_IT", "ln_CD", "lo_LA", "lt_LT", "lv_LV", "lzh_TW",
+    "mag_IN", "mai_IN", "mfe_MU", "mg_MG", "mhr_RU", "mi_NZ", "miq_NI", "mjw_IN", "mk_MK", "ml_IN",
+    "mn_MN", "mni_IN", "mnw_MM", "mr_IN", "ms_MY", "mt_MT", "my_MM", "nan_TW", "nb_NO", "nds_DE",
+    "ne_NP", "nhn_MX", "niu_NU", "nl_NL", "nn_NO", "nr_ZA", "nso_ZA", "oc_FR", "om_ET", "or_IN",
+    "os_RU", "pa_IN", "pap_CW", "pl_PL", "ps_AF", "pt_BR", "quz_PE", "raj_IN", "ro_RO", "ru_RU",
+    "rw_RW", "sa_IN", "sah_RU", "sat_IN", "sc_IT", "sd_IN", "se_NO", "sgs_LT", "shn_MM", "shs_CA",
+    "si_LK", "sid_ET", "sk_SK", "sl_SI", "sm_WS", "so_SO", "sq_AL", "sr_RS", "ss_ZA", "st_ZA",
+    "sv_SE", "sw_TZ", "szl_PL", "ta_IN", "tcy_IN", "te_IN", "tg_TJ", "th_TH", "the_NP", "ti_ET",
+    "tig_ER", "tk_TM", "tl_PH", "tn_ZA", "to_TO", "tpi_PG", "tr_TR", "ts_ZA", "tt_RU", "ug_CN",
+    "uk_UA", "unm_US", "ur_PK", "uz_UZ", "ve_ZA", "vi_VN", "wa_BE", "wae_CH", "wal_ET", "wo_SN",
+    "xh_ZA", "yi_US", "yo_NG", "yue_HK", "yuw_PG", "zh_CN", "zu_ZA",
+];
+
+/// Resolves `locale` to chrono's names: an identifier chrono knows as given, then the language and
+/// region in any case, then the language alone through [`PRIMARY_LOCALES`]. Script subtags and
+/// modifiers never fall back to another script, so they give `None` (English) when not found.
+#[cfg(feature = "locales")]
+fn chrono_locale(locale: &str) -> Option<chrono::Locale> {
+    let locale = locale.replace('-', "_");
+    if let Ok(found) = chrono::Locale::try_from(locale.as_str()) {
+        return Some(found);
+    }
+    let (tag, modifier) = locale.split_at(locale.find('@').unwrap_or(locale.len()));
+    let mut parts = tag.split('_');
+    let language = parts.next()?.to_ascii_lowercase();
+    let region = parts.next();
+    if parts.next().is_some()
+        || region.is_some_and(|part| {
+            part.len() == 4 && part.bytes().all(|byte| byte.is_ascii_alphabetic())
+        })
+    {
+        return None;
+    }
+    if let Some(region) = region {
+        let id = format!("{language}_{}{modifier}", region.to_ascii_uppercase());
+        if let Ok(found) = chrono::Locale::try_from(id.as_str()) {
+            return Some(found);
+        }
+    }
+    if !modifier.is_empty() {
+        return None;
+    }
+    PRIMARY_LOCALES
+        .iter()
+        .find(|id| id.split('_').next() == Some(language.as_str()))
+        .and_then(|id| chrono::Locale::try_from(*id).ok())
 }
 
 /// Custom time formatter using a closure
@@ -915,12 +982,41 @@ mod tests {
             ("en_GB", "14:30"),
             ("de-DE", "14:30"),
             ("de_DE", "14:30"),
+            ("en", "02:30 PM"),
+            ("EN-us", "02:30 PM"),
         ] {
             assert_eq!(
                 LocaleTimeFormatter::new(locale).format(time, TickMarkType::Time),
                 expected,
                 "{locale}"
             );
+        }
+        // A language alone takes its most common region; language and region match in any case.
+        let january = Utc.with_ymd_and_hms(2024, 1, 13, 14, 30, 45).unwrap();
+        for (locale, time, expected) in [
+            ("de", time, localized("Mär", "Mar")),
+            ("DE", time, localized("Mär", "Mar")),
+            ("fr", time, localized("mars", "Mar")),
+            ("ja", time, localized("3月", "Mar")),
+            ("es", time, localized("mar", "Mar")),
+            ("de-AT", january, localized("Jän", "Jan")),
+            ("DE-at", january, localized("Jän", "Jan")),
+            ("de-XX", time, localized("Mär", "Mar")),
+            ("sr-rs@latin", time, localized("mar", "Mar")),
+            // A script never falls back to the language's default script, Cyrillic "мар".
+            ("sr@latin", time, "Mar"),
+            ("sr-Latn", time, "Mar"),
+            ("sr-Latn-RS", time, "Mar"),
+        ] {
+            assert_eq!(
+                LocaleTimeFormatter::new(locale).format(time, TickMarkType::Month),
+                expected,
+                "{locale}"
+            );
+        }
+        #[cfg(feature = "locales")]
+        for id in PRIMARY_LOCALES {
+            assert!(chrono::Locale::try_from(*id).is_ok(), "{id}");
         }
         let german = LocaleTimeFormatter::new("de-DE");
         assert_eq!(

@@ -1228,11 +1228,12 @@ impl Ladder {
                                 changed.take_profit = changed.take_profit.map(shift);
                                 for level in &mut changed.take_profit_levels {
                                     level.price = shift(level.price);
+                                    level.stop_loss = level.stop_loss.map(shift);
                                 }
                                 changed.stop_loss = changed.stop_loss.map(shift);
                                 let valid = |price: f64| price.is_finite() && price > 0.0;
                                 if changed.take_profit.is_none_or(valid)
-                                    && changed.take_profit_levels.iter().all(|l| valid(l.price))
+                                    && changed.take_profit_levels.iter().all(|l| valid(l.price) && l.stop_loss.is_none_or(valid))
                                     && changed.stop_loss.is_none_or(valid)
                                     && match changed.order_type {
                                         OrderType::StopLimit { limit, .. } => valid(limit),
@@ -2543,6 +2544,7 @@ mod tests {
                             crate::model::TakeProfitLevel::new(102.0, 1.0),
                             crate::model::TakeProfitLevel::new(103.0, 2.0),
                         ];
+                        second.request.take_profit_levels[1].stop_loss = Some(97.0);
                         working.push(second);
                     }
                     let positions = [crate::model::Position::new("ES", 2.0, 99.0)];
@@ -2707,6 +2709,7 @@ mod tests {
                                     crate::model::TakeProfitLevel::new(101.5, 1.0),
                                     crate::model::TakeProfitLevel::new(102.5, 2.0),
                                 ];
+                                request.take_profit_levels[1].stop_loss = Some(96.5);
                             } else {
                                 request.take_profit = Some(101.5);
                             }

@@ -567,6 +567,8 @@ mod tests {
             Option<f64>,
             &'static [&'static str],
         );
+        let mut stopped = TakeProfitLevel::new(110.0, 1.0);
+        stopped.stop_loss = Some(85.0);
         let rows: [Row; 2] = [
             (
                 OrderType::Limit(100.0),
@@ -584,17 +586,17 @@ mod tests {
                     stop: 101.0,
                     limit: 100.0,
                 },
-                vec![
-                    TakeProfitLevel::new(110.0, 1.0),
-                    TakeProfitLevel::new(120.0, 1.0),
-                ],
+                vec![stopped, TakeProfitLevel::new(120.0, 1.0)],
                 None,
                 &[
                     "[Quantity]",
                     "[Stop price]",
                     "[Limit price]",
                     "[Take profit 1]",
+                    "[Take profit 1 quantity]",
+                    "[Stop loss 1]",
                     "[Take profit 2]",
+                    "[Take profit 2 quantity]",
                     "[Stop loss]",
                 ],
             ),
@@ -630,6 +632,96 @@ mod tests {
             for name in names {
                 harness.get_by_role_and_label(egui::Role::SpinButton, name);
             }
+        }
+    }
+
+    /// Editing a level rounds to the quantity step, updates the total and reaches the broker.
+    /// Below-minimum levels and above-maximum totals explain why saving is disabled.
+    #[test]
+    fn the_modify_order_dialog_edits_level_quantities_and_says_why_it_refuses() {
+        use crate::model::{TakeProfitLevel, TradingRules};
+        let mut request = OrderRequest::new(
+            "SYM",
+            OrderSide::Buy,
+            2.0,
+            OrderType::StopLimit {
+                stop: 101.0,
+                limit: 100.0,
+            },
+        );
+        request.take_profit_levels = vec![
+            TakeProfitLevel::new(110.0, 1.0),
+            TakeProfitLevel::new(120.0, 1.0),
+        ];
+        request.stop_loss = Some(90.0);
+        let order = Order::new(OrderId::new("9"), request, OrderStatus::Working);
+        let broker = Arc::new(Recorder {
+            brackets: true,
+            ..Recorder::default()
+        });
+        let mut trading = Trading::default();
+        trading.set_service(broker.clone());
+        let ctx = egui::Context::default();
+        trading.poll(&ctx, &mut Toasts::new());
+        trading.load_rules("SYM");
+        let mut rules = TradingRules::new("SYM");
+        rules.quantity_step = 0.5;
+        rules.min_quantity = 0.5;
+        rules.max_quantity = Some(10.0);
+        for (_, reply) in std::mem::take(&mut *broker.rules.lock().unwrap()) {
+            reply.send(Ok(rules.clone()));
+        }
+        trading.poll(&ctx, &mut Toasts::new());
+        trading.account_panel.editing = Some((order.clone(), order.request.clone()));
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1000.0, 600.0))
+            .with_context_setup(|ctx| {
+                egui_extras::install_image_loaders(ctx);
+                crate::localization::set_translator(ctx, |english| Some(format!("[{english}]")));
+            })
+            .build_ui_state(
+                |ui, trading: &mut Trading| {
+                    trading.show_account_panel(ui, "SYM");
+                },
+                trading,
+            );
+        harness.run();
+        for (quantity, total, reason) in [
+            (1.4, 2.5, None),
+            (
+                0.2,
+                1.0,
+                Some("[Each take-profit level needs at least the minimum quantity of 0.5]"),
+            ),
+            (
+                30.0,
+                31.0,
+                Some("[The quantity is above the maximum of 10.0]"),
+            ),
+        ] {
+            harness.state_mut().account_panel.editing =
+                Some((order.clone(), order.request.clone()));
+            harness.run();
+            harness
+                .get_by_role_and_label(egui::Role::SpinButton, "[Take profit 2 quantity]")
+                .set_value_accesskit(quantity);
+            harness.run();
+            let edited = &harness.state().account_panel.editing.as_ref().unwrap().1;
+            assert_eq!(edited.quantity, total);
+            assert_eq!(edited.take_profit_levels[1].quantity, total - 1.0);
+            if let Some(reason) = reason {
+                harness.get_by_label(reason);
+            }
+            harness
+                .get_by_role_and_label(egui::Role::Button, "[Modify order]")
+                .click();
+            harness.run();
+            let modified = broker.modified.lock().unwrap();
+            assert_eq!(modified.len(), 1);
+            let mut expected = order.request.clone();
+            expected.quantity = 2.5;
+            expected.take_profit_levels[1].quantity = 1.5;
+            assert_eq!(modified[0], (order.id.clone(), expected));
         }
     }
 

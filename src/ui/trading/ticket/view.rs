@@ -2,7 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use super::{Action, Market, OrderPreset, OrderTicket, Tab, confirmation, order_quantity, summary};
+use super::{
+    Action, Market, OrderPreset, OrderTicket, Tab, confirmation, levels_accepted, order_quantity,
+    summary,
+};
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::painting::symbol_mark::paint_symbol_mark;
@@ -115,7 +118,16 @@ impl OrderTicket {
                     || request.take_profit.is_some()
                     || !request.take_profit_levels.is_empty())
                     && !market.capabilities.brackets
-                || !request.take_profit_levels.is_empty() && !market.capabilities.take_profit_levels
+                || !request.take_profit_levels.is_empty() && !levels_accepted(&market.capabilities)
+                || market
+                    .capabilities
+                    .max_take_profit_levels
+                    .is_some_and(|max| request.take_profit_levels.len() > max)
+                || request
+                    .take_profit_levels
+                    .iter()
+                    .any(|level| level.stop_loss.is_some())
+                    && !market.capabilities.take_profit_level_stops
         }) {
             self.confirm = None;
         }
@@ -620,7 +632,7 @@ mod tests {
     /// only the name. Saving a new name at ten presets is disabled while replacement still works.
     #[test]
     fn presets_belong_to_their_account_ask_before_replacing_and_keep_fields_on_rename() {
-        use super::super::{Bracket, BracketMode, Kind, PresetSizing};
+        use super::super::{Bracket, BracketMode, Kind, PresetLevel, PresetSizing};
         let rules = TradingRules::new("ES");
         let mut harness = egui_kittest::Harness::builder()
             .with_context_setup(egui_extras::install_image_loaders)
@@ -697,6 +709,11 @@ mod tests {
         kept.sizing = Some(PresetSizing::RiskPercent(1.0));
         kept.order_type = Some(Kind::Limit);
         kept.take_profit = Some(Bracket::new(BracketMode::Ticks, 8.0));
+        kept.take_profit_levels = vec![PresetLevel::new(
+            Bracket::new(BracketMode::Ticks, 16.0),
+            50.0,
+        )];
+        kept.first_level_stop_loss = Some(Bracket::new(BracketMode::Ticks, 4.0));
         harness.state_mut().1.get_mut("stocks").unwrap()[0] = kept.clone();
         harness.state_mut().1.get_mut("stocks").unwrap().remove(1);
         harness.run();

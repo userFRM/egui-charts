@@ -132,16 +132,23 @@ pub struct OrderPreset {
     /// In the symbol's trading units: what [`PresetSizing::Units`] applies, and the quantity
     /// the other sizings gave when the preset was saved.
     pub quantity: f64,
-    /// The take profit, if the preset sets one.
+    /// The take profit, or the first take-profit level, if the preset sets one.
     pub take_profit: Option<Bracket>,
+    /// The levels after the first, each with its share of the quantity. Applied on accounts
+    /// accepting levels; elsewhere `take_profit` is the order's only take profit.
+    #[serde(default)]
+    pub take_profit_levels: Vec<PresetLevel>,
+    /// The first level's own stop loss, for an account that accepts level stops.
+    #[serde(default)]
+    pub first_level_stop_loss: Option<Bracket>,
     /// The stop loss, if the preset sets one.
     pub stop_loss: Option<Bracket>,
     /// How the preset sizes the order, or `None` to keep the ticket's quantity. Presets saved
     /// without it restore [`quantity`](Self::quantity) units.
     #[serde(default = "units")]
     pub sizing: Option<PresetSizing>,
-    /// Whether applying sets both exits, turning off one that is `None`. Presets saved without
-    /// this field restore exits.
+    /// Whether applying sets the take profits, their stops and the order stop loss. Presets
+    /// saved without this field restore exits.
     #[serde(default = "restores")]
     pub exits: bool,
     /// The order type to select, or `None` to keep the ticket's.
@@ -181,6 +188,45 @@ impl OrderPreset {
             name: name.into(),
             quantity,
             take_profit: None,
+            take_profit_levels: Vec::new(),
+            first_level_stop_loss: None,
+            stop_loss: None,
+        }
+    }
+}
+
+/// A take-profit level after the first, as the ticket and an [`OrderPreset`] hold it:
+/// its distance, its share of the quantity and its own stop loss.
+///
+/// ```
+/// use egui_charts::ui::trading::{Bracket, BracketMode, OrderPreset, PresetLevel};
+///
+/// let mut preset = OrderPreset::new("Scale out", 3.0);
+/// preset.take_profit = Some(Bracket::new(BracketMode::Ticks, 8.0));
+/// let mut level = PresetLevel::new(Bracket::new(BracketMode::Ticks, 16.0), 50.0);
+/// level.stop_loss = Some(Bracket::new(BracketMode::Ticks, 4.0));
+/// preset.take_profit_levels.push(level);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct PresetLevel {
+    /// The take profit.
+    pub take_profit: Bracket,
+    /// The share of the order's quantity it closes, in percent. The first level closes the rest.
+    pub share: f64,
+    /// Its own stop loss, for accounts accepting
+    /// [level stops](crate::model::Capabilities::take_profit_level_stops). Otherwise the order's
+    /// stop loss protects this level.
+    #[serde(default)]
+    pub stop_loss: Option<Bracket>,
+}
+
+impl PresetLevel {
+    /// A level closing `share` percent of the quantity at `take_profit`, without its own stop.
+    pub fn new(take_profit: Bracket, share: f64) -> Self {
+        Self {
+            take_profit,
+            share,
             stop_loss: None,
             sizing: Some(PresetSizing::Units),
             exits: true,
@@ -359,9 +405,11 @@ pub(crate) struct OrderTicket {
     /// The value or risk entered for [`Sizing::Value`] and [`Sizing::Risk`].
     amount: f64,
     take_profit: (bool, Bracket),
-    /// The take-profit levels after the first, each with its share of the order quantity in
-    /// percent. The first level, `take_profit`, takes the rest.
-    levels: Vec<(Bracket, f64)>,
+    /// The take-profit levels after the first. The first level, `take_profit`, takes the rest
+    /// of the quantity.
+    levels: Vec<PresetLevel>,
+    /// The first take-profit level's own stop loss.
+    first_level_stop_loss: Option<Bracket>,
     stop_loss: (bool, Bracket),
     time_in_force: TimeInForce,
     expires: Option<chrono::DateTime<chrono::Utc>>,
@@ -400,6 +448,7 @@ impl Default for OrderTicket {
             amount: 1_000.0,
             take_profit: (false, bracket),
             levels: Vec::new(),
+            first_level_stop_loss: None,
             stop_loss: (false, bracket),
             time_in_force: TimeInForce::Day,
             expires: None,
@@ -461,9 +510,16 @@ impl OrderTicket {
             .iter()
             .map(|level| {
                 let share = level.quantity / request.quantity * 100.0;
-                (at_price(level.price), share)
+                let mut saved = PresetLevel::new(at_price(level.price), share);
+                saved.stop_loss = level.stop_loss.map(at_price);
+                saved
             })
             .collect();
+        self.first_level_stop_loss = request
+            .take_profit_levels
+            .first()
+            .and_then(|level| level.stop_loss)
+            .map(at_price);
         for (target, value) in [
             (&mut self.take_profit, first),
             (&mut self.stop_loss, request.stop_loss),
@@ -548,29 +604,38 @@ impl OrderTicket {
         quantity: f64,
     ) -> Result<(Option<f64>, Vec<TakeProfitLevel>), String> {
         let capabilities = &market.capabilities;
-        if !(self.take_profit.0 && capabilities.brackets && capabilities.take_profit_levels)
-            || self.levels.is_empty()
-        {
+        if !(self.take_profit.0 && levels_accepted(capabilities)) || self.levels.is_empty() {
             let take_profit = self.exit(market, side, entry, Some(quantity), true)?;
             return Ok((take_profit, Vec::new()));
         }
+        if let Some(max) = capabilities.max_take_profit_levels
+            && self.levels.len() + 1 > max
+        {
+            return Err(l10n::format_text(
+                ctx,
+                "The account accepts at most {count} take-profit levels",
+                &[("count", max.to_string())],
+            ));
+        }
         let rules = market.rules;
+        let stops = capabilities.take_profit_level_stops;
         let mut levels = Vec::with_capacity(self.levels.len() + 1);
-        levels.push((self.take_profit.1, 0.0));
-        for (bracket, share) in &self.levels {
-            if !share.is_finite() || *share <= 0.0 {
+        levels.push((self.take_profit.1, 0.0, self.first_level_stop_loss));
+        for level in &self.levels {
+            if !level.share.is_finite() || level.share <= 0.0 {
                 return Err("Enter a share above 0% for each take-profit level".into());
             }
             levels.push((
-                *bracket,
-                round_down(quantity * share / 100.0, rules.quantity_step),
+                level.take_profit,
+                round_down(quantity * level.share / 100.0, rules.quantity_step),
+                level.stop_loss,
             ));
         }
-        let extra: f64 = levels.iter().map(|(_, quantity)| quantity).sum();
+        let extra: f64 = levels.iter().map(|(_, quantity, _)| quantity).sum();
         levels[0].1 = to_step(quantity - extra, rules.quantity_step, f64::round);
         let levels = levels
             .into_iter()
-            .map(|(bracket, quantity)| {
+            .map(|(bracket, quantity, stop)| {
                 if quantity < rules.min_quantity {
                     return Err(l10n::format_text(
                         ctx,
@@ -587,7 +652,12 @@ impl OrderTicket {
                 }
                 let per_point = quantity * rules.point_value;
                 let price = exit_price(market, side, entry, bracket, per_point, true)?;
-                Ok(TakeProfitLevel::new(price, quantity))
+                let mut level = TakeProfitLevel::new(price, quantity);
+                level.stop_loss = match stop.filter(|_| stops) {
+                    Some(stop) => Some(exit_price(market, side, entry, stop, per_point, false)?),
+                    None => None,
+                };
+                Ok(level)
             })
             .collect::<Result<_, String>>()?;
         Ok((None, levels))
@@ -685,6 +755,9 @@ impl OrderTicket {
             }
         };
         let (take_profit, levels) = self.take_profits(ctx, market, self.side, entry, quantity)?;
+        if self.sizing == Sizing::Risk && levels.iter().any(|level| level.stop_loss.is_some()) {
+            return Err("Sizing by risk needs one stop loss for the whole order".into());
+        }
 
         let mut request = OrderRequest::new(&self.symbol, self.side, quantity, order_type);
         request.take_profit = take_profit;
@@ -732,7 +805,8 @@ impl OrderTicket {
             self.take_profit = preset
                 .take_profit
                 .map_or((false, self.take_profit.1), |bracket| (true, bracket));
-            self.levels.clear();
+            self.levels.clone_from(&preset.take_profit_levels);
+            self.first_level_stop_loss = preset.first_level_stop_loss;
             self.stop_loss = preset
                 .stop_loss
                 .map_or((false, self.stop_loss.1), |bracket| (true, bracket));
@@ -760,6 +834,14 @@ impl OrderTicket {
             quantity,
             take_profit: (self.preset_fields.exits && self.take_profit.0)
                 .then_some(self.take_profit.1),
+            take_profit_levels: if self.preset_fields.exits && self.take_profit.0 {
+                self.levels.clone()
+            } else {
+                Vec::new()
+            },
+            first_level_stop_loss: self
+                .first_level_stop_loss
+                .filter(|_| self.preset_fields.exits && self.take_profit.0),
             stop_loss: (self.preset_fields.exits && self.stop_loss.0).then_some(self.stop_loss.1),
             sizing: self.preset_fields.quantity.then_some(match self.sizing {
                 Sizing::Units => PresetSizing::Units,
@@ -774,6 +856,15 @@ impl OrderTicket {
                 .then_some(self.time_in_force),
         }
     }
+}
+
+/// Whether the account takes brackets with levels and has room for at least two.
+pub(super) fn levels_accepted(capabilities: &Capabilities) -> bool {
+    capabilities.brackets
+        && capabilities.take_profit_levels
+        && capabilities
+            .max_take_profit_levels
+            .is_none_or(|max| max >= 2)
 }
 
 /// The price of `bracket` for an order on `side` entering at `entry`, snapped to the tick, where
@@ -820,8 +911,21 @@ fn reward(request: &OrderRequest, entry: f64) -> Option<f64> {
     )
 }
 
+/// The distance to each part's stop times its quantity, or none if a part has no stop:
+/// the risk per unit of point value.
+fn risk(request: &OrderRequest, entry: f64) -> Option<f64> {
+    if request.take_profit_levels.is_empty() {
+        return Some((request.stop_loss? - entry).abs() * request.quantity);
+    }
+    request
+        .take_profit_levels
+        .iter()
+        .map(|level| Some((level.stop_loss.or(request.stop_loss)? - entry).abs() * level.quantity))
+        .sum()
+}
+
 /// `quantity` rounded down to a whole multiple of `step`, at the step's decimals.
-fn round_down(quantity: f64, step: f64) -> f64 {
+pub(super) fn round_down(quantity: f64, step: f64) -> f64 {
     // Allow division noise at both small step counts and large quantities converted from money.
     to_step(quantity, step, |steps| {
         (steps + 1e-9 + steps.abs() * 1e-12).floor()
@@ -928,16 +1032,20 @@ fn confirmation(
         line("Take profit {price}", &[("price", numbers.price(price))]);
     }
     for level in &request.take_profit_levels {
-        line(
-            "Take profit {price} for {quantity}",
-            &[
-                ("price", numbers.price(level.price)),
-                (
-                    "quantity",
-                    numbers.quantity(level.quantity, quantity_decimals),
-                ),
-            ],
-        );
+        let mut values = vec![
+            ("price", numbers.price(level.price)),
+            (
+                "quantity",
+                numbers.quantity(level.quantity, quantity_decimals),
+            ),
+        ];
+        let key = if let Some(stop) = level.stop_loss {
+            values.push(("stop", numbers.price(stop)));
+            "Take profit {price} for {quantity} with a stop loss at {stop}"
+        } else {
+            "Take profit {price} for {quantity}"
+        };
+        line(key, &values);
     }
     if let Some(price) = request.stop_loss {
         line("Stop loss {price}", &[("price", numbers.price(price))]);
@@ -1163,7 +1271,8 @@ mod tests {
                 kind: Kind::Stop,
                 price: 101.0,
                 stop_loss: (true, ticks(4.0)),
-                levels: vec![(ticks(12.0), 50.0)],
+                levels: vec![PresetLevel::new(ticks(12.0), 50.0)],
+                first_level_stop_loss: Some(ticks(6.0)),
                 ..OrderTicket::default()
             };
             ticket.apply(&preset, &market);
@@ -1180,6 +1289,10 @@ mod tests {
             assert_eq!(ticket.take_profit.0.then_some(ticket.take_profit.1), profit);
             assert_eq!(ticket.stop_loss.0.then_some(ticket.stop_loss.1), stop);
             assert_eq!(ticket.levels.is_empty(), preset.exits);
+            assert_eq!(
+                ticket.first_level_stop_loss,
+                (!preset.exits).then_some(ticks(6.0))
+            );
         }
         let rules = TradingRules::new("ES");
         let market = market(&rules);
@@ -1470,6 +1583,7 @@ mod tests {
         let mut capabilities = Capabilities::default();
         (capabilities.limit, capabilities.stop, capabilities.brackets) = (true, true, true);
         capabilities.take_profit_levels = true;
+        capabilities.take_profit_level_stops = true;
         let market = Market {
             symbol: "ES",
             formatter: None,
@@ -1550,7 +1664,7 @@ mod tests {
             "Sell 3 ES @ 98.00 STOP?\nTake profit 94.00\nStop loss 100.00"
         );
         // A level at 24 ticks = 6 points for half of 3: 1.5 rounds down to 1 and the first takes 2.
-        ticket.levels = vec![(ticks(24.0).1, 50.0)];
+        ticket.levels = vec![PresetLevel::new(ticks(24.0).1, 50.0)];
         let order = OrderRequest::new("ES", OrderSide::Sell, 3.0, OrderType::Stop(98.0));
         let order = ticket.with_brackets(&ctx, order, &market).unwrap();
         assert_eq!(order.take_profit, None);
@@ -1572,6 +1686,24 @@ mod tests {
             confirmation(&marked, &order, &market.numbers(), 0),
             "~~3~ES~98.00~~\n~94.00~2~\n~92.00~1~\n~100.00~"
         );
+        ticket.levels[0].stop_loss = Some(ticks(4.0).1);
+        let order = OrderRequest::new("ES", OrderSide::Sell, 3.0, OrderType::Stop(98.0));
+        let order = ticket.with_brackets(&ctx, order, &market).unwrap();
+        let mut second = TakeProfitLevel::new(92.0, 1.0);
+        second.stop_loss = Some(99.0);
+        assert_eq!(
+            order.take_profit_levels,
+            [TakeProfitLevel::new(94.0, 2.0), second]
+        );
+        assert_eq!(
+            confirmation(&ctx, &order, &market.numbers(), 0),
+            "Sell 3 ES @ 98.00 STOP?\nTake profit 94.00 for 2\nTake profit 92.00 for 1 with a stop loss at 99.00\nStop loss 100.00"
+        );
+        assert_eq!(
+            confirmation(&marked, &order, &market.numbers(), 0),
+            "~~3~ES~98.00~~\n~94.00~2~\n~92.00~1~99.00~\n~100.00~"
+        );
+        ticket.levels[0].stop_loss = None;
         ticket.stop_loss = ticks(0.0);
         let order = OrderRequest::new("ES", OrderSide::Sell, 3.0, OrderType::Stop(98.0));
         assert!(ticket.with_brackets(&ctx, order, &market).is_err());
@@ -1908,7 +2040,10 @@ mod tests {
                 quantity: amount,
                 amount,
                 take_profit: (true, take_profit),
-                levels,
+                levels: levels
+                    .into_iter()
+                    .map(|(bracket, share)| PresetLevel::new(bracket, share))
+                    .collect(),
                 stop_loss: (stop_loss.is_some(), stop_loss.unwrap_or(ticks(1.0))),
                 ..OrderTicket::default()
             };
@@ -1969,6 +2104,339 @@ mod tests {
             let request = ticket.request(&egui::Context::default(), &market).unwrap();
             assert_eq!(request.quantity, expected, "amount from {quantity}");
         }
+    }
+    /// The symbol fixture uses half-unit steps and a point value of 50.
+    fn level_market(rules: &TradingRules) -> Market<'_> {
+        Market {
+            symbol: "ES",
+            formatter: None,
+            pip_value: None,
+            last: Some(4_000.0),
+            bid: None,
+            ask: None,
+            tick: 0.25,
+            decimals: 2,
+            currency: "USD",
+            balance: Some(100_000.0),
+            capabilities: Capabilities {
+                market: true,
+                limit: true,
+                brackets: true,
+                take_profit_levels: true,
+                take_profit_level_stops: true,
+                ..Capabilities::default()
+            },
+            rules,
+            rules_ready: true,
+            offline: None,
+            ladder: None,
+            ladder_unavailable: None,
+            highlights: Vec::new(),
+            orders: &[],
+            positions: &[],
+            trades: &[],
+            session_open: None,
+            last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
+            logo: None,
+            account: "",
+            timezone: crate::scales::TimezoneMode::Utc,
+        }
+    }
+
+    /// Own stops use their level's quantity, stay on the loss side, and require the capability.
+    /// Risk readouts add the parts; sizing by risk requires a single whole-order stop.
+    #[test]
+    fn level_stops_are_priced_from_their_level_and_sent_only_when_accepted() {
+        use crate::theme::ThemeExt;
+        let mut rules = TradingRules::new("ES");
+        rules.quantity_step = 0.5;
+        rules.min_quantity = 0.5;
+        rules.max_quantity = Some(10.0);
+        rules.point_value = 50.0;
+        let mut market = level_market(&rules);
+        let ticks = |value| Bracket::new(BracketMode::Ticks, value);
+        let stopped = |price, quantity, stop_loss| {
+            let mut level = TakeProfitLevel::new(price, quantity);
+            level.stop_loss = stop_loss;
+            level
+        };
+        // accepted, first stop, second stop, order stop, sizing -> quantity, stops, risk * 50.
+        for (accepted, first, second, shared, sizing, expected) in [
+            (
+                true,
+                Some(ticks(4.0)),
+                ticks(8.0),
+                None,
+                Sizing::Units,
+                Ok((2.0, Some(3999.0), Some(3998.0), None, Some(150.0))),
+            ),
+            (
+                true,
+                None,
+                ticks(8.0),
+                Some(ticks(16.0)),
+                Sizing::Units,
+                Ok((2.0, None, Some(3998.0), Some(3996.0), Some(300.0))),
+            ),
+            (
+                true,
+                None,
+                ticks(8.0),
+                None,
+                Sizing::Units,
+                Ok((2.0, None, Some(3998.0), None, None)),
+            ),
+            (
+                false,
+                Some(ticks(4.0)),
+                ticks(8.0),
+                Some(ticks(16.0)),
+                Sizing::Units,
+                Ok((2.0, None, None, Some(3996.0), Some(400.0))),
+            ),
+            (
+                true,
+                None,
+                Bracket::new(BracketMode::Price, 4003.0),
+                None,
+                Sizing::Units,
+                Err("The stop loss must lie on the loss side of the entry"),
+            ),
+            (
+                true,
+                None,
+                Bracket::new(BracketMode::Money, 50.0),
+                None,
+                Sizing::Units,
+                Ok((2.0, None, Some(3999.0), None, None)),
+            ),
+            (
+                true,
+                None,
+                ticks(8.0),
+                Some(ticks(8.0)),
+                Sizing::Risk,
+                Err("Sizing by risk needs one stop loss for the whole order"),
+            ),
+            (
+                false,
+                None,
+                ticks(8.0),
+                Some(ticks(8.0)),
+                Sizing::Risk,
+                Ok((10.0, None, None, Some(3998.0), Some(1000.0))),
+            ),
+        ] {
+            market.capabilities.take_profit_level_stops = accepted;
+            let mut saved = PresetLevel::new(ticks(8.0), 50.0);
+            saved.stop_loss = Some(second);
+            let mut ticket = OrderTicket {
+                symbol: "ES".into(),
+                sizing,
+                quantity: 2.0,
+                amount: 1.0,
+                take_profit: (true, ticks(4.0)),
+                levels: vec![saved],
+                first_level_stop_loss: first,
+                stop_loss: (shared.is_some(), shared.unwrap_or(ticks(1.0))),
+                ..OrderTicket::default()
+            };
+            let ctx = egui::Context::default();
+            let actual = ticket.request(&ctx, &market);
+            let expected = expected.map(|(quantity, first, second, shared, risk)| {
+                let mut request =
+                    OrderRequest::new("ES", OrderSide::Buy, quantity, OrderType::Market);
+                request.take_profit_levels = vec![
+                    stopped(4001.0, quantity / 2.0, first),
+                    stopped(4002.0, quantity / 2.0, second),
+                ];
+                request.stop_loss = shared;
+                (request, risk)
+            });
+            assert_eq!(
+                actual.as_ref().map_err(String::as_str),
+                expected
+                    .as_ref()
+                    .map(|(request, _)| request)
+                    .map_err(|error| *error)
+            );
+            if let Ok((request, expected_risk)) = expected {
+                assert_eq!(
+                    risk(&request, 4000.0).map(|risk| risk * 50.0),
+                    expected_risk
+                );
+                let mut reopened = OrderTicket::default();
+                reopened.open(&request);
+                assert_eq!(reopened.request(&ctx, &market), Ok(request.clone()));
+                if accepted && first.is_none() && shared.is_none() && second == ticks(8.0) {
+                    // Both halves have take profits; only the second half has a stop.
+                    let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        ticket.show(
+                            ui,
+                            &market,
+                            &mut std::collections::BTreeMap::new(),
+                            &mut false,
+                        );
+                    });
+                    let theme = ctx.active_theme();
+                    for (color, width) in [(theme.ui.take_profit, 10.0), (theme.ui.stop_loss, 5.0)]
+                    {
+                        let bar = |rect: &egui::epaint::RectShape| {
+                            rect.fill == color
+                                && rect.rect.height() == 3.0
+                                && rect.rect.width() == width
+                        };
+                        assert!(output.shapes.iter().any(
+                            |shape| matches!(&shape.shape, egui::Shape::Rect(rect) if bar(rect))
+                        ));
+                    }
+                    output.drop_without_applying_deltas();
+                }
+            }
+        }
+    }
+
+    /// The first level counts toward the maximum, including after restoring a larger preset.
+    #[test]
+    fn the_ticket_offers_levels_up_to_the_accounts_maximum() {
+        let mut rules = TradingRules::new("ES");
+        rules.quantity_step = 0.5;
+        rules.min_quantity = 0.5;
+        let mut market = level_market(&rules);
+        market.capabilities.max_take_profit_levels = Some(3);
+        let ticks = |value| Bracket::new(BracketMode::Ticks, value);
+        for (extra, max, offered, error) in [
+            (1, 3, true, false),
+            (2, 3, false, false),
+            (3, 3, false, true),
+            (1, 1, false, false),
+        ] {
+            market.capabilities.max_take_profit_levels = Some(max);
+            let mut ticket = OrderTicket {
+                symbol: "ES".into(),
+                quantity: 2.0,
+                take_profit: (true, ticks(4.0)),
+                levels: (0..extra)
+                    .map(|i| {
+                        PresetLevel::new(
+                            ticks(8.0 + i as f64 * 4.0),
+                            if extra == 3 { 20.0 } else { 30.0 },
+                        )
+                    })
+                    .collect(),
+                ..OrderTicket::default()
+            };
+            let ctx = egui::Context::default();
+            let request = ticket.request(&ctx, &market);
+            if error {
+                assert_eq!(
+                    request,
+                    Err("The account accepts at most 3 take-profit levels".into())
+                );
+            } else {
+                let request = request.unwrap();
+                if max == 1 {
+                    assert_eq!(request.take_profit, Some(4001.0));
+                    assert!(request.take_profit_levels.is_empty());
+                }
+            }
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ticket.show(
+                    ui,
+                    &market,
+                    &mut std::collections::BTreeMap::new(),
+                    &mut false,
+                );
+            });
+            let add_level = |text: &egui::epaint::TextShape| text.galley.text() == "Add level";
+            assert_eq!(
+                output.shapes.iter().any(
+                    |shape| matches!(&shape.shape, egui::Shape::Text(text) if add_level(text))
+                ),
+                offered,
+                "{extra} extra, maximum {max}"
+            );
+            output.drop_without_applying_deltas();
+        }
+    }
+
+    /// Presets keep distances, shares and both kinds of stop; old JSON loads without levels.
+    #[test]
+    fn presets_restore_take_profit_levels_and_their_stops() {
+        let mut rules = TradingRules::new("ES");
+        rules.quantity_step = 0.5;
+        rules.min_quantity = 0.5;
+        let mut market = level_market(&rules);
+        let ticks = |value| Bracket::new(BracketMode::Ticks, value);
+        for (first, keep) in [
+            (None, true),
+            (Some(ticks(4.0)), true),
+            (None, false),
+            (Some(ticks(4.0)), false),
+        ] {
+            let mut saved = PresetLevel::new(ticks(8.0), 50.0);
+            saved.stop_loss = Some(ticks(8.0));
+            let ticket = OrderTicket {
+                symbol: "ES".into(),
+                quantity: 2.0,
+                take_profit: (true, ticks(4.0)),
+                levels: vec![saved],
+                first_level_stop_loss: first,
+                preset_fields: PresetFields {
+                    exits: keep,
+                    ..PresetFields::default()
+                },
+                stop_loss: (true, ticks(16.0)),
+                ..OrderTicket::default()
+            };
+            let ctx = egui::Context::default();
+            let json =
+                serde_json::to_string(&ticket.preset(&ctx, "Scale".into(), &market)).unwrap();
+            let preset: OrderPreset = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                preset.take_profit_levels,
+                if keep { vec![saved] } else { Vec::new() }
+            );
+            assert_eq!(preset.first_level_stop_loss, first.filter(|_| keep));
+            let mut restored = OrderTicket {
+                symbol: "ES".into(),
+                ..OrderTicket::default()
+            };
+            if !keep {
+                restored.take_profit = ticket.take_profit;
+                restored.levels.clone_from(&ticket.levels);
+                restored.first_level_stop_loss = ticket.first_level_stop_loss;
+                restored.stop_loss = ticket.stop_loss;
+            }
+            restored.apply(&preset, &market);
+            let mut expected = OrderRequest::new("ES", OrderSide::Buy, 2.0, OrderType::Market);
+            let mut first_level = TakeProfitLevel::new(4001.0, 1.0);
+            first_level.stop_loss = first.map(|_| 3999.0);
+            let mut second = TakeProfitLevel::new(4002.0, 1.0);
+            second.stop_loss = Some(3998.0);
+            expected.take_profit_levels = vec![first_level, second];
+            expected.stop_loss = Some(3996.0);
+            assert_eq!(restored.request(&ctx, &market), Ok(expected.clone()));
+            market.capabilities.take_profit_levels = false;
+            expected.take_profit_levels.clear();
+            expected.take_profit = Some(4001.0);
+            assert_eq!(restored.request(&ctx, &market), Ok(expected));
+            market.capabilities.take_profit_levels = true;
+        }
+        // Literal format emitted on the base revision, before presets stored level fields.
+        let old = r#"{"name":"Old","quantity":2.0,"take_profit":{"mode":"Ticks","value":4.0},"stop_loss":null}"#;
+        let mut restored = OrderTicket {
+            symbol: "ES".into(),
+            ..OrderTicket::default()
+        };
+        restored.apply(&serde_json::from_str(old).unwrap(), &market);
+        let mut expected = OrderRequest::new("ES", OrderSide::Buy, 2.0, OrderType::Market);
+        expected.take_profit = Some(4001.0);
+        assert_eq!(
+            restored.request(&egui::Context::default(), &market),
+            Ok(expected)
+        );
     }
 
     /// Guards the reasons the ticket gives for a quantity outside the symbol's limits: the limit
@@ -2045,7 +2513,7 @@ mod tests {
                 quantity,
                 take_profit: (split, ticks(10.0)),
                 levels: if split {
-                    vec![(ticks(20.0), 50.0)]
+                    vec![PresetLevel::new(ticks(20.0), 50.0)]
                 } else {
                     Vec::new()
                 },

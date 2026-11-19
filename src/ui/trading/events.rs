@@ -439,10 +439,9 @@ fn valid_event(event: &AccountEvent) -> bool {
                 && (0.0..=request.quantity).contains(&order.filled)
                 && finite(order.fill_price)
                 && finite(request.take_profit)
-                && request
-                    .take_profit_levels
-                    .iter()
-                    .all(|level| level.price.is_finite() && positive(level.quantity))
+                && request.take_profit_levels.iter().all(|level| {
+                    level.price.is_finite() && positive(level.quantity) && finite(level.stop_loss)
+                })
                 && finite(request.stop_loss)
                 && match request.order_type {
                     OrderType::Market => true,
@@ -1251,7 +1250,12 @@ mod tests {
             let mut invalid_level = order.clone();
             invalid_level.request.take_profit_levels =
                 vec![crate::model::TakeProfitLevel::new(bad, 2.0)];
+            let mut invalid_stop = order.clone();
+            let mut level = crate::model::TakeProfitLevel::new(110.0, 2.0);
+            level.stop_loss = Some(bad);
+            invalid_stop.request.take_profit_levels = vec![level];
             for event in [
+                AccountEvent::Order(invalid_stop),
                 AccountEvent::Account(Account::new("USD", bad, Capabilities::default())),
                 AccountEvent::Order(invalid_order),
                 AccountEvent::Order(invalid_level),
