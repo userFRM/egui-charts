@@ -76,7 +76,10 @@ pub struct RangeBar {
     pub end_time: DateTime<Utc>,
     /// Range size used for this bar
     pub range_size: f64,
-    /// Number of ticks in this bar
+    /// Number of trades in this bar, or of source bars in one approximated from OHLC bars. Zero
+    /// for a bar that closed without a trade in its range: a trade beyond a price gap, or an
+    /// OHLC bar that opens beyond one, closes a bar at each boundary on the way, and only the
+    /// first of them holds a trade.
     pub tick_cnt: usize,
 }
 
@@ -238,21 +241,23 @@ impl RangeBarBuilder {
         curr_bar.tick_cnt += 1;
 
         const MAX_CLOSES: usize = 100;
-        if self.advance(&mut curr_bar, tick.price, tick.ts, MAX_CLOSES) {
+        if self.advance(&mut curr_bar, tick.price, tick.ts, MAX_CLOSES, 0) {
             curr_bar.tick_cnt = usize::from(curr_bar.close != curr_bar.open);
         }
         self.curr_bar = Some(curr_bar);
     }
 
     /// Moves the bar in progress to `price`, closing at most `max_closes` bars, one at every
-    /// boundary the move reaches; a move that would close more stops at the last close. Returns
-    /// whether a bar closed.
+    /// boundary the move reaches; a move that would close more stops at the last close. Each bar
+    /// the move opens starts with `traded` ticks: 0 for a jump, 1 for a move taken to trade on
+    /// the way. Returns whether a bar closed.
     fn advance(
         &mut self,
         curr_bar: &mut RangeBar,
         mut price: f64,
         time: DateTime<Utc>,
         max_closes: usize,
+        traded: usize,
     ) -> bool {
         let range_size = self.range_size;
         let mut closes = 0;
@@ -313,7 +318,7 @@ impl RangeBarBuilder {
                 start_time: time,
                 end_time: time,
                 range_size,
-                tick_cnt: 0,
+                tick_cnt: traded,
             };
         }
         curr_bar.high = curr_bar.high.max(price);
@@ -323,14 +328,18 @@ impl RangeBarBuilder {
     }
 
     /// Takes the bar in progress along the price path of `bar`, closing a range bar wherever the
-    /// path completes one.
+    /// path completes one. The move from the price before to the open is a gap no trade filled;
+    /// the bar's own path is taken to have traded throughout.
     fn walk(&mut self, curr_bar: &mut RangeBar, bar: &Bar) {
-        for price in price_path(bar) {
-            self.advance(curr_bar, price, bar.time, usize::MAX);
+        let [open, path @ ..] = price_path(bar);
+        self.advance(curr_bar, open, bar.time, usize::MAX, 0);
+        // The bar that holds the open, and each bar the path opens, counts this bar.
+        curr_bar.tick_cnt += 1;
+        for price in path {
+            self.advance(curr_bar, price, bar.time, usize::MAX, 1);
         }
         curr_bar.volume = add_volume(curr_bar.volume, bar.volume);
         curr_bar.end_time = bar.time;
-        curr_bar.tick_cnt += 1;
     }
 
     /// Whether [`elements`](PriceBuilder::elements) ends with the range bar in progress.
