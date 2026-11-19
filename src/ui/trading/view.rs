@@ -1362,6 +1362,11 @@ mod tests {
             !defaults.show_execution_labels,
             "settings saved before labels were on by default keep them off"
         );
+        assert!(
+            !defaults.show_execution_prices,
+            "older settings keep fill prices off"
+        );
+        assert!(!TradingSettings::default().show_execution_prices);
         assert!(TradingSettings::default().show_execution_labels);
         assert!(defaults.extend_lines);
         assert_eq!(defaults.label_alignment, Right);

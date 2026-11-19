@@ -70,6 +70,7 @@ impl<'a> ExecutionMark<'a> {
 /// Fills on the same side and bar share up to three stacked triangles and a count of the rest.
 /// Buys point up below the bar's low; sells point down above its high. Hover lists the fills,
 /// and [`TradingSettings::show_execution_labels`] adds their side and total quantity.
+/// [`TradingSettings::show_execution_prices`] adds their quantity-weighted average fill price.
 /// [`TradingSettings::show_executions`] hides everything when off. Fills with non-finite
 /// prices or quantities, or quantities at or below zero, are omitted.
 ///
@@ -222,18 +223,22 @@ pub(super) fn show(
         let mut rect = Rect::from_two_pos(at(-HALF_WIDTH, 0.0), at(HALF_WIDTH, length));
         let more = (run.len() > MAX_STACK).then(|| format!("+{}", run.len() - MAX_STACK));
         let label = display.show_execution_labels.then(|| {
+            let quantity = numbers.quantity(quantity, quantity_decimals(quantity));
+            let price =
+                (display.show_execution_prices && price.is_finite()).then(|| numbers.price(price));
+            let template = match (side, price.is_some()) {
+                (OrderSide::Buy, false) => "Buy {quantity}",
+                (OrderSide::Sell, false) => "Sell {quantity}",
+                (OrderSide::Buy, true) => "Buy {quantity} @ {price}",
+                (OrderSide::Sell, true) => "Sell {quantity} @ {price}",
+            };
             l10n::format_text(
                 ui.ctx(),
-                match side {
-                    OrderSide::Buy => "Buy {quantity}",
-                    OrderSide::Sell => "Sell {quantity}",
-                },
-                &[(
-                    "quantity",
-                    numbers
-                        .quantity(quantity, quantity_decimals(quantity))
-                        .as_str(),
-                )],
+                template,
+                &[
+                    ("quantity", quantity.as_str()),
+                    ("price", price.as_deref().unwrap_or("")),
+                ],
             )
         });
         let lines: Vec<_> = more
@@ -444,7 +449,12 @@ mod tests {
     #[test]
     fn host_fills_draw_with_their_own_colour_and_hover() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            for visible in [true, false] {
+            for (visible, labels, prices, label) in [
+                (true, true, false, Some("Buy 2")),
+                (false, true, false, None),
+                (true, true, true, Some("Buy 2 @ 101.25")),
+                (true, false, true, None),
+            ] {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut chart = test_frames::chart(&[90.0], &[110.0]);
@@ -481,6 +491,8 @@ mod tests {
                 marks.extend(invalid.iter().map(ExecutionMark::new));
                 let mut display = TradingSettings::default();
                 display.show_executions = visible;
+                display.show_execution_labels = labels;
+                display.show_execution_prices = prices;
                 let (mut triangles, mut hovered, mut labelled) = (Vec::new(), false, false);
                 for frame in 0..4 {
                     let mapping = chart.get_chart_mapping();
@@ -520,7 +532,7 @@ mod tests {
                         Shape::Text(text) if text.galley.text() == "Imported\nBuy 1 at 101.50, Sun 18 Feb '24 10:13:20"));
                     labelled |= output.shapes.iter().any(|shape| {
                         matches!(&shape.shape,
-                        Shape::Text(text) if text.galley.text() == "Buy 2")
+                        Shape::Text(text) if text.galley.text().starts_with("Buy 2") && Some(text.galley.text()) == label)
                     });
                     output.drop_without_applying_deltas();
                 }
@@ -536,7 +548,7 @@ mod tests {
                 };
                 assert_eq!(triangles, expected);
                 assert_eq!(hovered, visible);
-                assert_eq!(labelled, visible);
+                assert_eq!(labelled, label.is_some());
             }
         }
     }
