@@ -419,7 +419,7 @@ mod tests {
             ),
         ];
         for (study, closes, conditions) in rows {
-            let bars = closes
+            let bars: Vec<_> = closes
                 .into_iter()
                 .enumerate()
                 .map(|(i, c)| {
@@ -433,7 +433,7 @@ mod tests {
                     )
                 })
                 .collect();
-            let mut chart = Chart::new(BarData::from_bars(bars));
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
             let id = chart.add_indicator(study);
             let sources = chart.alert_sources();
             for (condition, (name, expected)) in conditions.iter().enumerate() {
@@ -471,6 +471,7 @@ mod tests {
                 study
                     .set_input("plot_offset", InputValue::Integer(2))
                     .unwrap();
+                study.calculate(&bars);
                 for (condition, (_, expected)) in conditions.iter().enumerate() {
                     for (bar, expected) in expected.iter().enumerate() {
                         assert_eq!(

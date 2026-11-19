@@ -2005,8 +2005,8 @@ mod tests {
         let mut restored = AlertDialog::new();
         restored.edit(saved);
 
-        // Words drop out under `mark_keys` and values stay: MACD's Signal and Histogram, the
-        // median, and the first and second lines at 0.5, of which the restored alert saved one.
+        // Words drop out under `mark_keys` and values stay: MACD's Signal, Histogram and two
+        // conditions, the median and both lines at 0.5, of which the restored alert saved one.
         for dialog in [fresh, restored] {
             let mut h = Harness::builder()
                 .with_size(egui::vec2(600.0, 900.0))
@@ -2016,7 +2016,7 @@ mod tests {
             h.run();
             crate::localization::mark_keys(&h.ctx);
             h.run();
-            for (label, count) in [("~MACD~~~", 2), ("~~~7~~~", 1), ("~~~7~0.5~", 2)] {
+            for (label, count) in [("~MACD~~~", 4), ("~~~7~~~", 1), ("~~~7~0.5~", 2)] {
                 assert_eq!(h.query_all_by_label(label).count(), count, "{label}");
             }
         }
