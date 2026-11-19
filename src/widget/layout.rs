@@ -17,8 +17,12 @@ const LINK_CONTROLS_MIN_WIDTH: f32 = 352.0;
 /// Distance of the selectors from the chart's right edge, which ends the status line's first row.
 pub(super) const LINK_CONTROLS_INSET: f32 = 220.0;
 
-/// The keys a layout of more than one chart takes from its charts' requests.
-const LAYOUT_KEYS: &[KeyboardAction] = &[KeyboardAction::MaximizeChart];
+/// The keys a layout of more than one chart takes: Alt+Enter in grids, Tab in every preset.
+const LAYOUT_KEYS: &[KeyboardAction] = &[
+    KeyboardAction::MaximizeChart,
+    KeyboardAction::CycleChartFocus,
+    KeyboardAction::CycleChartFocusBack,
+];
 
 const LINK_MARKERS: [(&str, egui::Color32); 5] = [
     ("🔶", egui::Color32::from_rgb(240, 150, 0)),
@@ -1668,9 +1672,28 @@ impl ChartLayout {
         self.groups[a] == self.groups[b]
     }
 
+    /// Steps among supplied slots, skipping detached charts and wrapping at the ends.
+    fn cycled_slot(&self, from: usize, forward: bool, count: usize) -> usize {
+        (1..count)
+            .map(|step| {
+                if forward {
+                    (from + step) % count
+                } else {
+                    (from + count - step) % count
+                }
+            })
+            .find(|slot| !self.detached[*slot])
+            .unwrap_or(from)
+    }
+
     /// Shows the preset and synchronizes its charts. Click or scroll a panel to activate it;
     /// chart shortcuts and typed entry go to the active chart, while a focused text field or
     /// dialog keeps its keys.
+    /// With more than one chart, Tab and Shift+Tab activate and focus the next and previous chart
+    /// in slot order, skipping detached ones and wrapping at the ends; while a chart is maximized,
+    /// that chart is shown maximized instead. Alt+Enter in a grid shows the active chart alone and
+    /// restores the preset. These keys stay with the layout even when the host drains
+    /// [`Chart::take_shortcut_requests`] first; with one chart they reach the host.
     /// Its header and corner menu offer independent symbol and interval groups; the corner menu
     /// also offers detachment and the synchronization group. The active border is painted
     /// inside the chart; stacked charts have a two-point gap and side-by-side charts meet at their
@@ -1700,7 +1723,11 @@ impl ChartLayout {
         }
         // Keep the layout's keys queued when a host drains requests before `show`.
         let pass = ui.ctx().cumulative_pass_nr();
-        let keys = (count > 1 && self.mode != ChartLayoutMode::Tabs).then_some(LAYOUT_KEYS);
+        let keys = (count > 1).then_some(if self.mode == ChartLayoutMode::Tabs {
+            &LAYOUT_KEYS[1..]
+        } else {
+            LAYOUT_KEYS
+        });
         for (index, chart) in charts.iter_mut().enumerate() {
             chart.keyboard.layout_keys = keys.filter(|_| index < count).map(|keys| (pass, keys));
         }
@@ -2085,6 +2112,35 @@ impl ChartLayout {
                     self.set_active(index);
                     ui.ctx().request_repaint();
                 }
+            }
+        }
+        // Tab activates a neighbour and hands any maximized place to it; a lone chart yields.
+        if count > 1 {
+            for (index, chart) in charts.iter_mut().take(count).enumerate() {
+                let mut steps = Vec::new();
+                chart.keyboard.requests.retain(|request| match request {
+                    ShortcutRequest::Action(KeyboardAction::CycleChartFocus) => {
+                        steps.push(true);
+                        false
+                    }
+                    ShortcutRequest::Action(KeyboardAction::CycleChartFocusBack) => {
+                        steps.push(false);
+                        false
+                    }
+                    _ => true,
+                });
+                // A discarded pass replays its input, so only the last one moves.
+                if steps.is_empty() || ui.ctx().will_discard() {
+                    continue;
+                }
+                let target = steps.into_iter().fold(index, |slot, forward| {
+                    self.cycled_slot(slot, forward, count)
+                });
+                if self.maximized.is_some() && !self.detached[target] {
+                    self.maximized = Some(target);
+                }
+                self.set_active(target);
+                ui.ctx().request_repaint();
             }
         }
         // Apply gestures from the source after it has handled this frame's input.
@@ -4901,6 +4957,218 @@ mod tests {
         assert_eq!(layout.visible_chart_rects(screen, 4), grid);
         frame(&mut layout, &mut charts, false, false);
         assert_eq!((layout.maximized(), layout.active()), (None, 3));
+    }
+
+    /// Tab follows slot order, wraps, skips detached slots and transfers both maximization and
+    /// canvas focus. A host draining first cannot take layout keys; a lone chart still yields them.
+    #[test]
+    fn tab_and_shift_tab_move_between_the_shown_charts() {
+        type Row = (
+            &'static str,
+            ChartLayoutMode,
+            usize,
+            &'static [usize],
+            Option<usize>,
+            usize,
+            bool,
+            bool,
+            (usize, Option<usize>),
+        );
+        use ChartLayoutMode::{Four, Single, Tabs};
+        let rows: [Row; 13] = [
+            ("next", Four, 4, &[], None, 1, true, false, (2, None)),
+            (
+                "wrap forward",
+                Four,
+                4,
+                &[],
+                None,
+                3,
+                true,
+                false,
+                (0, None),
+            ),
+            ("wrap back", Four, 4, &[], None, 0, false, false, (3, None)),
+            (
+                "skip detached",
+                Four,
+                4,
+                &[2],
+                None,
+                1,
+                true,
+                false,
+                (3, None),
+            ),
+            (
+                "skip detached back",
+                Four,
+                4,
+                &[2],
+                None,
+                3,
+                false,
+                false,
+                (1, None),
+            ),
+            ("tab preset", Tabs, 4, &[], None, 3, true, false, (0, None)),
+            (
+                "maximized",
+                Four,
+                4,
+                &[],
+                Some(2),
+                2,
+                true,
+                false,
+                (3, Some(3)),
+            ),
+            (
+                "maximized back",
+                Four,
+                4,
+                &[],
+                Some(0),
+                0,
+                false,
+                false,
+                (3, Some(3)),
+            ),
+            (
+                "host drains first",
+                Four,
+                4,
+                &[],
+                None,
+                1,
+                true,
+                true,
+                (2, None),
+            ),
+            (
+                "tabs host drains first",
+                Tabs,
+                4,
+                &[],
+                None,
+                3,
+                true,
+                true,
+                (0, None),
+            ),
+            (
+                "others detached",
+                Four,
+                4,
+                &[0, 1, 3],
+                None,
+                2,
+                true,
+                false,
+                (2, None),
+            ),
+            ("one chart", Single, 2, &[], None, 0, true, false, (0, None)),
+            (
+                "one supplied chart",
+                Four,
+                1,
+                &[],
+                None,
+                0,
+                true,
+                true,
+                (0, None),
+            ),
+        ];
+        for (row, mode, supplied, detached, maximized, start, forward, host_first, expected) in rows
+        {
+            let ctx = egui::Context::default();
+            let mut layout = ChartLayout {
+                mode,
+                ..Default::default()
+            };
+            let mut charts: Vec<_> = (0..supplied).map(|_| chart(60)).collect();
+            for slot in detached {
+                layout.set_detached(*slot, true);
+            }
+            layout.set_active(start);
+            if let Some(slot) = maximized {
+                layout.set_maximized(Some(slot));
+            }
+            let modifiers = if forward {
+                egui::Modifiers::NONE
+            } else {
+                egui::Modifiers::SHIFT
+            };
+            let mut requests = Vec::new();
+            let mut time = 0.0;
+            let mut frame = |layout: &mut ChartLayout, charts: &mut Vec<Chart>, pressed| {
+                time += 0.1;
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
+                        time: Some(time),
+                        modifiers,
+                        events: if pressed {
+                            vec![
+                                Event::ModifiersChanged(modifiers),
+                                Event::Key {
+                                    key: egui::Key::Tab,
+                                    physical_key: None,
+                                    pressed: true,
+                                    repeat: false,
+                                    modifiers,
+                                },
+                            ]
+                        } else {
+                            vec![]
+                        },
+                        ..Default::default()
+                    },
+                    |ui| {
+                        if host_first {
+                            let chart = &mut charts[layout.active()];
+                            chart.dispatch_shortcuts(ui.ctx());
+                            requests.extend(chart.take_shortcut_requests());
+                        }
+                        layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                    },
+                )
+                .drop_without_applying_deltas();
+            };
+            for _ in 0..3 {
+                frame(&mut layout, &mut charts, false);
+            }
+            frame(&mut layout, &mut charts, true);
+            for _ in 0..2 {
+                frame(&mut layout, &mut charts, false);
+            }
+            assert_eq!((layout.active(), layout.maximized()), expected, "{row}");
+            let count = supplied.min(mode.chart_count());
+            if count > 1 {
+                let focused = ctx.memory(|memory| memory.focused()).and_then(|id| {
+                    charts
+                        .iter()
+                        .position(|chart| chart.keyboard.chart_id == Some(id))
+                });
+                assert_eq!(focused, Some(expected.0), "{row}: canvas focus");
+            }
+            for chart in &mut charts {
+                requests.extend(chart.take_shortcut_requests());
+            }
+            if count > 1 {
+                assert!(
+                    requests.is_empty(),
+                    "{row}: layout keys reached the host: {requests:?}"
+                );
+            } else {
+                assert_eq!(
+                    requests,
+                    [ShortcutRequest::Action(KeyboardAction::CycleChartFocus)],
+                    "{row}"
+                );
+            }
+        }
     }
 
     /// A border drag changes only the charts beside it and leaves the dragged border under the
