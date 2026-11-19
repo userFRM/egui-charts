@@ -197,8 +197,8 @@ impl Chart {
     /// by `time` reach rendering, studies, auto-scaling and readouts, including the histories
     /// that studies request for other symbols and intervals. A bar closes at its next open on
     /// [`Self::bar_clock`], and a daily, weekly or monthly bar of an instrument with a session
-    /// when its last trading window closes, extended hours included when
-    /// [`Self::set_extended_hours`] selects them; without a timeframe or on numeric and custom
+    /// when its last trading window closes, including the extended and overnight hours
+    /// selected by [`Self::set_extended_hours`] and [`Self::set_overnight_hours`]; without a timeframe or on numeric and custom
     /// horizontal axes, keys strictly before `time` are available. Supply finer bars with
     /// `set_replay_source` to build the unfinished chart bar. No future OHLC is inferred from a
     /// completed coarse bar. ATR and percentage sizes resolve from the bars before the cursor when

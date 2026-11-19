@@ -1508,6 +1508,11 @@ macro_rules! profile_study {
             fn needs_order_flow(&self) -> bool {
                 false
             }
+            // The finer bars are chosen below the interval the profile is calculated on, so they
+            // apply on any Interval.
+            fn requests_allow_other_intervals(&self) -> bool {
+                true
+            }
             fn volume_profiles(&self, visible: Range<usize>) -> Vec<StudyProfile> {
                 self.profile.profiles(visible)
             }
