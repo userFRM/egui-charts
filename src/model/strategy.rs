@@ -228,6 +228,18 @@ pub struct StrategyPerformance {
     /// Intrabar maximum drawdown divided by initial capital. `None` without usable ranges or
     /// positive finite capital, or if the result is not finite.
     pub intrabar_max_drawdown_initial_capital_fraction: Option<f64>,
+    /// Largest close-to-close rise above an earlier equity trough, in money. `None` without
+    /// a usable equity point.
+    pub max_run_up: Option<f64>,
+    /// `max_run_up / initial_capital`. `None` without a run-up, positive finite capital or a
+    /// finite result.
+    pub max_run_up_fraction: Option<f64>,
+    /// Largest rise using [`StrategyReport::equity_ranges`]: at each bar the larger of its high
+    /// less the earlier trough and its own [`EquityRange::rise`]. At least `max_run_up`.
+    /// `None` without usable ranges.
+    pub intrabar_max_run_up: Option<f64>,
+    /// `intrabar_max_run_up / initial_capital`, subject to the conditions of `max_run_up_fraction`.
+    pub intrabar_max_run_up_fraction: Option<f64>,
     /// Annualised Sharpe ratio: the mean excess return per step of the curve over the sample standard
     /// deviation of the returns, times the square root of `periods_per_year`. Returns are simple
     /// returns between consecutive usable points, and the excess is over the risk-free rate per step,
@@ -336,11 +348,12 @@ impl EquityRange {
     }
 }
 
-/// Drawdown of one usable equity point.
+/// Drawdown and run-up of one usable equity point.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CurveExcursion {
     pub(crate) drawdown: f64,
     pub(crate) drawdown_fraction: f64,
+    pub(crate) run_up: f64,
 }
 
 impl StrategyReport {
@@ -490,16 +503,22 @@ impl StrategyReport {
                        value: fn(&CurveExcursion) -> f64| {
             finite(curve.iter().map(|(_, x)| value(x)).fold(f64::NAN, f64::max))
         };
+        let of_capital = |amount: Option<f64>| {
+            amount
+                .filter(|_| capital.is_finite() && capital > 0.0)
+                .and_then(|a| finite(a / capital))
+        };
         let close = self.excursion_curve(false).unwrap_or_default();
         p.max_drawdown = largest(&close, |x| x.drawdown);
         p.max_drawdown_fraction = largest(&close, |x| x.drawdown_fraction);
+        p.max_run_up = largest(&close, |x| x.run_up);
+        p.max_run_up_fraction = of_capital(p.max_run_up);
         if let Some(intrabar) = self.excursion_curve(true) {
             p.intrabar_max_drawdown = largest(&intrabar, |x| x.drawdown);
             p.intrabar_max_drawdown_fraction = largest(&intrabar, |x| x.drawdown_fraction);
-            p.intrabar_max_drawdown_initial_capital_fraction = p
-                .intrabar_max_drawdown
-                .filter(|_| capital.is_finite() && capital > 0.0)
-                .and_then(|amount| finite(amount / capital));
+            p.intrabar_max_drawdown_initial_capital_fraction = of_capital(p.intrabar_max_drawdown);
+            p.intrabar_max_run_up = largest(&intrabar, |x| x.run_up);
+            p.intrabar_max_run_up_fraction = of_capital(p.intrabar_max_run_up);
         }
 
         let steps = curve.len() - 1;
@@ -552,7 +571,7 @@ impl StrategyReport {
         }
     }
 
-    /// Composes per-point drawdown from closes or usable ranges. Shared by metrics and charts.
+    /// Composes per-point drawdown and run-up from closes or usable ranges, for metrics and charts.
     pub(crate) fn excursion_curve(
         &self,
         intrabar: bool,
@@ -587,23 +606,26 @@ impl StrategyReport {
         };
         let (_, first) = *ranges.first()?;
         let positive = first.high > 0.0;
-        let mut peak = first.high;
+        let (mut peak, mut trough) = (first.high, first.low);
         let mut result = Vec::with_capacity(ranges.len());
         for (index, &(time, r)) in ranges.iter().enumerate() {
-            let (drawdown, fraction) = if index == 0 {
-                (r.fall, r.fall / r.high)
+            let (drawdown, fraction, run_up) = if index == 0 {
+                (r.fall, r.fall / r.high, r.rise)
             } else {
                 (
                     (peak - r.low).max(r.fall),
                     ((peak - r.low) / peak).max(r.fall / peak.max(r.high)),
+                    (r.high - trough).max(r.rise),
                 )
             };
             peak = peak.max(r.high);
+            trough = trough.min(r.low);
             result.push((
                 time,
                 CurveExcursion {
                     drawdown,
                     drawdown_fraction: if positive { fraction } else { f64::NAN },
+                    run_up,
                 },
             ));
         }
@@ -851,6 +873,18 @@ impl StrategyReport {
                 p.intrabar_max_drawdown_initial_capital_fraction,
                 "percent",
             ),
+            ("Maximum run-up (close-to-close)", p.max_run_up, "money"),
+            (
+                "Maximum run-up % (close-to-close)",
+                p.max_run_up_fraction,
+                "percent",
+            ),
+            ("Maximum run-up (intrabar)", p.intrabar_max_run_up, "money"),
+            (
+                "Maximum run-up % (intrabar)",
+                p.intrabar_max_run_up_fraction,
+                "percent",
+            ),
             ("Sharpe ratio", p.sharpe_ratio, "ratio"),
             ("Sortino ratio", p.sortino_ratio, "ratio"),
             (
@@ -1065,6 +1099,8 @@ mod tests {
             net_profit: 44.5,
             net_profit_fraction: Some(0.00445),
             open_profit: Some(45.5),
+            max_run_up: Some(130.0),
+            max_run_up_fraction: Some(0.013),
             gross_profit: 76.5,
             gross_loss: 32.0,
             total_fees: 5.0,
@@ -1104,6 +1140,10 @@ mod tests {
             open_trades: 1,
             net_profit_fraction: Some(0.0),
             open_profit: Some(-1000.0),
+            max_run_up: Some(0.0),
+            max_run_up_fraction: Some(0.0),
+            intrabar_max_run_up: Some(3000.0),
+            intrabar_max_run_up_fraction: Some(0.3),
             max_drawdown: Some(1000.0),
             max_drawdown_fraction: Some(0.1),
             intrabar_max_drawdown: Some(3000.0),
@@ -1149,6 +1189,10 @@ mod tests {
             [
                 p.net_profit_fraction,
                 p.open_profit,
+                p.max_run_up,
+                p.max_run_up_fraction,
+                p.intrabar_max_run_up,
+                p.intrabar_max_run_up_fraction,
                 p.intrabar_max_drawdown,
                 p.intrabar_max_drawdown_fraction,
                 p.intrabar_max_drawdown_initial_capital_fraction,
@@ -1259,12 +1303,16 @@ mod tests {
 
         let no_curve = StrategyPerformance {
             open_profit: None,
+            max_run_up: None,
+            max_run_up_fraction: None,
             max_drawdown: None,
             max_drawdown_fraction: None,
             ..expected_a()
         };
         let no_intrabar = StrategyPerformance {
             intrabar_max_drawdown: None,
+            intrabar_max_run_up: None,
+            intrabar_max_run_up_fraction: None,
             intrabar_max_drawdown_fraction: None,
             intrabar_max_drawdown_initial_capital_fraction: None,
             ..expected_d()
@@ -1348,6 +1396,8 @@ mod tests {
                     max_drawdown: Some(100.0),
                     max_drawdown_fraction: Some(0.5),
                     open_profit: Some(0.0),
+                    max_run_up: Some(950.0),
+                    max_run_up_fraction: Some(0.095),
                     ..Default::default()
                 },
             ),
@@ -1362,6 +1412,8 @@ mod tests {
                     sharpe_ratio: Some(5.864663773071857),
                     sortino_ratio: Some(7.742250169261054),
                     open_profit: Some(0.0),
+                    max_run_up: Some(6642.0),
+                    max_run_up_fraction: Some(0.6642),
                     ..Default::default()
                 },
             ),
@@ -1376,6 +1428,8 @@ mod tests {
                     sharpe_ratio: Some(1.08244877567277),
                     sortino_ratio: Some(1.433886945862868),
                     open_profit: Some(0.0),
+                    max_run_up: Some(885.0),
+                    max_run_up_fraction: Some(0.0885),
                     ..Default::default()
                 },
             ),
@@ -1388,6 +1442,8 @@ mod tests {
                     max_drawdown_fraction: Some(0.008104368452263293),
                     periods_per_year: Some(8766.0),
                     open_profit: Some(0.0),
+                    max_run_up: Some(6642.0),
+                    max_run_up_fraction: Some(0.6642),
                     ..Default::default()
                 },
             ),
@@ -1400,6 +1456,8 @@ mod tests {
                     max_drawdown_fraction: Some(1.5),
                     periods_per_year: Some(2.9938524590163933),
                     open_profit: Some(0.0),
+                    max_run_up: Some(80.0),
+                    max_run_up_fraction: Some(0.008),
                     ..Default::default()
                 },
             ),
@@ -1410,6 +1468,8 @@ mod tests {
                     net_profit_fraction: Some(0.0),
                     max_drawdown: Some(5.0),
                     open_profit: Some(0.0),
+                    max_run_up: Some(10.0),
+                    max_run_up_fraction: Some(0.001),
                     ..Default::default()
                 },
             ),
@@ -1438,6 +1498,8 @@ mod tests {
                     max_drawdown_fraction: Some(0.0),
                     periods_per_year: Some(8.908536585365853),
                     open_profit: Some(0.0),
+                    max_run_up: Some(0.09003600840125614),
+                    max_run_up_fraction: Some(9.003600840125613e-06),
                     ..Default::default()
                 },
             ),
@@ -1485,6 +1547,8 @@ mod tests {
             &loaded.performance(),
             &StrategyPerformance {
                 intrabar_max_drawdown: None,
+                intrabar_max_run_up: None,
+                intrabar_max_run_up_fraction: None,
                 intrabar_max_drawdown_fraction: None,
                 intrabar_max_drawdown_initial_capital_fraction: None,
                 ..expected_d()
@@ -1755,6 +1819,10 @@ mod tests {
              summary,Maximum drawdown (intrabar),,money,USD\n\
              summary,Maximum drawdown % (intrabar),,percent,\n\
              summary,Maximum drawdown % of initial capital (intrabar),,percent,\n\
+             summary,Maximum run-up (close-to-close),130,money,USD\n\
+             summary,Maximum run-up % (close-to-close),1.3,percent,\n\
+             summary,Maximum run-up (intrabar),,money,USD\n\
+             summary,Maximum run-up % (intrabar),,percent,\n\
              summary,Sharpe ratio,,ratio,\n\
              summary,Sortino ratio,,ratio,\n\
              summary,Buy-and-hold return,,percent,\n\
@@ -1830,6 +1898,8 @@ mod tests {
             p.net_profit_fraction = Some(fraction);
             p.win_rate = Some(fraction);
             p.max_drawdown_fraction = Some(fraction);
+            p.max_run_up_fraction = Some(fraction);
+            p.intrabar_max_run_up_fraction = Some(fraction);
             p.intrabar_max_drawdown_fraction = Some(fraction);
             p.intrabar_max_drawdown_initial_capital_fraction = Some(fraction);
             let mut c = r.comparison(&[]);
@@ -1856,6 +1926,8 @@ mod tests {
         let p = StrategyPerformance {
             net_profit: -0.0,
             open_profit: Some(-0.0),
+            max_run_up: Some(-0.0),
+            intrabar_max_run_up: Some(-0.0),
             intrabar_max_drawdown: Some(-0.0),
             gross_profit: -0.0,
             gross_loss: -0.0,

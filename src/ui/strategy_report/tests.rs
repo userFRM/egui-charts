@@ -126,7 +126,7 @@ fn equity_curve_uses_the_full_width_at_every_time_resolution() {
         let color = egui::Color32::GREEN;
         let mut h = Harness::builder()
             .with_size(Vec2::new(320.0, 200.0))
-            .build_ui(|ui| plot::show(ui, &values, &[], color, 175.0));
+            .build_ui(|ui| plot::show(ui, &values, &[], color, 175.0, 1.0));
         h.run();
         let points = h
             .output()
@@ -146,7 +146,7 @@ fn equity_curve_uses_the_full_width_at_every_time_resolution() {
 }
 
 #[test]
-fn summary_lists_open_profit() {
+fn summary_lists_open_profit_and_charts_switch_to_percent() {
     let hour = |h| DateTime::UNIX_EPOCH + chrono::TimeDelta::hours(h);
     let mut report = StrategyReport::new("Held", "HELD", Timeframe::Hour1, 10_000.0);
     report.trades = vec![StrategyTrade::new(OrderSide::Buy, 100.0, hour(1), 100.0)];
@@ -169,4 +169,37 @@ fn summary_lists_open_profit() {
     h.run();
     h.get_by_label("Open profit");
     h.get_by_label("-1000.00");
+    let texts = |h: &Harness<'_, StrategyReportPanel>| -> Vec<String> {
+        h.output()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    };
+    // Independently worked middle labels for equity [10000,10000,9000], drawdown [0,-3000,-1000]
+    // and run-up [0,3000,3000]. Percent multiplies all three series by 100 / 10000.
+    let money = ["9500.00", "-1500.00", "1500.00"];
+    let percent = ["95.00", "-15.00", "15.00"];
+    let has = |shown: &[String], label: &str| shown.iter().any(|t| t == label);
+    let shown = texts(&h);
+    assert!(
+        money.iter().all(|l| has(&shown, l)) && !percent.iter().any(|l| has(&shown, l)),
+        "{shown:?}"
+    );
+    h.get_by_role_and_label(Role::CheckBox, "Percent of initial capital")
+        .click();
+    h.run();
+    let shown = texts(&h);
+    assert!(
+        percent.iter().all(|l| has(&shown, l)) && !money.iter().any(|l| has(&shown, l)),
+        "{shown:?}"
+    );
+    let replacement = h.state().report().unwrap().clone();
+    h.state_mut().set_report(Some(replacement), &[]);
+    h.run();
+    assert!(!h.state().percent);
+    assert!(money.iter().all(|l| has(&texts(&h), l)));
 }

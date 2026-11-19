@@ -1779,6 +1779,17 @@ mod tests {
                 (Some(0.0), Some(drawdown), Some(fraction)),
                 "{name}"
             );
+            let run_up = if lower.is_empty() { 3000.0 } else { 5000.0 };
+            assert_eq!(
+                (
+                    p.max_run_up,
+                    p.max_run_up_fraction,
+                    p.intrabar_max_run_up,
+                    p.intrabar_max_run_up_fraction
+                ),
+                (Some(0.0), Some(0.0), Some(run_up), Some(run_up / 10_000.0)),
+                "{name}"
+            );
             assert_eq!(
                 p.intrabar_max_drawdown_initial_capital_fraction,
                 Some(drawdown / 10_000.0),
