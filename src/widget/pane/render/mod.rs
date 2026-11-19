@@ -700,6 +700,14 @@ impl Chart {
             }
             let mut below_grouped = false;
             let mut series_backgrounds = Vec::new();
+            #[cfg(feature = "drawings")]
+            let layered = self
+                .drawings
+                .drawings
+                .iter()
+                .any(|d| d.series_layer.is_some());
+            #[cfg(feature = "drawings")]
+            let mut marks = vec![None; if layered { members.len() } else { 0 }];
             for (paint_row, (entry, indicator, mut panel, legend_row_height, assignment)) in
                 panels.into_iter().enumerate()
             {
@@ -932,6 +940,14 @@ impl Chart {
                                 PrimitivePass::Series,
                                 self.merge_groups.factor(),
                             );
+                        }
+                        #[cfg(feature = "drawings")]
+                        if pass == PrimitivePass::Below
+                            && layered
+                            && let Some(at) =
+                                id.and_then(|id| members.iter().position(|m| *m == id))
+                        {
+                            marks[at] = Some(primitives::next_shape(painter));
                         }
                     },
                 ) {
@@ -1171,6 +1187,34 @@ impl Chart {
                             })
                             .or_else(|| builtin_at(pos))
                     };
+                    #[cfg(feature = "drawings")]
+                    if layered {
+                        let (pointer, hover, press) = ui.input(|input| {
+                            (
+                                input.pointer.interact_pos(),
+                                input.pointer.hover_pos(),
+                                input.pointer.press_origin(),
+                            )
+                        });
+                        let mut probes = Vec::new();
+                        for point in [pointer, pane_response.interact_pointer_pos(), hover, press]
+                            .into_iter()
+                            .flatten()
+                        {
+                            if chart_rect.contains(point) && !probes.contains(&point) {
+                                probes.push(point);
+                            }
+                        }
+                        let covers = probes.into_iter().filter_map(|point| {
+                            let (ChartElementId::Indicator(id) | ChartElementId::Series(id)) =
+                                study_at(point)?;
+                            members
+                                .iter()
+                                .position(|member| *member == id)
+                                .map(|e| (point, e + 1))
+                        });
+                        self.drawings.set_covers(chart_rect, covers);
+                    }
                     if !collapsed
                         && !toggle.clicked()
                         && !control_clicked
@@ -1522,6 +1566,12 @@ impl Chart {
                         &cursors,
                     );
                     self.drawings = drawings;
+                    Self::queue_layered_drawings(
+                        &self.drawings,
+                        &mut self.layered_drawings,
+                        painter.layer_id(),
+                        &marks,
+                    );
                     self.cursor_modes = cursors;
                     self.history
                         .finish_drawing_action(&mut self.drawings, history);
