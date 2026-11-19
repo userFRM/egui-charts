@@ -2,8 +2,8 @@
 //! exits.
 
 use super::{
-    Bracket, BracketMode, Kind, Market, OrderTicket, PresetLevel, Sizing, exit_lines, levels_accepted,
-    reward, risk,
+    Bracket, BracketMode, Kind, Market, OrderTicket, PresetLevel, Sizing, exit_lines,
+    levels_accepted, reward, risk,
 };
 use crate::chart::{COVERAGE_CELL, coverage_text, exit_coverage, paint_coverage};
 use crate::icons::icons;

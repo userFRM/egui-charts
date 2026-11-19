@@ -943,7 +943,7 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ui| action = ticket.show(ui, market, &mut vec![], &mut true),
+                    |ui| action = ticket.show(ui, market, &mut vec![], &mut true, &mut false),
                 );
                 let labels: Vec<_> = output
                     .shapes
