@@ -1,11 +1,12 @@
 //! Symbol tab - chart type, price source, and line/candle style settings.
 
+use crate::chart::overlays::SessionColors;
 use crate::chart::series::SeriesSettings;
 use crate::localization as l10n;
 use crate::model::{
     BaselineLevel, BoxSizeMethod, ChartType, ChartTypeParams, FootprintColor, FootprintMode,
     FootprintStatistic, HighLowStyle, LinePlotStyle, LineStyle, PriceBasedSource, PriceSource,
-    ProfileRows, ProfileSession, TPOProfilePeriod, TimezoneId,
+    ProfileRows, ProfileSession, TPOProfilePeriod, TimezoneId, TradeProfileSettings,
 };
 use crate::theme::ThemeExt;
 use crate::ui_kit::color_picker::keep_opacity;
@@ -13,6 +14,10 @@ use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid};
 use chrono::{NaiveTime, Timelike};
 use egui::{Color32, RichText, Ui};
+
+/// The row that chooses between the last real price and the newest element's close on the
+/// price scale of a price-based chart type.
+const REAL_PRICE: &str = "Real price";
 
 /// Symbol tab renderer - shows chart type and style settings
 #[derive(Debug)]
@@ -146,6 +151,62 @@ impl SymbolTab {
                         .labelled_by(label.id);
                         ui.end_row();
                     }
+                    let candles = [settings.bullish_color, settings.bearish_color];
+                    Self::own_color_rows(
+                        ui,
+                        [
+                            ("Thick line colour", &mut styles.kagi.up_color),
+                            ("Thin line colour", &mut styles.kagi.down_color),
+                        ],
+                        candles,
+                    );
+                }
+                ChartType::PointAndFigure => {
+                    let candles = [settings.bullish_color, settings.bearish_color];
+                    let style = &mut styles.point_figure;
+                    Self::own_color_rows(
+                        ui,
+                        [
+                            ("Rising column colour", &mut style.up_color),
+                            ("Falling column colour", &mut style.down_color),
+                        ],
+                        candles,
+                    );
+                }
+                ChartType::Renko => {
+                    Self::candle_colors_section(ui, settings);
+                    let body = [settings.bullish_color, settings.bearish_color];
+                    let style = &mut settings.chart_type_params.styles.renko;
+                    Self::switch(ui, "Borders", &mut style.border_visible);
+                    Self::custom_colors_row(
+                        ui,
+                        "Border",
+                        [&mut style.border_up, &mut style.border_down],
+                        body.map(crate::chart::rendering::candles::brick_border),
+                    );
+                    Self::custom_colors_row(
+                        ui,
+                        "Wick",
+                        [&mut style.wick_up, &mut style.wick_down],
+                        body,
+                    );
+                }
+                ChartType::LineBreak => {
+                    Self::candle_colors_section(ui, settings);
+                    let body = [settings.bullish_color, settings.bearish_color];
+                    let style = &mut settings.chart_type_params.styles.line_break;
+                    Self::switch(ui, "Borders", &mut style.border_visible);
+                    Self::custom_colors_row(
+                        ui,
+                        "Border",
+                        [&mut style.border_up, &mut style.border_down],
+                        body.map(crate::chart::rendering::candles::brick_border),
+                    );
+                }
+                ChartType::Range => {
+                    let style = &mut styles.range;
+                    Self::switch(ui, "Thin bars", &mut style.thin_bars);
+                    Self::switch(ui, "Phantom bars", &mut style.phantom_bars);
                     Self::candle_colors_section(ui, settings);
                 }
                 _ => Self::candle_colors_section(ui, settings),
@@ -284,7 +345,14 @@ impl SymbolTab {
             .into_iter()
             .enumerate()
             {
-                Self::followed_color(ui, name, &mut params.footprint_colors[i], default, "Auto");
+                Self::followed_color(
+                    ui,
+                    name,
+                    None,
+                    &mut params.footprint_colors[i],
+                    default,
+                    "Auto",
+                );
             }
         });
         Self::section(ui, "Rows", true, |ui| {
@@ -370,7 +438,7 @@ impl SymbolTab {
                 .enumerate()
             {
                 let color = &mut params.footprint_imbalance_colors[i];
-                Self::followed_color(ui, name, color, sides[i], "Same as cells");
+                Self::followed_color(ui, name, None, color, sides[i], "Same as cells");
             }
         });
         Self::section(ui, "Annotations", false, |ui| {
@@ -477,15 +545,21 @@ impl SymbolTab {
         });
     }
 
-    /// A colour row whose `reset` button returns the colour to following `default`.
+    /// A colour row whose `reset` button returns the colour to following `default`; with
+    /// `visible`, its name is a checkbox for what the colour paints.
     fn followed_color(
         ui: &mut Ui,
         name: &str,
+        visible: Option<&mut bool>,
         color: &mut Option<Color32>,
         default: Color32,
         reset: &str,
     ) {
-        let label = ui.label(l10n::text(ui.ctx(), name));
+        let text = l10n::text(ui.ctx(), name);
+        let label = match visible {
+            Some(visible) => ui.checkbox(visible, text),
+            None => ui.label(text),
+        };
         ui.horizontal(|ui| {
             let mut selected = color.unwrap_or(default);
             if Self::color_picker(ui, &mut selected) {
@@ -531,7 +605,54 @@ impl SymbolTab {
             Self::profile_session(ui, &mut profile.session);
             Self::profile_rows(ui, &mut profile.rows);
             Self::value_area(ui, &mut profile.value_area);
+            let colors = SessionColors::new(&TradeProfileSettings::default(), &ui.active_theme());
+            Self::followed_color(
+                ui,
+                "Point of control",
+                Some(&mut profile.poc),
+                &mut profile.poc_color,
+                colors.poc,
+                "Auto",
+            );
             Self::switch(ui, "Value area guides", &mut profile.value_area_guides);
+            // Without guides, the edge colours still paint their extensions.
+            let guides = profile.value_area_guides;
+            Self::followed_color(
+                ui,
+                "Value area high",
+                guides.then_some(&mut profile.value_area_high),
+                &mut profile.value_area_high_color,
+                colors.value_area_high,
+                "Auto",
+            );
+            Self::followed_color(
+                ui,
+                "Value area low",
+                guides.then_some(&mut profile.value_area_low),
+                &mut profile.value_area_low_color,
+                colors.value_area_low,
+                "Auto",
+            );
+            for (name, color, default) in [
+                ("Up volume", &mut profile.up_volume_color, colors.volume[0]),
+                (
+                    "Down volume",
+                    &mut profile.down_volume_color,
+                    colors.volume[1],
+                ),
+                (
+                    "Up volume in value area",
+                    &mut profile.value_area_up_color,
+                    colors.value_area_volume[0],
+                ),
+                (
+                    "Down volume in value area",
+                    &mut profile.value_area_down_color,
+                    colors.value_area_volume[1],
+                ),
+            ] {
+                Self::followed_color(ui, name, None, color, default, "Auto");
+            }
             Self::switch(ui, "Developing POC", &mut profile.developing_poc);
             Self::switch(
                 ui,
@@ -730,10 +851,12 @@ impl SymbolTab {
                 ui.checkbox(&mut params.renko_wicks, "")
                     .labelled_by(label.id);
                 ui.end_row();
+                Self::switch(ui, REAL_PRICE, &mut params.renko_real_price);
             }
             ChartType::Kagi => {
                 Self::box_size(ui, &mut params.kagi_size_method, &mut params.kagi_reversal);
                 Self::transform_source(ui, &mut params.kagi_source);
+                Self::switch(ui, REAL_PRICE, &mut params.kagi_real_price);
             }
             ChartType::Range => {
                 Self::box_size(ui, &mut params.range_size_method, &mut params.range_size)
@@ -745,6 +868,13 @@ impl SymbolTab {
                 ui.add(egui::DragValue::new(&mut params.pnf_reversal).range(1..=100))
                     .labelled_by(label.id);
                 ui.end_row();
+                // One step back applies to a reversal of one box only.
+                let label = ui.label(l10n::text(ui.ctx(), "One step back"));
+                let one_box = params.pnf_reversal == 1;
+                let switch = egui::Checkbox::without_text(&mut params.pnf_one_step_back);
+                ui.add_enabled(one_box, switch).labelled_by(label.id);
+                ui.end_row();
+                Self::switch(ui, REAL_PRICE, &mut params.pnf_real_price);
             }
             ChartType::LineBreak => {
                 let label = ui.label(l10n::text(ui.ctx(), "Number of lines"));
@@ -752,6 +882,7 @@ impl SymbolTab {
                     .labelled_by(label.id);
                 ui.end_row();
                 Self::transform_source(ui, &mut params.line_break_source);
+                Self::switch(ui, REAL_PRICE, &mut params.line_break_real_price);
             }
             ChartType::TimePriceOpportunity => {
                 let label = ui.label(l10n::text(ui.ctx(), "Period"));
@@ -1156,36 +1287,65 @@ impl SymbolTab {
             return;
         }
 
-        for (label, up, down) in [
-            (
-                "Border",
+        let body = [settings.bullish_color, settings.bearish_color];
+        Self::custom_colors_row(
+            ui,
+            "Border",
+            [
                 &mut settings.bullish_border_color,
                 &mut settings.bearish_border_color,
-            ),
-            (
-                "Wick",
+            ],
+            body,
+        );
+        Self::custom_colors_row(
+            ui,
+            "Wick",
+            [
                 &mut settings.bullish_wick_color,
                 &mut settings.bearish_wick_color,
-            ),
-        ] {
-            ui.label(l10n::text(ui.ctx(), label));
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                Self::optional_color_picker(ui, up, settings.bullish_color);
-                Self::optional_color_picker(ui, down, settings.bearish_color);
-                for (color, default, label) in [
-                    (up, settings.bullish_color, "Custom up"),
-                    (down, settings.bearish_color, "Custom down"),
-                ] {
-                    let mut custom = color.is_some();
-                    if ui
-                        .checkbox(&mut custom, l10n::text(ui.ctx(), label))
-                        .changed()
-                    {
-                        *color = custom.then_some(color.unwrap_or(default));
-                    }
+            ],
+            body,
+        );
+    }
+
+    /// A row of rising and falling colours that are `None` until made custom, starting from
+    /// `defaults`.
+    fn custom_colors_row(
+        ui: &mut Ui,
+        label: &str,
+        [up, down]: [&mut Option<Color32>; 2],
+        [default_up, default_down]: [Color32; 2],
+    ) {
+        ui.label(l10n::text(ui.ctx(), label));
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            Self::optional_color_picker(ui, up, default_up);
+            Self::optional_color_picker(ui, down, default_down);
+            for (color, default, label) in [
+                (up, default_up, "Custom up"),
+                (down, default_down, "Custom down"),
+            ] {
+                let mut custom = color.is_some();
+                if ui
+                    .checkbox(&mut custom, l10n::text(ui.ctx(), label))
+                    .changed()
+                {
+                    *color = custom.then_some(color.unwrap_or(default));
                 }
-            });
+            }
+        });
+        ui.end_row();
+    }
+
+    /// Rows of a style's rising and falling colours; one saved before the style had them shows
+    /// the candle body colour it draws in, `candles`, until picked.
+    fn own_color_rows(ui: &mut Ui, rows: [(&str, &mut Color32); 2], candles: [Color32; 2]) {
+        for ((label, color), candle) in rows.into_iter().zip(candles) {
+            ui.label(l10n::text(ui.ctx(), label));
+            let mut shown = crate::model::or_candle(*color, candle);
+            if Self::color_picker(ui, &mut shown) {
+                *color = shown;
+            }
             ui.end_row();
         }
     }

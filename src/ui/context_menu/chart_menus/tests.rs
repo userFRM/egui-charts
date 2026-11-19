@@ -577,6 +577,14 @@ fn host_menu_entries_filter_targets_and_return_the_original_click() {
             let original = menus.context.unwrap();
             assert_eq!(original.time, Some(time));
             assert_eq!(original.target, target);
+            assert_eq!(
+                original.menu,
+                match target {
+                    RightClickTarget::Background { .. } => ChartMenuKind::Chart,
+                    RightClickTarget::Element { .. } => ChartMenuKind::Series,
+                    RightClickTarget::Drawing { .. } => ChartMenuKind::Drawing,
+                }
+            );
             match target {
                 RightClickTarget::Background { .. } => assert_eq!(original.price, 123.25),
                 RightClickTarget::Element { .. } => assert_eq!(original.price, 321.5),
@@ -619,6 +627,254 @@ fn host_menu_entries_filter_targets_and_return_the_original_click() {
                 "one action per choice"
             );
         }
+    }
+}
+
+/// Guards #3241: hosts place rows among built-ins, omit individual rows, customize axes and
+/// discard duplicate or unavailable ids and empty submenus. Moved built-ins keep their actions;
+/// an axis host choice returns the original click without changing chart history.
+#[test]
+fn host_rows_take_any_place_in_the_chart_and_price_axis_menus() {
+    use crate::ui::context_menu::{ChartMenuKind, MenuRow, MenuRowId};
+    use egui::Shape;
+
+    fn collect(shape: &Shape, texts: &mut Vec<(String, Pos2)>) {
+        match shape {
+            Shape::Text(text) => texts.push((
+                text.galley.text().to_owned(),
+                text.pos + text.galley.size() / 2.0,
+            )),
+            Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, texts)),
+            _ => {}
+        }
+    }
+    let click = |pos, button| {
+        vec![
+            Event::PointerMoved(pos),
+            Event::PointerButton {
+                pos,
+                button,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            },
+            Event::PointerButton {
+                pos,
+                button,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            },
+        ]
+    };
+    for theme in [Theme::light(), Theme::dark()] {
+        let ctx = Context::default();
+        crate::theme::apply_to_egui(&ctx, &theme);
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        let mut menus = ChartMenus::default();
+        menus.set_menu_rows(|click, mut rows| {
+            match click.menu {
+                ChartMenuKind::Chart => {
+                    rows.retain(|row| row.id() != Some(MenuRowId::ViewDataTable));
+                    let at = rows
+                        .iter()
+                        .position(|row| row.id() == Some(MenuRowId::ChartSettings))
+                        .expect("chart settings row");
+                    rows.insert(
+                        at,
+                        MenuRow::Host(MenuItem::new("Send to ticket", "ticket".to_owned())),
+                    );
+                }
+                ChartMenuKind::Series => {
+                    rows = vec![
+                        MenuRow::Separator,
+                        MenuRow::BuiltIn(MenuRowId::ViewDataTable),
+                        MenuRow::BuiltIn(MenuRowId::CopyPrice),
+                        MenuRow::BuiltIn(MenuRowId::CopyPrice),
+                        MenuRow::Separator,
+                        MenuRow::Separator,
+                        MenuRow::Submenu {
+                            id: None,
+                            label: "Empty".into(),
+                            icon: None,
+                            rows: vec![MenuRow::Separator],
+                        },
+                        MenuRow::BuiltIn(MenuRowId::SeriesSettings),
+                        MenuRow::Separator,
+                    ];
+                }
+                ChartMenuKind::PriceAxis { .. } => {
+                    rows.insert(
+                        1,
+                        MenuRow::Host(MenuItem::new("Axis ticket", "axis-ticket".to_owned())),
+                    );
+                }
+                _ => {}
+            }
+            rows
+        });
+        let frame = |chart: &mut Chart, menus: &mut ChartMenus, events| {
+            let mut action = None;
+            let right_click = chart.right_click.take();
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 900.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        chart.show(ui);
+                    });
+                    if right_click.is_some() {
+                        chart.right_click = right_click;
+                    }
+                    action = menus.show(ui.ctx(), chart);
+                },
+            );
+            let mut texts = Vec::new();
+            for shape in &output.shapes {
+                collect(&shape.shape, &mut texts);
+            }
+            output.drop_without_applying_deltas();
+            (action, texts)
+        };
+        frame(&mut chart, &mut menus, vec![]);
+        chart.right_click = Some(RightClickTarget::Background {
+            pos: Pos2::new(100.0, 100.0),
+            price: 105.0,
+        });
+        frame(&mut chart, &mut menus, vec![]);
+        let (_, text) = frame(&mut chart, &mut menus, vec![]);
+        let tail = [
+            "View Data Table…",
+            "Export Data to CSV…",
+            "Series Settings…",
+            "Send to ticket",
+            "Chart Settings…",
+        ];
+        assert_eq!(
+            text.iter()
+                .filter(|(label, _)| tail.contains(&label.as_str()))
+                .map(|(label, _)| label.as_str())
+                .collect::<Vec<_>>(),
+            &tail[1..]
+        );
+        let settings = text
+            .iter()
+            .find(|(label, _)| label == "Chart Settings…")
+            .unwrap()
+            .1;
+        frame(&mut chart, &mut menus, vec![Event::PointerMoved(settings)]);
+        let mut chosen = None;
+        for pressed in [true, false] {
+            chosen = chosen.or(frame(
+                &mut chart,
+                &mut menus,
+                vec![Event::PointerButton {
+                    pos: settings,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                }],
+            )
+            .0);
+        }
+        assert_eq!(
+            chosen,
+            Some(ChartContextAction::Chart(ContextMenuAction::OpenSettings))
+        );
+
+        chart.right_click = Some(RightClickTarget::Element {
+            id: ChartElementId::Series(SeriesId::MAIN),
+            bar_idx: 0,
+            pos: Pos2::new(100.0, 100.0),
+            price: 105.0,
+        });
+        frame(&mut chart, &mut menus, vec![]);
+        let actions = menus
+            .build_menu_items(&ctx, &chart, menus.context.unwrap())
+            .into_iter()
+            .map(|entry| match entry {
+                MenuEntry::Item(item) => Some(item.action),
+                MenuEntry::Separator => None,
+                MenuEntry::Submenu { .. } => panic!("empty submenu must be omitted"),
+            })
+            .collect::<Vec<_>>();
+        use crate::ui::dialogs::SeriesContextMenuAction as Series;
+        assert_eq!(
+            actions,
+            vec![
+                Some(ChartContextAction::Series(Series::CopyPrice)),
+                None,
+                Some(ChartContextAction::Series(Series::OpenSettings))
+            ]
+        );
+        frame(
+            &mut chart,
+            &mut menus,
+            vec![Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        assert!(!chart.menu_open);
+
+        let plot = chart.get_rendered_price_rect();
+        let anchor = Pos2::new(plot.right() + 25.0, plot.center().y);
+        frame(
+            &mut chart,
+            &mut menus,
+            click(anchor, PointerButton::Secondary),
+        );
+        let (_, text) = frame(&mut chart, &mut menus, vec![]);
+        let head = ["Auto scale", "Axis ticket", "Scale price chart only"];
+        assert_eq!(
+            text.iter()
+                .filter(|(label, _)| head.contains(&label.as_str()))
+                .map(|(label, _)| label.as_str())
+                .collect::<Vec<_>>(),
+            head
+        );
+        let ticket = text
+            .iter()
+            .find(|(label, _)| label == "Axis ticket")
+            .unwrap()
+            .1;
+        let (chosen, _) = frame(
+            &mut chart,
+            &mut menus,
+            click(ticket, PointerButton::Primary),
+        );
+        let Some(ChartContextAction::Host { id, context }) = chosen else {
+            panic!("axis host action");
+        };
+        assert_eq!(id, "axis-ticket");
+        assert_eq!(
+            context.menu,
+            ChartMenuKind::PriceAxis {
+                pane: crate::widget::PaneId::MAIN,
+                axis: crate::widget::PaneScale::Named(crate::model::SeriesScale::Right),
+            }
+        );
+        assert_eq!(context.time, None);
+        assert_eq!(
+            context.target,
+            RightClickTarget::Background {
+                pos: anchor,
+                price: context.price
+            }
+        );
+        // A linear scale maps the top to max and bottom to min; its centre is the midpoint.
+        let map = chart.get_chart_mapping();
+        let range = chart.state().price_scale().range();
+        let expected = range.max
+            - (anchor.y - map.rect.top()) as f64 / map.rect.height() as f64
+                * (range.max - range.min);
+        assert!((context.price - expected).abs() < 0.00001);
+        assert!(!chart.can_undo());
+        assert!(!chart.menu_open);
     }
 }
 
@@ -1365,7 +1621,9 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
                     .clone()
             };
             config.tick_size = 1.0;
-            to_tpo_profiles(chart.bars(SeriesId::MAIN), &config, &chart.bar_clock())
+            let (clock, session) = chart.profile_hours(&config.session);
+            config.session = session.clone();
+            to_tpo_profiles(chart.bars(SeriesId::MAIN), &config, &clock)
                 .iter()
                 .map(|p| {
                     (
@@ -1701,6 +1959,58 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
         assert!(TpoMenu::open(&study_chart, pos).is_some());
         study_chart.set_indicators_hidden(true);
         assert!(TpoMenu::open(&study_chart, pos).is_none());
+
+        // Custom hours keep only 00:30 and 01:00 of each day. Their first bar starts A,
+        // independently of the midnight bar that the chart still shows.
+        let mut hours = Chart::new(BarData::from_bars(bars.clone()));
+        hours.set_timeframe(Timeframe::Min30);
+        hours.set_instrument(Some(crate::model::Instrument::new("X").with_tick_size(1.0)));
+        let mut study = crate::studies::TimePriceOpportunity::default();
+        for (id, value) in [
+            ("hours", crate::studies::InputValue::Choice(2)),
+            ("session_start", crate::studies::InputValue::Length(30)),
+            ("session_end", crate::studies::InputValue::Length(90)),
+        ] {
+            crate::studies::Indicator::set_input(&mut study, id, value).unwrap();
+        }
+        hours.add_indicator(Box::new(study));
+        let mut hours_menus = ChartMenus::default();
+        frame(&mut hours, &mut hours_menus, vec![]);
+        hours.set_visible_logical_range(crate::model::LogicalRange::new(-1.0, 9.0));
+        let unmerged = [
+            (at(30), "AAABB".to_owned(), 102.0),
+            (day(1) + Duration::minutes(30), "AAABBB".to_owned(), 100.0),
+        ];
+        assert_eq!(profiles(&hours), unmerged);
+        pick(&mut hours, &mut hours_menus, 1, "Merge with next profile");
+        assert_eq!(
+            profiles(&hours),
+            [(at(30), "AAABBAAABBB".to_owned(), 102.0)]
+        );
+        let (_, shapes) = frame(&mut hours, &mut hours_menus, vec![]);
+        let map = hours.get_chart_mapping();
+        let b = letter(
+            &shapes,
+            "B",
+            map.rect.left()..map.rect.right(),
+            map.price_to_y(101.0),
+        )
+        .unwrap();
+        pick_at(
+            &mut hours,
+            &mut hours_menus,
+            b,
+            "Split profile at selected period",
+        );
+        assert_eq!(
+            profiles(&hours),
+            [
+                (at(30), "AAABBAAA".to_owned(), 102.0),
+                (day(1) + Duration::minutes(60), "BBB".to_owned(), 100.0)
+            ]
+        );
+        assert!(hours.undo());
+        assert_eq!(profiles(&hours).len(), 1);
 
         let bars = (0..14)
             .map(|i| {

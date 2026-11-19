@@ -453,6 +453,21 @@ impl StudyTemplate {
                     })
                     .collect();
             }
+            // `period` also set the ADX smoothing before the smoothing had an input of its
+            // own. The last `period` saved is the one the study applied.
+            "ADX" | "DMI" if has("period") && !has("adx_smoothing") => {
+                let period = self.inputs.iter().rev().find(|(id, _)| id == "period");
+                template
+                    .inputs
+                    .extend(period.map(|(_, value)| ("adx_smoothing".to_owned(), value.clone())));
+            }
+            // `period` also set the ATR period before that had an input of its own.
+            "Chandelier" if has("period") && !has("atr_period") => {
+                let period = self.inputs.iter().rev().find(|(id, _)| id == "period");
+                template
+                    .inputs
+                    .extend(period.map(|(_, value)| ("atr_period".to_owned(), value.clone())));
+            }
             // Before it averaged highs and lows, MA Channel drew the close average with percentage
             // bands, which Envelopes draws with a simple average.
             "MA Channel" if has("offset_percent") && !declares("offset_percent") => {
@@ -484,6 +499,12 @@ impl StudyTemplate {
                 template
                     .inputs
                     .push(("midpoint".to_owned(), InputValue::Toggle(true)));
+            }
+            // Missed pivots were swings before they could follow a period.
+            "Missed Pivot Levels" if !has("period") => {
+                template
+                    .inputs
+                    .push(("period".to_owned(), InputValue::Choice(0)));
             }
             // Higher-interval candles drew their saved interval before one could follow the chart's.
             "Higher Interval Candles" if !has("auto_interval") => {
@@ -1064,6 +1085,7 @@ mod tests {
             show_closing_price: false,
             show_volume_profile: false,
             split_sessions: false,
+            session: crate::model::ProfileSession::Chart,
             profile_period: crate::model::TPOProfilePeriod::Session,
             custom_letters: None,
             composites: Vec::new(),
@@ -1231,6 +1253,17 @@ mod tests {
             expected.plot_variants.push(Vec::new());
             assert_eq!(restored.settings(), expected, "{}", saved.name);
             let inputs = restored.inputs();
+            if saved.name == "Missed Pivot Levels" {
+                assert_eq!(
+                    inputs
+                        .iter()
+                        .find(|input| input.id == "period")
+                        .unwrap()
+                        .value,
+                    InputValue::Choice(0)
+                );
+                assert_eq!(Some(restored.scale()), saved.scale);
+            }
             for (id, value) in &saved.inputs {
                 assert_eq!(
                     inputs
@@ -1284,6 +1317,27 @@ mod tests {
                 vec![("period", Length(20))],
                 vec![("period", Length(20)), ("adx_smoothing", Length(20))],
             ),
+            // Saved with both lengths, in either order.
+            (
+                "ADX",
+                vec![("adx_smoothing", Length(20)), ("period", Length(10))],
+                vec![("period", Length(10)), ("adx_smoothing", Length(20))],
+            ),
+            (
+                "ADX",
+                vec![("period", Length(10)), ("adx_smoothing", Length(20))],
+                vec![("period", Length(10)), ("adx_smoothing", Length(20))],
+            ),
+            (
+                "DMI",
+                vec![("adx_smoothing", Length(20)), ("period", Length(10))],
+                vec![("period", Length(10)), ("adx_smoothing", Length(20))],
+            ),
+            (
+                "DMI",
+                vec![("period", Length(10)), ("adx_smoothing", Length(20))],
+                vec![("period", Length(10)), ("adx_smoothing", Length(20))],
+            ),
             (
                 "Chandelier",
                 vec![("period", Length(10)), ("multiplier", Number(2.0))],
@@ -1292,6 +1346,11 @@ mod tests {
                     ("atr_period", Length(10)),
                     ("multiplier", Number(2.0)),
                 ],
+            ),
+            (
+                "Chandelier",
+                vec![("atr_period", Length(5)), ("period", Length(10))],
+                vec![("period", Length(10)), ("atr_period", Length(5))],
             ),
             (
                 "MA Cross",
@@ -1338,6 +1397,17 @@ mod tests {
                 "Time Price Opportunity",
                 vec![("midpoint", Toggle(false))],
                 vec![("midpoint", Toggle(false))],
+            ),
+            // Saved before levels could follow a period, when they were swings.
+            (
+                "Missed Pivot Levels",
+                vec![("left", Length(5))],
+                vec![("left", Length(5)), ("period", Choice(0))],
+            ),
+            (
+                "Missed Pivot Levels",
+                vec![("period", Choice(2))],
+                vec![("period", Choice(2))],
             ),
             // Saved before the interval could follow the chart's, as new studies do.
             (
@@ -1497,6 +1567,55 @@ mod tests {
                 "{name}"
             );
         }
+        // Literal study saved on main before Hours existed: all saved inputs and styles stay,
+        // and the trading day remains selected with its extended hours split.
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Time Price Opportunity","inputs":[["period",{"Length":30}],["row_ticks",{"Length":0}],["value_area",{"Number":70.0}],["split_sessions",{"Toggle":true}],["single_prints",{"Toggle":false}],["midpoint",{"Toggle":false}],["statistics",{"Toggle":false}],["display",{"Choice":0}],["sessions",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TimePriceOpportunity.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[16,16,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        let study = saved.create().unwrap();
+        assert_eq!(study.settings(), saved.settings);
+        let inputs = study.inputs();
+        for (id, value) in saved
+            .inputs
+            .iter()
+            .chain(&[("hours".to_owned(), Choice(0))])
+        {
+            assert_eq!(
+                inputs
+                    .iter()
+                    .find(|input| input.id == *id)
+                    .map(|input| &input.value),
+                Some(value),
+                "Time Price Opportunity {id}"
+            );
+        }
+
+        // Literal single-period saves retain their lengths, plot visibility and styles.
+        for text in [
+            r#"{"name":"ADX","inputs":[["period",{"Length":20}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ADX.html","plots":[{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[15,3,4,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+            r#"{"name":"DMI","inputs":[["period",{"Length":20}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.DirectionalMovement.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[245,0,87,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+            r#"{"name":"Chandelier","inputs":[["period",{"Length":10}],["multiplier",{"Number":3.0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ChandelierExit.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+        ] {
+            let saved: StudyTemplate = serde_json::from_str(text).unwrap();
+            let study = saved.create().unwrap();
+            assert_eq!(study.settings(), saved.settings, "{}", saved.name);
+            assert_eq!(Some(study.scale()), saved.scale, "{}", saved.name);
+            let inputs = study.inputs();
+            let (other, period) = if saved.name == "Chandelier" {
+                ("atr_period", 10)
+            } else {
+                ("adx_smoothing", 20)
+            };
+            for id in ["period", other] {
+                assert_eq!(
+                    inputs
+                        .iter()
+                        .find(|input| input.id == id)
+                        .map(|input| &input.value),
+                    Some(&Length(period)),
+                    "{} {id}",
+                    saved.name
+                );
+            }
+        }
 
         // A chart save of an anchored profile from before tick heights and width were inputs
         // keeps its settings and inputs and takes the defaults of both.
@@ -1610,6 +1729,12 @@ mod tests {
         // Chart saves made before the input labels changed keep every saved id, value and
         // style while the editor describes the three study-local controls distinctly.
         for (saved, id, label) in [
+            // Literal default study captured on origin/main 04d6d16e7, before period pivots.
+            (
+                r#"{"name":"Missed Pivot Levels","inputs":[["left",{"Length":10}],["right",{"Length":10}],["tolerance",{"Number":0.1}],["max_levels",{"Length":20}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MissedPivots.html","plots":[{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[15,3,4,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                "left",
+                "Pivot left bars",
+            ),
             // Saved before Elliott Wave gained its swing and display inputs.
             (
                 r#"{"name":"Elliott Wave","inputs":[["left",{"Length":2}],["right",{"Length":3}],["history",{"Length":7}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ElliottWave.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Circles","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleUp","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,

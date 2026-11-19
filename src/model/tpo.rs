@@ -14,10 +14,10 @@
 //! [`TPOProfile`]s.
 
 use crate::model::bar::{bar_level_keys, level_grid, level_key};
-use crate::model::{Bar, BarClock, SessionProvider};
+use crate::model::{Bar, BarClock, ProfileSession, SessionProvider};
 use chrono::{DateTime, Datelike, Utc};
 use std::collections::HashMap;
-use std::ops::RangeInclusive;
+use std::ops::{Range, RangeInclusive};
 
 /// Letter sequence for TPO periods (A, B, C... Z, a, b...)
 const TPO_LETTERS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -160,6 +160,11 @@ pub struct TPOConfig {
     /// separate overnight, pre-market, regular and post-market profiles.
     /// Session profiles only; see [`TPOProfilePeriod`].
     pub split_sessions: bool,
+    /// Which bars of each trading day of the clock the profiles keep: every bar for
+    /// `ProfileSession::Chart`, otherwise those of the hours the choice picks, read from a clock
+    /// of those hours. The Time Price Opportunity study sets it; `split_sessions` splits the
+    /// trading day only.
+    pub(crate) session: ProfileSession,
     /// Length of each profile: a session, the default, or a week or month of sessions.
     pub profile_period: TPOProfilePeriod,
     /// Custom letters sequence; an empty string uses the default letters
@@ -217,6 +222,7 @@ impl Default for TPOConfig {
             show_closing_price: false,
             show_volume_profile: false,
             split_sessions: false,
+            session: ProfileSession::Chart,
             profile_period: TPOProfilePeriod::Session,
             custom_letters: None,
             composites: Vec::new(),
@@ -532,6 +538,59 @@ pub(crate) fn session_starts(
         .collect()
 }
 
+/// The bars of each profile before composites, and whether it opens a session: from each start
+/// of [`session_starts`] to the next for [`ProfileSession::Chart`], otherwise the parts of each
+/// trading day that `config.session` keeps ([`ProfileSession::profiled`]). `config.splits` cut
+/// these further into profiles that keep counting periods from the open of the part they split.
+pub(crate) fn profile_parts(
+    bars: &[Bar],
+    sessions: &crate::model::ExchangeSessionProvider,
+    config: &TPOConfig,
+) -> Vec<(Range<usize>, bool)> {
+    let parts = if config.session == ProfileSession::Chart {
+        let starts = session_starts(bars, sessions, config.split_hours(), &[]);
+        let ends = starts.iter().skip(1).copied().chain([bars.len()]);
+        starts
+            .iter()
+            .copied()
+            .zip(ends)
+            .map(|(start, end)| start..end)
+            .collect()
+    } else {
+        // Whole trading days, unusable bars included: a day of them must not join the day before.
+        let breaks: Vec<_> = (sessions.session_breaks(bars).into_iter())
+            .map(|(i, _)| i)
+            .collect();
+        let starts = std::iter::once(0).chain(breaks.iter().copied());
+        let ends = breaks.iter().copied().chain([bars.len()]);
+        starts
+            .zip(ends)
+            .flat_map(|(start, end)| config.session.profiled(bars, start..end, sessions, true))
+            .collect::<Vec<_>>()
+    };
+    let mut cuts: Vec<_> = (config.splits.iter())
+        .map(|split| bars.partition_point(|bar| bar.time < *split))
+        .collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    parts
+        .into_iter()
+        .flat_map(|part| {
+            let inside = cuts
+                .iter()
+                .copied()
+                .filter(|&i| part.start < i && i < part.end);
+            let starts = std::iter::once(part.start).chain(inside.clone());
+            let ends = inside.chain([part.end]);
+            starts
+                .zip(ends)
+                .enumerate()
+                .map(|(n, (start, end))| (start..end, n == 0))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 /// Transform bars into TPO profiles
 ///
 /// With `config.profile_period` a week or month, sessions opening in one form a single profile,
@@ -597,16 +656,17 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
     let interval_minutes = clock.timeframe().map_or(0, |t| t.duration_ms() / 60_000);
     let period_minutes = i64::from(config.period_minutes.max(1)).max(interval_minutes);
     let sessions = clock.sessions();
-    let split_hours = config.split_hours();
-    let mut starts = session_starts(bars, &sessions, split_hours, &config.splits)
+    let mut parts = profile_parts(bars, &sessions, config)
         .into_iter()
         .peekable();
-    // A split starts a profile, while its periods keep counting from the session's open.
-    let mut opens = (!config.splits.is_empty()).then(|| {
-        session_starts(bars, &sessions, split_hours, &[])
-            .into_iter()
-            .peekable()
-    });
+    // The end of the open profile's bars; bars from there to the next profile join none.
+    let mut part_end = 0;
+    // The pre-market, post-market and segment profiles count from the open of their own hours.
+    let split = match config.session {
+        ProfileSession::Chart => config.split_hours(),
+        ProfileSession::PreMarket | ProfileSession::PostMarket | ProfileSession::Segments => true,
+        _ => false,
+    };
     let grid = level_grid(bars, config.tick_size);
     let extreme = bars
         .iter()
@@ -632,25 +692,21 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
             continue;
         };
 
-        // A session starting at a skipped bar starts at the next usable one.
+        // A profile starting at a skipped bar starts at the next usable one.
         let mut is_new_session = current_profile.is_none();
-        while starts.next_if(|&start| start <= i).is_some() {
+        // A split starts a profile, while its periods keep counting from the session's open.
+        let mut opens_session = is_new_session;
+        while let Some((part, opens)) = parts.next_if(|(part, _)| part.start <= i) {
+            part_end = part.end;
             is_new_session = true;
+            opens_session |= opens;
         }
-        let opens_session = match &mut opens {
-            Some(opens) => {
-                let mut opened = current_profile.is_none();
-                while opens.next_if(|&start| start <= i).is_some() {
-                    opened = true;
-                }
-                opened
-            }
-            None => is_new_session,
-        };
+        // Bars outside the chosen hours join no profile.
+        if i >= part_end {
+            continue;
+        }
         if opens_session {
-            session_open = sessions
-                .session_open(bar.time, split_hours)
-                .unwrap_or(bar.time);
+            session_open = sessions.session_open(bar.time, split).unwrap_or(bar.time);
         }
         let elapsed = (bar.time - session_open).num_minutes().max(0);
         let bar_period = (elapsed / period_minutes) as usize;

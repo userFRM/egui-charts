@@ -169,7 +169,7 @@ impl FeedLink {
     }
 
     fn rebuild_paged_trade_rate(&self, input: &crate::data::OrderFlowInput, history: &[Bar]) {
-        if let Some(tf @ (Timeframe::Ticks(_) | Timeframe::Range(_))) = self.clock.timeframe()
+        if let Some(tf) = self.clock.timeframe().filter(|tf| tf.is_trade_based())
             && self.trades_from_start
             && self.pushed_from.is_none()
             && self.trades.live().next().is_none()
@@ -965,6 +965,8 @@ impl Chart {
 
     /// Reloads the current feed key on the next frame, retaining drawings and chart history.
     /// Use after changing host-side feed settings or to retry a permanent request failure.
+    /// A feed asks for the same reload of the chart's series through
+    /// [`Sink::reload_history`](crate::data::Sink::reload_history).
     pub fn reload_feed(&mut self) {
         self.study_data.clear_feed();
         if let Some(link) = &mut self.feed_link {

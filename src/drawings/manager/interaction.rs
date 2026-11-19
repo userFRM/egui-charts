@@ -460,6 +460,75 @@ impl DrawingManager {
         )
     }
 
+    /// Tools whose first two anchors span a box that Shift keeps square on screen, while the
+    /// drawing is placed and while one of its corners is dragged: a Fib circle comes out round
+    /// and a Gann 1x1 line runs at 45 degrees.
+    pub(crate) fn squares_box(tool: DrawingToolType) -> bool {
+        use DrawingToolType as T;
+        matches!(
+            tool,
+            T::Rect
+                | T::Ellipse
+                | T::FibonacciCircles
+                | T::GannBox
+                | T::GannSquare
+                | T::GannFixed
+                | T::GannFan
+        )
+    }
+
+    /// The far corner of the square on `anchor` toward `point`: its side is the larger of the
+    /// two distances, cut to the room a positive `bounds` leaves in that direction.
+    pub(crate) fn square_corner(anchor: Pos2, point: Pos2, bounds: egui::Rect) -> Pos2 {
+        let delta = point - anchor;
+        let direction = egui::vec2(
+            if delta.x < 0.0 { -1.0 } else { 1.0 },
+            if delta.y < 0.0 { -1.0 } else { 1.0 },
+        );
+        let mut side = delta.x.abs().max(delta.y.abs());
+        if bounds.is_positive() {
+            let room = egui::vec2(
+                if direction.x < 0.0 {
+                    anchor.x - bounds.left()
+                } else {
+                    bounds.right() - anchor.x
+                },
+                if direction.y < 0.0 {
+                    anchor.y - bounds.top()
+                } else {
+                    bounds.bottom() - anchor.y
+                },
+            );
+            side = side.min(room.x).min(room.y).max(0.0);
+        }
+        anchor + direction * side
+    }
+
+    /// The corner a Shift drag of `handle` keeps fixed while it squares the box, and the price at
+    /// that corner's screen y: the other anchor, or for a box's mixed corner the opposite one.
+    fn square_anchor(&self, drawing: &Drawing, handle: HandlePos) -> Option<(Pos2, f64)> {
+        if !self.interaction_modifiers.shift
+            || drawing.custom_tool.is_some()
+            || !Self::squares_box(drawing.tool_type)
+        {
+            return None;
+        }
+        let ([first, second, ..], [a, b, ..]) =
+            (drawing.points.as_slice(), drawing.chart_points.as_slice())
+        else {
+            return None;
+        };
+        match handle {
+            HandlePos::Start | HandlePos::Point(0) | HandlePos::TopLeft => Some((*second, b.price)),
+            HandlePos::End | HandlePos::Point(1) | HandlePos::BottomRight => {
+                Some((*first, a.price))
+            }
+            HandlePos::TopRight => Some((Pos2::new(first.x, second.y), b.price)),
+            HandlePos::BottomLeft => Some((Pos2::new(second.x, first.y), a.price)),
+            _ => None,
+        }
+    }
+
     // Project onto the nearest 45-degree direction. Integer directions keep diagonals exact.
     fn constrain_angle(&self, drawing: &Drawing, index: usize, point: Pos2) -> Pos2 {
         if !self.interaction_modifiers.shift
@@ -604,9 +673,13 @@ impl DrawingManager {
                         constrained_price = Some((chart_anchor.price, anchor.y));
                     }
                 }
+                if let Some((anchor, price)) = self.square_anchor(drawing, handle) {
+                    snapped = Self::square_corner(anchor, snapped, self.pane_rect);
+                    constrained_price = Some((price, anchor.y));
+                }
             }
-            // Shift edits receive precise bars for the angle; other Shift edits keep whole bars
-            // while anchors snap to bars in time.
+            // Shift edits receive precise bars for the angle or the square; other Shift edits
+            // keep whole bars while anchors snap to bars in time.
             let whole_bars = self.interaction_modifiers.shift
                 && constrained_price.is_none()
                 && self.options.snap_to_time;
@@ -1002,7 +1075,9 @@ impl DrawingManager {
     /// Prepares a post or idea card showing `post`, placed by the next click on the chart, as
     /// [`Self::start_icon_insertion`] does for a picked icon. The tool's saved defaults apply,
     /// and the inline editor does not open, since the card has its content. Does nothing for
-    /// other tools or a disabled one.
+    /// other tools or a disabled one. On a chart, the card stands on the bar of the time its
+    /// content was published, at the clicked price, as
+    /// [`Chart::set_post_source`](crate::widget::Chart::set_post_source) describes.
     pub fn start_post_insertion(&mut self, tool: DrawingToolType, post: PostLink) {
         if !matches!(tool, DrawingToolType::Tweet | DrawingToolType::Idea)
             || !self.registry.availability(tool).enabled

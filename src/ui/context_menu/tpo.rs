@@ -34,31 +34,35 @@ pub(super) struct TpoMenu {
 impl TpoMenu {
     pub(super) fn open(chart: &Chart, pos: Pos2) -> Option<Self> {
         let params = chart.chart_type_params().clone();
-        let clock = chart.tpo_clock();
         let bars = chart.bars(SeriesId::MAIN);
         let (start, end) = chart.state().visible_range();
         let tick = chart.instrument().and_then(|i| i.tick_size);
         let mapping = chart.get_chart_mapping();
         let hit = |config: &TPOConfig| {
-            crate::chart::rendering::candles::tpo::profile_at(
+            let (clock, session) = chart.profile_hours(&config.session);
+            let config = TPOConfig {
+                session: session.clone(),
+                ..config.clone()
+            };
+            let profile = crate::chart::rendering::candles::tpo::profile_at(
                 bars,
                 start..end,
                 chart.state().revision(),
-                config,
+                &config,
                 tick,
                 &clock,
                 &mapping,
                 pos,
-            )
+            )?;
+            Some((clock, config, profile))
         };
-        let (owner, config, (open, period)) =
+        let (owner, (clock, config, (open, period))) =
             if chart.chart_type() == ChartType::TimePriceOpportunity {
                 if !chart.is_main_series_visible() {
                     return None;
                 }
                 let config = params.tpo_config(tick);
-                let profile = hit(&config)?;
-                (TpoOwner::ChartType, config, profile)
+                (TpoOwner::ChartType, hit(&config)?)
             } else {
                 if chart.chart_type().is_time_independent()
                     || chart.chart_type() == ChartType::SessionVolumeProfile
@@ -76,20 +80,34 @@ impl TpoMenu {
                             return None;
                         }
                         let config = study.tpo()?;
-                        Some((TpoOwner::Study(id), config.clone(), hit(config)?))
+                        Some((TpoOwner::Study(id), hit(config)?))
                     })?
             };
         let composite = |time| config.composites.iter().position(|r| r.contains(&time));
         let sessions = clock.sessions();
-        let opens: Vec<_> =
-            crate::model::tpo::session_starts(bars, &sessions, config.split_hours(), &[])
+        // Use the renderer's parts, including hours excluded by the study's session choice.
+        let starts = |config: &TPOConfig| {
+            crate::model::tpo::profile_parts(bars, &sessions, config)
                 .into_iter()
-                .map(|i| bars[i].time)
-                .collect();
+                .filter_map(|(part, opens)| {
+                    part.clone()
+                        .find(|&i| {
+                            bars[i].high.is_finite()
+                                && bars[i].low.is_finite()
+                                && bars[i].high >= bars[i].low
+                        })
+                        .map(|i| (i, opens))
+                })
+                .collect::<Vec<_>>()
+        };
+        let parts = starts(&config);
+        let opens: Vec<_> = parts
+            .iter()
+            .filter(|(_, opens)| *opens)
+            .map(|&(i, _)| bars[i].time)
+            .collect();
         let mut groups: Vec<RangeInclusive<DateTime<Utc>>> = Vec::new();
-        for i in
-            crate::model::tpo::session_starts(bars, &sessions, config.split_hours(), &config.splits)
-        {
+        for &(i, _) in &parts {
             let time = bars[i].time;
             let previous = bars[..i]
                 .iter()
@@ -141,16 +159,15 @@ impl TpoMenu {
             let mut composites = config.composites.clone();
             if let Some(i) = composite(open) {
                 let range = composites.remove(i);
-                let previous = crate::model::tpo::session_starts(
-                    bars,
-                    &sessions,
-                    config.split_hours(),
-                    &splits,
-                )
-                .into_iter()
-                .map(|j| bars[j].time)
-                .rfind(|t| *t < time && range.contains(t))
-                .unwrap();
+                let split_config = TPOConfig {
+                    splits: splits.clone(),
+                    ..config.clone()
+                };
+                let previous = starts(&split_config)
+                    .into_iter()
+                    .map(|(j, _)| bars[j].time)
+                    .rfind(|t| *t < time && range.contains(t))
+                    .unwrap();
                 let mut parts = Vec::new();
                 if *range.start() < previous {
                     parts.push(*range.start()..=previous);
@@ -207,13 +224,14 @@ impl TpoMenu {
     }
 
     pub(super) fn apply(&self, chart: &mut Chart, action: &ContextMenuAction) {
-        if chart.symbol() != self.symbol || chart.tpo_clock() != self.clock {
+        if chart.symbol() != self.symbol {
             return;
         }
         match self.owner {
             TpoOwner::ChartType
                 if chart.chart_type() != ChartType::TimePriceOpportunity
-                    || chart.chart_type_params() != &self.params =>
+                    || chart.chart_type_params() != &self.params
+                    || chart.profile_clock() != self.clock =>
             {
                 return;
             }
@@ -224,8 +242,12 @@ impl TpoMenu {
                     .and_then(|(_, study)| study.tpo());
                 if !chart.indicator_user_edit_enabled(id)
                     || current.is_none_or(|config| {
-                        config.composites != self.config.composites
-                            || config.splits != self.config.splits
+                        let (clock, session) = chart.profile_hours(&config.session);
+                        let config = TPOConfig {
+                            session: session.clone(),
+                            ..config.clone()
+                        };
+                        clock != self.clock || config != self.config
                     })
                 {
                     return;
