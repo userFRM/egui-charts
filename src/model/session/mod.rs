@@ -18,7 +18,6 @@
 mod exchange;
 
 pub use exchange::ExchangeSessionProvider;
-#[cfg(any(feature = "widget", feature = "studies"))]
 pub(crate) use exchange::MarketSession;
 pub(crate) use exchange::WindowKind;
 
