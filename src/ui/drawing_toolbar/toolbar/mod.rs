@@ -546,7 +546,10 @@ impl DrawingToolbar {
                     display_tool
                         .map(icons::get_icon)
                         .unwrap_or(&embedded_icons::EMOJI_ICON),
-                    display_tool.map(|tool| tool.as_str()).unwrap_or(category),
+                    display_tool
+                        .as_ref()
+                        .map(|tool| tool.as_str())
+                        .unwrap_or(category),
                 )
             };
             let has_sel = selected_custom.is_some()
