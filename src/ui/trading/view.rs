@@ -2105,7 +2105,11 @@ mod tests {
         ] {
             rules.quantity_step = step;
             rules.min_quantity = step;
-            assert_eq!(close_part(requested, size, &rules), Ok(closed), "{requested}");
+            assert_eq!(
+                close_part(requested, size, &rules),
+                Ok(closed),
+                "{requested}"
+            );
         }
     }
 
