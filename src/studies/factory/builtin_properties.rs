@@ -260,7 +260,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(Ratio::default()),
         Box::new(Spread::default()),
         Box::new(Correlation::new(l(0))),
-        Box::new(Correlation::new(l(0)).with_log_returns(true)),
+        Box::new(CorrelationLog::new(l(0))),
         Box::new(RciRibbon::new(l(0), l(1), l(2))),
         Box::new(MajorityRule::new(l(0))),
         Box::new(MajorityRule::new(l(0)).with_mode(MajorityMode::Direction)),
