@@ -8,6 +8,35 @@ use std::sync::Arc;
 
 /// One price-row profile placed over a half-open span of chart bars. Exhaustive, so that a custom
 /// study can build it in `studies::Indicator::volume_profiles`.
+///
+/// Build a profile beside its bars, as a custom study can return from
+/// `Indicator::volume_profiles`. Set `strip: Some(0.3)` with `right_aligned: true` to
+/// place it in the plot's rightmost 30% instead.
+///
+/// ```
+/// use egui_charts::data::{StudyProfile, VolumeProfile, VolumeProfileConfig};
+/// use egui_charts::model::Bar;
+/// use std::sync::Arc;
+///
+/// let bars = [Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 12.0, 9.0, 11.0, 100.0)];
+/// let config = VolumeProfileConfig::default();
+/// let profile = StudyProfile {
+///     bars: 0..bars.len(),
+///     profile: Arc::new(VolumeProfile::from_bars(&bars, config).unwrap()),
+///     config,
+///     color: [255, 255, 255, 255],
+///     right_aligned: false,
+///     strip: None,
+///     width: 0.8,
+/// };
+/// assert_eq!(profile.bars, 0..1);
+/// assert_eq!(profile.strip, None);
+/// assert!(!profile.right_aligned);
+/// assert_eq!(profile.width, 0.8);
+/// let edge_profile = StudyProfile { right_aligned: true, strip: Some(0.3), ..profile };
+/// assert!(edge_profile.right_aligned);
+/// assert_eq!(edge_profile.strip, Some(0.3));
+/// ```
 #[derive(Clone, Debug)]
 pub struct StudyProfile {
     /// Full source span for bar profiles, including offscreen bars in fixed periods,
