@@ -134,6 +134,10 @@ pub enum AccountPanelAction {
     SelectAccount(usize),
     /// Disconnect from the broker.
     Disconnect,
+    /// Open the host's broker picker, such as a
+    /// [`BrokerPicker`](crate::ui::trading::BrokerPicker), to choose another broker. The current
+    /// broker stays connected until the user picks another.
+    ChangeBroker,
     /// Open the account's settings, such as resetting a [paper
     /// account](crate::services::PaperAccount).
     Settings,
@@ -158,9 +162,9 @@ pub enum AccountPanelAction {
 /// a broker that reports that it is connecting or disconnected, until it reports that it is live.
 /// Below are the positions, working orders, finished orders, closed positions, balance changes
 /// and trading journal the broker pushes, each with a column chooser and an export. Order History
-/// also lists individual executions. A position offers close, and an order offers edit and cancel on hover; each waits
-/// for the user's confirmation like the chart's lines. Clicking
-/// a symbol asks the host to show it. Each history keeps the most recent 1,000 entries; active
+/// also lists individual executions. A position offers close, and an order offers edit and cancel
+/// on hover; each waits for the user's confirmation like the chart's lines. The broker menu asks
+/// the host to open its broker picker or disconnect. Clicking a symbol asks the host to show it. Each history keeps the most recent 1,000 entries; active
 /// orders are retained independently. Scrolling to the end of a history asks
 /// [`Broker::history`](crate::services::Broker::history) for the entries before its oldest
 /// one, a page at a time, until the broker has nothing older or the history lists 1,000
@@ -580,6 +584,40 @@ mod tests {
                     "{buffer:?}: {key}"
                 );
             }
+        }
+    }
+
+    /// Menu entries ask the host for the chosen action while the current service stays live.
+    #[test]
+    fn the_broker_menu_asks_the_host_to_change_broker_or_disconnect() {
+        for (item, expected) in [
+            ("Change broker", AccountPanelAction::ChangeBroker),
+            ("Disconnect", AccountPanelAction::Disconnect),
+        ] {
+            let mut trading = Trading::default();
+            trading.set_service(Arc::new(Recorder::default()));
+            trading.poll(&egui::Context::default(), &mut Toasts::new());
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(1000.0, 400.0))
+                .with_context_setup(egui_extras::install_image_loaders)
+                .build_ui_state(
+                    |ui, state: &mut (Trading, Option<AccountPanelAction>)| {
+                        if let Some(action) = state.0.show_account_panel(ui, "SYM") {
+                            state.1 = Some(action);
+                        }
+                    },
+                    (trading, None),
+                );
+            harness.run();
+            harness
+                .get_by_role_and_label(egui::Role::Button, "Broker")
+                .click();
+            harness.run();
+            harness.get_by_label(item).click();
+            harness.run();
+            assert_eq!(harness.state().1, Some(expected));
+            assert!(harness.state().0.has_broker());
+            assert!(harness.state().0.is_connected());
         }
     }
 

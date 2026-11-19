@@ -210,7 +210,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 - [x] `Trading` connects order tickets, account tables and chart overlays to a supplied `Broker`.
 - [x] Market, limit, stop and stop-limit tickets, units/value sizing, risk-percent sizing on every order type, time in force, presets and attached stop-loss/take-profit levels. Switching between units and an amount preserves the order quantity; money exits show no price and keep their entered value when the quantity is zero or invalid.
-- [x] Validated one-click orders, chart context-menu entry and broker/account selection components.
+- [x] Validated one-click orders, chart context-menu entry and broker/account selection components. The account menu returns a change-broker request while keeping the current connection; the demo opens its broker picker for it.
 - [x] Order and position lines show levels and profit/loss; confirmed actions modify/cancel orders, close/reverse positions and edit brackets.
 - [x] A depth ladder supports order entry, drag modification and right-click cancellation through the broker interface.
 - [x] Account summary, including the reported equity left above positions' margin with a tooltip, and positions, orders, order history, closed positions, executions, balance and journal tables, with column selection, CSV export and older history pages. The paper account records closed round trips, including partial closes and reversals.

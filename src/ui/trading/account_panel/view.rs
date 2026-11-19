@@ -158,6 +158,9 @@ impl Trading {
                     false => broker,
                 };
                 egui::Popup::menu(&broker).show(|ui| {
+                    if ui.button(l10n::text(ui.ctx(), "Change broker")).clicked() {
+                        action = Some(AccountPanelAction::ChangeBroker);
+                    }
                     if ui.button(l10n::text(ui.ctx(), "Disconnect")).clicked() {
                         action = Some(AccountPanelAction::Disconnect);
                     }
