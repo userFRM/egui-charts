@@ -63,11 +63,12 @@ pub use session_breaks::{SessionBreakRenderConfig, SessionBreakRenderer};
 pub(crate) use session_breaks::{exchange_session, render_extended_hours};
 #[cfg(feature = "ui")]
 pub(crate) use trading_lines::{
-    COVERAGE_CELL, coverage_text, entry_price, exit_coverage, paint_coverage, pnl_text,
+    COVERAGE_CELL, coverage_text, entry_price, exit_coverage, exit_request, held_exits,
+    paint_coverage, pnl_text,
 };
 pub use trading_lines::{
-    PnlUnit, TradingLabelAlignment, TradingLineAction, TradingLineOptions, TradingLines,
-    render_trading_lines,
+    PnlUnit, TradingLabelAlignment, TradingLineAction, TradingLineAppearance, TradingLineOptions,
+    TradingLines, render_trading_lines,
 };
 pub(crate) use watermark::render_watermark;
 pub use watermark::{Watermark, WatermarkLine};

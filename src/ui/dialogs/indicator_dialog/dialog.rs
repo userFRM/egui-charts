@@ -1828,15 +1828,15 @@ mod tests {
             dialog.open_tab(OrderFlow);
             for query in ["", "Order flow"] {
                 *dialog.search.query_mut() = query.into();
-                for (id, accepted) in [
-                    "Trade Rate",
-                    "Rolling Volume and Delta",
-                    "Quoted Spread",
-                    "Book Size",
-                ]
-                .into_iter()
-                .zip(expected)
-                {
+                for (id, column) in [
+                    ("Trade Rate", 0),
+                    ("Volatility Regime", 0),
+                    ("Rolling Volume and Delta", 1),
+                    ("Quoted Spread", 2),
+                    ("Book Size", 3),
+                    ("Book Balance", 3),
+                ] {
+                    let accepted = expected[column];
                     let ind = dialog.indicators.iter().find(|ind| ind.id == id).unwrap();
                     assert_eq!(
                         dialog.matches(&ctx, ind),
