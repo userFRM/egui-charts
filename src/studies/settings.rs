@@ -285,6 +285,34 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
         let mut guide = levels[0];
         guide.visible = false;
         settings.levels.push(guide);
+    } else if study.name() == "Aroon Oscillator" && settings.levels.len() < 2 && guides_since(study)
+    {
+        // Keep the saved zero style at its new position and add the outer guides hidden.
+        let zero = settings.levels.first().copied().unwrap_or(levels[1]);
+        settings.levels = vec![
+            LevelStyle {
+                visible: false,
+                ..levels[0]
+            },
+            zero,
+            LevelStyle {
+                visible: false,
+                ..levels[2]
+            },
+        ];
+        settings.fill_between_levels = false;
+    } else if settings.levels.is_empty() && guides_since(study) {
+        // Older saves drew no guides or band; showing them later uses the declared styles.
+        settings.levels = levels
+            .into_iter()
+            .map(|level| LevelStyle {
+                visible: false,
+                ..level
+            })
+            .collect();
+        settings.fill_between_levels = false;
+        settings.level_fill_color = color;
+        settings.mfi_auto_range = study.name() == "MFI";
     } else if settings.levels.len() != levels.len()
         && former_guides(study, settings.levels.len()).is_none()
     {
@@ -365,6 +393,25 @@ fn former_guides(study: &dyn Indicator, saved: usize) -> Option<(Guides, Option<
     (study.pane().levels == current).then_some((former, fill))
 }
 
+/// Whether a built-in gained guides after settings were saved without them. Compare its
+/// declared values so a host study under the same name keeps its own guide handling.
+fn guides_since(study: &dyn Indicator) -> bool {
+    // Built-in types are available only with the `studies` feature.
+    let since: &[f64] = match study.name() {
+        "%B" => &[1.0, 0.0, 0.5],
+        "CCI" => &[100.0, -100.0, 0.0],
+        "MFI" => &[80.0, 20.0],
+        "Aroon Oscillator" => &[90.0, 0.0, -90.0],
+        _ => return false,
+    };
+    study
+        .pane()
+        .levels
+        .iter()
+        .map(|level| level.0)
+        .eq(since.iter().copied())
+}
+
 /// Reads [`StudySettings::timeframe_visibility`], or the interval range that settings saved
 /// before it hold: every interval, the saved interval only, or also those above or below it.
 fn saved_timeframe_visibility<'de, D: serde::Deserializer<'de>>(
@@ -438,7 +485,10 @@ pub struct StudySettings {
     /// editable, and settings with another number of levels, take the study's own levels and fill.
     /// Only the guide declared since is added, hidden, to a Stochastic saved with two levels or a
     /// Know Sure Thing, Chaikin Money Flow, Force Index or Advance/Decline Ratio (Bars) saved
-    /// with none. A Connors RSI or a Correlation Coefficient with three levels keeps the guides it
+    /// with none. A Bollinger Bands %b, Commodity Channel Index or Money Flow Index saved with
+    /// none restores its guides hidden and its band unfilled, and an Aroon Oscillator saved with
+    /// its zero guide alone, or with none, keeps that guide and adds those at 90 and -90 hidden.
+    /// A Connors RSI or a Correlation Coefficient with three levels keeps the guides it
     /// opened with before: 70, 50 and 30 with the band between 70 and 30, or 1, -1 and 0.
     #[serde(default)]
     pub levels: Vec<LevelStyle>,
@@ -449,6 +499,9 @@ pub struct StudySettings {
     /// Colour of the band between the boundary levels.
     #[serde(default)]
     pub level_fill_color: Color32,
+    /// Keep automatic fitting for an MFI saved before it declared a fixed range.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) mfi_auto_range: bool,
     /// Plots, as indices into [`plots`](Self::plots), whose last value has no tag on the price
     /// scale while the chart shows study values; the legend still shows it. A study starts
     /// with the plots its [`Indicator::plot_tagged`] leaves out, every plot of a study with more
@@ -498,6 +551,7 @@ impl Default for StudySettings {
             levels: Vec::new(),
             fill_between_levels: false,
             level_fill_color: Color32::TRANSPARENT,
+            mfi_auto_range: false,
             untagged_plots: Vec::new(),
             price_line_plots: Vec::new(),
             plot_variants: Vec::new(),
@@ -650,6 +704,8 @@ pub struct ConfiguredStudy {
     /// The values kept on the bars that remain after the chart evicted the oldest bars, until
     /// the study is calculated again.
     kept: Option<Kept>,
+    /// Defaults by input id that replace the declared ones, from `set_input_defaults`.
+    input_defaults: Vec<(String, InputValue)>,
 }
 
 impl Clone for ConfiguredStudy {
@@ -701,6 +757,7 @@ impl ConfiguredStudy {
             aligned_markers: self.aligned_markers.clone(),
             aligned_zones: self.aligned_zones.clone(),
             kept: self.kept.clone(),
+            input_defaults: self.input_defaults.clone(),
         }
     }
 
@@ -710,6 +767,12 @@ impl ConfiguredStudy {
         let mut pane = self.study.pane();
         if let Some((levels, _)) = former_guides(self.study.as_ref(), self.settings.levels.len()) {
             pane.levels = levels;
+        }
+        if self.settings.mfi_auto_range
+            && self.study.name() == "MFI"
+            && guides_since(self.study.as_ref())
+        {
+            pane.range = None;
         }
         pane
     }
@@ -748,6 +811,7 @@ impl ConfiguredStudy {
             aligned_markers: Vec::new(),
             aligned_zones: Vec::new(),
             kept: None,
+            input_defaults: Vec::new(),
         }
     }
     /// Attach a host-chosen help article to this study, retained in saved presentation.
@@ -758,13 +822,25 @@ impl ConfiguredStudy {
 
     /// Whether the study can be calculated on another interval: it reads one source, or the bars
     /// alone, without order flow it cannot do without and with no data of its own to request
-    /// unless its requests apply on any interval. An accepted interval stays available if
-    /// calculating on it changes those requests.
+    /// unless its requests apply on any interval or are price bars it reads on that interval as
+    /// on a chart of it: other symbols' bars, and bars of the chart's interval, while the study
+    /// has no interval input of its own. An accepted interval stays available if calculating on
+    /// it changes those requests.
     fn runs_on_other_bars(&self) -> bool {
+        let requests = self.study.data_requests();
+        let follows = |request: &super::StudyDataRequest| {
+            request.metric.is_none() && (request.timeframe.is_none() || !request.symbol.is_empty())
+        };
         self.calculation_timeframe.is_some()
             || self.study.source().is_some()
-            || ((self.study.data_requests().is_empty()
-                || self.study.requests_allow_other_intervals())
+            || ((requests.is_empty()
+                || self.study.requests_allow_other_intervals()
+                || (requests.iter().all(follows)
+                    && !self
+                        .study
+                        .inputs()
+                        .iter()
+                        .any(|input| matches!(input.kind, super::InputKind::Timeframe))))
                 && !self.study.needs_order_flow())
     }
 
@@ -775,6 +851,50 @@ impl ConfiguredStudy {
             symbol: self.calculation_symbol.clone(),
             timeframe: self.calculation_timeframe,
         }
+    }
+
+    /// The study's own requests it reads while it runs on another symbol or interval, each with
+    /// the request made for it. Price bars of the chart's interval are made on the calculation
+    /// interval, and the chart symbol's on the calculation symbol, as on a chart of them. Metrics,
+    /// other symbols' bars of a stated interval, the chart symbol's candles inside the Interval's
+    /// bars and every request of a study whose requests apply on any interval are made as stated.
+    /// The study reads no other request.
+    fn requests_on_other_bars(&self) -> Vec<(super::StudyDataRequest, super::StudyDataRequest)> {
+        // Bars inside the Interval's bars, on the chart symbol, are the candles a chart of
+        // that interval would read (24-hour Volume on 1W reads hourly candles).
+        let inside = |timeframe: Timeframe| {
+            self.calculation_symbol.is_empty()
+                && !timeframe.is_trade_based()
+                && self
+                    .calculation_timeframe
+                    .is_some_and(|interval| timeframe.duration_ms() < interval.duration_ms())
+        };
+        let all = self.study.requests_allow_other_intervals();
+        self.study
+            .data_requests()
+            .into_iter()
+            .filter_map(|request| {
+                if all
+                    || request.metric.is_some()
+                    || (!request.symbol.is_empty() && request.timeframe.is_some())
+                    || (request.symbol.is_empty() && request.timeframe.is_some_and(inside))
+                {
+                    return Some((request.clone(), request));
+                }
+                request.timeframe.is_none().then(|| {
+                    let made = super::StudyDataRequest {
+                        symbol: if request.symbol.is_empty() {
+                            self.calculation_symbol.clone()
+                        } else {
+                            request.symbol.clone()
+                        },
+                        timeframe: self.calculation_timeframe,
+                        metric: None,
+                    };
+                    (request, made)
+                })
+            })
+            .collect()
     }
 
     /// The bars evicted since the study was last calculated, by which the bars of its kept values
@@ -845,6 +965,9 @@ impl Indicator for ConfiguredStudy {
     fn set_registered_name(&mut self, name: &str) -> bool {
         self.registered = name.to_owned();
         true
+    }
+    fn set_input_defaults(&mut self, defaults: &[(String, InputValue)]) {
+        self.input_defaults = defaults.to_vec();
     }
     fn metric(&self) -> Option<&crate::data::MetricSeries> {
         self.study.metric()
@@ -918,6 +1041,13 @@ impl Indicator for ConfiguredStudy {
                 )
                 .with_default(InputValue::Toggle(true)),
             ]);
+        }
+        for input in &mut inputs {
+            if let Some((_, value)) = self.input_defaults.iter().find(|(id, _)| *id == input.id)
+                && input.accepts(value)
+            {
+                input.default = value.clone();
+            }
         }
         inputs
     }
@@ -1018,27 +1148,12 @@ impl Indicator for ConfiguredStudy {
     }
     fn data_requests(&self) -> Vec<super::StudyDataRequest> {
         if !self.calculation_symbol.is_empty() || self.calculation_timeframe.is_some() {
-            // The bars come first: `update_data` reads them from the head. The study's own
-            // metric requests (exchange rates) follow, and the candles it reads inside the
-            // Interval's bars, or every request of a study whose histories apply on any interval.
+            // The bars come first: `update_data` reads them from the head. The requests the study
+            // reads on them follow, each once.
             let mut requests = vec![self.calculation_request()];
-            // Bars inside the Interval's bars, on the chart symbol, are the candles a chart of
-            // that interval would read (24-hour Volume on 1W reads hourly candles).
-            let inside = |timeframe: Timeframe| {
-                self.calculation_symbol.is_empty()
-                    && !timeframe.is_trade_based()
-                    && self
-                        .calculation_timeframe
-                        .is_some_and(|interval| timeframe.duration_ms() < interval.duration_ms())
-            };
-            let all = self.study.requests_allow_other_intervals();
-            for request in self.study.data_requests() {
-                if (all
-                    || request.metric.is_some()
-                    || (request.symbol.is_empty() && request.timeframe.is_some_and(inside)))
-                    && !requests.contains(&request)
-                {
-                    requests.push(request);
+            for (_, made) in self.requests_on_other_bars() {
+                if !requests.contains(&made) {
+                    requests.push(made);
                 }
             }
             requests
@@ -1091,10 +1206,27 @@ impl Indicator for ConfiguredStudy {
             self.study
                 .set_visible_range(source_bars(&self.spans, visible));
         }
-        if self.data_requests().len() > 1 {
+        let read = self.requests_on_other_bars();
+        if read.is_empty() {
+            self.update_price(source.bars, 0);
+        } else if read.iter().all(|(own, made)| own == made) {
             self.study.update_data(source.bars, 0, sources);
         } else {
-            self.update_price(source.bars, 0);
+            // The study finds each history under its own request.
+            let histories: Vec<_> = read
+                .into_iter()
+                .filter_map(|(own, made)| {
+                    let history = sources.iter().find(|history| history.request == made)?;
+                    Some(super::StudyData {
+                        request: own,
+                        bars: history.bars,
+                        clock: history.clock.clone(),
+                        instrument: history.instrument,
+                        timeframe: history.timeframe,
+                    })
+                })
+                .collect();
+            self.study.update_data(source.bars, 0, &histories);
         }
         let mut aligned = IndicatorValues::new();
         self.aligned_bars.clear();
@@ -2784,6 +2916,193 @@ mod tests {
         }
     }
 
+    /// Guards #3494: a volume profile offers the Interval and Wait for interval close whatever
+    /// finer bars it requests, from its Source interval or the host's suggestion, so either order
+    /// of Source interval and Interval, by input or by Apply, gives the same study. It reads the
+    /// finer bars inside the Interval's bars from the profile's first bar, and keeps the Interval
+    /// listed once it is cleared.
+    #[test]
+    fn profiles_offer_the_interval_in_either_order() {
+        use crate::model::{BarClock, ProfileResolution};
+        use crate::studies::{
+            StudyData, StudyDataRequest, VolProfileAutoAnchored, VolProfileVisible,
+        };
+        // 48 hourly bars from Monday 2 March 2026 00:00 UTC, two daily bars of volume 99, and one
+        // minute bar on each day, of volume 2 and 3.
+        let start: chrono::DateTime<chrono::Utc> = "2026-03-02T00:00:00Z".parse().unwrap();
+        let hour = |h: i64| start + chrono::Duration::hours(h);
+        let flat = |h, volume| Bar::new(hour(h), 100.0, 101.0, 100.0, 101.0, volume);
+        let chart: Vec<_> = (0..48).map(|h| flat(h, 1.0)).collect();
+        let days = [flat(0, 99.0), flat(24, 99.0)];
+        let minutes = [
+            Bar::new(hour(10), 100.0, 100.5, 100.0, 100.5, 2.0),
+            Bar::new(hour(29), 100.5, 101.0, 100.5, 101.0, 3.0),
+        ];
+        let bars = |timeframe| StudyDataRequest {
+            symbol: String::new(),
+            timeframe: Some(timeframe),
+            metric: None,
+        };
+        let suggested = Instrument::new("TEST")
+            .with_profile_resolutions([ProfileResolution::new(Timeframe::Min1, None)]);
+        let interval = (
+            "calculation_timeframe",
+            InputValue::Timeframe(Some(Timeframe::Day1)),
+        );
+        let source = (
+            "source_interval",
+            InputValue::Timeframe(Some(Timeframe::Min1)),
+        );
+        let listed = |study: &ConfiguredStudy| -> Vec<_> {
+            study
+                .inputs()
+                .into_iter()
+                .filter(|input| {
+                    matches!(
+                        input.id.as_str(),
+                        "calculation_timeframe" | "wait_for_close"
+                    )
+                })
+                .map(|input| (input.id, input.value))
+                .collect()
+        };
+        type Factory = fn() -> Box<dyn Indicator>;
+        let studies: [(&str, Factory); 2] = [
+            ("Vol Profile VR", || Box::new(VolProfileVisible::new(1))),
+            ("Vol Profile Auto Anchored", || {
+                Box::new(VolProfileAutoAnchored::new(1))
+            }),
+        ];
+        let (mut observed, mut expected) = (Vec::new(), Vec::new());
+        for (name, study) in studies {
+            for (order, apply, host, edits) in [
+                (
+                    "source, then interval",
+                    false,
+                    false,
+                    vec![vec![source.clone()], vec![interval.clone()]],
+                ),
+                (
+                    "interval, then source",
+                    false,
+                    false,
+                    vec![vec![interval.clone()], vec![source.clone()]],
+                ),
+                (
+                    "source, then interval",
+                    true,
+                    false,
+                    vec![vec![source.clone()], vec![interval.clone()]],
+                ),
+                (
+                    "interval, then source",
+                    true,
+                    false,
+                    vec![vec![interval.clone()], vec![source.clone()]],
+                ),
+                (
+                    "one Apply",
+                    true,
+                    false,
+                    vec![vec![source.clone(), interval.clone()]],
+                ),
+                (
+                    "suggested, then interval",
+                    false,
+                    true,
+                    vec![vec![interval.clone()]],
+                ),
+            ] {
+                let case = format!("{name}: {order}, apply_settings {apply}");
+                let rows = edits.len();
+                let mut study = ConfiguredStudy::new(study());
+                study.set_timeframe(Timeframe::Hour1);
+                study.set_bar_clock(&BarClock::new(Timeframe::Hour1));
+                study.set_instrument(host.then_some(&suggested));
+                study.set_visible_range(0..chart.len());
+                study.calculate(&chart);
+                let results: Vec<_> = edits
+                    .into_iter()
+                    .map(|edit| {
+                        if apply {
+                            let inputs: Vec<_> = edit
+                                .iter()
+                                .map(|(id, value)| (id.to_string(), value.clone()))
+                                .collect();
+                            let settings = study.settings();
+                            study.apply_settings(&inputs, settings)
+                        } else {
+                            edit.into_iter()
+                                .try_for_each(|(id, value)| study.set_input(id, value))
+                        }
+                        .map_err(|error| error.to_string())
+                    })
+                    .collect();
+                let reply = |request, bars, timeframe| StudyData {
+                    request,
+                    bars,
+                    clock: BarClock::new(timeframe),
+                    instrument: host.then_some(&suggested),
+                    timeframe,
+                };
+                let replies = [
+                    reply(bars(Timeframe::Day1), &days[..], Timeframe::Day1),
+                    reply(bars(Timeframe::Min1), &minutes[..], Timeframe::Min1),
+                ];
+                // A suggestion follows the profile length, known once the daily bars arrived.
+                for _ in 0..2 {
+                    study.update_data(&chart, 0, &replies);
+                }
+                let profiles: Vec<_> = study
+                    .volume_profiles(0..chart.len())
+                    .into_iter()
+                    .map(|plot| {
+                        let rows = &plot.profile;
+                        (plot.bars, rows.low(), rows.high(), rows.volume().to_vec())
+                    })
+                    .collect();
+                let starts = [
+                    study.data_start(&bars(Timeframe::Day1)),
+                    study.data_start(&bars(Timeframe::Min1)),
+                ];
+                let on_interval = (listed(&study), study.data_requests(), starts, profiles);
+                let cleared = study
+                    .set_input("calculation_timeframe", InputValue::Timeframe(None))
+                    .map_err(|error| error.to_string());
+                study.calculate(&chart);
+                observed.push((
+                    case.clone(),
+                    results,
+                    on_interval,
+                    cleared,
+                    listed(&study),
+                    study.data_requests(),
+                ));
+                expected.push((
+                    case,
+                    vec![Ok(()); rows],
+                    (
+                        vec![
+                            (interval.0.to_owned(), interval.1.clone()),
+                            ("wait_for_close".to_owned(), InputValue::Toggle(true)),
+                        ],
+                        vec![bars(Timeframe::Day1), bars(Timeframe::Min1)],
+                        [None, Some(start)],
+                        // Each daily bar holds a minute bar, so the one row sums 2 + 3.
+                        vec![(0..48, 100.0, 101.0, vec![5.0])],
+                    ),
+                    Ok(()),
+                    vec![
+                        (interval.0.to_owned(), InputValue::Timeframe(None)),
+                        ("wait_for_close".to_owned(), InputValue::Toggle(true)),
+                    ],
+                    vec![bars(Timeframe::Min1)],
+                ));
+            }
+        }
+        assert_eq!(observed, expected);
+    }
+
     #[test]
     fn edits_are_atomic_and_interval_visibility_preserves_the_global_toggle() {
         let mut study = ConfiguredStudy::new(Box::new(BollingerBands::new(3, 2.0)));
@@ -2981,6 +3300,76 @@ mod tests {
             study.apply_settings(&[], absent).unwrap();
             assert_eq!(study.settings(), defaults);
         }
+        // Profiles saved with finer bars keep their presentation and both saved interval inputs.
+        // Saves that omitted those inputs keep their existing chart interval and close-wait defaults.
+        for (saved, interval) in [
+            (
+                r#"{"name":"Vol Profile VR","inputs":[["row_count",{"Length":24}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":"Min1"}],["feed_source",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileVisible.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                None,
+            ),
+            (
+                r#"{"name":"Vol Profile VR","inputs":[["row_count",{"Length":24}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":"Min1"}],["feed_source",{"Toggle":true}],["calculation_timeframe",{"Timeframe":"Day1"}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileVisible.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                Some(Timeframe::Day1),
+            ),
+            (
+                r#"{"name":"Vol Profile Auto Anchored","inputs":[["row_count",{"Length":24}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":"Min1"}],["feed_source",{"Toggle":true}],["anchor",{"Choice":0}],["length",{"Length":100}],["width",{"Number":30.0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileAutoAnchored.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                None,
+            ),
+            (
+                r#"{"name":"Vol Profile Auto Anchored","inputs":[["row_count",{"Length":24}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":"Min1"}],["feed_source",{"Toggle":true}],["anchor",{"Choice":0}],["length",{"Length":100}],["width",{"Number":30.0}],["calculation_timeframe",{"Timeframe":"Day1"}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileAutoAnchored.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                Some(Timeframe::Day1),
+            ),
+        ] {
+            let template = serde_json::from_str::<crate::studies::StudyTemplate>(saved).unwrap();
+            let mut older = template.create().unwrap();
+            older.set_timeframe(Timeframe::Hour1);
+            assert_eq!(older.settings(), template.settings);
+            assert_eq!(older.is_visible(), template.visible);
+            assert_eq!(Some(older.scale()), template.scale);
+            let mut expected = template.inputs.clone();
+            for (id, value) in [
+                ("calculation_timeframe", InputValue::Timeframe(interval)),
+                ("wait_for_close", InputValue::Toggle(true)),
+            ] {
+                if !expected.iter().any(|(saved, _)| saved == id) {
+                    expected.push((id.to_owned(), value.clone()));
+                }
+                assert_eq!(
+                    older
+                        .inputs()
+                        .iter()
+                        .find(|input| input.id == id)
+                        .unwrap()
+                        .value,
+                    value
+                );
+            }
+            assert_eq!(
+                crate::studies::StudyTemplate::from_study(older.as_ref()).inputs,
+                expected
+            );
+        }
+        // A template saved before the size basis existed keeps fill-based filtering and
+        // its exact presentation; the missing toggle takes its declared false default.
+        let saved = r#"{"name":"Size-Filtered CVD","inputs":[["min",{"Number":100.0}],["max",{"Number":1.7976931348623157e+308}],["anchor",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.OrderFlowStudy.html","plots":[{"color":[38,166,154,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[2,10,10,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let template = serde_json::from_str::<crate::studies::StudyTemplate>(saved).unwrap();
+        let older = template.create().unwrap();
+        assert_eq!(older.settings(), template.settings);
+        assert_eq!(
+            older
+                .inputs()
+                .iter()
+                .find(|input| input.id == "combine_fills")
+                .unwrap()
+                .value,
+            InputValue::Toggle(false)
+        );
+        let mut expected = template.inputs.clone();
+        expected.insert(2, ("combine_fills".to_owned(), InputValue::Toggle(false)));
+        assert_eq!(
+            crate::studies::StudyTemplate::from_study(older.as_ref()).inputs,
+            expected
+        );
         // A KST opens with a dashed zero guide. Saved before it had one, it restores with the
         // guide hidden, and a guide shown since keeps its style through a template.
         let declared =
@@ -3035,11 +3424,194 @@ mod tests {
         });
         assert_eq!(older.settings(), expected);
         assert_eq!(older.pane().levels[0].1, Color32::TRANSPARENT);
+        // A literal Aroon Oscillator template saved on origin/main keeps its zero guide alone.
+        let saved = r#"{"name":"Aroon Oscillator","inputs":[["period",{"Length":14}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.AroonOscillator.html","plots":[{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":false,"level_fill_color":[5,11,5,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let template = serde_json::from_str::<crate::studies::StudyTemplate>(saved).unwrap();
+        let older = template.create().unwrap();
+        let mut expected = template.settings.clone();
+        let hidden = LevelStyle {
+            visible: false,
+            ..zero
+        };
+        expected.levels = vec![hidden, expected.levels[0], hidden];
+        assert_eq!(older.settings(), expected);
+        assert_eq!(
+            older.pane().levels,
+            [
+                (90.0, Color32::TRANSPARENT, "Upper guide"),
+                (0.0, palette::GRAY, "Zero"),
+                (-90.0, Color32::TRANSPARENT, "Lower guide"),
+            ]
+        );
+        // An older MFI retains automatic fitting, including after saving its upgraded guides.
+        let saved = r#"{"name":"MFI","inputs":[["period",{"Length":14}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MoneyFlowIndex.html","plots":[{"color":[126,87,194,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[8,5,12,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let mut template = serde_json::from_str::<crate::studies::StudyTemplate>(saved).unwrap();
+        for _ in 0..2 {
+            let older = template.create().unwrap();
+            assert_eq!(older.pane().range, None);
+            assert!(older.settings().levels.iter().all(|level| !level.visible));
+            assert!(!older.pane().fill_between_levels);
+            template = serde_json::from_str(
+                &serde_json::to_string(&crate::studies::StudyTemplate::from_study(older.as_ref()))
+                    .unwrap(),
+            )
+            .unwrap();
+        }
         let mut adx = ConfiguredStudy::new(Box::new(AdxBreakout::default()));
         let settings = adx.settings();
         adx.apply_settings(&[("threshold".into(), InputValue::Length(25))], settings)
             .unwrap();
         assert_eq!(values(&adx), [25.0]);
+    }
+
+    /// The Aroon Oscillator, Bollinger Bands %b, CCI and Money Flow Index open with their usual
+    /// guides and band. Settings saved before they had them restore as they were drawn, with the
+    /// new guides hidden and no band; shown since, a guide keeps its style through a template.
+    /// Older Awesome Oscillator columns and Balance of Power smoothing restore as saved.
+    #[test]
+    fn oscillator_guides_open_declared_and_older_saves_restore_as_drawn() {
+        use crate::studies::{IndicatorFactory, PlotType, StudyTemplate, palette};
+        type Row = (
+            &'static str,
+            Vec<(f64, Color32)>,
+            bool,
+            Option<[usize; 2]>,
+            Option<(f64, f64)>,
+            Color32,
+        );
+        let factory = IndicatorFactory::new();
+        let (gray, faint) = (palette::MUTED, palette::MUTED.gamma_multiply_u8(128));
+        let blue = Color32::from_rgba_unmultiplied(41, 98, 255, 26);
+        let rows: [Row; 4] = [
+            (
+                "Aroon Oscillator",
+                vec![(90.0, gray), (0.0, gray), (-90.0, gray)],
+                false,
+                None,
+                Some((-100.0, 100.0)),
+                Color32::TRANSPARENT,
+            ),
+            (
+                "%B",
+                vec![(1.0, gray), (0.0, gray), (0.5, faint)],
+                true,
+                Some([0, 1]),
+                None,
+                blue,
+            ),
+            (
+                "CCI",
+                vec![(100.0, gray), (-100.0, gray), (0.0, faint)],
+                true,
+                Some([0, 1]),
+                None,
+                blue,
+            ),
+            (
+                "MFI",
+                vec![(80.0, gray), (20.0, gray)],
+                true,
+                None,
+                Some((0.0, 100.0)),
+                Color32::from_rgba_unmultiplied(126, 87, 194, 26),
+            ),
+        ];
+        let hidden = |level: LevelStyle| LevelStyle {
+            visible: false,
+            ..level
+        };
+        for (name, guides, fill, indices, range, band) in rows {
+            let mut study = ConfiguredStudy::new(factory.create(name).unwrap());
+            let pane = study.pane();
+            let drawn: Vec<_> = pane.levels.iter().map(|level| (level.0, level.1)).collect();
+            assert_eq!(drawn, guides, "{name}");
+            assert_eq!(pane.range, range, "{name}");
+            let defaults = study.settings();
+            assert!(
+                defaults.levels.iter().all(|level| level.value.is_none()
+                    && level.visible
+                    && level.pattern == LineStyle::Dashed
+                    && level.width == 1.0),
+                "{name}"
+            );
+            assert_eq!(defaults.fill_between_levels, fill, "{name}");
+            assert_eq!(study.level_fill_indices(), indices, "{name}");
+            if fill {
+                assert_eq!(defaults.level_fill_color, band, "{name}");
+            }
+            // The Aroon Oscillator drew its zero guide before; the others drew none.
+            let declared = defaults.levels.clone();
+            let older: Vec<(Vec<LevelStyle>, Vec<LevelStyle>)> = if name == "Aroon Oscillator" {
+                let moved = LevelStyle {
+                    value: Some(5.0),
+                    width: 2.0,
+                    ..declared[1]
+                };
+                vec![
+                    (
+                        vec![moved],
+                        vec![hidden(declared[0]), moved, hidden(declared[2])],
+                    ),
+                    (
+                        Vec::new(),
+                        vec![hidden(declared[0]), declared[1], hidden(declared[2])],
+                    ),
+                ]
+            } else {
+                vec![(Vec::new(), declared.iter().copied().map(hidden).collect())]
+            };
+            for (saved, restored) in older {
+                let mut settings = defaults.clone();
+                settings.levels = saved;
+                settings.fill_between_levels = false;
+                study.apply_settings(&[], settings).unwrap();
+                assert_eq!(study.settings().levels, restored, "{name}");
+                assert!(!study.pane().fill_between_levels, "{name}");
+                assert_eq!(
+                    study.pane().range,
+                    if name == "MFI" { None } else { range },
+                    "{name}"
+                );
+                let shown: Vec<_> = study.pane().levels.iter().map(|level| level.1).collect();
+                let expected: Vec<_> = restored
+                    .iter()
+                    .zip(&guides)
+                    .map(|(level, &(_, color))| {
+                        if level.visible {
+                            color
+                        } else {
+                            Color32::TRANSPARENT
+                        }
+                    })
+                    .collect();
+                assert_eq!(shown, expected, "{name}");
+            }
+            // A guide shown since keeps its style, and the restore does not run again.
+            let mut edited = study.settings();
+            edited.levels[0].visible = true;
+            edited.levels[0].width = 3.0;
+            study.apply_settings(&[], edited.clone()).unwrap();
+            let again = StudyTemplate::from_study(&study).create().unwrap();
+            assert_eq!(again.settings().levels, edited.levels, "{name}");
+            assert_eq!(again.pane().range, study.pane().range, "{name}");
+        }
+        // Saved as columns, an Awesome Oscillator stays columns; saved smoothed over 14 bars,
+        // a Balance of Power keeps its smoothing.
+        let mut ao = ConfiguredStudy::new(factory.create("AO").unwrap());
+        let mut columns = ao.settings();
+        columns.plots[0].plot_type = PlotType::Columns;
+        ao.apply_settings(&[], columns).unwrap();
+        let again = StudyTemplate::from_study(&ao).create().unwrap();
+        assert_eq!(again.plot_style(0).plot_type, PlotType::Columns);
+        let mut bop = ConfiguredStudy::new(factory.create("BoP").unwrap());
+        let settings = bop.settings();
+        bop.apply_settings(
+            &[("smooth_period".into(), InputValue::Length(14))],
+            settings,
+        )
+        .unwrap();
+        let again = StudyTemplate::from_study(&bop).create().unwrap();
+        assert_eq!(again.line_names(), ["BoP(14)"]);
     }
 
     /// A palette set on a chart study recolours its band, as it recolours its plots.

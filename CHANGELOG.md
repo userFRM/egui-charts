@@ -511,6 +511,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Trade Rate now fills history-only range intervals when the instrument's tick size and the complete trade tape reproduce the candles. ([#3453](https://github.com/userFRM/egui-charts/issues/3453))
+
 - Trade Rate now fills history-only tick charts when the complete trade tape reproduces the candles. Partial or mismatched inputs stay blank. ([#3394](https://github.com/userFRM/egui-charts/issues/3394))
 
 - A detached chart export keeps Trade Rate and other `OrderFlowStudy` values at the captured position when new live events arrive. Ordinary study clones still follow the stream. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))
@@ -1406,6 +1408,8 @@ All notable changes to this project are documented in this file. The format is b
 - Drawing bar buttons and flyout rows have a role, a name and their selected state for assistive technology, and rows show a focus ring.
 
 ### Changed
+
+- Breaking: `ReplayStartPicker::show` no longer accepts `can_resume` and asks only for a date; the other replay starts are offered by the replay bar. Migration: set resume availability with `FloatingReplayControl::set_can_resume`, handle `ReplayControlAction::Start` for `ReplayStartAction::{Resume, First, Random, SelectBar}`, and open the date picker for `ReplayStartAction::SelectDate`. `ui::top_toolbar::IconTextButton` now has a private field, so replace struct literals with `IconTextButton::new(icon, label, &config)` and add `.selected(..)` for a toggle. ([#2244](https://github.com/userFRM/egui-charts/issues/2244), [#2358](https://github.com/userFRM/egui-charts/issues/2358))
 
 - Breaking: `chart::{PnlUnit, TradingLabelAlignment}`, `chart::overlays::{BookProfile, BubbleColor, BubbleGrouping}`, `chart::series::TradeDeltaStyle`, `config::{DrawingSort, NavigationButtons, TouchTrackingExitMode}`, `data::{Importance, OrderSizeTier, ProfileDisplay, ProfileSource, ScreenerOp}`, `drawings::{LineMeasurementPosition, LineTextHorizontalAlign, LineTextOrientation, LineTextVerticalAlign, VwapBandMode}`, `model::{AlertChannelComparison, AlertComparison, AlertSource, BaselineLevel, BoxSizeMethod, ExtendedSession, FootprintColor, FootprintMode, FootprintStatistic, LastPriceAnimation, LineType, MarkerZOrder, PriceBasedSource, ProfileRows, ProfileSession, SeriesFormat, SeriesScale, WatchlistFlag, WatchlistItem}`, `services::CountWindow`, `studies::TableTextSize`, `ui::dialogs::PaneTarget`, `ui::trading::BracketMode`, `ui::widget_bar::AlertSortKey`, `widget::{ChartLink, CursorDataPolicy, PaneScale, PrimitivePass, QuoteSide}` and `widget::settings::{ThousandsSeparator, TradingNotifications}` are `#[non_exhaustive]`, so that variants can be added without a breaking change. Migration: add a wildcard arm to matches on them. `model::{AxisSide, Direction, PositionBracket}`, `widget::VisualOrder`, `studies::TablePosition` and `ui::dialogs::IntervalRange` stay exhaustive, since their sets of values are closed. ([#3022](https://github.com/userFRM/egui-charts/issues/3022))
 

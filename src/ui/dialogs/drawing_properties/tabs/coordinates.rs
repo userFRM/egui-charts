@@ -228,4 +228,110 @@ mod tests {
             );
         }
     }
+
+    /// An anchored text keeps its place in the pane through a scroll, and its coordinates
+    /// follow it: the chart and the Coordinates tab report the bar under it, a whole bar when
+    /// it is within half a pixel of one, and points set through the chart move it there as one
+    /// undoable edit.
+    #[test]
+    fn anchored_text_coordinates_follow_where_it_is_drawn() {
+        use crate::widget::test_frames::{chart, frame};
+        let day = |bar: i64| DateTime::from_timestamp(1_700_000_000 + bar * 86_400, 0).unwrap();
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        let mut text = Drawing::new(0, DrawingToolType::AnchoredText);
+        text.text = Some("Anchored".into());
+        let id = chart.create_drawing(text, &[(day(50), 15.0)]).unwrap();
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        // A quarter of a pixel right of bar 50, as a drag or a resize can leave it.
+        let pane = chart.get_rendered_price_rect();
+        let at = chart.drawings().drawings[0].points[0] + egui::vec2(0.25, 0.0);
+        chart.drawings_mut().drawings[0].screen_anchor = Some([
+            (at.x - pane.left()) / pane.width(),
+            (at.y - pane.top()) / pane.height(),
+        ]);
+        frame(&ctx, &mut chart, 0.05, vec![]);
+        let drawn = chart.drawings().drawings[0].points[0];
+        let spacing = chart.state.time_scale().bar_spacing();
+        let offset = chart.state.time_scale().right_offset_precise() as f32;
+        // Ten more bars of space on the right move every bar ten slots to the left.
+        chart.scroll_to_position(offset + 10.0, false);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        assert_eq!(chart.drawings().drawings[0].points[0], drawn);
+        assert_eq!(chart.drawing_points(id), Some(vec![(day(60), 15.0)]));
+        let tab = CoordinatesState::from_drawing(&chart.drawings().drawings[0], &chart);
+        let point = &tab.points[0];
+        assert_eq!(
+            [&point.date, &point.time, &point.price],
+            ["2024-01-13", "22:13:20", "15"]
+        );
+
+        chart.set_drawing_points(id, &[(day(80), 18.0)]).unwrap();
+        frame(&ctx, &mut chart, 0.2, vec![]);
+        let moved = chart.drawings().drawings[0].points[0];
+        // Bar 60 is under the old x, so bar 80 is twenty slots to the right; 18 is above 15.
+        assert!(
+            (moved.x - drawn.x - 20.0 * spacing).abs() < 0.5 && moved.y < drawn.y,
+            "{moved:?}"
+        );
+        assert_eq!(chart.drawing_points(id), Some(vec![(day(80), 18.0)]));
+        assert!(chart.drawings_mut().undo());
+        frame(&ctx, &mut chart, 0.3, vec![]);
+        assert_eq!(chart.drawings().drawings[0].points[0], drawn);
+        assert_eq!(chart.drawing_points(id), Some(vec![(day(60), 15.0)]));
+    }
+
+    /// An anchored text moved to a bar left of the view, through the chart or through the
+    /// Coordinates tab, keeps the point it was given until that bar is scrolled into view, is
+    /// painted over it inside the pane, and keeps that place in the pane from then on.
+    #[test]
+    fn anchored_text_moved_out_of_view_takes_its_pane_position_inside_the_pane() {
+        use crate::ui::dialogs::drawing_properties::{DrawingId, DrawingProps};
+        use crate::widget::test_frames::{chart, frame, shapes};
+        let day = |bar: i64| DateTime::from_timestamp(1_700_000_000 + bar * 86_400, 0).unwrap();
+        let painted_at = |shapes: &[egui::Shape]| {
+            shapes.iter().find_map(|shape| match shape {
+                egui::Shape::Text(text) if text.galley.job.text == "Anchored" => Some(text.pos),
+                _ => None,
+            })
+        };
+        for coordinates_tab in [false, true] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            let mut text = Drawing::new(0, DrawingToolType::AnchoredText);
+            text.text = Some("Anchored".into());
+            let id = chart.create_drawing(text, &[(day(90), 15.0)]).unwrap();
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let start = chart.drawings().drawings[0].points[0];
+            let spacing = chart.state.time_scale().bar_spacing();
+            if coordinates_tab {
+                let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+                // Bar 0 opens on 2023-11-14, so bar -60 on 2023-09-15 at the same time of day.
+                props.coordinates.points[0].date = "2023-09-15".into();
+                props.apply_to_chart(DrawingId(id), &mut chart).unwrap();
+            } else {
+                chart.set_drawing_points(id, &[(day(-60), 15.0)]).unwrap();
+            }
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let moved = Some(vec![(day(-60), 15.0)]);
+            assert_eq!(chart.drawing_points(id), moved, "tab {coordinates_tab}");
+            // 100 bars less space on the right move every bar 100 slots to the right: bar -60
+            // to where bar 40 was, 50 slots left of bar 90.
+            let offset = chart.state.time_scale().right_offset_precise() as f32;
+            chart.scroll_to_position(offset - 100.0, false);
+            let at = painted_at(&shapes(&ctx, &mut chart, 0.2, vec![]));
+            let pane = chart.get_rendered_price_rect();
+            assert!(
+                at.is_some_and(|at| pane.contains(at)
+                    && (at.x - (start.x - 50.0 * spacing)).abs() < 0.5
+                    && (at.y - start.y).abs() < 0.5),
+                "tab {coordinates_tab}: {at:?} in {pane:?}, from {start:?}"
+            );
+            assert_eq!(chart.drawing_points(id), moved, "tab {coordinates_tab}");
+            // Ten more bars of space on the right put bar -50 under the text, which stays.
+            chart.scroll_to_position(offset - 90.0, false);
+            assert_eq!(painted_at(&shapes(&ctx, &mut chart, 0.3, vec![])), at);
+            assert_eq!(chart.drawing_points(id), Some(vec![(day(-50), 15.0)]));
+        }
+    }
 }

@@ -6,7 +6,6 @@ use crate::model::Bar;
 use crate::model::LineStyle;
 use crate::painting::dashed_line::{draw_cached_dashed_segments, draw_dashed_segments};
 use crate::scales::{HorizontalScale, PriceFormatter, PriceMap, PriceScaleMode};
-use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Align2, Color32, Pos2, Rect, Stroke};
 
@@ -159,7 +158,7 @@ pub(crate) fn render_crosshair_at_time(
                     options.label_text_color,
                     options.vert_label_background_color,
                 ),
-                egui::FontId::proportional(context.painter.ctx().active_theme().text.title),
+                axis_font(context.painter.ctx()),
                 23.5,
                 None,
             )
@@ -474,7 +473,8 @@ mod tests {
                         _ => None,
                     })
                     .unwrap();
-                assert_eq!(date_text.galley.job.sections[0].format.font_id.size, 14.0);
+                // The default theme's label size, the scale font outside a chart.
+                assert_eq!(date_text.galley.job.sections[0].format.font_id.size, 12.0);
                 output.drop_without_applying_deltas();
                 let date = tags[1].unwrap();
                 assert!(

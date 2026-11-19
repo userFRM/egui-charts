@@ -115,6 +115,7 @@ impl Chart {
             .is_some_and(|session| {
                 !session.windows.is_empty()
                     || !session.extended_windows.is_empty()
+                    || !session.overnight_windows.is_empty()
                     || !session.overrides.is_empty()
             })
             || self.config.session_config.is_some();
