@@ -1255,16 +1255,6 @@ mod tests {
                 vec![("start_time", Number(-8e15))],
                 vec![("start_time", Text(String::new()))],
             ),
-            // Saved before the rows could be sized in ticks and the width chosen.
-            (
-                "Vol Profile Anchored",
-                vec![("row_count", Length(30))],
-                vec![
-                    ("row_count", Length(30)),
-                    ("row_ticks", Length(0)),
-                    ("width", Number(30.0)),
-                ],
-            ),
             // Saved before the levels could extend past their profiles, and before sessions,
             // leaving out the bars outside them and rows in ticks could be chosen.
             (
@@ -1346,30 +1336,18 @@ mod tests {
             for plot in &mut settings.plots {
                 plot.visible = true;
             }
-            // The anchored row is a literal save from before tick heights and width were inputs.
-            let template = if name == "Vol Profile Anchored"
-                && saved.iter().any(|(id, _)| *id == "row_count")
-            {
-                serde_json::from_str(
-                    r#"{"name":"Vol Profile Anchored","inputs":[["row_count",{"Length":30}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["display",{"Choice":1}],["source_interval",{"Timeframe":null}],["feed_source",{"Toggle":true}],["start_time",{"Text":""}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileAnchored.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
-                ).unwrap()
-            } else {
-                StudyTemplate {
-                    name: name.to_owned(),
-                    inputs: saved
-                        .into_iter()
-                        .map(|(id, value)| (id.to_owned(), value))
-                        .collect(),
-                    settings,
-                    visible: true,
-                    scale: None,
-                    metric: None,
-                }
+            let template = StudyTemplate {
+                name: name.to_owned(),
+                inputs: saved
+                    .into_iter()
+                    .map(|(id, value)| (id.to_owned(), value))
+                    .collect(),
+                settings,
+                visible: true,
+                scale: None,
+                metric: None,
             };
             let study = template.create().unwrap();
-            if name == "Vol Profile Anchored" {
-                assert_eq!(study.settings(), template.settings);
-            }
             let inputs = study.inputs();
             for (id, value) in restored {
                 let input = inputs.iter().find(|input| input.id == id);
@@ -1380,6 +1358,27 @@ mod tests {
                 "{name}"
             );
         }
+
+        // A chart save of an anchored profile from before tick heights and width were inputs
+        // keeps its settings and inputs and takes the defaults of both.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"Vol Profile Anchored","inputs":[["row_count",{"Length":30}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["display",{"Choice":1}],["source_interval",{"Timeframe":null}],["feed_source",{"Toggle":true}],["start_time",{"Text":""}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileAnchored.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+        )
+        .unwrap();
+        let study = saved.create().unwrap();
+        assert_eq!(study.settings(), saved.settings);
+        let inputs = study.inputs();
+        let value = |id: &str| {
+            inputs
+                .iter()
+                .find(|input| input.id == id)
+                .map(|input| &input.value)
+        };
+        for (id, kept) in &saved.inputs {
+            assert_eq!(value(id), Some(kept), "{id}");
+        }
+        assert_eq!(value("row_ticks"), Some(&Length(0)));
+        assert_eq!(value("width"), Some(&Number(30.0)));
     }
 
     /// A Correlation Coefficient as a chart saved it before it opened as an area: a line with its
