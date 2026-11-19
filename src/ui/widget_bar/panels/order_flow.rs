@@ -124,6 +124,34 @@ impl OrderFlowPanel {
                         ));
                     });
                 });
+                ui.push_id("footprint", |ui| {
+                    detector(ui, "Footprint conditions", &mut settings.footprint, |ui, rule| {
+                        ui.label(l10n::format_text(
+                            ui.ctx(),
+                            "Imbalance {ratio}:1, {comparison}, minimum volume {minimum}, stack {stack}",
+                            &[
+                                ("ratio", &rule.imbalance_ratio.to_string()),
+                                (
+                                    "comparison",
+                                    &l10n::text(
+                                        ui.ctx(),
+                                        if rule.diagonal { "diagonal" } else { "horizontal" },
+                                    ),
+                                ),
+                                ("minimum", &rule.imbalance_min_volume.to_string()),
+                                ("stack", &rule.stack.max(1).to_string()),
+                            ],
+                        ));
+                        check(ui, "Buy imbalance", &mut rule.buy_imbalance);
+                        check(ui, "Sell imbalance", &mut rule.sell_imbalance);
+                        check(ui, "Stacked buy imbalance", &mut rule.stacked_buy_imbalance);
+                        check(ui, "Stacked sell imbalance", &mut rule.stacked_sell_imbalance);
+                        level(ui, "Buy volume above", &mut rule.buy_volume_above, 0.0);
+                        level(ui, "Sell volume above", &mut rule.sell_volume_above, 0.0);
+                        level(ui, "Delta above", &mut rule.delta_above, f64::MIN);
+                        level(ui, "Delta below", &mut rule.delta_below, f64::MIN);
+                    });
+                });
                 ui.push_id("icebergs", |ui| {
                     detector(ui, "Icebergs", &mut settings.icebergs, |ui, rule| {
                         ui.horizontal_wrapped(|ui| {
@@ -274,6 +302,24 @@ fn threshold(ui: &mut Ui, label: &str, threshold: &mut Threshold) {
     });
 }
 
+/// A level switched on at zero, or at `min` when that is higher, and kept finite from `min` up.
+fn level(ui: &mut Ui, label: &str, level: &mut Option<f64>, min: f64) {
+    ui.horizontal_wrapped(|ui| {
+        let mut on = level.is_some();
+        let response = ui.checkbox(&mut on, l10n::text(ui.ctx(), label));
+        if response.changed() {
+            *level = on.then_some(min.max(0.0));
+        }
+        if let Some(value) = level {
+            ui.add(egui::DragValue::new(value).range(min..=f64::MAX))
+                .labelled_by(response.id);
+            if !value.is_finite() {
+                *value = min.max(0.0);
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,7 +354,7 @@ mod tests {
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
-                            egui::vec2(width, 900.0),
+                            egui::vec2(width, 1500.0),
                         )),
                         events,
                         ..Default::default()
@@ -334,7 +380,20 @@ mod tests {
             };
             let mut texts = draw(Vec::new());
             assert!(texts.iter().any(|(text, _)| text == "Auftragsfluss"));
-            for label in ["Big trades", "Alert", "Sound"] {
+            for label in [
+                "Big trades",
+                "Alert",
+                "Sound",
+                "Footprint conditions",
+                "Buy imbalance",
+                "Sell imbalance",
+                "Stacked buy imbalance",
+                "Stacked sell imbalance",
+                "Buy volume above",
+                "Sell volume above",
+                "Delta above",
+                "Delta below",
+            ] {
                 let pos = texts
                     .iter()
                     .find(|(text, _)| text == label)
@@ -360,6 +419,20 @@ mod tests {
             assert!(service.settings().big_trades.enabled);
             assert!(service.settings().big_trades.alert);
             assert!(service.settings().big_trades.sound);
+            let footprint = service.settings().footprint;
+            assert!(footprint.enabled && !footprint.alert);
+            let rule = crate::services::FootprintRule {
+                buy_imbalance: true,
+                sell_imbalance: true,
+                stacked_buy_imbalance: true,
+                stacked_sell_imbalance: true,
+                buy_volume_above: Some(0.0),
+                sell_volume_above: Some(0.0),
+                delta_above: Some(0.0),
+                delta_below: Some(0.0),
+                ..Default::default()
+            };
+            assert_eq!(footprint.rule, rule);
             for second in 1..=6 {
                 let time = now + chrono::TimeDelta::seconds(second);
                 service.push(
