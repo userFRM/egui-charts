@@ -326,6 +326,10 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(ChartPatterns::all()),
     ];
     studies.extend(
+        (0..CandlestickPatterns::PATTERN_COUNT)
+            .map(|k| Box::new(CandlestickPatterns::only(k)) as Box<dyn Indicator>),
+    );
+    studies.extend(
         PatternFamily::ALL
             .iter()
             .flat_map(|family| family.kinds())
