@@ -1198,6 +1198,7 @@ mod tests {
     /// HMA is 300.6 below close 302, the drawn cloud is 297 > 288.5 > 266.75 > 249.5,
     /// Momentum rises 10 to 12, MACD is 7.1595 > 7.0319 and UO is 82.87. ADX rises
     /// above 20 on both trends, so it buys the rise but does not sell the fall.
+    /// A flat stretch has no CCI, so its vote is missing.
     #[test]
     fn scores_coverage_and_ratings_follow_the_votes() {
         let fixture = |direction: f64| {
@@ -1239,6 +1240,13 @@ mod tests {
             ),
             (0.0, 0.0, [0.; 11]),
         ] {
+            let mut last_votes = last_votes.map(Some);
+            let oscillator_coverage = if direction == 0.0 {
+                last_votes[2] = None;
+                10. / 11.
+            } else {
+                1.
+            };
             let bars = fixture(direction);
             for basis in [
                 RatingBasis::All,
@@ -1249,8 +1257,8 @@ mod tests {
                 study.calculate(&bars);
                 let expected: Vec<_> = [direction; 15]
                     .into_iter()
-                    .chain(last_votes)
                     .map(Some)
+                    .chain(last_votes)
                     .collect();
                 let got: Vec<_> =
                     TechnicalRatings::votes(study.components.as_ref().unwrap(), &study.bars, 259)
@@ -1262,9 +1270,21 @@ mod tests {
                     RatingBasis::MovingAverages => direction,
                     RatingBasis::Oscillators => oscillator,
                 };
-                for (line, expected) in [direction, oscillator, summary, 1., 1., 1.]
-                    .into_iter()
-                    .enumerate()
+                let coverage = match basis {
+                    RatingBasis::All if direction == 0.0 => 25. / 26.,
+                    RatingBasis::Oscillators => oscillator_coverage,
+                    _ => 1.,
+                };
+                for (line, expected) in [
+                    direction,
+                    oscillator,
+                    summary,
+                    1.,
+                    oscillator_coverage,
+                    coverage,
+                ]
+                .into_iter()
+                .enumerate()
                 {
                     assert!(
                         (study.values.value(line, 259).unwrap() - expected).abs() < 1e-12,
@@ -1297,8 +1317,8 @@ mod tests {
         full.calculate(&bars);
         for (at, expected) in [
             (0, [6. / 15., 0., 6. / 26.]),
-            (34, [11. / 15., 10. / 11., 21. / 26.]),
-            (35, [11. / 15., 1., 22. / 26.]),
+            (34, [11. / 15., 9. / 11., 20. / 26.]),
+            (35, [11. / 15., 10. / 11., 21. / 26.]),
             (75, [12. / 15., 1., 23. / 26.]),
             (76, [13. / 15., 1., 24. / 26.]),
             (198, [14. / 15., 1., 25. / 26.]),

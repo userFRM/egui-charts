@@ -150,6 +150,28 @@ impl DrawingManager {
         self.history.push_snapshot(before);
     }
 
+    /// Gives each drawing in `layers`, as `(id, series_layer, z_order)`, its new place after
+    /// its pane's items changed, locked drawings included, and queues it to be saved. With
+    /// `record`, the changes form one undo step.
+    pub(crate) fn restack(&mut self, layers: &[(usize, usize, i32)], record: bool) {
+        let mut before = Vec::new();
+        for (index, drawing) in self.drawings.iter_mut().enumerate() {
+            if let Some(&(_, layer, z)) = layers.iter().find(|(id, ..)| *id == drawing.id)
+                && (drawing.series_layer, drawing.z_order) != (Some(layer), z)
+            {
+                before.push((index, drawing.clone()));
+                drawing.series_layer = Some(layer);
+                drawing.z_order = z;
+            }
+        }
+        for (_, old) in &before {
+            self.queue_update(old.id);
+        }
+        if record {
+            self.history.push_snapshot(before);
+        }
+    }
+
     /// Removes every drawing that is not locked and clears the current drawing and selection.
     ///
     /// Queues a `Delete` for each drawing it removes, so the host deletes their stored records.
