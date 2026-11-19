@@ -689,6 +689,97 @@ mod tests {
         }
     }
 
+    /// The tester intent contains everything a host needs to run the same decisions live.
+    #[test]
+    #[cfg(all(feature = "alert-engine", feature = "ui"))]
+    fn a_run_started_from_the_add_alert_intent_alerts_on_its_fills() {
+        use crate::model::{Alert, AlertCondition};
+        use crate::services::{AlertEngine, AlertEvent};
+        use crate::ui::strategy_report::{StrategyTester, StrategyTesterAction};
+        use egui_kittest::{Harness, kittest::Queryable};
+        use std::sync::{Arc, Mutex};
+        let bars: Vec<_> = [100.0, 101.0, 102.0, 103.0, 100.0, 99.0, 98.0, 101.0, 101.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, close)| bar(i as i64, close))
+            .collect();
+        let mut tester = StrategyTester::default();
+        tester.select_strategy("Consecutive Up/Down").unwrap();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .build_ui_state(
+                |ui, (tester, actions): &mut (StrategyTester, Vec<StrategyTesterAction>)| {
+                    actions.extend(tester.show(ui, "SYM", Timeframe::Min1, &bars[..8]));
+                },
+                (tester, Vec::new()),
+            );
+        h.get_by_label("Add alert").click();
+        h.run();
+        let StrategyTesterAction::AddAlert {
+            strategy,
+            inputs,
+            settings,
+            symbol,
+            timeframe,
+        } = h.state_mut().1.pop().expect("alert intent")
+        else {
+            panic!("alert intent");
+        };
+        let mut script = StrategyFactory::new().create(&strategy).unwrap();
+        for (id, value) in inputs {
+            script.set_input(&id, value).unwrap();
+        }
+        let mut run = Backtest::new(&strategy, &symbol, timeframe, settings.initial_capital);
+        run.settings = settings;
+        let mut alert = Alert::new(&symbol, AlertCondition::StrategyFills("run-1".into()));
+        alert.timeframe = Some(timeframe);
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let sink = delivered.clone();
+        let engine = AlertEngine::new()
+            .with_alerts(vec![alert])
+            .on_trigger(move |_, event| sink.lock().unwrap().push(event.clone()));
+        for count in 1..=bars.len() {
+            let fills = run.update(script.as_mut(), &bars[..count], &[]);
+            engine.strategy_fills(
+                "run-1",
+                &symbol,
+                None,
+                timeframe,
+                &fills,
+                bars[count - 1].time,
+            );
+        }
+        let actual: Vec<_> = delivered
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|event| match event {
+                AlertEvent::TriggeredForSymbol {
+                    time,
+                    price,
+                    message,
+                    ..
+                } => Some((*time, *price, message.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    bars[4].time,
+                    Some(100.0),
+                    "Buy 1 at 100.00, position 1".into()
+                ),
+                (
+                    bars[7].time,
+                    Some(101.0),
+                    "Sell 2 at 101.00, position -1".into()
+                ),
+            ]
+        );
+    }
+
     #[test]
     #[cfg(feature = "alert-engine")]
     fn strategy_alerts_deliver_each_fill_once_even_at_the_same_timestamp() {
