@@ -178,18 +178,14 @@ impl Chart {
     ) -> Response {
         let footprint = footprint.filter(|_| self.replay.is_none());
         let theme = self.theme_override.clone();
-        // Axis labels take their size from the theme's label text.
-        let scaled = self.config.axis_font_size.map(|size| {
-            let mut scaled = theme.clone().unwrap_or_else(|| ui.ctx().active_theme());
-            scaled.text.label = crate::styles::typography::font_size(size);
-            scaled
-        });
-        let _theme_scope = scaled
+        let _theme_scope = theme
             .as_ref()
-            .or(theme.as_ref())
             .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
-        let _font_scope =
-            rendering::axes::AxisFontScope::new(ui.ctx(), &self.config.axis_font_family);
+        let _font_scope = rendering::axes::AxisFontScope::new(
+            ui.ctx(),
+            self.config.axis_font_size,
+            &self.config.axis_font_family,
+        );
         let size = self.size;
         let show = |ui: &mut Ui| {
             if let Some(theme) = &theme {
@@ -400,6 +396,10 @@ impl Chart {
                 self.prev_width = Some(new_width);
             }
             ui.ctx().request_discard("Chart measured its axis labels");
+        }
+        // The pass that is shown ends the refits of a range set before the first layout.
+        if self.prev_width.is_some() && !ui.ctx().will_discard() {
+            self.pending_visible_range = None;
         }
         self.record_host_events(ui);
         let needs_info = response.clicked()
@@ -707,6 +707,9 @@ impl Chart {
             || self.drawings.dragging_handle.is_some()
             || self.drawings.text_editor.is_some()
             || self.drawings.curr_drawing.is_some()
+            || self.drawings.partial_erase.is_some()
+            // A modified eraser press owns the drag even when it starts beside a stroke.
+            || (self.drawings.eraser_mode && ui.input(|i| i.modifiers.ctrl || i.modifiers.command))
             || ui
                 .input(|i| i.pointer.press_origin().or_else(|| i.pointer.hover_pos()))
                 .is_some_and(|origin| {
@@ -2463,14 +2466,22 @@ impl Chart {
         for study in studies
             .indicators()
             .iter()
-            .filter(|study| self.shows_study(study.as_ref()) && study.labels_on_price())
+            .filter(|study| self.shows_study(study.as_ref()))
         {
-            crate::chart::indicators::plots::paint_labels(
+            crate::chart::indicators::plots::paint_price_segments(
                 &clipped_painter,
                 study.as_ref(),
                 &price_map,
                 &coords,
             );
+            if study.labels_on_price() {
+                crate::chart::indicators::plots::paint_labels(
+                    &clipped_painter,
+                    study.as_ref(),
+                    &price_map,
+                    &coords,
+                );
+            }
         }
         self.paint_signals(ui, &coords);
         let target_lines = self

@@ -150,6 +150,37 @@ pub struct StudyLabel {
     pub plot: usize,
 }
 
+/// A straight line between two points on the main price chart, stored once instead of per bar.
+///
+/// Exhaustive, so that a custom study can build it in
+/// [`Indicator::price_segments`](crate::studies::Indicator::price_segments).
+///
+/// ```
+/// use egui_charts::studies::StudySegment;
+///
+/// let segment = StudySegment {
+///     start_bar: 1,
+///     start_price: 8.0,
+///     end_bar: 3,
+///     end_price: 7.5,
+///     plot: 1,
+/// };
+/// # let _ = segment;
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StudySegment {
+    /// Source bar of the first point.
+    pub start_bar: usize,
+    /// Price of the first point, in the main series' price scale.
+    pub start_price: f64,
+    /// Source bar of the second point.
+    pub end_bar: usize,
+    /// Price of the second point, in the main series' price scale.
+    pub end_price: f64,
+    /// Output whose colour, stroke width, pattern and visibility apply to the line.
+    pub plot: usize,
+}
+
 /// The plot style drawing `index` of `study` takes: plot 0's while the study's drawings use
 /// its style, else that of the plot [`Indicator::drawing_plot`](super::Indicator::drawing_plot)
 /// names, or `None` for a drawing that keeps its own. A hidden style hides the drawing.

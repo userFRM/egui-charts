@@ -31,7 +31,8 @@ pub struct TradeDeltaValue {
 ///
 /// `reset(i, bar)` marks the start of a host-defined session or period; the first bar always
 /// starts at zero. Rolling totals cover the last `rolling.max(1)` displayed bars and continue
-/// across resets. Size filtering belongs to [`Footprint::set_size_filter`], before aggregation.
+/// across resets. Size filtering belongs to [`Footprint::set_size_filter`] and
+/// [`Footprint::set_size_basis`], before aggregation.
 /// Bars must be chronological, one per slot of the footprint's clock. A timestamp inside
 /// the slot is accepted, as in the feed history contract.
 /// Historical coverage is exactly the supplied executions; missing trades are never estimated.
