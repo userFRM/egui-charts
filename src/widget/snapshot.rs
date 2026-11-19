@@ -121,6 +121,9 @@ pub struct ChartSnapshot {
     pub interval: Option<Timeframe>,
     /// Whether extended hours are requested.
     pub extended_hours: bool,
+    /// Whether overnight hours are requested together with extended hours. False in older saves.
+    #[serde(default)]
+    pub overnight_hours: bool,
     /// The chart type.
     pub chart_type: ChartType,
     /// The parameters of the price-based chart types and of the baseline.
@@ -290,6 +293,7 @@ impl Chart {
             symbol: self.symbol.clone(),
             interval: self.timeframe,
             extended_hours: self.extended_hours,
+            overnight_hours: self.overnight_hours,
             chart_type: self.chart_type,
             chart_type_params: self.chart_type_params.clone(),
             main_series_visible: self.main_series_visible,
@@ -460,6 +464,7 @@ impl Chart {
             self.drawings.curr_timeframe.clear();
         }
         self.set_extended_hours(snapshot.extended_hours);
+        self.set_overnight_hours(snapshot.overnight_hours);
         self.set_dividend_adjusted(snapshot.settings.adjust_for_dividends);
         self.set_chart_type(snapshot.chart_type);
         self.set_chart_type_params(snapshot.chart_type_params.clone());

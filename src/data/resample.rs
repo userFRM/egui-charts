@@ -92,6 +92,7 @@ pub fn resample(
 /// and the last output includes all available inputs even while its period is forming.
 /// Daily and longer inputs already carry their trading date as a calendar label. Pass timeframes
 /// for UTC labels, or matching source and target [`BarClock`] values to retain another calendar.
+/// With `extended_hours`, both extended and overnight windows participate.
 /// Exchange time determines the trading date; the target clock determines its output label.
 ///
 /// As with [`resample`], returns `None` if an input straddles target slots or folded volume
@@ -149,7 +150,7 @@ pub(crate) fn resample_periods(
     }
     let mut session = instrument.session.clone();
     if !extended_hours && let Some(session) = &mut session {
-        session.clear_extended_windows();
+        session.select_hours(false, false);
     }
     let provider = ExchangeSessionProvider::new(zone, session);
     let opens = provider.opens(bars.iter().map(|bar| bar.time));

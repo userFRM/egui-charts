@@ -47,16 +47,25 @@ impl BarClock {
     /// Align intraday buckets to the first selected exchange-session window. Calendar bars
     /// keep their trading-date labels; use `data::resample_with_session` to derive those labels
     /// from intraday history. Live trades and heartbeats join the calendar bar of their trading
-    /// date. Extended windows participate only when requested.
+    /// date. Extended and overnight windows participate only when requested.
     pub fn with_session(
+        self,
+        zone: super::TimezoneId,
+        session: super::Session,
+        extended_hours: bool,
+    ) -> Self {
+        self.with_session_hours(zone, session, extended_hours, extended_hours)
+    }
+
+    /// Selects the chart's extended and overnight hours independently.
+    pub(crate) fn with_session_hours(
         mut self,
         zone: super::TimezoneId,
         mut session: super::Session,
         extended_hours: bool,
+        overnight_hours: bool,
     ) -> Self {
-        if !extended_hours {
-            session.clear_extended_windows();
-        }
+        session.select_hours(extended_hours, overnight_hours);
         let provider = super::ExchangeSessionProvider::new(zone, Some(session));
         self.session = Some(Arc::new(provider));
         self

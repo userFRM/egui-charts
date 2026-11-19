@@ -19,7 +19,7 @@ mod partial;
 enum Call {
     Resolve(String),
     History(HistoryRequest),
-    Subscribe(SubscriptionId, String, Timeframe, bool),
+    Subscribe(SubscriptionId, String, Timeframe, (bool, bool)),
     Unsubscribe(SubscriptionId),
     Trades(TradeRequest),
     Footprints(FootprintRequest),
@@ -86,10 +86,11 @@ impl Datafeed for Script {
             symbol,
             timeframe,
             extended_hours,
+            overnight_hours,
             sink,
             ..
         } = subscription;
-        let call = Call::Subscribe(id, symbol, timeframe, extended_hours);
+        let call = Call::Subscribe(id, symbol, timeframe, (extended_hours, overnight_hours));
         self.calls.lock().unwrap().push(call);
         self.sinks.lock().unwrap().push(sink);
     }
@@ -682,6 +683,7 @@ fn history(symbol: &str, timeframe: Timeframe, before: Option<DateTime<Utc>>) ->
         since: None,
         count: 1000,
         extended_hours: false,
+        overnight_hours: false,
         adjusted: false,
         conversion: None,
     })
@@ -6341,28 +6343,39 @@ fn depth_pages_follow_visible_time_and_stop_without_older_columns() {
     }
 }
 
+/// Each hours choice reloads history, paging and the subscription together. Undo restores
+/// both flags, and layouts saved before overnight hours restore without them.
 #[test]
-fn extended_hours_reload_history_paging_and_subscription_together() {
+fn trading_hours_reload_history_paging_and_subscription_together() {
     let feed = Arc::new(Script::default());
     let mut chart = fed(&feed, Some("A"));
     let mut frames = Frames::new();
     let mut previous = None;
-    for extended in [false, true, false] {
-        chart.set_extended_hours(extended);
-        assert_eq!(chart.extended_hours(), extended);
+    type Choice = fn(&mut Chart);
+    let rows: [(Choice, (bool, bool)); 6] = [
+        (|chart| chart.set_extended_hours(false), (false, false)),
+        (|chart| chart.set_extended_hours(true), (true, false)),
+        (|chart| chart.set_overnight_hours(true), (true, true)),
+        (|chart| chart.set_extended_hours(false), (false, false)),
+        (|chart| chart.set_overnight_hours(true), (true, true)),
+        (|chart| chart.set_overnight_hours(false), (true, false)),
+    ];
+    for (choose, hours) in rows {
+        choose(&mut chart);
+        assert_eq!((chart.extended_hours(), chart.overnight_hours()), hours);
         frames.run(&mut chart);
         let calls = feed.calls();
         if let Some(previous) = previous {
             assert!(calls.contains(&Call::Unsubscribe(previous)));
         }
-        assert!(calls.iter().any(|call| matches!(call, Call::History(request) if request.before.is_none() && request.extended_hours == extended)));
+        assert!(calls.iter().any(|call| matches!(call, Call::History(request) if request.before.is_none() && (request.extended_hours, request.overnight_hours) == hours)));
         feed.page().send(page(bars(1000), false));
         feed.resolve().send(Ok(Instrument::new("A")));
         frames.run(&mut chart);
         let id = feed.sink().id;
         let mut calls = feed.calls();
-        assert!(calls.contains(&Call::Subscribe(id, "A".into(), Timeframe::Min1, extended)));
-        chart.set_extended_hours(extended);
+        assert!(calls.contains(&Call::Subscribe(id, "A".into(), Timeframe::Min1, hours)));
+        choose(&mut chart);
         frames.run(&mut chart);
         assert!(
             feed.calls().is_empty(),
@@ -6372,10 +6385,56 @@ fn extended_hours_reload_history_paging_and_subscription_together() {
         frames.run(&mut chart);
         frames.run(&mut chart);
         calls.extend(feed.calls());
-        assert!(calls.iter().any(|call| matches!(call, Call::History(request) if request.before.is_some() && request.extended_hours == extended)), "{extended}: {calls:?}");
+        assert!(calls.iter().any(|call| matches!(call, Call::History(request) if request.before.is_some() && (request.extended_hours, request.overnight_hours) == hours)), "{hours:?}: {calls:?}");
         feed.page().send(page(vec![], true));
         frames.run(&mut chart);
         previous = Some(id);
+    }
+    chart.user_action(|chart| chart.set_overnight_hours(true));
+    assert!(chart.undo());
+    assert_eq!(
+        (chart.extended_hours(), chart.overnight_hours()),
+        (true, false)
+    );
+    assert!(chart.redo());
+    assert_eq!(
+        (chart.extended_hours(), chart.overnight_hours()),
+        (true, true)
+    );
+    #[cfg(feature = "ui")]
+    {
+        let saved = chart.snapshot().unwrap();
+        let mut older = serde_json::to_value(&saved).unwrap();
+        assert!(
+            older
+                .as_object_mut()
+                .unwrap()
+                .remove("overnight_hours")
+                .is_some()
+        );
+        // These colours did not exist in older configs or palettes either.
+        for field in ["config", "palette"] {
+            assert!(
+                older[field]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("overnight_hours_color")
+                    .is_some()
+            );
+        }
+        let older = serde_json::from_value(older).unwrap();
+        for (snapshot, hours) in [(saved, (true, true)), (older, (true, false))] {
+            let mut restored = fed(&Arc::new(Script::default()), Some("A"));
+            restored.restore(&snapshot).unwrap();
+            assert_eq!(
+                (restored.extended_hours(), restored.overnight_hours()),
+                hours
+            );
+            assert_eq!(
+                restored.config().overnight_hours_color,
+                egui::Color32::PLACEHOLDER
+            );
+        }
     }
 }
 
@@ -6852,7 +6911,7 @@ fn feed_lifecycle() {
         count: TRADE_CAPACITY,
         conversion: None,
     });
-    let subscribe = Call::Subscribe(id, "A".into(), Timeframe::Min1, false);
+    let subscribe = Call::Subscribe(id, "A".into(), Timeframe::Min1, (false, false));
     assert_eq!(feed.calls(), [subscribe, trades], "c");
     assert_eq!(chart.instrument(), Some(&instrument), "c");
     feed.sink().symbols_changed();

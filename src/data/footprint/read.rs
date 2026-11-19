@@ -840,6 +840,7 @@ mod tests {
             since: None,
             count: 10,
             extended_hours: false,
+            overnight_hours: false,
             adjusted: false,
             conversion: None,
         }

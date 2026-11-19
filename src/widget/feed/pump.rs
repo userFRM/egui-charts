@@ -572,6 +572,7 @@ impl Chart {
         let mut retain_prepared = resumed
             && link.clock == clock
             && link.extended_hours == self.extended_hours
+            && link.overnight_hours == self.overnight_hours
             && link.conversion == self.conversion
             && link
                 .footprint
@@ -579,6 +580,7 @@ impl Chart {
                 .is_some_and(|flow| flow.live.prepared_before().is_some());
         let mut retain_trades = (resumed || link.clock != clock)
             && link.extended_hours == self.extended_hours
+            && link.overnight_hours == self.overnight_hours
             && link.conversion == self.conversion
             && link.clock.sessions().with_timeframe(Timeframe::Min1)
                 == clock.sessions().with_timeframe(Timeframe::Min1)
@@ -616,6 +618,7 @@ impl Chart {
             link.trades = Trades::new(TRADE_CAPACITY);
         }
         link.extended_hours = self.extended_hours;
+        link.overnight_hours = self.overnight_hours;
         link.conversion = self.conversion.clone();
         for study in self.studies.indicators() {
             for input in study.order_flow_inputs() {
@@ -690,6 +693,7 @@ impl Chart {
             since: None,
             count: link.initial_bars,
             extended_hours: self.extended_hours,
+            overnight_hours: self.overnight_hours,
             adjusted: link.adjusted,
             conversion: self.conversion.clone(),
         };
@@ -775,6 +779,7 @@ impl Chart {
             timeframe,
             clock: link.clock.clone(),
             extended_hours: self.extended_hours,
+            overnight_hours: self.overnight_hours,
             conversion: self.conversion.clone(),
             sink,
         };
@@ -1217,6 +1222,7 @@ impl Chart {
             since: self.range_start(before),
             count: link.initial_bars.max(MIN_SCROLL_BACK_PAGE),
             extended_hours: self.extended_hours,
+            overnight_hours: self.overnight_hours,
             adjusted: link.adjusted,
             conversion: self.conversion.clone(),
         };

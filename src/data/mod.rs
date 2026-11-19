@@ -536,8 +536,12 @@ pub struct HistoryRequest {
     pub since: Option<DateTime<Utc>>,
     /// Bars wanted. Fewer is fine; the chart asks again as the user scrolls back.
     pub count: usize,
-    /// Include the instrument's extended trading hours, as well as regular hours.
+    /// Include the instrument's pre-market and post-market windows as well as regular hours.
     pub extended_hours: bool,
+    /// Include [`Session::overnight_windows`](crate::model::Session::overnight_windows) too.
+    /// With `extended_hours`, this selects all hours. Without it, requests select regular hours.
+    /// The chart requests regular, extended or all hours and never overnight hours alone.
+    pub overnight_hours: bool,
     /// Request dividend-adjusted bars when the instrument supports them. An unsupported feed
     /// returns unadjusted bars; [`Instrument::dividend_adjustment`] advertises the choice.
     pub adjusted: bool,
@@ -570,6 +574,7 @@ impl HistoryRequest {
             since: None,
             count,
             extended_hours: false,
+            overnight_hours: false,
             adjusted: false,
             conversion: None,
         }
@@ -646,6 +651,9 @@ pub struct FootprintRequest {
     pub count: usize,
     /// Include extended hours, with the same meaning as [`HistoryRequest::extended_hours`].
     pub extended_hours: bool,
+    /// Include overnight windows too, as in
+    /// [`HistoryRequest::overnight_hours`]. Requires `extended_hours`.
+    pub overnight_hours: bool,
     /// Use the same adjustment as [`HistoryRequest::adjusted`].
     pub adjusted: bool,
     /// Requested price currency or unit; see [`HistoryRequest::conversion`].
@@ -680,6 +688,7 @@ impl FootprintRequest {
             since: None,
             count,
             extended_hours: false,
+            overnight_hours: false,
             adjusted: false,
             conversion: None,
         }
@@ -1106,8 +1115,11 @@ pub struct Subscription {
     pub timeframe: Timeframe,
     /// The same calendar boundaries supplied to history requests.
     pub clock: BarClock,
-    /// Include the instrument's extended trading hours, as well as regular hours.
+    /// Include the instrument's pre-market and post-market windows as well as regular hours.
     pub extended_hours: bool,
+    /// Include overnight windows too, as in
+    /// [`HistoryRequest::overnight_hours`]. Requires `extended_hours`.
+    pub overnight_hours: bool,
     /// The currency or unit the host chose, in which the updates are wanted; see
     /// [`HistoryRequest::conversion`].
     pub conversion: Option<String>,

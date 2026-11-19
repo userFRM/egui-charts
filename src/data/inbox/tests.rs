@@ -1020,10 +1020,13 @@ fn heartbeat_outside_the_session_opens_no_candle() {
     ]);
     let with_premarket = Session::new([SessionWindow::new(days, hm(9, 30), hm(16, 0))])
         .with_extended_windows([SessionWindow::new(days, hm(4, 0), hm(9, 30))]);
+    let with_overnight = with_premarket
+        .clone()
+        .with_overnight_windows([SessionWindow::new(days, hm(20, 0), hm(4, 0))]);
     #[rustfmt::skip]
     let cases = [
         ("after the close, overnight, on a holiday and a weekend", Timeframe::Min1,
-            regular.clone(), false, "2024-03-12T15:59:30Z",
+            regular.clone(), (false, false), "2024-03-12T15:59:30Z",
             vec![("2024-03-12T16:00:00Z", None),
                 ("2024-03-12T16:05:00Z", None),
                 ("2024-03-13T03:00:00Z", None),
@@ -1031,29 +1034,41 @@ fn heartbeat_outside_the_session_opens_no_candle() {
                 ("2024-03-14T10:00:00Z", None),
                 ("2024-03-16T12:00:00Z", None),
                 ("2024-03-18T09:31:00Z", Some("2024-03-18T09:31:00Z"))]),
-        ("in the break between two windows", Timeframe::Min1, with_break, false,
+        ("in the break between two windows", Timeframe::Min1, with_break, (false, false),
             "2024-03-12T11:59:30Z",
             vec![("2024-03-12T12:30:00Z", None),
                 ("2024-03-12T13:00:05Z", Some("2024-03-12T13:00:00Z"))]),
-        ("a daily bar on a weekend", Timeframe::Day1, regular, false, "2024-03-15T15:59:30Z",
+        ("a daily bar on a weekend", Timeframe::Day1, regular, (false, false), "2024-03-15T15:59:30Z",
             vec![("2024-03-16T12:00:00Z", None),
                 ("2024-03-18T03:00:00Z", None),
                 ("2024-03-18T09:30:05Z", Some("2024-03-18T00:00:00Z"))]),
-        ("an extended window left out", Timeframe::Min1, with_premarket.clone(), false,
+        ("an extended window left out", Timeframe::Min1, with_premarket.clone(), (false, false),
             "2024-03-12T15:59:30Z",
             vec![("2024-03-13T08:00:00Z", None),
                 ("2024-03-13T09:30:05Z", Some("2024-03-13T09:30:00Z"))]),
         ("hours without regular windows, extended hours left out", Timeframe::Min1,
             Session::new([]).with_extended_windows([SessionWindow::new(days, hm(4, 0), hm(9, 30))]),
-            false, "2024-03-12T08:00:00Z",
+            (false, false), "2024-03-12T08:00:00Z",
             vec![("2024-03-12T08:30:00Z", None), ("2024-03-12T12:00:00Z", None)]),
-        ("an extended window selected", Timeframe::Min1, with_premarket, true,
+        ("an extended window selected", Timeframe::Min1, with_premarket, (true, false),
             "2024-03-12T15:59:30Z",
             vec![("2024-03-13T03:00:00Z", None),
                 ("2024-03-13T08:00:00Z", Some("2024-03-13T08:00:00Z"))]),
+        ("an overnight window left out", Timeframe::Min1, with_overnight.clone(), (true, false),
+            "2024-03-12T15:59:30Z",
+            vec![("2024-03-12T22:00:00Z", None),
+                ("2024-03-13T04:00:05Z", Some("2024-03-13T04:00:00Z"))]),
+        ("an overnight window selected", Timeframe::Min1, with_overnight, (true, true),
+            "2024-03-12T15:59:30Z",
+            vec![("2024-03-12T22:00:05Z", Some("2024-03-12T22:00:00Z"))]),
     ];
-    for (name, timeframe, session, extended, trade, heartbeats) in cases {
-        let clock = BarClock::new(timeframe).with_session(TimezoneId::utc(), session, extended);
+    for (name, timeframe, session, hours, trade, heartbeats) in cases {
+        let clock = BarClock::new(timeframe).with_session_hours(
+            TimezoneId::utc(),
+            session,
+            hours.0,
+            hours.1,
+        );
         let inbox = Arc::new(Inbox::default());
         let sink = inbox.subscribe("ES".into(), clock, 10, None);
         sink.push_tick(tick(time(trade), 100.0, 1.0));

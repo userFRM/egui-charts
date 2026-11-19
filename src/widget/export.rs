@@ -731,6 +731,7 @@ impl Chart {
         chart.series_formatters = self.series_formatters.clone();
         chart.study_formatters = self.study_formatters.clone();
         chart.extended_hours = self.extended_hours;
+        chart.overnight_hours = self.overnight_hours;
         chart.theme_override = self.theme_override.clone();
         chart.inherited_theme = self.inherited_theme.clone();
         #[cfg(feature = "drawings")]
