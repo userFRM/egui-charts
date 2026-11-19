@@ -19,7 +19,7 @@ use super::{
 use crate::{
     localization as l10n,
     model::{Bar, Signal, StrategyReport, Timeframe},
-    strategies::{Backtest, BacktestSettings, Strategy, StrategyFactory},
+    strategies::{Backtest, BacktestSettings, OrderSize, Strategy, StrategyFactory},
     studies::{InputValue, StudyInput},
     theme::ThemeExt,
     ui_kit::tab_bar::{TabBar, TabLabel},
@@ -211,16 +211,23 @@ impl StrategyTester {
     /// Use the built-in catalogue and any constructors the host registered in `factory`.
     pub fn new(factory: StrategyFactory) -> Self {
         let name = factory.list().first().map_or("", |name| *name).to_owned();
-        let inputs = factory
-            .create(&name)
+        let strategy = factory.create(&name);
+        let inputs = strategy
+            .as_ref()
             .map_or_else(Vec::new, |strategy| strategy.study_inputs());
+        let settings = BacktestSettings {
+            order_size: strategy
+                .as_deref()
+                .map_or(BacktestSettings::default().order_size, strategy_order_size),
+            ..Default::default()
+        };
         let ranges = inputs.iter().filter_map(Range::new).collect();
         Self {
             factory: Arc::new(factory),
             name,
             inputs,
             ranges,
-            settings: BacktestSettings::default(),
+            settings,
             undo_settings: Vec::new(),
             redo_settings: Vec::new(),
             settings_edit: None,
@@ -250,9 +257,16 @@ impl StrategyTester {
         &self.name
     }
 
-    /// Select a strategy and restore its declared defaults. Unknown names leave the form intact.
+    /// Select a strategy and restore its declared defaults: its inputs and its
+    /// [order size](Strategy::default_order_size), or the default size when none is declared
+    /// or the declaration is invalid. The size changes as one settings step, which
+    /// [`Self::undo_settings`] reverts; other settings are kept. Unknown names leave the form
+    /// intact. A host restoring saved settings selects the strategy first.
     pub fn select_strategy(&mut self, name: &str) -> Result<(), &'static str> {
         let strategy = self.factory.create(name).ok_or("Unknown strategy")?;
+        let mut settings = self.settings.clone();
+        settings.order_size = strategy_order_size(strategy.as_ref());
+        self.set_settings(settings)?;
         self.name = name.into();
         self.inputs = strategy.study_inputs();
         self.ranges = self.inputs.iter().filter_map(Range::new).collect();
@@ -903,6 +917,22 @@ impl StrategyTester {
         }
         false
     }
+}
+
+/// The order size `strategy` declares, or the default one when it declares none or one the
+/// settings refuse.
+fn strategy_order_size(strategy: &dyn Strategy) -> OrderSize {
+    let default = BacktestSettings::default();
+    strategy
+        .default_order_size()
+        .filter(|&order_size| {
+            super::properties::validate(&BacktestSettings {
+                order_size,
+                ..default.clone()
+            })
+            .is_ok()
+        })
+        .unwrap_or(default.order_size)
 }
 
 #[cfg(test)]

@@ -62,6 +62,8 @@ a fraction of current marked equity, or cash divided by the absolute execution p
 Cash and equity sizing reject a zero execution price. The default pyramiding limit is one
 open entry; zero disables entries. A partial exit retains its entry slot until that lot is
 fully closed. An opposite entry reverses the position and starts a new entry count.
+[`Strategy::default_order_size`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/trait.Strategy.html#method.default_order_size) suggests the strategy's usual size; the tester applies it on selection,
+while [`Backtest::run`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.run) uses its settings alone. Select the strategy before restoring saved settings.
 
 Commission is an absolute fill-value fraction, an amount per unit, or an amount per order.
 Each fill pays once, even when reversing or closing several FIFO lots; trade fees and net

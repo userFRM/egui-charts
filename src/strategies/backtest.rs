@@ -330,6 +330,14 @@ pub trait Strategy {
         Ok(())
     }
 
+    /// The order size this strategy is usually tested with, such as a fraction of equity, or
+    /// `None` for the default [`BacktestSettings::order_size`]. The strategy tester applies it
+    /// when the strategy is selected, and the user can still change it; [`Backtest::run`] reads
+    /// only its settings. Returns `None` by default.
+    fn default_order_size(&self) -> Option<OrderSize> {
+        None
+    }
+
     /// Computes what the strategy needs from the whole run once, before the first bar, such as
     /// its studies. A value at a bar must depend only on that bar and earlier ones, as a study's
     /// does, or the run looks ahead. Reset any decision state here so a corrected history can

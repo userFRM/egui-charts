@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     model::{ChartType, Direction, OrderSide, SignalShape},
-    strategies::Commission,
+    strategies::{Commission, OrderSize, StrategyContext},
 };
 use egui::{Role, Vec2};
 use egui_kittest::{Harness, kittest::Queryable};
@@ -368,6 +368,53 @@ fn tick_slippage_follows_the_price_increment_until_a_size_is_typed() {
             entry,
             "{order}"
         );
+    }
+}
+
+#[test]
+fn selecting_a_strategy_applies_its_declared_order_size() {
+    let mut tester = StrategyTester::default();
+    for (name, size) in [
+        ("SuperTrend", OrderSize::EquityFraction(0.15)),
+        ("Technical Ratings", OrderSize::EquityFraction(0.05)),
+        ("Consecutive Up/Down", OrderSize::Fixed(1.0)),
+    ] {
+        let mut settings = tester.settings().clone();
+        settings.order_size = OrderSize::Cash(500.0);
+        settings.commission = Commission::PerOrder(2.0);
+        tester.set_settings(settings).unwrap();
+        tester.select_strategy(name).unwrap();
+        assert_eq!(tester.settings().order_size, size, "{name}");
+        assert_eq!(
+            tester.settings().commission,
+            Commission::PerOrder(2.0),
+            "{name}"
+        );
+        assert!(tester.undo_settings(), "{name}");
+        assert_eq!(
+            tester.settings().order_size,
+            OrderSize::Cash(500.0),
+            "{name}"
+        );
+        assert_eq!(tester.strategy(), name);
+    }
+    struct Sized(OrderSize);
+    impl Strategy for Sized {
+        fn default_order_size(&self) -> Option<OrderSize> {
+            Some(self.0)
+        }
+        fn on_bar(&mut self, _: &mut StrategyContext<'_>) {}
+    }
+    // A host strategy listed first sets the starting size; one the form refuses gives way.
+    for (declared, size) in [
+        (OrderSize::Cash(250.0), OrderSize::Cash(250.0)),
+        (OrderSize::Fixed(f64::NAN), OrderSize::Fixed(1.0)),
+    ] {
+        let mut factory = StrategyFactory::new();
+        factory.register("A host strategy", move || Box::new(Sized(declared)));
+        let tester = StrategyTester::new(factory);
+        assert_eq!(tester.strategy(), "A host strategy");
+        assert_eq!(tester.settings().order_size, size);
     }
 }
 
