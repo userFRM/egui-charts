@@ -37,7 +37,8 @@ const TIMES_IN_FORCE: [TimeInForce; 1] = [TimeInForce::GoodTillCancelled];
 /// the symbol's [rules](Self::set_rules); a symbol without rules has a point value of 1 and the
 /// account's leverage. A position holds its market value divided by the leverage as margin, and
 /// a working order the same for its quantity at its price. Each fill
-/// pays the commission rate times its value. Placement and modification reserve buying power
+/// pays its commission: the rate times its value, plus the amount per order and the amount per
+/// unit of its quantity, booked as one balance change. Placement and modification reserve buying power
 /// across all symbols, including working orders and their commissions. Market orders that
 /// reduce exposure remain possible when funds are insufficient. Position exits only reduce the
 /// remaining position.
@@ -59,6 +60,8 @@ pub struct PaperAccount {
     initial: f64,
     leverage: f64,
     commission: f64,
+    commission_per_order: f64,
+    commission_per_unit: f64,
     state: Mutex<State>,
 }
 
@@ -69,6 +72,8 @@ impl std::fmt::Debug for PaperAccount {
             .field("initial", &self.initial)
             .field("leverage", &self.leverage)
             .field("commission", &self.commission)
+            .field("commission_per_order", &self.commission_per_order)
+            .field("commission_per_unit", &self.commission_per_unit)
             .finish_non_exhaustive()
     }
 }
@@ -91,6 +96,15 @@ struct State {
     quotes: HashMap<String, (f64, f64)>,
     balance_history: Vec<BalanceChange>,
     journal: Vec<JournalEntry>,
+}
+
+/// Negative and non-finite costs count as zero.
+fn cost(value: f64) -> f64 {
+    if value.is_finite() {
+        value.max(0.0)
+    } else {
+        0.0
+    }
 }
 
 /// Describes an order in the journal, such as "buy 2 AAPL limit 185".
@@ -125,6 +139,8 @@ impl PaperAccount {
             initial: balance,
             leverage: 1.0,
             commission: 0.0,
+            commission_per_order: 0.0,
+            commission_per_unit: 0.0,
             state: Mutex::new(state),
         }
     }
@@ -141,8 +157,28 @@ impl PaperAccount {
 
     /// Sets the commission each fill pays, as a fraction of its value, such as 0.001 for 0.1%.
     pub fn commission(mut self, rate: f64) -> Self {
-        self.commission = if rate.is_finite() { rate.max(0.0) } else { 0.0 };
+        self.commission = cost(rate);
         self
+    }
+
+    /// Sets a fixed commission each fill pays per order, in the account's currency, beside the
+    /// rate of [`commission`](Self::commission) and the amount per unit. Negative and non-finite
+    /// amounts count as 0.
+    pub fn commission_per_order(mut self, amount: f64) -> Self {
+        self.commission_per_order = cost(amount);
+        self
+    }
+
+    /// Sets a commission each fill pays per unit of its quantity, such as per share or per
+    /// contract, in the account's currency, beside the rate and the amount per order. Negative
+    /// and non-finite amounts count as 0.
+    pub fn commission_per_unit(mut self, amount: f64) -> Self {
+        self.commission_per_unit = cost(amount);
+        self
+    }
+
+    fn commission_of(&self, quantity: f64, value: f64) -> f64 {
+        value * self.commission + self.commission_per_order + quantity * self.commission_per_unit
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
@@ -380,7 +416,10 @@ impl State {
                 };
                 let (pv, lev) = self.terms_of(terms, &order.request.symbol);
                 let value = order.request.quantity * price.abs() * pv;
-                (value / lev, value * terms.commission)
+                (
+                    value / lev,
+                    terms.commission_of(order.request.quantity, value),
+                )
             })
             .fold((0.0, 0.0), |(margin, commission), (m, c)| {
                 (margin + m, commission + c)
@@ -448,7 +487,7 @@ impl State {
         } else {
             margin += value / lev;
         }
-        let needed = margin + reserved + commissions + value * terms.commission;
+        let needed = margin + reserved + commissions + terms.commission_of(request.quantity, value);
         if !needed.is_finite() || !equity.is_finite() || needed > equity {
             return Err(FeedError::Other(format!(
                 "Insufficient buying power: {needed:.2} {} needed, {equity:.2} available",
@@ -541,7 +580,7 @@ impl State {
             ),
         );
         self.book(
-            -request.quantity * price.abs() * pv * terms.commission,
+            -terms.commission_of(request.quantity, request.quantity * price.abs() * pv),
             format!("Commission for order {id}"),
         );
         if held != 0.0 && position.quantity == 0.0 {
@@ -1124,6 +1163,69 @@ mod tests {
                 drop(state);
                 paper.reset();
             }
+        }
+    }
+
+    /// Every cost is booked once per fill and reserved per working order; the rate includes
+    /// point value, while the per-unit amount uses quantity alone. Entry checks include each fee.
+    #[test]
+    fn commissions_book_the_rate_per_order_and_per_unit() {
+        for (rate, per_order, per_unit, point_value, fill, working) in [
+            (0.001, 0.0, 0.0, 1.0, 0.2, 0.09),
+            (0.0, 5.0, 0.0, 1.0, 5.0, 5.0),
+            (0.0, 0.0, 0.5, 1.0, 1.0, 0.5),
+            (0.001, 5.0, 0.5, 50.0, 16.0, 10.0),
+        ] {
+            let account = |balance| {
+                let paper = PaperAccount::new("USD", balance)
+                    .commission(rate)
+                    .commission_per_order(per_order)
+                    .commission_per_unit(per_unit);
+                let mut rules = TradingRules::new("SYM");
+                rules.point_value = point_value;
+                assert!(paper.set_rules(rules));
+                paper.set_price("SYM", 100.0);
+                paper
+            };
+            let paper = account(100_000.0);
+            place(
+                &paper,
+                OrderRequest::new("SYM", OrderSide::Buy, 2.0, OrderType::Market),
+            )
+            .unwrap();
+            place(
+                &paper,
+                OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(90.0)),
+            )
+            .unwrap();
+            let near = |a: f64, b: f64| assert!((a - b).abs() < 1e-9, "{a} != {b}");
+            let state = paper.lock();
+            assert_eq!(state.balance_history.len(), 1);
+            assert!(
+                state.balance_history[0]
+                    .action
+                    .starts_with("Commission for order")
+            );
+            near(state.balance_history[0].amount, -fill);
+            near(state.balance, 100_000.0 - fill);
+            let AccountEvent::Account(a) = state.account(&paper) else {
+                unreachable!()
+            };
+            near(
+                a.available_funds.unwrap(),
+                a.equity.unwrap() - a.margin.unwrap() - a.orders_margin.unwrap() - working,
+            );
+            drop(state);
+            let short = account(200.0 * point_value + fill - 0.01);
+            place(
+                &short,
+                OrderRequest::new("SYM", OrderSide::Buy, 2.0, OrderType::Market),
+            )
+            .unwrap();
+            assert!(matches!(
+                short.lock().finished[0].status,
+                OrderStatus::Rejected(_)
+            ));
         }
     }
 
