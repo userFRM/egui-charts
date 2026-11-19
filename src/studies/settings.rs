@@ -487,11 +487,11 @@ pub struct StudySettings {
     /// [`StudyPane::levels`](super::StudyPane::levels). Settings saved before levels were
     /// editable, and settings with another number of levels, take the study's own levels and fill.
     /// Only the guide declared since is added, hidden, to a Stochastic or Money Flow Index saved
-    /// with two levels or a
-    /// Know Sure Thing, Chaikin Money Flow, Force Index or Advance/Decline Ratio (Bars) saved
-    /// with none. A Bollinger Bands %b, Commodity Channel Index or Money Flow Index saved with
-    /// none restores its guides hidden and its band unfilled, and an Aroon Oscillator saved with
-    /// its zero guide alone, or with none, keeps that guide and adds those at 90 and -90 hidden.
+    /// with two levels or a Know Sure Thing, Chaikin Money Flow, Force Index or Advance/Decline
+    /// Ratio (Bars) saved with none. A Bollinger Bands %b, Commodity Channel Index or Money Flow
+    /// Index saved with none restores its guides hidden and its band unfilled, and an Aroon
+    /// Oscillator saved with its zero guide alone, or with none, keeps that guide and adds those
+    /// at 90 and -90 hidden.
     /// A Connors RSI or a Correlation Coefficient with three levels keeps the guides it
     /// opened with before: 70, 50 and 30 with the band between 70 and 30, or 1, -1 and 0.
     #[serde(default)]
