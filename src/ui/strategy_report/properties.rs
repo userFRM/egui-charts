@@ -270,6 +270,10 @@ pub(super) fn show(
         &mut settings.recalculate_after_fills,
         l10n::text(ui.ctx(), "Recalculate after fills"),
     );
+    ui.checkbox(
+        &mut settings.recalculate_on_every_update,
+        l10n::text(ui.ctx(), "Recalculate on every update"),
+    );
     ui.add_enabled_ui(!settings.chart_type.transforms_data(), |ui| {
         ui.checkbox(
             &mut settings.recalculate_on_history,

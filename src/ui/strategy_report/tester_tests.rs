@@ -176,6 +176,15 @@ fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
             .click();
         h.run();
         assert!(h.state().settings().recalculate_on_history);
+        h.get_by_role_and_label(Role::CheckBox, "Recalculate on every update")
+            .click();
+        h.run();
+        assert!(h.state().settings().recalculate_on_every_update);
+        h.get_by_role_and_label(Role::Button, "Undo settings")
+            .click();
+        h.run();
+        assert!(!h.state().settings().recalculate_on_every_update);
+        assert!(h.state().settings().recalculate_on_history);
         h.get_by_role_and_label(Role::ComboBox, "Decision candles")
             .click();
         h.run();
@@ -214,6 +223,7 @@ fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
         settings.liquidation_increment = 0.1;
         settings.fill_on_close = true;
         settings.order_delay = 3;
+        settings.recalculate_on_every_update = true;
         h.state_mut().set_settings(settings.clone()).unwrap();
         let saved = serde_json::to_string(&settings).unwrap();
         let restored = serde_json::from_str::<BacktestSettings>(&saved).unwrap();
@@ -250,6 +260,7 @@ fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
             ("Decision chart type", "Heikin Ashi"),
             ("Original-price execution", "true"),
             ("Historical tick decisions", "false"),
+            ("Recalculate on every update", "true"),
         ] {
             assert_eq!(property(key), expected);
         }
