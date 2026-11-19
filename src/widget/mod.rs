@@ -535,6 +535,9 @@ pub struct Chart {
     /// the next frame only, so the box goes when trading stops drawing.
     #[cfg(feature = "ui")]
     pub(crate) order_quantity: Option<f64>,
+    /// The host's text for `order_quantity`, set with it for the next frame only.
+    #[cfg(feature = "ui")]
+    pub(crate) order_quantity_text: Option<String>,
     /// The legend's quantity box, when the user clicked it, for trading to open its calculator.
     #[cfg(feature = "ui")]
     pub(crate) quantity_clicked: Option<egui::Rect>,

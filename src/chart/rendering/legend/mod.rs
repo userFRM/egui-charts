@@ -165,9 +165,9 @@ pub struct Legend<'a> {
     /// Opacity from 0 to 1 of the chart background behind the volume and study rows.
     /// Text and controls retain opaque backing so profiles cannot interfere with them.
     pub study_backdrop: f32,
-    /// The order quantity shown in a box under the quote buttons' spread, which the user clicks
-    /// to change it.
-    pub(crate) quantity: Option<f64>,
+    /// The order quantity and the host's text for it, shown under the quote buttons' spread,
+    /// which the user clicks to change it.
+    pub(crate) quantity: Option<(f64, Option<String>)>,
     /// Groups the thousands of built-in price values; the chart sets it from
     /// `ChartConfig::thousands_sep`.
     pub(crate) thousands_sep: Option<char>,
@@ -695,7 +695,7 @@ impl<'a> Legend<'a> {
                 precision,
                 self.thousands_sep,
                 self.formatters.price,
-                self.quantity,
+                self.quantity.clone(),
                 id,
             );
             layout.new_row();

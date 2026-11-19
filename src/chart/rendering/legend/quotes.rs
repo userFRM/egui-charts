@@ -15,7 +15,7 @@ pub(super) fn paint_quotes(
     precision: usize,
     thousands_sep: Option<char>,
     formatter: Option<&dyn crate::scales::PriceFormatter>,
-    quantity: Option<f64>,
+    quantity: Option<(f64, Option<String>)>,
     id: egui::Id,
 ) -> (Option<QuoteSide>, Option<Rect>) {
     let text = |price: f64| {
@@ -32,7 +32,16 @@ pub(super) fn paint_quotes(
         FontId::proportional(theme.text.tiny),
         layout.colors.text,
     );
-    let gap = (spread_galley.size().x + 12.0).max(36.0);
+    let quantity = quantity.map(|(quantity, text)| {
+        layout.painter.layout_no_wrap(
+            text.unwrap_or_else(|| compact_quantity(quantity)),
+            FontId::proportional(theme.text.small),
+            layout.colors.text,
+        )
+    });
+    let gap = (spread_galley.size().x + 12.0)
+        .max(36.0)
+        .max(quantity.as_ref().map_or(0.0, |text| text.size().x + 18.0));
     let quote = |side: QuoteSide, price: f64, color: Color32| {
         let price = layout
             .painter
@@ -75,12 +84,7 @@ pub(super) fn paint_quotes(
         Vec2::new(gap, 34.0),
     );
     layout.painter.add(layout.fill(spread_rect, 1.0));
-    let quantity = quantity.map(|quantity| {
-        let text = layout.painter.layout_no_wrap(
-            compact_quantity(quantity),
-            FontId::proportional(theme.text.small),
-            layout.colors.text,
-        );
+    let quantity = quantity.map(|text| {
         let rect = Rect::from_center_size(
             Pos2::new(spread_rect.center().x, spread_rect.bottom() - 9.0),
             Vec2::new((text.size().x + 10.0).max(gap - 8.0), 18.0),

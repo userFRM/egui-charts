@@ -3532,6 +3532,8 @@ impl Chart {
                 let timeframe = self.timeframe.map(|tf| tf.as_str()).unwrap_or_default();
                 #[cfg(feature = "ui")]
                 let order_quantity = self.order_quantity.take();
+                #[cfg(feature = "ui")]
+                let order_quantity_text = self.order_quantity_text.take();
                 let mut legend = super::Legend::new(&self.symbol, &timeframe, &bar);
                 let statuses: Vec<_> = self
                     .legend_statuses
@@ -3607,7 +3609,8 @@ impl Chart {
                     values && self.chart_type.supports_volume() && self.config.show_legend_volume;
                 #[cfg(feature = "ui")]
                 {
-                    legend.quantity = order_quantity;
+                    legend.quantity =
+                        order_quantity.map(|quantity| (quantity, order_quantity_text));
                 }
                 let (quote_action, study_settings, bottom, quantity, main_action) = ui
                     .push_id(shown.id, |ui| {

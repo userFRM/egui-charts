@@ -393,6 +393,11 @@ impl Trading {
 
         // The legend shows the order quantity under the spread; clicking it toggles the calculator.
         chart.order_quantity = self.service.is_some().then_some(self.quantity);
+        chart.order_quantity_text = self
+            .service
+            .as_ref()
+            .and(self.formatter.as_deref())
+            .and_then(|formatter| formatter.quantity(chart.symbol(), self.quantity));
         let toggled = chart.quantity_clicked.take();
         if let Some(anchor) = toggled {
             self.calculator = match self.calculator {
@@ -1590,6 +1595,16 @@ mod tests {
             find(&texts, "25").is_some(),
             "the legend shows the new quantity"
         );
+        struct Lots;
+        impl TradingFormatter for Lots {
+            fn quantity(&self, _: &str, quantity: f64) -> Option<String> {
+                Some(format!("{} lots", quantity / 100.0))
+            }
+        }
+        trading.set_formatter(Some(Arc::new(Lots)));
+        frame(&mut trading, &mut chart, vec![]);
+        let texts = frame(&mut trading, &mut chart, vec![]);
+        assert!(find(&texts, "0.25 lots").is_some());
     }
 
     #[test]

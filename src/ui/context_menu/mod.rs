@@ -17,7 +17,9 @@ pub use chart_menus::{ChartContextAction, ChartMenus, HostMenuContext, HostMenuE
 pub use menu::MenuItem;
 pub(crate) use menu::{MenuEntry, POINTER_GAP, show_menu, trim_separators};
 
+use crate::ui::trading::TradingFormatter;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use crate::config::KeyboardAction;
 use crate::icons::icons as embedded_icons;
@@ -152,6 +154,16 @@ pub(crate) fn format_price(price: f64) -> String {
 // CONTEXT MENU STATE
 // ============================================================================
 
+/// The host's text for the order rows' quantity.
+#[derive(Clone)]
+struct OrderFormatter(Arc<dyn TradingFormatter>);
+
+impl std::fmt::Debug for OrderFormatter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TradingFormatter")
+    }
+}
+
 /// Chart context menu state and renderer
 ///
 /// Manages the lifecycle of a right-click context menu including
@@ -178,6 +190,8 @@ pub struct ChartContextMenu {
     pub order_quantity: f64,
     /// The order types the account accepts; entries for the others are left out.
     pub order_types: Capabilities,
+    /// Writes the order rows' quantity, from [`ChartMenus::set_order_formatter`].
+    order_formatter: Option<OrderFormatter>,
     /// Last action taken
     pub last_action: ContextMenuAction,
     /// Skip close detection on first frame after opening
@@ -217,6 +231,7 @@ impl ChartContextMenu {
                 stop: true,
                 ..Capabilities::default()
             },
+            order_formatter: None,
             last_action: ContextMenuAction::None,
             just_opened: false,
             hidden: HashSet::new(),
@@ -364,6 +379,11 @@ impl ChartContextMenu {
             } else {
                 (OrderSide::Buy, OrderSide::Sell)
             };
+            let quantity = crate::ui::trading::quantity_text(
+                self.order_formatter.as_ref().map(|formatter| &*formatter.0),
+                symbol,
+                self.order_quantity,
+            );
             for (side, order_type) in [
                 (limit, OrderType::Limit(price)),
                 (stop, OrderType::Stop(price)),
@@ -392,7 +412,7 @@ impl ChartContextMenu {
                             ctx,
                             key,
                             &[
-                                ("quantity", self.order_quantity.to_string().as_str()),
+                                ("quantity", quantity.as_str()),
                                 ("symbol", symbol.as_str()),
                                 ("price", price_text(price).as_str()),
                             ],
@@ -597,6 +617,61 @@ mod tests {
                 })
                 .collect();
             assert_eq!(entries, expected, "click at {click}");
+        }
+    }
+
+    /// Menu quantities use the host's symbol-specific text, else the account tables' grouping.
+    #[test]
+    fn order_rows_write_quantities_as_the_trading_panels_do() {
+        struct Lots;
+        impl TradingFormatter for Lots {
+            fn quantity(&self, symbol: &str, quantity: f64) -> Option<String> {
+                (symbol == "AAPL").then(|| format!("{} lots", quantity / 100.0))
+            }
+        }
+        for (formatter, symbol, quantity, text) in [
+            (None, "AAPL", 1000.0, "1,000"),
+            (
+                Some(OrderFormatter(Arc::new(Lots))),
+                "AAPL",
+                1000.0,
+                "10 lots",
+            ),
+            (
+                Some(OrderFormatter(Arc::new(Lots))),
+                "MSFT",
+                1234.5,
+                "1,234.5",
+            ),
+        ] {
+            let mut menu = ChartContextMenu::new();
+            menu.symbol = symbol.into();
+            menu.market_price = Some(100.0);
+            menu.tick_size = Some(1.0);
+            menu.click_price = 98.9;
+            menu.order_quantity = quantity;
+            menu.order_formatter = formatter;
+            let labels: Vec<_> = menu
+                .build_menu_items(
+                    &Context::default(),
+                    &crate::widget::ShortcutMap::default(),
+                    &format_price,
+                )
+                .into_iter()
+                .filter_map(|entry| match entry {
+                    MenuEntry::Item(item) if matches!(item.action, ContextMenuAction::Order(_)) => {
+                        Some(item.label)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                labels,
+                [
+                    format!("Buy {text} {symbol} @ 99.00 limit"),
+                    format!("Sell {text} {symbol} @ 99.00 stop"),
+                ]
+            );
         }
     }
 

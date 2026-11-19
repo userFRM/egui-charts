@@ -200,6 +200,21 @@ impl Default for Trading {
     }
 }
 
+/// `quantity` of `symbol` in the host's text, else at its own decimals, up to eight,
+/// with thousands separators, as the account tables write it.
+pub(crate) fn quantity_text(
+    formatter: Option<&dyn TradingFormatter>,
+    symbol: &str,
+    quantity: f64,
+) -> String {
+    Numbers {
+        symbol,
+        decimals: 2,
+        formatter,
+    }
+    .quantity(quantity, account_panel::quantity_decimals(quantity))
+}
+
 impl Trading {
     /// Sets the latest quote of `symbol`, such as the one `WatchlistPanel::quote` holds for the
     /// chart's symbol. While the chart shows `symbol`, the ticket enters a market buy at the
