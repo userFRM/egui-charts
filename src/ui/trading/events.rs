@@ -3,7 +3,7 @@
 
 use super::account_panel::quantity_decimals;
 use super::widgets::side_name;
-use super::{Numbers, Trading, valid};
+use super::{Numbers, Trading};
 use crate::chart::TradingLineAction;
 use crate::data::FeedError;
 use crate::localization as l10n;
@@ -40,7 +40,7 @@ impl Trading {
                 let (_, _, mut order) = self.placing.remove(index);
                 if let Ok(answer) = answer.downcast::<Result<TradingRules, FeedError>>() {
                     match *answer {
-                        Ok(rules) if rules.symbol == order.symbol && valid(&rules) => {
+                        Ok(rules) if rules.symbol == order.symbol && rules.is_valid() => {
                             order.time_in_force = rules.time_in_force[0];
                             self.place(order);
                         }
@@ -97,7 +97,7 @@ impl Trading {
             if key == self.rules_key {
                 if let Ok(answer) = answer.downcast::<Result<TradingRules, FeedError>>() {
                     match *answer {
-                        Ok(rules) if rules.symbol == self.rules.symbol && valid(&rules) => {
+                        Ok(rules) if rules.symbol == self.rules.symbol && rules.is_valid() => {
                             self.rules = rules;
                             self.rules_ready = true;
                         }
@@ -1052,13 +1052,17 @@ mod tests {
     #[test]
     fn a_reset_paper_account_restates_itself_on_the_next_poll() {
         use crate::data::inbox::Inbox;
-        use crate::model::TimeInForce;
+        use crate::model::{TimeInForce, TradingRules};
         use crate::services::{Broker, PaperAccount};
         let ctx = egui::Context::default();
         let paper = Arc::new(PaperAccount::new("USD", 100_000.0));
+        let mut rules = TradingRules::new("SYM");
+        (rules.quantity_step, rules.min_quantity) = (0.01, 0.01);
+        rules.time_in_force = vec![TimeInForce::GoodTillCancelled];
+        assert!(paper.set_rules(rules));
         paper.set_price("SYM", 100.0);
         let mut trading = Trading::default();
-        (trading.display.instant_orders, trading.quantity) = (true, 1.0);
+        (trading.display.instant_orders, trading.quantity) = (true, 0.5);
         trading.set_service(paper.clone());
         trading.poll(&ctx, &mut Toasts::new());
         trading.trade("SYM".into(), OrderSide::Buy);
@@ -1075,7 +1079,7 @@ mod tests {
         trading.poll(&ctx, &mut Toasts::new());
         assert_eq!(
             (held(&trading), trading.orders.len()),
-            (vec![("SYM".into(), 1.0)], 1)
+            (vec![("SYM".into(), 0.5)], 1)
         );
 
         let old_id = trading.account_panel.fills.executions[0].order.clone();
@@ -1087,7 +1091,7 @@ mod tests {
 
         trading.trade("SYM".into(), OrderSide::Buy);
         trading.poll(&ctx, &mut Toasts::new());
-        assert_eq!(held(&trading), vec![("SYM".into(), 1.0)]);
+        assert_eq!(held(&trading), vec![("SYM".into(), 0.5)]);
         assert_eq!(trading.account_panel.fills.executions.len(), 1);
         assert_ne!(trading.account_panel.fills.executions[0].order, old_id);
     }
