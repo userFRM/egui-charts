@@ -168,9 +168,8 @@ pub trait Broker: MaybeSend + 'static {
     /// [`AccountEvent::ClosedPosition`], [`AccountEvent::Balance`] or [`AccountEvent::Journal`]
     /// events, as the request's [`HistoryKind`] says, oldest first, and never working orders or
     /// positions: those come only from the pushed stream. The first page of a request holds the
-    /// newest entries of its range
-    /// and each page after it, asked for with the [`next`](HistoryPage::next) cursor, the entries
-    /// before the previous one. Entries that were pushed live may appear again in a page: an order
+    /// newest entries of its range and each page after it, asked for with the
+    /// [`next`](HistoryPage::next) cursor, the entries before the previous one. Entries that were pushed live may appear again in a page: an order
     /// is matched by its id and other events by value, so repeat them unchanged. Answer for the
     /// account `connect` last served; a consumer drops an answer that arrives after the account
     /// changed.
@@ -179,10 +178,10 @@ pub trait Broker: MaybeSend + 'static {
     /// scrolls to the end of a history: first for the range that ends one second after the oldest
     /// entry it lists (for an order or closed position, when it closed), so entries sharing that
     /// time are not skipped, then for each `next` until it is `None` or the history lists 1,000
-    /// entries. After an error, which it shows unless it is `NotSupported`, it asks for that history again only
-    /// after the next `connect`; after a [recoverable](FeedError::is_recoverable) error or one that
-    /// arrives while the broker reports that it is not live, it asks again once the broker
-    /// reports that it is live again.
+    /// entries. After an error, which it shows unless it is `NotSupported`, it asks for that
+    /// history again only after the next `connect`; after a
+    /// [recoverable](FeedError::is_recoverable) error or one that arrives while the broker reports
+    /// that it is not live, it asks again once the broker reports that it is live again.
     fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
         let _ = request;
         reply.send(Err(FeedError::NotSupported));

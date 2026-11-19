@@ -164,8 +164,9 @@ pub enum AccountPanelAction {
 /// and trading journal the broker pushes, each with a column chooser and an export. Order History
 /// also lists individual executions. A position offers close, and an order offers edit and cancel
 /// on hover; each waits for the user's confirmation like the chart's lines. The broker menu asks
-/// the host to open its broker picker or disconnect. Clicking a symbol asks the host to show it. Each history keeps the most recent 1,000 entries; active
-/// orders are retained independently. Scrolling to the end of a history asks
+/// the host to open its broker picker or disconnect. Clicking a symbol asks the host to show it.
+/// Each history keeps the most recent 1,000 entries; active orders are retained independently.
+/// Scrolling to the end of a history asks
 /// [`Broker::history`](crate::services::Broker::history) for the entries before its oldest
 /// one, a page at a time, until the broker has nothing older or the history lists 1,000
 /// entries. Each entry is listed once, whether a page or the broker's stream brings it first,
