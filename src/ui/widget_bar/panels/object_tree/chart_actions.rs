@@ -14,8 +14,8 @@ impl ObjectTreePanel {
     /// removal, renaming non-drawing rows and the layout-wide drawings by symbol. Drawing names are
     /// saved and undone with the drawing.
     /// Bulk actions apply to drawings, studies and added bar series. Visibility includes the main
-    /// series; bar-series ordering stays within its pane. Deleting keeps locked drawings, which
-    /// stay selected, and reports them with
+    /// series; bar-series ordering stays within its pane. Deleting keeps locked drawings and
+    /// those whose user edits are off selected, and reports only locked drawings with
     /// [`ChartEvent::LockedDrawingsKept`](crate::widget::ChartEvent::LockedDrawingsKept).
     /// Duplicate and Duplicate selected add the study copies the
     /// [study caps](Chart::set_study_limit) allow, in the order of `sources`, and leave out the others.
@@ -134,7 +134,7 @@ impl ObjectTreePanel {
                         d.folder.starts_with(path)
                             && match action {
                                 ObjectTreeAction::SetFolderVisible(_, _) => d.visible != *value,
-                                _ => d.locked != *value,
+                                _ => d.locked != *value && d.user_edit_enabled,
                             }
                     })
                     .map(|d| d.id)
@@ -197,9 +197,16 @@ impl ObjectTreePanel {
                 }
             }
             ObjectTreeAction::ToggleLock(id) => {
-                let _ = chart
-                    .drawings_mut()
-                    .edit_drawing(*id, |d| d.locked = !d.locked);
+                if chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .any(|d| d.id == *id && d.user_edit_enabled)
+                {
+                    let _ = chart
+                        .drawings_mut()
+                        .edit_drawing(*id, |d| d.locked = !d.locked);
+                }
             }
             ObjectTreeAction::LockAll | ObjectTreeAction::UnlockAll => {
                 let locked = matches!(action, ObjectTreeAction::LockAll);
@@ -207,7 +214,7 @@ impl ObjectTreePanel {
                     .drawings()
                     .drawings
                     .iter()
-                    .filter(|d| d.locked != locked)
+                    .filter(|d| d.locked != locked && d.user_edit_enabled)
                     .map(|d| d.id)
                     .collect();
                 for id in ids {
@@ -231,7 +238,7 @@ impl ObjectTreePanel {
                 for source in others {
                     delete(chart, source);
                 }
-                // Locked drawings stay selected, as after Delete on the chart.
+                // Keep the surviving selection, as after Delete on the chart.
                 let kept: Vec<_> = chart
                     .drawings()
                     .drawings
@@ -258,6 +265,7 @@ impl ObjectTreePanel {
             }
             ObjectTreeAction::MoveToPane(id, pane) => {
                 if !sources.iter().any(|s| s.id == *id && s.is_drawing())
+                    || !chart.drawings().user_can_edit(*id)
                     || !chart.move_drawing_to_pane(*id, *pane)
                 {
                     return false;
@@ -470,6 +478,8 @@ mod tests {
         for drawing in chart.drawings().listed_drawings() {
             let mut item = SourceItem::drawing(drawing.id, drawing.tool_type, drawing.color32());
             item.visible = drawing.visible;
+            item.locked = drawing.locked;
+            item.user_edit_enabled = drawing.user_edit_enabled;
             item.z_index = drawing.z_order;
             rows.push(item);
         }
@@ -480,6 +490,54 @@ mod tests {
     fn apply(tree: &mut ObjectTreePanel, chart: &mut Chart, action: ObjectTreeAction) {
         let rows = rows(chart);
         chart.user_action(|chart| tree.apply_to_chart(chart, &action, &rows));
+    }
+
+    /// Every destructive tree command respects the drawing's host editing permission.
+    #[test]
+    fn object_tree_commands_keep_drawings_without_user_edits() {
+        for row in 0..7 {
+            for enabled in [true, false] {
+                let mut chart = chart(&[100.0], &[200.0]);
+                let pane = chart.add_pane();
+                for id in [3, 4] {
+                    let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+                    drawing.chart_points = vec![
+                        ChartPoint::new(10.0, 120.0 + id as f64),
+                        ChartPoint::new(20.0, 130.0 + id as f64),
+                    ];
+                    drawing.completed = true;
+                    drawing.user_edit_enabled = id != 3 || enabled;
+                    drawing.locked = id == 3 && row == 2;
+                    chart.drawings_mut().drawings.push(drawing);
+                }
+                let mut tree = ObjectTreePanel::new();
+                tree.state_mut().select(3);
+                tree.state_mut().toggle_selection(4);
+                chart.drawings_mut().select_drawings([3, 4]);
+                let before = chart.drawings().drawings[0].clone();
+                let action = [
+                    ObjectTreeAction::ToggleLock(3),
+                    ObjectTreeAction::LockAll,
+                    ObjectTreeAction::UnlockAll,
+                    ObjectTreeAction::MoveToPane(3, pane),
+                    ObjectTreeAction::Delete(3),
+                    ObjectTreeAction::DeleteSelected,
+                    ObjectTreeAction::RemoveAllDrawings,
+                ][row]
+                    .clone();
+                apply(&mut tree, &mut chart, action.clone());
+                let unchanged = chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .find(|d| d.id == 3)
+                    .is_some_and(|d| {
+                        serde_json::to_string(d).unwrap() == serde_json::to_string(&before).unwrap()
+                            && d.chart_points == before.chart_points
+                    });
+                assert_eq!(unchanged, !enabled, "{action:?}, enabled {enabled}");
+            }
+        }
     }
 
     #[test]
