@@ -20,6 +20,10 @@ const TIMES_IN_FORCE: [TimeInForce; 3] = [
     TimeInForce::FillOrKill,
 ];
 
+/// Finished orders, executions, balance changes and journal entries kept, which keeps a
+/// reconnect snapshot below the event stream's burst limit.
+const HISTORY: usize = 1_000;
+
 /// A paper account: a [`Broker`] that fills orders against the prices the host feeds it, so the
 /// order ticket, the chart's order and position lines and the account panel work as they do with
 /// a real account.
@@ -30,9 +34,9 @@ const TIMES_IN_FORCE: [TimeInForce; 3] = [
 /// are cancelled. Immediate-or-cancel and fill-or-kill orders fill at placement where a marketable
 /// order would, and are cancelled at once otherwise; since every fill is complete, the two behave
 /// alike. Day, week and month orders are refused, since the account has no trading-session calendar,
-/// and a working order cannot change its time in force. Market orders fill at the bid or ask of a usable
-/// [quote](Self::set_bid_ask), otherwise at the last price; limit and
-/// stop orders fill at the first price that reaches them, a limit at that price or better;
+/// and a working order cannot change its time in force. Market orders fill at the bid or ask of
+/// a usable [quote](Self::set_bid_ask), otherwise at the last price; limit and stop orders fill at
+/// the first price that reaches them, a limit at that price or better;
 /// a triggered stop-limit works on as a limit order. An order's take profits and stop loss become
 /// exit orders once it fills, for the quantity the fill opened: take-profit levels each close their
 /// own quantity, the first ones first when the fill opened less than the order's quantity, as after
@@ -43,10 +47,10 @@ const TIMES_IN_FORCE: [TimeInForce; 3] = [
 /// beyond it opens the other side at the fill price. Values use the point value and leverage of
 /// the symbol's [rules](Self::set_rules); a symbol without rules has a point value of 1 and the
 /// account's leverage. A position holds its market value divided by the leverage as margin, and
-/// a working order the same for its quantity at its price. Each fill
-/// pays its commission: the rate times its value, plus the amount per order and the amount per
-/// unit of its quantity, booked as one balance change. Placement and modification reserve buying power
-/// across all symbols, including working orders and their commissions. Market orders that
+/// a working order the same for its quantity at its price. Each fill pays its commission: the
+/// rate times its value, plus the amount per order and the amount per unit of its quantity,
+/// booked as one balance change. Placement and modification reserve buying power across all
+/// symbols, including working orders and their commissions. Market orders that
 /// reduce exposure remain possible when funds are insufficient. Position exits only reduce the
 /// remaining position.
 /// Every change is pushed as an [`AccountEvent`], with
@@ -70,6 +74,30 @@ pub struct PaperAccount {
     commission_per_order: f64,
     commission_per_unit: f64,
     state: Mutex<State>,
+}
+
+/// What a [`PaperAccount`] keeps between sessions, from [`PaperAccount::save`]: its settings,
+/// symbol rules, balance, working orders with their exits, positions and history, without the
+/// prices, quotes and replay clock, which the host feeds again. Write it in any serde format
+/// and read it back for [`PaperAccount::restore`].
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SavedPaperAccount {
+    currency: String,
+    initial: f64,
+    leverage: f64,
+    commission: f64,
+    commission_per_order: f64,
+    commission_per_unit: f64,
+    rules: Vec<TradingRules>,
+    balance: f64,
+    next_id: u64,
+    working: Vec<Order>,
+    exits: Vec<(OrderId, Vec<OrderId>)>,
+    positions: Vec<Position>,
+    finished: Vec<Order>,
+    executions: Vec<Execution>,
+    balance_history: Vec<BalanceChange>,
+    journal: Vec<JournalEntry>,
 }
 
 impl std::fmt::Debug for PaperAccount {
@@ -265,11 +293,103 @@ impl PaperAccount {
         self.lock().replay_time = time;
     }
 
+    /// The account as [`restore`](Self::restore) reads it back.
+    ///
+    /// ```
+    /// use egui_charts::services::{PaperAccount, SavedPaperAccount};
+    ///
+    /// let paper = PaperAccount::new("USD", 100_000.0).commission_per_order(1.0);
+    /// let json = serde_json::to_string(&paper.save()).unwrap();
+    /// // At the next launch:
+    /// let saved: SavedPaperAccount = serde_json::from_str(&json).unwrap();
+    /// let paper = PaperAccount::restore(saved).expect("a finite balance");
+    /// paper.set_price("AAPL", 187.5);
+    /// ```
+    pub fn save(&self) -> SavedPaperAccount {
+        let state = self.lock();
+        let mut rules: Vec<_> = state.rules.values().cloned().collect();
+        rules.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+        let mut positions: Vec<_> = state.positions.values().cloned().collect();
+        positions.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+        let exits = state
+            .working
+            .iter()
+            .filter_map(|order| Some((order.id.clone(), state.exits.get(&order.id)?.clone())))
+            .collect();
+        SavedPaperAccount {
+            currency: self.currency.clone(),
+            initial: self.initial,
+            leverage: self.leverage,
+            commission: self.commission,
+            commission_per_order: self.commission_per_order,
+            commission_per_unit: self.commission_per_unit,
+            rules,
+            balance: state.balance,
+            next_id: state.next_id,
+            working: state.working.clone(),
+            exits,
+            positions,
+            finished: state.finished.clone(),
+            executions: state.executions.clone(),
+            balance_history: state.balance_history.clone(),
+            journal: state.journal.clone(),
+        }
+    }
+
+    /// The account `saved` describes, with its settings, symbol rules, balance, working orders and
+    /// their exits, positions and history, and order ids that continue from it. Feed the prices of
+    /// its symbols with [`set_price`](Self::set_price): until then its orders cannot be placed or
+    /// changed, and the first price fills the working orders it reaches. Settings out of range count
+    /// as their builders say, rules that are not valid are left out, and only the newest 1,000
+    /// entries of each history are kept. Returns `None` when the saved balance or starting balance
+    /// is not finite.
+    pub fn restore(mut saved: SavedPaperAccount) -> Option<Self> {
+        if !saved.initial.is_finite() || !saved.balance.is_finite() {
+            return None;
+        }
+        let paper = Self::new(saved.currency, saved.initial)
+            .leverage(saved.leverage)
+            .commission(saved.commission)
+            .commission_per_order(saved.commission_per_order)
+            .commission_per_unit(saved.commission_per_unit);
+        for rules in saved.rules {
+            paper.set_rules(rules);
+        }
+        saved
+            .finished
+            .drain(..saved.finished.len().saturating_sub(HISTORY));
+        saved
+            .executions
+            .drain(..saved.executions.len().saturating_sub(HISTORY));
+        saved
+            .balance_history
+            .drain(..saved.balance_history.len().saturating_sub(HISTORY));
+        saved
+            .journal
+            .drain(..saved.journal.len().saturating_sub(HISTORY));
+        {
+            let mut state = paper.lock();
+            state.balance = saved.balance;
+            state.next_id = saved.next_id;
+            state.working = saved.working;
+            state.exits = saved.exits.into_iter().collect();
+            state.positions = saved
+                .positions
+                .into_iter()
+                .map(|p| (p.symbol.clone(), p))
+                .collect();
+            state.finished = saved.finished;
+            state.executions = saved.executions;
+            state.balance_history = saved.balance_history;
+            state.journal = saved.journal;
+        }
+        Some(paper)
+    }
+
     /// Returns the account to its starting balance without orders, positions or history. It keeps
-    /// its settings and symbol rules, the host's prices, quotes and replay clock, and the count its order
-    /// ids continue from. It ends the event stream of the last [`connect`](Broker::connect), so
-    /// the terminal connects
-    /// again at its next poll and shows the fresh account; a host that reads the stream itself
+    /// its settings and symbol rules, the host's prices, quotes and replay clock, and the count
+    /// its order ids continue from. It ends the event stream of the last [`connect`](Broker::connect),
+    /// so the terminal connects again at its next poll and shows the fresh account; a host that reads the stream itself
     /// calls `connect` again once [`Events::is_active`] is false.
     pub fn reset(&self) {
         let mut state = self.lock();
@@ -328,7 +448,7 @@ impl State {
     fn log(&mut self, text: String) {
         let entry = JournalEntry::new(self.now(), text);
         self.push(AccountEvent::Journal(entry.clone()));
-        if self.journal.len() == 1_000 {
+        if self.journal.len() == HISTORY {
             self.journal.remove(0);
         }
         self.journal.push(entry);
@@ -341,7 +461,7 @@ impl State {
         self.balance += amount;
         let change = BalanceChange::new(self.now(), self.balance, amount, action);
         self.push(AccountEvent::Balance(change.clone()));
-        if self.balance_history.len() == 1_000 {
+        if self.balance_history.len() == HISTORY {
             self.balance_history.remove(0);
         }
         self.balance_history.push(change);
@@ -513,7 +633,7 @@ impl State {
         order.status = status;
         order.closed = Some(self.now());
         self.push(AccountEvent::Order(order.clone()));
-        if self.finished.len() == 1_000 {
+        if self.finished.len() == HISTORY {
             self.finished.remove(0);
         }
         self.finished.push(order);
@@ -569,7 +689,7 @@ impl State {
         let id = order.id.clone();
         self.finish(order, OrderStatus::Filled);
         self.push(AccountEvent::Execution(execution.clone()));
-        if self.executions.len() == 1_000 {
+        if self.executions.len() == HISTORY {
             self.executions.remove(0);
         }
         self.executions.push(execution);
@@ -917,7 +1037,9 @@ impl Broker for PaperAccount {
                 "an order's symbol, side and position bracket cannot change".into(),
             )));
         }
-        let last = state.last[&order.symbol];
+        let Some(&last) = state.last.get(&order.symbol) else {
+            return reply.send(Err(FeedError::SymbolNotFound(order.symbol)));
+        };
         if let Err(error) = validate(&order, last, state.terms_of(self, &order.symbol).0) {
             return reply.send(Err(error));
         }
@@ -1255,6 +1377,107 @@ mod tests {
                 short.lock().finished[0].status,
                 OrderStatus::Rejected(_)
             ));
+        }
+    }
+
+    /// A JSON round trip preserves terms, history, working exits and the next id. Restored orders
+    /// refuse changes before host prices arrive; a filled take profit still cancels its stop loss.
+    #[test]
+    fn a_saved_account_restores_its_state_and_settings() {
+        let time = DateTime::from_timestamp(1_704_067_200, 0).unwrap();
+        let paper = PaperAccount::new("USD", 10_000.0)
+            .leverage(5.0)
+            .commission(0.001)
+            .commission_per_order(1.0)
+            .commission_per_unit(0.25);
+        paper.set_replay_time(Some(time));
+        let mut rules = TradingRules::new("ES");
+        (
+            rules.quantity_step,
+            rules.min_quantity,
+            rules.point_value,
+            rules.leverage,
+        ) = (0.25, 0.25, 50.0, Some(20.0));
+        rules.time_in_force = vec![TimeInForce::GoodTillCancelled];
+        assert!(paper.set_rules(rules));
+        paper.set_price("ES", 100.0);
+        let mut entry = OrderRequest::new("ES", OrderSide::Buy, 2.0, OrderType::Market);
+        entry.take_profit = Some(105.0);
+        entry.stop_loss = Some(95.0);
+        place(&paper, entry).unwrap();
+        let mut limit = OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Limit(90.0));
+        limit.time_in_force = TimeInForce::GoodTillCancelled;
+        let id = place(&paper, limit.clone()).unwrap();
+        let json = serde_json::to_string(&paper.save()).unwrap();
+        let saved: SavedPaperAccount = serde_json::from_str(&json).unwrap();
+        let restored = PaperAccount::restore(saved).unwrap();
+        assert_eq!(serde_json::to_string(&restored.save()).unwrap(), json);
+        let inbox = Arc::new(Inbox::default());
+        limit.order_type = OrderType::Limit(91.0);
+        restored.modify(id, limit, inbox.reply(0));
+        assert_eq!(
+            *inbox
+                .drain()
+                .answers
+                .pop()
+                .unwrap()
+                .1
+                .downcast::<Result<(), FeedError>>()
+                .unwrap(),
+            Err(FeedError::SymbolNotFound("ES".into()))
+        );
+        restored.set_replay_time(Some(time));
+        restored.set_price("ES", 100.0);
+        assert_eq!(snapshot(&restored), snapshot(&paper));
+        assert_eq!(rules_of(&restored, "ES"), rules_of(&paper, "ES"));
+        for account in [&paper, &restored] {
+            account.set_price("ES", 106.0);
+        }
+        assert_eq!(snapshot(&restored), snapshot(&paper));
+        let market = OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Market);
+        assert_eq!(place(&restored, market.clone()), place(&paper, market));
+        assert_eq!(snapshot(&restored), snapshot(&paper));
+
+        // Edited settings follow the builders, invalid rules are ignored and histories remain bounded.
+        let mut saved = paper.save();
+        saved.leverage = 0.0;
+        saved.commission = -1.0;
+        saved.commission_per_order = f64::INFINITY;
+        saved.commission_per_unit = f64::NAN;
+        saved.rules[0].point_value = 0.0;
+        saved.finished = vec![saved.finished[0].clone(); HISTORY + 3];
+        saved.executions = vec![saved.executions[0].clone(); HISTORY + 3];
+        saved.balance_history = vec![saved.balance_history[0].clone(); HISTORY + 3];
+        saved.journal = vec![saved.journal[0].clone(); HISTORY + 3];
+        let restored = PaperAccount::restore(saved).unwrap();
+        let saved = restored.save();
+        assert_eq!(
+            (
+                saved.leverage,
+                saved.commission,
+                saved.commission_per_order,
+                saved.commission_per_unit
+            ),
+            (1.0, 0.0, 0.0, 0.0)
+        );
+        assert!(saved.rules.is_empty());
+        assert_eq!(
+            [
+                saved.finished.len(),
+                saved.executions.len(),
+                saved.balance_history.len(),
+                saved.journal.len()
+            ],
+            [HISTORY; 4]
+        );
+        for initial in [true, false] {
+            let mut saved = paper.save();
+            if initial {
+                saved.initial = f64::NAN;
+            } else {
+                saved.balance = f64::INFINITY;
+            }
+            assert!(PaperAccount::restore(saved).is_none());
         }
     }
 
