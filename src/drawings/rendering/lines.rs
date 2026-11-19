@@ -1451,7 +1451,7 @@ mod tests {
     }
 
     /// A new trend line's, ray's, extended line's or horizontal ray's text starts in its own blue,
-    /// and a new rectangle's, circle's or ellipse's in the purple or red of its border. A change
+    /// and a new rectangle's, circle's or ellipse's in the purple, orange or red of its border. A change
     /// of line colour leaves the text's alone, and the text draws the slant it is given.
     #[test]
     fn line_and_shape_text_keeps_its_own_colour_and_slant() {
@@ -1464,7 +1464,7 @@ mod tests {
             (T::ExtendedLine, blue),
             (T::HorizontalRay, blue),
             (T::Rect, Color32::from_rgb(156, 39, 176)),
-            (T::Circle, red),
+            (T::Circle, Color32::from_rgb(255, 152, 0)),
             (T::Ellipse, red),
         ] {
             let mut drawing = Drawing::new(1, tool);

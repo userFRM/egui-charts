@@ -1936,7 +1936,8 @@ mod tests {
         );
         assert_eq!(
             label.texts.iter().map(text_of).collect::<Vec<_>>(),
-            ["200.00"]
+            // A new price label paints its bold price twice, a fraction apart.
+            ["200.00", "200.00"]
         );
         let [badge] = &label.paths[..] else {
             panic!("badge and pointer are one shape");

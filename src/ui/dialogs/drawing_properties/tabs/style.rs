@@ -1375,8 +1375,8 @@ mod tests {
         }
     }
 
-    /// A price label's badge and a price note's label offer their text, background and border on
-    /// the Style tab in place of a fill, and a palette colour keeps the border's opacity.
+    /// Badges and ranges offer their border, label and readout settings on the Style tab;
+    /// a palette colour keeps the border's opacity.
     #[test]
     fn price_label_and_note_style_their_badge() {
         let chart = Chart::new(BarData::new());

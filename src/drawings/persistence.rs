@@ -1198,6 +1198,11 @@ mod v1 {
         drawing.border_color = None;
         drawing.channel_midline = false;
         drawing.theme_shade = false;
+        drawing.regression_trend = None;
+        drawing.position_size = None;
+        drawing.position_target_color = None;
+        drawing.position_stop_color = None;
+        drawing.elliott_degree = crate::drawings::ElliottDegree::default();
         // Info lines already displayed readouts; other lines keep their old text placement.
         drawing.line_measurements = if tool_type == DrawingToolType::InfoLine {
             LineMeasurements::for_tool(tool_type)
@@ -1744,6 +1749,7 @@ mod tests {
             want.line_style = LineStyle::Solid;
             // Only the text label rendered text here, in a fixed 14 pt font.
             want.font_size = 14.0;
+            want.elliott_degree = ElliottDegree::default(); // Version 1 waves read at Minor.
             want.range_settings.font_size = 14.0;
             want.text_color = None;
             want.background = true;
@@ -1794,6 +1800,17 @@ mod tests {
             (DrawingToolType::ElliottImpulse, ElliottDegree::Cycle, true)
         );
 
+        value["drawings"][0]["drawing"]
+            .as_object_mut()
+            .unwrap()
+            .remove("elliott_degree");
+        let (loaded, skipped) = DrawingStorage::from_json(&value.to_string()).unwrap();
+        assert!(skipped.is_empty());
+        assert_eq!(
+            loaded.drawings[0].drawing.elliott_degree,
+            ElliottDegree::Minor
+        );
+
         let (v2, skipped) =
             DrawingStorage::from_json(include_str!("fixtures/storage_v2.json")).unwrap();
         assert!(skipped.is_empty(), "{skipped:?}");
@@ -1807,6 +1824,9 @@ mod tests {
             let mut want = non_default_drawing(tool);
             want.label = None; // Earlier files have no object name.
             want.position_sizing = PositionSizing::default(); // Earlier files use unit sizing.
+            // Earlier positions keep their greyed zones when no colours were stored.
+            want.position_target_color = None;
+            want.position_stop_color = None;
             want.position_readout.persistent = true; // Earlier files always showed statistics.
             want.vwap = None; // Earlier files use the default bands.
             want.theme_shade = false; // Earlier files draw their stored colours on every theme.

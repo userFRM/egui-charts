@@ -819,6 +819,20 @@ impl RegressionTrendConfig {
     }
 }
 
+impl RegressionTrendConfig {
+    /// Settings for a new drawing: the defaults with 2 px accent blue bands at 30% opacity.
+    pub fn drawing_default() -> Self {
+        let band = RegressionBandLine::new([41, 98, 255, 77])
+            .with_width(Some(2.0))
+            .expect("2 px is a valid width");
+        Self {
+            upper_line: band,
+            lower_line: band,
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for RegressionTrendConfig {
     /// A dashed line fitted to the closes in the drawing's colour and width, solid bands two
     /// standard deviations away in the accent blue at the drawing's width, and a correlation label
