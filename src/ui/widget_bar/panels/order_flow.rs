@@ -97,6 +97,9 @@ impl OrderFlowPanel {
                 ui.push_id("big_trades", |ui| {
                     detector(ui, "Big trades", &mut settings.big_trades, |ui, rule| {
                         threshold(ui, "Size", &mut rule.threshold);
+                        check(ui, "Aggressive orders", &mut rule.aggressive_orders);
+                        check(ui, "Same-time fills", &mut rule.same_time_fills);
+                        check(ui, "Passive orders", &mut rule.passive_orders);
                         check(ui, "Body zones", &mut rule.body_zones);
                         check(ui, "Wick zones", &mut rule.wick_zones);
                     });

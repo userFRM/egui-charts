@@ -102,9 +102,9 @@ impl std::fmt::Debug for OrderFlowDetectors {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DetectionKind {
-    /// A large aggressive execution, as a marker: see [`BigTradeRule`].
+    /// A large trade, as a marker: see [`BigTradeRule`].
     BigTrade,
-    /// The prices a large aggressive execution traded at, as a zone: see [`BigTradeRule`].
+    /// The prices a large trade traded at, as a zone: see [`BigTradeRule`].
     BigTradeZone,
     /// A rapid sequence of same-side aggressive fills.
     StopRun,
@@ -173,7 +173,7 @@ impl DetectionKind {
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct DetectorSettings {
-    /// Large aggressive executions and their zones.
+    /// Large trades and their zones.
     pub big_trades: Detector<BigTradeRule>,
     /// Rapid same-side execution bursts.
     pub stop_runs: Detector<StopRunRule>,
@@ -1007,7 +1007,7 @@ mod tests {
         at: i64,
         price: f64,
         direction: Direction,
-        size: &str,
+        label: &str,
     ) -> SignalEvent {
         SignalEvent::Upsert(Signal {
             id: SignalId(format!("big-trade-{number}")),
@@ -1017,7 +1017,7 @@ mod tests {
                 direction,
             },
             category: "Big trades".into(),
-            label: Some(size.into()),
+            label: Some(label.into()),
             tooltip: None,
         })
     }
@@ -1113,14 +1113,14 @@ mod tests {
         assert_eq!(
             trade(self::fill(2, 101.0, 8.0, Buy, Some(7))),
             [
-                marker(1, 1, 100.875, Direction::Up, "16"),
+                marker(1, 1, 100.875, Direction::Up, "16 aggressive"),
                 zone(1, 1, None, 100.0, 101.0)
             ]
         );
         assert_eq!(
             trade(self::fill(3, 101.0, 16.0, Buy, Some(7))),
             [
-                marker(1, 1, 100.9375, Direction::Up, "32"),
+                marker(1, 1, 100.9375, Direction::Up, "32 aggressive"),
                 zone(1, 1, None, 100.0, 101.0)
             ]
         );
@@ -1129,7 +1129,7 @@ mod tests {
             trade(self::fill(4, 99.0, 12.0, Sell, None)),
             [
                 zone(1, 1, Some(4), 100.0, 101.0),
-                marker(2, 4, 99.0, Direction::Down, "12"),
+                marker(2, 4, 99.0, Direction::Down, "12 aggressive"),
                 zone(2, 4, None, 98.875, 99.125)
             ]
         );
@@ -1359,8 +1359,8 @@ mod tests {
         // 5,002 detections lose marker 1 and zone 1; restoring ended zone 1 loses marker 2.
         assert_eq!(replay.len(), 5000);
         assert!(replay.contains(&zone(1, 1, Some(2), 49.875, 50.125)));
-        assert!(!replay.contains(&marker(1, 1, 50.0, Direction::Up, "10")));
-        assert!(!replay.contains(&marker(2, 1, 100.0, Direction::Up, "10")));
+        assert!(!replay.contains(&marker(1, 1, 50.0, Direction::Up, "10 aggressive")));
+        assert!(!replay.contains(&marker(2, 1, 100.0, Direction::Up, "10 aggressive")));
         assert_eq!(live.len(), 5000, "live detections after one history page");
         let replay: HashMap<_, _> = replay
             .into_iter()
@@ -1390,7 +1390,7 @@ mod tests {
         assert_eq!(
             host.push(MarketEvent::Trade(buy(100.0))),
             [
-                marker(2501, 1, 100.0, Direction::Up, "10"),
+                marker(2501, 1, 100.0, Direction::Up, "10 aggressive"),
                 SignalEvent::Remove(SignalId("big-trade-1".into())),
                 zone(2501, 1, None, 99.875, 100.125),
                 SignalEvent::Remove(SignalId("big-trade-zone-1".into()))
@@ -1498,7 +1498,7 @@ mod tests {
                 Some(7)
             ))),
             [
-                marker(1, 1, 100.0, Direction::Neutral, "10"),
+                marker(1, 1, 100.0, Direction::Neutral, "10 aggressive"),
                 zone(1, 1, None, 100.0, 101.0)
             ]
         );
@@ -1525,7 +1525,7 @@ mod tests {
         assert!(trade(989.0).is_empty());
         assert_eq!(
             trade(990.0)[0],
-            marker(1, 2000, 100.0, Direction::Up, "990")
+            marker(1, 2000, 100.0, Direction::Up, "990 aggressive")
         );
     }
 
@@ -1557,7 +1557,10 @@ mod tests {
             ..fill(1, 100.0, 4.0, OrderSide::Buy, Some(5))
         };
         let detections = host.push(MarketEvent::Trade(rest));
-        assert_eq!(detections[0], marker(1, 1, 100.0, Direction::Up, "10"));
+        assert_eq!(
+            detections[0],
+            marker(1, 1, 100.0, Direction::Up, "10 aggressive")
+        );
 
         let book = |price| OrderBook {
             ts: time(2),
@@ -1612,7 +1615,7 @@ mod tests {
         assert_eq!(
             events,
             [
-                marker(1, 2, 100.0, Direction::Up, "12"),
+                marker(1, 2, 100.0, Direction::Up, "12 aggressive"),
                 zone(1, 2, None, 99.875, 100.125)
             ],
             "the validated fill precedes the invalid cancel in the snapshot buffer"
