@@ -96,7 +96,7 @@ pub struct TPOProfile {
 }
 
 /// Configuration for TPO chart generation and rendering.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct TPOConfig {
     /// Row height for price grouping, such as 0.25 for one ES tick or 1.0 for four. With

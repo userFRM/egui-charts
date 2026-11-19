@@ -1327,6 +1327,15 @@ mod tests {
 
     #[test]
     fn saved_execution_settings_keep_choices_and_legacy_defaults() {
+        let profile = serde_json::json!({"mode": "Volume", "value_area": 0.5, "developing_poc": true,
+                "developing_value_area": true, "extend_poc": true, "extend_vah": true,
+                "extend_val": true, "value_area_guides": true, "poc": false,
+                "poc_color": [12, 34, 56, 255], "value_area_high": false,
+                "value_area_high_color": [0, 200, 0, 255], "value_area_low": false,
+                "value_area_low_color": [0, 0, 100, 128], "up_volume_color": [60, 0, 0, 60],
+                "down_volume_color": [0, 60, 0, 60], "value_area_up_color": [0, 0, 120, 120],
+                "value_area_down_color": [120, 120, 0, 120],
+                "nodes": {"smoothing": 2, "prominence": 0.1}});
         let settings = serde_json::json!({
             "footprint_modes": ["Delta", "BidAskTrades", "Trades", "AverageSize"], "footprint_row_ticks": 2,
             "footprint_row_atr": true, "footprint_row_atr_length": 30,
@@ -1352,15 +1361,7 @@ mod tests {
             "tpo_poor_low": false,
             "tpo_extend_poor": true,
             "tpo_volume_profile": true,
-            "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
-                "developing_value_area": true, "extend_poc": true, "extend_vah": true,
-                "extend_val": true, "value_area_guides": true, "poc": false,
-                "poc_color": [12, 34, 56, 255], "value_area_high": false,
-                "value_area_high_color": [0, 200, 0, 255], "value_area_low": false,
-                "value_area_low_color": [0, 0, 100, 128], "up_volume_color": [60, 0, 0, 60],
-                "down_volume_color": [0, 60, 0, 60], "value_area_up_color": [0, 0, 120, 120],
-                "value_area_down_color": [120, 120, 0, 120],
-                "nodes": {"smoothing": 2, "prominence": 0.1}}
+            "profile": profile
         });
         let params: ChartTypeParams = serde_json::from_value(settings.clone()).unwrap();
         let saved = serde_json::to_value(&params).unwrap();
