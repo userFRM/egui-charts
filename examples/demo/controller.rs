@@ -1293,6 +1293,11 @@ impl DemoApp {
         self.settings_state = self.chart_settings_state();
         self.settings_dialog
             .offer_apply_to_all(self.layout_has_other_charts());
+        self.settings_dialog.set_depth_history_config(
+            self.chart
+                .depth_history(SeriesId::MAIN)
+                .map(DepthHistory::config),
+        );
         self.settings_dialog.open(self.settings_state.clone());
     }
 
@@ -1372,6 +1377,7 @@ impl DemoApp {
             SettingsAction::PreviewSound { name, volume } => {
                 self.play_sound(ctx, &name, volume, true)
             }
+            SettingsAction::ClearDepthHistory => self.chart.clear_depth_history(),
             SettingsAction::Cancel => {}
             _ => {}
         }

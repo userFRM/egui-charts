@@ -5,7 +5,20 @@ use super::{checkbox, styled_checkbox, styled_dropdown};
 use crate::chart::overlays::{BookProfile, BubbleColor, BubbleGrouping, BubbleScalingMode};
 use crate::localization as l10n;
 use crate::theme::Theme;
+use chrono::TimeDelta;
 use egui::{RichText, Ui};
+
+/// Retentions shorter than the full sampling history, in minutes.
+const RETENTIONS: [(i64, &str); 8] = [
+    (15, "15 minutes"),
+    (30, "30 minutes"),
+    (60, "1 hour"),
+    (120, "2 hours"),
+    (240, "4 hours"),
+    (480, "8 hours"),
+    (720, "12 hours"),
+    (1440, "24 hours"),
+];
 
 impl SettingsDialog {
     pub(in super::super) fn draw_order_flow_tab(&mut self, ui: &mut Ui, theme: &Theme) {
@@ -65,6 +78,58 @@ impl SettingsDialog {
                         }
                     },
                 );
+            });
+            self.draw_setting_row_with_controls(ui, "History retention", theme, |ui, dialog| {
+                let full = dialog.depth_config.clone().with_retention(None).span();
+                let retention = &mut dialog.settings.order_flow.heatmap_retention;
+                let name = match *retention {
+                    None => "Full history".to_owned(),
+                    Some(chosen) => RETENTIONS
+                        .iter()
+                        .find(|(minutes, _)| TimeDelta::minutes(*minutes) == chosen)
+                        .map_or_else(
+                            || {
+                                l10n::format_text(
+                                    ui.ctx(),
+                                    "{0} min",
+                                    &[("0", ((chosen.num_seconds() + 59) / 60).max(1).to_string())],
+                                )
+                            },
+                            |(_, label)| (*label).to_owned(),
+                        ),
+                };
+                styled_dropdown(ui, "heatmap_retention", 180.0, theme.ui.text, &name, |ui| {
+                    for (minutes, label) in RETENTIONS {
+                        let choice = TimeDelta::minutes(minutes);
+                        if choice < full {
+                            ui.selectable_value(
+                                retention,
+                                Some(choice),
+                                l10n::text(ui.ctx(), label),
+                            );
+                        }
+                    }
+                    ui.selectable_value(retention, None, l10n::text(ui.ctx(), "Full history"));
+                });
+            });
+            self.draw_setting_row_with_controls(ui, "Memory", theme, |ui, dialog| {
+                let bytes = dialog
+                    .depth_config
+                    .clone()
+                    .with_retention(dialog.settings.order_flow.heatmap_retention)
+                    .max_memory();
+                ui.label(
+                    RichText::new(l10n::format_text(
+                        ui.ctx(),
+                        "Up to {0} MB",
+                        &[("0", format!("{:.1}", bytes as f64 / 1e6))],
+                    ))
+                    .size(theme.text.title)
+                    .color(theme.ui.text),
+                );
+                if ui.button(l10n::text(ui.ctx(), "Release memory")).clicked() {
+                    dialog.release_depth_history = true;
+                }
             });
         }
         if book {
