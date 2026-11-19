@@ -346,13 +346,14 @@ impl FloatingSelectionToolbar {
                     .clone()
                     .map(|alert| DrawingContextMenuAction::AddAlert(Box::new(alert)));
             }
-            FloatingToolbarAction::DrawingMenu(DrawingContextMenuAction::ReversePosition) => {
-                if editable {
-                    let _ = chart.reverse_position_drawing(id);
-                }
+            FloatingToolbarAction::DrawingMenu(DrawingContextMenuAction::ReversePosition)
+                if editable =>
+            {
+                let _ = chart.reverse_position_drawing(id);
             }
             FloatingToolbarAction::DrawingMenu(action)
-                if !action.apply_interval_visibility(chart, id) =>
+                if action != DrawingContextMenuAction::ReversePosition
+                    && !action.apply_interval_visibility(chart, id) =>
             {
                 return Some(action);
             }
