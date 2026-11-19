@@ -236,10 +236,10 @@ impl OrderTicket {
         for (index, preset) in presets.iter().enumerate() {
             ui.horizontal(|ui| {
                 if ui
-                    .selectable_label(false, l10n::text(ui.ctx(), &preset.name))
+                    .selectable_label(false, preset.name.as_str())
                     .clicked()
                 {
-                    self.apply(preset);
+                    self.apply(preset, market);
                 }
                 if ui
                     .small_button("✕")
@@ -387,10 +387,30 @@ impl OrderTicket {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::kittest::Queryable;
     use crate::model::{
         Capabilities, Order, OrderId, OrderRequest, OrderSide, OrderType, TimeInForce, TradingRules,
     };
     use egui::pos2;
+
+    #[test]
+    fn preset_names_are_shown_as_typed() {
+        let rules = TradingRules::new("ES");
+        let market = super::super::tests::market(&rules);
+        let mut harness = egui_kittest::Harness::builder().build_ui_state(
+            |ui, (ticket, presets): &mut (OrderTicket, Vec<OrderPreset>)| {
+                ticket.more(ui, &market, presets, &mut false);
+            },
+            (OrderTicket::default(), vec![OrderPreset::new("Market", 1.0)]),
+        );
+        crate::localization::set_translator(&harness.ctx, |key| {
+            (key == "Market").then(|| "Markt".to_owned())
+        });
+        harness.run();
+        assert!(harness.query_by_label("Market").is_some());
+        assert!(harness.query_by_label("Markt").is_none());
+
+    }
 
     #[test]
     fn short_tickets_keep_order_controls_reachable() {

@@ -60,10 +60,11 @@ impl Bracket {
     /// A bracket of `value`, read as `mode` says.
     ///
     /// ```
-    /// use egui_charts::ui::trading::{Bracket, BracketMode, OrderPreset};
+    /// use egui_charts::ui::trading::{Bracket, BracketMode, OrderPreset, PresetSizing};
     ///
     /// let mut preset = OrderPreset::new("Scalp", 2.0);
     /// preset.take_profit = Some(Bracket::new(BracketMode::Ticks, 8.0));
+    /// preset.sizing = Some(PresetSizing::RiskPercent(1.0));
     /// ```
     pub fn new(mode: BracketMode, value: f64) -> Self {
         Self { mode, value }
@@ -127,12 +128,35 @@ impl Bracket {
 pub struct OrderPreset {
     /// Shown in the ticket's preset list.
     pub name: String,
-    /// In the symbol's trading units.
+    /// In the symbol's trading units: what [`PresetSizing::Units`] applies, and the quantity
+    /// the other sizings gave when the preset was saved.
     pub quantity: f64,
     /// The take profit, if the preset sets one.
     pub take_profit: Option<Bracket>,
     /// The stop loss, if the preset sets one.
     pub stop_loss: Option<Bracket>,
+    /// How the preset sizes the order, or `None` to keep the ticket's quantity. Presets saved
+    /// without it restore [`quantity`](Self::quantity) units.
+    #[serde(default = "units")]
+    pub sizing: Option<PresetSizing>,
+}
+
+fn units() -> Option<PresetSizing> {
+    Some(PresetSizing::Units)
+}
+
+/// How an [`OrderPreset`] sizes an order. Value and risk are sized again against the entry,
+/// stop loss and balance when the ticket applies it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum PresetSizing {
+    /// [`OrderPreset::quantity`] units.
+    #[default]
+    Units,
+    /// Units worth this amount in the account's currency at the entry.
+    Value(f64),
+    /// Units that lose this percent of the account's balance at the stop loss.
+    RiskPercent(f64),
 }
 
 impl OrderPreset {
@@ -143,6 +167,7 @@ impl OrderPreset {
             quantity,
             take_profit: None,
             stop_loss: None,
+            sizing: Some(PresetSizing::Units),
         }
     }
 }
@@ -596,9 +621,19 @@ impl OrderTicket {
         Ok(request)
     }
 
-    fn apply(&mut self, preset: &OrderPreset) {
-        self.sizing = Sizing::Units;
-        self.quantity = preset.quantity;
+    fn apply(&mut self, preset: &OrderPreset, market: &Market<'_>) {
+        match preset.sizing {
+            None => {}
+            Some(PresetSizing::Value(amount)) => (self.sizing, self.amount) = (Sizing::Value, amount),
+            // Risk needs a stop loss, which an account without brackets cannot take.
+            Some(PresetSizing::RiskPercent(percent)) if market.capabilities.brackets => {
+                (self.sizing, self.amount) = (Sizing::Risk, percent);
+            }
+            Some(_) => self.sizing = Sizing::Units,
+        }
+        if preset.sizing.is_some() {
+            self.quantity = preset.quantity;
+        }
         self.take_profit = preset
             .take_profit
             .map_or((false, self.take_profit.1), |bracket| (true, bracket));
@@ -617,6 +652,11 @@ impl OrderTicket {
             quantity,
             take_profit: self.take_profit.0.then_some(self.take_profit.1),
             stop_loss: self.stop_loss.0.then_some(self.stop_loss.1),
+            sizing: Some(match self.sizing {
+                Sizing::Units => PresetSizing::Units,
+                Sizing::Value => PresetSizing::Value(self.amount),
+                Sizing::Risk => PresetSizing::RiskPercent(self.amount),
+            }),
         }
     }
 }
@@ -827,6 +867,79 @@ pub(super) fn preview_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    pub(super) fn market(rules: &TradingRules) -> Market<'_> {
+        Market {
+            symbol: "ES",
+            formatter: None,
+            pip_value: None,
+            last: Some(100.0),
+            bid: None,
+            ask: None,
+            tick: 0.25,
+            decimals: 2,
+            currency: "USD",
+            balance: Some(10_000.0),
+            capabilities: Capabilities {
+                market: true,
+                limit: true,
+                stop: true,
+                brackets: true,
+                ..Capabilities::default()
+            },
+            rules,
+            rules_ready: true,
+            offline: None,
+            ladder: None,
+            ladder_unavailable: None,
+            highlights: Vec::new(),
+            orders: &[],
+            positions: &[],
+            trades: &[],
+            session_open: None,
+            last_fill: None,
+            logo: None,
+        }
+    }
+
+    /// Applying a preset sizes value and risk again at the new entry and stop; accounts without
+    /// brackets use the saved units instead. Fixed units would double the risk in the first row.
+    #[test]
+    fn presets_size_again_by_their_sizing() {
+        let ctx = egui::Context::default();
+        let rules = TradingRules::new("ES");
+        for (sizing, amount, stop, brackets, saved, applied) in [
+            (Sizing::Risk, 1.0, true, true, 50.0, 25.0),
+            (Sizing::Value, 10_000.0, false, true, 100.0, 50.0),
+            (Sizing::Units, 3.0, false, true, 3.0, 3.0),
+            (Sizing::Risk, 1.0, true, false, 50.0, 50.0),
+        ] {
+            let mut market = market(&rules);
+            let ticket = OrderTicket {
+                symbol: "ES".into(),
+                kind: Kind::Limit,
+                price: 100.0,
+                sizing,
+                amount,
+                quantity: amount,
+                stop_loss: (stop, Bracket::new(BracketMode::Percent, 2.0)),
+                ..OrderTicket::default()
+            };
+            let preset = ticket.preset(&ctx, "Scalp".into(), &market);
+            assert_eq!(preset.quantity, saved, "{sizing:?}");
+            market.capabilities.brackets = brackets;
+            let mut ticket = OrderTicket {
+                symbol: "ES".into(),
+                kind: Kind::Limit,
+                price: 200.0,
+                ..OrderTicket::default()
+            };
+            ticket.apply(&preset, &market);
+            let request = ticket.request(&ctx, &market).unwrap();
+            assert_eq!(request.quantity, applied, "{sizing:?}, brackets {brackets}");
+            assert_eq!(request.stop_loss, (stop && brackets).then_some(196.0));
+        }
+    }
 
     #[test]
     fn opening_a_ticket_replaces_brackets_and_prices() {
