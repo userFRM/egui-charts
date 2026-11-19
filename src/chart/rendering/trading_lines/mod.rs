@@ -907,6 +907,8 @@ pub(crate) fn entry_price(order_type: &OrderType) -> Option<f64> {
     }
 }
 
+type LabelMenu<'a> = &'a dyn Fn(&mut Ui) -> Option<TradingLineAction>;
+
 /// The label at the right end of a trading line: TP and SL buttons, the open quantity, a
 /// description and buttons.
 struct Label<'a> {
@@ -923,7 +925,7 @@ struct Label<'a> {
     exits: &'a [Level],
     /// The text after the name on a label of an exit dragged out of `exits`, from its price.
     exit_pnl: &'a dyn Fn(PnlUnit, f64) -> String,
-    menu: Option<&'a dyn Fn(&mut Ui) -> Option<TradingLineAction>>,
+    menu: Option<LabelMenu<'a>>,
 }
 
 type LabelResponse = (
