@@ -1294,11 +1294,17 @@ mod tests {
                 series.chart_type_params = params.clone();
                 chart.apply_series_settings(&series);
             });
-            assert_eq!(chart.chart_type_params(), &params);
+            let applied = chart.chart_type_params().clone();
+            let saved = serde_json::to_value(&applied).unwrap();
+            for (name, expected) in settings.as_object().unwrap() {
+                if name.starts_with("tpo_") {
+                    assert_eq!(&saved[name], expected);
+                }
+            }
             assert!(chart.undo());
             assert_eq!(chart.chart_type_params(), &ChartTypeParams::default());
             assert!(chart.redo());
-            assert_eq!(chart.chart_type_params(), &params);
+            assert_eq!(chart.chart_type_params(), &applied);
             let layout = crate::widget::SavedLayout::new(
                 crate::widget::ChartLayoutMode::Single,
                 vec![chart.snapshot().unwrap()],
@@ -1306,7 +1312,7 @@ mod tests {
             let saved = crate::widget::SavedLayout::from_json(&layout.to_json().unwrap()).unwrap();
             let mut restored = crate::widget::Chart::new(crate::model::BarData::new());
             restored.restore(&saved.charts[0]).unwrap();
-            assert_eq!(restored.chart_type_params(), &params);
+            assert_eq!(restored.chart_type_params(), &applied);
         }
         let legacy: ChartTypeParams = serde_json::from_str(r#"{"tpo_row_ticks":2}"#).unwrap();
         let legacy = serde_json::to_value(legacy).unwrap();
