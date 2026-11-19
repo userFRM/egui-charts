@@ -146,6 +146,7 @@ impl Chart {
             series_scales: Default::default(),
             study_ids: Vec::new(),
             study_limit: None,
+            chained_study_limit: None,
             study_inputs: Vec::new(),
             study_autoscale: Vec::new(),
             pending_from: Vec::new(),
@@ -893,7 +894,7 @@ impl ChartBuilder {
         self
     }
 
-    /// Toggle session-break dividers at day, week, month and year boundaries.
+    /// Toggle session-break dividers, drawn at each new session on intraday intervals.
     #[must_use]
     pub fn with_session_breaks(mut self, show: bool) -> Self {
         self.config.show_session_breaks = show;

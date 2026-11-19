@@ -47,12 +47,10 @@ impl DemoApp {
         // A forward test primes on the latest 121 bars and runs on without an end.
         run.settings.start_time = Some(first.time);
         run.settings.end_time = None;
-        if run.settings.currency.is_none() {
-            run.settings.currency = self
-                .chart
-                .instrument()
-                .and_then(|instrument| instrument.currency.clone());
-        }
+        run.instrument_currency = self
+            .chart
+            .instrument()
+            .and_then(|instrument| instrument.currency.clone());
         let source = &bars[bars.partition_point(|bar| bar.time < first.time)..];
         // Prime history before arming the alerts, so only subsequent executions notify.
         run.update(&mut Momentum, source, &[]);
@@ -239,5 +237,19 @@ mod tests {
         let alerts = app.alert_host.engine().alerts();
         assert_eq!(alerts.len(), 2);
         assert!(alerts.iter().all(|a| a.status == AlertStatus::Disabled));
+
+        let mut settings = app.strategy_report.settings().clone();
+        settings.currency = Some("EUR".into());
+        app.strategy_report.set_settings(settings).unwrap();
+        app.start_live_strategy();
+        let run = &app.live_strategy.as_ref().unwrap().0;
+        let report = run.report().unwrap();
+        assert_eq!(run.instrument_currency.as_deref(), Some("USD"));
+        assert_eq!(report.currency.as_deref(), Some("EUR"));
+        assert_eq!(
+            report.unavailable.as_deref(),
+            Some("Exchange rates from USD to EUR are unavailable")
+        );
+        assert!(report.trades.is_empty() && report.equity.is_empty());
     }
 }

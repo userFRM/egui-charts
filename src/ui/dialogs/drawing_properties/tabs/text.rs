@@ -470,6 +470,8 @@ impl TextTab {
                         | DrawingToolType::Rect
                         | DrawingToolType::Circle
                         | DrawingToolType::Ellipse
+                        | DrawingToolType::DateRange
+                        | DrawingToolType::DateAndPriceRange
                         | DrawingToolType::ArrowMarker
                         | DrawingToolType::ArrowMarkUp
                         | DrawingToolType::ArrowMarkDown
