@@ -22,6 +22,9 @@ use std::ops::RangeInclusive;
 /// Letter sequence for TPO periods (A, B, C... Z, a, b...)
 const TPO_LETTERS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
+/// Default opacity of TPO blocks outside the value area.
+pub(crate) const OUTSIDE_VALUE_AREA_OPACITY: f32 = 0.45;
+
 /// A single TPO letter placed at a price level during one time period.
 #[derive(Debug, Clone)]
 pub struct TPOLetter {
@@ -107,6 +110,16 @@ pub struct TPOConfig {
     pub display_mode: TPODisplayMode,
     /// Color mode for TPO letters
     pub color_mode: TPOColorMode,
+    /// Colours of the entries under [`TPOColorMode::ByPeriod`]: the first pair covers the first
+    /// half of the longest session's periods and the second pair covers the second half.
+    /// Entries keep 3:1 contrast on the background, or 4.5:1 for letters without blocks, moving
+    /// toward the chart text colour when needed.
+    pub period_colors: [egui::Color32; 4],
+    /// Colour of every entry under [`TPOColorMode::Solid`], kept readable in the same way.
+    pub solid_color: egui::Color32,
+    /// Opacity of blocks outside the value area over the chart background, clamped to 0..=1.
+    /// Zero paints the background colour; one leaves blocks undimmed. NaN reads 0.45.
+    pub outside_value_area_opacity: f32,
     /// Show POC line
     pub show_poc: bool,
     /// Show Value Area
@@ -160,6 +173,14 @@ impl Default for TPOConfig {
             value_area_pct: 0.70,
             display_mode: TPODisplayMode::Letters,
             color_mode: TPOColorMode::ByPeriod,
+            period_colors: [
+                egui::Color32::from_rgb(214, 56, 100),
+                egui::Color32::from_rgb(90, 197, 97),
+                egui::Color32::from_rgb(84, 185, 209),
+                egui::Color32::from_rgb(93, 36, 245),
+            ],
+            solid_color: crate::tokens::DESIGN_TOKENS.semantic.tpo.letter_default,
+            outside_value_area_opacity: OUTSIDE_VALUE_AREA_OPACITY,
             show_poc: true,
             show_value_area: true,
             show_midpoint: false,
@@ -195,7 +216,7 @@ pub enum TPODisplayMode {
 pub enum TPOColorMode {
     /// Color by time period
     ByPeriod,
-    /// Single color
+    /// Every entry in [`TPOConfig::solid_color`].
     Solid,
     /// Color by value area
     ByValueArea,

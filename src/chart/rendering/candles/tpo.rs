@@ -23,6 +23,7 @@ use egui::emath::GuiRounding as _;
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2};
 
+use crate::model::tpo::OUTSIDE_VALUE_AREA_OPACITY;
 use crate::model::{
     Bar, BarClock, ExchangeSessionProvider, SessionProvider, TPOColorMode, TPOConfig,
     TPODisplayMode, TPOProfile, derive_tick_size, to_tpo_profiles,
@@ -71,8 +72,6 @@ pub struct TpoRenderConfig {
     pub single_print_color: Color32,
     /// Default letter color
     pub default_letter_color: Color32,
-    /// Gradient stops for period-based coloring
-    pub period_colors: Vec<Color32>,
 }
 
 impl Default for TpoRenderConfig {
@@ -87,32 +86,7 @@ impl Default for TpoRenderConfig {
             initial_balance_color: tpo.initial_balance,
             single_print_color: tpo.single_print,
             default_letter_color: tpo.letter_default,
-            period_colors: Self::default_period_colors(),
         }
-    }
-}
-
-impl TpoRenderConfig {
-    /// Default color palette for period-based coloring
-    fn default_period_colors() -> Vec<Color32> {
-        [
-            (
-                Color32::from_rgb(214, 56, 100),
-                Color32::from_rgb(90, 197, 97),
-            ),
-            (
-                Color32::from_rgb(84, 185, 209),
-                Color32::from_rgb(93, 36, 245),
-            ),
-        ]
-        .into_iter()
-        .flat_map(|(start, end)| (0..26).map(move |i| start.lerp_to_gamma(end, i as f32 / 25.0)))
-        .collect()
-    }
-
-    /// Get color for a specific period index
-    pub fn color_for_period(&self, period_idx: usize) -> Color32 {
-        self.period_colors[period_idx % self.period_colors.len()]
     }
 }
 
@@ -764,7 +738,13 @@ fn draw_session_profile(
             block_color(render_config, config, period_idx, price, profile, &chart)
         }
     };
-    let dim = |color: Color32| chart.bg.lerp_to_gamma(color, 0.45);
+    let opacity = config.outside_value_area_opacity;
+    let opacity = if opacity.is_nan() {
+        OUTSIDE_VALUE_AREA_OPACITY
+    } else {
+        opacity.clamp(0.0, 1.0)
+    };
+    let dim = |color: Color32| chart.bg.lerp_to_gamma(color, opacity);
     let tones: Vec<Color32> = if by_period {
         (0..profile.width())
             .map(|period| tone(period, 0.0))
@@ -1205,6 +1185,19 @@ fn cell_letter_color(cell: Color32, chart: &ChartColors) -> Color32 {
     }
 }
 
+/// Steps in each half of the period palette.
+const PERIOD_STEPS: usize = 26;
+
+/// One step of the first or second gradient, preserving the default palette's rounding.
+fn period_step(colors: &[Color32; 4], step: usize) -> Color32 {
+    let (start, end, step) = if step < PERIOD_STEPS {
+        (colors[0], colors[1], step)
+    } else {
+        (colors[2], colors[3], step - PERIOD_STEPS)
+    };
+    start.lerp_to_gamma(end, step as f32 / (PERIOD_STEPS - 1) as f32)
+}
+
 fn entry_color(
     render_config: &TpoRenderConfig,
     config: &TPOConfig,
@@ -1215,16 +1208,15 @@ fn entry_color(
     match config.color_mode {
         TPOColorMode::ByPeriod => {
             let last = profile.width().saturating_sub(1).max(1);
-            let position = (period_idx as f32 / last as f32).min(1.0)
-                * (render_config.period_colors.len() - 1) as f32;
+            let steps = 2 * PERIOD_STEPS - 1;
+            let position = (period_idx as f32 / last as f32).min(1.0) * steps as f32;
             let index = position as usize;
-            render_config.color_for_period(index).lerp_to_gamma(
-                render_config
-                    .color_for_period((index + 1).min(render_config.period_colors.len() - 1)),
+            period_step(&config.period_colors, index).lerp_to_gamma(
+                period_step(&config.period_colors, (index + 1).min(steps)),
                 position.fract(),
             )
         }
-        TPOColorMode::Solid => render_config.default_letter_color,
+        TPOColorMode::Solid => config.solid_color,
         TPOColorMode::ByValueArea => {
             if profile.is_in_value_area(price) {
                 let va = render_config.value_area_color;
@@ -1273,32 +1265,156 @@ mod tests {
         };
         let rgb = Color32::from_rgb;
         type Row = (&'static str, ChartTypeParams, [[Color32; 8]; 2]);
-        let rows: [Row; 1] = [(
-            "default",
-            params,
-            [
+        let rows: [Row; 5] = [
+            (
+                "default",
+                params.clone(),
                 [
-                    rgb(96, 25, 45),
-                    rgb(96, 25, 45),
-                    rgb(214, 56, 100),
-                    rgb(87, 191, 153),
-                    rgb(214, 56, 100),
-                    rgb(87, 191, 153),
-                    rgb(93, 36, 245),
-                    rgb(214, 56, 100),
+                    [
+                        rgb(96, 25, 45),
+                        rgb(96, 25, 45),
+                        rgb(214, 56, 100),
+                        rgb(87, 191, 153),
+                        rgb(214, 56, 100),
+                        rgb(87, 191, 153),
+                        rgb(93, 36, 245),
+                        rgb(214, 56, 100),
+                    ],
+                    [
+                        rgb(237, 165, 185),
+                        rgb(237, 165, 185),
+                        rgb(214, 56, 100),
+                        rgb(75, 164, 131),
+                        rgb(214, 56, 100),
+                        rgb(75, 164, 131),
+                        rgb(93, 36, 245),
+                        rgb(214, 56, 100),
+                    ],
                 ],
+            ),
+            (
+                "colours",
+                ChartTypeParams {
+                    tpo_block_colors: [
+                        rgb(255, 0, 0),
+                        rgb(0, 160, 0),
+                        rgb(0, 160, 0),
+                        rgb(128, 128, 128),
+                    ],
+                    ..params.clone()
+                },
                 [
-                    rgb(237, 165, 185),
-                    rgb(237, 165, 185),
-                    rgb(214, 56, 100),
-                    rgb(75, 164, 131),
-                    rgb(214, 56, 100),
-                    rgb(75, 164, 131),
-                    rgb(93, 36, 245),
-                    rgb(214, 56, 100),
+                    [
+                        rgb(115, 0, 0),
+                        rgb(115, 0, 0),
+                        rgb(255, 0, 0),
+                        rgb(0, 160, 0),
+                        rgb(255, 0, 0),
+                        rgb(0, 160, 0),
+                        rgb(128, 128, 128),
+                        rgb(255, 0, 0),
+                    ],
+                    [
+                        rgb(255, 140, 140),
+                        rgb(255, 140, 140),
+                        rgb(255, 0, 0),
+                        rgb(0, 160, 0),
+                        rgb(255, 0, 0),
+                        rgb(0, 160, 0),
+                        rgb(128, 128, 128),
+                        rgb(255, 0, 0),
+                    ],
                 ],
-            ],
-        )];
+            ),
+            (
+                "single colour",
+                ChartTypeParams {
+                    tpo_colored_blocks: false,
+                    tpo_block_color: rgb(128, 128, 128),
+                    ..params.clone()
+                },
+                [
+                    [
+                        rgb(58, 58, 58),
+                        rgb(58, 58, 58),
+                        rgb(128, 128, 128),
+                        rgb(128, 128, 128),
+                        rgb(128, 128, 128),
+                        rgb(128, 128, 128),
+                        rgb(128, 128, 128),
+                        rgb(128, 128, 128),
+                    ],
+                    [
+                        rgb(198, 198, 198),
+                        rgb(198, 198, 198),
+                        rgb(128, 128, 128),
+                        rgb(128, 128, 128),
+                        rgb(128, 128, 128),
+                        rgb(128, 128, 128),
+                        rgb(128, 128, 128),
+                        rgb(128, 128, 128),
+                    ],
+                ],
+            ),
+            (
+                "opaque outside",
+                ChartTypeParams {
+                    tpo_block_colors: [
+                        rgb(255, 0, 0),
+                        rgb(0, 160, 0),
+                        rgb(0, 160, 0),
+                        rgb(128, 128, 128),
+                    ],
+                    tpo_outside_value_area_opacity: 100,
+                    ..params.clone()
+                },
+                [[
+                    rgb(255, 0, 0),
+                    rgb(255, 0, 0),
+                    rgb(255, 0, 0),
+                    rgb(0, 160, 0),
+                    rgb(255, 0, 0),
+                    rgb(0, 160, 0),
+                    rgb(128, 128, 128),
+                    rgb(255, 0, 0),
+                ]; 2],
+            ),
+            (
+                "hidden outside",
+                ChartTypeParams {
+                    tpo_block_colors: [
+                        rgb(255, 0, 0),
+                        rgb(0, 160, 0),
+                        rgb(0, 160, 0),
+                        rgb(128, 128, 128),
+                    ],
+                    tpo_outside_value_area_opacity: 0,
+                    ..params
+                },
+                [
+                    [
+                        rgb(0, 0, 0),
+                        rgb(0, 0, 0),
+                        rgb(255, 0, 0),
+                        rgb(0, 160, 0),
+                        rgb(255, 0, 0),
+                        rgb(0, 160, 0),
+                        rgb(128, 128, 128),
+                        rgb(255, 0, 0),
+                    ],
+                    [
+                        rgb(255, 255, 255),
+                        rgb(255, 255, 255),
+                        rgb(255, 0, 0),
+                        rgb(0, 160, 0),
+                        rgb(255, 0, 0),
+                        rgb(0, 160, 0),
+                        rgb(128, 128, 128),
+                        rgb(255, 0, 0),
+                    ],
+                ],
+            ),
+        ];
         let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0));
         let coords = PriceMap::new(
             crate::scales::PriceTransform::default(),
@@ -1575,13 +1691,6 @@ mod tests {
     #[test]
     fn letters_have_at_least_4_5_contrast_in_every_mode_period_price_and_theme() {
         let config = TpoRenderConfig::default();
-        let num_colors = config.period_colors.len();
-
-        // Should cycle through colors
-        let color_0 = config.color_for_period(0);
-        let color_wrap = config.color_for_period(num_colors);
-
-        assert_eq!(color_0, color_wrap);
         let model = TPOConfig {
             tick_size: 1.0,
             ..Default::default()
@@ -1599,7 +1708,7 @@ mod tests {
                     color_mode: mode,
                     ..model.clone()
                 };
-                for period in 0..num_colors {
+                for period in 0..52 {
                     for price in [98.0, 103.0, 108.0] {
                         let color =
                             letter_color(&config, &model, period, price, &profile, &theme.chart);

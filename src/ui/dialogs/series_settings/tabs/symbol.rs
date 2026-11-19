@@ -819,6 +819,32 @@ impl SymbolTab {
                 ui.checkbox(&mut params.tpo_letters, "")
                     .labelled_by(label.id);
                 ui.end_row();
+                ui.checkbox(
+                    &mut params.tpo_colored_blocks,
+                    l10n::text(ui.ctx(), "Colored blocks"),
+                );
+                let colored = params.tpo_colored_blocks;
+                ui.add_enabled_ui(colored, |ui| {
+                    ui.horizontal(|ui| {
+                        for color in &mut params.tpo_block_colors {
+                            Self::color_picker(ui, color);
+                        }
+                    })
+                });
+                ui.end_row();
+                ui.label(l10n::text(ui.ctx(), "Block color"));
+                ui.add_enabled_ui(!colored, |ui| {
+                    Self::color_picker(ui, &mut params.tpo_block_color)
+                });
+                ui.end_row();
+                let label = ui.label(l10n::text(ui.ctx(), "Opacity outside value area"));
+                ui.add(
+                    egui::DragValue::new(&mut params.tpo_outside_value_area_opacity)
+                        .range(0..=100)
+                        .suffix("%"),
+                )
+                .labelled_by(label.id);
+                ui.end_row();
                 let label = ui.label(l10n::text(ui.ctx(), "Statistics"));
                 ui.checkbox(&mut params.tpo_statistics, "")
                     .labelled_by(label.id);

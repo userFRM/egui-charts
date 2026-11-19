@@ -921,6 +921,14 @@ pub struct ChartTypeParams {
     pub tpo_letters: bool,
     /// TPO: draw the session statistics table below each profile.
     pub tpo_statistics: bool,
+    /// TPO: colour blocks along `tpo_block_colors`; off uses `tpo_block_color`. On by default.
+    pub tpo_colored_blocks: bool,
+    /// TPO: the four colours of [`TPOConfig::period_colors`](super::TPOConfig::period_colors).
+    pub tpo_block_colors: [egui::Color32; 4],
+    /// TPO: colour of every block with `tpo_colored_blocks` off.
+    pub tpo_block_color: egui::Color32,
+    /// TPO: opacity of blocks outside the value area, in percent, clamped to 100. Default 45.
+    pub tpo_outside_value_area_opacity: u8,
     /// TPO: sessions combined into one profile, as in
     /// [`TPOConfig::composites`](super::TPOConfig::composites).
     pub tpo_composites: Vec<std::ops::RangeInclusive<chrono::DateTime<chrono::Utc>>>,
@@ -1015,6 +1023,15 @@ impl Default for ChartTypeParams {
             tpo_midpoint: false,
             tpo_letters: true,
             tpo_statistics: false,
+            tpo_colored_blocks: true,
+            tpo_block_colors: [
+                egui::Color32::from_rgb(214, 56, 100),
+                egui::Color32::from_rgb(90, 197, 97),
+                egui::Color32::from_rgb(84, 185, 209),
+                egui::Color32::from_rgb(93, 36, 245),
+            ],
+            tpo_block_color: crate::tokens::DESIGN_TOKENS.semantic.tpo.letter_default,
+            tpo_outside_value_area_opacity: 45,
             tpo_composites: Vec::new(),
             tpo_splits: Vec::new(),
         }
@@ -1037,6 +1054,15 @@ impl ChartTypeParams {
             show_single_prints: self.tpo_single_prints,
             show_midpoint: self.tpo_midpoint,
             show_statistics: self.tpo_statistics,
+            color_mode: if self.tpo_colored_blocks {
+                super::TPOColorMode::ByPeriod
+            } else {
+                super::TPOColorMode::Solid
+            },
+            period_colors: self.tpo_block_colors,
+            solid_color: self.tpo_block_color,
+            outside_value_area_opacity: f32::from(self.tpo_outside_value_area_opacity.min(100))
+                / 100.0,
             display_mode: if self.tpo_letters {
                 super::TPODisplayMode::Both
             } else {
@@ -1200,6 +1226,10 @@ mod tests {
             "footprint_colors": [[12, 34, 56, 255], null, null, null],
             "footprint_imbalance_colors": [[200, 30, 220, 255], null],
             "tpo_letters": false,
+            "tpo_colored_blocks": false,
+            "tpo_block_colors": [[255,0,0,255],[0,160,0,255],[0,160,0,255],[128,128,128,255]],
+            "tpo_block_color": [12,34,56,255],
+            "tpo_outside_value_area_opacity": 80,
             "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
                 "developing_value_area": true, "extend_poc": true, "extend_vah": true,
                 "extend_val": true,
@@ -1222,7 +1252,11 @@ mod tests {
         );
         #[cfg(feature = "ui")]
         {
-            for chart_type in [ChartType::VolumeFootprint, ChartType::SessionVolumeProfile] {
+            for chart_type in [
+                ChartType::VolumeFootprint,
+                ChartType::SessionVolumeProfile,
+                ChartType::TimePriceOpportunity,
+            ] {
                 let mut series = crate::chart::series::SeriesSettings {
                     chart_type,
                     chart_type_params: params.clone(),
@@ -1238,6 +1272,18 @@ mod tests {
                     "opening settings keeps saved values"
                 );
             }
+            let mut chart = crate::widget::Chart::new(crate::model::BarData::new());
+            chart.set_chart_type(ChartType::TimePriceOpportunity);
+            chart.user_action(|chart| {
+                let mut series = chart.series_settings();
+                series.chart_type_params = params.clone();
+                chart.apply_series_settings(&series);
+            });
+            assert_eq!(chart.chart_type_params(), &params);
+            assert!(chart.undo());
+            assert_eq!(chart.chart_type_params(), &ChartTypeParams::default());
+            assert!(chart.redo());
+            assert_eq!(chart.chart_type_params(), &params);
         }
         let legacy: ChartTypeParams = serde_json::from_str(r#"{"tpo_row_ticks":2}"#).unwrap();
         let legacy = serde_json::to_value(legacy).unwrap();
@@ -1246,6 +1292,21 @@ mod tests {
         assert_eq!(legacy["footprint_row_atr"], false);
         assert_eq!(legacy["footprint_row_atr_length"], 14);
         assert_eq!(legacy["tpo_letters"], false);
+        assert_eq!(legacy["tpo_colored_blocks"], true);
+        assert_eq!(
+            legacy["tpo_block_colors"],
+            serde_json::json!([
+                [214, 56, 100, 255],
+                [90, 197, 97, 255],
+                [84, 185, 209, 255],
+                [93, 36, 245, 255]
+            ])
+        );
+        assert_eq!(
+            legacy["tpo_block_color"],
+            serde_json::json!([189, 189, 189, 255])
+        );
+        assert_eq!(legacy["tpo_outside_value_area_opacity"], 45);
         assert_eq!(
             legacy["footprint_colors"],
             serde_json::json!([null, null, null, null])
