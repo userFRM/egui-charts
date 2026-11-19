@@ -703,6 +703,53 @@ impl DrawingManager {
         }
     }
 
+    /// Keeps each anchored text of this pane on the bar and price under the point it is drawn
+    /// at, so its coordinates follow its pane position through pans, zooms and resizes. A bar or
+    /// price already within half a pixel of that point is kept, so an exact time or price set
+    /// from code stays exact, and a whole bar within half a pixel is taken over a fraction.
+    /// Called by the chart after the pane's screen coordinates are updated; the pane position is
+    /// left as it is, and nothing is queued for saving.
+    pub(crate) fn place_anchored_text(
+        &mut self,
+        bar_to_x: impl Fn(f32) -> f32,
+        x_to_bar: impl Fn(f32) -> f32,
+        price_to_y: impl Fn(f64) -> f32,
+        y_to_price: impl Fn(f32) -> f64,
+    ) {
+        let near = |a: f32, b: f32| (a - b).abs() <= 0.5;
+        for drawing in self.drawings.iter_mut().chain(&mut self.curr_drawing) {
+            if drawing.tool_type != DrawingToolType::AnchoredText
+                || drawing.screen_anchor.is_none()
+                || !self.pane_members.contains(&drawing.pane)
+            {
+                continue;
+            }
+            let (Some(&pos), Some(point)) =
+                (drawing.points.first(), drawing.chart_points.first_mut())
+            else {
+                continue;
+            };
+            if !near(bar_to_x(point.bar_idx), pos.x) {
+                let index = x_to_bar(pos.x);
+                let whole = index.round();
+                let bar = if near(bar_to_x(whole), pos.x) {
+                    whole
+                } else {
+                    index
+                };
+                if bar.is_finite() {
+                    point.bar_idx = bar;
+                }
+            }
+            if !near(price_to_y(point.price), pos.y) {
+                let price = y_to_price(pos.y);
+                if price.is_finite() {
+                    point.price = price;
+                }
+            }
+        }
+    }
+
     /// Puts each pin of this pane that still carries a pane position on the bar and price under
     /// that position, and clears the position, so pins saved by earlier releases stay where they
     /// were shown. Called by the chart after the pane's screen coordinates are updated.
