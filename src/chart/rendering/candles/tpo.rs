@@ -26,7 +26,7 @@ use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2};
 use crate::model::tpo::OUTSIDE_VALUE_AREA_OPACITY;
 use crate::model::{
     Bar, BarClock, ExchangeSessionProvider, SessionProvider, TPOColorMode, TPOConfig,
-    TPODisplayMode, TPOProfile, derive_tick_size, to_tpo_profiles,
+    TPODisplayMode, TPOProfile, TPOProfilePeriod, derive_tick_size, to_tpo_profiles,
 };
 use crate::styles::typography;
 use crate::theme::{ChartColors, ThemeExt, contrast, readable_color};
@@ -125,6 +125,7 @@ fn same_profiles(old: &TPOConfig, new: &TPOConfig) -> bool {
         && old.value_area_pct.to_bits() == new.value_area_pct.to_bits()
         && old.custom_letters == new.custom_letters
         && old.split_sessions == new.split_sessions
+        && old.profile_period == new.profile_period
         && old.composites == new.composites
         && old.splits == new.splits
         && old.instrument_tick.map(f64::to_bits) == new.instrument_tick.map(f64::to_bits)
@@ -177,6 +178,16 @@ fn whole_sessions(
                 .saturating_sub(1);
             start = start.min(start_of(first));
             end = end.max(end_of(last));
+        }
+        // Adjacent bars of one period may share a profile, so keep their sessions together.
+        if config.profile_period != TPOProfilePeriod::Session {
+            let period = |i: usize| config.profile_period.key(sessions, full[i].time);
+            while start > 0 && period(start - 1) == period(start) {
+                start = start_of(start - 1);
+            }
+            while end < full.len() && period(end - 1) == period(end) {
+                end = end_of(end);
+            }
         }
         if before == (start..end) {
             break;
@@ -256,9 +267,9 @@ fn build_profiles(
     let mut ends = Vec::new();
     let mut open = 0;
     // Keep whole sessions in each unit so split parts can count periods from their session's open.
-    let starts = crate::model::tpo::session_starts(bars, sessions, config.split_sessions, &[]);
+    let starts = crate::model::tpo::session_starts(bars, sessions, config.split_hours(), &[]);
     let parts = (!config.splits.is_empty()).then(|| {
-        crate::model::tpo::session_starts(bars, sessions, config.split_sessions, &config.splits)
+        crate::model::tpo::session_starts(bars, sessions, config.split_hours(), &config.splits)
     });
     let mut profile_open = starts.first().copied().unwrap_or(0);
     let breaks = starts.into_iter().skip(1);
@@ -273,9 +284,16 @@ fn build_profiles(
                     .map(|i| parts[i])
             })
             .unwrap_or(profile_open);
-        if bars.get(end).is_some_and(|next| {
-            composite(&bars[last_open]).is_some_and(|group| composite(next) == Some(group))
-        }) {
+        let joins_period = config.profile_period != TPOProfilePeriod::Session
+            && bars.get(end).is_some_and(|next| {
+                config.profile_period.key(sessions, bars[end - 1].time)
+                    == config.profile_period.key(sessions, next.time)
+            });
+        if joins_period
+            || bars.get(end).is_some_and(|next| {
+                composite(&bars[last_open]).is_some_and(|group| composite(next) == Some(group))
+            })
+        {
             continue;
         }
         ends.push(end - open);
@@ -2257,15 +2275,38 @@ mod tests {
             })
             .collect();
         // Each day has 3 pre-market, 13 regular and 3 post-market half-hour periods.
-        for (range, latest_session_only, expected) in [
-            (Some((480, 1440)), false, vec![3, 13, 6, 13, 3]),
-            (Some((90, 1530)), false, vec![3, 32, 3]),
-            (None, true, vec![3, 13, 3]),
-            (Some((480, 1440)), true, vec![6, 13, 3]),
-            (Some((90, 1530)), true, vec![32, 3]),
+        for (range, latest_session_only, profile_period, expected) in [
+            (
+                Some((480, 1440)),
+                false,
+                TPOProfilePeriod::Session,
+                vec![3, 13, 6, 13, 3],
+            ),
+            (
+                Some((90, 1530)),
+                false,
+                TPOProfilePeriod::Session,
+                vec![3, 32, 3],
+            ),
+            (None, true, TPOProfilePeriod::Session, vec![3, 13, 3]),
+            (
+                Some((480, 1440)),
+                true,
+                TPOProfilePeriod::Session,
+                vec![6, 13, 3],
+            ),
+            (
+                Some((90, 1530)),
+                true,
+                TPOProfilePeriod::Session,
+                vec![32, 3],
+            ),
+            (None, false, TPOProfilePeriod::Week, vec![38]),
+            (None, true, TPOProfilePeriod::Week, vec![38]),
         ] {
             let config = TPOConfig {
                 split_sessions: true,
+                profile_period,
                 latest_session_only,
                 composites: range
                     .into_iter()
@@ -2276,7 +2317,14 @@ mod tests {
                 ..Default::default()
             };
             let span = whole_sessions(&bars, 24..25, &clock.sessions(), &config);
-            assert_eq!(span, if range.is_none() { 19..38 } else { 0..38 });
+            assert_eq!(
+                span,
+                if range.is_none() && profile_period == TPOProfilePeriod::Session {
+                    19..38
+                } else {
+                    0..38
+                }
+            );
             let cached = cached_profiles(
                 &bars[span.clone()],
                 1,

@@ -1426,6 +1426,39 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
             "the next session's letters join the split part's displayed profile"
         );
     }
+    let bars = (0..14)
+        .map(|i| {
+            Bar::new(
+                day(i / 2) + Duration::minutes(i % 2 * 30),
+                100.0,
+                102.0,
+                100.0,
+                102.0,
+                1.0,
+            )
+        })
+        .collect();
+    let mut weekly = Chart::new(BarData::from_bars(bars));
+    weekly.set_timeframe(Timeframe::Min30);
+    weekly.set_chart_type(ChartType::TimePriceOpportunity);
+    weekly.set_chart_type_params(crate::model::ChartTypeParams {
+        tpo_profile_period: crate::model::TPOProfilePeriod::Week,
+        ..Default::default()
+    });
+    let mut weekly_menus = ChartMenus::default();
+    weekly.set_visible_logical_range(crate::model::LogicalRange::new(-1.0, 15.0));
+    frame(&mut weekly, &mut weekly_menus, vec![]);
+    assert_eq!(counts(&weekly), [8, 6]);
+    pick(
+        &mut weekly,
+        &mut weekly_menus,
+        8,
+        "Merge with previous profile",
+    );
+    assert_eq!(counts(&weekly), [14]);
+    assert_eq!(weekly.chart_type_params().tpo_composites, [day(0)..=day(6)]);
+    assert!(weekly.undo());
+    assert_eq!(counts(&weekly), [8, 6]);
 }
 
 /// Guards #1540: picking the row adds one selected horizontal line at the clicked price in the

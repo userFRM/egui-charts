@@ -5,7 +5,7 @@ use crate::localization as l10n;
 use crate::model::{
     BaselineLevel, BoxSizeMethod, ChartType, ChartTypeParams, FootprintColor, FootprintMode,
     FootprintStatistic, HighLowStyle, LinePlotStyle, LineStyle, PriceBasedSource, PriceSource,
-    ProfileRows, ProfileSession, TimezoneId,
+    ProfileRows, ProfileSession, TPOProfilePeriod, TimezoneId,
 };
 use crate::theme::ThemeExt;
 use crate::ui_kit::color_picker::keep_opacity;
@@ -762,6 +762,27 @@ impl SymbolTab {
                 )
                 .labelled_by(label.id);
                 ui.end_row();
+                let label = ui.label(l10n::text(ui.ctx(), "Profile period"));
+                ui.label_inputs_by(label.id, |ui| {
+                    ui.combo_select(
+                        "tpo_profile_period",
+                        &mut params.tpo_profile_period,
+                        [
+                            TPOProfilePeriod::Session,
+                            TPOProfilePeriod::Week,
+                            TPOProfilePeriod::Month,
+                        ],
+                        |period| {
+                            match period {
+                                TPOProfilePeriod::Session => "Session",
+                                TPOProfilePeriod::Week => "Week",
+                                TPOProfilePeriod::Month => "Month",
+                            }
+                            .to_owned()
+                        },
+                    );
+                });
+                ui.end_row();
                 let label = ui.label(l10n::text(ui.ctx(), "Initial balance"));
                 ui.add(
                     egui::DragValue::new(&mut params.tpo_initial_balance_minutes)
@@ -804,8 +825,11 @@ impl SymbolTab {
                 .labelled_by(label.id);
                 ui.end_row();
                 let label = ui.label(l10n::text(ui.ctx(), "Split extended hours"));
-                ui.checkbox(&mut params.tpo_split_sessions, "")
-                    .labelled_by(label.id);
+                ui.add_enabled(
+                    params.tpo_profile_period == TPOProfilePeriod::Session,
+                    egui::Checkbox::without_text(&mut params.tpo_split_sessions),
+                )
+                .labelled_by(label.id);
                 ui.end_row();
                 let label = ui.label(l10n::text(ui.ctx(), "Single prints"));
                 ui.checkbox(&mut params.tpo_single_prints, "")

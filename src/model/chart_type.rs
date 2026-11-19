@@ -929,6 +929,8 @@ pub struct ChartTypeParams {
     pub tpo_block_color: egui::Color32,
     /// TPO: opacity of blocks outside the value area, in percent, clamped to 100. Default 45.
     pub tpo_outside_value_area_opacity: u8,
+    /// TPO: length of a profile, as in [`TPOConfig::profile_period`](super::TPOConfig::profile_period).
+    pub tpo_profile_period: super::TPOProfilePeriod,
     /// TPO: sessions combined into one profile, as in
     /// [`TPOConfig::composites`](super::TPOConfig::composites).
     pub tpo_composites: Vec<std::ops::RangeInclusive<chrono::DateTime<chrono::Utc>>>,
@@ -1032,6 +1034,7 @@ impl Default for ChartTypeParams {
             ],
             tpo_block_color: crate::tokens::DESIGN_TOKENS.semantic.tpo.letter_default,
             tpo_outside_value_area_opacity: 45,
+            tpo_profile_period: super::TPOProfilePeriod::Session,
             tpo_composites: Vec::new(),
             tpo_splits: Vec::new(),
         }
@@ -1051,6 +1054,7 @@ impl ChartTypeParams {
             show_initial_balance_extensions: self.tpo_initial_balance_extensions,
             value_area_pct: self.tpo_value_area / 100.0,
             split_sessions: self.tpo_split_sessions,
+            profile_period: self.tpo_profile_period,
             show_single_prints: self.tpo_single_prints,
             show_midpoint: self.tpo_midpoint,
             show_statistics: self.tpo_statistics,
@@ -1230,6 +1234,7 @@ mod tests {
             "tpo_block_colors": [[255,0,0,255],[0,160,0,255],[0,160,0,255],[128,128,128,255]],
             "tpo_block_color": [12,34,56,255],
             "tpo_outside_value_area_opacity": 80,
+            "tpo_profile_period": "Week",
             "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
                 "developing_value_area": true, "extend_poc": true, "extend_vah": true,
                 "extend_val": true,
@@ -1307,6 +1312,7 @@ mod tests {
             serde_json::json!([189, 189, 189, 255])
         );
         assert_eq!(legacy["tpo_outside_value_area_opacity"], 45);
+        assert_eq!(legacy["tpo_profile_period"], "Session");
         assert_eq!(
             legacy["footprint_colors"],
             serde_json::json!([null, null, null, null])
