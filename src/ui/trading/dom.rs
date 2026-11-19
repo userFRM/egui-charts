@@ -262,6 +262,7 @@ impl DepthPanel {
                 .and_then(|trade| super::view::session_open(chart, trade.ts)),
             last_fill: None,
             logo: None,
+            account: "",
         };
         ui.push_id("depth_panel", |ui| {
             self.ladder.draw(ui, chart.symbol(), &market, None);
@@ -1572,6 +1573,7 @@ mod tests {
                     session_open: None,
                     last_fill: None,
                     logo: None,
+                    account: "",
                 };
                 let mut ladder = Ladder {
                     centre: last.is_none().then_some(initial),
@@ -1678,6 +1680,7 @@ mod tests {
             session_open: None,
             last_fill: None,
             logo: None,
+            account: "",
         };
         let ctx = egui::Context::default();
         let frame = |ladder: &mut Ladder, market: &Market<'_>, events: Vec<egui::Event>| {
@@ -2017,6 +2020,7 @@ mod tests {
                         session_open: None,
                         last_fill: None,
                         logo: None,
+                        account: "",
                     };
                     let mut output = ctx.run_ui(
                         egui::RawInput {
@@ -2300,6 +2304,7 @@ mod tests {
                 session_open: None,
                 last_fill: None,
                 logo: None,
+                account: "",
             };
             let output = ctx.run_ui(
                 egui::RawInput {
@@ -2455,6 +2460,7 @@ mod tests {
                             session_open: None,
                             last_fill: None,
                             logo: None,
+                            account: "",
                         };
                         let mut action = None;
                         let output = ctx.run_ui(
@@ -2667,6 +2673,7 @@ mod tests {
                     session_open: None,
                     last_fill: None,
                     logo: None,
+                    account: "",
                 };
                 let output = ctx.run_ui(egui::RawInput::default(), |ui| {
                     ladder.show(ui, "ES", &market, &mut 1.0, &mut TimeInForce::Day);
@@ -2833,6 +2840,7 @@ mod tests {
             session_open: None,
             last_fill: None,
             logo: None,
+            account: "",
         };
         let ctx = egui::Context::default();
         let mut ladder = Ladder {

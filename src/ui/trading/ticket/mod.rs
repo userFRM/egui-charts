@@ -244,7 +244,12 @@ struct PresetFields {
 
 impl Default for PresetFields {
     fn default() -> Self {
-        Self { quantity: true, exits: true, order_type: true, time_in_force: true }
+        Self {
+            quantity: true,
+            exits: true,
+            order_type: true,
+            time_in_force: true,
+        }
     }
 }
 
@@ -302,6 +307,8 @@ pub(crate) struct Market<'a> {
     pub last_fill: Option<f64>,
     /// URI of the symbol logo, from the chart instrument or the host description of the symbol.
     pub logo: Option<&'a str>,
+    /// The broker account whose presets the ticket offers.
+    pub account: &'a str,
 }
 
 impl<'a> Market<'a> {
@@ -353,6 +360,8 @@ pub(crate) struct OrderTicket {
     time_in_force: TimeInForce,
     preset_name: String,
     preset_fields: PresetFields,
+    replacing: Option<OrderPreset>,
+    renaming: Option<(String, String)>,
     tab: Tab,
     exits_open: bool,
     ladder: Ladder,
@@ -386,6 +395,8 @@ impl Default for OrderTicket {
             time_in_force: TimeInForce::Day,
             preset_name: String::new(),
             preset_fields: PresetFields::default(),
+            replacing: None,
+            renaming: None,
             tab: Tab::Order,
             exits_open: true,
             ladder: Ladder::default(),
@@ -665,7 +676,9 @@ impl OrderTicket {
     fn apply(&mut self, preset: &OrderPreset, market: &Market<'_>) {
         match preset.sizing {
             None => {}
-            Some(PresetSizing::Value(amount)) => (self.sizing, self.amount) = (Sizing::Value, amount),
+            Some(PresetSizing::Value(amount)) => {
+                (self.sizing, self.amount) = (Sizing::Value, amount)
+            }
             // Risk needs a stop loss, which an account without brackets cannot take.
             Some(PresetSizing::RiskPercent(percent)) if market.capabilities.brackets => {
                 (self.sizing, self.amount) = (Sizing::Risk, percent);
@@ -684,10 +697,16 @@ impl OrderTicket {
                 .stop_loss
                 .map_or((false, self.stop_loss.1), |bracket| (true, bracket));
         }
-        if let Some(kind) = preset.order_type.filter(|kind| kind.accepted(&market.capabilities)) {
+        if let Some(kind) = preset
+            .order_type
+            .filter(|kind| kind.accepted(&market.capabilities))
+        {
             self.select_kind(kind, market);
         }
-        if let Some(value) = preset.time_in_force.filter(|value| market.rules.time_in_force.contains(value)) {
+        if let Some(value) = preset
+            .time_in_force
+            .filter(|value| market.rules.time_in_force.contains(value))
+        {
             self.time_in_force = value;
         }
     }
@@ -699,7 +718,8 @@ impl OrderTicket {
         OrderPreset {
             name,
             quantity,
-            take_profit: (self.preset_fields.exits && self.take_profit.0).then_some(self.take_profit.1),
+            take_profit: (self.preset_fields.exits && self.take_profit.0)
+                .then_some(self.take_profit.1),
             stop_loss: (self.preset_fields.exits && self.stop_loss.0).then_some(self.stop_loss.1),
             sizing: self.preset_fields.quantity.then_some(match self.sizing {
                 Sizing::Units => PresetSizing::Units,
@@ -708,7 +728,10 @@ impl OrderTicket {
             }),
             exits: self.preset_fields.exits,
             order_type: self.preset_fields.order_type.then_some(self.kind),
-            time_in_force: self.preset_fields.time_in_force.then_some(self.time_in_force),
+            time_in_force: self
+                .preset_fields
+                .time_in_force
+                .then_some(self.time_in_force),
         }
     }
 }
@@ -951,6 +974,7 @@ mod tests {
             session_open: None,
             last_fill: None,
             logo: None,
+            account: "",
         }
     }
 
@@ -1000,42 +1024,116 @@ mod tests {
         let ctx = egui::Context::default();
         let ticks = |v| Bracket::new(BracketMode::Ticks, v);
         let all = PresetFields::default();
-        let quantity = PresetFields { quantity: true, exits: false, order_type: false, time_in_force: false };
-        let kinds = PresetFields { quantity: false, exits: false, order_type: true, time_in_force: true };
+        let quantity = PresetFields {
+            quantity: true,
+            exits: false,
+            order_type: false,
+            time_in_force: false,
+        };
+        let kinds = PresetFields {
+            quantity: false,
+            exits: false,
+            order_type: true,
+            time_in_force: true,
+        };
         // Literal produced by serializing OrderPreset on origin/main.
         let old = r#"{"name":"Scalp","quantity":2.0,"take_profit":null,"stop_loss":{"mode":"Ticks","value":8.0}}"#;
         for (fields, accepts, legacy, kind, tif, units, profit, stop) in [
-            (all, true, false, Kind::Limit, TimeInForce::GoodTillCancelled, 2.0, Some(ticks(8.0)), None),
-            (quantity, true, false, Kind::Stop, TimeInForce::Day, 2.0, None, Some(ticks(4.0))),
-            (kinds, true, false, Kind::Limit, TimeInForce::GoodTillCancelled, 1.0, None, Some(ticks(4.0))),
-            (all, false, false, Kind::Stop, TimeInForce::Day, 2.0, Some(ticks(8.0)), None),
-            (all, true, true, Kind::Stop, TimeInForce::Day, 2.0, None, Some(ticks(8.0))),
+            (
+                all,
+                true,
+                false,
+                Kind::Limit,
+                TimeInForce::GoodTillCancelled,
+                2.0,
+                Some(ticks(8.0)),
+                None,
+            ),
+            (
+                quantity,
+                true,
+                false,
+                Kind::Stop,
+                TimeInForce::Day,
+                2.0,
+                None,
+                Some(ticks(4.0)),
+            ),
+            (
+                kinds,
+                true,
+                false,
+                Kind::Limit,
+                TimeInForce::GoodTillCancelled,
+                1.0,
+                None,
+                Some(ticks(4.0)),
+            ),
+            (
+                all,
+                false,
+                false,
+                Kind::Stop,
+                TimeInForce::Day,
+                2.0,
+                Some(ticks(8.0)),
+                None,
+            ),
+            (
+                all,
+                true,
+                true,
+                Kind::Stop,
+                TimeInForce::Day,
+                2.0,
+                None,
+                Some(ticks(8.0)),
+            ),
         ] {
             let mut rules = TradingRules::new("ES");
             rules.time_in_force.push(TimeInForce::GoodTillCancelled);
             let mut market = market(&rules);
             let saving = OrderTicket {
-                symbol: "ES".into(), kind: Kind::Limit, price: 100.0,
-                time_in_force: TimeInForce::GoodTillCancelled, quantity: 2.0,
-                take_profit: (true, ticks(8.0)), preset_fields: fields,
+                symbol: "ES".into(),
+                kind: Kind::Limit,
+                price: 100.0,
+                time_in_force: TimeInForce::GoodTillCancelled,
+                quantity: 2.0,
+                take_profit: (true, ticks(8.0)),
+                preset_fields: fields,
                 ..OrderTicket::default()
             };
-            let saved = if legacy { old.to_owned() } else {
+            let saved = if legacy {
+                old.to_owned()
+            } else {
                 serde_json::to_string(&saving.preset(&ctx, "Scalp".into(), &market)).unwrap()
             };
             let preset: OrderPreset = serde_json::from_str(&saved).unwrap();
             market.capabilities.limit = accepts;
             let mut restricted = rules.clone();
-            if !accepts { restricted.time_in_force = vec![TimeInForce::Day]; }
+            if !accepts {
+                restricted.time_in_force = vec![TimeInForce::Day];
+            }
             market.rules = &restricted;
             let mut ticket = OrderTicket {
-                symbol: "ES".into(), kind: Kind::Stop, price: 101.0,
-                stop_loss: (true, ticks(4.0)), levels: vec![(ticks(12.0), 50.0)],
+                symbol: "ES".into(),
+                kind: Kind::Stop,
+                price: 101.0,
+                stop_loss: (true, ticks(4.0)),
+                levels: vec![(ticks(12.0), 50.0)],
                 ..OrderTicket::default()
             };
             ticket.apply(&preset, &market);
-            assert_eq!((ticket.kind, ticket.time_in_force, ticket.sizing, ticket.quantity),
-                (kind, tif, Sizing::Units, units), "{saved}, accepts {accepts}");
+            assert_eq!(
+                (
+                    ticket.kind,
+                    ticket.time_in_force,
+                    ticket.sizing,
+                    ticket.quantity
+                ),
+                (kind, tif, Sizing::Units, units),
+                "{saved}, accepts {accepts}"
+            );
             assert_eq!(ticket.take_profit.0.then_some(ticket.take_profit.1), profit);
             assert_eq!(ticket.stop_loss.0.then_some(ticket.stop_loss.1), stop);
             assert_eq!(ticket.levels.is_empty(), preset.exits);
@@ -1046,7 +1144,11 @@ mod tests {
         let mut preset = OrderPreset::new("Limit", 1.0);
         preset.order_type = Some(Kind::Limit);
         ticket.apply(&preset, &market);
-        assert_eq!((ticket.price, ticket.limit), (100.0, 100.0), "selecting seeds the entry like its tab");
+        assert_eq!(
+            (ticket.price, ticket.limit),
+            (100.0, 100.0),
+            "selecting seeds the entry like its tab"
+        );
     }
 
     #[test]
@@ -1118,6 +1220,7 @@ mod tests {
             session_open: None,
             last_fill: None,
             logo: None,
+            account: "",
         };
         for quantity in [0.0, f64::NAN, -1.0] {
             for profit in [true, false] {
@@ -1257,6 +1360,7 @@ mod tests {
             session_open: None,
             last_fill: None,
             logo: None,
+            account: "",
         };
         let ticks = |value| {
             (
@@ -1286,7 +1390,12 @@ mod tests {
         );
         // The control is on the Order tab for the pending kind.
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            ticket.show(ui, &market, &mut vec![], &mut false);
+            ticket.show(
+                ui,
+                &market,
+                &mut std::collections::BTreeMap::new(),
+                &mut false,
+            );
         });
         let risk = output.shapes.iter().any(|shape| {
             matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Risk, % balance")
@@ -1375,6 +1484,7 @@ mod tests {
             session_open: None,
             last_fill: None,
             logo: None,
+            account: "",
         };
         let ticks = |value| Bracket {
             mode: BracketMode::Ticks,
@@ -1788,6 +1898,7 @@ mod tests {
                 session_open: None,
                 last_fill: None,
                 logo: None,
+                account: "",
             };
             let ticket = OrderTicket {
                 symbol: "EURUSD".into(),

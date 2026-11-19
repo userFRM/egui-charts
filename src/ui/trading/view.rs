@@ -95,6 +95,7 @@ impl Trading {
             session_open: None,
             last_fill: self.account_panel.fills.price(symbol),
             logo: instrument.and_then(|instrument| instrument.logo.as_deref()),
+            account: &self.account_id,
         }
     }
 

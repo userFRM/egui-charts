@@ -162,6 +162,13 @@ pub trait Broker: MaybeSend + 'static {
         reply.send(Err(FeedError::NotSupported));
     }
 
+    /// Names this account, such as its broker account number, so the order ticket offers only
+    /// its presets. Keep the id stable across sessions: hosts persist presets by it. Brokers
+    /// that keep the empty default share one list.
+    fn account_id(&self) -> &str {
+        ""
+    }
+
     /// Answers one page of finished history older than what [`connect`](Self::connect) pushed, for
     /// the kind and range of `request`. By default the answer is [`FeedError::NotSupported`], and
     /// only the pushed history exists.
