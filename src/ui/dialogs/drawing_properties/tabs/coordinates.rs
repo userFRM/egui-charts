@@ -230,8 +230,9 @@ mod tests {
     }
 
     /// An anchored text keeps its place in the pane through a scroll, and its coordinates
-    /// follow it: the chart and the Coordinates tab report the bar under it, and points set
-    /// through the chart move it there as one undoable edit.
+    /// follow it: the chart and the Coordinates tab report the bar under it, a whole bar when
+    /// it is within half a pixel of one, and points set through the chart move it there as one
+    /// undoable edit.
     #[test]
     fn anchored_text_coordinates_follow_where_it_is_drawn() {
         use crate::widget::test_frames::{chart, frame};
@@ -242,6 +243,14 @@ mod tests {
         text.text = Some("Anchored".into());
         let id = chart.create_drawing(text, &[(day(50), 15.0)]).unwrap();
         frame(&ctx, &mut chart, 0.0, vec![]);
+        // A quarter of a pixel right of bar 50, as a drag or a resize can leave it.
+        let pane = chart.get_rendered_price_rect();
+        let at = chart.drawings().drawings[0].points[0] + egui::vec2(0.25, 0.0);
+        chart.drawings_mut().drawings[0].screen_anchor = Some([
+            (at.x - pane.left()) / pane.width(),
+            (at.y - pane.top()) / pane.height(),
+        ]);
+        frame(&ctx, &mut chart, 0.05, vec![]);
         let drawn = chart.drawings().drawings[0].points[0];
         let spacing = chart.state.time_scale().bar_spacing();
         let offset = chart.state.time_scale().right_offset_precise() as f32;
