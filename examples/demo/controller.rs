@@ -1820,7 +1820,18 @@ impl eframe::App for DemoApp {
                 ctx.request_repaint_after(delay);
             }
         }
-        self.order_flow.set_service(self.live.detectors());
+        let detectors = self.live.detectors();
+        let mut settings = detectors.settings();
+        let before = settings.clone();
+        // Footprint alerts read the imbalances the active chart shows.
+        settings
+            .footprint
+            .rule
+            .follow_chart(self.chart.chart_type_params());
+        if settings != before {
+            detectors.set_settings(settings);
+        }
+        self.order_flow.set_service(detectors);
         self.notification_host
             .watch_detectors(self.live.detectors());
         let sounds = self.order_flow.poll(&ctx, &mut self.toasts);
@@ -6232,6 +6243,29 @@ mod tests {
         let output = draw(&mut app, vec![]);
         assert!(!has(&output, "Depth"));
         output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn footprint_alerts_follow_the_active_chart() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let mut params = app.chart.chart_type_params().clone();
+        params.footprint_imbalance_ratio = 4.0;
+        params.footprint_diagonal = false;
+        params.footprint_imbalance_min_volume = 5.0;
+        params.footprint_stack = 2;
+        app.chart.set_chart_type_params(params);
+        settle(&mut app, &ctx);
+        let rule = app.live.detectors().settings().footprint.rule;
+        assert_eq!(
+            (
+                rule.imbalance_ratio,
+                rule.diagonal,
+                rule.imbalance_min_volume,
+                rule.stack
+            ),
+            (4.0, false, 5.0, 2)
+        );
     }
 
     #[test]
