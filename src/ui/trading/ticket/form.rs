@@ -531,7 +531,9 @@ impl OrderTicket {
                            index: usize,
                            bracket: &mut Bracket,
                            control: &mut dyn FnMut(&mut Ui) -> bool| {
-            let exit = entry.and_then(|entry| {
+            // Money is priced from the quantity, so a quantity not above 0 gives it no price.
+            let priced = |mode| mode != BracketMode::Money || per_point > 0.0;
+            let exit = entry.filter(|_| priced(bracket.mode)).and_then(|entry| {
                 let price = bracket.price(side, entry, tick, per_point, profit);
                 price
                     .is_finite()
@@ -602,10 +604,10 @@ impl OrderTicket {
             if mode != bracket.mode {
                 // The exit stays where it is: its distance is written in the new way.
                 *bracket = match exit {
-                    Some((entry, price)) => {
+                    Some((entry, price)) if priced(mode) => {
                         Bracket::at(mode, price, side, entry, tick, per_point, profit)
                     }
-                    None => Bracket { mode, ..*bracket },
+                    _ => Bracket { mode, ..*bracket },
                 };
             }
         };

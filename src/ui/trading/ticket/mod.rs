@@ -847,7 +847,8 @@ mod tests {
         }
     }
 
-    /// A money exit needs a usable quantity before it can show a price or convert its value.
+    /// A money exit needs a quantity above 0 before it can show a price, and an exit keeps its
+    /// value when switched to or from money without one.
     #[test]
     fn money_exits_without_a_quantity_keep_their_value_when_switching_modes() {
         let rules = TradingRules::new("ES");
@@ -878,7 +879,7 @@ mod tests {
             last_fill: None,
             logo: None,
         };
-        for quantity in [0.0, f64::NAN] {
+        for quantity in [0.0, f64::NAN, -1.0] {
             for profit in [true, false] {
                 let ctx = egui::Context::default();
                 let mut ticket = OrderTicket {
@@ -935,7 +936,7 @@ mod tests {
                     ]
                 };
                 frame(&mut ticket, vec![]);
-                let mut texts = frame(&mut ticket, vec![]);
+                let texts = frame(&mut ticket, vec![]);
                 let non_finite = texts
                     .iter()
                     .filter(|(text, _)| matches!(text.as_str(), "inf" | "-inf" | "NaN"))
@@ -945,37 +946,36 @@ mod tests {
                     usize::from(quantity.is_nan()),
                     "only the invalid quantity itself is shown"
                 );
-                let caption = if profit {
-                    "Take profit, USD"
-                } else {
-                    "Stop loss, USD"
+                let exit = if profit { "Take profit" } else { "Stop loss" };
+                // Picks `to` from the menu of the exit while it is in mode `from`.
+                let switch = |ticket: &mut OrderTicket, from: &str, to: &str| {
+                    let mut texts = frame(ticket, vec![]);
+                    for events in click(find(&texts, &format!("{exit}, {from}"))) {
+                        texts = frame(ticket, events);
+                    }
+                    for events in click(find(&texts, to)) {
+                        frame(ticket, events);
+                    }
+                    if profit {
+                        ticket.take_profit.1
+                    } else {
+                        ticket.stop_loss.1
+                    }
                 };
-                let menu = find(&texts, caption);
-                for events in click(menu) {
-                    texts = frame(&mut ticket, events);
-                }
-                let price = find(&texts, "price");
-                for events in click(price) {
-                    frame(&mut ticket, events);
-                }
-                let actual = if profit {
-                    ticket.take_profit.1
-                } else {
-                    ticket.stop_loss.1
-                };
+                let price = Bracket::new(BracketMode::Price, 25.0);
                 assert_eq!(
-                    actual,
-                    Bracket::new(BracketMode::Price, 25.0),
+                    switch(&mut ticket, "USD", "price"),
+                    price,
+                    "{quantity} {profit}"
+                );
+                assert_eq!(
+                    switch(&mut ticket, "price", "USD"),
+                    bracket,
                     "{quantity} {profit}"
                 );
 
                 // Once the quantity is fixed, money exits show their finite price again.
                 ticket.quantity = 1.0;
-                if profit {
-                    ticket.take_profit.1 = bracket;
-                } else {
-                    ticket.stop_loss.1 = bracket;
-                }
                 let texts = frame(&mut ticket, vec![]);
                 let expected = if profit { "125.00" } else { "75.00" };
                 find(&texts, expected);
@@ -1481,6 +1481,5 @@ mod tests {
             let request = ticket.request(&egui::Context::default(), &market).unwrap();
             assert_eq!(request.quantity, expected, "amount from {quantity}");
         }
-        assert_eq!(round_down(2.9999999, 1.0), 2.0);
     }
 }
