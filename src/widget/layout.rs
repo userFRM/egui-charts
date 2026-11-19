@@ -936,7 +936,8 @@ impl LayoutEditLink {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct ChartSyncOptions {
-    /// Synchronize scrolling and zooming using UTC plot edges.
+    /// Synchronize scrolling and zooming using UTC plot edges. Turning this on fits the other
+    /// charts of the active chart's group to its visible span at the next [`ChartLayout::show`].
     pub sync_time_axis: bool,
     /// Synchronize the hovered timestamp.
     pub sync_crosshair: bool,
@@ -952,10 +953,14 @@ pub struct ChartSyncOptions {
     /// A top-level folder's `FolderSync` overrides this for its drawings: one kept on the chart
     /// reaches no other chart, one kept in the layout reaches the charts of this layout only.
     pub sync_drawings: bool,
-    /// Synchronize symbol changes for fields following the layout setting.
+    /// Synchronize symbol changes for fields following the layout setting. Turning this on
+    /// aligns each group at the next [`ChartLayout::show`]: those fields take the active chart's
+    /// symbol, or in a group without it the lowest such slot's, and keep their undo history.
     /// Explicit individual groups work independently. A host without a feed supplies bars.
     pub sync_symbol: bool,
-    /// Synchronize interval changes for fields following the layout setting.
+    /// Synchronize interval changes for fields following the layout setting. Turning this on
+    /// aligns each group at the next [`ChartLayout::show`]: those fields take the active chart's
+    /// interval, or in a group without it the lowest such slot's.
     /// Explicit individual groups work independently. A host without a feed supplies bars.
     pub sync_timeframe: bool,
     /// Pass chosen date ranges, as given to [`ChartLayout::apply_date_range`], on to the group.
@@ -988,10 +993,12 @@ impl Default for ChartSyncOptions {
 /// its link controls or [`Self::set_link_groups`] with history takes the group's symbol or
 /// interval: the active chart's when it is a member, otherwise the lowest other slot's. Charts
 /// supplied or restored into linked slots, and memberships set without history, keep their own
-/// until the next change. Synchronization includes supplied slots hidden by a
-/// grid preset. The container does not acquire data or persist it. Charts that keep their
-/// drawings in the same storage (`Chart::set_storage`) read the drawings of their symbol again
-/// after another of them wrote them, in any group.
+/// until the next change. A switch of [`ChartSyncOptions`] turned on aligns the charts following
+/// it at the next [`Self::show`], unless that show receives a chart supplied or restored into a
+/// slot. Synchronization includes supplied slots hidden by a grid preset. The container does not
+/// acquire data or persist it. Charts that keep their drawings in the same storage
+/// (`Chart::set_storage`) read the drawings of their symbol again after another of them wrote
+/// them, in any group.
 /// A clone follows pending cross-chart undo and redo steps when it shows the same charts.
 /// Clones showing other charts leave those steps for their owners. Each clone keeps its own
 /// split sizes and link memberships; undo and redo of a change to them apply to the layout that
@@ -1035,6 +1042,8 @@ pub struct ChartLayout {
     #[cfg(feature = "drawings")]
     drawings: DrawingLinks,
     previous_preset: Option<(ChartLayoutMode, usize)>,
+    /// The switches at the last [`Self::show`], to tell which of them were turned on since.
+    previous_sync: ChartSyncOptions,
     sizing: SizingState,
     edits: LayoutEdits,
 }
@@ -1674,8 +1683,10 @@ impl ChartLayout {
         // A chart supplied or restored in a slot starts a new baseline: nothing changed in it.
         #[cfg(feature = "drawings")]
         let known = self.previous_charts;
+        let mut supplied = false;
         for (index, chart) in charts.iter().enumerate() {
             if self.previous_charts[index] != chart.layout_identity {
+                supplied = true;
                 // A chart new to the layout brings drawings new to it, except those of a restored
                 // chart that it held before, while one that `swap_slots` moved keeps its links.
                 #[cfg(feature = "drawings")]
@@ -1688,6 +1699,15 @@ impl ChartLayout {
                 self.pending_ranges[index] = None;
             }
         }
+        // A switch turned on aligns the charts that follow it, except in a show that brings a
+        // supplied or restored chart: like the charts, the switches are then a new baseline.
+        let turned_on = |now: bool, before: bool| now && !before && !supplied;
+        let aligned = (
+            turned_on(self.sync.sync_symbol, self.previous_sync.sync_symbol),
+            turned_on(self.sync.sync_timeframe, self.previous_sync.sync_timeframe),
+            turned_on(self.sync.sync_time_axis, self.previous_sync.sync_time_axis),
+        );
+        self.previous_sync = self.sync.clone();
         // Before this frame's input selects a chart, so a change is sent from the chart it is in.
         self.sync_state(charts, total);
         let mut tab = None;
@@ -1724,6 +1744,7 @@ impl ChartLayout {
         // After a released drag queues its step, so an undo in this frame reaches it.
         self.record_sizes(charts[self.active]);
         self.join_groups(charts);
+        self.align_followers(charts, aligned.0, aligned.1);
         self.record_links(charts[self.active]);
         // Divider hit regions stay above the charts, but their input is known before painting.
         let starting_resize = self.sizing.drag.is_none()
@@ -2034,7 +2055,8 @@ impl ChartLayout {
         }
         // Apply gestures from the source after it has handled this frame's input.
         let sync_range = charts[self.active].visible_time_range() != before_range
-            || self.previous_preset != Some((self.mode, count));
+            || self.previous_preset != Some((self.mode, count))
+            || aligned.2;
         self.sync_view(charts, total, sync_range);
         self.previous_preset = Some((self.mode, count));
         if charts
@@ -2156,6 +2178,47 @@ impl ChartLayout {
                 } else {
                     let symbol = charts[from].symbol().to_owned();
                     charts[index].change_symbol(symbol, true);
+                }
+            }
+        }
+    }
+
+    /// Gives the charts whose symbol or interval follows the layout setting the value of their
+    /// view group, after its switch was turned on: the active chart's in its group, otherwise
+    /// that of the lowest slot following the setting. Each keeps its undo history.
+    fn align_followers(&self, charts: &mut [&mut Chart], symbol: bool, interval: bool) {
+        let count = charts.len();
+        for (on, interval) in [(symbol, false), (interval, true)] {
+            if !on {
+                continue;
+            }
+            let mut done = [false; 16];
+            for from in std::iter::once(self.active).chain(0..count) {
+                if std::mem::replace(&mut done[from], true) {
+                    continue;
+                }
+                for index in 0..count {
+                    let groups = &self.links.groups[index];
+                    let field = if interval {
+                        &groups.interval
+                    } else {
+                        &groups.symbol
+                    };
+                    if done[index]
+                        || *field != ChartLink::Layout
+                        || !self.linked(index, from, interval)
+                    {
+                        continue;
+                    }
+                    done[index] = true;
+                    if interval {
+                        if let Some(timeframe) = charts[from].timeframe() {
+                            charts[index].set_timeframe(timeframe);
+                        }
+                    } else {
+                        let symbol = charts[from].symbol().to_owned();
+                        charts[index].change_symbol(symbol, true);
+                    }
                 }
             }
         }
@@ -4551,6 +4614,152 @@ mod tests {
                 assert!((actual.from - source.from).num_milliseconds().abs() < 1);
                 assert!((actual.to - source.to).num_milliseconds().abs() < 1);
             }
+        }
+    }
+
+    /// Six charts that differ in symbol, interval and span, all switches off: slot 0 is active,
+    /// slot 1 follows the layout setting beside it, slots 2 and 5 share explicit symbol and
+    /// interval groups, slots 3 and 4 are in view group "B". Turning one switch on aligns its
+    /// field at the next show: within the active chart's view group from the active chart,
+    /// within "B" from its lowest slot for symbol and interval, while the explicit groups keep
+    /// theirs and scrolling stays with the active chart's group. The follower keeps its undo
+    /// history. Turning the switch off changes nothing, and a show that receives a supplied
+    /// chart takes a switch turned on as found.
+    #[test]
+    fn turning_a_sync_switch_on_aligns_the_charts_that_follow_it() {
+        type Switch = fn(&mut ChartSyncOptions) -> &mut bool;
+        type Row = (&'static str, Switch, [usize; 6]);
+        let rows: [Row; 3] = [
+            ("symbol", |sync| &mut sync.sync_symbol, [0, 0, 2, 3, 3, 5]),
+            (
+                "interval",
+                |sync| &mut sync.sync_timeframe,
+                [0, 0, 2, 3, 3, 5],
+            ),
+            ("span", |sync| &mut sync.sync_time_axis, [0, 0, 0, 3, 4, 0]),
+        ];
+        let symbols = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"];
+        let intervals = [
+            Timeframe::Min1,
+            Timeframe::Min5,
+            Timeframe::Min15,
+            Timeframe::Hour1,
+            Timeframe::Day1,
+            Timeframe::Week1,
+        ];
+        let ctx = egui::Context::default();
+        let show = |layout: &mut ChartLayout, charts: &mut [Chart; 6]| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    layout.show(ui, &mut charts.each_mut());
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        let span = |chart: &Chart| {
+            let range = chart.visible_time_range().unwrap();
+            (range.from.timestamp_millis(), range.to.timestamp_millis())
+        };
+        type State = (String, Option<Timeframe>, (i64, i64));
+        let state = |chart: &Chart| -> State {
+            (chart.symbol().to_owned(), chart.timeframe(), span(chart))
+        };
+        // A synchronized fit lands within a microsecond of the source's edges, which whole
+        // milliseconds can round apart by one.
+        let same = |a: &State, b: &State, name: &str| match name {
+            "symbol" => a.0 == b.0,
+            "interval" => a.1 == b.1,
+            _ => (a.2.0 - b.2.0).abs() <= 1 && (a.2.1 - b.2.1).abs() <= 1,
+        };
+        for (row, switch, sources) in rows {
+            let mut layout = ChartLayout {
+                mode: ChartLayoutMode::Six,
+                ..Default::default()
+            };
+            layout.sync.sync_time_axis = false;
+            layout.sync.sync_crosshair = false;
+            for slot in [2, 5] {
+                layout.set_link_groups(
+                    slot,
+                    ChartLinkGroups {
+                        symbol: ChartLink::Group("🔶".into()),
+                        interval: ChartLink::Group("💧".into()),
+                    },
+                    true,
+                );
+            }
+            layout.set_sync_group(3, Some("B".into()));
+            layout.set_sync_group(4, Some("B".into()));
+            let mut charts = [
+                chart(60),
+                chart(60),
+                chart(60),
+                chart(60),
+                chart(60),
+                chart(60),
+            ];
+            for (slot, chart) in charts.iter_mut().enumerate() {
+                chart.set_symbol(symbols[slot]);
+                chart.set_timeframe(intervals[slot]);
+                chart.set_visible_bars(30 + 10 * slot);
+            }
+            show(&mut layout, &mut charts);
+            show(&mut layout, &mut charts);
+            charts[1].user_action(|chart| chart.set_chart_type(crate::model::ChartType::Line));
+            let before: Vec<_> = charts.iter().map(state).collect();
+            *switch(&mut layout.sync) = true;
+            show(&mut layout, &mut charts);
+            let after: Vec<_> = charts.iter().map(state).collect();
+            for (slot, source) in sources.into_iter().enumerate() {
+                // An interval set on bars it does not match maps other times to the whitespace
+                // past the last bar, so the interval row leaves the span to the span row.
+                for name in ["symbol", "interval", "span"]
+                    .into_iter()
+                    .filter(|name| row != "interval" || *name != "span")
+                {
+                    let expected = if name == row {
+                        &before[source]
+                    } else {
+                        &before[slot]
+                    };
+                    assert!(
+                        same(&after[slot], expected, name),
+                        "{row} on: {name} of slot {slot}: {:?}, expected {expected:?}",
+                        after[slot]
+                    );
+                }
+            }
+            assert!(
+                charts[1].can_undo(),
+                "{row}: the follower keeps its history"
+            );
+            *switch(&mut layout.sync) = false;
+            show(&mut layout, &mut charts);
+            for (slot, chart) in charts.iter().enumerate() {
+                let off = state(chart);
+                for name in ["symbol", "interval", "span"] {
+                    assert!(
+                        same(&off, &after[slot], name),
+                        "{row} off: {name} of slot {slot}"
+                    );
+                }
+            }
+            // Supplied in the show that sees the switch on, slot 1 keeps its own like a restore.
+            charts[1] = chart(60);
+            charts[1].set_symbol("ZZZ");
+            charts[1].set_timeframe(Timeframe::Month1);
+            charts[1].set_visible_bars(90);
+            *switch(&mut layout.sync) = true;
+            show(&mut layout, &mut charts);
+            let supplied = state(&charts[1]);
+            assert!(
+                !same(&supplied, &after[0], row),
+                "{row}: supplied chart {supplied:?}"
+            );
         }
     }
 

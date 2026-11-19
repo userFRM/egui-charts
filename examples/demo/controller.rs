@@ -625,7 +625,7 @@ impl DemoApp {
         chart.set_timeframe(timeframe);
         let storage = Arc::new(storage::DemoStorage::restore(cc.storage));
         chart.set_storage(storage.clone());
-        chart.set_post_source(Some(Arc::new(feeds::DemoPosts)));
+        chart.set_post_source(Some(Arc::new(feeds::DemoPosts(live.clone()))));
         let notification_host: Arc<feeds::DemoNotifications> = Arc::default();
 
         let mut top_toolbar = TopToolbar::new().with_config(
@@ -5493,6 +5493,13 @@ mod tests {
                 "{link}"
             );
             assert!(shown.is_none_or(|c| c.picture.is_none()));
+            // The card stands at the story's publication time; bring that time into view.
+            if let Some(time) = shown.map(|content| content.time) {
+                app.chart.scroll_to_time(time);
+                for _ in 0..2 {
+                    painted = frame(&mut app, vec![]).0;
+                }
+            }
             let open = painted
                 .iter()
                 .find_map(|shape| match &shape.shape {

@@ -1,7 +1,7 @@
 use super::{
-    Button, ExitButtons, HEIGHT, LABEL_INSET, Level, NODE_INSET, PADDING, PnlUnit,
-    TradingLabelAlignment, TradingLineAction, TradingLineOptions, direction, exit_buttons_width,
-    label_fill, offered_exits, paint_glyph, pnl_text,
+    Button, COVERAGE_CELL, ExitButtons, HEIGHT, LABEL_INSET, Level, NODE_INSET, PADDING, PnlUnit,
+    TradingLabelAlignment, TradingLineAction, TradingLineOptions, coverage_text, direction,
+    exit_buttons_width, label_fill, offered_exits, paint_coverage, paint_glyph, pnl_text,
 };
 use crate::chart::coords::ChartMapping;
 use crate::chart::rendering::render_price_line;
@@ -21,6 +21,7 @@ pub(super) fn show_position(
     mapping: &ChartMapping,
     options: &TradingLineOptions<'_>,
     position: &Position,
+    coverage: Option<(f64, f64)>,
     tags: &mut Vec<(f64, Color32)>,
 ) -> Option<TradingLineAction> {
     let theme = ui.ctx().active_theme();
@@ -55,6 +56,13 @@ pub(super) fn show_position(
             options,
         )
     };
+    let exits = offered_exits(options.take_profit, options.stop_loss);
+    let quantity = layout(format!("{size}"), Color32::WHITE);
+    let close = if options.close { HEIGHT } else { 0.0 };
+    let fixed_width = exit_buttons_width(ui, exits)
+        + width(&quantity)
+        + coverage.map_or(0.0, |_| COVERAGE_CELL)
+        + close;
     let pnl = options.pnl.and_then(|unit| {
         let gain = options
             .last_price
@@ -76,15 +84,19 @@ pub(super) fn show_position(
         } else {
             theme.ui.text_secondary
         };
-        Some((layout(text, text_color), text_color))
+        let galley = if coverage.is_some() {
+            // Keep the exit and close controls reachable when the coverage cell narrows the text.
+            let mut job = egui::text::LayoutJob::simple_singleline(text, font.clone(), text_color);
+            job.wrap.max_width =
+                (mapping.rect.width() - 16.0 - fixed_width - 2.0 * PADDING).max(0.0);
+            job.wrap.max_rows = 1;
+            painter.layout_job(job)
+        } else {
+            layout(text, text_color)
+        };
+        Some((galley, text_color))
     });
-    let exits = offered_exits(options.take_profit, options.stop_loss);
-    let quantity = layout(format!("{size}"), Color32::WHITE);
-    let close = if options.close { HEIGHT } else { 0.0 };
-    let total = exit_buttons_width(ui, exits)
-        + width(&quantity)
-        + pnl.as_ref().map_or(0.0, |(galley, _)| width(galley))
-        + close;
+    let total = fixed_width + pnl.as_ref().map_or(0.0, |(galley, _)| width(galley));
     let reverse = options.close && options.reverse;
     let label_width = total + if reverse { HEIGHT * 1.6 } else { 0.0 };
     let inset = LABEL_INSET.min((mapping.rect.width() - total - HEIGHT * 1.6).max(8.0));
@@ -122,7 +134,10 @@ pub(super) fn show_position(
         } else {
             label.top() - 4.0 - HEIGHT
         };
-        Rect::from_min_size(pos2(right - total, top), vec2(HEIGHT, HEIGHT))
+        Rect::from_min_size(
+            pos2((right - total).max(mapping.rect.left()), top),
+            vec2(HEIGHT, HEIGHT),
+        )
     } else {
         cell(left, HEIGHT)
     };
@@ -226,10 +241,30 @@ pub(super) fn show_position(
         quantity,
         Color32::WHITE,
     );
+    if let Some(coverage) = coverage {
+        let rect = cell(x, COVERAGE_CELL);
+        x = rect.right();
+        painter.vline(rect.left(), rect.y_range(), stroke);
+        paint_coverage(&painter, &theme, rect.center(), coverage);
+        ui.interact(
+            rect.intersect(mapping.rect),
+            key.with("coverage"),
+            Sense::hover(),
+        )
+        .on_hover_text(coverage_text(ui.ctx(), coverage));
+    }
     if let Some((pnl, text_color)) = pnl {
         let rect = cell(x, width(&pnl));
         x = rect.right();
         painter.vline(rect.left(), rect.y_range(), stroke);
+        if pnl.elided {
+            ui.interact(
+                rect.intersect(mapping.rect),
+                key.with("pnl"),
+                Sense::hover(),
+            )
+            .on_hover_text(pnl.job.text.clone());
+        }
         painter.galley(
             pos2(rect.left() + PADDING, y - pnl.size().y / 2.0),
             pnl,
