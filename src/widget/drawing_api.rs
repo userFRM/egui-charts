@@ -214,8 +214,9 @@ impl Chart {
         Ok(())
     }
 
-    /// Replace an anchored VWAP's settings (source, bands, their unit and the style of each band
-    /// line, fills, line plot, latest-value tracking and its precision) as one undoable edit.
+    /// Replace an anchored VWAP's settings (source, whether it counts executions, bands, their
+    /// unit and line styles, fills, line plot, latest-value tracking and its precision) as one
+    /// undoable edit.
     /// Unknown ids, locked drawings, other tools and invalid settings change nothing.
     pub fn set_vwap_config(
         &mut self,
@@ -605,7 +606,8 @@ impl Chart {
     /// Deletes the selected drawings as one undo step, as Delete and Backspace do. Locked drawings
     /// stay selected and in place, and
     /// [`ChartEvent::LockedDrawingsKept`](super::ChartEvent::LockedDrawingsKept) reports how many,
-    /// so the host can tell the user why.
+    /// so the host can tell the user why. Drawings whose user edits are off also stay selected
+    /// and in place, and are not counted.
     pub fn delete_selected_drawings(&mut self) {
         let ids: Vec<_> = self.drawings.selected_ids().collect();
         self.delete_drawings_keeping_locked(&ids);
@@ -613,14 +615,22 @@ impl Chart {
 
     /// Deletes the drawings in `ids` as one undo step, keeping the locked ones, and reports how
     /// many it kept with [`ChartEvent::LockedDrawingsKept`](super::ChartEvent::LockedDrawingsKept).
+    /// Drawings whose user edits are off also stay selected and in place, and are not counted.
     pub(crate) fn delete_drawings_keeping_locked(&mut self, ids: &[usize]) {
         let kept = self
             .drawings
             .drawings
             .iter()
-            .filter(|d| d.locked && ids.contains(&d.id))
+            .filter(|d| d.locked && d.user_edit_enabled && ids.contains(&d.id))
             .count();
-        self.drawings.delete_drawings(ids);
+        let ids: Vec<_> = self
+            .drawings
+            .drawings
+            .iter()
+            .filter(|d| d.user_edit_enabled && ids.contains(&d.id))
+            .map(|d| d.id)
+            .collect();
+        self.drawings.delete_drawings(&ids);
         if kept > 0 {
             self.push_event(super::ChartEvent::LockedDrawingsKept(kept));
         }
@@ -1152,6 +1162,7 @@ mod tests {
         chart.drawings_mut().drawings.push(drawing);
         let edited = VwapConfig {
             source: crate::model::PriceSource::OHLC4,
+            executions: true,
             band_mode: VwapBandMode::Percentage,
             show_line: false,
             plot_type: crate::drawings::VwapPlotType::StepLine,
@@ -1385,6 +1396,7 @@ mod tests {
         restored.set_symbol("LEGACY");
         restored.load_drawings(old).unwrap();
         let drawing = &restored.drawings().drawings[0];
+        assert!(drawing.user_edit_enabled);
         assert_eq!(
             drawing.regression_trend,
             Some(RegressionTrendConfig::default())

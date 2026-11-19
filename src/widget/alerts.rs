@@ -128,7 +128,8 @@ impl Chart {
     /// [`Price`](AlertSource::Price), the volume for [`Volume`](AlertSource::Volume), the value of
     /// the study output at that bar for a [`Study`](AlertSource::Study) named by its [`SeriesId`]
     /// in decimal, and the value of the drawing's level at that bar, on the scale of the pane that
-    /// paints the drawing, for a [`Drawing`](AlertSource::Drawing) named as
+    /// paints the drawing, an anchored VWAP counting the executions the chart holds, for a
+    /// [`Drawing`](AlertSource::Drawing) named as
     /// [`Drawing::alert_source`] does.
     ///
     /// `None` for an unknown study, output or drawing, a bar the series does not have, and a value
@@ -148,10 +149,15 @@ impl Chart {
             AlertSource::Drawing(_) => self.drawings().drawings.iter().find_map(|d| {
                 let level = d.alert_level(source)?;
                 let (scale, ..) = self.drawing_subject(d.id);
-                d.alert_levels_with_bars(bar as f64, scale, self.bars(SeriesId::MAIN))
-                    .into_iter()
-                    .find(|(index, ..)| *index == level)
-                    .map(|(.., price)| price)
+                d.alert_levels_with_executions(
+                    bar as f64,
+                    scale,
+                    self.bars(SeriesId::MAIN),
+                    self.drawing_executions(),
+                )
+                .into_iter()
+                .find(|(index, ..)| *index == level)
+                .map(|(.., price)| price)
             })?,
         };
         value.is_finite().then_some(value)

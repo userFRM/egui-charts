@@ -124,6 +124,7 @@ impl Trading {
         let mut ticket = std::mem::take(&mut self.ticket);
         let mut presets = std::mem::take(&mut self.presets);
         let mut one_click = self.display.instant_orders;
+        let mut compact = self.display.compact_ticket;
         let trades: Vec<_> = if chart.replay_time().is_some() {
             Vec::new()
         } else {
@@ -145,12 +146,17 @@ impl Trading {
                     .inner_margin(egui::Margin::symmetric(16, 8)),
             )
             .show(ui, |ui| {
-                ticket.show(ui, &market, &mut presets, &mut one_click)
+                ticket.show(ui, &market, &mut presets, &mut one_click, &mut compact)
             })
             .inner;
         // Later panels may grow to their contents, but must not cover the docked ticket.
         ui.shrink_clip_rect(ui.available_rect_before_wrap());
-        (self.ticket, self.presets, self.display.instant_orders) = (ticket, presets, one_click);
+        (
+            self.ticket,
+            self.presets,
+            self.display.instant_orders,
+            self.display.compact_ticket,
+        ) = (ticket, presets, one_click, compact);
         self.perform(action);
     }
 
@@ -1798,6 +1804,10 @@ mod tests {
             "settings saved before labels were on by default keep them off"
         );
         assert!(TradingSettings::default().show_execution_labels);
+        assert!(
+            !defaults.compact_ticket,
+            "older settings keep the full ticket"
+        );
         assert!(defaults.extend_lines);
         assert_eq!(defaults.label_alignment, Right);
         assert!(!defaults.include_in_image);
@@ -2521,6 +2531,193 @@ mod tests {
                 remaining.right() <= symbol.expect("the ticket's symbol"),
                 "later panels stay beside the ticket at {width}"
             );
+        }
+    }
+
+    /// The More menu keeps the compact choice in host settings. Both forms explain an unusable
+    /// preset without showing a non-finite exit price; compact orders keep their visible exits.
+    #[test]
+    fn the_more_menu_switches_to_a_compact_ticket_and_keeps_the_choice() {
+        use crate::ui::trading::{Bracket, BracketMode, OrderPreset};
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+            chart.symbol = "SYM".into();
+            let broker = Arc::new(Recorder {
+                brackets: true,
+                state: vec![AccountEvent::Account(Account::new(
+                    "USD",
+                    0.0,
+                    Capabilities {
+                        market: true,
+                        limit: true,
+                        brackets: true,
+                        take_profit_levels: true,
+                        take_profit_level_stops: true,
+                        preview: true,
+                        ..Capabilities::default()
+                    },
+                ))],
+                ..Recorder::default()
+            });
+            let mut trading = Trading::default();
+            trading.set_service(broker.clone());
+            trading.poll(&ctx, &mut Toasts::new());
+            trading.open_ticket(OrderRequest::new(
+                "SYM",
+                OrderSide::Buy,
+                1.0,
+                OrderType::Limit(100.0),
+            ));
+            let (_, reply) = broker.rules.lock().unwrap().pop().unwrap();
+            reply.send(Ok(TradingRules::new("SYM")));
+            trading.poll(&ctx, &mut Toasts::new());
+            let mut preset = OrderPreset::new("Balance stop", 1.0);
+            preset.stop_loss = Some(Bracket::new(BracketMode::BalancePercent, 1.0));
+            trading.presets.push(preset);
+            let frame = |trading: &mut Trading, events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(340.0, 1200.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| trading.show_ticket(ui, &chart),
+                );
+                let more = output.platform_output.events.iter().any(|event| {
+                    matches!(event, egui::output::OutputEvent::FocusGained(info) if info.label.as_deref() == Some("More"))
+                });
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some((
+                            text.galley.text().to_owned(),
+                            text.galley.rect.translate(text.pos.to_vec2()).center(),
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                (texts, more)
+            };
+            frame(&mut trading, vec![]);
+            frame(&mut trading, vec![]);
+            let key = |key| {
+                vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }]
+            };
+            let mut focused = false;
+            for _ in 0..30 {
+                if frame(&mut trading, key(egui::Key::Tab)).1 {
+                    focused = true;
+                    break;
+                }
+            }
+            assert!(focused, "More is reachable from the keyboard");
+            frame(&mut trading, key(egui::Key::Enter));
+            let click = |trading: &mut Trading, wanted: &str| {
+                let texts = frame(trading, vec![]).0;
+                let at = texts
+                    .iter()
+                    .find(|(text, _)| text == wanted)
+                    .unwrap_or_else(|| panic!("{wanted}: {texts:?}"))
+                    .1;
+                for events in [
+                    vec![egui::Event::PointerMoved(at)],
+                    vec![egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    }],
+                    vec![egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    }],
+                    vec![],
+                ] {
+                    frame(trading, events);
+                }
+            };
+            click(&mut trading, "Balance stop");
+            let reason = "An exit in % of the balance needs the account's balance";
+            let texts = frame(&mut trading, vec![]).0;
+            for wanted in [
+                "Limit",
+                "Price",
+                "Units",
+                "Exits",
+                "Risk, % balance",
+                "Stop loss, % balance",
+                "Extra settings",
+                "Order info",
+                reason,
+            ] {
+                assert!(
+                    texts.iter().any(|(text, _)| text == wanted),
+                    "{wanted}: {texts:?}"
+                );
+            }
+            assert!(!texts.iter().any(|(text, _)| text.contains("NaN")));
+            click(&mut trading, "Compact form");
+            assert!(trading.display.compact_ticket);
+            let texts = frame(&mut trading, vec![]).0;
+            for wanted in ["Limit", "Price", "Units", reason] {
+                assert!(
+                    texts.iter().any(|(text, _)| text == wanted),
+                    "{wanted}: {texts:?}"
+                );
+            }
+            for hidden in [
+                "Exits",
+                "Risk, % balance",
+                "Stop loss, % balance",
+                "Extra settings",
+                "Order info",
+            ] {
+                assert!(
+                    !texts.iter().any(|(text, _)| text == hidden),
+                    "{hidden}: {texts:?}"
+                );
+            }
+            assert!(!texts.iter().any(|(text, _)| text.contains("NaN")));
+            // A valid order lists its exits, including each partial target, in the compact form.
+            let mut order = OrderRequest::new("SYM", OrderSide::Buy, 2.0, OrderType::Limit(100.0));
+            order.take_profit_levels = vec![
+                TakeProfitLevel::new(110.0, 1.0),
+                TakeProfitLevel::new(120.0, 1.0),
+            ];
+            order.take_profit_levels[1].stop_loss = Some(95.0);
+            order.stop_loss = Some(90.0);
+            trading.open_ticket(order.clone());
+            frame(&mut trading, vec![]);
+            let texts = frame(&mut trading, vec![]).0;
+            for wanted in [
+                "Take profit 110.00 for 1",
+                "Take profit 120.00 for 1 with a stop loss at 95.00",
+                "Stop loss 90.00",
+                "Buy",
+                "Preview order",
+            ] {
+                assert!(
+                    texts.iter().any(|(text, _)| text == wanted),
+                    "{wanted}: {texts:?}"
+                );
+            }
+            let market = trading.market(&chart, &theme.chart);
+            assert_eq!(trading.ticket.request(&ctx, &market), Ok(order));
         }
     }
 

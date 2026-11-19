@@ -91,7 +91,8 @@ pub struct ChartView<'a> {
     pub time_axis: bool,
     /// The executions behind `bars`, aggregated on the bars' clock. The volume profile drawings
     /// then show the executed volume in their rows, split by aggressor side, instead of
-    /// spreading bar volume over bar ranges; `None` estimates from the bars.
+    /// spreading bar volume over bar ranges, and an anchored VWAP set to count executions sums
+    /// them on bars held in full; `None` estimates from the bars.
     ///
     /// Hosts with an owned footprint construct the borrowed view without copying:
     /// ```

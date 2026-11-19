@@ -239,6 +239,9 @@ pub(crate) struct Trades {
     /// held, and until the sink drops live trades, which are at or after it. The list goes when the
     /// store evicts, or the sink drops, a trade of that instant or a later one.
     unheld_live: Option<(DateTime<Utc>, Vec<Tick>)>,
+    /// First revision of this store, unchanged by paging, pushes and evictions.
+    #[cfg(feature = "widget")]
+    pub(crate) generation: u64,
     /// Changes whenever a trade is added or evicted.
     revision: u64,
     /// Whether the sink dropped live trades since the subscription began, after which no more are
@@ -248,6 +251,7 @@ pub(crate) struct Trades {
 
 impl Trades {
     pub(crate) fn new(capacity: usize) -> Self {
+        let revision = next_revision();
         Self {
             trades: VecDeque::new(),
             capacity,
@@ -263,7 +267,9 @@ impl Trades {
             front_reached: false,
             left_out_at: None,
             unheld_live: None,
-            revision: next_revision(),
+            #[cfg(feature = "widget")]
+            generation: revision,
+            revision,
             live_lost: false,
         }
     }

@@ -366,6 +366,8 @@ fn catalogue_studies_open_with_their_usual_lengths() {
         ("TEMA", "period", 9),
         ("LSMA", "period", 25),
         ("SMMA", "period", 7),
+        ("EMA Cross", "period_0", 9),
+        ("EMA Cross", "period_1", 26),
         ("ROC", "period", 9),
         ("TRIX", "period", 18),
         ("CMO", "period", 9),
