@@ -950,6 +950,8 @@ pub struct ChartTypeParams {
     pub tpo_open_price: bool,
     /// TPO: mark each profile's closing price. Off by default.
     pub tpo_close_price: bool,
+    /// TPO: draw a volume profile beside each profile. Off by default.
+    pub tpo_volume_profile: bool,
     /// TPO: sessions combined into one profile, as in
     /// [`TPOConfig::composites`](super::TPOConfig::composites).
     pub tpo_composites: Vec<std::ops::RangeInclusive<chrono::DateTime<chrono::Utc>>>,
@@ -1063,6 +1065,7 @@ impl Default for ChartTypeParams {
             tpo_value_area_levels: true,
             tpo_open_price: true,
             tpo_close_price: false,
+            tpo_volume_profile: false,
             tpo_composites: Vec::new(),
             tpo_splits: Vec::new(),
         }
@@ -1083,6 +1086,7 @@ impl ChartTypeParams {
             show_value_area: self.tpo_value_area_levels,
             show_opening_range: self.tpo_open_price,
             show_closing_price: self.tpo_close_price,
+            show_volume_profile: self.tpo_volume_profile,
             show_poor_high: self.tpo_poor_high || self.tpo_poor_highs_lows,
             show_poor_low: self.tpo_poor_low || self.tpo_poor_highs_lows,
             extend_poor_extremes: self.tpo_extend_poor,
@@ -1280,6 +1284,7 @@ mod tests {
             "tpo_poor_high": true,
             "tpo_poor_low": false,
             "tpo_extend_poor": true,
+            "tpo_volume_profile": true,
             "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
                 "developing_value_area": true, "extend_poc": true, "extend_vah": true,
                 "extend_val": true,
@@ -1381,6 +1386,7 @@ mod tests {
         assert_eq!(legacy["tpo_poor_high"], false);
         assert_eq!(legacy["tpo_poor_low"], false);
         assert_eq!(legacy["tpo_extend_poor"], false);
+        assert_eq!(legacy["tpo_volume_profile"], false);
         assert_eq!(
             legacy["footprint_colors"],
             serde_json::json!([null, null, null, null])

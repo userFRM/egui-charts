@@ -63,6 +63,8 @@ pub struct TPOProfile {
     pub letters: Vec<TPOLetter>,
     /// TPO count at each price level
     pub price_tpo_count: HashMap<i64, usize>,
+    /// Volume at each row; empty unless built with [`TPOConfig::show_volume_profile`].
+    pub(crate) row_volume: HashMap<i64, f64>,
     /// Point of control: the price (lowest tick) of the row with the most TPOs. A tie takes the
     /// lower price.
     pub poc_price: f64,
@@ -151,6 +153,9 @@ pub struct TPOConfig {
     /// Mark the closing price right of its row, in the bullish colour when it closes at or above
     /// its open, otherwise in the bearish colour.
     pub show_closing_price: bool,
+    /// Draw row volumes beside each profile, up to 40 px for the busiest row. Each bar shares
+    /// its volume equally among the rows its range touches; nonpositive or nonfinite volume adds none.
+    pub show_volume_profile: bool,
     /// Split each session where it moves between regular, extended and overnight hours, giving
     /// separate overnight, pre-market, regular and post-market profiles.
     /// Session profiles only; see [`TPOProfilePeriod`].
@@ -163,11 +168,11 @@ pub struct TPOConfig {
     /// profile. Adding a range over adjacent sessions merges them, removing it splits them back,
     /// and a range over many sessions builds a composite profile.
     pub composites: Vec<RangeInclusive<DateTime<Utc>>>,
-    /// Instants that start another profile at the first bar at or after them, until the next
-    /// session or split. Periods still count from the session's open: splitting at its third
-    /// period leaves A and B in the first profile and C and D in the second. Each part holds
+    /// Instants that start another profile at the first bar at or after them. Session profiles
+    /// last until the next session or split. Periods still count from the session's open: splitting
+    /// at its third period leaves A and B in the first profile and C and D in the second. Each part holds
     /// the initial balance of its own bars, with none after the balance window.
-    /// An instant at or before the session's first bar changes nothing; one beyond the last
+    /// An instant at or before the first usable bar changes nothing; one beyond the last
     /// bar takes effect when later bars reach it. A part joins a composite if its first bar
     /// lies in the range. A split inside a period, for example after changing the period
     /// length, leaves that period's letter in both parts.
@@ -210,6 +215,7 @@ impl Default for TPOConfig {
             show_statistics: false,
             show_opening_range: true,
             show_closing_price: false,
+            show_volume_profile: false,
             split_sessions: false,
             profile_period: TPOProfilePeriod::Session,
             custom_letters: None,
@@ -315,6 +321,7 @@ impl TPOProfile {
             row_ticks: 1,
             letters: Vec::new(),
             price_tpo_count: HashMap::new(),
+            row_volume: HashMap::new(),
             poc_price: 0.0,
             value_area_high: 0.0,
             value_area_low: 0.0,
@@ -353,6 +360,14 @@ impl TPOProfile {
         *self.price_tpo_count.get(&price_key).unwrap_or(&0)
     }
 
+    /// Volume at the row holding `price`, or zero. Built only with [`TPOConfig::show_volume_profile`].
+    pub fn volume_at(&self, price: f64) -> f64 {
+        self.row_volume
+            .get(&self.key(price))
+            .copied()
+            .unwrap_or(0.0)
+    }
+
     /// Get all unique price levels with TPOs
     pub fn price_levels(&self) -> Vec<f64> {
         let mut levels: Vec<f64> = self
@@ -384,6 +399,9 @@ impl TPOProfile {
     fn merge(&mut self, later: TPOProfile) {
         for (key, count) in later.price_tpo_count {
             *self.price_tpo_count.entry(key).or_insert(0) += count;
+        }
+        for (key, volume) in later.row_volume {
+            *self.row_volume.entry(key).or_insert(0.0) += volume;
         }
         self.letters.extend(later.letters);
         self.closing_price = later.closing_price;
@@ -678,6 +696,12 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
         touched = (*touched.start()).min(lo)..=(*touched.end()).max(hi);
 
         if let Some(ref mut profile) = current_profile {
+            if config.show_volume_profile && bar.volume.is_finite() && bar.volume > 0.0 {
+                let volume = bar.volume / (high_key.abs_diff(low_key) + 1) as f64;
+                for key in low_key..=high_key {
+                    *profile.row_volume.entry(key).or_insert(0.0) += volume;
+                }
+            }
             profile.closing_price = bar.close;
             // Update profile high/low
             profile.profile_high = profile.profile_high.max(bar.high);
@@ -1150,6 +1174,7 @@ mod tests {
             ]
         );
         let first = &weekly[0];
+        assert_eq!(first.closing_price, 101.0);
         // Counts 1,2,6,4,2,1 total 16. From POC 101, the upper pair wins 6 to 3;
         // adding 102 and 103 reaches the twelve-TPO target.
         assert_eq!(
@@ -1231,6 +1256,7 @@ mod tests {
         assert_eq!(monthly.len(), 2);
         assert_eq!(monthly[1].session_date, monday + Duration::days(28));
         assert_eq!(monthly[0].letters.len(), 17);
+        assert_eq!(monthly[0].closing_price, 105.0);
         assert_eq!(
             (
                 monthly[0].poc_price,

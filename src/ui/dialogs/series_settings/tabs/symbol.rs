@@ -800,6 +800,7 @@ impl SymbolTab {
                     ("Value area high and low", &mut params.tpo_value_area_levels),
                     ("Open price", &mut params.tpo_open_price),
                     ("Closing price", &mut params.tpo_close_price),
+                    ("Volume profile", &mut params.tpo_volume_profile),
                     (
                         "Initial balance extensions",
                         &mut params.tpo_initial_balance_extensions,
