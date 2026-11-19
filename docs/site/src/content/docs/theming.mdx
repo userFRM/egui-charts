@@ -127,12 +127,15 @@ chart.set_price_formatter(Some(Arc::new(CustomPriceFormatter::new(|price| {
 
 [`set_date_format`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_date_format)
 accepts a `strftime` pattern for crosshair, tooltip and forecast dates; intraday
-labels append the clock. Invalid patterns fall back to the built-in dates.
+labels append the clock. Invalid or empty patterns fall back to the built-in dates.
+The chart settings offer the same choice, with a 24-hour or 12-hour clock and
+whether dates name the weekday. Hosts set the latter two in the time scale
+options `use_24_hour` and `weekday_names`.
 [`set_time_formatter`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_time_formatter)
 accepts an `Arc<dyn TimeFormatter>` for custom time labels. Its
 [`format_tick`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/trait.TimeFormatter.html#method.format_tick)
 receives the active locale and can return `None` for the built-in tick text.
-A supplied formatter otherwise replaces the built-in locale and date format.
+A supplied formatter otherwise replaces the built-in locale, date format, clock and weekday names.
 Inputs already contain wall-clock fields, in the selected zone or, when it is
 behind UTC, in UTC for the daily and longer bars described in
 [Time zones and sessions](time-zones.mdx): do not shift them a second time. [`format_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.format_time)
