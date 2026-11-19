@@ -927,7 +927,11 @@ impl SymbolTab {
                 });
                 ui.end_row();
                 for (name, enabled) in [
-                    ("Poor highs and lows", &mut params.tpo_poor_highs_lows),
+                    ("Point of control", &mut params.tpo_poc),
+                    ("Value area high and low", &mut params.tpo_value_area_levels),
+                    ("Open price", &mut params.tpo_open_price),
+                    ("Closing price", &mut params.tpo_close_price),
+                    ("Volume profile", &mut params.tpo_volume_profile),
                     (
                         "Initial balance extensions",
                         &mut params.tpo_initial_balance_extensions,
@@ -937,6 +941,41 @@ impl SymbolTab {
                     ui.checkbox(enabled, "").labelled_by(label.id);
                     ui.end_row();
                 }
+                let mut poor = [
+                    params.tpo_poor_high || params.tpo_poor_highs_lows,
+                    params.tpo_poor_low || params.tpo_poor_highs_lows,
+                ];
+                for (name, i) in [("Poor high", 0), ("Poor low", 1)] {
+                    let label = ui.label(l10n::text(ui.ctx(), name));
+                    if ui
+                        .checkbox(&mut poor[i], "")
+                        .labelled_by(label.id)
+                        .changed()
+                    {
+                        [params.tpo_poor_high, params.tpo_poor_low] = poor;
+                        params.tpo_poor_highs_lows = false;
+                    }
+                    ui.end_row();
+                }
+                let label = ui
+                    .vertical(|ui| {
+                        ui.set_width(160.0);
+                        ui.add(
+                            egui::Label::new(l10n::text(
+                                ui.ctx(),
+                                "Extend poor highs and lows until repaired",
+                            ))
+                            .wrap()
+                            .halign(egui::Align::Min),
+                        )
+                    })
+                    .inner;
+                ui.add_enabled(
+                    poor[0] || poor[1],
+                    egui::Checkbox::without_text(&mut params.tpo_extend_poor),
+                )
+                .labelled_by(label.id);
+                ui.end_row();
                 let label = ui.label(l10n::text(ui.ctx(), "Ticks per row"));
                 ui.add(
                     egui::DragValue::new(&mut params.tpo_row_ticks)

@@ -50,7 +50,7 @@ impl Chart {
     /// extended hours still divide daily bars by their trading dates. The other choices on daily
     /// bars, and a choice without the instrument hours it reads, keep the chart's calendar, in
     /// the instrument's zone when it has no hours.
-    pub(in crate::widget) fn profile_hours<'a>(
+    pub(crate) fn profile_hours<'a>(
         &self,
         selection: &'a crate::model::ProfileSession,
     ) -> (crate::model::BarClock, &'a crate::model::ProfileSession) {
@@ -331,6 +331,222 @@ mod tests {
                 .count();
             assert_eq!(drawn, tables, "statistics {statistics}");
         }
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn tpo_settings_change_the_painted_profile_in_the_chart_type_and_the_study() {
+        use crate::model::{Bar, BarData, ChartType, Instrument, Timeframe};
+        use crate::studies::{Indicator, InputValue, TimePriceOpportunity};
+        use crate::theme::ThemeExt;
+        let start: chrono::DateTime<chrono::Utc> = "2024-01-02T02:00:00Z".parse().unwrap();
+        let paint = |study: bool, edits: &[(&str, InputValue)]| {
+            let bars = (0..40)
+                .map(|i| {
+                    let (low, high) = match i {
+                        0 => (100.0, 101.0),
+                        1 => (101.0, 103.0),
+                        _ => (99.0, 103.0),
+                    };
+                    Bar::new(
+                        start + chrono::Duration::minutes(30 * i),
+                        100.0_f64.clamp(low, high),
+                        high,
+                        low,
+                        102.0_f64.clamp(low, high),
+                        1.0,
+                    )
+                })
+                .collect();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.set_timeframe(Timeframe::Min30);
+            chart.set_instrument(Some(Instrument::new("X").with_tick_size(1.0)));
+            if study {
+                let mut tpo = TimePriceOpportunity::default();
+                tpo.set_input("row_ticks", InputValue::Length(1)).unwrap();
+                tpo.set_input("display", InputValue::Choice(2)).unwrap();
+                for (id, value) in edits {
+                    tpo.set_input(id, value.clone()).unwrap();
+                }
+                chart.add_indicator(Box::new(tpo));
+            } else {
+                chart.set_chart_type(ChartType::TimePriceOpportunity);
+                let mut saved = serde_json::json!({"tpo_row_ticks":1, "tpo_letters":true, "tpo_midpoint":false});
+                for (id, value) in edits {
+                    let InputValue::Toggle(show) = value else {
+                        panic!("chart rows use toggles")
+                    };
+                    saved[format!("tpo_{id}")] = (*show).into();
+                }
+                chart.set_chart_type_params(serde_json::from_value(saved).unwrap());
+            }
+            let ctx = egui::Context::default();
+            shapes(&ctx, &mut chart, 0.0, vec![]);
+            chart.price_scale_mut().set_range(90.0, 115.0);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            (painted, chart.get_chart_mapping(), ctx.active_theme().chart)
+        };
+        for study in [false, true] {
+            for setting in [
+                "default",
+                "poc",
+                "value_area_levels",
+                "initial_balance",
+                "open_price",
+                "close_price",
+                "poor_high",
+                "poor_low",
+                "volume_profile",
+            ] {
+                let show = matches!(
+                    setting,
+                    "close_price" | "poor_high" | "poor_low" | "volume_profile"
+                );
+                let edits = if setting == "default" {
+                    vec![]
+                } else {
+                    vec![(setting, InputValue::Toggle(show))]
+                };
+                let (painted, map, chart) = paint(study, &edits);
+                let caption = |name| {
+                    painted
+                        .iter()
+                        .any(|s| matches!(s, Shape::Text(t) if t.galley.text() == name))
+                };
+                assert_eq!(caption("POC"), setting != "poc", "{setting}, study {study}");
+                assert_eq!(
+                    (caption("VAH"), caption("VAL")),
+                    (
+                        setting != "value_area_levels",
+                        setting != "value_area_levels"
+                    ),
+                    "{setting}, study {study}"
+                );
+                let balance = painted.iter().filter(|s| matches!(s, Shape::Rect(r) if r.rect.width() == 2.0 && r.fill == crate::tokens::DESIGN_TOKENS.semantic.tpo.initial_balance)).count();
+                assert_eq!(
+                    balance,
+                    usize::from(setting != "initial_balance"),
+                    "{setting}, study {study}"
+                );
+                let markers: Vec<_> = painted
+                    .iter()
+                    .filter_map(|s| match s {
+                        Shape::Path(p) if p.points.len() == 3 && p.points[1].x == p.points[2].x => {
+                            Some(p)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    markers.len(),
+                    usize::from(setting != "open_price") + usize::from(setting == "close_price"),
+                    "{setting}, study {study}"
+                );
+                for (key, price) in [("poor_high", 103.0), ("poor_low", 99.0)] {
+                    let ticks = painted.iter().filter(|s| matches!(s, Shape::LineSegment { points, .. } if points[0].y == map.price_to_y(price) && points[1].x - points[0].x == 8.0)).count();
+                    assert_eq!(
+                        ticks,
+                        usize::from(setting == key),
+                        "{setting}, study {study}, {key}"
+                    );
+                }
+                let color = chart.axis_text_secondary;
+                let dim = chart.bg.lerp_to_gamma(color, 0.45);
+                let volume = painted.iter().filter(|s| matches!(s, Shape::Rect(r) if (r.fill == color || r.fill == dim) && r.rect.width() > 2.0 && r.rect.width() <= 40.0)).count();
+                assert_eq!(
+                    volume,
+                    if setting == "volume_profile" { 5 } else { 0 },
+                    "{setting}, study {study}"
+                );
+                if setting == "close_price" {
+                    let close = markers.last().unwrap();
+                    assert_eq!(close.points[0].y, map.price_to_y(102.0));
+                    assert!(close.points[0].x > markers[0].points[2].x);
+                    assert_eq!(close.fill, chart.candle_up);
+                }
+            }
+        }
+        let yellow = egui::Color32::from_rgb(255, 200, 0);
+        for opacity in [0, 45, 100] {
+            let (painted, map, chart) = paint(
+                true,
+                &[
+                    ("coloring", InputValue::Choice(1)),
+                    ("block_color", InputValue::Color(yellow)),
+                    ("display", InputValue::Choice(1)),
+                    ("outside_value_area_opacity", InputValue::Length(opacity)),
+                ],
+            );
+            let cells: Vec<_> = painted
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::Rect(r) if r.rect.width() > 2.0 && r.rect.width() < 24.0 => Some(r),
+                    _ => None,
+                })
+                .collect();
+            // Counts at 99..=103 are 38,39,40,39,39: the value area covers 100..=103.
+            assert!(cells.iter().any(|r| r.fill == yellow));
+            let outside = cells
+                .iter()
+                .find(|r| (r.rect.center().y - map.price_to_y(99.0)).abs() < 1.0)
+                .unwrap();
+            assert_eq!(
+                outside.fill,
+                chart.bg.lerp_to_gamma(yellow, opacity as f32 / 100.0)
+            );
+        }
+        for (minutes, low, high) in [(60, 100.0, 103.0), (30, 100.0, 101.0)] {
+            let (painted, map, _) = paint(
+                true,
+                &[("initial_balance_minutes", InputValue::Length(minutes))],
+            );
+            let balance = painted
+                .iter()
+                .find_map(|s| match s {
+                    Shape::Rect(r)
+                        if r.rect.width() == 2.0
+                            && r.fill
+                                == crate::tokens::DESIGN_TOKENS.semantic.tpo.initial_balance =>
+                    {
+                        Some(r.rect)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(
+                (balance.top(), balance.bottom()),
+                (map.price_to_y(high), map.price_to_y(low))
+            );
+        }
+        let (painted, _, _) = paint(
+            true,
+            &[("initial_balance_extensions", InputValue::Toggle(true))],
+        );
+        assert_eq!(painted.iter().filter(|s| matches!(s, Shape::LineSegment { points, stroke } if points[1].x - points[0].x == 10.0 && stroke.color == crate::tokens::DESIGN_TOKENS.semantic.tpo.initial_balance)).count(), 4);
+        let letter_x = |split| {
+            let (painted, map, _) = paint(true, &[("split_periods", InputValue::Toggle(split))]);
+            let x = |letter: &str, row: Option<f64>| {
+                painted
+                    .iter()
+                    .filter_map(|s| match s {
+                        Shape::Text(t) if t.galley.text() == letter => {
+                            let center = t.pos + t.galley.size() * 0.5;
+                            row.is_none_or(|price| (center.y - map.price_to_y(price)).abs() < 1.0)
+                                .then_some(center.x)
+                        }
+                        _ => None,
+                    })
+                    .min_by(f32::total_cmp)
+                    .unwrap()
+            };
+            (x("B", None), x("B", Some(101.0)) - x("A", Some(101.0)))
+        };
+        let (packed, column) = letter_x(false);
+        let split = letter_x(true).0;
+        assert!(
+            (split - packed - column).abs() < 0.001,
+            "packed {packed}, split {split}, column {column}"
+        );
     }
 
     #[cfg(feature = "timezones")]

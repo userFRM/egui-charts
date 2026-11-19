@@ -47,12 +47,17 @@ pub struct ToolbarState {
     pub remember_removal: bool,
     /// Currently selected tool
     pub sel_tool: Option<DrawingToolType>,
+    /// Registered selection by id; `sel_tool` holds its polyline identity, as the manager does.
+    pub sel_custom_tool: Option<String>,
     /// Whether the toolbar is expanded (shows names)
     pub expanded: bool,
     /// Currently expanded category (for nested menus)
     pub expanded_category: Option<String>,
     /// Favorite tools, in the order they were starred
     pub favorites: Vec<DrawingToolType>,
+    /// Registered favourites by id, in starring order, after built-in favourites. Missing ids
+    /// stay saved and are left off the strip until registered again.
+    pub custom_favorites: Vec<String>,
     /// Favourite cursor modes, in the order they were starred. Hosts can serialize this list.
     pub cursor_favorites: Vec<CursorType>,
     /// Whether the floating strip of favorite tools is shown while there are favorites
@@ -62,6 +67,8 @@ pub struct ToolbarState {
     pub floating_pos: Option<egui::Pos2>,
     /// Recently used tools (max 5)
     pub recent: VecDeque<DrawingToolType>,
+    /// Recently selected registered ids, newest first, at most five.
+    pub custom_recent: VecDeque<String>,
     /// Whether drawing anchors snap to nearby chart values and drawing points
     pub magnet_mode: bool,
     /// Type of magnet snapping when magnet mode is enabled
@@ -98,9 +105,17 @@ pub struct ToolbarState {
     /// Whether the Hide menu has hidden indicators.
     pub hide_indicators: bool,
     /// Whether the Hide menu has hidden positions.
+    /// [`Trading::sync_hide_menu`](crate::ui::trading::Trading::sync_hide_menu) refreshes it
+    /// from the trading display settings.
     pub hide_positions: bool,
     /// Whether the Hide menu has hidden orders.
+    /// [`Trading::sync_hide_menu`](crate::ui::trading::Trading::sync_hide_menu) refreshes it
+    /// from the trading display settings.
     pub hide_orders: bool,
+    /// Whether the Hide menu has hidden executions.
+    /// [`Trading::sync_hide_menu`](crate::ui::trading::Trading::sync_hide_menu) refreshes it
+    /// from the trading display settings.
+    pub hide_executions: bool,
     /// Whether zoom history exists (for showing/hiding Zoom Out button)
     pub has_zoom_history: bool,
     /// Whether zoom-in mode is currently active (for button highlighting)
@@ -134,13 +149,16 @@ impl Default for ToolbarState {
             pending_removal: None,
             remember_removal: false,
             sel_tool: None,
+            sel_custom_tool: None,
             expanded: true,
             expanded_category: None,
             favorites: Vec::new(),
+            custom_favorites: Vec::new(),
             cursor_favorites: Vec::new(),
             floating_visible: true,
             floating_pos: None,
             recent: VecDeque::with_capacity(5),
+            custom_recent: VecDeque::with_capacity(5),
             magnet_mode: false,
             magnet_type: MagnetType::Strong, // Default to strong magnet
             snap_to_indicators: true,
@@ -159,6 +177,7 @@ impl Default for ToolbarState {
             hide_indicators: false,
             hide_positions: false,
             hide_orders: false,
+            hide_executions: false,
             has_zoom_history: false,
             zoom_mode_active: false,
             current_cursor_type: CursorType::Arrow, // Default: Arrow
@@ -171,14 +190,22 @@ impl Default for ToolbarState {
 
 impl ToolbarState {
     /// Whether every supported visibility group is hidden. Hosts refresh the group flags
-    /// from their active chart before drawing the menu.
+    /// from their active chart, and the trading flags with
+    /// [`Trading::sync_hide_menu`](crate::ui::trading::Trading::sync_hide_menu), before drawing
+    /// the menu.
     pub fn all_hidden(&self, trading: bool) -> bool {
         self.hide_drawings
             && self.hide_indicators
-            && (!trading || self.hide_positions && self.hide_orders)
+            && (!trading || self.hide_positions && self.hide_orders && self.hide_executions)
     }
 
     /// Create new toolbar state with defaults
+    ///
+    /// ```
+    /// use egui_charts::ui::drawing_toolbar::ToolbarState;
+    /// let state = ToolbarState { hide_executions: true, ..ToolbarState::new() };
+    /// assert!(state.hide_executions && !state.all_hidden(true));
+    /// ```
     pub fn new() -> Self {
         Self::default()
     }
@@ -186,6 +213,7 @@ impl ToolbarState {
     /// Select a drawing tool and add to recent
     pub fn select_tool(&mut self, tool: DrawingToolType) {
         self.sel_tool = Some(tool);
+        self.sel_custom_tool = None;
         self.eraser_mode_enabled = false;
         self.zoom_mode_active = false;
         self.add_to_recent(tool);
@@ -194,6 +222,20 @@ impl ToolbarState {
         if let Some(category) = data::get_tool_category(tool) {
             self.category_last_tool.insert(category.to_string(), tool);
         }
+    }
+
+    pub(crate) fn select_custom_tool(&mut self, id: &str) {
+        self.sel_tool = Some(DrawingToolType::Polyline);
+        self.sel_custom_tool = Some(id.into());
+        self.eraser_mode_enabled = false;
+        self.zoom_mode_active = false;
+        self.custom_recent.retain(|tool| tool != id);
+        self.custom_recent.push_front(id.into());
+        self.custom_recent.truncate(5);
+    }
+
+    pub(crate) fn sel_builtin(&self) -> Option<DrawingToolType> {
+        self.sel_tool.filter(|_| self.sel_custom_tool.is_none())
     }
 
     /// Add a tool to recent list
@@ -211,6 +253,7 @@ impl ToolbarState {
     /// Clear tool selection (cursor mode)
     pub fn clear_selection(&mut self) {
         self.sel_tool = None;
+        self.sel_custom_tool = None;
         self.zoom_mode_active = false;
     }
 
@@ -238,7 +281,8 @@ impl ToolbarState {
         self.stay_in_drawing_mode = !self.stay_in_drawing_mode;
     }
 
-    /// Sync toolbar state from external drawing state.
+    /// Sync toolbar state from external drawing state. Use `DrawingToolbar::sync_from_domain_state`
+    /// to retain a registered tool selection.
     pub fn sync_from(
         &mut self,
         active_tool: Option<DrawingToolType>,
@@ -248,6 +292,7 @@ impl ToolbarState {
         drawing_color: [u8; 4],
     ) {
         self.sel_tool = active_tool;
+        self.sel_custom_tool = None;
         self.magnet_mode = magnet_mode;
         self.stay_in_drawing_mode = stay_in_drawing_mode;
         self.eraser_mode_enabled = eraser_mode;

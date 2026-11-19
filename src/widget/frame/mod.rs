@@ -3465,6 +3465,7 @@ impl Chart {
                 ui.active_theme().chart.axis_text_secondary,
                 self.state.shown(),
                 self.state.revision(),
+                self.drawing_executions(),
             ) {
                 match tag {
                     crate::drawings::manager::DrawingAxisTag::Price {
@@ -3658,6 +3659,16 @@ impl Chart {
                 let timeframe = self.timeframe.map(|tf| tf.as_str()).unwrap_or_default();
                 #[cfg(feature = "ui")]
                 let order_quantity = self.order_quantity.take();
+                #[cfg(feature = "ui")]
+                let order_quantity_text = self.order_quantity_text.take();
+                // Trading prices market orders at the last price, so Buy and Sell need no quote.
+                #[cfg(feature = "ui")]
+                let last_price = order_quantity.and_then(|_| {
+                    crate::model::last_with_value(self.bars(super::SeriesId::MAIN))
+                        .map(|bar| bar.close)
+                });
+                #[cfg(not(feature = "ui"))]
+                let last_price = None;
                 let mut legend = super::Legend::new(&self.symbol, &timeframe, &bar);
                 let statuses: Vec<_> = self
                     .legend_statuses
@@ -3683,10 +3694,16 @@ impl Chart {
                 legend.badge = self.legend_badge.clone();
                 legend.show_logo = self.config.show_legend_badge;
                 legend.statuses = &statuses;
-                legend.quote = self
-                    .quote
-                    .as_ref()
-                    .filter(|_| self.main_series_visible && self.config.show_quote_boxes);
+                legend.quote = self.quote.as_ref().filter(|_| {
+                    self.main_series_visible
+                        && self.config.show_quote_boxes
+                        && !self.config.quote_panel
+                });
+                legend.last_price = last_price.filter(|_| {
+                    self.main_series_visible
+                        && self.config.show_quote_boxes
+                        && !self.config.quote_panel
+                });
                 legend.show_title = self.main_series_present && self.config.show_symbol_labels;
                 legend.show_market_status = self.config.show_market_status;
                 legend.replaying = self.replay_time().is_some();
@@ -3733,11 +3750,12 @@ impl Chart {
                     values && self.chart_type.supports_volume() && self.config.show_legend_volume;
                 #[cfg(feature = "ui")]
                 {
-                    legend.quantity = order_quantity;
+                    legend.quantity =
+                        order_quantity.map(|quantity| (quantity, order_quantity_text));
                 }
-                let (quote_action, study_settings, bottom, quantity, main_action) = ui
+                let ((quote_action, study_settings, bottom, quantity, main_action), panel) = ui
                     .push_id(shown.id, |ui| {
-                        legend.show_with_colors(
+                        let result = legend.show_with_colors(
                             ui,
                             Rect::from_min_max(
                                 price_rect.min,
@@ -3753,9 +3771,39 @@ impl Chart {
                             } else {
                                 f32::INFINITY
                             },
-                        )
+                        );
+                        let panel = (self.config.quote_panel
+                            && self.main_series_visible
+                            && self.config.show_quote_boxes)
+                            .then(|| rendering::quote_prices(self.quote.as_ref(), last_price))
+                            .flatten()
+                            .map(|prices| {
+                                legend.show_quote_panel(
+                                    ui,
+                                    &colors,
+                                    price_rect.shrink(8.0),
+                                    self.quote_panel_at.unwrap_or([0.5, 0.0]),
+                                    prices,
+                                    ui.scope_id().with("quote_panel"),
+                                )
+                            });
+                        (result, panel)
                     })
                     .inner;
+                let quote_action = panel
+                    .as_ref()
+                    .and_then(|panel| panel.action)
+                    .or(quote_action);
+                let quantity = panel.as_ref().and_then(|panel| panel.quantity).or(quantity);
+                if let Some(panel) = panel {
+                    if let Some(place) = panel.moved {
+                        self.quote_panel_at = Some(place);
+                    }
+                    if panel.released {
+                        // Moving the panel is not undone, but its layout is saved again.
+                        self.history.edits += 1;
+                    }
+                }
                 if let Some(action) = quote_action {
                     self.quote_action = Some(action);
                 }

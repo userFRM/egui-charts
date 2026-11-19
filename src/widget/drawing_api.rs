@@ -214,8 +214,9 @@ impl Chart {
         Ok(())
     }
 
-    /// Replace an anchored VWAP's settings (source, bands, their unit and the style of each band
-    /// line, fills, line plot, latest-value tracking and its precision) as one undoable edit.
+    /// Replace an anchored VWAP's settings (source, whether it counts executions, bands, their
+    /// unit and line styles, fills, line plot, latest-value tracking and its precision) as one
+    /// undoable edit.
     /// Unknown ids, locked drawings, other tools and invalid settings change nothing.
     pub fn set_vwap_config(
         &mut self,
@@ -1161,6 +1162,7 @@ mod tests {
         chart.drawings_mut().drawings.push(drawing);
         let edited = VwapConfig {
             source: crate::model::PriceSource::OHLC4,
+            executions: true,
             band_mode: VwapBandMode::Percentage,
             show_line: false,
             plot_type: crate::drawings::VwapPlotType::StepLine,
