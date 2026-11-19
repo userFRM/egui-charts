@@ -216,9 +216,9 @@ Chart,Multi-chart and sync,Symbol and interval sync groups,verified,library,src/
 Chart,Multi-chart and sync,Sync crosshair,verified,library,src/widget/layout.rs;src/widget/sync.rs;src/widget/frame/mod.rs,2474;2512;2814;2852;2853
 Chart,Multi-chart and sync,Sync date range,verified,library,src/widget/layout.rs;src/widget/sync.rs;src/model/timescale.rs;src/ui/top_toolbar/components/chart_grid_selector.rs,2854;3246
 Chart,Multi-chart and sync,Sync drawings,verified,library,src/widget/layout.rs;src/widget/layout/drawings.rs;src/widget/stored_drawings.rs;src/widget/history.rs;src/drawings/services/history.rs;src/drawings/manager/mod.rs;src/widget/feed/mod.rs;src/widget/anchors.rs;src/drawings/domain/drawing.rs,3286;3436
-Chart,Multi-chart and sync,Sync interval,verified,host,src/widget/layout.rs;src/widget/feed/mod.rs;src/widget/sync.rs;src/model/timescale.rs,2829
-Chart,Multi-chart and sync,Sync symbol,incomplete,host,src/widget/layout.rs;src/widget/feed/mod.rs,2826;2829;3266
-Chart,Multi-chart and sync,Sync time,incomplete,library,src/widget/layout.rs;src/widget/sync.rs;src/model/timescale.rs,
+Chart,Multi-chart and sync,Sync interval,unverified,host,src/widget/layout.rs;src/widget/feed/mod.rs;src/widget/sync.rs;src/model/timescale.rs,2829;3569
+Chart,Multi-chart and sync,Sync symbol,unverified,host,src/widget/layout.rs;src/widget/feed/mod.rs,2826;2829;3569
+Chart,Multi-chart and sync,Sync time,unverified,library,src/widget/layout.rs;src/widget/sync.rs;src/model/timescale.rs,3569
 Chart,Multi-chart and sync,Up to 16 charts per tab,verified,library,src/widget/layout.rs,
 Chart,Panes,Collapse pane,incomplete,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/pane/render/mod.rs;src/widget/frame/mod.rs;src/widget/keyboard.rs,3205;3131
 Chart,Panes,Maximize pane,verified,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/pane/render/mod.rs;src/widget/pane/indicator/mod.rs;src/widget/frame/mod.rs,3205;3334
