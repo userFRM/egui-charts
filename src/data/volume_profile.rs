@@ -82,6 +82,13 @@ fn profile_down_color() -> [u8; 4] {
     [239, 83, 80, 180]
 }
 
+fn profile_shown() -> bool {
+    true
+}
+fn profile_line_colors() -> [[u8; 4]; 2] {
+    [ecolor::Color32::PLACEHOLDER.to_srgba_unmultiplied(); 2]
+}
+
 /// Row layout and display settings shared by volume profile studies and drawings.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "VolumeProfileFields")]
@@ -99,6 +106,16 @@ pub struct VolumeProfileConfig {
     pub value_area_colors: Option<[[u8; 4]; 2]>,
     /// Draw the high and low boundaries of the value area.
     pub show_value_area_lines: bool,
+    /// Draw the price rows; hiding them leaves the profile's levels.
+    pub show_rows: bool,
+    /// Draw the point of control line.
+    pub show_poc: bool,
+    /// Draw the value area high even without `show_value_area_lines`.
+    pub show_value_area_high: bool,
+    /// Draw the value area low even without `show_value_area_lines`.
+    pub show_value_area_low: bool,
+    /// High and low line colours; placeholder bytes take the profile colour at alpha 200.
+    pub value_area_line_colors: [[u8; 4]; 2],
     /// Keep a fixed range drawing growing to the last bar, past its second anchor.
     pub extend_right: bool,
 }
@@ -120,6 +137,16 @@ struct VolumeProfileFields {
     value_area_colors: Option<[[u8; 4]; 2]>,
     #[serde(default)]
     show_value_area_lines: bool,
+    #[serde(default = "profile_shown")]
+    show_rows: bool,
+    #[serde(default = "profile_shown")]
+    show_poc: bool,
+    #[serde(default)]
+    show_value_area_high: bool,
+    #[serde(default)]
+    show_value_area_low: bool,
+    #[serde(default = "profile_line_colors")]
+    value_area_line_colors: [[u8; 4]; 2],
     #[serde(default)]
     extend_right: bool,
 }
@@ -135,6 +162,11 @@ impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
         config.down_color = fields.down_color;
         config.value_area_colors = fields.value_area_colors;
         config.show_value_area_lines = fields.show_value_area_lines;
+        config.show_rows = fields.show_rows;
+        config.show_poc = fields.show_poc;
+        config.show_value_area_high = fields.show_value_area_high;
+        config.show_value_area_low = fields.show_value_area_low;
+        config.value_area_line_colors = fields.value_area_line_colors;
         config.extend_right = fields.extend_right;
         config
             .with_row_size(fields.row_size)
@@ -208,6 +240,11 @@ impl Default for VolumeProfileConfig {
             down_color: profile_down_color(),
             value_area_colors: None,
             show_value_area_lines: false,
+            show_rows: true,
+            show_poc: true,
+            show_value_area_high: false,
+            show_value_area_low: false,
+            value_area_line_colors: profile_line_colors(),
             extend_right: false,
         }
     }

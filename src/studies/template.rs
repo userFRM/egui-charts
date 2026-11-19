@@ -1411,6 +1411,29 @@ mod tests {
 
         // A chart save of an anchored profile from before tick heights and width were inputs
         // keeps its settings and inputs and takes the defaults of both.
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Vol Profile Session","inputs":[["row_count",{"Length":30}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["row_ticks",{"Length":0}],["display",{"Choice":1}],["source_interval",{"Timeframe":null}],["feed_source",{"Toggle":true}],["adaptive_rows",{"Toggle":false}],["sessions",{"Choice":0}],["session_start",{"Length":0}],["session_end",{"Length":0}],["session_zone",{"Text":""}],["hours_only",{"Toggle":false}],["width",{"Number":30.0}],["extend_poc",{"Toggle":false}],["extend_vah",{"Toggle":false}],["extend_val",{"Toggle":false}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileSession.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        let restored = saved.create().unwrap();
+        assert_eq!(restored.settings(), saved.settings);
+        for (id, value) in &saved.inputs {
+            assert_eq!(
+                restored
+                    .inputs()
+                    .iter()
+                    .find(|input| &input.id == id)
+                    .map(|input| &input.value),
+                Some(value),
+                "{id}"
+            );
+        }
+        assert_eq!(
+            restored
+                .inputs()
+                .iter()
+                .find(|input| input.id == "whole_tick_rows")
+                .unwrap()
+                .value,
+            Toggle(false)
+        );
         let saved: StudyTemplate = serde_json::from_str(
             r#"{"name":"Vol Profile Anchored","inputs":[["row_count",{"Length":30}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["display",{"Choice":1}],["source_interval",{"Timeframe":null}],["feed_source",{"Toggle":true}],["start_time",{"Text":""}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileAnchored.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
         )
@@ -1430,6 +1453,31 @@ mod tests {
         assert_eq!(value("whole_tick_rows"), Some(&Toggle(false)));
         assert_eq!(value("row_ticks"), Some(&Length(0)));
         assert_eq!(value("width"), Some(&Number(30.0)));
+        for (id, expected) in [
+            ("show_rows", Toggle(true)),
+            ("show_poc", Toggle(true)),
+            ("show_vah", Toggle(false)),
+            ("show_val", Toggle(false)),
+            ("poc_color", InputValue::Color(Color32::PLACEHOLDER)),
+            ("vah_color", InputValue::Color(Color32::PLACEHOLDER)),
+            ("val_color", InputValue::Color(Color32::PLACEHOLDER)),
+        ] {
+            assert_eq!(value(id), Some(&expected), "{id}");
+        }
+        let mut edited = study.clone_box();
+        edited
+            .set_input("up_color", InputValue::Color(Color32::BLUE))
+            .unwrap();
+        let template = StudyTemplate::from_study(edited.as_ref());
+        let encoded = serde_json::to_string(&template).unwrap();
+        let restored = serde_json::from_str::<StudyTemplate>(&encoded)
+            .unwrap()
+            .create()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(StudyTemplate::from_study(restored.as_ref())).unwrap(),
+            serde_json::to_value(template).unwrap()
+        );
     }
 
     /// A Correlation Coefficient as a chart saved it before it opened as an area: a line with its

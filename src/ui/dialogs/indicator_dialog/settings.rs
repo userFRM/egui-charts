@@ -277,18 +277,18 @@ impl IndicatorSettingsDialog {
                     .show(ui, |ui| match self.tab {
                         Tab::Inputs => {
                             let mut choice_labels = Vec::new();
-                            if self.inputs.is_empty() {
+                            if !self.inputs.iter().any(|input| !input.style) {
                                 ui.label(l10n::text(
                                     ui.ctx(),
                                     "This study has no editable inputs.",
                                 ));
                             }
-                            if !self.inputs.is_empty()
+                            if self.inputs.iter().any(|input| !input.style)
                                 && ui
                                     .small_button(l10n::text(ui.ctx(), "Reset inputs"))
                                     .clicked()
                             {
-                                for input in &mut self.inputs {
+                                for input in self.inputs.iter_mut().filter(|input| !input.style) {
                                     input.value = input.default.clone();
                                 }
                             }
@@ -324,7 +324,7 @@ impl IndicatorSettingsDialog {
                                         };
                                         continue;
                                     }
-                                    if !shown {
+                                    if !shown || input.style {
                                         continue;
                                     }
                                     if crate::ui::strategy_report::inputs::show_input(
@@ -364,6 +364,43 @@ impl IndicatorSettingsDialog {
                                 &mut edit.settings.show_legend_values,
                                 l10n::text(ui.ctx(), "Show values in status line"),
                             );
+                            let shown: Vec<_> = self
+                                .inputs
+                                .iter()
+                                .map(|input| input.style && input.is_shown(&self.inputs))
+                                .collect();
+                            if shown.contains(&true) {
+                                FormGrid::new("study_style_inputs").show(ui, |ui| {
+                                    for (input, shown) in self.inputs.iter_mut().zip(shown) {
+                                        if !shown {
+                                            continue;
+                                        }
+                                        if let (InputKind::Color, InputValue::Color(color)) =
+                                            (&input.kind, &mut input.value)
+                                            && *color == egui::Color32::PLACEHOLDER
+                                        {
+                                            let label =
+                                                ui.label(l10n::text(ui.ctx(), &input.label));
+                                            let mut shown = ui.visuals().text_color();
+                                            if ui
+                                                .color_edit_button_srgba(&mut shown)
+                                                .labelled_by(label.id)
+                                                .changed()
+                                            {
+                                                *color = shown;
+                                            }
+                                            ui.end_row();
+                                        } else {
+                                            crate::ui::strategy_report::inputs::show_input(
+                                                ui,
+                                                input,
+                                                &[],
+                                            );
+                                        }
+                                    }
+                                });
+                                ui.separator();
+                            }
                             for (line, plot) in edit.settings.plots.iter_mut().enumerate() {
                                 ui.push_id(line, |ui| {
                                     ui.horizontal_wrapped(|ui| {
@@ -1466,6 +1503,73 @@ mod tests {
                 .iter()
                 .all(|level| level["price_line"] == false)
         );
+    }
+
+    /// Profile style inputs preview and apply with the style settings; cancellation restores them.
+    #[test]
+    fn profile_styles_preview_cancel_and_apply() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut chart = crate::widget::test_frames::chart(&[10.0, 11.0], &[12.0, 13.0]);
+        let id = chart.add_indicator(Box::new(crate::studies::VolProfileSession::default()));
+        let mut dialog = IndicatorSettingsDialog::default();
+        assert!(dialog.open_for_chart(&chart, id));
+        let mut applied = None;
+        let mut harness = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .with_size(egui::vec2(1440.0, 900.0))
+            .build_ui(|ui| {
+                if let Some(edit) =
+                    dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart)
+                {
+                    applied = Some(edit);
+                }
+            });
+        harness.run();
+        assert!(harness.query_by_label("Histogram").is_none());
+        harness.get_by_label("Style").click();
+        harness.run();
+        for label in ["Histogram", "Up", "POC colour"] {
+            assert!(harness.query_by_label(label).is_some(), "{label}");
+        }
+        harness.get_by_label("Histogram").click();
+        harness.run();
+        harness.get_by_label("Apply").click();
+        harness.run();
+        drop(harness);
+        let edit = applied.unwrap();
+        chart
+            .indicator_mut(id)
+            .unwrap()
+            .apply_settings(&edit.inputs, edit.settings)
+            .unwrap();
+        let value = |chart: &crate::widget::Chart| {
+            chart
+                .indicators()
+                .find(|(i, _)| *i == id)
+                .unwrap()
+                .1
+                .inputs()
+                .into_iter()
+                .find(|input| input.id == "show_rows")
+                .unwrap()
+                .value
+        };
+        assert_eq!(value(&chart), InputValue::Toggle(false));
+        assert!(dialog.open_for_chart(&chart, id));
+        dialog.tab = Tab::Style;
+        let mut harness = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .with_size(egui::vec2(1440.0, 900.0))
+            .build_ui(|ui| {
+                let _ = dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart);
+            });
+        harness.run();
+        harness.get_by_label("Histogram").click();
+        harness.run();
+        harness.get_by_label("Cancel").click();
+        harness.run();
+        drop(harness);
+        assert_eq!(value(&chart), InputValue::Toggle(false));
     }
 
     /// Studies preview real inputs and independent guide styles, then cancel or commit

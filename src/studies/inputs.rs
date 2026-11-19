@@ -44,6 +44,8 @@ pub struct StudyInput {
     pub default: InputValue,
     /// Accepted values, used to build the editor.
     pub kind: InputKind,
+    /// Edited in the Style tab; saved and applied like any other input.
+    pub style: bool,
     /// The choice input this one applies with and the choices it applies to. An editor hides it
     /// under the other choices and keeps its value. `None` always shows it.
     pub shown_when: Option<(String, Vec<usize>)>,
@@ -63,8 +65,15 @@ impl StudyInput {
             default: value.clone(),
             value,
             kind,
+            style: false,
             shown_when: None,
         }
+    }
+
+    /// List this input in the Style tab instead of the Inputs tab.
+    pub fn in_style_tab(mut self) -> Self {
+        self.style = true;
+        self
     }
 
     /// Set the declared default independently of the current value.

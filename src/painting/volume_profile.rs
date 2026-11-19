@@ -154,7 +154,7 @@ pub(crate) fn paint_profile(
             },
             poc_width,
             [y_at_row(va_high + 1), y_at_row(va_low)],
-            config.show_value_area_lines,
+            config,
             drawing,
         );
     };
@@ -163,7 +163,12 @@ pub(crate) fn paint_profile(
         draw_lines();
     }
 
-    for (row, &volume) in profile.volume.iter().enumerate() {
+    for (row, &volume) in profile
+        .volume
+        .iter()
+        .enumerate()
+        .filter(|_| config.show_rows)
+    {
         // Ordered on screen: the upper row edge is lower down on an inverted scale.
         let (upper, lower) = (y_at_row(row + 1), y_at_row(row));
         let (top, bottom) = (upper.min(lower), upper.max(lower));
@@ -541,7 +546,7 @@ fn draw_volume_profile_lines(
     poc_span: egui::Rangef,
     poc_width: f32,
     [vah_y, val_y]: [f32; 2],
-    show_value_area_lines: bool,
+    config: VolumeProfileConfig,
     drawing: bool,
 ) {
     let theme = painter.ctx().active_theme();
@@ -552,37 +557,58 @@ fn draw_volume_profile_lines(
     } else {
         Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3])
     };
-    painter.add(egui::Shape::line(
-        vec![
-            Pos2::new(poc_span.min, poc_y),
-            Pos2::new(poc_span.max, poc_y),
-        ],
-        Stroke::new(poc_width, poc_color),
-    ));
+    if config.show_poc {
+        painter.add(egui::Shape::line(
+            vec![
+                Pos2::new(poc_span.min, poc_y),
+                Pos2::new(poc_span.max, poc_y),
+            ],
+            Stroke::new(poc_width, poc_color),
+        ));
+    }
 
     let va_color = Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 200);
-    for y in [vah_y, val_y].into_iter().filter(|_| show_value_area_lines) {
+    let away = if vah_y <= val_y { 8.0 } else { -8.0 };
+    for (i, (label, y, label_y, shown)) in [
+        (
+            "VAH",
+            vah_y,
+            vah_y - away,
+            config.show_value_area_lines || config.show_value_area_high,
+        ),
+        (
+            "VAL",
+            val_y,
+            val_y + away,
+            config.show_value_area_lines || config.show_value_area_low,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if !shown {
+            continue;
+        }
+        let rgba = config.value_area_line_colors[i];
+        let line_color = if rgba == Color32::PLACEHOLDER.to_srgba_unmultiplied() {
+            va_color
+        } else {
+            Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3])
+        };
         painter.hline(
             rect.min.x..=rect.max.x,
             y,
-            Stroke::new(stroke::HAIRLINE, va_color),
+            Stroke::new(stroke::HAIRLINE, line_color),
         );
-    }
-    if rect.width() < 50.0 || !show_value_area_lines {
-        return;
-    }
-
-    // Each label sits outside the value area, away from the other line;
-    // the VAH line is the lower one on an inverted scale.
-    let away = if vah_y <= val_y { 8.0 } else { -8.0 };
-    for (label, y) in [("VAH", vah_y - away), ("VAL", val_y + away)] {
-        painter.text(
-            Pos2::new(rect.max.x - 25.0, y),
-            egui::Align2::CENTER_CENTER,
-            crate::localization::text(painter.ctx(), label),
-            font.clone(),
-            va_color,
-        );
+        if rect.width() >= 50.0 {
+            painter.text(
+                Pos2::new(rect.max.x - 25.0, label_y),
+                egui::Align2::CENTER_CENTER,
+                crate::localization::text(painter.ctx(), label),
+                font.clone(),
+                line_color,
+            );
+        }
     }
 }
 

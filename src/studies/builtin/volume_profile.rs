@@ -128,6 +128,10 @@ struct ProfileStudy {
     levels: RefCell<LevelCache>,
     values: IndicatorValues,
     colors: Vec<Color32>,
+    show_rows: bool,
+    /// Point of control, value area high and low visibility.
+    lines: [bool; 3],
+    line_colors: [Color32; 2],
     visible: bool,
 }
 
@@ -334,6 +338,9 @@ impl ProfileStudy {
                 Color32::from_rgba_unmultiplied(0, 188, 212, 163),
                 Color32::from_rgba_unmultiplied(233, 30, 99, 163),
             ],
+            show_rows: true,
+            lines: [true, false, false],
+            line_colors: [Color32::PLACEHOLDER; 2],
             visible: true,
         }
     }
@@ -544,6 +551,76 @@ impl ProfileStudy {
                 ));
             }
         }
+        for (id, label, value, kind) in [
+            (
+                "show_rows",
+                "Histogram",
+                InputValue::Toggle(self.show_rows),
+                InputKind::Toggle,
+            ),
+            (
+                "up_color",
+                "Up",
+                InputValue::Color(self.colors[1]),
+                InputKind::Color,
+            ),
+            (
+                "down_color",
+                "Down",
+                InputValue::Color(self.colors[2]),
+                InputKind::Color,
+            ),
+            (
+                "va_up_color",
+                "Value area up",
+                InputValue::Color(self.colors[3]),
+                InputKind::Color,
+            ),
+            (
+                "va_down_color",
+                "Value area down",
+                InputValue::Color(self.colors[4]),
+                InputKind::Color,
+            ),
+            (
+                "show_poc",
+                "POC",
+                InputValue::Toggle(self.lines[0]),
+                InputKind::Toggle,
+            ),
+            (
+                "poc_color",
+                "POC colour",
+                InputValue::Color(self.colors[0]),
+                InputKind::Color,
+            ),
+            (
+                "show_vah",
+                "VAH",
+                InputValue::Toggle(self.lines[1]),
+                InputKind::Toggle,
+            ),
+            (
+                "vah_color",
+                "VAH colour",
+                InputValue::Color(self.line_colors[0]),
+                InputKind::Color,
+            ),
+            (
+                "show_val",
+                "VAL",
+                InputValue::Toggle(self.lines[2]),
+                InputKind::Toggle,
+            ),
+            (
+                "val_color",
+                "VAL colour",
+                InputValue::Color(self.line_colors[1]),
+                InputKind::Color,
+            ),
+        ] {
+            inputs.push(StudyInput::new(id, label, value, kind).in_style_tab());
+        }
         inputs
     }
 
@@ -556,6 +633,17 @@ impl ProfileStudy {
             return Err(crate::studies::StudyError::rejected(&self.inputs(), id));
         }
         match (id, value) {
+            ("show_rows", InputValue::Toggle(v)) => self.show_rows = v,
+            ("up_color", InputValue::Color(v)) => self.colors[1] = v,
+            ("down_color", InputValue::Color(v)) => self.colors[2] = v,
+            ("va_up_color", InputValue::Color(v)) => self.colors[3] = v,
+            ("va_down_color", InputValue::Color(v)) => self.colors[4] = v,
+            ("show_poc", InputValue::Toggle(v)) => self.lines[0] = v,
+            ("poc_color", InputValue::Color(v)) => self.colors[0] = v,
+            ("show_vah", InputValue::Toggle(v)) => self.lines[1] = v,
+            ("vah_color", InputValue::Color(v)) => self.line_colors[0] = v,
+            ("show_val", InputValue::Toggle(v)) => self.lines[2] = v,
+            ("val_color", InputValue::Color(v)) => self.line_colors[1] = v,
             ("row_count", InputValue::Length(v)) => self.rows = v,
             ("value_area", InputValue::Number(v)) => self.value_area = v / 100.0,
             ("row_size", InputValue::Number(v)) => self.row_size = v,
@@ -1131,6 +1219,11 @@ impl ProfileStudy {
         {
             config = config.with_row_size(Some(height)).unwrap_or(config);
         }
+        config.show_rows = self.show_rows;
+        config.show_poc = self.lines[0];
+        config.show_value_area_high = self.lines[1];
+        config.show_value_area_low = self.lines[2];
+        config.value_area_line_colors = self.line_colors.map(|color| color.to_srgba_unmultiplied());
         config.display = self.display;
         config.up_color = self.colors[1].to_srgba_unmultiplied();
         config.down_color = self.colors[2].to_srgba_unmultiplied();
@@ -1362,7 +1455,19 @@ impl ProfileStudy {
                         bars: end..last + 1,
                         price: level.price,
                         kind: level.kind,
-                        color,
+                        color: match level.kind {
+                            ProfileLevelKind::ValueAreaHigh
+                                if self.line_colors[0] != Color32::PLACEHOLDER =>
+                            {
+                                self.line_colors[0].to_srgba_unmultiplied()
+                            }
+                            ProfileLevelKind::ValueAreaLow
+                                if self.line_colors[1] != Color32::PLACEHOLDER =>
+                            {
+                                self.line_colors[1].to_srgba_unmultiplied()
+                            }
+                            _ => color,
+                        },
                     });
                 }
             }
@@ -3579,8 +3684,6 @@ mod rendering_tests {
             Bar::new(time(1), 20.0, 20.0, 10.0, 10.0, 100.0),
             Bar::new(time(2), 12.0, 20.0, 12.0, 20.0, 100.0),
         ];
-        let mut study = VolProfileSession::new(10);
-        study.calculate(&bars);
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0));
         let price = PriceMap::new(
             PriceTransform::default(),
@@ -3590,62 +3693,33 @@ mod rendering_tests {
             false,
         );
         let coords = ChartMapping::new(rect, 200.0, 0, 1, 0.0, price);
-        #[derive(Clone)]
-        struct Guides(VolProfileSession, bool);
-        impl Indicator for Guides {
-            fn name(&self) -> &str {
-                self.0.name()
+        // Rows 0 and 1 hold 60, the rest 22.5. VA is 10..16; POC is 10.5.
+        for (inputs, x, value, expected) in [
+            (vec![], 390.0, 10.0, false),
+            (vec![], 390.0, 16.0, false),
+            (vec![("show_vah", true)], 390.0, 16.0, true),
+            (vec![("show_vah", true)], 390.0, 10.0, false),
+            (vec![("show_val", true)], 390.0, 10.0, true),
+            (vec![("show_val", true)], 390.0, 16.0, false),
+            (vec![], 390.0, 10.5, true),
+            (vec![("show_poc", false)], 390.0, 10.5, false),
+            (vec![], 20.0, 12.5, true),
+            (vec![("show_rows", false)], 20.0, 12.5, false),
+        ] {
+            let mut study = VolProfileSession::new(10);
+            for (id, value) in inputs {
+                study.set_input(id, InputValue::Toggle(value)).unwrap();
             }
-            fn calculate(&mut self, bars: &[Bar]) {
-                self.0.calculate(bars);
-            }
-            fn values(&self) -> &IndicatorValues {
-                self.0.values()
-            }
-            fn colors(&self) -> Vec<Color32> {
-                self.0.colors()
-            }
-            fn set_colors(&mut self, colors: Vec<Color32>) {
-                self.0.set_colors(colors);
-            }
-            fn set_visible(&mut self, visible: bool) {
-                self.0.set_visible(visible);
-            }
-            fn clone_box(&self) -> Box<dyn Indicator> {
-                Box::new(self.clone())
-            }
-            fn volume_profiles(&self, visible: Range<usize>) -> Vec<StudyProfile> {
-                let mut plots = self.0.volume_profiles(visible);
-                for plot in &mut plots {
-                    plot.config.show_value_area_lines = self.1;
-                }
-                plots
-            }
-        }
-        // Rows 0 and 1 hold 60 each, the rest 22.5 each. The 70% area is rows 0 to 5,
-        // prices 10 to 16; POC is 10.5. Every row ends at or before x=120.
-        for shown in [false, true] {
-            let study = Guides(study.clone(), shown);
-            for (x, value, expected) in [
-                (390.0, 10.0, shown),
-                (390.0, 16.0, shown),
-                (390.0, 10.5, true),
-                (20.0, 12.5, true),
-            ] {
-                let hit = crate::chart::indicators::hit_test_indicator(
-                    egui::pos2(x, price.price_to_y(value)),
-                    &study,
-                    0,
-                    0..3,
-                    &coords,
-                    |value| price.price_to_y(value),
-                );
-                assert_eq!(
-                    hit.is_some(),
-                    expected,
-                    "guides {shown}, selection at ({x}, {value})"
-                );
-            }
+            study.calculate(&bars);
+            let hit = crate::chart::indicators::hit_test_indicator(
+                egui::pos2(x, price.price_to_y(value)),
+                &study,
+                0,
+                0..3,
+                &coords,
+                |value| price.price_to_y(value),
+            );
+            assert_eq!(hit.is_some(), expected, "selection at ({x}, {value})");
         }
     }
 
@@ -3885,7 +3959,7 @@ mod rendering_tests {
         // colour, the width input and where the widest row ends: each profile spans the plot,
         // 0 to 400.
         let session = || Box::new(VolProfileSession::new(10)) as Box<dyn Indicator>;
-        for (mut study, theme, colors, rows, poc, width, right_edge) in [
+        let cases = [
             (
                 session(),
                 &light,
@@ -3941,7 +4015,108 @@ mod rendering_tests {
                 None,
                 120.0,
             ),
-        ] {
+        ]
+        .into_iter()
+        .map(|(study, theme, colors, rows, poc, width, right_edge)| {
+            (
+                study,
+                theme,
+                colors,
+                rows,
+                poc,
+                width,
+                right_edge,
+                vec![],
+                true,
+                1,
+                false,
+            )
+        })
+        .chain([
+            (
+                session(),
+                &light,
+                None,
+                stored,
+                saved[0],
+                None,
+                120.0,
+                [
+                    "poc_color",
+                    "up_color",
+                    "down_color",
+                    "va_up_color",
+                    "va_down_color",
+                ]
+                .into_iter()
+                .zip(&saved)
+                .map(|(id, color)| (id, InputValue::Color(*color)))
+                .collect(),
+                true,
+                1,
+                false,
+            ),
+            (
+                session(),
+                &light,
+                None,
+                defaults,
+                light.ui.text,
+                None,
+                120.0,
+                vec![("show_rows", InputValue::Toggle(false))],
+                false,
+                1,
+                false,
+            ),
+            (
+                session(),
+                &light,
+                None,
+                defaults,
+                light.ui.text,
+                None,
+                120.0,
+                vec![("show_poc", InputValue::Toggle(false))],
+                true,
+                0,
+                false,
+            ),
+            (
+                session(),
+                &light,
+                None,
+                defaults,
+                light.ui.text,
+                None,
+                120.0,
+                vec![
+                    ("show_vah", InputValue::Toggle(true)),
+                    ("vah_color", InputValue::Color(Color32::BLUE)),
+                ],
+                true,
+                1,
+                true,
+            ),
+        ]);
+        for (
+            mut study,
+            theme,
+            colors,
+            rows,
+            poc,
+            width,
+            right_edge,
+            inputs,
+            rows_drawn,
+            line_count,
+            vah,
+        ) in cases
+        {
+            for (id, value) in inputs {
+                study.set_input(id, value).unwrap();
+            }
+
             if let Some(colors) = colors {
                 study.set_colors(colors);
             }
@@ -3998,21 +4173,51 @@ mod rendering_tests {
                     _ => None,
                 })
                 .collect();
+            let hairlines: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::LineSegment { points, stroke }
+                        if stroke.color == Color32::BLUE =>
+                    {
+                        Some(*points)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(hairlines.len(), usize::from(vah));
+            if vah {
+                assert!((hairlines[0][0].y - price.price_to_y(16.0)).abs() < 1e-3);
+            }
+            let captions: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if matches!(text.galley.text(), "VAH" | "VAL") => {
+                        Some(text.galley.text())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(captions, if vah { vec!["VAH"] } else { vec![] });
             output.drop_without_applying_deltas();
             assert!(
-                (widest - right_edge).abs() < 1e-3,
+                !rows_drawn || (widest - right_edge).abs() < 1e-3,
                 "{widest} to {right_edge}"
             );
-            for [r, g, b, a] in rows {
+            assert_eq!(!fills.is_empty(), rows_drawn);
+            for [r, g, b, a] in rows.into_iter().filter(|_| rows_drawn) {
                 // Colours pass through the study's stored and painted forms as Color32 does.
                 let [r, g, b, a] =
                     Color32::from_rgba_unmultiplied(r, g, b, a).to_srgba_unmultiplied();
                 let row = Color32::from_rgba_unmultiplied(r, g, b, a);
                 assert!(fills.contains(&row), "{row:?} among {fills:?}");
             }
-            assert_eq!(lines.len(), 1);
-            assert_eq!(lines[0].width, 2.0);
-            assert_eq!(lines[0].color, egui::epaint::ColorMode::Solid(poc));
+            assert_eq!(lines.len(), line_count);
+            for line in lines {
+                assert_eq!(line.width, 2.0);
+                assert_eq!(line.color, egui::epaint::ColorMode::Solid(poc));
+            }
         }
     }
 
