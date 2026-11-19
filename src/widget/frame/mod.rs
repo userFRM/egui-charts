@@ -2791,7 +2791,7 @@ impl Chart {
             let line = chart_line(
                 &self.config.prev_close_line,
                 previous_close,
-                ui.active_theme().ui.text_secondary,
+                crate::config::ChartConfig::prev_close_fallback(&ui.active_theme()),
                 self.config.show_prev_close_line,
             );
             rendering::render_price_line(
