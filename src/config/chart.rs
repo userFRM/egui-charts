@@ -77,6 +77,16 @@ fn follow_the_theme() -> Color32 {
     Color32::PLACEHOLDER
 }
 
+/// Older saved configurations draw 1 point session breaks.
+fn session_break_width() -> f32 {
+    1.0
+}
+
+/// Older saved configurations shade the pre-market and the post-market.
+fn shaded() -> bool {
+    true
+}
+
 /// Appearance of the price axis: its border, tick marks and which labels it shows. It applies to
 /// the main and series price axes; value tag settings also apply to study panes.
 ///
@@ -139,6 +149,46 @@ impl Default for PriceAxisOptions {
             ticks_visible: false,
             edge_ticks_visible: false,
             hide_clipped_labels: true,
+        }
+    }
+}
+
+/// Colour, width and pattern of one of the chart's own price lines, such as the high and low or
+/// the previous close line. Its colour also fills the line's axis tag.
+///
+/// ```
+/// use egui_charts::config::{ChartConfig, ChartLineStyle};
+/// use egui_charts::model::LineStyle;
+///
+/// let mut line = ChartLineStyle::default();
+/// line.color = Some(egui::Color32::GOLD);
+/// line.width = 2.0;
+/// line.style = LineStyle::Solid;
+/// let mut config = ChartConfig::default();
+/// config.show_prev_close_line = true;
+/// config.prev_close_line = line;
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct ChartLineStyle {
+    /// Colour of the line and its axis tag; `None` keeps the colour each line documents.
+    /// Default: None
+    pub color: Option<Color32>,
+    /// Width in points. A width that is not positive and finite draws no line; the tag stays.
+    /// Default: 1
+    pub width: f32,
+    /// Pattern of the line.
+    /// Default: [`LineStyle::Dotted`]
+    pub style: LineStyle,
+}
+
+impl Default for ChartLineStyle {
+    fn default() -> Self {
+        Self {
+            color: None,
+            width: 1.0,
+            style: LineStyle::Dotted,
         }
     }
 }
@@ -426,6 +476,10 @@ pub struct ChartConfig {
     pub show_price_line: bool,
     /// Draw a line at the preceding session close independently of its tag.
     pub show_prev_close_line: bool,
+    /// Colour, width and pattern of the previous close line and its tag. Without a colour it
+    /// follows the theme's secondary text colour.
+    #[serde(default)]
+    pub prev_close_line: ChartLineStyle,
     /// Whether to show previous close value line
     pub show_symbol_prev_close: bool,
     /// Whether to show indicator name labels
@@ -438,10 +492,51 @@ pub struct ChartConfig {
     /// range, without hiding them or changing their individual autoscale settings.
     #[serde(default)]
     pub scale_price_chart_only: bool,
-    /// Draw the latest valid bid and ask lines and axis values supplied by the host.
+    /// Draw the latest valid bid and ask tags supplied by the host on the price axis, and their
+    /// lines while [`show_bid_ask_lines`](Self::show_bid_ask_lines) is `None`.
     pub show_bid_ask: bool,
-    /// Draw the highest high and lowest low of the visible bars on the price scale.
+    /// Draw the latest valid bid and ask lines across the pane. `None` draws them with
+    /// [`show_bid_ask`](Self::show_bid_ask), as configurations saved before this field do.
+    /// Default: None
+    #[serde(default)]
+    pub show_bid_ask_lines: Option<bool>,
+    /// Colour, width and pattern of the bid line and tag. Without a colour it follows the
+    /// theme's accent.
+    #[serde(default)]
+    pub bid_line: ChartLineStyle,
+    /// Colour, width and pattern of the ask line and tag. Without a colour it follows the
+    /// theme's falling candle colour.
+    #[serde(default)]
+    pub ask_line: ChartLineStyle,
+    /// Tag the highest high and lowest low of the visible bars on the price scale, and draw
+    /// their lines while [`show_high_low_lines`](Self::show_high_low_lines) is `None`.
     pub show_high_low: bool,
+    /// Draw the high and low lines apart from their tags. `None` follows
+    /// [`show_high_low`](Self::show_high_low), preserving older saved charts.
+    /// Default: None
+    #[serde(default)]
+    pub show_high_low_lines: Option<bool>,
+    /// Colour, width and pattern of the high line and tag. Without a colour it follows the
+    /// rising candle colour.
+    #[serde(default)]
+    pub high_line: ChartLineStyle,
+    /// Colour, width and pattern of the low line and tag. Without a colour it follows the
+    /// falling candle colour.
+    #[serde(default)]
+    pub low_line: ChartLineStyle,
+    /// Draw a line at the mean close of the visible bars, which moves with the view as it scrolls
+    /// and zooms. Bars without a close are left out.
+    /// Default: false
+    #[serde(default)]
+    pub show_average_close_line: bool,
+    /// Tag the mean close of the visible bars on the price scale, independently of its line.
+    /// Default: false
+    #[serde(default)]
+    pub show_average_close_label: bool,
+    /// Colour, width and pattern of the average close line and tag. Without a colour it follows
+    /// the theme's information colour.
+    #[serde(default)]
+    pub average_close_line: ChartLineStyle,
     /// Whether to show countdown to next candle
     pub show_countdown: bool,
     /// Whether to show the scroll-to-latest button when scrolled away from the live edge.
@@ -463,18 +558,44 @@ pub struct ChartConfig {
     /// When to show the maximize and menu buttons of the panes.
     #[serde(default = "pane_buttons_on_hover")]
     pub pane_buttons: NavigationButtons,
-    /// Whether to show session break vertical lines
+    /// Draw a vertical line at each session, day, week, month or year boundary, by the interval.
     pub show_session_breaks: bool,
-    /// Color for session break lines
+    /// Colour of session break lines, painted as set for every kind of boundary.
     pub session_break_color: Color32,
-    /// Style for session break lines
+    /// Pattern of session break lines.
     pub session_break_style: LineStyle,
+    /// Width of session break lines in points; a width that is not positive and finite draws
+    /// none. Configurations saved without this field draw 1 point lines.
+    /// Default: 1
+    #[serde(default = "session_break_width")]
+    pub session_break_width: f32,
     /// Session configuration (market hours)
     pub session_config: Option<SessionConfig>,
     /// Shade bars identified as extended or overnight hours by the session metadata.
     pub show_extended_hours: bool,
-    /// Extended-hours fill. `PLACEHOLDER` uses the active theme accent at low opacity.
+    /// Fill of the pre-market and the post-market where they set no colour of their own.
+    /// `PLACEHOLDER` uses the active theme accent at low opacity.
     pub extended_hours_color: Color32,
+    /// Fill of the pre-market: extended hours that regular hours of the same trading date
+    /// follow. `None` uses [`extended_hours_color`](Self::extended_hours_color).
+    /// Default: None
+    #[serde(default)]
+    pub premarket_color: Option<Color32>,
+    /// Fill of the post-market: extended hours that no regular hours of the same trading date
+    /// follow. `None` uses [`extended_hours_color`](Self::extended_hours_color).
+    /// Default: None
+    #[serde(default)]
+    pub postmarket_color: Option<Color32>,
+    /// Shade the pre-market while [`show_extended_hours`](Self::show_extended_hours) is on.
+    /// Configurations saved without this field shade it.
+    /// Default: true
+    #[serde(default = "shaded")]
+    pub shade_premarket: bool,
+    /// Shade the post-market while [`show_extended_hours`](Self::show_extended_hours) is on.
+    /// Configurations saved without this field shade it.
+    /// Default: true
+    #[serde(default = "shaded")]
+    pub shade_postmarket: bool,
     /// Fill for overnight windows. `PLACEHOLDER` follows the active theme accent at twice
     /// the extended-hours opacity. Older saved charts use that theme default.
     #[serde(default = "follow_the_theme")]
@@ -607,13 +728,23 @@ impl Default for ChartConfig {
             show_symbol_last_change: false,
             show_price_line: true,
             show_prev_close_line: false,
+            prev_close_line: ChartLineStyle::default(),
             show_symbol_prev_close: false,
             show_indicator_labels: true,
             show_indicator_last_val: true,
             lock_price_to_bar_ratio: false,
             scale_price_chart_only: false,
             show_bid_ask: false,
+            show_bid_ask_lines: None,
+            bid_line: ChartLineStyle::default(),
+            ask_line: ChartLineStyle::default(),
             show_high_low: false,
+            show_high_low_lines: None,
+            high_line: ChartLineStyle::default(),
+            low_line: ChartLineStyle::default(),
+            show_average_close_line: false,
+            show_average_close_label: false,
+            average_close_line: ChartLineStyle::default(),
             show_countdown: true,
             show_realtime_btn: true,
             realtime_button_pos: RealtimeButtonPos::BottomRight,
@@ -631,9 +762,14 @@ impl Default for ChartConfig {
             show_session_breaks: false,
             session_break_color: chart.grid_line_major,
             session_break_style: LineStyle::Dashed,
+            session_break_width: session_break_width(),
             session_config: None,
             show_extended_hours: true,
             extended_hours_color: Color32::PLACEHOLDER,
+            premarket_color: None,
+            postmarket_color: None,
+            shade_premarket: true,
+            shade_postmarket: true,
             overnight_hours_color: Color32::PLACEHOLDER,
             // Watermark disabled by default
             show_watermark: false,
@@ -685,6 +821,51 @@ impl ChartConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Configurations saved before the price line styles, the bid and ask line switch, the
+    /// average close line, the session break width and the pre-market and post-market choices
+    /// restore with today's lines: 1 point dotted price lines in their usual colours, bid and
+    /// ask lines that follow their tags, 1 point breaks and both extended sessions shaded.
+    #[test]
+    fn configs_saved_before_line_styles_restore_todays_lines() {
+        // A literal configuration saved by the base revision, before these fields existed.
+        let saved = r#"{"bullish_color":[8,153,129,255],"bearish_color":[242,54,69,255],"bullish_border_color":[8,153,129,255],"bearish_border_color":[242,54,69,255],"bullish_wick_color":[8,153,129,255],"bearish_wick_color":[242,54,69,255],"price_source":"Close","conflation_threshold":1.0,"background_color":[0,0,0,255],"background_style":"Solid","grid_color":[34,34,34,255],"vertical_grid_color":null,"grid_line_style":"Dotted","vertical_grid_line_style":null,"text_color":[255,255,255,255],"axis_font_size":null,"axis_font_family":"Proportional","thousands_sep":",","candle_width":0.6,"wick_width":1.0,"candle_border_width":0.0,"show_grid":true,"show_horizontal_grid":true,"show_vertical_grid":true,"show_volume":false,"volume_height_fraction":0.12,"volume_baseline_inset":12.0,"padding":0.0,"show_time_labels":true,"show_ohlc_info":true,"title_as_description":true,"show_quote_boxes":false,"show_ohlc_change":true,"show_ohlc_change_percent":true,"show_legend_volume":true,"show_indicator_inputs":true,"show_legend_badge":true,"show_market_status":true,"show_last_day_change":false,"indicator_backdrop_opacity":0.6,"show_currency":true,"show_unit":true,"currency_unit_on_hover":false,"show_scale_mode_buttons":true,"show_plus_button":true,"show_extended_session_price":true,"extended_session_price_color":[251,142,1,255],"show_right_axis":true,"show_left_axis":false,"right_axis_width":70.0,"left_axis_width":70.0,"price_axis":{"allow_label_overlap":false,"show_study_values":true,"study_value_color":null,"show_symbol_name":false,"show_study_names":false,"border_visible":false,"border_color":null,"ticks_visible":false,"edge_ticks_visible":false,"hide_clipped_labels":true},"right_axis_scale_mode":"Normal","left_axis_scale_mode":"Normal","show_symbol_labels":true,"show_symbol_last_val":true,"show_symbol_last_change":false,"show_price_line":true,"show_prev_close_line":true,"show_symbol_prev_close":true,"show_indicator_labels":true,"show_indicator_last_val":true,"lock_price_to_bar_ratio":false,"scale_price_chart_only":false,"show_bid_ask":true,"show_high_low":true,"show_countdown":false,"show_realtime_btn":true,"realtime_button_pos":"BottomRight","realtime_button_text":null,"realtime_button_size":[28.0,28.0],"realtime_button_color":[64,254,0,128],"realtime_button_hover_color":[64,254,0,128],"realtime_button_text_color":[64,254,0,128],"navigation_buttons":"Never","pane_buttons":"OnHover","show_session_breaks":false,"session_break_color":[18,18,18,18],"session_break_style":"Solid","session_config":null,"show_extended_hours":true,"extended_hours_color":[64,254,0,128],"overnight_hours_color":[64,254,0,128],"show_watermark":false,"watermark_text":null,"watermark_description":false,"watermark_color":[34,34,34,255],"watermark_font_size":48.0,"watermark_pos":"Center","skip_background":false}"#;
+        let restored: ChartConfig = serde_json::from_str(saved).unwrap();
+        let original: serde_json::Value = serde_json::from_str(saved).unwrap();
+        let current: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&restored).unwrap()).unwrap();
+        for (field, value) in original.as_object().unwrap() {
+            assert_eq!(&current[field], value, "{field}");
+        }
+        for line in [
+            restored.high_line,
+            restored.low_line,
+            restored.bid_line,
+            restored.ask_line,
+            restored.prev_close_line,
+            restored.average_close_line,
+        ] {
+            assert_eq!(line, ChartLineStyle::default());
+        }
+        assert_eq!(restored.show_high_low_lines, None);
+        assert!(!restored.show_average_close_line && !restored.show_average_close_label);
+        assert_eq!(
+            (restored.premarket_color, restored.postmarket_color),
+            (None, None)
+        );
+        let line = restored.prev_close_line;
+        assert_eq!(
+            (
+                line.color,
+                line.width,
+                line.style,
+                restored.show_bid_ask_lines,
+                restored.session_break_width,
+                restored.shade_premarket && restored.shade_postmarket,
+            ),
+            (None, 1.0, LineStyle::Dotted, None, 1.0, true)
+        );
+    }
 
     #[test]
     fn saved_axis_family_defaults_and_round_trips_host_names() {

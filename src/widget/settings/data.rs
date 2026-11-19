@@ -399,12 +399,18 @@ pub struct ScalesAndLinesSettings {
     pub thousands_sep: Option<ThousandsSeparator>,
     /// Whether to show countdown.
     pub show_countdown: bool,
-    /// Whether to show bid ask.
+    /// Whether to show the bid and ask tags.
     pub show_bid_ask: bool,
+    /// Whether to draw the bid and ask lines, apart from their tags. `None` keeps the chart's
+    /// choice, as do settings saved without this field.
+    pub show_bid_ask_lines: Option<bool>,
     /// Whether to show high low.
     pub show_high_low: bool,
     /// Whether to show prev close.
     pub show_prev_close: bool,
+    /// Colour, width and pattern of the previous close line. `None` keeps the chart's, as do
+    /// settings saved without this field.
+    pub prev_close_line: Option<crate::config::ChartLineStyle>,
 }
 
 impl Default for ScalesAndLinesSettings {
@@ -442,8 +448,10 @@ impl Default for ScalesAndLinesSettings {
             thousands_sep: None,
             show_countdown: true,
             show_bid_ask: false,
+            show_bid_ask_lines: None,
             show_high_low: false,
             show_prev_close: false,
+            prev_close_line: None,
         }
     }
 }
@@ -475,7 +483,7 @@ pub struct TradingSettings {
     pub show_positions: bool,
     /// Give each position's profit or loss on its label.
     pub position_pnl: bool,
-    /// The unit of the positions' profit or loss.
+    /// The unit of the positions' profit or loss, on their labels and in the depth ladder.
     pub position_pnl_unit: PnlUnit,
     /// Show a position's reverse button while its label is hovered.
     pub reverse_button: bool,

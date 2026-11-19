@@ -896,7 +896,7 @@ impl ChartBuilder {
         self
     }
 
-    /// Toggle session-break dividers (day/week/month boundaries) and shading.
+    /// Toggle session-break dividers at day, week, month and year boundaries.
     #[must_use]
     pub fn with_session_breaks(mut self, show: bool) -> Self {
         self.config.show_session_breaks = show;
