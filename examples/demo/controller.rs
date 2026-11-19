@@ -1035,7 +1035,10 @@ impl DemoApp {
             .state
             .set_display_timezone(&self.chart.display_timezone());
         let clock_changed = self.timeframe_toolbar.state.timezone != clock;
+        // A bar reload must keep the session restored by history.
+        let extended = self.chart.extended_hours();
         self.follow_chart_symbol(clock_changed);
+        self.chart.set_extended_hours(extended);
         self.follow_chart_session();
     }
 
@@ -1171,7 +1174,7 @@ impl DemoApp {
         let extended = self.chart.extended_hours();
         if self.own_data.is_none()
             && DemoSymbol::has_hours(&self.state.symbol)
-            && extended != (self.timeframe_toolbar.state.session_type == SessionType::ETH)
+            && extended != (self.timeframe_toolbar.state.session_type != SessionType::RTH)
         {
             self.timeframe_toolbar.set_session(if extended {
                 SessionType::ETH
@@ -7694,6 +7697,56 @@ mod tests {
             );
             assert_eq!(app.chart.extended_hours(), expected != SessionType::RTH);
             assert_eq!(app.live.view(app.chart.extended_hours()).0, expected);
+        }
+    }
+
+    /// Settings and their undo keep the session in the chart, toolbar and demo feed together,
+    /// including when a restored clock change also reloads the bars.
+    #[test]
+    fn settings_session_follows_undo_with_a_clock_change() {
+        for zone in [None, Some("Europe/Zurich")] {
+            let ctx = egui::Context::default();
+            let now = "2026-11-18T15:30:00Z".parse().unwrap();
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                now,
+                true,
+            );
+            settle(&mut app, &ctx);
+            app.timeframe_toolbar.set_session(SessionType::RTH);
+            app.apply_session();
+            let mut settings = app.chart_settings_state();
+            settings.extended_hours = Some(true);
+            if let Some(zone) = zone {
+                settings.timezone = zone.into();
+            }
+            app.apply_chart_settings(settings);
+            let session = |app: &DemoApp| {
+                (
+                    app.chart.extended_hours(),
+                    app.timeframe_toolbar.state.session_type,
+                    app.live.view(app.chart.extended_hours()).0,
+                )
+            };
+            assert_eq!(
+                session(&app),
+                (true, SessionType::ETH, SessionType::ETH),
+                "{zone:?}: apply"
+            );
+            assert!(app.chart.undo());
+            app.sync_chart_history();
+            assert_eq!(
+                session(&app),
+                (false, SessionType::RTH, SessionType::RTH),
+                "{zone:?}: undo"
+            );
+            assert!(app.chart.redo());
+            app.sync_chart_history();
+            assert_eq!(
+                session(&app),
+                (true, SessionType::ETH, SessionType::ETH),
+                "{zone:?}: redo"
+            );
         }
     }
 
