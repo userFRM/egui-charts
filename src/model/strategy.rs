@@ -2011,6 +2011,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     fn holding_totals_preserve_averages_beyond_32_bit_range() {
         // Invalid prices keep excursions short; timestamps still count toward holding.
         let bars: Vec<_> = (0..100_000)
