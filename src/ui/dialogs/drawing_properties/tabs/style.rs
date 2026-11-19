@@ -3,7 +3,7 @@
 use crate::drawings::glyphs::GLYPHS;
 use crate::drawings::{
     ArrowStyle, Drawing, DrawingToolType, FontWeight, GhostFeedConfig, LineMeasurementPosition,
-    RangeSettings,
+    RangeSettings, StyleControls,
 };
 use crate::localization as l10n;
 use crate::model::LineStyle;
@@ -32,7 +32,9 @@ impl StyleTab {
         props: &mut DrawingProps,
         pickers: &mut [ColorPickerState; 3],
         badge_pickers: &mut [ColorPickerState; 3],
+        custom: Option<&crate::drawings::RegisteredDrawingTool>,
     ) {
+        let style = custom.map_or_else(StyleControls::default, |tool| tool.style);
         let tool = props.tool_settings.as_ref().map(|t| t.settings.tool_type);
         // A price label and the label of a price note style their text, background and border
         // in the rows below; a price label has no other colour.
@@ -81,6 +83,7 @@ impl StyleTab {
                 && !position
                 && !regression
                 && !projection
+                && style.color
             {
                 ui.label(l10n::text(ui.ctx(), "Color"));
                 color_picker.sel_color = props.color;
@@ -108,12 +111,16 @@ impl StyleTab {
                 ui.end_row();
             }
 
-            if tool.is_none_or(|tool| tool.supports_line_width()) && !regression && !projection {
+            if tool.is_none_or(|tool| tool.supports_line_width())
+                && !regression
+                && !projection
+                && style.line_width
+            {
                 ui.label(l10n::text(ui.ctx(), "Line width"));
                 line_width_row(ui, &mut props.line_width);
                 ui.end_row();
             }
-            if tool.is_none_or(|tool| tool.supports_line_style()) {
+            if tool.is_none_or(|tool| tool.supports_line_style()) && style.line_style {
                 let label = ui.label(l10n::text(ui.ctx(), "Line style"));
                 ui.label_inputs_by(label.id, |ui| {
                     ui.combo_select(
@@ -348,7 +355,7 @@ impl StyleTab {
                         badge_pickers,
                     );
                 }
-                if settings.tool_type.supports_line_ends() {
+                if settings.tool_type.supports_line_ends() && style.line_ends {
                     for (label, style) in [
                         ("Line start", &mut settings.arrow_start_style),
                         ("Line end", &mut settings.arrow_end_style),
@@ -459,7 +466,9 @@ impl StyleTab {
                 badge_rows(ui, props, badge_pickers);
             }
 
-            if let Some(tool) = tool.filter(|tool| tool.supports_fill() && !position && !badge) {
+            if let Some(tool) =
+                tool.filter(|tool| tool.supports_fill() && !position && !badge && style.fill)
+            {
                 let label = ui.label(l10n::text(ui.ctx(), "Fill"));
                 ui.checkbox(&mut props.fill_enabled, l10n::text(ui.ctx(), "Enable fill"))
                     .labelled_by(label.id);
@@ -555,6 +564,13 @@ impl StyleTab {
                 ui.end_row();
             }
         });
+        if let Some(tool) = custom
+            && let Some(template) = &mut props.tool_settings
+        {
+            ui.space_md();
+            tool.implementation
+                .settings(ui, &mut template.settings.custom_settings);
+        }
     }
 }
 
@@ -1143,6 +1159,7 @@ mod tests {
                         &mut props,
                         &mut Default::default(),
                         &mut Default::default(),
+                        None,
                     )
                 },
             );
@@ -1190,7 +1207,9 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ui| StyleTab::show(ui, &mut props, &mut pickers, &mut Default::default()),
+                    |ui| {
+                        StyleTab::show(ui, &mut props, &mut pickers, &mut Default::default(), None)
+                    },
                 );
                 let well = output.shapes.iter().find_map(|s| match &s.shape {
                     Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
@@ -1280,7 +1299,9 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ui| StyleTab::show(ui, &mut props, &mut pickers, &mut Default::default()),
+                    |ui| {
+                        StyleTab::show(ui, &mut props, &mut pickers, &mut Default::default(), None)
+                    },
                 );
                 let well = output.shapes.iter().find_map(|s| match &s.shape {
                     Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
@@ -1428,7 +1449,9 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ui| StyleTab::show(ui, &mut props, &mut pickers, &mut Default::default()),
+                    |ui| {
+                        StyleTab::show(ui, &mut props, &mut pickers, &mut Default::default(), None)
+                    },
                 );
                 let shapes: Vec<_> = output.shapes.iter().map(|s| s.shape.clone()).collect();
                 output.drop_without_applying_deltas();
@@ -1558,7 +1581,13 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        StyleTab::show(ui, &mut props, &mut Default::default(), &mut badge_pickers)
+                        StyleTab::show(
+                            ui,
+                            &mut props,
+                            &mut Default::default(),
+                            &mut badge_pickers,
+                            None,
+                        )
                     },
                 );
                 let shapes: Vec<_> = output.shapes.iter().map(|s| s.shape.clone()).collect();
@@ -1632,6 +1661,7 @@ mod tests {
                             &mut props,
                             &mut Default::default(),
                             &mut Default::default(),
+                            None,
                         )
                     },
                 );
