@@ -12,7 +12,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// A stream holds at most 10,000 pushes between two frames. A push between frames counts towards
 /// that bound, so a burst larger than the bound always ends the stream. A push beyond the bound is
 /// dropped and ends the stream: the terminal discards what the stream built and calls the service again, which
-/// pushes its current state first.
+/// pushes its current state first. A built-in service ends its stream itself when its state starts
+/// over, as [`PaperAccount::reset`](crate::services::PaperAccount::reset) does.
 pub struct Events<T: Send + 'static> {
     inbox: Arc<Inbox>,
     key: u64,
@@ -36,10 +37,17 @@ impl<T: Send + 'static> Events<T> {
             .push_answer(self.key, Box::new(event), &self.active);
     }
 
-    /// False once the terminal stopped listening: the symbol or interval changed, the stream
-    /// lagged, or the terminal was dropped. Stop pushing then; later pushes are ignored.
+    /// False once the terminal stopped listening (the symbol or interval changed, the stream
+    /// lagged, or the terminal was dropped) or the service ended the stream. Stop pushing then;
+    /// later pushes are ignored.
     pub fn is_active(&self) -> bool {
         self.active.load(Ordering::Relaxed)
+    }
+
+    /// Ends the stream, as a push beyond the bound does: the terminal discards what the stream
+    /// built and calls the service again, which pushes its current state.
+    pub(crate) fn end(&self) {
+        self.active.store(false, Ordering::Relaxed);
     }
 }
 
@@ -70,8 +78,8 @@ impl Listener {
         (Self(active), events)
     }
 
-    /// False once the stream lagged: drop this listener, discard what the stream built and its
-    /// pushes still in the inbox, and subscribe again.
+    /// False once the stream lagged or its service ended it: drop this listener, discard what
+    /// the stream built and its pushes still in the inbox, and subscribe again.
     pub(crate) fn is_active(&self) -> bool {
         self.0.load(Ordering::Relaxed)
     }
