@@ -499,11 +499,18 @@ impl Session {
         self
     }
 
-    /// Drops the pre-market and post-market windows, weekly and date-specific.
+    /// Drops extended windows, weekly and date-specific. A schedule without regular windows
+    /// stays closed rather than becoming continuous.
     pub(crate) fn clear_extended_windows(&mut self) {
+        let scheduled = !self.windows.is_empty() || !self.extended_windows.is_empty();
         self.extended_windows.clear();
         for date in &mut self.overrides {
             date.extended_windows.clear();
+        }
+        if scheduled && self.windows.is_empty() {
+            // No window at all would mean always open.
+            self.windows
+                .push(SessionWindow::new([], NaiveTime::MIN, NaiveTime::MIN));
         }
     }
 }
