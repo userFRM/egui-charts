@@ -13,8 +13,8 @@ impl Drawing {
     /// enabled band `n` (from zero) levels `2n + 1` and `2n + 2`, at the values the painted lines
     /// have at `bar`; they are empty before the anchor, past the last bar, before volume trades
     /// and at a bar whose source price or volume is not finite. An anchored VWAP set to count
-    /// executions counts every bar at its source price here; [`Chart::alert_value`](crate::Chart::alert_value)
-    /// reads the chart's executions.
+    /// executions counts every bar at its source price here;
+    /// [`Chart::alert_value`](crate::Chart::alert_value) reads the chart's executions.
     pub fn alert_levels_with_bars(
         &self,
         bar: f64,

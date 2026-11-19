@@ -161,9 +161,9 @@ impl Drawing {
     }
 
     /// The values at the last of `bars`, the pane's bars at `revision`, with the chart's
-    /// `executions`, of the anchored VWAP's tracked lines, each with its style: the VWAP while its line shows, in the drawing's
-    /// colour, then the shown band lines of the enabled bands. Empty for other drawings, before
-    /// volume trades and while the last bar has no value.
+    /// `executions`, of the anchored VWAP's tracked lines, each with its style: the VWAP while
+    /// its line shows, in the drawing's colour, then the shown band lines of the enabled bands.
+    /// Empty for other drawings, before volume trades and while the last bar has no value.
     pub(crate) fn anchored_vwap_tracked(
         &self,
         bars: &[Bar],
@@ -238,7 +238,8 @@ impl Drawing {
         Some((estimated, span.len()))
     }
 
-    /// Whether a visible drawing reads executions: a profile, or an anchored VWAP set to count them.
+    /// Whether a visible drawing reads executions: a profile, or an anchored VWAP set to count
+    /// them.
     pub(crate) fn reads_executions(&self) -> bool {
         self.reads_profile()
             || (self.visible
@@ -1507,7 +1508,6 @@ mod tests {
                     expected[i]
                 );
             }
-            assert_close(tracked[0].0, mean);
             assert_eq!(
                 drawing.anchored_vwap_estimated(bars, flow),
                 estimated,

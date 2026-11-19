@@ -460,8 +460,8 @@ impl DrawingManager {
     /// levels, whose entry takes `entry_color`, the latest values of an anchored VWAP's tracked
     /// line and band lines over the pane's `bars` at `revision` with the chart's `executions`, and
     /// the time of a vertical line reaching that pane from another. Call after the pane handles
-    /// input so tags follow a drag
-    /// in the same frame. Line tags use opaque RGB so their text stays legible.
+    /// input so tags follow a drag in the same frame. Line tags use opaque RGB so their text
+    /// stays legible.
     pub(crate) fn axis_tags<'a>(
         &'a self,
         plot: Rect,
