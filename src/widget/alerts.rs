@@ -203,9 +203,10 @@ impl Chart {
                     Vec::new()
                 };
                 let single = levels.len() == 1;
+                let tool_name = self.drawings().registry.tool_name(d);
                 levels.into_iter().map(move |(level, name, _)| {
                     let id = d.id.to_string();
-                    let tool = ("tool", d.tool_type.as_str());
+                    let tool = ("tool", tool_name);
                     let named =
                         |template: &str, values: &[(&str, &str)], labels: &[(&str, &str)]| {
                             match study {
