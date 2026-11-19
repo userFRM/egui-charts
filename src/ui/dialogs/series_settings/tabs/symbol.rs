@@ -1163,7 +1163,7 @@ impl SymbolTab {
         [default_up, default_down]: [Color32; 2],
     ) {
         ui.label(l10n::text(ui.ctx(), label));
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             Self::optional_color_picker(ui, up, default_up);
             Self::optional_color_picker(ui, down, default_down);
