@@ -850,6 +850,10 @@ pub struct ChartTypeParams {
     pub footprint_stacked_imbalances: bool,
     /// Footprint: adjacent imbalances required for a zone.
     pub footprint_stack: usize,
+    /// Footprint: end stacked imbalance zones only at a bar closing beyond their far edge,
+    /// counting and marking the bars that trade into them without such a close, rather than at
+    /// their first revisit.
+    pub footprint_zones_until_broken: bool,
     /// Footprint: extend volume POCs until revisited.
     pub footprint_naked_poc: bool,
     /// Footprint: mark the largest absolute delta row.
@@ -1044,6 +1048,7 @@ impl Default for ChartTypeParams {
             footprint_diagonal: true,
             footprint_stacked_imbalances: false,
             footprint_stack: 3,
+            footprint_zones_until_broken: false,
             footprint_naked_poc: false,
             footprint_delta_poc: false,
             footprint_unfinished_auctions: false,
@@ -1341,6 +1346,7 @@ mod tests {
             "footprint_row_atr": true, "footprint_row_atr_length": 30,
             "footprint_value_area": 0.010003969988090037,
             "footprint_statistics": true,
+            "footprint_zones_until_broken": true,
             "footprint_statistics_rows": ["Volume", "Delta", "Trades", "AverageSize", "PointOfControl", "VolumeChange"],
             "footprint_session_cumulative_delta": true,
             "footprint_colors": [[12, 34, 56, 255], null, null, null],
@@ -1491,6 +1497,7 @@ mod tests {
                 "footprint_unfinished_auctions",
                 "footprint_extreme_ratio",
                 "footprint_pullback",
+                "footprint_zones_until_broken",
             ] {
                 assert_eq!(legacy[field], false);
             }

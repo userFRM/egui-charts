@@ -1889,6 +1889,32 @@ mod tests {
                 &["Buy imbalance: Buy imbalance on 3 rows"],
             ),
         ];
+        // Bar 60's buy zone at 100.25 to 100.75: bar 120 rejects it, bar 180 closes below
+        // it, ending it silently, and bar 240 trades into the ended zone without a signal.
+        let rejection: [Step; 7] = [
+            (
+                120,
+                100.5,
+                1.0,
+                Sell,
+                &[
+                    "Buy imbalance: Buy imbalance on 3 rows",
+                    "Stacked buy imbalance: Stacked buy imbalance of 3 rows",
+                ],
+            ),
+            (121, 100.75, 1.0, Buy, &[]),
+            (
+                180,
+                100.25,
+                1.0,
+                Buy,
+                &["Buy zone rejection: Buy zone rejection at 100.25 to 100.75"],
+            ),
+            (181, 100.0, 1.0, Sell, &[]),
+            (240, 100.5, 1.0, Sell, &[]),
+            (241, 100.75, 1.0, Buy, &[]),
+            (300, 100.0, 1.0, Buy, &[]),
+        ];
         let settings = |minimum: f64| {
             let mut settings = DetectorSettings::default();
             settings.footprint.enabled = true;
@@ -1898,6 +1924,8 @@ mod tests {
             rule.sell_imbalance = true;
             rule.stacked_buy_imbalance = true;
             rule.stacked_sell_imbalance = true;
+            rule.buy_zone_rejection = true;
+            rule.sell_zone_rejection = true;
             rule.imbalance_min_volume = minimum;
             rule.buy_volume_above = Some(100.0);
             rule.sell_volume_above = Some(100.0);
@@ -1930,6 +1958,11 @@ mod tests {
             ),
             ("levels", 0.0, selling.to_vec()),
             ("horizontal gap breaks the stack", 0.0, gapped.to_vec()),
+            (
+                "zone rejection",
+                0.0,
+                [&stacked(&[])[..7], &rejection[..]].concat(),
+            ),
         ] {
             let mut host = Host::new(Some(1_000.0));
             let mut configured = settings(minimum);

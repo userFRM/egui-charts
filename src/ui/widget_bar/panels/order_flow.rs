@@ -146,6 +146,8 @@ impl OrderFlowPanel {
                         check(ui, "Sell imbalance", &mut rule.sell_imbalance);
                         check(ui, "Stacked buy imbalance", &mut rule.stacked_buy_imbalance);
                         check(ui, "Stacked sell imbalance", &mut rule.stacked_sell_imbalance);
+                        check(ui, "Buy zone rejection", &mut rule.buy_zone_rejection);
+                        check(ui, "Sell zone rejection", &mut rule.sell_zone_rejection);
                         level(ui, "Buy volume above", &mut rule.buy_volume_above, 0.0);
                         level(ui, "Sell volume above", &mut rule.sell_volume_above, 0.0);
                         level(ui, "Delta above", &mut rule.delta_above, f64::MIN);
@@ -389,6 +391,8 @@ mod tests {
                 "Sell imbalance",
                 "Stacked buy imbalance",
                 "Stacked sell imbalance",
+                "Buy zone rejection",
+                "Sell zone rejection",
                 "Buy volume above",
                 "Sell volume above",
                 "Delta above",
@@ -426,6 +430,8 @@ mod tests {
                 sell_imbalance: true,
                 stacked_buy_imbalance: true,
                 stacked_sell_imbalance: true,
+                buy_zone_rejection: true,
+                sell_zone_rejection: true,
                 buy_volume_above: Some(0.0),
                 sell_volume_above: Some(0.0),
                 delta_above: Some(0.0),

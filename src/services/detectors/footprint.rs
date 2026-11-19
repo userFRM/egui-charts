@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 
 use super::DetectionKind;
-use crate::data::FootprintBar;
+use crate::data::Footprint;
 use crate::model::{ChartTypeParams, Direction, Signal, SignalId, SignalShape};
 use crate::services::SignalEvent;
 
@@ -14,7 +14,12 @@ use crate::services::SignalEvent;
 /// ratio, comparison, minimum volume and stack, as
 /// [`FootprintBar::imbalance`](crate::data::FootprintBar::imbalance) reads them and the footprint's
 /// stacked imbalance zones join them; [`follow_chart`](Self::follow_chart) copies these from a
-/// chart. Volume and delta levels are read on the forming bar after each sided execution: a level
+/// chart. The stacks of each closed bar become zones that stay active, through any number of
+/// rejections, until a later bar closes beyond their far edge: below the lowest row of a buy
+/// zone or above the highest row of a sell zone. A later closed bar that trades into an active
+/// zone without such a close is a zone rejection; the bar that closes beyond it ends the zone
+/// and fires nothing. Zones come from bars closed while footprint conditions are enabled.
+/// Volume and delta levels are read on the forming bar after each sided execution: a level
 /// fires on the execution that takes the value past it, by more than the rounding of a sum of
 /// sizes, from the bar's previous value, which starts at zero. Unknown-side executions never
 /// count. Trade-based intervals and the first retained bar have no conditions, and a bar that
@@ -47,6 +52,12 @@ pub struct FootprintRule {
     pub stacked_buy_imbalance: bool,
     /// A closed bar with at least [`stack`](Self::stack) adjacent rows where selling dominates.
     pub stacked_sell_imbalance: bool,
+    /// A closed bar that trades into an active stacked buy imbalance zone without closing below
+    /// its lowest row.
+    pub buy_zone_rejection: bool,
+    /// A closed bar that trades into an active stacked sell imbalance zone without closing above
+    /// its highest row.
+    pub sell_zone_rejection: bool,
     /// The forming bar's buy volume rises above this finite, non-negative level.
     pub buy_volume_above: Option<f64>,
     /// The forming bar's sell volume rises above this finite, non-negative level.
@@ -73,6 +84,8 @@ impl Default for FootprintRule {
             sell_imbalance: false,
             stacked_buy_imbalance: false,
             stacked_sell_imbalance: false,
+            buy_zone_rejection: false,
+            sell_zone_rejection: false,
             buy_volume_above: None,
             sell_volume_above: None,
             delta_above: None,
@@ -97,17 +110,38 @@ impl FootprintRule {
     }
 }
 
-/// Pushes the imbalance conditions of `rule` that the closed `bar`, opened at `at` and closed
-/// at `close`, meets.
+/// A stacked imbalance zone of an earlier closed bar, in rows of one tick, active until a later
+/// bar closes beyond its far edge.
+pub(super) struct Zone {
+    low: i64,
+    high: i64,
+    /// Buy imbalances support from the low; sell imbalances resist from the high.
+    buy: bool,
+}
+
+/// Active zones kept per interval. Zones far from the price can stay active all session; the
+/// oldest go first.
+const ZONES: usize = 1_000;
+
+/// Pushes the imbalance and zone rejection conditions of `rule` that the closed bar of `flow`
+/// opened at `at` and closed at `close` meets, then ends the `zones` it broke and adds its own.
 pub(super) fn closed(
-    bar: &FootprintBar,
+    flow: &Footprint,
     at: DateTime<Utc>,
     close: f64,
     rule: &FootprintRule,
+    zones: &mut Vec<Zone>,
     out: &mut Vec<SignalEvent>,
 ) {
-    // Per side, sell then buy: imbalanced rows, the run of adjacent ones and the longest run.
-    let (mut rows, mut run, mut longest) = ([0_usize; 2], [0_usize; 2], [0_usize; 2]);
+    let Some(bar) = flow.bar_at(at) else {
+        return;
+    };
+    let stack = rule.stack.max(1);
+    // Per side, sell then buy: imbalanced rows, the run of adjacent ones, the run's first row and
+    // the longest run.
+    let (mut rows, mut run, mut first, mut longest) =
+        ([0_usize; 2], [0_usize; 2], [0_i64; 2], [0_usize; 2]);
+    let mut stacks = Vec::new();
     let mut previous: Option<i64> = None;
     for &level in bar.levels.keys() {
         let (sell, buy) = bar.imbalance(
@@ -118,17 +152,35 @@ pub(super) fn closed(
         );
         let adjacent = previous.and_then(|key| key.checked_add(1)) == Some(level);
         for (side, active) in [sell, buy].into_iter().enumerate() {
+            if let Some(high) = previous.filter(|_| run[side] >= stack && !(active && adjacent)) {
+                stacks.push(Zone {
+                    low: first[side],
+                    high,
+                    buy: side == 1,
+                });
+            }
             run[side] = match (active, adjacent) {
                 (false, _) => 0,
-                (true, true) => run[side] + 1,
-                (true, false) => 1,
+                (true, true) if run[side] > 0 => run[side] + 1,
+                (true, _) => {
+                    first[side] = level;
+                    1
+                }
             };
             rows[side] += usize::from(active);
             longest[side] = longest[side].max(run[side]);
         }
         previous = Some(level);
     }
-    let stack = rule.stack.max(1);
+    for side in 0..2 {
+        if let Some(high) = previous.filter(|_| run[side] >= stack) {
+            stacks.push(Zone {
+                low: first[side],
+                high,
+                buy: side == 1,
+            });
+        }
+    }
     for (met, key, label, up, count, preposition) in [
         (
             rule.buy_imbalance && rows[1] > 0,
@@ -168,6 +220,54 @@ pub(super) fn closed(
             let tooltip = format!("{label} {preposition} {count} {unit}");
             out.push(signal(key, at, close, up, label, tooltip));
         }
+    }
+    // Earlier zones only: a close beyond the far edge ends one, trading into it rejects it.
+    let row = flow.level_of(close);
+    let traded = bar.levels.keys().next().zip(bar.levels.keys().next_back());
+    let decimals = crate::scales::decimals(flow.tick_size());
+    let price = |key: i64| format!("{:.decimals$}", key as f64 * flow.tick_size());
+    let mut rejected: [Vec<String>; 2] = Default::default();
+    zones.retain(|zone| {
+        let broken = row.is_some_and(|row| {
+            if zone.buy {
+                row < zone.low
+            } else {
+                row > zone.high
+            }
+        });
+        if !broken && traded.is_some_and(|(&low, &high)| low <= zone.high && high >= zone.low) {
+            rejected[usize::from(zone.buy)].push(format!(
+                "{} to {}",
+                price(zone.low),
+                price(zone.high)
+            ));
+        }
+        !broken
+    });
+    for (met, side, key, label, up) in [
+        (
+            rule.buy_zone_rejection,
+            1,
+            "buy-zone-rejection",
+            "Buy zone rejection",
+            true,
+        ),
+        (
+            rule.sell_zone_rejection,
+            0,
+            "sell-zone-rejection",
+            "Sell zone rejection",
+            false,
+        ),
+    ] {
+        if met && !rejected[side].is_empty() {
+            let tooltip = format!("{label} at {}", rejected[side].join(", "));
+            out.push(signal(key, at, close, up, label, tooltip));
+        }
+    }
+    zones.extend(stacks);
+    if zones.len() > ZONES {
+        zones.drain(..zones.len() - ZONES);
     }
 }
 

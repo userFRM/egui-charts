@@ -466,6 +466,11 @@ impl SymbolTab {
                 ui.add(egui::DragValue::new(&mut params.footprint_stack).range(1..=1000))
                     .labelled_by(label.id);
                 ui.end_row();
+                Self::switch(
+                    ui,
+                    "Zones end only when broken",
+                    &mut params.footprint_zones_until_broken,
+                );
             }
             let mut cluster = params.footprint_cluster_share.map(|share| share * 100.0);
             Self::optional_number(ui, "Volume clusters", &mut cluster, 25.0, 0.0..=100.0, "%");

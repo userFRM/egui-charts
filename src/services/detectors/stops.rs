@@ -158,6 +158,8 @@ pub(super) struct StopSweeps {
     /// The latest bar of each footprint condition counted on the current clock, independent of
     /// chart marker retention.
     pub(super) conditions: HashMap<String, DateTime<Utc>>,
+    /// Footprint stacked imbalance zones still active on the current clock.
+    zones: Vec<footprint::Zone>,
 }
 
 struct Prices {
@@ -184,6 +186,7 @@ impl StopSweeps {
             live: None,
             live_open: None,
             conditions: HashMap::new(),
+            zones: Vec::new(),
         }
     }
 
@@ -207,6 +210,7 @@ impl StopSweeps {
             .zip(self.clock.as_ref())
             .map(|(time, clock)| clock.instant_open(time));
         self.conditions.clear();
+        self.zones.clear();
         self.footprint = self.clock.clone().map(|clock| {
             let mut footprint = Footprint::new(clock, self.tick, 1).unwrap();
             footprint.set_budget(12, 100_000);
@@ -323,7 +327,14 @@ impl StopSweeps {
                 continue;
             };
             if settings.footprint.enabled {
-                footprint::closed(bar, at, prices.close, &settings.footprint.rule, out);
+                footprint::closed(
+                    footprint,
+                    at,
+                    prices.close,
+                    &settings.footprint.rule,
+                    &mut self.zones,
+                    out,
+                );
             }
             let volume = bar.volume();
             let buy = prices.close > prices.open;
