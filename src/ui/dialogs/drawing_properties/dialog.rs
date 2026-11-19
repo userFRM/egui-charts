@@ -653,50 +653,55 @@ mod tests {
     /// The registered settings editor is reachable, and Ok records its edit as one undo step.
     #[test]
     fn registered_tool_settings_show_in_the_style_tab() {
-        let ctx = Context::default();
-        let mut chart = Chart::new(BarData::new());
-        let mut tool = crate::drawings::registry::tests::midpoint();
-        tool.style.fill = false;
-        tool.style.line_ends = false;
-        chart
-            .drawings_mut()
-            .registry
-            .register("midpoint", tool)
-            .unwrap();
-        let mut drawing = Drawing::custom("midpoint");
-        drawing.id = 7;
-        drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
-        chart.drawings_mut().drawings.push(drawing);
-        let mut dialog = DrawingPropertiesDialog::new();
-        assert!(dialog.open_for_chart(&chart, DrawingId(7)));
-        frame(&mut dialog, &mut chart, &ctx, vec![]);
-        let labels = frame(&mut dialog, &mut chart, &ctx, vec![]);
-        for (label, present) in [
-            ("Radius", true),
-            ("Color", true),
-            ("Line width", true),
-            ("Line style", true),
-            ("Fill", false),
-            ("Line start", false),
-            ("Line end", false),
-        ] {
+        for common in [true, false] {
+            let ctx = Context::default();
+            let mut chart = Chart::new(BarData::new());
+            let mut tool = crate::drawings::registry::tests::midpoint();
+            tool.style.color = common;
+            tool.style.line_width = common;
+            tool.style.line_style = common;
+            tool.style.fill = false;
+            tool.style.line_ends = false;
+            chart
+                .drawings_mut()
+                .registry
+                .register("midpoint", tool)
+                .unwrap();
+            let mut drawing = Drawing::custom("midpoint");
+            drawing.id = 7;
+            drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+            chart.drawings_mut().drawings.push(drawing);
+            let mut dialog = DrawingPropertiesDialog::new();
+            assert!(dialog.open_for_chart(&chart, DrawingId(7)));
+            frame(&mut dialog, &mut chart, &ctx, vec![]);
+            let labels = frame(&mut dialog, &mut chart, &ctx, vec![]);
+            for (label, present) in [
+                ("Radius", true),
+                ("Color", common),
+                ("Line width", common),
+                ("Line style", common),
+                ("Fill", false),
+                ("Line start", false),
+                ("Line end", false),
+            ] {
+                assert_eq!(
+                    labels.iter().any(|(text, _)| text == label),
+                    present,
+                    "{label}"
+                );
+            }
+            click(&mut dialog, &mut chart, &ctx, "Ok");
             assert_eq!(
-                labels.iter().any(|(text, _)| text == label),
-                present,
-                "{label}"
+                chart.drawings().drawings[0].custom_settings,
+                serde_json::json!({"radius": 10})
             );
+            assert!(chart.undo());
+            assert_eq!(
+                chart.drawings().drawings[0].custom_settings,
+                serde_json::Value::Null
+            );
+            assert!(!chart.can_undo());
         }
-        click(&mut dialog, &mut chart, &ctx, "Ok");
-        assert_eq!(
-            chart.drawings().drawings[0].custom_settings,
-            serde_json::json!({"radius": 10})
-        );
-        assert!(chart.undo());
-        assert_eq!(
-            chart.drawings().drawings[0].custom_settings,
-            serde_json::Value::Null
-        );
-        assert!(!chart.can_undo());
     }
 
     fn frame(

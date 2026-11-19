@@ -408,7 +408,7 @@ mod tests {
         use egui::accesskit::Role;
         use egui_kittest::{Harness, kittest::Queryable};
 
-        let mut settings = UserSettings::from_json(r#"{"version":1,"drawing_favorites":["TrendLine"],"custom_drawing_favorites":["midpoint","gone"]}"#).unwrap();
+        let settings = UserSettings::from_json(r#"{"version":1,"drawing_favorites":["TrendLine"],"custom_drawing_favorites":["midpoint","gone"]}"#).unwrap();
         let written: serde_json::Value = serde_json::from_str(&settings.to_json()).unwrap();
         assert_eq!(
             written["custom_drawing_favorites"],
@@ -457,9 +457,10 @@ mod tests {
                 .query_by_role_and_label(Role::Button, "gone")
                 .is_none()
         );
+        assert_eq!(settings.custom_drawing_favorites, ["midpoint", "gone"]);
         assert_eq!(
-            settings.custom_drawing_favorites.pop().as_deref(),
-            Some("gone")
+            harness.state().state.custom_favorites,
+            settings.custom_drawing_favorites
         );
     }
 
