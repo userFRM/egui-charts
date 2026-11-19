@@ -1350,7 +1350,7 @@ mod tests {
         rules.point_value = 50.0;
         rules.leverage = Some(20.0);
         rules.time_in_force = vec![
-            TimeInForce::Day,
+            TimeInForce::GoodTillDate,
             TimeInForce::ImmediateOrCancel,
             TimeInForce::GoodTillCancelled,
         ];

@@ -655,7 +655,7 @@ pub struct TradingRules {
 impl TradingRules {
     /// Whether the rules are usable: a positive finite step, minimum and point value, a maximum
     /// no smaller than the minimum, a positive finite leverage and pip value where set, and at
-    /// least one time in force, with a default that needs no entered expiry.
+    /// least one time in force.
     pub(crate) fn is_valid(&self) -> bool {
         let positive = |value: f64| value.is_finite() && value > 0.0;
         positive(self.quantity_step)
@@ -667,7 +667,6 @@ impl TradingRules {
             && self.leverage.is_none_or(positive)
             && self.pip_value.is_none_or(positive)
             && !self.time_in_force.is_empty()
-            && self.time_in_force[0] != TimeInForce::GoodTillDate
     }
 
     /// Whole units from 1 without a maximum, a point value of 1 and day orders: the rules the
