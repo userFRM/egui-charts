@@ -318,8 +318,9 @@ pub struct Drawing {
     /// Lines, labels, zone fill and border of position tools.
     #[serde(default)]
     pub position_style: PositionStyle,
-    /// Text popup of a pin and glyph disc of a signpost. Drawings saved without it show their
-    /// text and no glyph, as new ones do.
+    /// Text popup of a pin, glyph disc of a signpost, and the Show text switch of horizontal
+    /// lines and rays, arrow marks and the parallel, flat top/bottom and disjoint channels.
+    /// Drawings saved without it show their text and no glyph, as new ones do.
     #[serde(default)]
     pub marker: AnnotationMarker,
     /// Customizable Fibonacci levels for Fib tools
