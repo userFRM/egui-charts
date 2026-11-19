@@ -9,8 +9,8 @@ use egui::Color32;
 /// Shows the positive and negative directional indicators and the ADX, Wilder's average of DX
 /// over the ADX smoothing period (Wilder 1978)
 ///
-/// The `period` input sets both lengths, as studies saved with a single length expect;
-/// `adx_smoothing`, which follows it in `inputs()`, then sets the smoothing alone.
+/// The `period` and `adx_smoothing` inputs are independent; setting either leaves the other.
+/// A template saved before the smoothing had an input of its own restores it equal to `period`.
 #[derive(Clone, Debug)]
 pub struct DirectionalMovement {
     /// Period of the directional indicators (typically 14)
@@ -78,12 +78,7 @@ impl Indicator for DirectionalMovement {
     crate::studies::inputs::study_inputs!(self;
         period: length("DI period", 1, usize::MAX),
         adx_smoothing: length("ADX smoothing period", 1, usize::MAX)
-    ; changed => {
-        // Before the smoothing input existed, `period` set both lengths; saved studies still do.
-        if changed == "period" {
-            self.adx_smoothing = self.period;
-        }
-    });
+    ; {});
 
     fn name(&self) -> &str {
         "DMI"

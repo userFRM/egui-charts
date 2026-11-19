@@ -3776,7 +3776,9 @@ impl Chart {
                     continue;
                 }
                 let mut labels = Vec::new();
-                if let Some(poc) = profile.volume.poc() {
+                if self.trade_profile_settings().poc
+                    && let Some(poc) = profile.volume.poc()
+                {
                     labels.push(("POC", poc as f64 * step));
                 }
                 if let Some((low, high)) = self
