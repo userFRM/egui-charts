@@ -12,9 +12,11 @@ use egui::Color32;
 ///
 /// Outputs are the width, the highest width of the last `expansion` bars (highest
 /// expansion) and the lowest width of the last `contraction` bars (lowest contraction),
-/// each window ending at the current bar. The width starts at bar `period - 1` and both
-/// extrema start with it. A bar with a non-finite close is skipped as if absent: it has no
-/// value and is in no window, so later values equal those of the series without it.
+/// each window ending at the current bar. The width starts at bar `period - 1`. Each extremum
+/// starts at bar `lookback - 1`, the first bar whose window spans its whole lookback, or with
+/// the width when that comes later; bars before the width are in the window but hold no width.
+/// A bar with a non-finite close is skipped as if absent: it has no value and is in no window,
+/// so later values equal those of the series without it.
 #[derive(Clone, Debug)]
 pub struct BollingerBandsWidth {
     period: usize,
@@ -88,8 +90,22 @@ impl BollingerBandsWidth {
         let highest = helpers::highest(widths.iter().copied(), self.expansion);
         let lowest = helpers::lowest(widths.iter().copied(), self.contraction);
         let mut values = IndicatorValues::new();
-        for ((width, highest), lowest) in widths.into_iter().zip(highest).zip(lowest) {
-            values.push_lines(&[width, highest, lowest]);
+        for (bar, ((width, highest), lowest)) in
+            widths.into_iter().zip(highest).zip(lowest).enumerate()
+        {
+            // An extremum has no value until its window spans the whole lookback.
+            let filled = |lookback: usize, extreme: f64| {
+                if bar + 1 < lookback {
+                    f64::NAN
+                } else {
+                    extreme
+                }
+            };
+            values.push_lines(&[
+                width,
+                filled(self.expansion, highest),
+                filled(self.contraction, lowest),
+            ]);
         }
         values
     }

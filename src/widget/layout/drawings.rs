@@ -20,6 +20,8 @@ struct Snapshot {
     notes: Option<String>,
     symbol: String,
     sync: Option<FolderSync>,
+    /// Whether the chart stored the drawing (see [`Chart::stores`]).
+    stored: bool,
     /// The [`DrawingLinks::frame`] in which the layout last saw the drawing change, or wrote the
     /// change of another drawing to it.
     seen: u64,
@@ -242,6 +244,24 @@ impl DrawingLinks {
         self.origins.get(&key).copied().unwrap_or(key)
     }
 
+    /// Whether the stored drawing `key` went because its chart read storage after another chart
+    /// of that storage took the drawing into a folder kept on the chart or in the layout, which
+    /// is no deletion: that chart's change reaches the others.
+    fn left_storage(&self, charts: &[&mut Chart], count: usize, key: Key) -> bool {
+        let origin = self.origin_of(key);
+        (0..count).any(|slot| {
+            slot != key.0
+                && charts[slot].shares_stored_drawings(charts[key.0])
+                && self.linked_on(charts, slot, origin).is_some_and(|id| {
+                    charts[slot]
+                        .drawings()
+                        .drawings
+                        .iter()
+                        .any(|d| d.id == id && !charts[slot].stores(charts[slot].symbol(), d))
+                })
+        })
+    }
+
     /// The id of the drawing on show in `slot` that is linked under `origin`.
     fn linked_on(&self, charts: &[&mut Chart], slot: usize, origin: Key) -> Option<usize> {
         self.origins
@@ -301,8 +321,9 @@ impl DrawingLinks {
                 slot != key.0
                     && groups[slot] == groups[key.0]
                     && charts[slot].symbol() == charts[key.0].symbol()
-                    // Charts on one storage read each other's drawings from it.
-                    && !(drawing.saveable && charts[slot].shares_stored_drawings(charts[key.0]))
+                    // Charts on one storage read each other's stored drawings from it.
+                    && !(charts[key.0].stores(charts[key.0].symbol(), drawing)
+                        && charts[slot].shares_stored_drawings(charts[key.0]))
             })
             .filter_map(|slot| {
                 let other = charts[slot].drawings().drawings.iter().find(|d| {
@@ -533,7 +554,11 @@ impl DrawingLinks {
             }
         }
         for (&key, old) in &self.previous {
-            if key.0 < count && !seen.contains_key(&key) && old.symbol == charts[key.0].symbol() {
+            if key.0 < count
+                && !seen.contains_key(&key)
+                && old.symbol == charts[key.0].symbol()
+                && !(old.stored && self.left_storage(charts, count, key))
+            {
                 changes.push((key, None, None));
             }
         }
@@ -584,15 +609,38 @@ impl DrawingLinks {
             let mut saveable = false;
             let mut writers: Vec<usize> = Vec::new();
             let mut deleted = vec![key];
+            // Charts on one storage read each other's stored drawings instead.
+            let stored = drawing
+                .as_ref()
+                .is_some_and(|drawing| charts[key.0].stores(&symbol, drawing));
             for slot in 0..count {
-                // Charts on one storage read each other's stored drawings instead.
-                let stored = drawing.as_ref().is_some_and(|drawing| drawing.saveable);
                 if slot == key.0
                     || only.is_some_and(|only| only != slot)
                     || groups[slot] != groups[key.0]
                     || charts[slot].symbol() != symbol
-                    || (stored && charts[slot].shares_stored_drawings(charts[key.0]))
                 {
+                    continue;
+                }
+                if stored && charts[slot].shares_stored_drawings(charts[key.0]) {
+                    // A copy the chart does not store, as of a drawing taken out of a folder kept
+                    // in the layout, gives way to the stored drawing it reads.
+                    let copies: Vec<usize> = self
+                        .origins
+                        .iter()
+                        .filter(|&(&(at, _), &linked)| at == slot && linked == origin)
+                        .map(|(&(_, id), _)| id)
+                        .filter(|&id| {
+                            charts[slot]
+                                .drawings()
+                                .drawings
+                                .iter()
+                                .any(|d| d.id == id && !charts[slot].stores(&symbol, d))
+                        })
+                        .collect();
+                    for id in copies {
+                        changed = true;
+                        delete_copy(charts, &mut writers, key.0, slot, id);
+                    }
                     continue;
                 }
                 let linked = self.linked_on(charts, slot, origin);
@@ -746,6 +794,7 @@ impl DrawingLinks {
                             notes: drawing.notes.clone(),
                             symbol: chart.symbol().to_owned(),
                             sync: drawing.folder_sync_mode(),
+                            stored: chart.stores(chart.symbol(), drawing),
                             seen: seen.get(&(slot, drawing.id)).copied().unwrap_or(self.frame),
                         },
                     );
@@ -995,7 +1044,8 @@ impl DrawingLinks {
                                 && charts[from].symbol() == charts[slot].symbol()
                         })
                         // Read from the storage they share, as the loop leaves it.
-                        || (drawing.saveable && charts[slot].shares_stored_drawings(charts[source]))
+                        || (charts[source].stores(charts[source].symbol(), drawing)
+                            && charts[slot].shares_stored_drawings(charts[source]))
                         || given.contains(&(origin, slot))
                         || self.linked_on(charts, slot, origin).is_some()
                     {
@@ -1041,7 +1091,12 @@ impl DrawingLinks {
             }
             let chart = &mut *charts[slot];
             // A drawing the chart stores comes back from its storage, which this does not write.
-            let stores = chart.keeps_stored_drawings();
+            let gone = drawings_of(chart, &symbol).is_some_and(|manager| {
+                manager
+                    .drawings
+                    .iter()
+                    .any(|d| d.id == id && !chart.stores(&symbol, d))
+            });
             let manager = if chart.symbol() == symbol {
                 Some(&mut chart.drawings)
             } else {
@@ -1051,10 +1106,7 @@ impl DrawingLinks {
                     .map(|(manager, _)| manager)
             };
             if let Some(manager) = manager
-                && manager
-                    .drawings
-                    .iter()
-                    .any(|d| d.id == id && !(stores && d.saveable))
+                && gone
             {
                 manager.remove_drawings(&[id]);
             }
@@ -1075,7 +1127,10 @@ impl DrawingLinks {
         let mut joined = HashSet::new();
         for (key, drawing, _) in changes {
             let Some(drawing) = drawing else { continue };
-            if !drawing.saveable || drawing.stored_id.is_none() || self.origins.contains_key(key) {
+            if !charts[key.0].stores(charts[key.0].symbol(), drawing)
+                || drawing.stored_id.is_none()
+                || self.origins.contains_key(key)
+            {
                 continue;
             }
             let record = sync_id(drawing);
@@ -1087,11 +1142,9 @@ impl DrawingLinks {
                         && charts[slot].shares_stored_drawings(charts[key.0])
                 })
                 .find_map(|slot| {
-                    let other = charts[slot]
-                        .drawings()
-                        .drawings
-                        .iter()
-                        .find(|d| d.saveable && sync_id(d) == record)?;
+                    let other = charts[slot].drawings().drawings.iter().find(|d| {
+                        charts[slot].stores(charts[slot].symbol(), d) && sync_id(d) == record
+                    })?;
                     // Not linked yet if it appeared this frame too: it starts its link below.
                     let other = (slot, other.id);
                     Some(self.origins.get(&other).copied().unwrap_or(other))
@@ -1191,6 +1244,7 @@ fn copy_key(drawing: &Drawing, points: impl IntoIterator<Item = (i64, u32, f64)>
         settings.pane,
         settings.z_order,
     ) = (true, false, None, 0);
+    settings.series_layer = None;
     let style = serde_json::to_string(&settings).unwrap_or_default();
     let points: Vec<_> = points
         .into_iter()
@@ -1288,11 +1342,16 @@ fn inventory(charts: &[&mut Chart]) -> BTreeMap<String, Vec<(SymbolDrawing, Stri
                     }
                 }
             }
-        } else {
-            for (symbol, (manager, _)) in &chart.symbol_drawings {
-                for drawing in manager.drawings.iter().filter(|d| inventoried(d)) {
-                    hold(symbol, live_row(drawing), live_key(chart, drawing));
-                }
+        }
+        for (symbol, (manager, _)) in &chart.symbol_drawings {
+            // Storage lists the drawings it holds; those kept on the chart or in the layout only
+            // the chart does.
+            for drawing in manager
+                .drawings
+                .iter()
+                .filter(|d| inventoried(d) && !chart.stores(symbol, d))
+            {
+                hold(symbol, live_row(drawing), live_key(chart, drawing));
             }
         }
     }
@@ -1372,7 +1431,7 @@ impl ChartLayout {
                 if writes && inventoried(drawing) {
                     return true;
                 }
-                !drawing.saveable && keys.contains(&live_key(chart, drawing))
+                !chart.stores(symbol, drawing) && keys.contains(&live_key(chart, drawing))
             };
             let chart = &mut *charts[slot];
             let ids: Vec<usize> = if chart.symbol() == symbol {
@@ -1400,7 +1459,9 @@ impl ChartLayout {
                     manager
                         .drawings
                         .iter()
-                        .filter(|drawing| (stored || !drawing.saveable) && doomed(chart, drawing))
+                        .filter(|drawing| {
+                            (stored || !chart.stores(symbol, drawing)) && doomed(chart, drawing)
+                        })
                         .map(|drawing| drawing.id)
                         .collect()
                 })
@@ -1508,7 +1569,8 @@ fn writes(charts: &[&mut Chart], writers: &[usize], from: usize, slot: usize, id
 }
 
 /// Deletes the copy `id` on the chart in `slot` of a drawing deleted on the chart in `from`, and
-/// returns whether the chart in `slot` writes the deletion to its storage.
+/// returns whether the chart in `slot` saves the deletion: it writes it to its storage, or the
+/// copy is kept on that chart or in the layout, which the chart saves with itself.
 fn delete_copy(
     charts: &mut [&mut Chart],
     writers: &mut Vec<usize>,
@@ -1518,12 +1580,17 @@ fn delete_copy(
 ) -> bool {
     unlock(charts[slot], id);
     let written = writes(charts, writers, from, slot, id);
+    let kept = charts[slot]
+        .drawings()
+        .drawings
+        .iter()
+        .any(|d| d.id == id && d.saveable && !charts[slot].stores(charts[slot].symbol(), d));
     if written {
         writers.push(slot);
         charts[slot].history.drawing_edits += 1;
     }
     charts[slot].drawings_mut().delete_drawing(id);
-    written
+    written || kept
 }
 
 /// `drawing` as a drawing of `target`, at the times its points have on `source`. Without bars on
@@ -1774,7 +1841,7 @@ mod tests {
             assert!(
                 chart
                     .drawings_mut()
-                    .set_folder_sync(&top, Some(FolderSync::Layout))
+                    .set_folder_sync(&top, Some(FolderSync::AllLayouts))
             );
         });
         frames(&mut session, &mut shown);
@@ -1879,6 +1946,34 @@ mod tests {
         assert_eq!(records("CCC"), [("Hidden".to_owned(), 2_001)]);
         assert_eq!(a.storage_conflict(), None);
 
+        // A drawing kept on a chart away from its symbol is listed and deleted with the symbol,
+        // though storage does not hold it.
+        b.set_symbol("CCC");
+        settle(&mut a, &mut b);
+        b.user_action(|chart| {
+            let id = chart.drawings_mut().add_drawing(line("Kept")).unwrap();
+            let folder = ["Mine".to_owned()];
+            assert!(chart.drawings_mut().move_to_folder(&[id], &[], &folder));
+            assert!(
+                chart
+                    .drawings_mut()
+                    .set_folder_sync(&folder, Some(FolderSync::Chart))
+            );
+        });
+        b.set_symbol("AAA");
+        settle(&mut a, &mut b);
+        assert_eq!(records("CCC"), [("Hidden".to_owned(), 2_001)]);
+        assert_eq!(
+            names(&layout, &[&mut a, &mut b]),
+            listed(&[("CCC", &["Kept"]), ("DDD", &["Two"])])
+        );
+        assert!(layout.delete_symbol_drawings(&mut [&mut a, &mut b], "CCC"));
+        settle(&mut a, &mut b);
+        assert_eq!(
+            names(&layout, &[&mut a, &mut b]),
+            listed(&[("DDD", &["Two"])])
+        );
+
         // A chart that holds no such document open still follows the write of another.
         layout.set_active(1);
         assert!(layout.delete_symbol_drawings(&mut [&mut a, &mut b], "DDD"));
@@ -1962,11 +2057,13 @@ mod tests {
         }
     }
 
-    /// Guards #3286: opening a layout shows the symbol's stored drawings. One moved or deleted
-    /// elsewhere since the layout was saved stays so, one drawn elsewhere shows, and one the
-    /// layout keeps on a chart or in a layout comes back as the layout holds it. The opening
-    /// chart's own drawing is kept whether it was stored before the layout opened, unsaved then,
-    /// or drawn before the stored drawings were read again.
+    /// Guards #3286 and #3436: opening a layout shows the symbol's stored drawings. One moved or
+    /// deleted elsewhere since the layout was saved stays so, one drawn elsewhere shows, and one
+    /// the layout keeps on a chart or in a layout comes back as the layout holds it, which storage
+    /// does not hold. As a document of an earlier version holds such a drawing, it shows elsewhere
+    /// as stored and stays stored until it is changed. The opening chart's own drawing is kept
+    /// whether it was stored before the layout opened, unsaved then, or drawn before the stored
+    /// drawings were read again.
     #[cfg(feature = "ui")]
     #[test]
     fn opening_a_layout_keeps_the_drawings_stored_since_it_was_saved() {
@@ -1978,20 +2075,122 @@ mod tests {
             Unsaved,
             After,
         }
-        // (folder of the layout's drawing, deleted elsewhere, when the opening chart draws its
-        // own, prices shown and stored)
-        type Row = (Option<FolderSync>, bool, Drawn, &'static [f64]);
-        let rows: [Row; 8] = [
-            (None, false, Drawn::Before, &[105.0, 108.0]),
-            (Some(AllLayouts), false, Drawn::Before, &[105.0, 108.0]),
-            (Some(Layout), false, Drawn::Before, &[104.0, 108.0]),
-            (Some(Local), false, Drawn::Before, &[104.0, 108.0]),
-            (None, true, Drawn::Before, &[108.0]),
-            (Some(Layout), true, Drawn::Before, &[104.0, 108.0]),
-            (None, false, Drawn::Unsaved, &[105.0, 108.0]),
-            (None, false, Drawn::After, &[105.0, 108.0]),
+        /// What another layout does to the layout's drawing, if it shows there.
+        #[derive(Debug, PartialEq)]
+        enum Elsewhere {
+            Moved,
+            Deleted,
+            Untouched,
+        }
+        // (folder of the layout's drawing, stored there as by an earlier version, what another
+        // layout does to it, when the opening chart draws its own, prices shown, prices stored)
+        type Row = (
+            Option<FolderSync>,
+            bool,
+            Elsewhere,
+            Drawn,
+            &'static [f64],
+            &'static [f64],
+        );
+        let rows: [Row; 12] = [
+            (
+                None,
+                false,
+                Elsewhere::Moved,
+                Drawn::Before,
+                &[105.0, 108.0],
+                &[105.0, 108.0],
+            ),
+            (
+                Some(AllLayouts),
+                false,
+                Elsewhere::Moved,
+                Drawn::Before,
+                &[105.0, 108.0],
+                &[105.0, 108.0],
+            ),
+            (
+                Some(Layout),
+                false,
+                Elsewhere::Untouched,
+                Drawn::Before,
+                &[104.0, 108.0],
+                &[108.0],
+            ),
+            (
+                Some(Local),
+                false,
+                Elsewhere::Untouched,
+                Drawn::Before,
+                &[104.0, 108.0],
+                &[108.0],
+            ),
+            (
+                Some(Layout),
+                true,
+                Elsewhere::Moved,
+                Drawn::Before,
+                &[104.0, 108.0],
+                &[108.0],
+            ),
+            (
+                Some(Local),
+                true,
+                Elsewhere::Moved,
+                Drawn::Before,
+                &[104.0, 108.0],
+                &[108.0],
+            ),
+            (
+                Some(Layout),
+                true,
+                Elsewhere::Untouched,
+                Drawn::Before,
+                &[104.0, 108.0],
+                &[104.0, 108.0],
+            ),
+            (
+                Some(Local),
+                true,
+                Elsewhere::Untouched,
+                Drawn::Before,
+                &[104.0, 108.0],
+                &[104.0, 108.0],
+            ),
+            (
+                None,
+                false,
+                Elsewhere::Deleted,
+                Drawn::Before,
+                &[108.0],
+                &[108.0],
+            ),
+            (
+                Some(Layout),
+                true,
+                Elsewhere::Deleted,
+                Drawn::Before,
+                &[104.0, 108.0],
+                &[108.0],
+            ),
+            (
+                None,
+                false,
+                Elsewhere::Moved,
+                Drawn::Unsaved,
+                &[105.0, 108.0],
+                &[105.0, 108.0],
+            ),
+            (
+                None,
+                false,
+                Elsewhere::Moved,
+                Drawn::After,
+                &[105.0, 108.0],
+                &[105.0, 108.0],
+            ),
         ];
-        for (folder, deleted, drawn, expected) in rows {
+        for (folder, earlier, elsewhere, drawn, shown_expected, stored_expected) in rows {
             let host = Arc::new(Revised::default());
             let chart = || {
                 let mut chart = bars(60);
@@ -2009,16 +2208,22 @@ mod tests {
             });
             assert!(saved.flush_stored_drawings());
             let layout = saved.snapshot().unwrap();
+            if earlier {
+                // An earlier version stored every saveable drawing, as the layout's chart saves.
+                host.put("SAMPLE", &saved.save_drawings().unwrap().to_json().unwrap());
+            }
             // Another layout of the symbol moves or deletes that drawing and draws one at 108.
             let mut other = chart();
-            other.user_action(|chart| {
-                if deleted {
-                    let id = chart.drawings().drawings[0].id;
-                    chart.drawings_mut().delete_drawing(id);
-                } else {
-                    move_first(chart, 105.0);
-                }
-            });
+            if elsewhere != Elsewhere::Untouched {
+                other.user_action(|chart| {
+                    if elsewhere == Elsewhere::Deleted {
+                        let id = chart.drawings().drawings[0].id;
+                        chart.drawings_mut().delete_drawing(id);
+                    } else {
+                        move_first(chart, 105.0);
+                    }
+                });
+            }
             assert!(other.flush_stored_drawings());
             if !matches!(drawn, Drawn::After) {
                 other.user_action(|chart| draw(chart, 108.0));
@@ -2033,6 +2238,18 @@ mod tests {
             // A write the restore started is settled before the stored drawings are read again.
             assert!((0..3).any(|_| other.flush_stored_drawings()));
             let [shown] = prices(std::array::from_ref(&other));
+            // Each drawing keeps a stored id of its own, so the layout saved now holds them all.
+            let resaved = other.snapshot().unwrap().drawings.unwrap().to_string();
+            let held = DrawingStorage::from_json(&resaved)
+                .unwrap()
+                .0
+                .drawings()
+                .len();
+            assert_eq!(
+                held,
+                shown.len(),
+                "{folder:?}, earlier {earlier}, {elsewhere:?}"
+            );
             let (document, _) = DrawingStorage::from_json(&host.get("SAMPLE").unwrap()).unwrap();
             let mut stored: Vec<f64> = document
                 .drawings()
@@ -2042,8 +2259,8 @@ mod tests {
             stored.sort_by(f64::total_cmp);
             assert_eq!(
                 (shown, stored),
-                (expected.to_vec(), expected.to_vec()),
-                "{folder:?}, deleted {deleted}, drawn {drawn:?}"
+                (shown_expected.to_vec(), stored_expected.to_vec()),
+                "{folder:?}, earlier {earlier}, {elsewhere:?}, drawn {drawn:?}"
             );
         }
     }
@@ -2500,14 +2717,17 @@ mod tests {
     }
 
     /// Each chart keeps its drawings in its own storage, or both in one. A drawing in a folder
-    /// mirrored across the layout is changed on the chart that shows its copy, by an edit, a drag,
+    /// shared across layouts is changed on the chart that shows its copy, by an edit, a drag,
     /// This chart only, a move out of the folder or a deletion, and undone and redone there, or
-    /// undone on the chart it was drawn on. After each, a restart shows what the charts showed,
-    /// with or without a later edit on the first chart: the drawing is stored on one chart, never
-    /// on none or both. A drag is written once, when it ends. Set to This chart only in the frame
+    /// undone on the chart it was drawn on. After each, opening the saved charts again shows what
+    /// the charts showed, with or without a later edit on the first chart: the drawing is kept by
+    /// one chart, never by none or both, and one kept on its chart shows on no other chart of its
+    /// storage (#3436). A drag is written once, when it ends. Set to This chart only in the frame
     /// in which its chart leaves the symbol, a copy is not stored there, and the first chart keeps
     /// the drawing stored. Deleted in that frame, as the chart reads the stored drawings of the
     /// symbol it goes to, the copy is deleted on the first chart too: a read is no load.
+    // Saving and opening a layout needs `ui`.
+    #[cfg(feature = "ui")]
     #[test]
     fn changes_to_a_mirrored_copy_survive_a_restart() {
         use crate::data::Reply;
@@ -2655,7 +2875,7 @@ mod tests {
         // Per chart, with a storage for each chart and with one for both, worked out by hand: a
         // chart that keeps a copy stores the drawing alone, and charts on one storage read it.
         let rows: &[Row] = &[
-            ("keep", &[(b_side, Keep)], [none, top_10], [top_10, top_10]),
+            ("keep", &[(b_side, Keep)], [none, top_10], [none, top_10]),
             (
                 "keep, undo",
                 &[(b_side, Keep), (b_side, Undo)],
@@ -2684,13 +2904,13 @@ mod tests {
                 "file on A, keep, undo on A",
                 &[(a_side, File), (b_side, Keep), (a_side, Undo)],
                 [top_10, top_10],
-                [&[("Top/Sub", 10.0)], &[("Top/Sub", 10.0)]],
+                [none, &[("Top/Sub", 10.0)]],
             ),
             (
                 "keep, undo, redo",
                 &[(b_side, Keep), (b_side, Undo), (b_side, Redo)],
                 [none, top_10],
-                [top_10, top_10],
+                [none, top_10],
             ),
             (
                 "root, undo, redo",
@@ -2751,7 +2971,7 @@ mod tests {
                         assert!(
                             chart
                                 .drawings_mut()
-                                .set_folder_sync(&top, Some(FolderSync::Layout))
+                                .set_folder_sync(&top, Some(FolderSync::AllLayouts))
                         );
                     });
                     frames(&mut session, &mut a, &mut b);
@@ -2834,8 +3054,11 @@ mod tests {
                         frames(&mut session, &mut a, &mut b);
                     }
                     let shown = lines(&a, &b);
+                    let saved = [&a, &b].map(|chart| chart.snapshot().unwrap());
                     let mut restarted = layout();
                     let (mut a, mut b) = (chart(&storages[0]), chart(&storages[1]));
+                    a.restore(&saved[0]).unwrap();
+                    b.restore(&saved[1]).unwrap();
                     frames(&mut restarted, &mut a, &mut b);
                     let restored = lines(&a, &b);
                     let expected = expected.map(|chart| {
@@ -2868,7 +3091,7 @@ mod tests {
             assert!(
                 chart
                     .drawings_mut()
-                    .set_folder_sync(&top, Some(FolderSync::Layout))
+                    .set_folder_sync(&top, Some(FolderSync::AllLayouts))
             );
         });
         frames(&mut session, &mut a, &mut b);
@@ -2879,8 +3102,10 @@ mod tests {
         });
         b.set_symbol("OTHER");
         frames(&mut session, &mut a, &mut b);
+        let saved = a.snapshot().unwrap();
         let mut restarted = layout();
         let (mut a, mut b) = (chart(&storages[0]), chart(&storages[1]));
+        a.restore(&saved).unwrap();
         frames(&mut restarted, &mut a, &mut b);
         let mirrored = vec![("Top".to_owned(), 10.0)];
         assert_eq!(
@@ -2909,7 +3134,7 @@ mod tests {
             assert!(
                 chart
                     .drawings_mut()
-                    .set_folder_sync(&top, Some(FolderSync::Layout))
+                    .set_folder_sync(&top, Some(FolderSync::AllLayouts))
             );
         });
         frames(&mut session, &mut a, &mut b);
@@ -4080,6 +4305,8 @@ mod tests {
     /// Keeping or editing a mirrored drawing on the third chart writes the shared storage once,
     /// which the other chart there reads: a second write would be refused as a conflict for the
     /// user to settle, and that chart would write nothing until then.
+    // Saving and opening a layout needs `ui`.
+    #[cfg(feature = "ui")]
     #[test]
     fn a_mirrored_copy_writes_a_shared_storage_once() {
         use crate::services::document::tests::Revised;
@@ -4123,7 +4350,7 @@ mod tests {
                 assert!(
                     chart
                         .drawings_mut()
-                        .set_folder_sync(&top, Some(FolderSync::Layout))
+                        .set_folder_sync(&top, Some(FolderSync::AllLayouts))
                 );
             });
             frames(&mut session, &mut shown);
@@ -4148,7 +4375,12 @@ mod tests {
             });
             frames(&mut session, &mut shown);
             assert_eq!(shown.each_ref().map(Chart::storage_conflict), [None; 3]);
+            // The copy kept on its chart comes back with the chart's saved layout.
+            let saved = shown.each_ref().map(|chart| chart.snapshot().unwrap());
             let mut restarted = charts();
+            for (chart, saved) in restarted.iter_mut().zip(&saved) {
+                chart.restore(saved).unwrap();
+            }
             frames(&mut layout(), &mut restarted);
             if edit {
                 assert_eq!((counts(&shown), counts(&restarted)), ([1; 3], [1; 3]));
@@ -4205,6 +4437,185 @@ mod tests {
             (prices(&charts), prices(&elsewhere)),
             ([vec![95.0], vec![95.0]], [vec![95.0]])
         );
+    }
+
+    /// Guards #3436: with drawing storage, a drawing kept on one chart shows on that chart only,
+    /// one kept in the layout on the charts of that layout only, and one shared across layouts on
+    /// every chart of the symbol, also after the layouts are saved and opened again on new charts
+    /// of the storage, and also when its chart shows another symbol as the layout is saved. Moving
+    /// a drawing into another folder moves it between the charts, and the undo on its chart moves
+    /// it back on all of them. Another layout opened on the chart leaves its drawings out.
+    // Saving and opening a layout needs `ui`.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn folder_scope_decides_which_charts_of_a_storage_show_a_drawing() {
+        use crate::services::document::tests::Revised;
+        use crate::widget::ChartLayoutMode;
+
+        /// The two charts of one layout and a chart of another, as in another window.
+        fn settle(layouts: &mut [ChartLayout; 2], pair: &mut [Chart; 2], other: &mut [Chart; 1]) {
+            for _ in 0..3 {
+                frames(&mut layouts[0], pair);
+                frames(&mut layouts[1], other);
+            }
+        }
+        let host = Arc::new(Revised::default());
+        let chart = || {
+            let mut chart = bars(60);
+            chart.set_symbol("SAMPLE");
+            chart.set_storage(host.clone());
+            chart
+        };
+        let layouts = || {
+            [
+                ChartLayout {
+                    mode: ChartLayoutMode::TwoHorizontal,
+                    ..Default::default()
+                },
+                ChartLayout::default(),
+            ]
+        };
+        let folders = [
+            ("Chart", FolderSync::Chart, 104.0),
+            ("Layout", FolderSync::Layout, 105.0),
+            ("All", FolderSync::AllLayouts, 106.0),
+        ];
+        let (mut session, mut pair, mut other) = (layouts(), [chart(), chart()], [chart()]);
+        settle(&mut session, &mut pair, &mut other);
+        pair[0].user_action(|chart| {
+            for (folder, sync, price) in folders {
+                let id = draw(chart, price);
+                let folder = [folder.to_owned()];
+                assert!(chart.drawings_mut().move_to_folder(&[id], &[], &folder));
+                assert!(chart.drawings_mut().set_folder_sync(&folder, Some(sync)));
+            }
+        });
+        settle(&mut session, &mut pair, &mut other);
+        let scoped = (
+            [vec![104.0, 105.0, 106.0], vec![105.0, 106.0]],
+            [vec![106.0]],
+        );
+        assert_eq!((prices(&pair), prices(&other)), scoped, "drawn");
+
+        // Saved, and opened again on new charts of the storage.
+        let saved = [&pair[0], &pair[1], &other[0]].map(|chart| chart.snapshot().unwrap());
+        let (mut session, mut pair, mut other) = (layouts(), [chart(), chart()], [chart()]);
+        for (chart, saved) in pair.iter_mut().chain(&mut other).zip(&saved) {
+            chart.restore(saved).unwrap();
+        }
+        settle(&mut session, &mut pair, &mut other);
+        assert_eq!((prices(&pair), prices(&other)), scoped, "opened again");
+
+        // (drawing moved, folder it moves to, then shown on the pair and on the other chart)
+        type Row = (f64, &'static str, [&'static [f64]; 2], &'static [f64]);
+        let rows: [Row; 6] = [
+            (
+                104.0,
+                "All",
+                [&[104.0, 105.0, 106.0], &[104.0, 105.0, 106.0]],
+                &[104.0, 106.0],
+            ),
+            (
+                104.0,
+                "Layout",
+                [&[104.0, 105.0, 106.0], &[104.0, 105.0, 106.0]],
+                &[106.0],
+            ),
+            (
+                105.0,
+                "All",
+                [&[104.0, 105.0, 106.0], &[105.0, 106.0]],
+                &[105.0, 106.0],
+            ),
+            (105.0, "Chart", [&[104.0, 105.0, 106.0], &[106.0]], &[106.0]),
+            (106.0, "Chart", [&[104.0, 105.0, 106.0], &[105.0]], &[]),
+            (
+                106.0,
+                "Layout",
+                [&[104.0, 105.0, 106.0], &[105.0, 106.0]],
+                &[],
+            ),
+        ];
+        for (price, folder, shown, elsewhere) in rows {
+            let id = pair[0]
+                .drawings()
+                .drawings
+                .iter()
+                .find(|d| d.chart_points[0].price == price)
+                .unwrap()
+                .id;
+            pair[0].user_action(|chart| {
+                let folder = [folder.to_owned()];
+                assert!(chart.drawings_mut().move_to_folder(&[id], &[], &folder));
+            });
+            settle(&mut session, &mut pair, &mut other);
+            assert_eq!(
+                (prices(&pair), prices(&other)),
+                (shown.map(<[f64]>::to_vec), [elsewhere.to_vec()]),
+                "{price} moved to {folder}"
+            );
+            assert!(pair[0].undo(), "{price} moved to {folder}");
+            settle(&mut session, &mut pair, &mut other);
+            assert_eq!(
+                (prices(&pair), prices(&other)),
+                scoped,
+                "{price} moved to {folder}, undone"
+            );
+        }
+
+        // Kept on the chart that shows the copy, the drawing leaves the first chart, and comes
+        // back on that chart alone with its saved layout.
+        pair[1].user_action(|chart| {
+            let layout = ["Layout".to_owned()];
+            assert!(
+                chart
+                    .drawings_mut()
+                    .set_folder_sync(&layout, Some(FolderSync::Chart))
+            );
+        });
+        settle(&mut session, &mut pair, &mut other);
+        let kept = ([vec![104.0, 106.0], vec![105.0, 106.0]], [vec![106.0]]);
+        assert_eq!(
+            (prices(&pair), prices(&other)),
+            kept,
+            "kept on the copy's chart"
+        );
+        let saved = [&pair[0], &pair[1], &other[0]].map(|chart| chart.snapshot().unwrap());
+        let (mut session, mut pair, mut other) = (layouts(), [chart(), chart()], [chart()]);
+        for (chart, saved) in pair.iter_mut().chain(&mut other).zip(&saved) {
+            chart.restore(saved).unwrap();
+        }
+        settle(&mut session, &mut pair, &mut other);
+        assert_eq!((prices(&pair), prices(&other)), kept, "kept, opened again");
+
+        // Kept aside while its chart shows another symbol, the drawing comes back with the saved
+        // layout once the chart shows the symbol again.
+        pair[0].set_symbol("OTHER");
+        settle(&mut session, &mut pair, &mut other);
+        let saved = [&pair[0], &pair[1], &other[0]].map(|chart| chart.snapshot().unwrap());
+        let (mut session, mut pair, mut other) = (layouts(), [chart(), chart()], [chart()]);
+        for (chart, saved) in pair.iter_mut().chain(&mut other).zip(&saved) {
+            chart.restore(saved).unwrap();
+        }
+        settle(&mut session, &mut pair, &mut other);
+        pair[0].set_symbol("SAMPLE");
+        settle(&mut session, &mut pair, &mut other);
+        assert_eq!(
+            (prices(&pair), prices(&other)),
+            kept,
+            "kept aside, opened again"
+        );
+
+        // Another layout opened on that chart leaves out the drawing the chart kept aside.
+        pair[0].set_symbol("OTHER");
+        settle(&mut session, &mut pair, &mut other);
+        let mut elsewhere = bars(60);
+        elsewhere.set_symbol("THIRD");
+        pair[0].restore(&elsewhere.snapshot().unwrap()).unwrap();
+        settle(&mut session, &mut pair, &mut other);
+        pair[0].set_symbol("SAMPLE");
+        settle(&mut session, &mut pair, &mut other);
+        assert_eq!(prices(&pair)[0], [106.0], "another layout opened");
     }
 
     /// Guards #1622: bars evicted from a chart or loaded in front of its bars renumber its

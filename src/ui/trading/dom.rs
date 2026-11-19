@@ -13,7 +13,7 @@ use super::widgets::{
     FIELD_HEIGHT, chevron, field, grouped, muted, number, side_color, side_fill, text,
     time_in_force_menu,
 };
-use crate::chart::{TradingLineAction, entry_price};
+use crate::chart::{TradingLineAction, entry_price, pnl_text};
 use crate::icons::icons;
 use crate::model::{Order, OrderId, OrderRequest, OrderSide, OrderType, Tick, TimeInForce};
 use crate::scales::{decimals, to_step};
@@ -74,6 +74,9 @@ pub(super) struct Ladder {
     /// The order chosen from a price with more than one working order on the same side.
     #[serde(skip)]
     selected: Option<OrderId>,
+    /// The row prices retained while its order menu is open and the market moves.
+    #[serde(skip)]
+    level_menu: Option<[f64; 2]>,
     /// Which of the [`EXTRAS`] are shown.
     columns: [bool; 3],
     profile: Profile,
@@ -142,9 +145,9 @@ fn format_size(value: f64) -> String {
 }
 
 /// A read-only depth ladder using the chart's book, executions and instrument metadata.
-/// No broker is required and no order actions are emitted. Prices stay fixed until Center
-/// (Shift+Alt+C) is pressed. Keep one panel per chart; serialize it with the workspace to retain
-/// the view and profile choices.
+/// No broker is required and no order actions are emitted. Prices stay fixed until Center,
+/// or Shift+Alt+C while the pointer or focus is on the panel, is pressed. Keep one panel per
+/// chart; serialize it with the workspace to retain the view and profile choices.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct DepthPanel {
@@ -261,6 +264,7 @@ impl DepthPanel {
                 .last()
                 .and_then(|trade| super::view::session_open(chart, trade.ts)),
             last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
         };
         ui.push_id("depth_panel", |ui| {
@@ -270,6 +274,21 @@ impl DepthPanel {
 }
 
 impl Ladder {
+    /// Re-centre only the ladder under the pointer or holding focus, outside text editing.
+    fn shortcut(ui: &mut Ui) -> bool {
+        let area = ui.min_rect();
+        let ctx = ui.ctx().clone();
+        let focused = ctx
+            .memory(|memory| memory.focused())
+            .and_then(|id| ctx.read_response(id))
+            .is_some_and(|response| area.intersects(response.rect));
+        (ui.rect_contains_pointer(area) || focused)
+            && !ctx.text_edit_focused()
+            && ui.input_mut(|input| {
+                input.consume_key(egui::Modifiers::SHIFT | egui::Modifiers::ALT, egui::Key::C)
+            })
+    }
+
     /// The retained trades the profile sums, oldest first.
     fn accumulated<'a>(
         &self,
@@ -350,10 +369,33 @@ impl Ladder {
             if entry_price(&order_type).is_some_and(|price| !price.is_finite() || price <= 0.0) {
                 return Err("Enter a positive price".into());
             }
-            let quantity =
-                order_quantity(wanted, market.rules).map_err(|limit| limit.message(&ctx))?;
+            let quantity = order_quantity(wanted, market.rules)
+                .map_err(|limit| limit.message(&ctx, &numbers, quantity_decimals))?;
             let mut request = OrderRequest::new(symbol, side, quantity, order_type);
             request.time_in_force = tif;
+            Ok(request)
+        };
+        // Stops must trigger beyond the touch, or the last price without a quote.
+        let checked = |side: OrderSide, order_type: OrderType| -> Result<OrderRequest, String> {
+            let request = order(side, order_type)?;
+            if let OrderType::Stop(at) | OrderType::StopLimit { stop: at, .. } = order_type {
+                let touch = match side {
+                    OrderSide::Buy => market.ask,
+                    OrderSide::Sell => market.bid,
+                }
+                .filter(|price| price.is_finite())
+                .or(market.last.filter(|price| price.is_finite()));
+                match (side, touch) {
+                    (_, None) => return Err("Waiting for the market's price".into()),
+                    (OrderSide::Buy, Some(touch)) if at <= touch => {
+                        return Err("A buy stop must lie above the market".into());
+                    }
+                    (OrderSide::Sell, Some(touch)) if at >= touch => {
+                        return Err("A sell stop must lie below the market".into());
+                    }
+                    _ => {}
+                }
+            }
             Ok(request)
         };
         let mut action = None;
@@ -407,6 +449,7 @@ impl Ladder {
                 }
             }
         }
+        let last_price = last;
         let last = last.map(row_key);
         let middle = middle.map(ticks);
         let top = |centre: i64| centre.div_euclid(step).saturating_add(rows / 2);
@@ -429,9 +472,7 @@ impl Ladder {
         let top = top(centre);
         // The row index from the top of a visible row key.
         let row_of = |key: i64| (visible(centre, key)).then(|| (top - key) as usize);
-        // A buy takes a row's highest price and a sell its lowest. The ladder then offers a limit
-        // only for a row that lies wholly at or inside the touch, priced nearest the market, and a
-        // stop only beyond it.
+        // A buy takes a row's highest price and a sell its lowest.
         let row_price = |row: usize, side: OrderSide| {
             let lowest = top.saturating_sub(row as i64).saturating_mul(step);
             price(match side {
@@ -621,6 +662,7 @@ impl Ladder {
         for (width, share) in widths.iter_mut().zip(shares) {
             *width += spare * share;
         }
+        let mut center = false;
         ui.scope(|ui| {
             // Vertical wheel movement changes price rows; shift-wheel and the bar scroll columns.
             ui.style_mut().always_scroll_the_only_direction = false;
@@ -941,14 +983,13 @@ impl Ladder {
                         }
                     }
 
-                    // Clicking a size cell places a limit order on the passive side of the market and a stop
-                    // order beyond it.
+                    // A size cell places a limit, or a stop with Ctrl (Cmd on macOS).
                     let pointer_row = |pos: egui::Pos2| {
                         ((pos.y - rect.top()) / ROW)
                             .floor()
                             .clamp(0.0, (rows - 1) as f32) as usize
                     };
-                    let cell_order = |pos: egui::Pos2| {
+                    let cell_order = |pos: egui::Pos2, stop: bool| {
                         if read_only {
                             return None;
                         }
@@ -961,26 +1002,14 @@ impl Ladder {
                         };
                         let row = pointer_row(pos);
                         let at = row_price(row, side);
-                        let touch = match side {
-                            OrderSide::Buy => market.ask,
-                            OrderSide::Sell => market.bid,
-                        }
-                        .or(market.last);
-                        let limit = touch.is_none_or(|touch| match side {
-                            OrderSide::Buy => at <= touch,
-                            OrderSide::Sell => at >= touch,
-                        });
-                        let order_type = if limit {
-                            market.capabilities.limit.then_some(OrderType::Limit(at))
-                        } else {
-                            market.capabilities.stop.then_some(OrderType::Stop(at))
-                        }?;
+                        let order_type = if stop { OrderType::Stop(at) } else { OrderType::Limit(at) };
                         Some((side, order_type, row_rect(row, column)))
                     };
+                    let stop = ui.input(|input| input.modifiers.command);
                     if let Some(pos) = response.hover_pos()
-                        && let Some((side, order_type, cell)) = cell_order(pos)
+                        && let Some((side, order_type, cell)) = cell_order(pos, stop)
                     {
-                        match order(side, order_type) {
+                        match checked(side, order_type) {
                             Ok(request) => {
                                 let color = side_color(&theme, side);
                                 let outline = cell.shrink(1.0);
@@ -1019,6 +1048,51 @@ impl Ladder {
                             Err(reason) => {
                                 response.clone().on_hover_text(l10n::text(ui.ctx(), reason));
                             }
+                        }
+                    }
+
+                    if !read_only {
+                        if response.secondary_clicked() {
+                            self.level_menu = response.interact_pointer_pos()
+                                .filter(|pos| rect.contains(*pos))
+                                .map(|pos| {
+                                    let row = pointer_row(pos);
+                                    [row_price(row, OrderSide::Buy), row_price(row, OrderSide::Sell)]
+                                });
+                        }
+                        if let Some([buy_at, sell_at]) = self.level_menu {
+                            egui::Popup::context_menu(&response)
+                                .id(ui.make_persistent_id("dom_level_menu"))
+                                .show(|ui| {
+                                    let entries = [
+                                        (OrderSide::Buy, OrderType::Limit(buy_at), "Buy limit {price}"),
+                                        (OrderSide::Sell, OrderType::Limit(sell_at), "Sell limit {price}"),
+                                        (OrderSide::Buy, OrderType::Stop(buy_at), "Buy stop {price}"),
+                                        (OrderSide::Sell, OrderType::Stop(sell_at), "Sell stop {price}"),
+                                        (OrderSide::Buy, OrderType::StopLimit { stop: buy_at, limit: buy_at }, "Buy stop limit {price}"),
+                                        (OrderSide::Sell, OrderType::StopLimit { stop: sell_at, limit: sell_at }, "Sell stop limit {price}"),
+                                    ];
+                                    let mut offered = false;
+                                    for (side, order_type, key) in entries {
+                                        if !market.capabilities.accepts(&order_type) {
+                                            continue;
+                                        }
+                                        offered = true;
+                                        let at = entry_price(&order_type).expect("a priced order");
+                                        let label = l10n::format_text(ui.ctx(), key, &[("price", numbers.price(at))]);
+                                        let request = checked(side, order_type);
+                                        let mut button = ui.add_enabled(request.is_ok(), egui::Button::new(label));
+                                        if let Err(reason) = &request {
+                                            button = button.on_disabled_hover_text(l10n::text(ui.ctx(), reason));
+                                        }
+                                        if button.clicked() && let Ok(request) = request {
+                                            action = Some(Action::Place(request));
+                                        }
+                                    }
+                                    if !offered {
+                                        muted(ui, "The account does not accept orders at a price");
+                                    }
+                                });
                         }
                     }
 
@@ -1076,9 +1150,10 @@ impl Ladder {
                             10.0,
                             color,
                         );
-                        if group.len() > 1 {
-                            egui::Popup::menu(&tag_response).show(|ui| {
-                                ui.label(l10n::text(ui.ctx(), "Choose an order to drag or cancel"));
+                        let menu_id = id.with("menu");
+                        egui::Popup::menu(&tag_response).id(menu_id).show(|ui| {
+                            if group.len() > 1 {
+                                ui.label(l10n::text(ui.ctx(), "Choose an order to drag, edit or cancel"));
                                 for order in group {
                                     let label = format!(
                                         "{} {} @ {} · {}",
@@ -1097,9 +1172,30 @@ impl Ladder {
                                         self.selected = Some(order.id.clone());
                                     }
                                 }
-                            });
+                                ui.separator();
+                            }
+                            if ui.add_enabled(market.capabilities.modify, egui::Button::new(l10n::text(ui.ctx(), "Edit order")))
+                                .on_disabled_hover_text(l10n::text(ui.ctx(), "The account does not support modifying orders"))
+                                .clicked() {
+                                action = Some(Action::Edit(working.clone()));
+                            }
+                            if ui.button(l10n::text(ui.ctx(), "Cancel order")).clicked() {
+                                action = Some(Action::Confirm(Box::new(TradingLineAction::Cancel(working.clone()))));
+                            }
+                        });
+                        let hint = if market.capabilities.modify {
+                            "{0} {1} @ {2} {label} · {3}. Drag to move, double-click to edit, right-click to cancel. {4} order(s) here; click for the menu"
+                        } else {
+                            "{0} {1} @ {2} {label} · {3}. The account does not support modifying orders; right-click to cancel. {4} order(s) here; click for the menu"
+                        };
+                        let tag_response = tag_response.on_hover_text(l10n::format_text(ui.ctx(), hint, &[("0", side.label().to_string()), ("1", numbers.quantity(working.request.quantity - working.filled, quantity_decimals)), ("2", numbers.price(at)), ("label", label.to_string()), ("3", working.id.0.to_string()), ("4", format!("{}", group.len()))]));
+                        // A recent tab click can count a tag's double click as three clicks.
+                        if tag_response.double_clicked() || tag_response.triple_clicked() {
+                            egui::Popup::close_id(ui.ctx(), menu_id);
+                            if market.capabilities.modify {
+                                action = Some(Action::Edit(working.clone()));
+                            }
                         }
-                        let tag_response = tag_response.on_hover_text(l10n::format_text(ui.ctx(), "{0} {1} @ {2} {label} · {3}. Drag to move, right-click to cancel. {4} order(s) here; click to choose", &[("0", side.label().to_string()), ("1", numbers.quantity(working.request.quantity - working.filled, quantity_decimals)), ("2", numbers.price(at)), ("label", label.to_string()), ("3", working.id.0.to_string()), ("4", format!("{}", group.len()))]));
                         if tag_response.secondary_clicked() {
                             action = Some(Action::Confirm(Box::new(TradingLineAction::Cancel(
                                 working.clone(),
@@ -1130,11 +1226,12 @@ impl Ladder {
                                 changed.take_profit = changed.take_profit.map(shift);
                                 for level in &mut changed.take_profit_levels {
                                     level.price = shift(level.price);
+                                    level.stop_loss = level.stop_loss.map(shift);
                                 }
                                 changed.stop_loss = changed.stop_loss.map(shift);
                                 let valid = |price: f64| price.is_finite() && price > 0.0;
                                 if changed.take_profit.is_none_or(valid)
-                                    && changed.take_profit_levels.iter().all(|l| valid(l.price))
+                                    && changed.take_profit_levels.iter().all(|l| valid(l.price) && l.stop_loss.is_none_or(valid))
                                     && changed.stop_loss.is_none_or(valid)
                                     && match changed.order_type {
                                         OrderType::StopLimit { limit, .. } => valid(limit),
@@ -1228,7 +1325,7 @@ impl Ladder {
                     if read_only {
                         return;
                     }
-                    let lock = Rect::from_center_size(price_column.center(), vec2(24.0, 24.0));
+                    let lock = Rect::from_center_size(price_column.center() - vec2(13.0, 0.0), vec2(24.0, 24.0));
                     let lock_response = ui
                         .interact(lock, ui.make_persistent_id("dom_lock"), Sense::click())
                         .on_hover_text(l10n::text(
@@ -1261,6 +1358,15 @@ impl Ladder {
                     };
                     icon.as_image_tinted(vec2(16.0, 16.0), ink)
                         .paint_at(ui, Rect::from_center_size(lock.center(), vec2(16.0, 16.0)));
+                    let centre_rect = Rect::from_center_size(price_column.center() + vec2(13.0, 0.0), vec2(24.0, 24.0));
+                    let centre_response = ui.interact(centre_rect, ui.make_persistent_id("dom_center"), Sense::click())
+                        .on_hover_text(l10n::text(ui.ctx(), "Center the ladder on the market (Shift+Alt+C)"));
+                    let translated_label = l10n::text(ui.ctx(), "Center");
+                    centre_response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label));
+                    let ink = if centre_response.hovered() { theme.ui.text } else { theme.ui.text_muted };
+                    icons::MOVE_VERTICAL.as_image_tinted(vec2(16.0, 16.0), ink)
+                        .paint_at(ui, Rect::from_center_size(centre_rect.center(), vec2(16.0, 16.0)));
+                    center = centre_response.clicked();
 
                 });
         });
@@ -1301,11 +1407,8 @@ impl Ladder {
                 "Spread: {spread}",
                 &[("spread", spread)],
             ));
-            let shortcut = !ui.ctx().text_edit_focused()
-                && ui.input_mut(|input| {
-                    input.consume_key(egui::Modifiers::SHIFT | egui::Modifiers::ALT, egui::Key::C)
-                });
-            if ui.button(l10n::text(ui.ctx(), "Center")).clicked() || shortcut {
+            let center = ui.button(l10n::text(ui.ctx(), "Center")).clicked();
+            if center || Self::shortcut(ui) {
                 self.centre = middle;
                 self.scroll = 0.0;
             }
@@ -1335,24 +1438,36 @@ impl Ladder {
                 None => (theme.ui.text_muted, "Flat".to_owned()),
             };
             boxed(&mut halves[0], &label, text_color);
-            let pnl = position
-                .and_then(|position| {
-                    position.unrealized_pnl.or_else(|| {
-                        market.last.map(|last| {
-                            (last - position.average_price)
-                                * position.quantity
-                                * market.rules.point_value
-                        })
-                    })
-                })
-                .unwrap_or_default();
-            let color = match pnl {
+            // Match the position line, including a money figure reported by the broker.
+            let (pnl, value) = match position {
+                Some(position) => {
+                    let per_point = position.quantity.abs() * market.rules.point_value;
+                    let gain = last_price
+                        .map(|last| (last - position.average_price) * position.quantity.signum())
+                        .or_else(|| position.unrealized_pnl.map(|pnl| pnl / per_point))
+                        .unwrap_or_default();
+                    let money = match (market.pnl_unit, position.unrealized_pnl) {
+                        (crate::chart::PnlUnit::Money, Some(pnl)) => pnl,
+                        _ => gain * per_point,
+                    };
+                    let options = crate::chart::TradingLineOptions::new(market.currency, tick);
+                    pnl_text(
+                        &ctx,
+                        market.pnl_unit,
+                        money,
+                        gain,
+                        position.average_price,
+                        &options,
+                    )
+                }
+                None => (String::new(), 0.0),
+            };
+            let color = match value {
                 pnl if pnl > 0.0 => theme.ui.success,
                 pnl if pnl < 0.0 => theme.ui.error,
                 _ => theme.ui.text_muted,
             };
-            let pnl = format!("{} {}", grouped(pnl, 2, false), market.currency);
-            boxed(&mut halves[1], pnl.trim_end(), color);
+            boxed(&mut halves[1], &pnl, color);
         });
 
         // Flatten, cancel all and reverse.
@@ -1494,6 +1609,12 @@ impl Ladder {
             muted(ui, "Time in force");
             time_in_force_menu(ui, "dom_tif", time_in_force, market.rules);
         }
+        if (center || Self::shortcut(ui))
+            && let Some(middle) = middle
+        {
+            self.centre = Some(middle);
+            self.scroll = 0.0;
+        }
         action
     }
 }
@@ -1571,6 +1692,7 @@ mod tests {
                     trades: &[],
                     session_open: None,
                     last_fill: None,
+                    pnl_unit: crate::chart::PnlUnit::Money,
                     logo: None,
                 };
                 let mut ladder = Ladder {
@@ -1677,6 +1799,7 @@ mod tests {
             trades: &trades,
             session_open: None,
             last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
         };
         let ctx = egui::Context::default();
@@ -1790,6 +1913,12 @@ mod tests {
                 );
             }
         }
+        let after_clicks = frame(&mut ladder, &market, vec![]);
+        assert!(
+            !after_clicks
+                .iter()
+                .any(|(text, _)| text.starts_with("Buy limit"))
+        );
         frame(
             &mut ladder,
             &market,
@@ -2016,6 +2145,7 @@ mod tests {
                         trades: &trades,
                         session_open: None,
                         last_fill: None,
+                        pnl_unit: crate::chart::PnlUnit::Money,
                         logo: None,
                     };
                     let mut output = ctx.run_ui(
@@ -2299,6 +2429,7 @@ mod tests {
                 trades,
                 session_open: None,
                 last_fill: None,
+                pnl_unit: crate::chart::PnlUnit::Money,
                 logo: None,
             };
             let output = ctx.run_ui(
@@ -2403,6 +2534,7 @@ mod tests {
                             crate::model::TakeProfitLevel::new(102.0, 1.0),
                             crate::model::TakeProfitLevel::new(103.0, 2.0),
                         ];
+                        second.request.take_profit_levels[1].stop_loss = Some(97.0);
                         working.push(second);
                     }
                     let positions = [crate::model::Position::new("ES", 2.0, 99.0)];
@@ -2454,6 +2586,7 @@ mod tests {
                             trades: &[],
                             session_open: None,
                             last_fill: None,
+                            pnl_unit: crate::chart::PnlUnit::Money,
                             logo: None,
                         };
                         let mut action = None;
@@ -2491,7 +2624,10 @@ mod tests {
                         20.0,
                         "price rows must stay 20 points apart"
                     );
-                    assert!(labels.contains_key("2.00 USD"), "mark an unpriced position");
+                    assert!(
+                        labels.contains_key("+2.00 USD"),
+                        "mark an unpriced position"
+                    );
                     let start = if gesture.starts_with("place") {
                         pos2(labels["Bid size"].x, labels["99.50"].y)
                     } else {
@@ -2539,9 +2675,9 @@ mod tests {
                     );
                     let (action, labels) = frame(vec![click(end, false)], 110.0);
                     let pnl = if gesture == "place-quote" {
-                        "2.00 USD"
+                        "+2.00 USD"
                     } else {
-                        "22.00 USD"
+                        "+22.00 USD"
                     };
                     assert!(labels.contains_key(pnl), "mark the moving position");
                     let original = &working[usize::from(stacked)];
@@ -2561,6 +2697,7 @@ mod tests {
                                     crate::model::TakeProfitLevel::new(101.5, 1.0),
                                     crate::model::TakeProfitLevel::new(102.5, 2.0),
                                 ];
+                                request.take_profit_levels[1].stop_loss = Some(96.5);
                             } else {
                                 request.take_profit = Some(101.5);
                             }
@@ -2666,6 +2803,7 @@ mod tests {
                     trades: &[],
                     session_open: None,
                     last_fill: None,
+                    pnl_unit: crate::chart::PnlUnit::Money,
                     logo: None,
                 };
                 let output = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -2832,6 +2970,7 @@ mod tests {
             trades: &[],
             session_open: None,
             last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
         };
         let ctx = egui::Context::default();
@@ -2862,32 +3001,60 @@ mod tests {
             pressed,
             modifiers: Default::default(),
         };
-        // A buy takes the row's highest price and a sell its lowest: a limit inside the touch, and
-        // a stop for the buy in the row that holds the ask.
-        for (column, row, side, order_type) in [
-            ("Bid size", "99.00", OrderSide::Buy, OrderType::Limit(99.75)),
+        // Grouped limits and stops use the same edge of the row for each side.
+        for (column, row, stop, side, order_type) in [
+            (
+                "Bid size",
+                "99.00",
+                false,
+                OrderSide::Buy,
+                OrderType::Limit(99.75),
+            ),
             (
                 "Ask size",
                 "101.00",
+                false,
                 OrderSide::Sell,
                 OrderType::Limit(101.0),
             ),
             (
                 "Bid size",
                 "100.00",
+                false,
+                OrderSide::Buy,
+                OrderType::Limit(100.75),
+            ),
+            (
+                "Bid size",
+                "100.00",
+                true,
                 OrderSide::Buy,
                 OrderType::Stop(100.75),
             ),
         ] {
             let pos = cell(column, row);
+            let modifiers = if stop {
+                egui::Modifiers::COMMAND
+            } else {
+                egui::Modifiers::NONE
+            };
             frame(
                 &ctx,
                 &mut ladder,
                 &market,
-                vec![egui::Event::PointerMoved(pos)],
+                vec![
+                    egui::Event::ModifiersChanged(modifiers),
+                    egui::Event::PointerMoved(pos),
+                ],
             );
-            frame(&ctx, &mut ladder, &market, vec![click(pos, true)]);
-            let (action, _, _) = frame(&ctx, &mut ladder, &market, vec![click(pos, false)]);
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers,
+            };
+            frame(&ctx, &mut ladder, &market, vec![button(true)]);
+            let (action, _, _) = frame(&ctx, &mut ladder, &market, vec![button(false)]);
             let expected = Action::Place(OrderRequest::new("ES", side, 1.0, order_type));
             assert_eq!(action, Some(expected), "{column} at {row}");
         }
@@ -2946,5 +3113,240 @@ mod tests {
             .filter(|color| [large, notable].contains(color))
             .collect();
         assert_eq!(tiers, [large]);
+    }
+    /// Center keeps the lock and neither steals another area's shortcut nor typed text.
+    #[test]
+    fn ticket_ladder_centres_on_the_market_and_keeps_its_lock() {
+        use crate::model::{Capabilities, TradingRules};
+        let rules = TradingRules::new("ES");
+        let market = Market {
+            symbol: "ES",
+            formatter: None,
+            pip_value: None,
+            last: Some(100.0),
+            bid: Some(99.75),
+            ask: Some(100.25),
+            tick: 0.25,
+            decimals: 2,
+            currency: "USD",
+            balance: None,
+            capabilities: Capabilities::default(),
+            rules: &rules,
+            rules_ready: true,
+            offline: None,
+            ladder: None,
+            ladder_unavailable: None,
+            highlights: Vec::new(),
+            orders: &[],
+            positions: &[],
+            trades: &[],
+            session_open: None,
+            last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
+            logo: None,
+        };
+        for (over_ladder, focus_text, expected) in
+            [(true, false, 400), (false, false, 398), (true, true, 398)]
+        {
+            let ctx = egui::Context::default();
+            let mut ladder = Ladder {
+                locked: true,
+                ..Default::default()
+            };
+            let frame = |ladder: &mut Ladder, focus_text, events| {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(600.0, 700.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.scope_builder(
+                            egui::UiBuilder::new()
+                                .max_rect(Rect::from_min_size(pos2(8.0, 8.0), vec2(180.0, 680.0))),
+                            |ui| {
+                                let response = ui.text_edit_singleline(&mut String::new());
+                                if focus_text {
+                                    response.request_focus();
+                                }
+                            },
+                        );
+                        ui.scope_builder(
+                            egui::UiBuilder::new().max_rect(Rect::from_min_size(
+                                pos2(208.0, 8.0),
+                                vec2(384.0, 680.0),
+                            )),
+                            |ui| {
+                                ladder.draw(
+                                    ui,
+                                    "ES",
+                                    &market,
+                                    Some((&mut 1.0, &mut TimeInForce::Day)),
+                                );
+                            },
+                        );
+                    },
+                )
+                .drop_without_applying_deltas();
+            };
+            frame(&mut ladder, false, vec![]);
+            frame(
+                &mut ladder,
+                false,
+                vec![
+                    egui::Event::PointerMoved(pos2(400.0, 300.0)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: vec2(0.0, -40.0),
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            for _ in 0..60 {
+                frame(&mut ladder, false, vec![]);
+            }
+            assert_eq!(ladder.centre, Some(398));
+            let pointer = if over_ladder {
+                pos2(400.0, 300.0)
+            } else {
+                pos2(50.0, 300.0)
+            };
+            frame(
+                &mut ladder,
+                focus_text,
+                vec![egui::Event::PointerMoved(pointer)],
+            );
+            frame(
+                &mut ladder,
+                false,
+                vec![egui::Event::Key {
+                    key: egui::Key::C,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::SHIFT | egui::Modifiers::ALT,
+                }],
+            );
+            assert_eq!(
+                ladder.centre,
+                Some(expected),
+                "pointer on ladder {over_ladder}, text focused {focus_text}"
+            );
+            assert!(ladder.locked);
+        }
+    }
+    /// Both position displays write the same money, tick or percentage result, including below zero.
+    #[test]
+    fn ladder_position_profit_follows_the_position_line_unit() {
+        use crate::chart::{PnlUnit, TradingLineOptions, render_trading_lines};
+        use crate::model::{Capabilities, Position, TradingRules};
+        for (quantity, average, last, unit, broker_pnl, expected) in [
+            (2.0, 99.0, Some(100.0), PnlUnit::Money, None, "+2.00 USD"),
+            (2.0, 99.0, Some(100.0), PnlUnit::Ticks, None, "+4 ticks"),
+            (2.0, 99.0, Some(100.0), PnlUnit::Percent, None, "+1.01%"),
+            (-2.0, 99.0, Some(100.0), PnlUnit::Money, None, "-2.00 USD"),
+            (-2.0, 99.0, Some(100.0), PnlUnit::Ticks, None, "-4 ticks"),
+            (-2.0, 99.0, Some(100.0), PnlUnit::Percent, None, "-1.01%"),
+            (1.0, -10.0, Some(-9.0), PnlUnit::Money, None, "+1.00 USD"),
+            (1.0, -10.0, Some(-9.0), PnlUnit::Ticks, None, "+4 ticks"),
+            (1.0, -10.0, Some(-9.0), PnlUnit::Percent, None, "+10.00%"),
+            (1.0, 0.0, Some(0.25), PnlUnit::Percent, None, "-"),
+            (
+                2.0,
+                99.0,
+                Some(100.0),
+                PnlUnit::Money,
+                Some(12.5),
+                "+12.50 USD",
+            ),
+            (2.0, 99.0, None, PnlUnit::Ticks, Some(12.5), "+25 ticks"),
+        ] {
+            let mut position = Position::new("ES", quantity, average);
+            position.unrealized_pnl = broker_pnl;
+            let positions = [position];
+            let rules = TradingRules::new("ES");
+            let market = Market {
+                symbol: "ES",
+                formatter: None,
+                pip_value: None,
+                last,
+                bid: None,
+                ask: None,
+                tick: 0.25,
+                decimals: 2,
+                currency: "USD",
+                balance: None,
+                capabilities: Capabilities::default(),
+                rules: &rules,
+                rules_ready: true,
+                offline: None,
+                ladder: None,
+                ladder_unavailable: None,
+                highlights: Vec::new(),
+                orders: &[],
+                positions: &positions,
+                trades: &[],
+                session_open: None,
+                last_fill: None,
+                pnl_unit: unit,
+                logo: None,
+            };
+            let labels = |output: egui::FullOutput| {
+                let labels: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                labels
+            };
+            let ctx = egui::Context::default();
+            let input = || egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 700.0))),
+                ..Default::default()
+            };
+            let mut chart = crate::widget::test_frames::chart(&[average - 2.0], &[average + 2.0]);
+            ctx.run_ui(input(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+            let mut options = TradingLineOptions::new("USD", 0.25);
+            options.pnl = Some(unit);
+            options.last_price = last;
+            let line = labels(ctx.run_ui(input(), |ui| {
+                chart.show(ui);
+                render_trading_lines(
+                    ui,
+                    &chart.get_chart_mapping(),
+                    [],
+                    [&positions[0]],
+                    &options,
+                );
+            }));
+            assert!(
+                line.iter().any(|text| text == expected),
+                "line {quantity} @ {average} {unit:?}: {line:?}"
+            );
+            let ctx = egui::Context::default();
+            let ladder = labels(ctx.run_ui(input(), |ui| {
+                Ladder {
+                    centre: Some((average / 0.25).round() as i64),
+                    ..Default::default()
+                }
+                .draw(ui, "ES", &market, Some((&mut 1.0, &mut TimeInForce::Day)));
+            }));
+            assert!(
+                ladder.iter().any(|text| text == expected),
+                "ladder {quantity} @ {average} {unit:?}: {ladder:?}"
+            );
+        }
     }
 }

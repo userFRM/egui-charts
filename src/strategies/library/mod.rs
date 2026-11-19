@@ -18,7 +18,9 @@ type StrategyConstructor = Box<dyn Fn() -> Box<dyn Strategy> + Send + Sync>;
 /// Ten price-action strategies need only `strategies`; twelve more use the public study
 /// calculations when `studies` is enabled. Inputs are available through
 /// [`Strategy::study_inputs`] and edited through [`Strategy::set_input`]. Entry size and
-/// pyramiding come from [`super::BacktestSettings`]. Built-ins ignore fill callbacks and decide
+/// pyramiding come from [`super::BacktestSettings`]. SuperTrend suggests 15% of equity and
+/// Technical Ratings 5% through [`Strategy::default_order_size`], which the strategy tester
+/// applies on selection. Built-ins ignore fill callbacks and decide
 /// at bar close, or on forming-bar updates when tick recalculation is enabled.
 ///
 /// ```

@@ -1,7 +1,11 @@
 //! The order ticket's Order tab: the quote, the order kinds, the quantity and price fields, and the
 //! exits.
 
-use super::{Bracket, BracketMode, Kind, Market, OrderTicket, Sizing, exit_lines, reward};
+use super::{
+    Bracket, BracketMode, Kind, Market, OrderTicket, PresetLevel, Sizing, exit_lines, levels_accepted,
+    reward, risk,
+};
+use crate::chart::{COVERAGE_CELL, coverage_text, exit_coverage, paint_coverage};
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::model::{OrderRequest, OrderSide};
@@ -116,9 +120,10 @@ impl OrderTicket {
 
         // The quantity, and the risk at the stop loss.
         let balance = market.positive_balance();
-        let risk_money = request.as_ref().ok().and_then(|request| {
-            Some((entry? - request.stop_loss?).abs() * request.quantity * rules.point_value)
-        });
+        let risk_money = request
+            .as_ref()
+            .ok()
+            .and_then(|request| Some(risk(request, entry?)? * rules.point_value));
         let units = |ticket: &mut Self, ui: &mut Ui| {
             let caption = match ticket.sizing {
                 Sizing::Value => {
@@ -373,8 +378,8 @@ impl OrderTicket {
             let reward = grouped(reward * rules.point_value, 2, false);
             info(ui, "Reward", &reward, currency, theme.ui.take_profit);
         }
-        if let Some(exit) = request.stop_loss {
-            let risk = grouped((exit - entry).abs() * per_point, 2, false);
+        if let Some(risk) = risk(request, entry) {
+            let risk = grouped(risk * rules.point_value, 2, false);
             info(ui, "Risk", &risk, currency, theme.ui.stop_loss);
         }
     }
@@ -403,6 +408,7 @@ impl OrderTicket {
                 Some(selected),
             )
             .clicked()
+                && self.editing.is_none()
             {
                 self.side = side;
             }
@@ -460,6 +466,7 @@ impl OrderTicket {
         let kinds: Vec<_> = Kind::ALL
             .into_iter()
             .filter(|(kind, _)| kind.accepted(&market.capabilities))
+            .filter(|(kind, _)| self.editing.is_none() || *kind == self.kind)
             .collect();
         if kinds.is_empty() {
             return;
@@ -551,7 +558,7 @@ impl OrderTicket {
         let ratio = request.and_then(|request| {
             let entry = entry?;
             let reward = reward(request, entry)?;
-            let risk = (request.stop_loss? - entry).abs() * request.quantity;
+            let risk = risk(request, entry)?;
             (risk > 0.0).then(|| reward / risk)
         });
         if let Some(ratio) = ratio {
@@ -569,6 +576,17 @@ impl OrderTicket {
                 theme.text.body,
                 theme.ui.text_muted,
             );
+        }
+        if let Some(request) = request {
+            let coverage = exit_coverage(request);
+            let center = pos2(row.right() - 16.0 - COVERAGE_CELL / 2.0, row.center().y);
+            paint_coverage(ui.painter(), &theme, center, coverage);
+            ui.interact(
+                Rect::from_center_size(center, vec2(COVERAGE_CELL, row.height())),
+                ui.make_persistent_id("order_ticket_coverage"),
+                Sense::hover(),
+            )
+            .on_hover_text(coverage_text(ui.ctx(), coverage));
         }
         chevron(
             ui,
@@ -713,9 +731,33 @@ impl OrderTicket {
             });
         };
 
-        let offered = market.capabilities.take_profit_levels && self.take_profit.0;
+        // An own stop starts at the order's stop until the user changes it.
+        let start = self.stop_loss.1;
+        let stop_fields =
+            |ui: &mut Ui, level: usize, per_point: f64, stop: &mut Option<Bracket>| {
+                let mut on = stop.is_some();
+                let mut bracket = stop.unwrap_or(start);
+                let title =
+                    l10n::format_text(ui.ctx(), "Stop loss {0}", &[("0", level.to_string())]);
+                exit_fields(
+                    ui,
+                    per_point,
+                    false,
+                    &title,
+                    level,
+                    &mut bracket,
+                    &mut |ui: &mut Ui| {
+                        toggle(ui, &mut on, "Stop loss");
+                        on
+                    },
+                );
+                *stop = on.then_some(bracket);
+            };
+
+        let offered = levels_accepted(&market.capabilities) && self.take_profit.0;
         let several = offered && !self.levels.is_empty();
-        let mut rest = 100.0 - self.levels.iter().map(|(_, share)| share).sum::<f64>();
+        let level_stops = several && market.capabilities.take_profit_level_stops;
+        let mut rest = 100.0 - self.levels.iter().map(|level| level.share).sum::<f64>();
         let (title, first_per_point) = if several {
             let title = l10n::format_text(ui.ctx(), "Take profit {0}", &[("0", "1".to_owned())]);
             (title, level_per_point(0, rest))
@@ -738,6 +780,9 @@ impl OrderTicket {
         if several {
             ui.add_enabled_ui(false, |ui| share_field(ui, 0, &mut rest));
         }
+        if level_stops {
+            stop_fields(ui, 1, first_per_point, &mut self.first_level_stop_loss);
+        }
         let stop_loss = l10n::text(ui.ctx(), "Stop loss");
         let (on, bracket) = &mut self.stop_loss;
         exit_fields(
@@ -757,7 +802,7 @@ impl OrderTicket {
         }
 
         let mut removed = None;
-        for (index, (bracket, share)) in self.levels.iter_mut().enumerate() {
+        for (index, saved) in self.levels.iter_mut().enumerate() {
             let level = index + 1;
             let title = l10n::format_text(
                 ui.ctx(),
@@ -766,11 +811,11 @@ impl OrderTicket {
             );
             exit_fields(
                 ui,
-                level_per_point(level, *share),
+                level_per_point(level, saved.share),
                 true,
                 &title,
                 level,
-                bracket,
+                &mut saved.take_profit,
                 &mut |ui: &mut Ui| {
                     if IconButton::new(&icons::TRASH)
                         .size(ButtonSize::SM)
@@ -783,18 +828,32 @@ impl OrderTicket {
                     true
                 },
             );
-            share_field(ui, level, share);
+            share_field(ui, level, &mut saved.share);
+            if level_stops {
+                stop_fields(
+                    ui,
+                    level + 1,
+                    level_per_point(level, saved.share),
+                    &mut saved.stop_loss,
+                );
+            }
         }
         if let Some(index) = removed {
             self.levels.remove(index);
         }
+        if market
+            .capabilities
+            .max_take_profit_levels
+            .is_some_and(|max| self.levels.len() + 1 >= max)
+        {
+            return;
+        }
         ui.add_space(4.0);
         if Button::new("Add level").secondary().show(ui).clicked() {
-            let (last, ..) = self
+            let last = self
                 .levels
                 .last()
-                .copied()
-                .unwrap_or((self.take_profit.1, 0.0));
+                .map_or(self.take_profit.1, |level| level.take_profit);
             let share = (rest / 2.0 * 100.0).round() / 100.0;
             let price = request.and_then(|request| {
                 let last = request.take_profit_levels.last();
@@ -818,7 +877,7 @@ impl OrderTicket {
                 ),
                 None => last,
             };
-            self.levels.push((bracket, share));
+            self.levels.push(PresetLevel::new(bracket, share));
         }
     }
 }
