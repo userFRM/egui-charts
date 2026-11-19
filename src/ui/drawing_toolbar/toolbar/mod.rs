@@ -118,8 +118,8 @@ impl DrawingToolbar {
         self
     }
 
-    /// Shows or hides `control`: Trading (the hide positions and orders rows) and Templates
-    /// (the standalone template name dialog). The toolbar ignores the other controls.
+    /// Shows or hides `control`: Trading (the hide positions, orders and executions rows) and
+    /// Templates (the standalone template name dialog). The toolbar ignores the other controls.
     pub fn set_control_visible(&mut self, control: Control, visible: bool) {
         crate::ui::app_state::set_control_visible(&mut self.hidden, control, visible);
         if control == Control::Templates && !visible {
@@ -748,6 +748,7 @@ impl DrawingToolbar {
             A::HideAllIndicators => self.state.hide_indicators = !self.state.hide_indicators,
             A::HideAllPoss => self.state.hide_positions = !self.state.hide_positions,
             A::HideAllOrders => self.state.hide_orders = !self.state.hide_orders,
+            A::HideAllExecutions => self.state.hide_executions = !self.state.hide_executions,
             A::HideAll => {
                 let state = &mut self.state;
                 let trading = !self.hidden.contains(&Control::Trading);
@@ -757,6 +758,7 @@ impl DrawingToolbar {
                 if trading {
                     state.hide_positions = hidden;
                     state.hide_orders = hidden;
+                    state.hide_executions = hidden;
                 }
             }
             A::InsertEmoji { .. } => self.select_tool(DrawingToolType::FontIcon),
@@ -1628,6 +1630,103 @@ mod tests {
         frame(&mut toolbar, vec![]);
         let (shapes, _) = frame(&mut toolbar, vec![]);
         assert!(label(&shapes, "Got it").is_none());
+    }
+
+    /// The host loop keeps trading checks and rendered visibility in agreement, including a
+    /// settings change before opening the menu and both directions of Hide all.
+    #[test]
+    fn hide_menu_trading_rows_follow_and_change_the_trading_display() {
+        use crate::ui::trading::Trading;
+        use egui::accesskit::{Role, Toggled};
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+
+        let theme = crate::theme::Theme::light();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(640.0, 1200.0))
+            .with_context_setup(move |ctx| {
+                egui_extras::install_image_loaders(ctx);
+                crate::theme::apply_to_egui(ctx, &theme);
+            })
+            .build_ui_state(
+                |ui, (toolbar, trading): &mut (DrawingToolbar, Trading)| {
+                    trading.sync_hide_menu(&mut toolbar.state);
+                    let action = toolbar.show_with_action(ui);
+                    trading.apply_hide_action(&action, &toolbar.state);
+                },
+                (DrawingToolbar::new(), Trading::default()),
+            );
+        harness.state_mut().1.display.show_positions = false;
+        harness.run();
+
+        let labels = [
+            "Hide drawings",
+            "Hide indicators",
+            "Hide positions",
+            "Hide orders",
+            "Hide executions",
+            "Hide all",
+        ];
+        let rows = [
+            (
+                [false, false, true, false, false, false],
+                [false, true, true],
+                Some("Hide positions"),
+            ),
+            ([false; 6], [true; 3], Some("Hide orders")),
+            (
+                [false, false, false, true, false, false],
+                [true, false, true],
+                Some("Hide orders"),
+            ),
+            ([false; 6], [true; 3], Some("Hide executions")),
+            (
+                [false, false, false, false, true, false],
+                [true, true, false],
+                Some("Hide all"),
+            ),
+            ([true; 6], [false; 3], Some("Hide executions")),
+            (
+                [true, true, true, true, false, false],
+                [false, false, true],
+                Some("Hide all"),
+            ),
+            ([true; 6], [false; 3], Some("Hide all")),
+            ([false; 6], [true; 3], None),
+        ];
+        for (checks, display, pick) in rows {
+            harness
+                .get_by_role_and_label(Role::Button, "Hide objects")
+                .click();
+            harness.run();
+            for (label, checked) in labels.into_iter().zip(checks) {
+                assert_eq!(
+                    harness
+                        .get_by_role_and_label(Role::MenuItem, label)
+                        .accesskit_node()
+                        .toggled()
+                        == Some(Toggled::True),
+                    checked,
+                    "{label} before {pick:?}"
+                );
+            }
+            let settings = &harness.state().1.display;
+            assert_eq!(
+                [
+                    settings.show_positions,
+                    settings.show_orders,
+                    settings.show_executions
+                ],
+                display,
+                "before {pick:?}"
+            );
+            if let Some(pick) = pick {
+                harness.get_by_role_and_label(Role::MenuItem, pick).click();
+                harness.run();
+            }
+        }
     }
 
     /// Group rules use the same palette blend as the top toolbar, including custom colours.

@@ -506,6 +506,9 @@ pub struct TradingSettings {
     /// Buy and Sell place a market order of the order quantity at once instead of opening the
     /// order ticket.
     pub instant_orders: bool,
+    /// Show only side, order type, prices and quantity above the send button, with the order's
+    /// exits listed one per line. The ticket's More menu switches it.
+    pub compact_ticket: bool,
     /// Show current Bid and Ask tags supplied by the quote source.
     pub bid_ask_labels: bool,
     /// Ask the host to play [`execution_sound`](Self::execution_sound) for every fill, through
@@ -550,6 +553,7 @@ impl Default for TradingSettings {
     fn default() -> Self {
         Self {
             instant_orders: false,
+            compact_ticket: false,
             bid_ask_labels: false,
             play_execution_sound: false,
             execution_sound: String::new(),
