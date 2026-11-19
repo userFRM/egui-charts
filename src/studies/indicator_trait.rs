@@ -656,6 +656,16 @@ pub trait Indicator: Send {
         false
     }
 
+    /// Report `defaults`, values keyed by input id, as the [`default`](super::StudyInput::default)
+    /// of the matching [`inputs`](Self::inputs) that accept them, so that resetting the inputs
+    /// restores them. `IndicatorFactory` passes the inputs a study it creates under the host's
+    /// defaults starts with. The chart's presentation wrapper reports them. A host study that
+    /// keeps its own presentation implements this to report them too; otherwise its inputs keep
+    /// their declared defaults.
+    fn set_input_defaults(&mut self, defaults: &[(String, super::InputValue)]) {
+        let _ = defaults;
+    }
+
     /// The descriptor needed to restore a host metric without its catalogue registration.
     /// Ordinary studies return `None`; a scalar metric returns its own descriptor.
     fn metric(&self) -> Option<&crate::data::MetricSeries> {

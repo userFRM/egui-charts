@@ -650,6 +650,8 @@ pub struct ConfiguredStudy {
     /// The values kept on the bars that remain after the chart evicted the oldest bars, until
     /// the study is calculated again.
     kept: Option<Kept>,
+    /// Defaults by input id that replace the declared ones, from `set_input_defaults`.
+    input_defaults: Vec<(String, InputValue)>,
 }
 
 impl Clone for ConfiguredStudy {
@@ -701,6 +703,7 @@ impl ConfiguredStudy {
             aligned_markers: self.aligned_markers.clone(),
             aligned_zones: self.aligned_zones.clone(),
             kept: self.kept.clone(),
+            input_defaults: self.input_defaults.clone(),
         }
     }
 
@@ -748,6 +751,7 @@ impl ConfiguredStudy {
             aligned_markers: Vec::new(),
             aligned_zones: Vec::new(),
             kept: None,
+            input_defaults: Vec::new(),
         }
     }
     /// Attach a host-chosen help article to this study, retained in saved presentation.
@@ -902,6 +906,9 @@ impl Indicator for ConfiguredStudy {
         self.registered = name.to_owned();
         true
     }
+    fn set_input_defaults(&mut self, defaults: &[(String, InputValue)]) {
+        self.input_defaults = defaults.to_vec();
+    }
     fn metric(&self) -> Option<&crate::data::MetricSeries> {
         self.study.metric()
     }
@@ -974,6 +981,13 @@ impl Indicator for ConfiguredStudy {
                 )
                 .with_default(InputValue::Toggle(true)),
             ]);
+        }
+        for input in &mut inputs {
+            if let Some((_, value)) = self.input_defaults.iter().find(|(id, _)| *id == input.id)
+                && input.accepts(value)
+            {
+                input.default = value.clone();
+            }
         }
         inputs
     }
