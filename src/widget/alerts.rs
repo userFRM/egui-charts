@@ -393,11 +393,11 @@ mod tests {
                 vec![10., 20., 40., 50., 40., 60.],
                 vec![
                     (
-                        "Awesome Oscillator: Changes to increasing bars",
+                        "AO: Changes to increasing bars",
                         vec![None, None, None, Some(0.), Some(0.), Some(1.)],
                     ),
                     (
-                        "Awesome Oscillator: Changes to decreasing bars",
+                        "AO: Changes to decreasing bars",
                         vec![None, None, None, Some(1.), Some(0.), Some(0.)],
                     ),
                 ],
@@ -408,11 +408,11 @@ mod tests {
                 vec![10., 20., 40., 60., 80., 100.],
                 vec![
                     (
-                        "Awesome Oscillator: Changes to increasing bars",
+                        "AO: Changes to increasing bars",
                         vec![None, None, None, Some(0.), Some(0.), Some(0.)],
                     ),
                     (
-                        "Awesome Oscillator: Changes to decreasing bars",
+                        "AO: Changes to decreasing bars",
                         vec![None, None, None, Some(1.), Some(0.), Some(0.)],
                     ),
                 ],

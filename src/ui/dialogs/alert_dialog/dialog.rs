@@ -1515,6 +1515,8 @@ pub(crate) fn rule_form(
                 .find(|(id, _)| id == run)
                 .map_or(run.as_str(), |(_, name)| name.as_str());
             egui::ComboBox::from_id_salt("strategy_run")
+                .width(ui.available_width().min(200.0))
+                .truncate()
                 .selected_text(name)
                 .show_ui(ui, |ui| {
                     for (id, name) in runs {
@@ -2042,6 +2044,7 @@ mod tests {
                 let mut dialog = AlertDialog::new();
                 dialog.alert = Alert::new("SAMPLE", condition.clone());
                 dialog.alert.source = source.clone();
+                dialog.strategy_runs = vec![("run".into(), "Momentum live ".repeat(20))];
                 let mut form_width = 0.0;
                 for _ in 0..3 {
                     let output = ctx.run_ui(Default::default(), |ui| {
