@@ -3038,10 +3038,11 @@ mod tests {
         };
         let mut chart = chart(&[100.0], &[110.0]);
         let new_chart = ChartSettingsState::from_chart(&chart);
-        let mut solid = crate::config::ChartLineStyle::default();
-        solid.color = Some(Color32::GOLD);
-        solid.width = 2.0;
-        solid.style = crate::model::LineStyle::Solid;
+        let solid = crate::config::ChartLineStyle {
+            color: Some(Color32::GOLD),
+            width: 2.0,
+            style: crate::model::LineStyle::Solid,
+        };
         for (breaks, source, line, lines) in [
             (true, LastVisible, solid, true),
             (false, LastBar, Default::default(), false),
