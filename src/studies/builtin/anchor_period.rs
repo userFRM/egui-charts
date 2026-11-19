@@ -26,6 +26,19 @@ pub enum AnchorPeriod {
 }
 
 impl AnchorPeriod {
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Session => "Session",
+            Self::Week => "Week",
+            Self::Month => "Month",
+            Self::Quarter => "Quarter",
+            Self::Year => "Year",
+            Self::Decade => "Decade",
+            Self::Century => "Century",
+        }
+    }
+
     /// Identifies the period that holds trading day `day`.
     pub(super) fn key(self, day: NaiveDate) -> (i32, u32) {
         match self {

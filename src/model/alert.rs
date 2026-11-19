@@ -170,6 +170,9 @@ pub struct AlertInputs {
     pub sources: Vec<(AlertSource, AlertSourceName)>,
     /// Include extended trading sessions.
     pub extended_hours: bool,
+    /// Whether overnight hours are requested together with extended hours. False in older saves.
+    #[serde(default)]
+    pub overnight_hours: bool,
     /// Host currency or unit conversion.
     pub conversion: Option<String>,
     /// Initial main-series history size when no start time was available.
@@ -192,6 +195,7 @@ impl Default for AlertInputs {
             calendar: None,
             sources: Vec::new(),
             extended_hours: false,
+            overnight_hours: false,
             conversion: None,
             count: 1000,
             start: None,

@@ -65,9 +65,9 @@
 //! and signal seed with the mean of their first inputs, the Relative Volatility Index and SMI Ergodic EMAs seed with
 //! their first input and an unchanged close counts as a falling bar in the Relative Volatility Index, and Parabolic
 //! SAR reverses when the price crosses it, not on a touch), otherwise a published one (Wilder's first true range is high minus
-//! low, Keltner's EMA seeds with the SMA of the first closes). Where no published rule settles it,
-//! the series pins the study's current behaviour: Supertrend starts bullish, an Aroon tie counts
-//! the most recent bar, and Parabolic SAR takes its first direction from the first two closes (up
+//! low, Keltner's EMA seeds with the SMA of the first closes, Supertrend starts in a down trend on
+//! the upper band at its first ATR). Where no published rule settles it, the series pins the
+//! study's current behaviour: an Aroon tie counts the most recent bar, and Parabolic SAR takes its first direction from the first two closes (up
 //! on a tie), starts at the first bar's low or high and takes its first extreme point from the
 //! first two bars. The Chaikin volatility starts once its average and its change both have their full
 //! length; the windows of the Choppiness Index, Vortex indicator and Ultimate Oscillator start at the
@@ -251,9 +251,9 @@ fn bollinger_basis_replaces_the_middle_and_keeps_the_deviation() {
 }
 
 /// The width of Bollinger Bands(2, 2) over closes 2, 4, 10, 10, 12 is 4 * deviation / mean:
-/// 400/3, 1200/7, 0 and 400/11 from bar 1. Its highest over 2 bars and lowest over 3 bars, each
-/// window ending at the bar, are read off by hand, and a bar with no close is skipped as if
-/// absent.
+/// 400/3, 1200/7, 0 and 400/11 from bar 1. Its highest and lowest over a lookback, each window
+/// ending at the bar, are read off by hand from bar `lookback - 1`, the first bar whose window
+/// spans the lookback, and a bar with no close is skipped as if absent.
 #[test]
 fn bollinger_width_extrema_match_hand_windows() {
     let (a, b, c) = (400.0 / 3.0, 1200.0 / 7.0, 400.0 / 11.0);
@@ -284,7 +284,7 @@ fn bollinger_width_extrema_match_hand_windows() {
         [
             [nan, a, b, 0.0, c],
             [nan, a, b, b, c],
-            [nan, a, a, 0.0, 0.0],
+            [nan, nan, a, 0.0, 0.0],
         ],
     );
     // A corrected bar 3 gives widths nan, a, b, c, 0.
@@ -292,7 +292,11 @@ fn bollinger_width_extrema_match_hand_windows() {
     study.update(&data, 3);
     check(
         &study,
-        [[nan, a, b, c, 0.0], [nan, a, b, b, c], [nan, a, a, c, 0.0]],
+        [
+            [nan, a, b, c, 0.0],
+            [nan, a, b, b, c],
+            [nan, nan, a, c, 0.0],
+        ],
     );
     // Without bar 2 the widths of the kept bars 0, 1, 3, 4 are nan, a, b, c.
     let skipped = bars([2.0, 4.0, nan, 10.0, 12.0]);
@@ -302,7 +306,18 @@ fn bollinger_width_extrema_match_hand_windows() {
         [
             [nan, a, nan, b, c],
             [nan, a, nan, b, b],
-            [nan, a, nan, a, c],
+            [nan, nan, nan, a, c],
+        ],
+    );
+    // With the lookbacks the other way round the highest waits for its 3 bars.
+    let mut swapped = BollingerBandsWidth::new(2, 2.0).with_lookbacks(3, 2);
+    swapped.calculate(&bars([2.0, 4.0, 10.0, 10.0, 12.0]));
+    check(
+        &swapped,
+        [
+            [nan, a, b, 0.0, c],
+            [nan, nan, b, b, b],
+            [nan, a, a, 0.0, 0.0],
         ],
     );
 }
@@ -467,7 +482,8 @@ fn small_range_studies_are_invariant_to_price_and_volume_units() {
 
 /// The colour bands of the Chop Zone (0 steepest rise to 8 steepest fall) and the trend of the
 /// Volatility Stop on the fixture, computed independently from the same definitions as the
-/// expected rows, one character per bar, `-` where the bar has no colour.
+/// expected rows, one character per bar, `-` where the bar has no colour. A Chop Zone bar without
+/// an angle, before its lengths fill or where its 30-bar range is zero, has a flat column.
 #[test]
 fn chop_zone_and_volatility_stop_colour_bars_by_their_definitions() {
     let bars = fixture();
@@ -475,7 +491,7 @@ fn chop_zone_and_volatility_stop_colour_bars_by_their_definitions() {
         (
             Box::new(ChopZone::default()),
             "012345678",
-            "----------------------------------00000000000000000000000000000000000000000000000003088888888682036888888754888888888888888888888888888888888888888888",
+            "444444444444444444444444444444444400000000000000000000000000000000000000000000000003088888888682036888888754888888888888888888888888888888888888888888",
         ),
         (
             Box::new(VolatilityStop::default()),
@@ -500,6 +516,19 @@ fn chop_zone_and_volatility_stop_colour_bars_by_their_definitions() {
             })
             .collect();
         assert_eq!(actual, expected, "{}", study.name());
+    }
+    // Forty rising bars, then flat ones: from bar 69 the 30-bar range is zero.
+    let flat: Vec<Bar> = (0..80)
+        .map(|i| {
+            let p = if i < 40 { 160.0 + i as f64 } else { 200.0 };
+            Bar::new(chrono::DateTime::UNIX_EPOCH, p, p, p, p, 1.0)
+        })
+        .collect();
+    let mut zone = ChopZone::default();
+    zone.calculate(&flat);
+    for bar in 69..80 {
+        assert_eq!(zone.values().value(0, bar), Some(1.0), "bar {bar}");
+        assert_eq!(zone.plot_color(0, bar), Some(zone.colors()[4]), "bar {bar}");
     }
 }
 
