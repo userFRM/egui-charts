@@ -8,7 +8,9 @@ use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
 use crate::theme::Theme;
 use crate::ui::Control;
-use crate::ui::context_menu::{MenuEntry, MenuItem, POINTER_GAP, format_price, show_menu};
+use crate::ui::context_menu::{
+    MenuEntry, MenuItem, MenuRowId, POINTER_GAP, format_price, show_menu,
+};
 
 use egui::{Context, Id, Pos2};
 use std::collections::HashSet;
@@ -31,6 +33,18 @@ pub enum SeriesContextMenuAction {
     CopyPrice,
     /// Open series settings dialog
     OpenSettings,
+}
+
+impl SeriesContextMenuAction {
+    pub(super) fn row_id(&self) -> Option<MenuRowId> {
+        Some(match self {
+            Self::None => return None,
+            Self::AddAlert => MenuRowId::AddAlert,
+            Self::AddIndicator => MenuRowId::AddIndicator,
+            Self::CopyPrice => MenuRowId::CopyPrice,
+            Self::OpenSettings => MenuRowId::SeriesSettings,
+        })
+    }
 }
 
 // ============================================================================

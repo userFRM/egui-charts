@@ -307,8 +307,9 @@ pub struct Drawing {
     /// Lines, labels, zone fill and border of position tools.
     #[serde(default)]
     pub position_style: PositionStyle,
-    /// Text popup of a pin and glyph disc of a signpost. Drawings saved without it show their
-    /// text and no glyph, as new ones do.
+    /// Text popup of a pin, glyph disc of a signpost, and the Show text switch of horizontal
+    /// lines and rays, arrow marks and the parallel, flat top/bottom and disjoint channels.
+    /// Drawings saved without it show their text and no glyph, as new ones do.
     #[serde(default)]
     pub marker: AnnotationMarker,
     /// Customizable Fibonacci levels for Fib tools
@@ -393,7 +394,9 @@ pub struct Drawing {
     /// back of the pane's draw order: `Some(0)` draws it under all of them. `None`, the default,
     /// draws it over all of them, as drawings were drawn before this setting, and so does a
     /// count of at least the number of series and studies in the pane. Drawings with the same
-    /// count are layered by [`z_order`](Self::z_order).
+    /// count are layered by [`z_order`](Self::z_order). The chart updates the count when a series
+    /// or study is removed, moved out of the pane or moved in its order, so the drawing stays
+    /// over and under the same other items.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub series_layer: Option<usize>,
 }
