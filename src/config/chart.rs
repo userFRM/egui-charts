@@ -309,7 +309,9 @@ pub struct ChartConfig {
     pub vertical_grid_line_style: Option<LineStyle>,
     /// Text color for labels
     pub text_color: Color32,
-    /// Font size of the price and time axis labels in logical pixels; `None` follows the theme.
+    /// Font size of this chart's price and time scale text in logical pixels: the axis labels
+    /// and tags, including the crosshair's and those of study panes. `None` follows the theme's
+    /// label size; other chart text keeps the theme's sizes.
     /// Default: None
     pub axis_font_size: Option<f32>,
     /// Font family of this chart's price and time axis labels and tags, including study panes.

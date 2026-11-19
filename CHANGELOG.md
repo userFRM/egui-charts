@@ -511,6 +511,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Trade Rate now fills history-only range intervals when the instrument's tick size and the complete trade tape reproduce the candles. ([#3453](https://github.com/userFRM/egui-charts/issues/3453))
+
 - Trade Rate now fills history-only tick charts when the complete trade tape reproduces the candles. Partial or mismatched inputs stay blank. ([#3394](https://github.com/userFRM/egui-charts/issues/3394))
 
 - A detached chart export keeps Trade Rate and other `OrderFlowStudy` values at the captured position when new live events arrive. Ordinary study clones still follow the stream. ([#2967](https://github.com/userFRM/egui-charts/issues/2967))

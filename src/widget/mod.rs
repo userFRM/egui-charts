@@ -273,6 +273,9 @@ pub struct Chart {
     pub(crate) pending_start_idx: Option<usize>,
     /// Timestamp to centre, retained while older history is loading.
     pub(crate) pending_scroll_time: Option<DateTime<Utc>>,
+    /// A range set before the first layout and the bar spacing, right offset and tracking mode
+    /// its last fit left, fitted again at the plot width until the first laid-out frame is shown.
+    pending_visible_range: Option<(time_scale::PendingRange, (f32, f64, bool))>,
     /// Animated scroll requested by the host, advanced each frame (UI state only)
     scroll_animation: Option<time_scale::ScrollAnimation>,
     /// Time axis below the plots in the last frame; zero height while its labels are hidden

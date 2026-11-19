@@ -4133,9 +4133,6 @@ fn history_page_after_a_store_loss_keeps_the_matched_cells() {
 #[cfg(feature = "studies")]
 #[test]
 fn history_only_tick_trade_rate_uses_proven_receipts() {
-    use crate::data::OrderFlowKind;
-    use crate::studies::OrderFlowStudy;
-
     let start = bars(1)[0].time;
     let later = start + TimeDelta::seconds(1);
     let tape = [
@@ -4147,16 +4144,68 @@ fn history_only_tick_trade_rate_uses_proven_receipts() {
     ]
     .map(|(ts, size)| Tick::new(ts, 100.0, size, None));
     let bar = |at, volume| Bar::new(at, 100.0, 100.0, 100.0, 100.0, volume);
-    // Same data, separate drains: either feed response can arrive first.
-    for (trades_first, complete, middle_volume) in [
-        (false, true, 12.0),
-        (true, true, 12.0),
-        (false, false, 12.0),
-        (true, true, 13.0),
+    check_history_only_trade_rate(
+        "2t",
+        &tape,
+        &[
+            bar(start, 3.0),
+            bar(start + TimeDelta::nanoseconds(1), 12.0),
+            bar(later, 16.0),
+        ],
+        &[[2.0, 1.0, 2.0], [2.0, 2.0, 1.0], [1.0, 2.5, 2.0]],
+    );
+}
+
+#[cfg(feature = "studies")]
+#[test]
+fn history_only_range_trade_rate_uses_proven_receipts() {
+    let start = bars(1)[0].time;
+    let later = start + TimeDelta::seconds(1);
+    let tape = [
+        (start, 100.0, 1.0),
+        (start, 100.125, 2.0),
+        (start, 100.25, 4.0),
+        (start, 101.0, 8.0),
+        (later, 100.5, 16.0),
+        (later, 100.375, 32.0),
+    ]
+    .map(|(ts, price, size)| Tick::new(ts, price, size, None));
+    // Three executions reach the range, two overshoot it, and the last stays open.
+    check_history_only_trade_rate(
+        "2r",
+        &tape,
+        &[
+            Bar::new(start, 100.0, 100.25, 100.0, 100.25, 7.0),
+            Bar::new(
+                start + TimeDelta::nanoseconds(1),
+                101.0,
+                101.0,
+                100.5,
+                100.5,
+                24.0,
+            ),
+            Bar::new(later, 100.375, 100.375, 100.375, 100.375, 32.0),
+        ],
+        &[[3.0, 1.5, 3.0], [2.0, 2.5, 1.0], [1.0, 3.0, 2.0]],
+    );
+}
+
+#[cfg(feature = "studies")]
+fn check_history_only_trade_rate(interval: &str, tape: &[Tick], bars: &[Bar], want: &[[f64; 3]]) {
+    use crate::data::OrderFlowKind;
+    use crate::studies::OrderFlowStudy;
+
+    for (trades_first, complete, mismatch, grid) in [
+        (false, true, None, Some(0.125)),
+        (true, true, None, Some(0.125)),
+        (false, false, None, Some(0.125)),
+        (true, true, Some(1), Some(0.125)),
+        (true, true, Some(bars.len() - 1), Some(0.125)),
+        (true, true, None, None),
     ] {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
-        chart.set_timeframe("2t".parse().unwrap());
+        chart.set_timeframe(interval.parse().unwrap());
         let rate = chart.add_indicator(Box::new(OrderFlowStudy::new(OrderFlowKind::TradeRate {
             volume: false,
             seconds: 2,
@@ -4164,21 +4213,19 @@ fn history_only_tick_trade_rate_uses_proven_receipts() {
         })));
         let mut frames = Frames::new();
         frames.run(&mut chart);
-        feed.resolve()
-            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        let mut instrument = Instrument::new("A");
+        instrument.tick_size = grid;
+        feed.resolve().send(Ok(instrument));
         frames.run(&mut chart);
         let candles = || {
-            feed.page().send(page(
-                vec![
-                    bar(start, 3.0),
-                    bar(start + TimeDelta::nanoseconds(1), middle_volume),
-                    bar(later, 16.0),
-                ],
-                true,
-            ));
+            let mut bars = bars.to_vec();
+            if let Some(i) = mismatch {
+                bars[i].volume += 1.0;
+            }
+            feed.page().send(page(bars, true));
         };
         let trades = || {
-            let held = if complete { &tape[..] } else { &tape[3..] };
+            let held = if complete { tape } else { &tape[3..] };
             feed.trades
                 .lock()
                 .unwrap()
@@ -4199,27 +4246,31 @@ fn history_only_tick_trade_rate_uses_proven_receipts() {
         frames.run(&mut chart);
         let study = chart.indicators().find(|(id, _)| *id == rate).unwrap().1;
         let values = |i| [0, 1, 2].map(|line| study.values().value(line, i));
-        if complete && middle_volume == 12.0 {
+        if complete && mismatch.is_none() && (interval == "2t" || grid.is_some()) {
             // Window rates use provider times through the last receipt of this bar,
             // not the allocated bar open or later receipts sharing that timestamp.
-            assert_eq!(values(0), [2.0, 1.0, 2.0].map(Some));
-            assert_eq!(values(1), [2.0, 2.0, 1.0].map(Some));
-            assert_eq!(values(2), [1.0, 2.5, 2.0].map(Some));
+            for (i, row) in want.iter().enumerate() {
+                assert_eq!(values(i), row.map(Some));
+            }
 
             // The sink allocates this fill to the last bar key independently. The page
             // proves no join there: neither its count nor its windows carry over.
-            feed.sink().push_tick(tape[4].clone());
+            feed.sink().push_tick(tape.last().unwrap().clone());
             frames.run(&mut chart);
             frames.run(&mut chart);
             let study = chart.indicators().find(|(id, _)| *id == rate).unwrap().1;
             assert_eq!(
-                [0, 1, 2].map(|line| study.values().value(line, 2)),
+                [0, 1, 2].map(|line| study.values().value(line, bars.len() - 1)),
                 [1.0, 0.5, 1.0].map(Some)
             );
         } else {
-            // A truncated tape or a mismatched candle proves no full run.
-            for i in 0..3 {
-                assert_eq!(values(i), [None; 3]);
+            // A truncated tape, mismatched candle or missing range grid proves no run.
+            for i in 0..bars.len() {
+                assert_eq!(
+                    values(i),
+                    [None; 3],
+                    "{interval} bar {i}, mismatch {mismatch:?}"
+                );
             }
         }
     }

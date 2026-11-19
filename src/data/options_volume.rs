@@ -103,6 +103,36 @@ impl OptionsVolumeSink {
     }
 }
 
+/// An [`OptionsVolumeSink`] outside a chart and its latest snapshot, to call
+/// [`Datafeed::options_volume`](super::Datafeed::options_volume), such as in a test. Dropping
+/// the reader makes the sink inactive.
+#[derive(Debug)]
+pub struct OptionsVolumeReader(Arc<Snapshot<Arc<[OptionsVolume]>>>);
+
+impl OptionsVolumeReader {
+    /// A sink and the reader of what it receives.
+    ///
+    /// ```
+    /// use egui_charts::data::{OptionsVolume, OptionsVolumeReader};
+    ///
+    /// let (reader, sink) = OptionsVolumeReader::new();
+    /// sink.push(vec![OptionsVolume::new(100.0, 1_200.0, 800.0)]);
+    /// assert_eq!(reader.values().len(), 1);
+    /// drop(reader);
+    /// assert!(!sink.is_active());
+    /// ```
+    pub fn new() -> (Self, OptionsVolumeSink) {
+        let snapshot = Snapshot::new(Arc::from([]), || {});
+        let sink = OptionsVolumeSink(Arc::downgrade(&snapshot));
+        (Self(snapshot), sink)
+    }
+
+    /// The latest snapshot pushed, in the feed's order. Empty until the first.
+    pub fn values(&self) -> Arc<[OptionsVolume]> {
+        self.0.read(Arc::clone)
+    }
+}
+
 #[cfg(feature = "studies")]
 #[derive(Clone, Debug)]
 pub(crate) struct OptionsVolumeSource(Arc<Snapshot<Arc<[OptionsVolume]>>>);

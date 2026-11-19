@@ -167,7 +167,7 @@ impl Chart {
             link.retries
                 .retain(|(_, request, _)| !matches!(request, Request::Footprints(_)));
         }
-        let mut paged_tick_rates = false;
+        let mut paged_rates = false;
         for (key, answer) in drained.answers {
             let Some(at) = link
                 .pending
@@ -202,7 +202,7 @@ impl Chart {
                     scroll_back,
                 } => match result::<HistoryPage>(answer) {
                     Ok(page) => {
-                        paged_tick_rates |= !page.bars.is_empty();
+                        paged_rates |= !page.bars.is_empty();
                         self.apply_page(&mut link, &asked, page, scroll_back);
                     }
                     Err(error) => self.request_failed(&mut link, request, failures, error, now),
@@ -252,7 +252,7 @@ impl Chart {
                 },
                 Request::Trades(asked) => match result::<TradePage>(answer) {
                     Ok(page) => {
-                        paged_tick_rates = true;
+                        paged_rates = true;
                         self.apply_trades(&mut link, &asked, page, reset);
                     }
                     Err(error) if error.is_recoverable() => {
@@ -265,9 +265,9 @@ impl Chart {
                 },
             }
         }
-        if paged_tick_rates && !reset {
+        if paged_rates && !reset {
             for (input, _) in &link.study_inputs {
-                link.rebuild_paged_tick_rate(input, &self.state.data().bars);
+                link.rebuild_paged_trade_rate(input, &self.state.data().bars);
             }
         }
 

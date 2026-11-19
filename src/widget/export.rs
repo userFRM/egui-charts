@@ -774,6 +774,7 @@ impl Chart {
         }
         chart.desired_visible_bars = self.desired_visible_bars;
         chart.apply_visible_bars_once = self.apply_visible_bars_once;
+        chart.pending_visible_range = self.pending_visible_range;
         chart.start_idx = self.start_idx;
         for (_, study) in self.indicators() {
             chart.insert_indicator(study.clone_for_export());
