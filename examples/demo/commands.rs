@@ -527,8 +527,8 @@ impl DemoApp {
                 }
                 if !self.chart.is_main_series_visible() {
                     self.notify(
-                        "Analyst targets start at the last close. Show the price series, then try \
-                         again.",
+                        "Analyst targets start at the close on their publication date. Show the price \
+                         series, then try again.",
                     );
                     return;
                 }
