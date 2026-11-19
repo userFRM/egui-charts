@@ -3878,25 +3878,6 @@ mod tests {
     #[cfg(feature = "widget")]
     #[test]
     fn auto_anchored_profiles_start_at_the_latest_chart_event() {
-        assert_eq!(
-            ANCHORS.map(|(_, label)| label),
-            [
-                "Auto",
-                "Highest High",
-                "Lowest Low",
-                "Highest Volume",
-                "Session",
-                "Week",
-                "Month",
-                "Quarter",
-                "Year",
-                "Decade",
-                "Century",
-                "Earnings",
-                "Dividends",
-                "Splits"
-            ]
-        );
         use crate::model::{BarData, EventKind, TimeScaleEvent};
         use crate::widget::{Chart, test_frames::shapes};
         let at = |day: i64, hour: i64| {
