@@ -126,9 +126,6 @@ pub(crate) fn trim_separators<A>(entries: &mut Vec<MenuEntry<A>>) {
 /// Distance between the pointer and the corner a menu opens at.
 pub(crate) const POINTER_GAP: f32 = 2.0;
 
-/// Labels wider than this are elided with "…".
-const MAX_LABEL_WIDTH: f32 = 300.0;
-
 /// Space between the label column and the shortcut column.
 const COLUMN_GAP: f32 = 24.0;
 
@@ -210,12 +207,12 @@ fn draw_menu<A: Clone>(
         job.wrap = TextWrapping::truncate_at_width(max_width);
         ctx.fonts_mut(|f| f.layout_job(job))
     };
-    // Each item's label and its shortcut.
+    // Measure complete labels, then fit them beside shortcuts within the window.
     let mut rows: Vec<_> = entries
         .iter()
         .map(|entry| match entry {
             MenuEntry::Item(item) => Some((
-                layout(l10n::text(ctx, &item.label), t.font_size, MAX_LABEL_WIDTH),
+                layout(l10n::text(ctx, &item.label), t.font_size, f32::INFINITY),
                 item.shortcut.map(|s| {
                     layout(
                         l10n::text(ctx, ctx.format_shortcut(&s)),
@@ -225,7 +222,7 @@ fn draw_menu<A: Clone>(
                 }),
             )),
             MenuEntry::Submenu { label, .. } => Some((
-                layout(l10n::text(ctx, label), t.font_size, MAX_LABEL_WIDTH),
+                layout(l10n::text(ctx, label), t.font_size, f32::INFINITY),
                 None,
             )),
             MenuEntry::Separator => None,
@@ -500,10 +497,16 @@ mod tests {
             let ctx = Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
             ctx.set_os(egui::os::OperatingSystem::Nix);
-            let entries = [MenuEntry::Item(
-                MenuItem::new("Add alert on VERY_LONG_SYMBOL at 123,456.78…", ())
-                    .with_shortcut(KeyboardAction::ResetChart.shortcut()),
-            )];
+            let entries = [
+                MenuEntry::Item(
+                    MenuItem::new("Add alert on VERY_LONG_SYMBOL at 123,456.78…", ())
+                        .with_shortcut(KeyboardAction::ResetChart.shortcut()),
+                ),
+                MenuEntry::Item(MenuItem::new(
+                    "Buy 1,000 SAMPLE @ 102.50 stop limit 102.75",
+                    (),
+                )),
+            ];
             for width in [800.0, 320.0] {
                 for pass in 0..2 {
                     let output = ctx.run_ui(
@@ -531,16 +534,24 @@ mod tests {
                         .iter()
                         .filter_map(|shape| {
                             if let egui::Shape::Text(text) = &shape.shape {
-                                Some(text.galley.rect.translate(text.pos.to_vec2()))
+                                Some(text)
                             } else {
                                 None
                             }
                         })
                         .collect();
                     if pass == 1 {
-                        assert_eq!(text.len(), 2);
-                        assert!(text[0].right() + COLUMN_GAP <= text[1].left() + 0.5);
-                        assert!(text[1].right() <= width - theme.spacing.lg);
+                        assert_eq!(text.len(), 3);
+                        // Both order prices fit in a wide window; a narrow one still clips
+                        // labels before the shortcut column.
+                        assert_eq!(text[2].galley.elided, width == 320.0);
+                        let rects: Vec<_> = text
+                            .iter()
+                            .map(|text| text.galley.rect.translate(text.pos.to_vec2()))
+                            .collect();
+                        assert!(rects[0].right() + COLUMN_GAP <= rects[1].left() + 0.5);
+                        assert!(rects[1].right() <= width - theme.spacing.lg);
+                        assert!(rects[2].right() + COLUMN_GAP <= rects[1].left() + 0.5);
                     }
                     output.drop_without_applying_deltas();
                 }
