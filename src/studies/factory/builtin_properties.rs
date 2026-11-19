@@ -6,7 +6,7 @@ use chrono::{Duration, TimeZone, Utc};
 /// Every built-in, with its `k`-th length parameter set to `l(k)` and each
 /// float parameter of conventional value `v` set to `x(v)`.
 fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<dyn Indicator>> {
-    vec![
+    let mut studies: Vec<Box<dyn Indicator>> = vec![
         Box::new(SMA::new(l(0))),
         Box::new(EMA::new(l(0))),
         Box::new(WMA::new(l(0))),
@@ -318,7 +318,15 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(CandlestickPatterns::default()),
         Box::new(ChartPatterns::new(PatternFamily::Continuation)),
         Box::new(ChartPatterns::new(PatternFamily::Reversal)),
-    ]
+        Box::new(ChartPatterns::all()),
+    ];
+    studies.extend(
+        PatternFamily::ALL
+            .iter()
+            .flat_map(|family| family.kinds())
+            .map(|&kind| Box::new(ChartPatterns::only(kind)) as Box<dyn Indicator>),
+    );
+    studies
 }
 
 /// xorshift64*, so the event sequence is the same on every platform and run.

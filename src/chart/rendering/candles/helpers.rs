@@ -92,16 +92,29 @@ pub fn body_rect(x: f32, bar_width: f32, y: &OhlcYCoords) -> Rect {
     )
 }
 
-/// Draw a brick/block with border (for Renko, Line Break)
-pub fn draw_brick(painter: &Painter, rect: Rect, color: Color32, corner_radius: f32) {
+/// Draw a brick/block in `color` with a `border`, if any (for Renko, Line Break)
+pub fn draw_brick(
+    painter: &Painter,
+    rect: Rect,
+    color: Color32,
+    border: Option<Color32>,
+    corner_radius: f32,
+) {
     painter.add(Shape::rect_filled(rect, corner_radius, color));
-    let border_color = color.gamma_multiply(0.7);
-    painter.add(Shape::rect_stroke(
-        rect,
-        corner_radius,
-        Stroke::new(DESIGN_TOKENS.stroke.hairline, border_color),
-        egui::epaint::StrokeKind::Inside,
-    ));
+    if let Some(border) = border {
+        painter.add(Shape::rect_stroke(
+            rect,
+            corner_radius,
+            Stroke::new(DESIGN_TOKENS.stroke.hairline, border),
+            egui::epaint::StrokeKind::Inside,
+        ));
+    }
+}
+
+/// The border of a brick in `color` without a border colour of its own: that colour at 70%
+/// opacity.
+pub fn brick_border(color: Color32) -> Color32 {
+    color.gamma_multiply(0.7)
 }
 
 /// Draw an X symbol (for Point & Figure up columns)
