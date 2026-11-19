@@ -145,6 +145,57 @@ pub struct NewChatRoom {
     pub members: Vec<String>,
 }
 
+impl NewChatRoom {
+    /// A room of `kind` named `name`, inviting the users whose host identifiers are `members`.
+    /// The name of a direct message is empty. Values are stored as given.
+    ///
+    /// ```
+    /// use std::sync::Mutex;
+    ///
+    /// use egui_charts::data::{Reply, ReplyReader};
+    /// use egui_charts::services::{
+    ///     ChatEvent, Chats, Events, EventsReader, NewChatRoom, NewChatRoomKind,
+    /// };
+    ///
+    /// /// Creates every room it is asked for, identified by its name.
+    /// #[derive(Default)]
+    /// struct Rooms(Mutex<Option<Events<ChatEvent>>>);
+    ///
+    /// impl Chats for Rooms {
+    ///     fn watch(&self, events: Events<ChatEvent>) {
+    ///         *self.0.lock().unwrap() = Some(events);
+    ///     }
+    ///
+    ///     fn send(&self, _: String, _: String, reply: Reply<()>) {
+    ///         reply.send(Ok(()));
+    ///     }
+    ///
+    ///     fn create_room(&self, room: NewChatRoom, reply: Reply<String>) {
+    ///         if let Some(events) = &*self.0.lock().unwrap() {
+    ///             events.push(ChatEvent::Room(room.name.clone()));
+    ///         }
+    ///         reply.send(Ok(room.name));
+    ///     }
+    /// }
+    ///
+    /// let rooms = Rooms::default();
+    /// let (pushed, events) = EventsReader::new();
+    /// rooms.watch(events);
+    /// let (answer, reply) = ReplyReader::new();
+    /// let members = vec!["ana".to_owned(), "ben".to_owned()];
+    /// rooms.create_room(NewChatRoom::new(NewChatRoomKind::Group, "Futures desk", members), reply);
+    /// assert_eq!(answer.take(), Some(Ok("Futures desk".to_owned())));
+    /// assert_eq!(pushed.take(), [ChatEvent::Room("Futures desk".into())]);
+    /// ```
+    pub fn new(kind: NewChatRoomKind, name: impl Into<String>, members: Vec<String>) -> Self {
+        Self {
+            kind,
+            name: name.into(),
+            members,
+        }
+    }
+}
+
 /// A change to the user's rooms, pushed through the stream [`Chats::watch`] received.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
