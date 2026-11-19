@@ -375,6 +375,7 @@ impl FootprintState {
             bars: Default::default(),
             trade_bars: Default::default(),
             trade_starts: Default::default(),
+            pending: Default::default(),
             rows: 0,
             missing: self.live.missing.clone(),
             partial_slots: self.live.partial_slots.clone(),
@@ -457,6 +458,7 @@ impl FootprintState {
                 .collect(),
             trade_bars: Default::default(),
             trade_starts: Default::default(),
+            pending: Default::default(),
             missing: self.live.missing.clone(),
             partial_slots: self.live.partial_slots.clone(),
             missing_bars: self.live.missing_bars.clone(),
@@ -840,6 +842,7 @@ mod tests {
             since: None,
             count: 10,
             extended_hours: false,
+            overnight_hours: false,
             adjusted: false,
             conversion: None,
         }

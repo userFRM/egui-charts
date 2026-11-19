@@ -16,8 +16,10 @@ impl Trading {
     /// Applies the broker's pushes and answers, and reports refused orders and fills in `toasts`.
     /// A lagged stream is replaced by a new one, on which the broker restates the account: the
     /// order ticket, a previewed order and the quantity calculator stay as the user left them,
-    /// while a change to an order or a position that waits for confirmation is dropped. Call it
-    /// every frame, even while the chart is hidden.
+    /// a change to an order or a position that waits for confirmation is dropped, and a
+    /// confirmed position order that still waits for its trading rules is reported as refused,
+    /// as while the broker is not live, and never sent. Call it every frame, even while the
+    /// chart is hidden.
     pub fn poll(&mut self, ctx: &egui::Context, toasts: &mut Toasts) {
         let repaint = ctx.clone();
         self.inbox.set_waker(move || repaint.request_repaint());
@@ -158,8 +160,12 @@ impl Trading {
         self.account_panel.record(&event);
         match event {
             AccountEvent::Account(account) => {
+                let waiting = self.placing.len();
                 self.placing
                     .retain(|(_, _, order)| account.capabilities.accepts(&order.order_type));
+                for _ in self.placing.len()..waiting {
+                    self.refuse("the account no longer accepts this order type");
+                }
                 if !account.capabilities.preview {
                     self.preview = None;
                 }
@@ -223,11 +229,15 @@ impl Trading {
                 }
             }
             AccountEvent::Position(position) => {
+                let waiting = self.placing.len();
                 self.placing.retain(|(_, old, _)| {
                     old.symbol != position.symbol
                         || (old.quantity == position.quantity
                             && old.average_price == position.average_price)
                 });
+                for _ in self.placing.len()..waiting {
+                    self.refuse("the position changed before the order was sent");
+                }
                 if matches!(&self.pending,
                     Some(TradingLineAction::Close(old) | TradingLineAction::Reverse(old) | TradingLineAction::Exit(old, _))
                     if old.symbol == position.symbol
@@ -245,7 +255,7 @@ impl Trading {
                 let chart = (self.chart_logo.as_ref()).map_or("", |(chart, _)| chart.as_str());
                 let numbers = self.numbers(order.map_or("", |order| order.symbol.as_str()), chart);
                 let side = l10n::text(ctx, side_name(fill.side));
-                let quantity = fill.quantity.to_string();
+                let quantity = numbers.quantity(fill.quantity, quantity_decimals(fill.quantity));
                 let price = numbers.price(fill.price);
                 let text = match order {
                     Some(order) => l10n::format_text(
@@ -293,9 +303,11 @@ impl Trading {
                 if let Some(order) = order
                     && filled < order.quantity * (1.0 - 1e-9)
                 {
-                    // A sum of fills such as 0.1 and 0.2 carries the noise of binary fractions.
+                    // Round binary fraction noise so the host's formatter gets 0.3 for 0.1 + 0.2.
                     let decimals = quantity_decimals(filled);
-                    let filled = format!("{filled:.decimals$}");
+                    let scale = 10f64.powi(decimals as i32);
+                    let filled = numbers.quantity((filled * scale).round() / scale, decimals);
+                    let total = numbers.quantity(order.quantity, quantity_decimals(order.quantity));
                     toast.kind = ToastKind::Info;
                     toast.title = Some(l10n::format_text(
                         ctx,
@@ -303,7 +315,7 @@ impl Trading {
                         &[
                             ("order", l10n::text(ctx, order_name(order)).as_str()),
                             ("filled", filled.as_str()),
-                            ("quantity", order.quantity.to_string().as_str()),
+                            ("quantity", total.as_str()),
                         ],
                     ));
                     toast.message = l10n::format_text(
@@ -312,7 +324,7 @@ impl Trading {
                         &[
                             ("fill", text.as_str()),
                             ("filled", filled.as_str()),
-                            ("quantity", order.quantity.to_string().as_str()),
+                            ("quantity", total.as_str()),
                         ],
                     );
                 }
@@ -329,7 +341,7 @@ impl Trading {
                     // arrive, after it is back: refuse them now instead.
                     (true, false) => {
                         for _ in std::mem::take(&mut self.placing) {
-                            self.refuse();
+                            self.refuse(super::NOT_LIVE);
                         }
                     }
                     // Ask once more for what the broker may not have answered meanwhile.
@@ -490,12 +502,13 @@ fn order_toast(
 ) -> Toast {
     let side = l10n::text(ctx, side_name(request.side));
     let price = numbers.price(price);
+    let quantity = numbers.quantity(quantity, quantity_decimals(quantity));
     let fill = l10n::format_text(
         ctx,
         "{side} {quantity} {symbol} at {price}",
         &[
             ("side", side.as_str()),
-            ("quantity", quantity.to_string().as_str()),
+            ("quantity", quantity.as_str()),
             ("symbol", request.symbol.as_str()),
             ("price", price.as_str()),
         ],
@@ -839,20 +852,25 @@ mod tests {
         }
     }
 
-    /// Notifications write each order's prices as the account tables do: in the decimals of the
-    /// order's symbol rather than the chart's, through the host's formatter, on the card too,
-    /// and a partial fill's running total without the noise of adding fills up. A regression
-    /// announces a five-decimal symbol at the chart's two, skips the formatter, or writes fills
-    /// of 0.1 and 0.2 as 0.30000000000000004 filled.
+    /// Notifications write each order's prices and quantities as the account tables do: prices
+    /// in the decimals of the order's symbol rather than the chart's, both through the host's
+    /// formatter for the order's symbol or else in the built-in text, in the title, the message
+    /// and on the card, and a partial fill's running total without the noise of adding fills up.
+    /// A regression announces a five-decimal symbol at the chart's two, skips the formatter, or
+    /// writes fills of 0.1 and 0.2 as 0.30000000000000004 filled.
     #[test]
-    fn notices_write_prices_in_the_order_symbols_decimals() {
+    fn notices_write_numbers_in_the_order_symbols_text() {
         use crate::model::Instrument;
         use crate::ui::trading::TradingFormatter;
-        struct ThirtySeconds;
-        impl TradingFormatter for ThirtySeconds {
+        struct Host;
+        impl TradingFormatter for Host {
             fn price(&self, symbol: &str, price: f64) -> Option<String> {
                 (symbol == "ZN")
                     .then(|| format!("{}'{:02}", price.trunc(), (price.fract() * 32.0).round()))
+            }
+
+            fn quantity(&self, symbol: &str, quantity: f64) -> Option<String> {
+                (symbol == "EURUSD").then(|| format!("{quantity} lots"))
             }
         }
         let order = |id, symbol, side, quantity, price| {
@@ -871,7 +889,7 @@ mod tests {
         };
         let mut trading = Trading::default();
         trading.set_instrument(Instrument::new("EURUSD").with_price_decimals(5));
-        trading.set_formatter(Some(Arc::new(ThirtySeconds)));
+        trading.set_formatter(Some(Arc::new(Host)));
         trading.set_service(Arc::new(Recorder::default()));
         let ctx = egui::Context::default();
         trading.poll(&ctx, &mut Toasts::new());
@@ -881,32 +899,53 @@ mod tests {
             fill("1", OrderSide::Buy, 1.08765, 0.1),
             fill("1", OrderSide::Buy, 1.08765, 0.2),
             fill("1", OrderSide::Buy, 1.0876, 0.7),
-            order("2", "ZN", OrderSide::Sell, 2.0, 110.5),
-            fill("2", OrderSide::Sell, 110.5, 2.0),
+            order("2", "ZN", OrderSide::Sell, 2_000.0, 110.5),
+            fill("2", OrderSide::Sell, 110.5, 2_000.0),
         ] {
             trading.apply(&ctx, event, &mut toasts);
         }
         let notices: Vec<_> = (toasts.toasts().iter())
             .map(|toast| {
-                let card = toast.trading.as_ref().map(|card| card.price.as_str());
-                (toast.message.as_str(), card)
+                let card = toast
+                    .trading
+                    .as_ref()
+                    .map(|card| (card.quantity.as_str(), card.price.as_str()));
+                (toast.title.as_deref(), toast.message.as_str(), card)
             })
             .collect();
         assert_eq!(
             notices,
             [
-                ("Placed: Buy 1 EURUSD at 1.08765", Some("1.08765")),
                 (
-                    "Partially filled: Buy 0.1 EURUSD at 1.08765 (0.1 of 1)",
-                    Some("1.08765")
+                    Some("Limit order placed on"),
+                    "Placed: Buy 1 lots EURUSD at 1.08765",
+                    Some(("1 lots", "1.08765")),
                 ),
                 (
-                    "Partially filled: Buy 0.2 EURUSD at 1.08765 (0.3 of 1)",
-                    Some("1.08765")
+                    Some("Limit order partially executed (0.1 lots of 1 lots) on"),
+                    "Partially filled: Buy 0.1 lots EURUSD at 1.08765 (0.1 lots of 1 lots)",
+                    Some(("0.1 lots", "1.08765")),
                 ),
-                ("Filled: Buy 0.7 EURUSD at 1.08760", Some("1.08760")),
-                ("Placed: Sell 2 ZN at 110'16", Some("110'16")),
-                ("Filled: Sell 2 ZN at 110'16", Some("110'16")),
+                (
+                    Some("Limit order partially executed (0.3 lots of 1 lots) on"),
+                    "Partially filled: Buy 0.2 lots EURUSD at 1.08765 (0.3 lots of 1 lots)",
+                    Some(("0.2 lots", "1.08765")),
+                ),
+                (
+                    Some("Limit order executed on"),
+                    "Filled: Buy 0.7 lots EURUSD at 1.08760",
+                    Some(("0.7 lots", "1.08760")),
+                ),
+                (
+                    Some("Limit order placed on"),
+                    "Placed: Sell 2,000 ZN at 110'16",
+                    Some(("2,000", "110'16")),
+                ),
+                (
+                    Some("Limit order executed on"),
+                    "Filled: Sell 2,000 ZN at 110'16",
+                    Some(("2,000", "110'16")),
+                ),
             ]
         );
     }
@@ -1013,6 +1052,49 @@ mod tests {
                 Some("Bell".to_owned())
             )
         );
+    }
+
+    /// A close the user confirmed waits for the trading rules of its symbol; when the stream lags
+    /// before their answer is read, the close is reported as refused, as when the broker stops
+    /// being live, and never sent, so the position stays open. A regression drops the close
+    /// without a word, or sends it on a stream that restated the account.
+    #[test]
+    fn a_lagged_stream_refuses_a_close_waiting_for_rules() {
+        use crate::data::inbox::Inbox;
+        use crate::model::TimeInForce;
+        use crate::services::{Broker, PaperAccount};
+        let ctx = egui::Context::default();
+        let paper = Arc::new(PaperAccount::new("USD", 100_000.0));
+        paper.set_price("SYM", 100.0);
+        let mut buy = OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Market);
+        buy.time_in_force = TimeInForce::GoodTillCancelled;
+        paper.place(buy, Arc::new(Inbox::default()).reply(0));
+        let mut trading = Trading::default();
+        trading.set_service(paper.clone());
+        trading.poll(&ctx, &mut Toasts::new());
+        let position = trading.positions[0].clone();
+        trading.execute(Some(TradingLineAction::Close(position)));
+        assert_eq!(
+            trading.placing.len(),
+            1,
+            "the close waits for the rules of SYM"
+        );
+        // Revaluing the position pushes it and the account per price: 10,004 pushes overflow
+        // the stream before the next frame reads the rules.
+        for price in [101.0, 100.0].repeat(2_501) {
+            paper.set_price("SYM", price);
+        }
+        let mut toasts = Toasts::new();
+        trading.poll(&ctx, &mut toasts);
+        trading.poll(&ctx, &mut toasts);
+        let messages: Vec<_> = (toasts.toasts().iter())
+            .map(|toast| toast.message.as_str())
+            .collect();
+        assert_eq!(messages, ["Order refused: the broker is not connected"]);
+        let held: Vec<_> = (trading.positions.iter())
+            .map(|position| (position.symbol.as_str(), position.quantity))
+            .collect();
+        assert_eq!((held, trading.orders.len()), (vec![("SYM", 1.0)], 0));
     }
 
     /// Each fill's triangles sit under its own bar, also among fills on the bars beside it, with
@@ -1147,7 +1229,7 @@ mod tests {
             let details = toast.trading.as_ref().unwrap();
             assert_eq!(details.logo.as_deref(), Some("bytes://sym.svg"));
             assert_eq!(details.side, OrderSide::Sell);
-            assert_eq!(details.quantity, 10.0);
+            assert_eq!(details.quantity, "10");
             assert!(!details.executed);
         }
     }

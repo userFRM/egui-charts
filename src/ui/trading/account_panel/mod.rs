@@ -486,12 +486,7 @@ impl AccountPanel {
 
 /// Decimals that show `quantity` without rounding, up to 8.
 pub(super) fn quantity_decimals(quantity: f64) -> usize {
-    (0..8)
-        .find(|&decimals| {
-            let scaled = quantity * 10f64.powi(decimals as i32);
-            (scaled - scaled.round()).abs() < 1e-6
-        })
-        .unwrap_or(8)
+    crate::scales::decimals(quantity).min(8)
 }
 
 /// The rows in view as comma-separated values, with the shown columns' titles as the header.
@@ -670,28 +665,54 @@ SYM,Long,3,110.00,125.00,+45.00 USD,2024-01-01 00:00:00,2024-01-01 00:00:20".int
         );
     }
 
-    /// A position's close button can be found by scanning the rows, without the pointer on one.
+    /// A position's full quantity and close button stay visible without hovering.
     #[test]
-    fn row_actions_show_at_rest() {
-        let broker = Arc::new(Recorder {
-            state: vec![AccountEvent::Position(Position::new("SYM", 1.0, 100.0))],
-            ..Default::default()
-        });
-        let mut trading = Trading::default();
-        trading.set_service(broker);
-        trading.poll(&egui::Context::default(), &mut Toasts::new());
-        trading.account_panel.broker = "Broker".into();
-        let mut harness = Harness::builder()
-            .with_size(egui::vec2(1000.0, 400.0))
-            .with_context_setup(egui_extras::install_image_loaders)
-            .build_ui_state(
-                |ui, trading: &mut Trading| {
-                    trading.show_account_panel(ui, "SYM");
-                },
-                trading,
+    fn position_quantities_and_row_actions_show_at_rest() {
+        for (quantity, expected) in [
+            (1.0, "1"),
+            (1e-8, "0.00000001"),
+            (1.0000001, "1.0000001"),
+            (1_000_000.0, "1,000,000"),
+        ] {
+            let broker = Arc::new(Recorder {
+                state: vec![AccountEvent::Position(Position::new(
+                    "SYM", quantity, 100.0,
+                ))],
+                ..Default::default()
+            });
+            let mut trading = Trading::default();
+            trading.set_service(broker);
+            trading.poll(&egui::Context::default(), &mut Toasts::new());
+            trading.account_panel.broker = "Broker".into();
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(1000.0, 400.0))
+                .with_context_setup(egui_extras::install_image_loaders)
+                .build_ui_state(
+                    |ui, trading: &mut Trading| {
+                        trading.show_account_panel(ui, "SYM");
+                    },
+                    trading,
+                );
+            harness.run();
+            harness.get_by_label("Close position");
+            let (clip, bounds) = harness
+                .output()
+                .shapes
+                .iter()
+                .rev()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == expected => {
+                        Some((shape.clip_rect, text.visual_bounding_rect()))
+                    }
+                    _ => None,
+                })
+                .expect("the position quantity");
+            // Text and clip edges round independently to physical pixels.
+            assert!(
+                clip.expand(0.5).contains_rect(bounds),
+                "{expected}: {bounds:?} outside {clip:?}"
             );
-        harness.run();
-        harness.get_by_label("Close position");
+        }
     }
 
     /// Each number field of the Modify order dialog is named after its label or check box, with
