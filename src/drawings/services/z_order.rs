@@ -94,11 +94,11 @@ impl ZOrderService {
     }
 }
 
-/// `drawings` from the bottom layer to the top: ascending z-order, and in list order where the
-/// z-order is the same.
+/// `drawings` from the bottom layer to the top: ascending `series_layer`, where `None` is the top,
+/// then ascending z-order, and in list order where both are the same.
 pub(crate) fn in_z_order(drawings: &[Drawing]) -> Vec<&Drawing> {
     let mut ordered: Vec<_> = drawings.iter().collect();
-    ordered.sort_by_key(|d| d.z_order());
+    ordered.sort_by_key(|d| (d.series_layer.unwrap_or(usize::MAX), d.z_order));
     ordered
 }
 
