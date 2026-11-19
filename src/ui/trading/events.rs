@@ -3,7 +3,7 @@
 
 use super::account_panel::quantity_decimals;
 use super::widgets::side_name;
-use super::{Numbers, Trading, valid};
+use super::{Numbers, Sent, Trading, valid};
 use crate::chart::TradingLineAction;
 use crate::data::FeedError;
 use crate::localization as l10n;
@@ -13,7 +13,9 @@ use crate::ui_kit::notifications::{Toast, ToastKind, Toasts};
 use crate::widget::settings::TradingNotifications;
 
 impl Trading {
-    /// Applies the broker's pushes and answers, and reports refused orders and fills in `toasts`.
+    /// Applies the broker's pushes and answers, reporting refused orders, cancellations and
+    /// changes, rejected orders, fills and broker cancellations in `toasts`, each naming its
+    /// order, and announcing when the broker stops being live and is live again.
     /// A lagged stream is replaced by a new one, on which the broker restates the account: the
     /// order ticket, a previewed order and the quantity calculator stay as the user left them,
     /// a change to an order or a position that waits for confirmation is dropped, and a
@@ -45,18 +47,19 @@ impl Trading {
                             self.place(order);
                         }
                         Err(FeedError::NotSupported) => self.place(order),
-                        Err(error) => self.notify(
-                            toasts,
-                            Toast::error(l10n::format_text(
+                        Err(error) => {
+                            let reason = l10n::format_text(
                                 ctx,
-                                "Trading rules unavailable: {error}",
+                                "trading rules unavailable: {error}",
                                 &[("error", error.to_string().as_str())],
-                            )),
-                        ),
-                        Ok(_) => self.notify(
-                            toasts,
-                            Toast::error("The broker returned invalid trading rules"),
-                        ),
+                            );
+                            self.notify(toasts, self.refusal(ctx, &Sent::Place(order), &reason));
+                        }
+                        Ok(_) => {
+                            let reason =
+                                l10n::text(ctx, "the broker returned invalid trading rules");
+                            self.notify(toasts, self.refusal(ctx, &Sent::Place(order), &reason));
+                        }
                     }
                 }
                 continue;
@@ -118,9 +121,10 @@ impl Trading {
                 }
                 continue;
             }
-            if key != 0 {
+            let Some(index) = self.sent.iter().position(|(sent, _)| *sent == key) else {
                 continue;
-            }
+            };
+            let (_, sent) = self.sent.remove(index);
             let error = match answer.downcast::<Result<OrderId, FeedError>>() {
                 Ok(placed) => placed.err(),
                 Err(answer) => answer
@@ -129,14 +133,10 @@ impl Trading {
                     .and_then(|done| done.err()),
             };
             if let Some(error) = error {
-                self.notify(
-                    toasts,
-                    Toast::error(l10n::format_text(
-                        ctx,
-                        "Order refused: {error}",
-                        &[("error", error.to_string().as_str())],
-                    )),
-                );
+                if let Sent::Cancel(id, _) = &sent {
+                    self.cancelling.remove(id);
+                }
+                self.notify(toasts, self.refusal(ctx, &sent, &error.to_string()));
             }
         }
         // A new stream counts as live unless the broker restated otherwise: rules held back
@@ -160,11 +160,15 @@ impl Trading {
         self.account_panel.record(&event);
         match event {
             AccountEvent::Account(account) => {
-                let waiting = self.placing.len();
-                self.placing
-                    .retain(|(_, _, order)| account.capabilities.accepts(&order.order_type));
-                for _ in self.placing.len()..waiting {
-                    self.refuse("the account no longer accepts this order type");
+                let (kept, withdrawn): (Vec<_>, Vec<_>) = std::mem::take(&mut self.placing)
+                    .into_iter()
+                    .partition(|(_, _, order)| account.capabilities.accepts(&order.order_type));
+                self.placing = kept;
+                for (_, _, order) in withdrawn {
+                    self.refuse(
+                        Sent::Place(order),
+                        "the account no longer accepts this order type",
+                    );
                 }
                 if !account.capabilities.preview {
                     self.preview = None;
@@ -193,7 +197,10 @@ impl Trading {
                 {
                     self.pending = None;
                 }
+                let listed = self.orders.iter().any(|working| working.id == order.id);
                 self.orders.retain(|working| working.id != order.id);
+                let asked =
+                    order.status != OrderStatus::Working && self.cancelling.remove(&order.id);
                 if announce
                     && first_order
                     && order.status == OrderStatus::Working
@@ -221,25 +228,75 @@ impl Trading {
                 match &order.status {
                     OrderStatus::Working => self.orders.push(order),
                     OrderStatus::Rejected(reason) if announce => {
-                        let toast = Toast::error(l10n::format_text(
+                        let chart =
+                            (self.chart_logo.as_ref()).map_or("", |(chart, _)| chart.as_str());
+                        let request = &order.request;
+                        let numbers = self.numbers(&request.symbol, chart);
+                        let mut toast = Toast::error(l10n::format_text(
                             ctx,
-                            "Order rejected: {reason}",
-                            &[("reason", reason.as_str())],
+                            "Order rejected: {order}: {reason}",
+                            &[
+                                ("order", order_text(ctx, request, &numbers).as_str()),
+                                ("reason", reason.as_str()),
+                            ],
+                        ))
+                        .with_title(l10n::format_text(
+                            ctx,
+                            "{order} order rejected: {reason}",
+                            &[
+                                ("order", l10n::text(ctx, order_name(request)).as_str()),
+                                ("reason", reason.as_str()),
+                            ],
                         ));
+                        let price = match request.order_type {
+                            OrderType::Market => l10n::text(ctx, "market"),
+                            OrderType::Limit(price) | OrderType::Stop(price) => {
+                                numbers.price(price)
+                            }
+                            OrderType::StopLimit { stop, .. } => numbers.price(stop),
+                        };
+                        toast.trading = Some(crate::ui_kit::notifications::TradingToast {
+                            symbol: request.symbol.clone(),
+                            logo: self.logo(&request.symbol).map(str::to_owned),
+                            side: request.side,
+                            quantity: numbers
+                                .quantity(request.quantity, quantity_decimals(request.quantity)),
+                            price,
+                            executed: false,
+                        });
                         self.notify(toasts, toast);
+                    }
+                    OrderStatus::Cancelled if announce && listed && !asked => {
+                        let chart =
+                            (self.chart_logo.as_ref()).map_or("", |(chart, _)| chart.as_str());
+                        let numbers = self.numbers(&order.request.symbol, chart);
+                        let text = order_text(ctx, &order.request, &numbers);
+                        self.notify(
+                            toasts,
+                            Toast::info(l10n::format_text(
+                                ctx,
+                                "Cancelled: {order}",
+                                &[("order", text.as_str())],
+                            )),
+                        );
                     }
                     _ => {}
                 }
             }
             AccountEvent::Position(position) => {
-                let waiting = self.placing.len();
-                self.placing.retain(|(_, old, _)| {
-                    old.symbol != position.symbol
-                        || (old.quantity == position.quantity
-                            && old.average_price == position.average_price)
-                });
-                for _ in self.placing.len()..waiting {
-                    self.refuse("the position changed before the order was sent");
+                let (kept, withdrawn): (Vec<_>, Vec<_>) = std::mem::take(&mut self.placing)
+                    .into_iter()
+                    .partition(|(_, old, _)| {
+                        old.symbol != position.symbol
+                            || (old.quantity == position.quantity
+                                && old.average_price == position.average_price)
+                    });
+                self.placing = kept;
+                for (_, _, order) in withdrawn {
+                    self.refuse(
+                        Sent::Place(order),
+                        "the position changed before the order was sent",
+                    );
                 }
                 if matches!(&self.pending,
                     Some(TradingLineAction::Close(old) | TradingLineAction::Reverse(old) | TradingLineAction::Exit(old, _))
@@ -350,14 +407,24 @@ impl Trading {
                     // Confirmed while the broker was live, these would be sent once their rules
                     // arrive, after it is back: refuse them now instead.
                     (true, false) => {
-                        for _ in std::mem::take(&mut self.placing) {
-                            self.refuse(super::NOT_LIVE);
+                        for (_, _, order) in std::mem::take(&mut self.placing) {
+                            self.refuse(Sent::Place(order), super::NOT_LIVE);
+                        }
+                        if !self.restating {
+                            self.connection_lost = true;
+                            let lost =
+                                "The broker disconnected: orders are not sent until it is back";
+                            self.notify(toasts, Toast::error(l10n::text(ctx, lost)));
                         }
                     }
                     // Ask once more for what the broker may not have answered meanwhile.
                     (false, true) => {
                         self.ask_rules_again();
                         self.account_panel.resume();
+                        if !self.restating && std::mem::take(&mut self.connection_lost) {
+                            let back = l10n::text(ctx, "The broker is connected again");
+                            self.notify(toasts, Toast::success(back));
+                        }
                     }
                     _ => {}
                 }
@@ -421,6 +488,30 @@ impl Trading {
             toasts.add(toast);
         }
     }
+
+    /// Describes the refused action with the order's own number formatting.
+    fn refusal(&self, ctx: &egui::Context, sent: &Sent, reason: &str) -> Toast {
+        let describe = |request: &OrderRequest| {
+            let chart = (self.chart_logo.as_ref()).map_or("", |(chart, _)| chart.as_str());
+            order_text(ctx, request, &self.numbers(&request.symbol, chart))
+        };
+        let (english, order) = match sent {
+            Sent::Place(request) => ("Order refused: {order}: {error}", describe(request)),
+            Sent::Modify(request) => ("Change refused: {order}: {error}", describe(request)),
+            Sent::Cancel(id, request) => (
+                "Cancel refused: {order}: {error}",
+                request.as_ref().map_or_else(
+                    || l10n::format_text(ctx, "order {id}", &[("id", id.to_string())]),
+                    describe,
+                ),
+            ),
+        };
+        Toast::error(l10n::format_text(
+            ctx,
+            english,
+            &[("order", order.as_str()), ("error", reason)],
+        ))
+    }
 }
 
 /// Whether every price and quantity of `event` is finite, quantities are positive and an
@@ -436,6 +527,7 @@ fn valid_event(event: &AccountEvent) -> bool {
                     account.equity,
                     account.realized_pnl,
                     account.margin,
+                    account.margin_buffer,
                     account.orders_margin,
                     account.available_funds,
                 ]
@@ -474,9 +566,62 @@ fn valid_event(event: &AccountEvent) -> bool {
                 .all(finite)
         }
         AccountEvent::Execution(fill) => positive(fill.quantity) && fill.price.is_finite(),
+        AccountEvent::ClosedPosition(closed) => {
+            positive(closed.quantity)
+                && closed.average_price.is_finite()
+                && closed.exit_price.is_finite()
+                && closed.realized_pnl.is_finite()
+        }
         AccountEvent::Balance(change) => change.balance.is_finite() && change.amount.is_finite(),
         _ => true,
     }
+}
+
+/// Names an order's side, quantity, symbol and type, retaining both stop-limit prices.
+fn order_text(ctx: &egui::Context, request: &OrderRequest, numbers: &Numbers<'_>) -> String {
+    use crate::model::PositionBracket;
+    let (english, price, limit) = match (request.position_bracket, request.order_type) {
+        (_, OrderType::Market) => ("{side} {quantity} {symbol} at market", None, None),
+        (_, OrderType::StopLimit { stop, limit }) => (
+            "{side} {quantity} {symbol} stop {price} limit {limit}",
+            Some(stop),
+            Some(limit),
+        ),
+        (Some(PositionBracket::TakeProfit), OrderType::Limit(price) | OrderType::Stop(price)) => (
+            "{side} {quantity} {symbol} take profit {price}",
+            Some(price),
+            None,
+        ),
+        (Some(PositionBracket::StopLoss), OrderType::Limit(price) | OrderType::Stop(price)) => (
+            "{side} {quantity} {symbol} stop loss {price}",
+            Some(price),
+            None,
+        ),
+        (None, OrderType::Limit(price)) => (
+            "{side} {quantity} {symbol} limit {price}",
+            Some(price),
+            None,
+        ),
+        (None, OrderType::Stop(price)) => {
+            ("{side} {quantity} {symbol} stop {price}", Some(price), None)
+        }
+    };
+    let price_text =
+        |value: Option<f64>| value.map(|value| numbers.price(value)).unwrap_or_default();
+    l10n::format_text(
+        ctx,
+        english,
+        &[
+            ("side", l10n::text(ctx, side_name(request.side))),
+            (
+                "quantity",
+                numbers.quantity(request.quantity, quantity_decimals(request.quantity)),
+            ),
+            ("symbol", request.symbol.clone()),
+            ("price", price_text(price)),
+            ("limit", price_text(limit)),
+        ],
+    )
 }
 
 fn order_name(request: &OrderRequest) -> &'static str {
@@ -561,6 +706,195 @@ mod tests {
     use crate::widget::settings::TradingSettings;
     use std::sync::Arc;
 
+    /// Broker cancellations are news once, but a user's cancellation stays silent whether its
+    /// push arrives before or after the answer; only All includes that information notice.
+    #[test]
+    fn broker_cancellations_are_announced_once() {
+        let ctx = egui::Context::default();
+        let order = |id, side, quantity, kind| {
+            Order::new(
+                OrderId::new(id),
+                OrderRequest::new("SYM", side, quantity, kind),
+                OrderStatus::Working,
+            )
+        };
+        let a = order("1", OrderSide::Buy, 1.0, OrderType::Limit(95.0));
+        let b = order("2", OrderSide::Buy, 1.0, OrderType::Limit(94.0));
+        let c = order("3", OrderSide::Sell, 2.0, OrderType::Stop(90.0));
+        let cancelled = |order: &Order| {
+            AccountEvent::Order(Order::new(
+                order.id.clone(),
+                order.request.clone(),
+                OrderStatus::Cancelled,
+            ))
+        };
+        for level in TradingNotifications::ALL {
+            let broker = Arc::new(Recorder {
+                state: [&a, &b, &c]
+                    .map(|order| AccountEvent::Order(order.clone()))
+                    .into(),
+                ..Recorder::default()
+            });
+            let mut trading = Trading::default();
+            trading.display.notifications = level;
+            trading.set_service(broker.clone());
+            let mut toasts = Toasts::new();
+            trading.poll(&ctx, &mut toasts);
+            trading.execute(Some(TradingLineAction::Cancel(a.clone())));
+            trading.poll(&ctx, &mut toasts);
+            trading.apply(&ctx, cancelled(&a), &mut toasts);
+            trading.execute(Some(TradingLineAction::Cancel(b.clone())));
+            trading.apply(&ctx, cancelled(&b), &mut toasts);
+            trading.poll(&ctx, &mut toasts);
+            for _ in 0..2 {
+                trading.apply(&ctx, cancelled(&c), &mut toasts);
+            }
+            let unseen = order("4", OrderSide::Sell, 2.0, OrderType::Stop(90.0));
+            trading.apply(&ctx, cancelled(&unseen), &mut toasts);
+            let messages: Vec<_> = toasts
+                .toasts()
+                .iter()
+                .map(|toast| toast.message.as_str())
+                .collect();
+            let expected = if level == TradingNotifications::All {
+                vec!["Cancelled: Sell 2 SYM stop 90.00"]
+            } else {
+                vec![]
+            };
+            assert_eq!(messages, expected, "{level:?}");
+            assert_eq!(
+                *broker.cancelled.lock().unwrap(),
+                [a.id.clone(), b.id.clone()]
+            );
+        }
+    }
+
+    /// Only live connection transitions are news: no initial or restated status is announced,
+    /// repeated offline/live statuses are quiet, and Errors retains the loss alone.
+    #[test]
+    fn losing_and_regaining_the_broker_raise_one_notice_each() {
+        use crate::data::FeedStatus;
+        let ctx = egui::Context::default();
+        for level in TradingNotifications::ALL {
+            let broker = Arc::new(Recorder {
+                state: vec![AccountEvent::Status(FeedStatus::Connecting)],
+                ..Recorder::default()
+            });
+            let mut trading = Trading::default();
+            trading.display.notifications = level;
+            trading.set_service(broker);
+            let mut toasts = Toasts::new();
+            trading.poll(&ctx, &mut toasts);
+            for status in [
+                FeedStatus::Live,
+                FeedStatus::Disconnected,
+                FeedStatus::Connecting,
+                FeedStatus::Live,
+                FeedStatus::Live,
+            ] {
+                trading.apply(&ctx, AccountEvent::Status(status), &mut toasts);
+            }
+            trading.listen();
+            trading.poll(&ctx, &mut toasts);
+            trading.apply(&ctx, AccountEvent::Status(FeedStatus::Live), &mut toasts);
+            let messages: Vec<_> = toasts
+                .toasts()
+                .iter()
+                .map(|toast| toast.message.as_str())
+                .collect();
+            let lost = "The broker disconnected: orders are not sent until it is back";
+            let expected = match level {
+                TradingNotifications::All => vec![lost, "The broker is connected again"],
+                TradingNotifications::Errors => vec![lost],
+                TradingNotifications::Off => vec![],
+            };
+            assert_eq!(messages, expected, "{level:?}");
+        }
+    }
+
+    /// Refusals identify the action and the unchanged order, including both stop-limit prices
+    /// and an id fallback after an order has left the working list.
+    #[test]
+    fn refusals_name_the_action_and_the_order() {
+        use crate::data::Reply;
+        use crate::services::{Broker, Events};
+        struct Closed;
+        impl Broker for Closed {
+            fn connect(&self, _: Events<AccountEvent>) {}
+            fn place(&self, _: OrderRequest, reply: Reply<OrderId>) {
+                reply.send(Err(FeedError::Other("market closed".into())));
+            }
+            fn cancel(&self, _: OrderId, reply: Reply<()>) {
+                reply.send(Err(FeedError::Other("market closed".into())));
+            }
+            fn modify(&self, _: OrderId, _: OrderRequest, reply: Reply<()>) {
+                reply.send(Err(FeedError::Other("market closed".into())));
+            }
+        }
+        let ctx = egui::Context::default();
+        let mut trading = Trading::default();
+        trading.set_service(Arc::new(Closed));
+        trading.poll(&ctx, &mut Toasts::new());
+        let listed = Order::new(
+            OrderId::new("7"),
+            OrderRequest::new("ES", OrderSide::Sell, 1.0, OrderType::Stop(4400.0)),
+            OrderStatus::Working,
+        );
+        let mut messages = Vec::new();
+        for row in 0..6 {
+            match row {
+                0 => trading.place(OrderRequest::new(
+                    "ES",
+                    OrderSide::Buy,
+                    2.0,
+                    OrderType::Limit(4500.25),
+                )),
+                1 => trading.place(OrderRequest::new(
+                    "ES",
+                    OrderSide::Sell,
+                    3.0,
+                    OrderType::Market,
+                )),
+                2 => trading.place(OrderRequest::new(
+                    "ES",
+                    OrderSide::Buy,
+                    1.0,
+                    OrderType::StopLimit {
+                        stop: 4510.0,
+                        limit: 4512.5,
+                    },
+                )),
+                3 => trading.execute(Some(TradingLineAction::Cancel(listed.clone()))),
+                4 => trading.cancel_order(OrderId::new("9"), None),
+                _ => {
+                    let mut moved = listed.request.clone();
+                    moved.order_type = OrderType::Stop(4390.0);
+                    trading.execute(Some(TradingLineAction::Modify(listed.clone(), moved)));
+                }
+            }
+            let mut toasts = Toasts::new();
+            trading.poll(&ctx, &mut toasts);
+            messages.push(
+                toasts
+                    .toasts()
+                    .iter()
+                    .map(|toast| toast.message.clone())
+                    .collect::<Vec<_>>(),
+            );
+        }
+        assert_eq!(
+            messages,
+            [
+                ["Order refused: Buy 2 ES limit 4,500.25: market closed"],
+                ["Order refused: Sell 3 ES at market: market closed"],
+                ["Order refused: Buy 1 ES stop 4,510.00 limit 4,512.50: market closed"],
+                ["Cancel refused: Sell 1 ES stop 4,400.00: market closed"],
+                ["Cancel refused: order 9: market closed"],
+                ["Change refused: Sell 1 ES stop 4,400.00: market closed"],
+            ]
+        );
+    }
+
     /// The fills of one side in one bar are one mark: filled triangles stacked outward just under
     /// the bar's low for buys and just over its high for sells, up to three and then a "+N" line;
     /// a fill of another symbol is not drawn. Labels, on by default, give the side and total
@@ -618,7 +952,7 @@ mod tests {
             "Filled: Buy 2 SYM at 98.00",
             "Filled: Sell 3 OTHER at 95.00",
             "Filled: Sell 3 SYM at 95.00",
-            "Order rejected: Insufficient margin",
+            "Order rejected: Buy 3 SYM limit 95.00: Insufficient margin",
             "Placed: Buy 3 SYM at 95.00",
         ];
         for (level, expected, sound) in [
@@ -857,7 +1191,8 @@ mod tests {
     /// Notifications write each order's prices and quantities as the account tables do: prices
     /// in the decimals of the order's symbol rather than the chart's, both through the host's
     /// formatter for the order's symbol or else in the built-in text, in the title, the message
-    /// and on the card, and a partial fill's running total without the noise of adding fills up.
+    /// and on the card, a rejection with its reason in the title, and a partial fill's running
+    /// total without the noise of adding fills up.
     /// A regression announces a five-decimal symbol at the chart's two, skips the formatter, or
     /// writes fills of 0.1 and 0.2 as 0.30000000000000004 filled.
     #[test]
@@ -903,6 +1238,16 @@ mod tests {
             fill("1", OrderSide::Buy, 1.0876, 0.7),
             order("2", "ZN", OrderSide::Sell, 2_000.0, 110.5),
             fill("2", OrderSide::Sell, 110.5, 2_000.0),
+            AccountEvent::Order(Order::new(
+                OrderId::new("3"),
+                OrderRequest::new("ZN", OrderSide::Sell, 2_000.0, OrderType::Limit(110.5)),
+                OrderStatus::Rejected("Insufficient margin".into()),
+            )),
+            AccountEvent::Order(Order::new(
+                OrderId::new("4"),
+                OrderRequest::new("EURUSD", OrderSide::Buy, 1.0, OrderType::Market),
+                OrderStatus::Rejected("Market closed".into()),
+            )),
         ] {
             trading.apply(&ctx, event, &mut toasts);
         }
@@ -948,7 +1293,22 @@ mod tests {
                     "Filled: Sell 2,000 ZN at 110'16",
                     Some(("2,000", "110'16")),
                 ),
+                (
+                    Some("Limit order rejected: Insufficient margin"),
+                    "Order rejected: Sell 2,000 ZN limit 110'16: Insufficient margin",
+                    Some(("2,000", "110'16")),
+                ),
+                (
+                    Some("Market order rejected: Market closed"),
+                    "Order rejected: Buy 1 lots EURUSD at market: Market closed",
+                    Some(("1 lots", "market")),
+                ),
             ]
+        );
+        assert!(
+            toasts.toasts()[6..]
+                .iter()
+                .all(|toast| toast.kind == ToastKind::Error)
         );
     }
 
@@ -994,7 +1354,10 @@ mod tests {
             messages[..2],
             ["Filled: Buy 1 SYM at 100.00", "Placed: Buy 1 SYM at 90.00"]
         );
-        assert!(messages[2].starts_with("Order rejected: Insufficient buying power"));
+        assert!(
+            messages[2]
+                .starts_with("Order rejected: Buy 10,000 SYM at market: Insufficient buying power")
+        );
         assert_eq!((messages.len(), sound.as_deref()), (3, Some("Bell")));
 
         let reset = format!("{:?}", trading.ticket);
@@ -1092,7 +1455,10 @@ mod tests {
         let messages: Vec<_> = (toasts.toasts().iter())
             .map(|toast| toast.message.as_str())
             .collect();
-        assert_eq!(messages, ["Order refused: the broker is not connected"]);
+        assert_eq!(
+            messages,
+            ["Order refused: Sell 1 SYM at market: the broker is not connected"]
+        );
         let held: Vec<_> = (trading.positions.iter())
             .map(|position| (position.symbol.as_str(), position.quantity))
             .collect();
@@ -1267,6 +1633,11 @@ mod tests {
             for event in [
                 AccountEvent::Order(invalid_stop),
                 AccountEvent::Account(Account::new("USD", bad, Capabilities::default())),
+                AccountEvent::Account({
+                    let mut invalid = account.clone();
+                    invalid.margin_buffer = Some(bad);
+                    invalid
+                }),
                 AccountEvent::Order(invalid_order),
                 AccountEvent::Order(invalid_level),
                 AccountEvent::Position(Position::new("SYM", bad, 100.0)),
@@ -1278,6 +1649,31 @@ mod tests {
                     trading.positions.as_slice(),
                     std::slice::from_ref(&position)
                 );
+            }
+        }
+        let closed = |quantity, entry, exit, pnl| {
+            AccountEvent::ClosedPosition(crate::model::ClosedPosition::new(
+                "SYM",
+                OrderSide::Sell,
+                quantity,
+                entry,
+                exit,
+                pnl,
+                chrono::Utc::now(),
+            ))
+        };
+        // A short of 1 from -5 to -7.5 earns 2.5; prices need not be positive.
+        assert!(valid_event(&closed(1.0, -5.0, -7.5, 2.5)));
+        for quantity in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(!valid_event(&closed(quantity, -5.0, -7.5, 2.5)));
+        }
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for event in [
+                closed(1.0, bad, -7.5, 2.5),
+                closed(1.0, -5.0, bad, 2.5),
+                closed(1.0, -5.0, -7.5, bad),
+            ] {
+                assert!(!valid_event(&event));
             }
         }
     }

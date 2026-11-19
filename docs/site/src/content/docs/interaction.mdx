@@ -108,6 +108,7 @@ enum.
 | `VisibleRangeChanged`, `VisibleLogicalRangeChanged`, `TimeScaleResized` | Observe UTC edges, slot ranges and layout size |
 | `DataLoaded`, `DataUpdated` | Refresh host state after accepted history or changed bars |
 | `SeriesAdded`, `SeriesRemoved` | Start or stop the host producer for that stable series id |
+| `Drawing { id, kind }` | Follow each drawing the user, undo or redo, or host code created, removed, hid, showed, moved or edited, for example in a host drawing list |
 | `SymbolChanged`, `TimeframeChanged` | Update host controls for the chart's instrument and interval |
 | `EventsDropped(count)` | Resynchronize the host from current chart state |
 

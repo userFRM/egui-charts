@@ -18,15 +18,15 @@ pub use dom::DepthPanel;
 pub use format::TradingFormatter;
 pub use ticket::{Bracket, BracketMode, OrderPreset, PresetLevel};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::chart::TradingLineAction;
 use crate::data::inbox::Inbox;
 use crate::data::{FeedError, FeedStatus};
 use crate::model::{
-    Account, Capabilities, Instrument, Order, OrderPreview, OrderRequest, OrderSide, OrderType,
-    Position, Quote, TradingRules,
+    Account, Capabilities, Instrument, Order, OrderId, OrderPreview, OrderRequest, OrderSide,
+    OrderType, Position, Quote, TradingRules,
 };
 use crate::services::{Broker, HistoryKind, Listener};
 use crate::ui::model::ConnectionState;
@@ -125,6 +125,12 @@ pub struct Trading {
     sound: Option<String>,
     /// The open quantity calculator: where it sits and the text of its field.
     calculator: Option<(egui::Pos2, String)>,
+    /// The action behind each order answer, kept until the broker answers so a refusal names it.
+    sent: Vec<(u64, Sent)>,
+    /// User cancellations stay silent until the order ends or the cancellation is refused.
+    cancelling: HashSet<OrderId>,
+    /// A loss was announced, but no later live update has announced the return yet.
+    connection_lost: bool,
 }
 
 impl std::fmt::Debug for Trading {
@@ -153,6 +159,9 @@ impl std::fmt::Debug for Trading {
             .field("display", &self.display)
             .field("sound", &self.sound)
             .field("calculator", &self.calculator)
+            .field("sent", &self.sent)
+            .field("cancelling", &self.cancelling)
+            .field("connection_lost", &self.connection_lost)
             .finish_non_exhaustive()
     }
 }
@@ -164,6 +173,16 @@ struct Preview {
     key: u64,
     request: OrderRequest,
     estimate: Option<OrderPreview>,
+}
+
+/// An action sent to the broker, or refused locally, awaiting its answer.
+#[derive(Debug)]
+enum Sent {
+    Place(OrderRequest),
+    /// The last listed request may be absent if the order ended before confirmation.
+    Cancel(OrderId, Option<OrderRequest>),
+    /// Describe the order before the change, which a refusal leaves in place.
+    Modify(OrderRequest),
 }
 
 impl Default for Trading {
@@ -199,6 +218,9 @@ impl Default for Trading {
             display: TradingSettings::default(),
             sound: None,
             calculator: None,
+            sent: Vec::new(),
+            cancelling: HashSet::new(),
+            connection_lost: false,
         }
     }
 }
@@ -308,6 +330,9 @@ impl Trading {
     /// order, the execution sound, the quantity calculator and the trading rules of the previous
     /// account are dropped, and a new stream starts.
     fn connect(&mut self) {
+        self.sent.clear();
+        self.cancelling.clear();
+        self.connection_lost = false;
         self.preview = None;
         self.sound = None;
         self.calculator = None;
@@ -326,8 +351,8 @@ impl Trading {
     /// trading rules stay.
     fn listen(&mut self) {
         // Their rules answers belong to the old stream, whose positions may have changed unseen.
-        for _ in std::mem::take(&mut self.placing) {
-            self.refuse(NOT_LIVE);
+        for (_, _, order) in std::mem::take(&mut self.placing) {
+            self.refuse(Sent::Place(order), NOT_LIVE);
         }
         self.pending = None;
         self.protecting = None;
@@ -336,8 +361,7 @@ impl Trading {
         self.orders.clear();
         self.positions.clear();
         self.account_panel.clear();
-        // Stream keys are even; rules, previews and history pages use odd keys, and order
-        // replies use zero.
+        // Stream keys are even; rules, previews, history pages and order answers use odd keys.
         self.generation += 2;
         let (listener, events) = Listener::new(&self.inbox, self.generation);
         self.listener = Some(listener);
@@ -397,29 +421,44 @@ impl Trading {
         }
     }
 
-    fn place(&self, request: OrderRequest) {
-        if let Some(service) = self.live_service() {
-            service.place(request, self.inbox.reply(0));
+    fn place(&mut self, request: OrderRequest) {
+        if let Some((service, key)) = self.live_service(Sent::Place(request.clone())) {
+            service.place(request, self.inbox.reply(key));
         }
     }
 
-    /// The broker to send an order, cancellation or change to: `None` without a broker, and
-    /// while the broker reports that it is not live, when nothing is sent and the next
-    /// [`poll`](Self::poll) reports the order, cancellation or change as refused.
-    fn live_service(&self) -> Option<Arc<dyn Broker>> {
+    /// Cancels `id`, describing it with its last listed request when it is still available.
+    fn cancel_order(&mut self, id: OrderId, request: Option<OrderRequest>) {
+        if let Some((service, key)) = self.live_service(Sent::Cancel(id.clone(), request)) {
+            self.cancelling.insert(id.clone());
+            service.cancel(id, self.inbox.reply(key));
+        }
+    }
+
+    /// Tracks `sent` and returns the live broker with its answer key. While the broker is not
+    /// live, nothing is sent and the next [`poll`](Self::poll) reports that action as refused.
+    fn live_service(&mut self, sent: Sent) -> Option<(Arc<dyn Broker>, u64)> {
         let service = self.service.clone()?;
-        if self.is_connected() {
-            return Some(service);
+        if !self.is_connected() {
+            self.refuse(sent, NOT_LIVE);
+            return None;
         }
-        self.refuse(NOT_LIVE);
-        None
+        Some((service, self.track(sent)))
     }
 
-    /// Reports an order, cancellation or change as refused for `reason`, the way
-    /// [`poll`](Self::poll) reports the broker's own refusals.
-    fn refuse(&self, reason: &str) {
-        let error = FeedError::Other(reason.into());
-        self.inbox.reply::<()>(0).send(Err(error));
+    /// Allocates an answer key and keeps the action until its answer is read.
+    fn track(&mut self, sent: Sent) -> u64 {
+        self.request_key += 2;
+        self.sent.push((self.request_key, sent));
+        self.request_key
+    }
+
+    /// Queues a local refusal through the same answer path as the broker's refusals.
+    fn refuse(&mut self, sent: Sent, reason: &str) {
+        let key = self.track(sent);
+        self.inbox
+            .reply::<()>(key)
+            .send(Err(FeedError::Other(reason.into())));
     }
 
     fn load_rules(&mut self, symbol: &str) {
@@ -695,15 +734,23 @@ mod tests {
                 let messages: Vec<_> = (toasts.toasts().iter())
                     .map(|toast| toast.message.as_str())
                     .collect();
-                let expected_messages: &[&str] = match response {
-                    "failure" => &["Trading rules unavailable: network error: offline"],
-                    "invalid" => &["The broker returned invalid trading rules"],
-                    "changed" => &["Order refused: the position changed before the order was sent"],
-                    "withdrawn" => {
-                        &["Order refused: the account no longer accepts this order type"]
-                    }
-                    _ => &[],
+                let order = match operation {
+                    "close" => "Sell 2 OTHER at market",
+                    "reverse" => "Sell 4 OTHER at market",
+                    "take profit" => "Sell 2 OTHER take profit 110.00",
+                    _ => "Sell 2 OTHER stop loss 90.00",
                 };
+                let reason = match response {
+                    "failure" => Some("trading rules unavailable: network error: offline"),
+                    "invalid" => Some("the broker returned invalid trading rules"),
+                    "changed" => Some("the position changed before the order was sent"),
+                    "withdrawn" => Some("the account no longer accepts this order type"),
+                    _ => None,
+                };
+                let expected_messages: Vec<_> = reason
+                    .into_iter()
+                    .map(|reason| format!("Order refused: {order}: {reason}"))
+                    .collect();
                 assert_eq!(
                     messages, expected_messages,
                     "{operation} with {response} rules"

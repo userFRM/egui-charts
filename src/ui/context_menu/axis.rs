@@ -1,11 +1,14 @@
 //! Price and time axis menus used by the chart's turnkey menus.
 
-use super::{ContextMenuAction, MenuEntry, MenuItem, POINTER_GAP, show_menu};
+use super::{
+    ChartContextAction, ChartMenuKind, ContextMenuAction, HostMenuContext, MenuEntry, MenuItem,
+    MenuRowId, POINTER_GAP, show_menu,
+};
 use crate::icons::icons;
 use crate::model::{AxisSide, PaneAxisOptions};
 use crate::scales::{PriceScaleMode, TimezoneMode};
 use crate::theme::ThemeExt;
-use crate::widget::{Chart, PaneId, PaneScale, SeriesId};
+use crate::widget::{Chart, PaneId, PaneScale, RightClickTarget, SeriesId};
 use egui::{Context, Id, Pos2, Rect};
 
 #[derive(Clone)]
@@ -16,8 +19,8 @@ enum Action {
     Invert,
     LockRatio,
     PlaceLeft(bool),
-    Layout(PaneAxisOptions),
-    Merge(AxisSide),
+    Layout(LayoutAction),
+    Host(String),
     LastValue,
     PreviousClose,
     Studies,
@@ -25,6 +28,7 @@ enum Action {
     BidAsk,
     BidAskLines,
     HighLow,
+    HighLowLines,
     Timezone(TimezoneMode),
     ExtendedHours,
     OvernightHours,
@@ -32,17 +36,64 @@ enum Action {
     Settings,
 }
 
+impl Action {
+    fn row_id(&self, time: bool) -> Option<MenuRowId> {
+        Some(match self {
+            Self::Auto => MenuRowId::AutoScale,
+            Self::PriceOnly => MenuRowId::ScalePriceChartOnly,
+            Self::Mode(mode) => match mode {
+                PriceScaleMode::Normal => MenuRowId::RegularScale,
+                PriceScaleMode::Percentage => MenuRowId::PercentScale,
+                PriceScaleMode::IndexedTo100 => MenuRowId::IndexedTo100Scale,
+                PriceScaleMode::Logarithmic => MenuRowId::LogarithmicScale,
+            },
+            Self::Invert => MenuRowId::InvertScale,
+            Self::LockRatio => MenuRowId::LockPriceToBarRatio,
+            Self::PlaceLeft(true) => MenuRowId::ScaleOnLeft,
+            Self::PlaceLeft(false) => MenuRowId::ScaleOnRight,
+            Self::Layout(layout) => layout.row_id(),
+            Self::Host(_) => return None,
+            Self::LastValue => MenuRowId::LastPriceLabel,
+            Self::PreviousClose => MenuRowId::PreviousCloseLabel,
+            Self::Studies => MenuRowId::IndicatorValues,
+            Self::Countdown => MenuRowId::Countdown,
+            Self::BidAsk => MenuRowId::BidAndAsk,
+            Self::BidAskLines => MenuRowId::BidAndAskLines,
+            Self::HighLow => MenuRowId::HighAndLow,
+            Self::HighLowLines => MenuRowId::HighAndLowLines,
+            Self::Timezone(zone) => match zone {
+                TimezoneMode::Utc => MenuRowId::Utc,
+                TimezoneMode::Local => MenuRowId::LocalTime,
+                TimezoneMode::Exchange(_) => MenuRowId::ExchangeTime,
+                TimezoneMode::Timezone(_) => return None,
+            },
+            Self::ExtendedHours => MenuRowId::ExtendedHours,
+            Self::OvernightHours => MenuRowId::OvernightHours,
+            Self::SessionBreaks => MenuRowId::SessionBreaks,
+            Self::Settings => {
+                if time {
+                    MenuRowId::TimeSettings
+                } else {
+                    MenuRowId::ScaleSettings
+                }
+            }
+        })
+    }
+}
+
 #[derive(Debug, Default)]
 pub(super) struct AxisMenus {
     open: Option<(bool, Pos2)>,
     just_opened: bool,
     target: Option<(PaneId, PaneScale)>,
+    context: Option<HostMenuContext>,
     pub(super) hidden: std::collections::HashSet<crate::ui::Control>,
 }
 
 impl AxisMenus {
     pub(super) fn close(&mut self) {
         self.open = None;
+        self.context = None;
     }
 
     pub(super) fn is_open(&self) -> bool {
@@ -80,6 +131,7 @@ impl AxisMenus {
         if price || time {
             self.open = Some((time, pos));
             self.target = target;
+            self.context = None;
             self.just_opened = true;
             true
         } else {
@@ -235,7 +287,12 @@ impl AxisMenus {
                     Action::BidAskLines,
                     config.show_bid_ask_lines.unwrap_or(config.show_bid_ask),
                 ),
-                row("High and low", Action::HighLow, config.show_high_low),
+                row("High and low labels", Action::HighLow, config.show_high_low),
+                row(
+                    "High and low lines",
+                    Action::HighLowLines,
+                    config.show_high_low_lines.unwrap_or(config.show_high_low),
+                ),
                 MenuEntry::Separator,
                 row("Scale settings…", Action::Settings, false),
                 MenuEntry::Separator,
@@ -253,6 +310,7 @@ impl AxisMenus {
                             | Action::BidAsk
                             | Action::BidAskLines
                             | Action::HighLow
+                            | Action::HighLowLines
                     ),
                     MenuEntry::Submenu { .. } | MenuEntry::Separator => true,
                 });
@@ -265,16 +323,16 @@ impl AxisMenus {
     fn layout_rows(chart: &Chart, pane: PaneId) -> Vec<MenuEntry<Action>> {
         layout_entries(chart.pane_axis_options(pane).unwrap_or_default())
             .into_iter()
-            .map(|entry| {
-                entry.map(&|action| match action {
-                    LayoutAction::Options(options) => Action::Layout(options),
-                    LayoutAction::Merge(side) => Action::Merge(side),
-                })
-            })
+            .map(|entry| entry.map(&Action::Layout))
             .collect()
     }
 
-    pub(super) fn show(&mut self, ctx: &Context, chart: &mut Chart) -> Option<ContextMenuAction> {
+    pub(super) fn show(
+        &mut self,
+        ctx: &Context,
+        chart: &mut Chart,
+        menu_rows: Option<&super::rows::MenuRows>,
+    ) -> Option<ChartContextAction> {
         let (time, pos) = self.open?;
         if let Some((pane, key)) = self.target
             && !chart.pane_scales(pane, AxisSide::Left).contains(&key)
@@ -283,6 +341,10 @@ impl AxisMenus {
             self.close();
             return None;
         }
+        let target = self.target;
+        let context = *self
+            .context
+            .get_or_insert_with(|| click_context(chart, time, pos, target));
         let mut entries = Self::entries(time, chart, self.target);
         entries.retain(|entry| {
             use crate::ui::Control;
@@ -299,7 +361,18 @@ impl AxisMenus {
             };
             !self.hidden.contains(&control)
         });
-        super::trim_separators(&mut entries);
+        let mut store = Vec::new();
+        let rows = super::rows::split(
+            entries,
+            &|action| action.row_id(time),
+            &|action| action,
+            &mut store,
+        );
+        let rows = match menu_rows {
+            Some(hook) => (hook.0)(&context, rows),
+            None => rows,
+        };
+        let entries = super::rows::join(rows, &mut store, &Action::Host);
         if entries.is_empty() {
             self.close();
             return None;
@@ -315,16 +388,22 @@ impl AxisMenus {
         ) {
             self.close();
             let action = action?;
+            if let Action::Host(id) = action {
+                return Some(ChartContextAction::Host { id, context });
+            }
             let (pane, key) = self.target.unwrap_or((
                 PaneId::MAIN,
                 PaneScale::Named(crate::model::SeriesScale::Right),
             ));
-            if let Action::Merge(side) = action {
-                chart.merge_pane_scales(pane, side);
-                return None;
-            }
-            if let Action::Layout(options) = action {
-                chart.set_pane_axis_options(pane, options);
+            if let Action::Layout(layout) = action {
+                match layout {
+                    LayoutAction::Merge(side) => {
+                        chart.merge_pane_scales(pane, side);
+                    }
+                    LayoutAction::Side(_, options) | LayoutAction::HideUnused(options) => {
+                        chart.set_pane_axis_options(pane, options);
+                    }
+                }
                 return None;
             }
             let scale = match self.target {
@@ -387,7 +466,7 @@ impl AxisMenus {
                     chart.config_mut().show_left_axis = left;
                     chart.config_mut().show_right_axis = !left;
                 }
-                Action::Layout(_) | Action::Merge(_) => unreachable!("layout was applied above"),
+                Action::Layout(_) | Action::Host(_) => unreachable!("handled above"),
                 Action::LastValue => {
                     chart.config_mut().show_symbol_last_val = !chart.config().show_symbol_last_val
                 }
@@ -402,37 +481,98 @@ impl AxisMenus {
                 Action::Countdown => {
                     chart.config_mut().show_countdown = !chart.config().show_countdown
                 }
-                Action::BidAsk => toggle_bid_ask(chart.config_mut(), false),
-                Action::BidAskLines => toggle_bid_ask(chart.config_mut(), true),
-                Action::HighLow => chart.config_mut().show_high_low = !chart.config().show_high_low,
+                Action::BidAsk | Action::BidAskLines | Action::HighLow | Action::HighLowLines => {
+                    let config = chart.config_mut();
+                    let (tags, lines) = match action {
+                        Action::BidAsk | Action::BidAskLines => {
+                            (&mut config.show_bid_ask, &mut config.show_bid_ask_lines)
+                        }
+                        _ => (&mut config.show_high_low, &mut config.show_high_low_lines),
+                    };
+                    toggle_tags_or_lines(
+                        tags,
+                        lines,
+                        matches!(action, Action::BidAskLines | Action::HighLowLines),
+                    );
+                }
                 Action::Timezone(zone) => chart.chart_options.time_scale.timezone = zone,
                 Action::ExtendedHours => chart.set_extended_hours(!chart.extended_hours()),
                 Action::OvernightHours => chart.set_overnight_hours(!chart.overnight_hours()),
                 Action::SessionBreaks => {
                     chart.config_mut().show_session_breaks = !chart.config().show_session_breaks
                 }
-                Action::Settings => return Some(ContextMenuAction::OpenSettings),
+                Action::Settings => {
+                    return Some(ChartContextAction::Chart(ContextMenuAction::OpenSettings));
+                }
             }
         }
         None
     }
 }
 
-/// Switches the bid and ask lines, with `lines`, or else their tags, keeping the other as it is
-/// drawn: lines that follow the tags get a switch of their own first.
-fn toggle_bid_ask(config: &mut crate::config::ChartConfig, lines: bool) {
-    let drawn = config.show_bid_ask_lines.unwrap_or(config.show_bid_ask);
+/// Switches the lines, with `lines`, or else the tags, keeping the other as it is drawn:
+/// lines that follow the tags get a switch of their own first.
+fn toggle_tags_or_lines(tags: &mut bool, drawn_lines: &mut Option<bool>, lines: bool) {
+    let drawn = drawn_lines.unwrap_or(*tags);
     if lines {
-        config.show_bid_ask_lines = Some(!drawn);
+        *drawn_lines = Some(!drawn);
     } else {
-        config.show_bid_ask_lines = Some(drawn);
-        config.show_bid_ask = !config.show_bid_ask;
+        *drawn_lines = Some(drawn);
+        *tags = !*tags;
     }
 }
 
+#[derive(Clone)]
 pub(super) enum LayoutAction {
-    Options(PaneAxisOptions),
+    /// The side selected, with the options the row applies.
+    Side(AxisSide, PaneAxisOptions),
+    /// The unused-axis choice the row applies.
+    HideUnused(PaneAxisOptions),
     Merge(AxisSide),
+}
+
+impl LayoutAction {
+    pub(super) fn row_id(&self) -> MenuRowId {
+        match self {
+            Self::Side(AxisSide::Left, _) => MenuRowId::AxesOnLeft,
+            Self::Side(AxisSide::Right, _) => MenuRowId::AxesOnRight,
+            Self::HideUnused(_) => MenuRowId::HideUnusedAxes,
+            Self::Merge(AxisSide::Left) => MenuRowId::JoinAtLeftEdge,
+            Self::Merge(AxisSide::Right) => MenuRowId::JoinAtRightEdge,
+        }
+    }
+}
+
+/// The original axis click, with a pane value or the time-axis bar time.
+fn click_context(
+    chart: &Chart,
+    time: bool,
+    pos: Pos2,
+    target: Option<(PaneId, PaneScale)>,
+) -> HostMenuContext {
+    let (menu, time_at, price) = if time {
+        (
+            ChartMenuKind::TimeAxis,
+            super::chart_menus::bar_time_at(chart, pos.x),
+            f64::NAN,
+        )
+    } else {
+        let (pane, axis) = target.unwrap_or((
+            PaneId::MAIN,
+            PaneScale::Named(crate::model::SeriesScale::Right),
+        ));
+        let inside = Pos2::new(chart.get_chart_mapping().rect.center().x, pos.y);
+        let price = chart
+            .pointer_price(inside)
+            .map_or(f64::NAN, |(_, price)| price);
+        (ChartMenuKind::PriceAxis { pane, axis }, None, price)
+    };
+    HostMenuContext {
+        target: RightClickTarget::Background { pos, price },
+        time: time_at,
+        price,
+        menu,
+    }
 }
 
 /// The same pane controls remain reachable from the plot when all axes are hidden.
@@ -451,14 +591,18 @@ pub(super) fn layout_entries(options: PaneAxisOptions) -> Vec<MenuEntry<LayoutAc
     ] {
         entries.push(row(
             label,
-            LayoutAction::Options(PaneAxisOptions {
-                side: (options.side != Some(side)).then_some(side),
-                ..options
-            }),
+            LayoutAction::Side(
+                side,
+                PaneAxisOptions {
+                    side: (options.side != Some(side)).then_some(side),
+                    ..options
+                },
+            ),
             options.side == Some(side),
         ));
     }
     entries.push(MenuEntry::Submenu {
+        id: Some(MenuRowId::JoinPriceScales),
         label: "Join price scales".into(),
         icon: None,
         entries: vec![
@@ -468,7 +612,7 @@ pub(super) fn layout_entries(options: PaneAxisOptions) -> Vec<MenuEntry<LayoutAc
     });
     entries.push(row(
         "Hide unused axes",
-        LayoutAction::Options(PaneAxisOptions {
+        LayoutAction::HideUnused(PaneAxisOptions {
             hide_unused: !options.hide_unused,
             ..options
         }),
@@ -519,50 +663,58 @@ mod tests {
         assert!(rows.contains(&("Overnight hours".into(), true)));
     }
 
-    /// The price axis switches the bid and ask tags and lines apart, each keeping the other as
-    /// it is drawn; lines that follow their tags, as saved charts do, stay drawn when the tags
-    /// go.
+    /// Price axis rows switch tags and lines apart, preserving the other as it is drawn,
+    /// including lines that followed tags in saved charts.
     #[test]
-    fn bid_ask_rows_switch_tags_and_lines_apart() {
-        let checks = |chart: &Chart| -> Vec<(String, bool)> {
-            AxisMenus::entries(false, chart, None)
-                .into_iter()
-                .filter_map(|entry| match entry {
-                    MenuEntry::Item(item) if item.label.starts_with("Bid and ask") => {
-                        Some((item.label, item.icon.is_some()))
-                    }
-                    _ => None,
-                })
-                .collect()
-        };
-        // Tags, the lines' switch, which row, and the tags and lines drawn afterwards.
-        for (tags, lines, lines_row, expected) in [
-            (true, None, false, (false, true)),
-            (true, None, true, (true, false)),
-            (false, None, true, (false, true)),
-            (false, Some(true), false, (true, true)),
-            (true, Some(false), true, (true, true)),
-        ] {
-            let mut chart = crate::widget::test_frames::chart(&[100.0], &[101.0]);
-            chart.config_mut().show_bid_ask = tags;
-            chart.config_mut().show_bid_ask_lines = lines;
-            assert_eq!(
-                checks(&chart),
-                vec![
-                    ("Bid and ask labels".to_owned(), tags),
-                    ("Bid and ask lines".to_owned(), lines.unwrap_or(tags)),
-                ]
-            );
-            toggle_bid_ask(chart.config_mut(), lines_row);
-            let config = chart.config();
-            assert_eq!(
-                (
-                    config.show_bid_ask,
-                    config.show_bid_ask_lines.unwrap_or(config.show_bid_ask)
-                ),
-                expected,
-                "{tags} {lines:?} {lines_row}"
-            );
+    fn price_axis_rows_switch_tags_and_lines_apart() {
+        for pair in ["Bid and ask", "High and low"] {
+            let checks = |chart: &Chart| -> Vec<(String, bool)> {
+                AxisMenus::entries(false, chart, None)
+                    .into_iter()
+                    .filter_map(|entry| match entry {
+                        MenuEntry::Item(item) if item.label.starts_with(pair) => {
+                            Some((item.label, item.icon.is_some()))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            };
+            // Tags, the lines' switch, which row, and the tags and lines drawn afterwards.
+            for (tags, lines, lines_row, expected) in [
+                (true, None, false, (false, true)),
+                (true, None, true, (true, false)),
+                (false, None, true, (false, true)),
+                (false, Some(true), false, (true, true)),
+                (true, Some(false), true, (true, true)),
+            ] {
+                let mut chart = crate::widget::test_frames::chart(&[100.0], &[101.0]);
+                let config = chart.config_mut();
+                let (label, line) = if pair == "Bid and ask" {
+                    (&mut config.show_bid_ask, &mut config.show_bid_ask_lines)
+                } else {
+                    (&mut config.show_high_low, &mut config.show_high_low_lines)
+                };
+                (*label, *line) = (tags, lines);
+                assert_eq!(
+                    checks(&chart),
+                    vec![
+                        (format!("{pair} labels"), tags),
+                        (format!("{pair} lines"), lines.unwrap_or(tags)),
+                    ]
+                );
+                let config = chart.config_mut();
+                let (tags, lines) = if pair == "Bid and ask" {
+                    (&mut config.show_bid_ask, &mut config.show_bid_ask_lines)
+                } else {
+                    (&mut config.show_high_low, &mut config.show_high_low_lines)
+                };
+                toggle_tags_or_lines(tags, lines, lines_row);
+                assert_eq!(
+                    (*tags, lines.unwrap_or(*tags)),
+                    expected,
+                    "{pair}: {tags} {lines:?} {lines_row}"
+                );
+            }
         }
     }
 
@@ -614,7 +766,7 @@ mod tests {
                 assert!(chart.remove_series(id));
             }
             ctx.run_ui(RawInput::default(), |ui| {
-                menus.show(ui.ctx(), &mut chart);
+                menus.show(ui.ctx(), &mut chart, None);
             })
             .drop_without_applying_deltas();
             assert!(
@@ -657,7 +809,7 @@ mod tests {
                     },
                     |ui| {
                         menus.open_from_pointer(ui.ctx(), chart);
-                        menus.show(ui.ctx(), chart);
+                        menus.show(ui.ctx(), chart, None);
                     },
                 )
                 .drop_without_applying_deltas();
@@ -699,7 +851,7 @@ mod tests {
             .build_ui_state(
                 |ui, (chart, menus): &mut (Chart, AxisMenus)| {
                     chart.show(ui);
-                    chart.user_action(|chart| menus.show(ui.ctx(), chart));
+                    chart.user_action(|chart| menus.show(ui.ctx(), chart, None));
                 },
                 (chart, AxisMenus::default()),
             );
@@ -748,7 +900,9 @@ mod tests {
                 .into_iter()
                 .find_map(|entry| match entry {
                     MenuEntry::Item(item) if item.label == label => match item.action {
-                        LayoutAction::Options(next) => Some(next.side),
+                        LayoutAction::Side(_, next) | LayoutAction::HideUnused(next) => {
+                            Some(next.side)
+                        }
                         LayoutAction::Merge(_) => None,
                     },
                     _ => None,
@@ -788,7 +942,7 @@ mod tests {
             .build_ui_state(
                 |ui, (chart, menus): &mut (Chart, AxisMenus)| {
                     chart.show(ui);
-                    menus.show(ui.ctx(), chart);
+                    menus.show(ui.ctx(), chart, None);
                 },
                 (chart, AxisMenus::default()),
             );

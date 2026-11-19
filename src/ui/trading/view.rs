@@ -4,7 +4,7 @@
 use super::account_panel::quantity_decimals;
 use super::format::Numbers;
 use super::ticket::{self, Action, Market};
-use super::{Preview, Trading, executions};
+use super::{NOT_LIVE, Preview, Sent, Trading, executions};
 use crate::chart::selection::SeriesId;
 use crate::chart::{
     TradingLineAction, TradingLineOptions, exit_request, held_exits, render_trading_lines,
@@ -171,10 +171,13 @@ impl Trading {
                 }
             }
             Some(Action::Cancel(ids)) => {
-                if let Some(service) = self.live_service() {
-                    for id in ids {
-                        service.cancel(id, self.inbox.reply(0));
-                    }
+                for id in ids {
+                    let request = self
+                        .orders
+                        .iter()
+                        .find(|order| order.id == id)
+                        .map(|order| order.request.clone());
+                    self.cancel_order(id, request);
                 }
             }
             Some(Action::Confirm(change)) => self.pending = Some(*change),
@@ -600,16 +603,19 @@ impl Trading {
         if action.is_none() {
             return;
         }
-        let Some(service) = self.live_service() else {
+        if self.service.is_none() {
             return;
-        };
+        }
         let reverse = matches!(action, Some(TradingLineAction::Reverse(_)));
         let (position, mut order) = match action {
             Some(TradingLineAction::Cancel(order)) => {
-                return service.cancel(order.id, self.inbox.reply(0));
+                return self.cancel_order(order.id, Some(order.request));
             }
             Some(TradingLineAction::Modify(order, request)) => {
-                return service.modify(order.id, request, self.inbox.reply(0));
+                if let Some((service, key)) = self.live_service(Sent::Modify(order.request)) {
+                    service.modify(order.id, request, self.inbox.reply(key));
+                }
+                return;
             }
             Some(TradingLineAction::Exit(position, exit)) => (position, exit),
             Some(TradingLineAction::Close(position) | TradingLineAction::Reverse(position))
@@ -634,7 +640,9 @@ impl Trading {
         if self.rules_ready && self.rules.symbol == order.symbol {
             order.time_in_force = self.rules.time_in_force[0];
             self.place(order);
-        } else {
+        } else if !self.is_connected() {
+            self.refuse(Sent::Place(order), NOT_LIVE);
+        } else if let Some(service) = self.service.clone() {
             self.request_key += 2;
             service.rules(&order.symbol, self.inbox.reply(self.request_key));
             self.placing.push((self.request_key, position, order));
@@ -2287,7 +2295,16 @@ mod tests {
         let messages: Vec<_> = (toasts.toasts().iter())
             .map(|toast| toast.message.as_str())
             .collect();
-        assert_eq!(messages, ["Order refused: the broker is not connected"; 4]);
+        assert_eq!(
+            messages,
+            [
+                "The broker disconnected: orders are not sent until it is back",
+                "Order refused: Sell 2 OTHER at market: the broker is not connected",
+                "Order refused: Buy 1 SYM at market: the broker is not connected",
+                "Cancel refused: Buy 1 SYM limit 95.00: the broker is not connected",
+                "Change refused: Buy 1 SYM limit 95.00: the broker is not connected",
+            ]
+        );
 
         trading.apply(
             &egui::Context::default(),
@@ -2311,7 +2328,7 @@ mod tests {
             std::slice::from_ref(&working.id)
         );
         assert_eq!(*broker.modified.lock().unwrap(), [(working.id, moved)]);
-        assert_eq!(toasts.toasts().len(), 4, "the broker accepted them");
+        assert_eq!(toasts.toasts().len(), 6, "the broker accepted them");
     }
 
     /// At the narrowest ticket a long symbol gives way, so that the broker's status stays clear of
