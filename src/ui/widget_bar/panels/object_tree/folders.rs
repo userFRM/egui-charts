@@ -245,7 +245,11 @@ pub(super) fn render_folders(
                             )
                             .on_disabled_hover_text(l10n::text(
                                 ui.ctx(),
-                                "Unlock the drawings in this folder to delete them",
+                                if lockable.is_empty() {
+                                    "The drawings in this folder cannot be edited"
+                                } else {
+                                    "Unlock the drawings in this folder to delete them"
+                                },
                             ))
                             .clicked()
                         {
@@ -280,7 +284,7 @@ pub(super) fn render_folders(
                     } else {
                         "Show folder"
                     })
-                    .enabled(!lockable.is_empty())
+                    .enabled(!members.is_empty())
                     .show(ui)
                     .clicked()
                     {
