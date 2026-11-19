@@ -455,12 +455,18 @@ pub enum DataStatus {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Session {
-    /// Regular windows. With no regular or extended windows, the session is always open, apart
-    /// from its holidays and the dates in [`overrides`](Self::overrides).
+    /// Regular windows. With no regular, extended or overnight windows, the session is always
+    /// open, apart from its holidays and the dates in [`overrides`](Self::overrides).
     pub windows: Vec<SessionWindow>,
     /// Pre-market and post-market windows in the exchange zone.
     pub extended_windows: Vec<SessionWindow>,
-    /// Trading dates on which every window is closed, including overnight windows.
+    /// Overnight windows in the exchange zone, such as 20:00 to 04:00 between the post-market
+    /// close and the next pre-market open. Windows spanning midnight belong to their closing
+    /// weekday, as in [`SessionWindow::days`]. The chart requests them with overnight hours,
+    /// shades them separately and names their market phase. Older saved hours load with none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overnight_windows: Vec<SessionWindow>,
+    /// Trading dates on which every window is closed, including windows closing after midnight.
     pub holidays: Vec<NaiveDate>,
     /// Date-specific hours, such as early closes and exceptional openings. An override replaces
     /// the weekly windows and any holiday of its date.
@@ -473,6 +479,7 @@ impl Session {
         Self {
             windows: windows.into_iter().collect(),
             extended_windows: Vec::new(),
+            overnight_windows: Vec::new(),
             holidays: Vec::new(),
             overrides: Vec::new(),
         }
@@ -484,6 +491,36 @@ impl Session {
         windows: impl IntoIterator<Item = SessionWindow>,
     ) -> Self {
         self.extended_windows = windows.into_iter().collect();
+        self
+    }
+
+    /// Adds the overnight windows beside the regular and extended windows.
+    ///
+    /// ```
+    /// use chrono::{DateTime, NaiveTime, Utc, Weekday::*};
+    /// use egui_charts::model::{ExchangeSessionProvider, Session, SessionWindow, TimezoneId};
+    ///
+    /// let at = |hour, minute| NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+    /// let weekdays = [Mon, Tue, Wed, Thu, Fri];
+    /// let session = Session::new([SessionWindow::new(weekdays, at(9, 30), at(16, 0))])
+    ///     .with_extended_windows([
+    ///         SessionWindow::new(weekdays, at(4, 0), at(9, 30)),
+    ///         SessionWindow::new(weekdays, at(16, 0), at(20, 0)),
+    ///     ])
+    ///     // Named by the day each window closes: Monday's opens on Sunday at 20:00.
+    ///     .with_overnight_windows([SessionWindow::new(weekdays, at(20, 0), at(4, 0))]);
+    /// let hours = ExchangeSessionProvider::new(TimezoneId::utc(), Some(session));
+    /// // Tuesday at 22:00 is outside regular hours and inside the overnight session.
+    /// let night = "2024-07-09T22:00:00Z".parse::<DateTime<Utc>>()?;
+    /// assert!(!hours.is_open(night, false) && hours.is_open(night, true));
+    /// assert!(hours.is_extended(night));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_overnight_windows(
+        mut self,
+        windows: impl IntoIterator<Item = SessionWindow>,
+    ) -> Self {
+        self.overnight_windows = windows.into_iter().collect();
         self
     }
 
@@ -499,11 +536,36 @@ impl Session {
         self
     }
 
-    /// Drops the pre-market and post-market windows, weekly and date-specific.
-    pub(crate) fn clear_extended_windows(&mut self) {
-        self.extended_windows.clear();
+    /// Drops the windows of the hours not selected, weekly and date-specific: the pre-market and
+    /// post-market windows without `extended`, the overnight windows without `overnight`. Hours
+    /// left without any weekly window stay scheduled, with one window on no day, so that they
+    /// stay closed instead of becoming continuous.
+    pub(crate) fn select_hours(&mut self, extended: bool, overnight: bool) {
+        let scheduled = !self.windows.is_empty()
+            || !self.extended_windows.is_empty()
+            || !self.overnight_windows.is_empty();
+        if !extended {
+            self.extended_windows.clear();
+        }
+        if !overnight {
+            self.overnight_windows.clear();
+        }
         for date in &mut self.overrides {
-            date.extended_windows.clear();
+            if !extended {
+                date.extended_windows.clear();
+            }
+            if !overnight {
+                date.overnight_windows.clear();
+            }
+        }
+        if scheduled
+            && self.windows.is_empty()
+            && self.extended_windows.is_empty()
+            && self.overnight_windows.is_empty()
+        {
+            // No window at all would mean always open.
+            self.windows
+                .push(SessionWindow::new([], NaiveTime::MIN, NaiveTime::MIN));
         }
     }
 }
@@ -519,17 +581,22 @@ pub struct SessionOverride {
     pub windows: Vec<OverrideWindow>,
     /// Pre-market and post-market windows of the date.
     pub extended_windows: Vec<OverrideWindow>,
+    /// Overnight windows of the date.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overnight_windows: Vec<OverrideWindow>,
 }
 
 impl SessionOverride {
     /// A closure: every window of `date` is closed. Add hours with
-    /// [`with_windows`](Self::with_windows) and
-    /// [`with_extended_windows`](Self::with_extended_windows).
+    /// [`with_windows`](Self::with_windows),
+    /// [`with_extended_windows`](Self::with_extended_windows) and
+    /// [`with_overnight_windows`](Self::with_overnight_windows).
     pub fn new(date: NaiveDate) -> Self {
         Self {
             date,
             windows: Vec::new(),
             extended_windows: Vec::new(),
+            overnight_windows: Vec::new(),
         }
     }
 
@@ -545,6 +612,36 @@ impl SessionOverride {
         windows: impl IntoIterator<Item = OverrideWindow>,
     ) -> Self {
         self.extended_windows = windows.into_iter().collect();
+        self
+    }
+
+    /// Sets the overnight windows of the date.
+    ///
+    /// ```
+    /// use chrono::{DateTime, NaiveDate, NaiveTime, Utc, Weekday::*};
+    /// use egui_charts::model::{
+    ///     ExchangeSessionProvider, OverrideWindow, Session, SessionOverride, SessionWindow,
+    ///     TimezoneId,
+    /// };
+    ///
+    /// let at = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+    /// let monday = NaiveDate::from_ymd_opt(2024, 7, 15).unwrap();
+    /// // Monday's regular hours are closed; its overnight window still opens on Sunday.
+    /// let session = Session::new([SessionWindow::new([Mon], at(9), at(16))]).with_overrides([
+    ///     SessionOverride::new(monday).with_overnight_windows([OverrideWindow::new(at(20), at(4))]),
+    /// ]);
+    /// let hours = ExchangeSessionProvider::new(TimezoneId::utc(), Some(session));
+    /// let sunday_night = "2024-07-14T22:00:00Z".parse::<DateTime<Utc>>()?;
+    /// let monday_noon = "2024-07-15T12:00:00Z".parse::<DateTime<Utc>>()?;
+    /// assert!(hours.is_open(sunday_night, true) && !hours.is_open(sunday_night, false));
+    /// assert!(!hours.is_open(monday_noon, true));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_overnight_windows(
+        mut self,
+        windows: impl IntoIterator<Item = OverrideWindow>,
+    ) -> Self {
+        self.overnight_windows = windows.into_iter().collect();
         self
     }
 }
@@ -592,6 +689,17 @@ impl SessionWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Hours saved before overnight windows existed load with none, and hours without them
+    /// save as before.
+    #[test]
+    fn hours_without_overnight_windows_save_as_before() {
+        let saved = r#"{"windows":[{"days":["Mon"],"open":"09:30:00","close":"16:00:00"}],"extended_windows":[{"days":["Mon"],"open":"04:00:00","close":"09:30:00"}],"holidays":["2024-07-04"],"overrides":[{"date":"2024-11-29","windows":[{"open":"09:30:00","close":"13:00:00"}],"extended_windows":[]}]}"#;
+        let session: Session = serde_json::from_str(saved).unwrap();
+        assert!(session.overnight_windows.is_empty());
+        assert!(session.overrides[0].overnight_windows.is_empty());
+        assert_eq!(serde_json::to_string(&session).unwrap(), saved);
+    }
 
     #[test]
     fn test_symbol_type_display() {

@@ -341,7 +341,7 @@ impl NotificationPanel {
                     } else {
                         "Sell {quantity}"
                     },
-                    &[("quantity", trade.quantity.to_string().as_str())],
+                    &[("quantity", trade.quantity.as_str())],
                 ),
                 side_format,
             ));
@@ -584,7 +584,7 @@ mod tests {
                 symbol: "SYM".into(),
                 logo: None,
                 side: crate::model::OrderSide::Buy,
-                quantity: 1.0,
+                quantity: "1".into(),
                 price: "100.00".into(),
                 executed: false,
             });
@@ -634,7 +634,7 @@ mod tests {
             symbol: "AAPL".into(),
             logo: None,
             side: crate::model::OrderSide::Buy,
-            quantity: 1.0,
+            quantity: "1".into(),
             price: "100.00".into(),
             executed: false,
         });
@@ -815,7 +815,7 @@ mod tests {
                                 symbol: "LONG:SYMBOL".into(),
                                 logo: None,
                                 side: crate::model::OrderSide::Buy,
-                                quantity: 0.5,
+                                quantity: "0.5".into(),
                                 price: "123456789.00".into(),
                                 executed: true,
                             });

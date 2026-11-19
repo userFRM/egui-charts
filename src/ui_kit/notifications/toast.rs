@@ -64,8 +64,8 @@ pub struct TradingToast {
     pub logo: Option<String>,
     /// Buy or sell.
     pub side: crate::model::OrderSide,
-    /// Filled or placed quantity.
-    pub quantity: f64,
+    /// Filled or placed quantity, written in the symbol's quantity text.
+    pub quantity: String,
     /// Price formatted at the instrument's precision.
     pub price: String,
     /// Executed orders have a check; placements have a side chevron.
@@ -80,20 +80,20 @@ impl TradingToast {
     /// use egui_charts::model::OrderSide;
     /// use egui_charts::ui_kit::notifications::TradingToast;
     ///
-    /// let mut toast = TradingToast::new("AAPL", OrderSide::Buy, 10.0, "189.25");
+    /// let mut toast = TradingToast::new("AAPL", OrderSide::Buy, "10", "189.25");
     /// toast.executed = true;
     /// ```
     pub fn new(
         symbol: impl Into<String>,
         side: crate::model::OrderSide,
-        quantity: f64,
+        quantity: impl Into<String>,
         price: impl Into<String>,
     ) -> Self {
         Self {
             symbol: symbol.into(),
             logo: None,
             side,
-            quantity,
+            quantity: quantity.into(),
             price: price.into(),
             executed: false,
         }
