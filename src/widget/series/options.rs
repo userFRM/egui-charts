@@ -623,7 +623,8 @@ impl Chart {
     /// series in its pane, or to the last position for a larger value. Other panes keep their
     /// order. Returns `false` for an absent series or a study. The order survives snapshots;
     /// [`hovered_series_on_top`](crate::config::ChartOptions::hovered_series_on_top) can raise
-    /// a hovered series for one frame without changing it.
+    /// a hovered series for one frame without changing it. Drawings stay over and under the
+    /// same other series and studies of the pane.
     pub fn set_series_order(&mut self, id: SeriesId, order: usize) -> bool {
         let Some(pane) = self.series_pane(id) else {
             return false;
@@ -636,6 +637,8 @@ impl Chart {
         if at == order {
             return true;
         }
+        #[cfg(feature = "drawings")]
+        let stack = self.pane_stack(id);
         self.sync_panes();
         let items = if pane == PaneId::MAIN {
             &mut self.pane_layout.main
@@ -680,6 +683,10 @@ impl Chart {
                 .position(|item| item.id == id)
                 .unwrap();
             self.price_series.swap(slot, at);
+        }
+        #[cfg(feature = "drawings")]
+        if let Some(stack) = stack {
+            self.keep_stack(stack);
         }
         true
     }
