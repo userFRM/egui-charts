@@ -1028,7 +1028,7 @@ pub struct ChartLayout {
     /// Offer editable group identifiers instead of the default emoji choices.
     pub text_sync_groups: bool,
     active: usize,
-    /// The chart slot Alt+Enter shows alone in place of the preset.
+    /// The chart slot shown alone in place of the preset.
     maximized: Option<usize>,
     focus_active: bool,
     /// The slot whose corner menu is open. It stays shown when a click selects another chart, so
@@ -1292,6 +1292,26 @@ impl ChartLayout {
         if index < 16 {
             self.active = index;
             self.focus_active = true;
+        }
+    }
+
+    /// The chart slot shown alone in place of the preset, by Alt+Enter in a grid or
+    /// [`Self::set_maximized`]; `None` while the preset shows.
+    pub fn maximized(&self) -> Option<usize> {
+        self.maximized
+    }
+
+    /// Shows chart slot `index` alone in place of the preset and makes it the active chart, or
+    /// restores the preset with `None`. Out-of-range indices are ignored. A slot the preset does
+    /// not show, and the tab preset, restore the preset at the next [`Self::show`].
+    pub fn set_maximized(&mut self, index: Option<usize>) {
+        match index {
+            Some(index) if index < 16 => {
+                self.maximized = Some(index);
+                self.set_active(index);
+            }
+            Some(_) => {}
+            None => self.maximized = None,
         }
     }
 
@@ -2507,7 +2527,7 @@ impl ChartLayout {
         if self.mode == ChartLayoutMode::Tabs {
             return vec![rect; count];
         }
-        if let Some(slot) = self.maximized {
+        if let Some(slot) = self.maximized.filter(|slot| *slot < count) {
             return (0..count)
                 .map(|index| if index == slot { rect } else { Rect::NOTHING })
                 .collect();
@@ -4835,37 +4855,52 @@ mod tests {
         // The chart's widget id follows its rect, so focus moves over to it on the next frames.
         frame(&mut layout, &mut charts, false, false);
         frame(&mut layout, &mut charts, false, false);
-        assert_eq!((layout.maximized, layout.active()), (Some(2), 2));
+        assert_eq!((layout.maximized(), layout.active()), (Some(2), 2));
         assert!(charts[2].get_rendered_price_rect().width() > tile.width() * 1.8);
         assert_eq!(layout.sync_group(2), Some("B"));
         assert!(charts[2].take_shortcut_requests().is_empty());
         frame(&mut layout, &mut charts, true, false);
         frame(&mut layout, &mut charts, false, false);
         frame(&mut layout, &mut charts, false, false);
-        assert_eq!((layout.maximized, layout.active()), (None, 2));
+        assert_eq!((layout.maximized(), layout.active()), (None, 2));
         assert_eq!(charts[2].get_rendered_price_rect(), tile);
         assert_eq!(charts[2].get_time_scale_state(), viewport);
         for maximized in [Some(2), None] {
             let requests = frame(&mut layout, &mut charts, true, true);
             frame(&mut layout, &mut charts, false, true);
             frame(&mut layout, &mut charts, false, true);
-            assert_eq!((layout.maximized, layout.active()), (maximized, 2));
+            assert_eq!((layout.maximized(), layout.active()), (maximized, 2));
             assert!(
                 requests.is_empty(),
                 "layout keys reached the host: {requests:?}"
             );
         }
-        layout.maximized = Some(2);
+        layout.set_maximized(Some(2));
         frame(&mut layout, &mut charts, false, false);
         layout.set_active(1);
         frame(&mut layout, &mut charts, false, false);
         frame(&mut layout, &mut charts, false, false);
-        assert_eq!((layout.maximized, layout.active()), (Some(1), 1));
+        assert_eq!((layout.maximized(), layout.active()), (Some(1), 1));
         assert!(charts[1].get_rendered_price_rect().width() > tiles[1].width() * 1.8);
         layout.mode = ChartLayoutMode::Tabs;
         frame(&mut layout, &mut charts, false, false);
-        assert_eq!(layout.maximized, None);
+        assert_eq!(layout.maximized(), None);
         layout.mode = ChartLayoutMode::Four;
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+        let grid = layout.visible_chart_rects(screen, 4);
+        assert_eq!(grid.len(), 4);
+        layout.set_maximized(Some(3));
+        assert_eq!(layout.visible_chart_rects(screen, 4), vec![(3, screen)]);
+        assert_eq!((layout.maximized(), layout.active()), (Some(3), 3));
+        layout.set_maximized(Some(16));
+        assert_eq!((layout.maximized(), layout.active()), (Some(3), 3));
+        layout.set_maximized(None);
+        assert_eq!(layout.visible_chart_rects(screen, 4), grid);
+        assert_eq!((layout.maximized(), layout.active()), (None, 3));
+        layout.set_maximized(Some(5));
+        assert_eq!(layout.visible_chart_rects(screen, 4), grid);
+        frame(&mut layout, &mut charts, false, false);
+        assert_eq!((layout.maximized(), layout.active()), (None, 3));
     }
 
     /// A border drag changes only the charts beside it and leaves the dragged border under the
