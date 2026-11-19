@@ -83,6 +83,9 @@ pub struct PaperAccount {
 /// symbol rules, balance, working orders with their exits, positions and history, without the
 /// prices, quotes and replay clock, which the host feeds again. Write it in any serde format
 /// and read it back for [`PaperAccount::restore`].
+///
+/// Fields added later to this type and the trading types it holds will carry `#[serde(default)]`,
+/// so accounts saved by an earlier version keep loading.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SavedPaperAccount {
     currency: String,
@@ -1434,6 +1437,250 @@ mod tests {
                 OrderStatus::Rejected(_)
             ));
         }
+    }
+
+    /// A fixed saved record catches required fields that would prevent earlier accounts loading.
+    #[test]
+    fn a_saved_account_keeps_its_stored_format() {
+        // Written once by save; keep this record unchanged when adding fields.
+        let json = r#"{
+          "currency": "USD",
+          "initial": 10000.0,
+          "leverage": 5.0,
+          "commission": 0.001,
+          "commission_per_order": 1.0,
+          "commission_per_unit": 0.25,
+          "rules": [
+            {
+              "symbol": "ES",
+              "quantity_step": 0.25,
+              "min_quantity": 0.25,
+              "max_quantity": null,
+              "point_value": 50.0,
+              "pip_value": null,
+              "time_in_force": [
+                "GoodTillCancelled"
+              ],
+              "leverage": 20.0
+            }
+          ],
+          "balance": 9988.5,
+          "next_id": 4,
+          "working": [
+            {
+              "id": "2",
+              "request": {
+                "symbol": "ES",
+                "side": "Sell",
+                "quantity": 2.0,
+                "order_type": {
+                  "Limit": 105.0
+                },
+                "take_profit": null,
+                "take_profit_levels": [],
+                "stop_loss": null,
+                "time_in_force": "GoodTillCancelled",
+                "position_bracket": "TakeProfit"
+              },
+              "status": "Working",
+              "filled": 0.0,
+              "fill_price": null,
+              "placed": "2024-01-01T00:00:00Z",
+              "closed": null
+            },
+            {
+              "id": "3",
+              "request": {
+                "symbol": "ES",
+                "side": "Sell",
+                "quantity": 2.0,
+                "order_type": {
+                  "Stop": 95.0
+                },
+                "take_profit": null,
+                "take_profit_levels": [],
+                "stop_loss": null,
+                "time_in_force": "GoodTillCancelled",
+                "position_bracket": "StopLoss"
+              },
+              "status": "Working",
+              "filled": 0.0,
+              "fill_price": null,
+              "placed": "2024-01-01T00:00:00Z",
+              "closed": null
+            },
+            {
+              "id": "4",
+              "request": {
+                "symbol": "ES",
+                "side": "Buy",
+                "quantity": 1.0,
+                "order_type": {
+                  "Limit": 90.0
+                },
+                "take_profit": 100.0,
+                "take_profit_levels": [],
+                "stop_loss": 80.0,
+                "time_in_force": "GoodTillCancelled",
+                "position_bracket": null
+              },
+              "status": "Working",
+              "filled": 0.0,
+              "fill_price": null,
+              "placed": "2024-01-01T00:00:00Z",
+              "closed": null
+            }
+          ],
+          "exits": [
+            [
+              "2",
+              [
+                "3"
+              ]
+            ],
+            [
+              "3",
+              [
+                "2"
+              ]
+            ]
+          ],
+          "positions": [
+            {
+              "symbol": "ES",
+              "quantity": 2.0,
+              "average_price": 100.0,
+              "unrealized_pnl": 100.0,
+              "last_price": 101.0,
+              "trade_value": 10000.0,
+              "market_value": 10100.0,
+              "leverage": 20.0,
+              "margin": 505.0,
+              "expiration": null
+            }
+          ],
+          "finished": [
+            {
+              "id": "1",
+              "request": {
+                "symbol": "ES",
+                "side": "Buy",
+                "quantity": 2.0,
+                "order_type": "Market",
+                "take_profit": null,
+                "take_profit_levels": [
+                  {
+                    "price": 105.0,
+                    "quantity": 2.0,
+                    "stop_loss": null
+                  }
+                ],
+                "stop_loss": 95.0,
+                "time_in_force": "GoodTillCancelled",
+                "position_bracket": null
+              },
+              "status": "Filled",
+              "filled": 2.0,
+              "fill_price": 100.0,
+              "placed": "2024-01-01T00:00:00Z",
+              "closed": "2024-01-01T00:00:00Z"
+            }
+          ],
+          "executions": [
+            {
+              "order": "1",
+              "time": "2024-01-01T00:00:00Z",
+              "side": "Buy",
+              "price": 100.0,
+              "quantity": 2.0
+            }
+          ],
+          "balance_history": [
+            {
+              "time": "2024-01-01T00:00:00Z",
+              "balance": 9988.5,
+              "amount": -11.5,
+              "action": "Commission for order 1"
+            }
+          ],
+          "journal": [
+            {
+              "time": "2024-01-01T00:00:00Z",
+              "text": "Order 1 placed: buy 2 ES at market"
+            }
+          ]
+        }"#;
+        let saved: SavedPaperAccount = serde_json::from_str(json).unwrap();
+        let paper = PaperAccount::restore(saved).unwrap();
+        let saved = paper.save();
+        assert_eq!(saved.balance, 9_988.5);
+        assert_eq!(saved.rules[0].point_value, 50.0);
+        assert_eq!(
+            saved
+                .working
+                .iter()
+                .map(|order| (
+                    order.id.clone(),
+                    order.request.order_type,
+                    order.request.quantity,
+                    order.request.position_bracket,
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    OrderId::new("2"),
+                    OrderType::Limit(105.0),
+                    2.0,
+                    Some(PositionBracket::TakeProfit)
+                ),
+                (
+                    OrderId::new("3"),
+                    OrderType::Stop(95.0),
+                    2.0,
+                    Some(PositionBracket::StopLoss)
+                ),
+                (OrderId::new("4"), OrderType::Limit(90.0), 1.0, None),
+            ]
+        );
+        assert_eq!(saved.working[2].request.take_profit, Some(100.0));
+        assert_eq!(saved.working[2].request.stop_loss, Some(80.0));
+        assert_eq!(
+            saved.exits,
+            vec![
+                (OrderId::new("2"), vec![OrderId::new("3")]),
+                (OrderId::new("3"), vec![OrderId::new("2")]),
+            ]
+        );
+        let mut position = Position::new("ES", 2.0, 100.0);
+        position.unrealized_pnl = Some(100.0);
+        position.last_price = Some(101.0);
+        position.trade_value = Some(10_000.0);
+        position.market_value = Some(10_100.0);
+        position.leverage = Some(20.0);
+        position.margin = Some(505.0);
+        assert_eq!(saved.positions, vec![position]);
+        assert_eq!(
+            (
+                saved.finished.len(),
+                saved.executions.len(),
+                saved.balance_history.len(),
+                saved.journal.len()
+            ),
+            (1, 1, 1, 1)
+        );
+        assert_eq!(
+            saved.finished[0].request.take_profit_levels,
+            vec![TakeProfitLevel::new(105.0, 2.0)]
+        );
+        paper.set_replay_time(DateTime::from_timestamp(1_704_067_200, 0));
+        paper.set_price("ES", 101.0);
+        assert_eq!(
+            place(
+                &paper,
+                OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Market)
+            ),
+            Ok(OrderId::new("5"))
+        );
     }
 
     /// A JSON round trip preserves terms, history, working exits and the next id. Restored orders

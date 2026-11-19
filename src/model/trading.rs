@@ -3,6 +3,9 @@
 //! Prices are in the symbol's price units and quantities in its trading units. Every price and
 //! quantity is finite. Quantities are positive, except a position's, which is signed, and an
 //! order's filled quantity, which starts at 0.
+//!
+//! Fields added to the serializable trading types follow the compatibility promise on
+//! [`SavedPaperAccount`](crate::services::SavedPaperAccount).
 
 use chrono::{DateTime, Utc};
 
@@ -140,6 +143,7 @@ pub struct TakeProfitLevel {
     /// [level stops](Capabilities::take_profit_level_stops): below the entry for a buy, above
     /// for a sell. When either fills, the other is cancelled. `None` leaves the level to the
     /// order's [`stop_loss`](OrderRequest::stop_loss).
+    #[serde(default)]
     pub stop_loss: Option<f64>,
 }
 
