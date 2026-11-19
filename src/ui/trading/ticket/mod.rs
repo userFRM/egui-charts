@@ -305,6 +305,8 @@ pub(crate) struct Market<'a> {
     pub session_open: Option<chrono::DateTime<chrono::Utc>>,
     /// The latest account fill for this symbol.
     pub last_fill: Option<f64>,
+    /// The position profit unit, shared by its chart label and the depth ladder.
+    pub pnl_unit: crate::chart::PnlUnit,
     /// URI of the symbol logo, from the chart instrument or the host description of the symbol.
     pub logo: Option<&'a str>,
     /// The broker account whose presets the ticket offers.
@@ -335,6 +337,8 @@ pub(crate) enum Action {
     Cancel(Vec<OrderId>),
     /// Ask the user to confirm this change before sending it.
     Confirm(Box<TradingLineAction>),
+    /// Open this working order on the Order tab to modify it.
+    Edit(Order),
 }
 
 /// The state of the order ticket panel.
@@ -373,6 +377,8 @@ pub(crate) struct OrderTicket {
     cancel: Option<Vec<OrderId>>,
     /// Why the ladder refused its last order, shown on the DOM tab.
     dom_error: Option<String>,
+    /// The working order the Order tab modifies instead of placing a new one.
+    pub(super) editing: Option<Order>,
 }
 
 impl Default for OrderTicket {
@@ -407,6 +413,7 @@ impl Default for OrderTicket {
             confirm: None,
             cancel: None,
             dom_error: None,
+            editing: None,
         }
     }
 }
@@ -414,6 +421,7 @@ impl Default for OrderTicket {
 impl OrderTicket {
     /// Fills the ticket from `request` and opens it on its Order tab.
     pub fn open(&mut self, request: &OrderRequest) {
+        self.editing = None;
         self.confirm = None;
         self.cancel = None;
         if self.symbol != request.symbol {
@@ -471,6 +479,12 @@ impl OrderTicket {
     pub(super) fn change_symbol(&mut self, symbol: &str) {
         let request = OrderRequest::new(symbol, self.side, self.quantity, OrderType::Market);
         self.open(&request);
+    }
+
+    /// Opens the working order with its quantity, prices, time in force and brackets.
+    pub(super) fn edit(&mut self, order: &Order) {
+        self.open(&order.request);
+        self.editing = Some(order.clone());
     }
 
     /// The ask for a buy and the bid for a sell, if the market quotes them.
@@ -689,6 +703,9 @@ impl OrderTicket {
 
     /// Selects a type as its tab does, seeding an unentered price from the quote.
     fn select_kind(&mut self, kind: Kind, market: &Market<'_>) {
+        if self.editing.is_some() && kind != self.kind {
+            return;
+        }
         if self.kind == Kind::Market && kind != Kind::Market && self.price == 0.0 {
             self.price = self.touch(market).or(market.last).unwrap_or_default();
             self.limit = self.price;
@@ -999,6 +1016,8 @@ mod tests {
             logo: None,
             account: "",
             timezone: crate::scales::TimezoneMode::Utc,
+
+            pnl_unit: crate::chart::PnlUnit::Money,
         }
     }
 
@@ -1173,6 +1192,18 @@ mod tests {
             (100.0, 100.0),
             "selecting seeds the entry like its tab"
         );
+        let working = Order::new(
+            OrderId::new("working"),
+            OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Stop(101.0)),
+            crate::model::OrderStatus::Working,
+        );
+        ticket.edit(&working);
+        ticket.apply(&preset, &market);
+        assert_eq!(
+            ticket.kind,
+            Kind::Stop,
+            "a preset respects the working order type lock"
+        );
     }
 
     /// GTD needs an offered validity and an expiry; other validities never carry a stale expiry.
@@ -1320,6 +1351,7 @@ mod tests {
             trades: &[],
             session_open: None,
             last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
             account: "",
             timezone: crate::scales::TimezoneMode::Utc,
@@ -1461,6 +1493,7 @@ mod tests {
             trades: &[],
             session_open: None,
             last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
             account: "",
             timezone: crate::scales::TimezoneMode::Utc,
@@ -1586,6 +1619,7 @@ mod tests {
             trades: &[],
             session_open: None,
             last_fill: None,
+            pnl_unit: crate::chart::PnlUnit::Money,
             logo: None,
             account: "",
             timezone: crate::scales::TimezoneMode::Utc,
@@ -2001,6 +2035,7 @@ mod tests {
                 trades: &[],
                 session_open: None,
                 last_fill: None,
+                pnl_unit: crate::chart::PnlUnit::Money,
                 logo: None,
                 account: "",
                 timezone: crate::scales::TimezoneMode::Utc,
