@@ -190,6 +190,35 @@ impl Chart {
             .map(|index| self.study_inputs[index].as_str())
     }
 
+    /// The studies that read the output of study `id`, directly or through other studies, in
+    /// chart order. A study whose user edits are off is not among them, nor are the studies
+    /// reading it, as no user command removes such a study.
+    pub(super) fn study_dependents(&self, id: SeriesId) -> Vec<SeriesId> {
+        if !self.study_ids.contains(&id) {
+            return Vec::new();
+        }
+        let mut removed = vec![id];
+        loop {
+            let before = removed.len();
+            for (study, indicator) in self.study_ids.iter().zip(self.studies.indicators()) {
+                let reads_removed = matches!(indicator.source(),
+                    Some(StudySource::Study { id: source, .. })
+                        if removed.iter().any(|removed| removed.0 == source));
+                if reads_removed && indicator.user_edit_enabled() && !removed.contains(study) {
+                    removed.push(*study);
+                }
+            }
+            if removed.len() == before {
+                break;
+            }
+        }
+        self.study_ids
+            .iter()
+            .filter(|study| removed[1..].contains(study))
+            .copied()
+            .collect()
+    }
+
     pub(super) fn take_study(&mut self, id: SeriesId) -> Option<Box<dyn Indicator>> {
         let at = self.study_ids.iter().position(|study| *study == id)?;
         self.record_study(id);
@@ -1087,8 +1116,6 @@ mod tests {
             assert!(csv.contains(",41.67"), "{csv}");
         }
         chart.user_action(|chart| chart.remove_series(rsi));
-        settle(&mut chart);
-        assert_eq!(output(&chart, 3), None);
         assert!(chart.undo());
         settle(&mut chart);
         assert!((output(&chart, 3).unwrap() - 125.0 / 3.0).abs() < 1e-8);
@@ -1112,6 +1139,66 @@ mod tests {
             .unwrap();
         settle(&mut chart);
         assert_eq!(output(&chart, 3), None);
+    }
+
+    /// Removing a study removes the studies that read its output, directly or through a chain,
+    /// as one undo step, and keeps its sources and a study whose user edits are off (#3464).
+    #[test]
+    fn removing_a_study_removes_the_studies_that_read_it() {
+        let start = DateTime::<Utc>::UNIX_EPOCH;
+        let bars: Vec<_> = [1.0, 2.0, 1.0, 2.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| Bar::new(start + Duration::minutes(i as i64), p, p, p, p, 1.0))
+            .collect();
+        // Studies 0 to 3: RSI(1), a two-bar mean of it, a two-bar mean of that mean, and a
+        // three-bar mean of the closes. RSI(1) of 1, 2, 1, 2 is missing, 100, 0, 100, so the
+        // first mean is missing, missing, 50, 50 and the second ends at 50.
+        let mut failures = Vec::new();
+        for (removed, locked, remaining) in [
+            (0, None, vec![3]),
+            (1, None, vec![0, 3]),
+            (2, None, vec![0, 1, 3]),
+            (0, Some(1), vec![1, 2, 3]),
+        ] {
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            let rsi = chart.add_indicator(Box::new(RSI::new(1)));
+            let mean = chart.add_indicator(Box::new(SMA::new(2)));
+            let mean_of_mean = chart.add_indicator(Box::new(SMA::new(2)));
+            let ids = [
+                rsi,
+                mean,
+                mean_of_mean,
+                chart.add_indicator(Box::new(SMA::new(3))),
+            ];
+            for (study, source) in [(mean, rsi), (mean_of_mean, mean)] {
+                let source = StudySource::Study {
+                    id: source.0,
+                    plot: 0,
+                };
+                chart.set_indicator_source(study, source).unwrap();
+            }
+            if let Some(locked) = locked {
+                assert!(chart.set_indicator_user_edit_enabled(ids[locked], false));
+            }
+            chart.recalculate_studies();
+            let studies = |chart: &Chart| chart.indicators().map(|(id, _)| id).collect::<Vec<_>>();
+            assert!(chart.user_action(|chart| chart.remove_series(ids[removed])));
+            let expected: Vec<_> = remaining.iter().map(|at| ids[*at]).collect();
+            if studies(&chart) != expected {
+                failures.push(format!(
+                    "removing {removed}, locked {locked:?}: {:?}",
+                    studies(&chart)
+                ));
+            }
+            assert!(chart.undo());
+            assert_eq!(studies(&chart), ids);
+            for id in [mean, mean_of_mean] {
+                let (_, study) = chart.indicators().find(|(study, _)| *study == id).unwrap();
+                assert!((study.values().value(0, 3).unwrap() - 50.0).abs() < 1e-8);
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 
     /// A study of another study shares its pane and scale without changing the price range.
