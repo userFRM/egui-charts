@@ -2351,7 +2351,7 @@ mod tests {
             trade.exchange_rate = rate;
             r.trades = vec![trade];
             assert_eq!(
-                r.trades_csv_with_excursions(&r.comparison(&[bar])),
+                r.trades_csv_with_excursions(&r.comparison(std::slice::from_ref(&bar))),
                 format!(
                     "number,side,quantity,entry_time,entry_price,exit_time,exit_price,profit,fees,label,mae,mfe\n\
                      1,long,10,2024-01-02T01:00:00Z,100,2024-01-02T02:00:00Z,110,50,0,L / X,{excursions}\n"
