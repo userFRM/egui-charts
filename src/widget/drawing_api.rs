@@ -512,6 +512,26 @@ impl Chart {
             .find(|pane| pane.0 == owner || self.pane_series_iter(*pane).any(|id| id.0 == owner))
     }
 
+    /// The pane that draws the drawing being placed, once it has an anchor. `None` without one,
+    /// or when no pane draws its owner.
+    pub(super) fn placement_pane(&self) -> Option<PaneId> {
+        let drawing = (self.drawings.curr_drawing.as_ref())
+            .filter(|drawing| !drawing.chart_points.is_empty())?;
+        match drawing.pane {
+            Some(_) => self.owner_pane(drawing),
+            None => Some(self.main_series_pane()).filter(|pane| self.panes().contains(pane)),
+        }
+    }
+
+    /// Cancels the drawing being placed when `pane`, the pane that drew it before a removal or a
+    /// history step, no longer draws it, so its anchors never land in another pane. The tool
+    /// stays selected.
+    pub(super) fn keep_placement_in(&mut self, pane: Option<PaneId>) {
+        if pane.is_some() && self.placement_pane() != pane {
+            self.drawings.cancel_curr_drawing();
+        }
+    }
+
     /// Moves drawing `id` into `pane` as one undoable edit, keeping its anchors and style; the
     /// anchors' prices are read on the new pane's scale. Returns `false` for an unknown drawing
     /// or pane and for a locked drawing.

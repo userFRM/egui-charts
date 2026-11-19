@@ -930,6 +930,7 @@ impl Chart {
     }
 
     /// Undo the most recent chart user action, across drawings, studies and settings.
+    /// A drawing being placed is cancelled when the step takes away the pane that draws it.
     /// Returns false while a user action or a drawing drag is in progress, or a layout divider
     /// is pressed or dragged; finish it first.
     pub fn undo(&mut self) -> bool {
@@ -937,6 +938,7 @@ impl Chart {
     }
 
     /// Redo the most recently undone chart user action.
+    /// A drawing being placed is cancelled as [`undo`](Self::undo) cancels it.
     /// Returns false while a user action or a drawing drag is in progress, or a layout divider
     /// is pressed or dragged; finish it first.
     pub fn redo(&mut self) -> bool {
@@ -996,6 +998,8 @@ impl Chart {
         if self.history_blocked() {
             return false;
         }
+        #[cfg(feature = "drawings")]
+        let placed = self.placement_pane();
         let stack = if redo {
             &mut self.history.redo
         } else {
@@ -1234,6 +1238,7 @@ impl Chart {
             if let Some(deletion) = &mut action.unshown {
                 self.step_unshown_deletion(deletion, redo);
             }
+            self.keep_placement_in(placed);
         }
         self.history.edits += 1;
         #[cfg(feature = "drawings")]
