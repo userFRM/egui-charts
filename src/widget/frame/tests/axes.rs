@@ -1323,3 +1323,38 @@ fn study_value_tags_read_the_last_bar_in_view() {
         }
     }
 }
+
+/// High, low, bid and ask strokes remain visible without either price axis.
+#[test]
+fn price_lines_paint_their_configured_styles() {
+    use crate::model::Level1Quote;
+    let ctx = egui::Context::default();
+    let mut chart = chart(&[100.0], &[110.0, 120.0]);
+    chart.config.show_volume = false;
+    chart.config.show_quote_boxes = false;
+    chart.config.show_right_axis = false;
+    chart.config.show_left_axis = false;
+    chart.config.show_high_low = true;
+    chart.config.show_bid_ask = true;
+    let time = chart.state.data().bars.last().unwrap().time;
+    chart.set_quote(Some(Level1Quote {
+        symbol: "TEST".into(),
+        ts: time,
+        bid: 112.0,
+        ask: 114.0,
+        bid_size: 1.0,
+        ask_size: 1.0,
+    }));
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+    let theme = crate::theme::ThemeExt::active_theme(&ctx);
+    for (price, color) in [
+        (120.0, chart.config.bullish_color),
+        (100.0, chart.config.bearish_color),
+        (112.0, theme.ui.accent),
+        (114.0, theme.chart.candle_down),
+    ] {
+        let y = chart.last_price_map.price_to_y(price);
+        assert!(painted.iter().any(|shape| matches!(shape, Shape::Mesh(mesh) if mesh.vertices.len() > 8 && mesh.vertices.iter().all(|v| v.color == color && (v.pos.y-y).abs() <= 1.5))), "line at {price}");
+    }
+}

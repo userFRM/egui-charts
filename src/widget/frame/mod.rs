@@ -3050,7 +3050,17 @@ impl Chart {
             }
         }
 
-        if show_price_axis && self.main_series_visible {
+        let trading_bid_ask = {
+            #[cfg(feature = "ui")]
+            {
+                std::mem::take(&mut self.trading_bid_ask)
+            }
+            #[cfg(not(feature = "ui"))]
+            {
+                false
+            }
+        };
+        if self.main_series_visible {
             let mut values = Vec::new();
             if self.config.show_high_low {
                 let high = visible_data
@@ -3063,16 +3073,6 @@ impl Chart {
                     .fold(f64::INFINITY, f64::min);
                 values.extend([(high, "High", colors.bullish), (low, "Low", colors.bearish)]);
             }
-            let trading_bid_ask = {
-                #[cfg(feature = "ui")]
-                {
-                    std::mem::take(&mut self.trading_bid_ask)
-                }
-                #[cfg(not(feature = "ui"))]
-                {
-                    false
-                }
-            };
             if (self.config.show_bid_ask || trading_bid_ask)
                 && let Some(quote) = self.quote.as_ref().filter(|quote| {
                     quote.bid.is_finite()
@@ -3106,7 +3106,7 @@ impl Chart {
                     false,
                     axis_edge,
                 );
-                if price_map
+                if show_price_axis && price_map
                     .range()
                     .contains(price_map.transform().to_scale(value))
                 {
