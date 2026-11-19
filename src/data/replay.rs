@@ -4,6 +4,7 @@ use super::{
     Datafeed, DepthHistory, DepthPage, DepthRequest, FeedError, HistoryPage, HistoryRequest,
     OrderEvent, RecordingReader, Reply, RestingOrder, Sink, Subscription, SubscriptionId,
 };
+use crate::model::session::WindowKind;
 use crate::model::{ExchangeSessionProvider, Instrument, Level1Quote, OrderBook, Tick, TimezoneId};
 use chrono::{DateTime, TimeDelta, Utc};
 use std::collections::{HashMap, HashSet};
@@ -278,8 +279,8 @@ impl ReplayClock {
 /// live sink's rules. A new subscription reconstructs the current position, including when its
 /// interval changes. No history request can return events beyond the playback position.
 /// A subscription receives the executions inside the instrument's session windows that
-/// [`Subscription::extended_hours`] selects; book events and quotes apply at every hour, so the
-/// book stays continuous.
+/// [`Subscription::extended_hours`] and [`Subscription::overnight_hours`] select; book events
+/// and quotes apply at every hour, so the book stays continuous.
 ///
 /// ```
 /// use egui_charts::data::{MarketEvent, RecordingWriter, ReplayDriver, ReplayEvent};
@@ -324,6 +325,7 @@ struct Route {
     /// The instrument's trading hours; `None` trades around the clock.
     hours: Option<ExchangeSessionProvider>,
     extended_hours: bool,
+    overnight_hours: bool,
 }
 
 impl ReplayDriver {
@@ -486,11 +488,11 @@ impl Route {
         };
         if !execution {
             event.push_to(&self.sink);
-        } else if self
-            .hours
-            .as_ref()
-            .is_none_or(|hours| hours.is_open(event.time, self.extended_hours))
-        {
+        } else if self.hours.as_ref().is_none_or(|hours| {
+            hours.is_open(event.time, self.extended_hours)
+                && (self.overnight_hours
+                    || hours.window_kind(event.time) != Some(WindowKind::Overnight))
+        }) {
             self.sink.open_quiet_slots(event.time);
             event.push_to(&self.sink);
         } else if let MarketEvent::Order {
@@ -562,6 +564,7 @@ impl Datafeed for ReplayDriver {
                     sink: subscription.sink.clone(),
                     hours,
                     extended_hours: subscription.extended_hours,
+                    overnight_hours: subscription.overnight_hours,
                 };
                 let others = state.routes.iter().cloned();
                 state.routes = others.chain([route.clone()]).collect();
@@ -978,6 +981,7 @@ mod tests {
                     timeframe: Timeframe::Min1,
                     clock: Timeframe::Min1.into(),
                     extended_hours: true,
+                    overnight_hours: true,
                     conversion: None,
                     sink: sink.clone(),
                 });
@@ -1155,6 +1159,7 @@ mod tests {
             timeframe: Timeframe::Min1,
             clock: Timeframe::Min1.into(),
             extended_hours: true,
+            overnight_hours: true,
             conversion: None,
             sink,
         });
@@ -1186,7 +1191,7 @@ mod tests {
         );
     }
 
-    fn connect(driver: &ReplayDriver, clock: BarClock, extended: bool) -> Arc<Inbox> {
+    fn connect(driver: &ReplayDriver, clock: BarClock, hours: (bool, bool)) -> Arc<Inbox> {
         let inbox = Arc::new(Inbox::default());
         let sink = inbox.subscribe("A".into(), clock.clone(), 100, Some(1.0));
         driver.subscribe(Subscription {
@@ -1194,7 +1199,8 @@ mod tests {
             symbol: "A".into(),
             timeframe: clock.timeframe().unwrap(),
             clock,
-            extended_hours: extended,
+            extended_hours: hours.0,
+            overnight_hours: hours.1,
             conversion: None,
             sink,
         });
@@ -1246,13 +1252,25 @@ mod tests {
         )
     }
 
-    /// `Subscription::extended_hours` selects the executions; the book follows every event.
+    /// The subscription's hours select executions; the book follows every event.
     #[test]
     fn a_subscription_receives_the_executions_of_the_hours_it_selected() {
-        let (instrument, zone, session) = new_york(Instrument::new("A"));
+        let (mut instrument, zone, session) = new_york(Instrument::new("A"));
+        let days = [
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+        ];
+        let hm = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        let session =
+            session.with_overnight_windows([SessionWindow::new(days, hm(20, 0), hm(4, 0))]);
+        instrument.session = Some(session.clone());
         // Tuesday 2024-01-02: a pre-market order and fills from 08:00, a regular fill at 09:31.
         let execution = utc(2, 13, 0, 30);
         let events = vec![
+            fill(utc(2, 8, 0, 0), 4, 45.0),
             ReplayEvent::new(
                 "A",
                 utc(2, 12, 59, 0),
@@ -1281,31 +1299,36 @@ mod tests {
             fill(utc(2, 14, 31, 0), 3, 100.0),
         ];
         let regular = (utc(2, 14, 31, 0), 100.0, 1.0);
-        for (extended, expected) in [
-            (false, vec![regular]),
-            (true, vec![(utc(2, 13, 0, 0), 40.0, 3.0), regular]),
+        let overnight = (utc(2, 8, 0, 0), 45.0, 1.0);
+        let pre = (utc(2, 13, 0, 0), 40.0, 3.0);
+        for (hours, expected) in [
+            ((false, false), vec![regular]),
+            ((true, false), vec![pre, regular]),
+            ((true, true), vec![overnight, pre, regular]),
+            ((false, true), vec![regular]),
         ] {
             let driver = ReplayDriver::new(events.clone(), vec![instrument.clone()]).unwrap();
-            let clock = BarClock::new(Timeframe::Min1).with_session(
+            let clock = BarClock::new(Timeframe::Min1).with_session_hours(
                 zone.clone(),
                 session.clone(),
-                extended,
+                hours.0,
+                hours.1,
             );
-            let inbox = connect(&driver, clock, extended);
+            let inbox = connect(&driver, clock, hours);
             driver.seek(utc(2, 14, 31, 30));
             let (_, update) = inbox.drain().updates.pop().unwrap();
             let executed: Vec<_> = (update.bars.values())
                 .filter(|(bar, _)| bar.volume > 0.0)
                 .map(|(bar, _)| (bar.time, bar.close, bar.volume))
                 .collect();
-            assert_eq!(executed, expected, "extended hours {extended}");
+            assert_eq!(executed, expected, "hours {hours:?}");
             assert_eq!(
                 update.trades.iter().count(),
-                expected.len() + usize::from(extended),
-                "held executions, extended hours {extended}"
+                expected.len() + usize::from(hours.0),
+                "held executions, hours {hours:?}"
             );
             let book = update.depth.expect("the order book");
-            assert_eq!(book.bids[0].size, 3.0, "extended hours {extended}");
+            assert_eq!(book.bids[0].size, 3.0, "hours {hours:?}");
         }
     }
 
@@ -1354,7 +1377,7 @@ mod tests {
             let driver = || ReplayDriver::new(events.clone(), vec![instrument.clone()]).unwrap();
             for &seconds in frames {
                 let played = driver();
-                let inbox = connect(&played, clock.clone(), false);
+                let inbox = connect(&played, clock.clone(), (false, false));
                 played.advance(Duration::ZERO).unwrap();
                 while played.time() < position {
                     let left = (position - played.time()).to_std().unwrap();
@@ -1365,7 +1388,7 @@ mod tests {
                 assert_eq!(bars, expected, "{seconds} seconds per frame");
             }
             let sought = driver();
-            let inbox = connect(&sought, clock.clone(), false);
+            let inbox = connect(&sought, clock.clone(), (false, false));
             sought.seek(position);
             assert_eq!(drained_bars(&inbox).0, expected, "sought");
         }
@@ -1379,7 +1402,7 @@ mod tests {
             let events = (0..=count).map(|s| trade("A", s, s as u64, 10.0)).collect();
             let driver =
                 ReplayDriver::new(events, vec![Instrument::new("A").with_tick_size(1.0)]).unwrap();
-            let inbox = connect(&driver, timeframe.into(), true);
+            let inbox = connect(&driver, timeframe.into(), (true, false));
             inbox.drain();
             driver.seek(at(count - 1));
             driver.advance(Duration::from_secs(1)).unwrap();

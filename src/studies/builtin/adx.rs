@@ -1,4 +1,4 @@
-//! Avg Directional Index (ADX) Indicator
+//! Average Directional Index (ADX) Indicator
 //!
 //! ADX measures trend strength regardless of direction. It's derived from the
 //! Directional Movement Index (DMI) system which includes +DI and -DI.
@@ -29,7 +29,7 @@ use crate::studies::stepper::Stepper;
 use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
 
-/// Avg Directional Index indicator. Draws its ADX line; +DI and -DI are computed and can be shown
+/// Average Directional Index indicator. Draws its ADX line; +DI and -DI are computed and can be shown
 /// from its style settings.
 ///
 /// The `period` input sets both lengths, as studies saved with a single length expect;
@@ -132,7 +132,7 @@ impl Indicator for ADX {
     }
 
     fn desc(&self) -> &str {
-        "Avg Directional Index - Trend strength indicator"
+        "Average Directional Index - Trend strength indicator"
     }
 
     fn calculate(&mut self, data: &[Bar]) {

@@ -82,7 +82,8 @@ pub(crate) mod projection;
 mod settings;
 pub(crate) mod table;
 pub use plots::{
-    FillBoundary, LabelPlacement, StudyCandle, StudyFill, StudyGradient, StudyLabel, StudyZone,
+    FillBoundary, LabelPlacement, StudyCandle, StudyFill, StudyGradient, StudyLabel, StudySegment,
+    StudyZone,
 };
 pub use projection::StudyProjection;
 pub use settings::{

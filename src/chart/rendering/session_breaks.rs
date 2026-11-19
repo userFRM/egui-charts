@@ -90,26 +90,29 @@ pub(crate) fn exchange_session(
     .with_timeframe(timeframe)
 }
 
-/// Shade complete bar slots only where the supplied session identifies extended hours, and
-/// returns the shaded rects, left to right.
+/// Shades complete bar slots in the extended and overnight colours, returning disjoint
+/// rectangles and their colours from left to right for the legend backdrops.
 pub(crate) fn render_extended_hours(
     ctx: &RenderContext,
     bars: &[Bar],
     provider: &crate::model::ExchangeSessionProvider,
     mapping: &ChartMapping,
     start_idx: usize,
-    color: Color32,
-) -> Vec<egui::Rect> {
+    (extended, overnight): (Color32, Color32),
+) -> Vec<(egui::Rect, Color32)> {
+    use crate::model::session::WindowKind;
     let mut shaded = Vec::new();
-    let mut start = None;
+    let mut run: Option<(usize, Color32)> = None;
     for i in 0..=bars.len() {
-        let extended = bars
+        let color = bars
             .get(i)
-            .is_some_and(|bar| provider.is_extended(bar.time));
-        if extended && start.is_none() {
-            start = Some(i);
-        }
-        if !extended && let Some(first) = start.take() {
+            .and_then(|bar| match provider.window_kind(bar.time)? {
+                WindowKind::Regular => None,
+                WindowKind::Extended => Some(extended),
+                WindowKind::Overnight => Some(overnight),
+            });
+        if let Some((first, shade)) = run.filter(|&(_, shade)| Some(shade) != color) {
+            run = None;
             let x0 = mapping.idx_to_x(start_idx + first) - mapping.bar_spacing / 2.0;
             let x1 = mapping.idx_to_x(start_idx + i - 1) + mapping.bar_spacing / 2.0;
             let rect = egui::Rect::from_min_max(
@@ -118,9 +121,14 @@ pub(crate) fn render_extended_hours(
             )
             .intersect(ctx.rect);
             if rect.is_positive() {
-                ctx.painter.rect_filled(rect, 0.0, color);
-                shaded.push(rect);
+                ctx.painter.rect_filled(rect, 0.0, shade);
+                shaded.push((rect, shade));
             }
+        }
+        if run.is_none()
+            && let Some(color) = color
+        {
+            run = Some((i, color));
         }
     }
     shaded

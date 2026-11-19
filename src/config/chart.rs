@@ -72,7 +72,7 @@ fn pixel_conflation_threshold() -> Option<f32> {
     Some(1.0)
 }
 
-/// Layouts saved before the analyst target colours existed use the theme's colours.
+/// Older saved configurations use the theme for analyst targets and overnight shading.
 fn theme_color() -> Color32 {
     Color32::PLACEHOLDER
 }
@@ -309,7 +309,9 @@ pub struct ChartConfig {
     pub vertical_grid_line_style: Option<LineStyle>,
     /// Text color for labels
     pub text_color: Color32,
-    /// Font size of the price and time axis labels in logical pixels; `None` follows the theme.
+    /// Font size of this chart's price and time scale text in logical pixels: the axis labels
+    /// and tags, including the crosshair's and those of study panes. `None` follows the theme's
+    /// label size; other chart text keeps the theme's sizes.
     /// Default: None
     pub axis_font_size: Option<f32>,
     /// Font family of this chart's price and time axis labels and tags, including study panes.
@@ -465,7 +467,7 @@ pub struct ChartConfig {
     pub session_break_style: LineStyle,
     /// Session configuration (market hours)
     pub session_config: Option<SessionConfig>,
-    /// Shade bars identified as extended hours by the session metadata.
+    /// Shade bars identified as extended or overnight hours by the session metadata.
     pub show_extended_hours: bool,
     /// Extended-hours fill. `PLACEHOLDER` uses the active theme accent at low opacity.
     pub extended_hours_color: Color32,
@@ -480,6 +482,10 @@ pub struct ChartConfig {
     /// candle colour.
     #[serde(default = "theme_color")]
     pub price_target_negative_color: Color32,
+    /// Fill for overnight windows. `PLACEHOLDER` follows the active theme accent at twice
+    /// the extended-hours opacity. Older saved charts use that theme default.
+    #[serde(default = "theme_color")]
+    pub overnight_hours_color: Color32,
     /// Whether to show the symbol watermark.
     pub show_watermark: bool,
     /// Text of the symbol watermark; `\n` starts another line. `None` shows the symbol and the
@@ -636,6 +642,7 @@ impl Default for ChartConfig {
             extended_hours_color: Color32::PLACEHOLDER,
             price_target_positive_color: Color32::PLACEHOLDER,
             price_target_negative_color: Color32::PLACEHOLDER,
+            overnight_hours_color: Color32::PLACEHOLDER,
             // Watermark disabled by default
             show_watermark: false,
             watermark_text: None,
