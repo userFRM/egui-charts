@@ -259,6 +259,8 @@ last close / first open - 1 for buy-and-hold.
 
 The distribution uses each closed trade's net profit divided by quantity times absolute
 entry price. Non-finite results, including zero entry value, do not enter the histogram.
+Entry value stays in the instrument's currency, as excursions do, so the results of a run
+converted into another account currency also carry the exchange rate.
 Bin widths follow 0.001, 0.002, 0.005, 0.01, 0.02, 0.05 and so on, choosing the first width
 that fits every result in at most 20 consecutive bins. Lower edges are included, upper edges
 excluded. Results within a billionth of an edge (of the width at zero) snap to it to remove

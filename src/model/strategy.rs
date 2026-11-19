@@ -293,7 +293,8 @@ pub struct StrategyAnalysis {
     /// 0.001 without results.
     pub result_bin_width: f64,
     /// Consecutive bins of net profit / (quantity × absolute entry price), lowest first.
-    /// Trades with a non-finite result, including a zero entry value, are omitted.
+    /// Trades with a non-finite result, including a zero entry value, are omitted. Entry value
+    /// stays in the instrument's currency, so a converted run's results carry the exchange rate.
     pub result_bins: Vec<StrategyResultBin>,
     /// Entry `n - 1` counts winning runs of exactly `n` trades, in exit order, with the same
     /// breaks as [`StrategyPerformance::max_consecutive_wins`]. Length is the longest run.
