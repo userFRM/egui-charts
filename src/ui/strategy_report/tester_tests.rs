@@ -398,6 +398,28 @@ fn selecting_a_strategy_applies_its_declared_order_size() {
         );
         assert_eq!(tester.strategy(), name);
     }
+    tester.settings.start_time = Some(DateTime::UNIX_EPOCH + chrono::TimeDelta::days(5));
+    tester.settings.end_time = Some(DateTime::UNIX_EPOCH + chrono::TimeDelta::days(1));
+    tester.start = "1970-01-0".into();
+    tester.end = "1970-01-02".into();
+    let before = tester.settings().clone();
+    let undo_steps = tester.undo_settings.len();
+    assert!(!tester.redo_settings.is_empty());
+    assert_eq!(tester.select_strategy("SuperTrend"), Ok(()));
+    assert_eq!(tester.strategy(), "SuperTrend");
+    assert_eq!(
+        tester.settings().order_size,
+        OrderSize::EquityFraction(0.15)
+    );
+    assert_eq!(tester.start, "1970-01-0");
+    assert_eq!(tester.end, "1970-01-02");
+    assert!(!tester.redo_settings());
+    assert_eq!(tester.undo_settings.len(), undo_steps + 1);
+    assert!(tester.undo_settings());
+    assert_eq!(tester.settings(), &before);
+    assert_eq!(tester.undo_settings.len(), undo_steps);
+    assert_eq!(tester.strategy(), "SuperTrend");
+
     struct Sized(OrderSize);
     impl Strategy for Sized {
         fn default_order_size(&self) -> Option<OrderSize> {

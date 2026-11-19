@@ -79,13 +79,13 @@ impl Backtest {
     /// a run that should alert only on subsequent fills. `lower` has the meaning it has in `run`.
     ///
     /// With `settings.recalculate_on_every_update` off, only newly closed bars execute, exactly
-    /// as in `run` over `bars` without its last bar. `settings.end_time` does not apply to a live
-    /// run. With it on, an observed forming bar walks from its open to its close, then from its
-    /// previous close to each new close, and decides
+    /// as in `run` over `bars` without its last bar. With it on, an observed forming bar walks
+    /// from its open to its close, then from its previous close to each new close, and decides
     /// again with that forming bar included in the context. Its fills and orders are retained
     /// when the bar closes; unseen intrabar extremes are never replayed over observed ticks.
     /// Identical snapshots do nothing. Live fill callbacks exclude the unfinished bar;
-    /// historical tick callbacks see their developing candle.
+    /// historical tick callbacks see their developing candle. `settings.end_time` does not apply
+    /// to a live run.
     ///
     /// A correction before the previous forming bar, removed history, changed settings or inputs
     /// rebuilds from the start using `Strategy::prepare` to reset decision state. Replayed fills

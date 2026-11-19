@@ -264,9 +264,12 @@ impl StrategyTester {
     /// intact. A host restoring saved settings selects the strategy first.
     pub fn select_strategy(&mut self, name: &str) -> Result<(), &'static str> {
         let strategy = self.factory.create(name).ok_or("Unknown strategy")?;
-        let mut settings = self.settings.clone();
-        settings.order_size = strategy_order_size(strategy.as_ref());
-        self.set_settings(settings)?;
+        let order_size = strategy_order_size(strategy.as_ref());
+        if self.settings.order_size != order_size {
+            self.undo_settings.push(self.settings.clone());
+            self.redo_settings.clear();
+            self.settings.order_size = order_size;
+        }
         self.name = name.into();
         self.inputs = strategy.study_inputs();
         self.ranges = self.inputs.iter().filter_map(Range::new).collect();

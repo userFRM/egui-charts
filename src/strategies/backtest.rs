@@ -657,10 +657,9 @@ impl Backtest {
     /// with historical tick decisions, whose calculations refresh through `prepare_update`.
     /// Chart bars opening before the start cannot trade. Equity starts at the requested time and
     /// subsequent points use chart-bar closes, so the starting value and first close have
-    /// distinct timestamps. A final execution
-    /// bar without a known end labels its equity mark one nanosecond after its last source time.
-    /// With an end time, chart bars that close after it are left out, as
-    /// [`BacktestSettings::end_time`] describes.
+    /// distinct timestamps. A final execution bar without a known end labels its equity mark one
+    /// nanosecond after its last source time. With an end time, chart bars that close after it are
+    /// left out, as [`BacktestSettings::end_time`] describes.
     ///
     /// # Panics
     ///

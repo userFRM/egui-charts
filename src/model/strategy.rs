@@ -564,10 +564,9 @@ impl StrategyReport {
     ///
     /// Columns: `number` (from 1, in this order), `side` (`long` or `short`), `quantity`,
     /// `entry_time`, `entry_price`, `exit_time`, `exit_price`, `profit`, `fees`, `label`, `mae` and
-    /// `mfe`. Times are
-    /// RFC 3339 in UTC (`2024-01-02T00:00:00Z`), numbers use the shortest form that reads back to the
-    /// same value, and an open trade leaves the three exit columns empty. `mae` and `mfe` stay
-    /// empty here; [`Self::trades_csv_with_excursions`] fills them.
+    /// `mfe`. Times are RFC 3339 in UTC (`2024-01-02T00:00:00Z`), numbers use the shortest form that
+    /// reads back to the same value, and an open trade leaves the three exit columns empty. `mae`
+    /// and `mfe` stay empty here; [`Self::trades_csv_with_excursions`] fills them.
     /// Text cells starting with `=`, `+`, `-`, `@`, tab or carriage return gain a leading apostrophe
     /// so spreadsheets treat them as text. Numeric cells, including negative numbers, are unchanged.
     #[cfg(feature = "csv")]
