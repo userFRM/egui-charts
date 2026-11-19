@@ -209,7 +209,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 ## Trading and Strategy Reports
 
 - [x] `Trading` connects order tickets, account tables and chart overlays to a supplied `Broker`.
-- [x] Market, limit, stop and stop-limit tickets, units/value sizing, risk-percent sizing on every order type, time in force, presets and attached stop-loss/take-profit levels. Switching between units and an amount preserves the order quantity; money exits show no price and keep their entered value when the quantity is zero or invalid.
+- [x] Market, limit, stop and stop-limit tickets, quantity in units, money or a share of the balance, risk in money or percent on every order type, time in force, presets and attached stop-loss/take-profit levels. Switching quantity or risk units preserves the order size; exits in a share of the balance preserve their prices when switched to or from another unit and are saved in presets. Balance-based modes need a positive finite balance; money risk needs none. Money exits show no price and keep their entered value when the quantity is zero or invalid. The More menu switches to a compact form that keeps the order's exits as one line each, and the host's trading settings retain the choice; older settings keep the full form.
 - [x] Validated one-click orders, chart context-menu entry and broker/account selection components.
 - [x] Order and position lines show levels and profit/loss; confirmed actions modify/cancel orders, close/reverse positions and edit brackets.
 - [x] A depth ladder supports order entry, drag modification and right-click cancellation through the broker interface.

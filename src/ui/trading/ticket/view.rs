@@ -25,12 +25,13 @@ impl OrderTicket {
         market: &Market<'_>,
         presets: &mut Vec<OrderPreset>,
         one_click: &mut bool,
+        compact: &mut bool,
     ) -> Option<Action> {
         if !market.rules.time_in_force.contains(&self.time_in_force) {
             self.time_in_force = market.rules.time_in_force[0];
         }
         ui.spacing_mut().item_spacing.y = 8.0;
-        self.header(ui, market, presets, one_click);
+        self.header(ui, market, presets, one_click, compact);
         self.switch(ui);
         let mut action = match self.tab {
             Tab::Order => {
@@ -42,7 +43,7 @@ impl OrderTicket {
                     .inner;
                 egui::ScrollArea::vertical()
                     .auto_shrink(false)
-                    .show(ui, |ui| self.form(ui, market));
+                    .show(ui, |ui| self.form(ui, market, *compact));
                 action
             }
             Tab::Dom => {
@@ -161,6 +162,7 @@ impl OrderTicket {
         market: &Market<'_>,
         presets: &mut Vec<OrderPreset>,
         one_click: &mut bool,
+        compact: &mut bool,
     ) {
         ui.horizontal(|ui| {
             ui.set_min_height(32.0);
@@ -179,7 +181,7 @@ impl OrderTicket {
                     .show(ui);
                 egui::Popup::menu(&more)
                     .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                    .show(|ui| self.more(ui, market, presets, one_click));
+                    .show(|ui| self.more(ui, market, presets, one_click, compact));
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     let (mark, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
                     paint_symbol_mark(
@@ -221,11 +223,17 @@ impl OrderTicket {
         market: &Market<'_>,
         presets: &mut Vec<OrderPreset>,
         one_click: &mut bool,
+        compact: &mut bool,
     ) {
         ui.checkbox(one_click, l10n::text(ui.ctx(), "One-click trading"))
             .on_hover_text(l10n::text(
                 ui.ctx(),
                 "Buy and Sell, and the depth ladder, place orders at once, without confirmation",
+            ));
+        ui.checkbox(compact, l10n::text(ui.ctx(), "Compact form"))
+            .on_hover_text(l10n::text(
+                ui.ctx(),
+                "Show only the side, the order type, the price and the quantity above the send button",
             ));
         ui.separator();
         ui.weak(l10n::text(ui.ctx(), "Presets"));
@@ -468,7 +476,7 @@ mod tests {
                             ..Default::default()
                         },
                         |ui| {
-                            ticket.show(ui, &market, &mut vec![], &mut false);
+                            ticket.show(ui, &market, &mut vec![], &mut false, &mut false);
                         },
                     );
                     for shape in &output.shapes {
@@ -495,7 +503,7 @@ mod tests {
                         OrderType::Limit(price),
                     ));
                     ctx.run_ui(egui::RawInput::default(), |ui| {
-                        ticket.show(ui, &market, &mut vec![], &mut false);
+                        ticket.show(ui, &market, &mut vec![], &mut false, &mut false);
                     })
                     .drop_without_applying_deltas();
                     assert_eq!(
@@ -619,7 +627,7 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ui| action = ticket.show(ui, &market, &mut vec![], &mut one_click),
+                    |ui| action = ticket.show(ui, &market, &mut vec![], &mut one_click, &mut false),
                 );
                 let centre = |label: &str| {
                     output.shapes.iter().find_map(|shape| match &shape.shape {
