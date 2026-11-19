@@ -31,7 +31,14 @@ pub(super) fn show_position(
     } else {
         OrderSide::Sell
     };
-    let color = crate::theme::trading_side_color(&theme, side);
+    let look = options
+        .position_appearance
+        .iter()
+        .find(|(symbol, _)| symbol == &position.symbol)
+        .map(|(_, look)| look);
+    let color = look
+        .and_then(|look| look.color)
+        .unwrap_or_else(|| crate::theme::trading_side_color(&theme, side));
     let size = position.quantity.abs();
     let entry = position.average_price;
     let y = mapping.price_to_y(entry);
@@ -39,7 +46,10 @@ pub(super) fn show_position(
         return None;
     }
     let painter = ui.painter().with_clip_rect(mapping.rect);
-    let line = PriceLine::new(entry, color).with_style(LineStyle::Solid);
+    let line = PriceLine::new(entry, color).with_style(
+        look.and_then(|look| look.line_style)
+            .unwrap_or(LineStyle::Solid),
+    );
     tags.push((entry, color));
 
     let key = ui.scope_id().with(("trading_position", &position.symbol));
@@ -82,9 +92,13 @@ pub(super) fn show_position(
     });
     let exits = offered_exits(options.take_profit, options.stop_loss);
     let quantity = layout(format!("{size}"), Color32::WHITE);
+    let text = look
+        .and_then(|look| look.text.as_ref())
+        .map(|text| layout(text.clone(), color));
     let close = if options.close { HEIGHT } else { 0.0 };
     let total = exit_buttons_width(ui, exits)
         + width(&quantity)
+        + text.as_deref().map_or(0.0, width)
         + pnl.as_ref().map_or(0.0, |(galley, _)| width(galley))
         + close;
     let reverse = options.close && options.reverse;
@@ -136,13 +150,24 @@ pub(super) fn show_position(
     let hovered = ui.rect_contains_pointer(hover_rect.intersect(mapping.rect));
     let stroke = Stroke::new(1.0, color);
     let mut action = None;
-    if let Some(capabilities) = options.menu {
-        ui.interact(
+    if options.menu.is_some() || look.and_then(|look| look.hover_text.as_ref()).is_some() {
+        let response = ui.interact(
             label.intersect(mapping.rect),
             key.with("menu"),
-            Sense::click(),
-        )
-        .context_menu(|ui| action = position_menu(ui, position, capabilities, held));
+            if options.menu.is_some() {
+                Sense::click()
+            } else {
+                Sense::hover()
+            },
+        );
+        let response = if let Some(text) = look.and_then(|look| look.hover_text.as_ref()) {
+            response.on_hover_text(text)
+        } else {
+            response
+        };
+        if let Some(capabilities) = options.menu {
+            response.context_menu(|ui| action = position_menu(ui, position, capabilities, held));
+        }
     }
 
     if reverse && hovered {
@@ -227,6 +252,16 @@ pub(super) fn show_position(
         quantity,
         Color32::WHITE,
     );
+    if let Some(text) = text {
+        let rect = cell(x, width(&text));
+        x = rect.right();
+        painter.vline(rect.left(), rect.y_range(), stroke);
+        painter.galley(
+            pos2(rect.left() + PADDING, y - text.size().y / 2.0),
+            text,
+            color,
+        );
+    }
     if let Some((pnl, text_color)) = pnl {
         let rect = cell(x, width(&pnl));
         x = rect.right();

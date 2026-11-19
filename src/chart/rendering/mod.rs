@@ -62,8 +62,8 @@ pub use session_breaks::{
 };
 pub(crate) use session_breaks::{exchange_session, render_extended_hours};
 pub use trading_lines::{
-    PnlUnit, TradingLabelAlignment, TradingLineAction, TradingLineOptions, TradingLines,
-    render_trading_lines,
+    PnlUnit, TradingLabelAlignment, TradingLineAction, TradingLineAppearance, TradingLineOptions,
+    TradingLines, render_trading_lines,
 };
 #[cfg(feature = "ui")]
 pub(crate) use trading_lines::{entry_price, exit_request, held_exits};

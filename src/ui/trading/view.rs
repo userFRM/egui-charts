@@ -201,6 +201,8 @@ impl Trading {
             stop_loss: capabilities.stop,
             order_exits: capabilities.brackets && capabilities.modify,
             menu: Some(capabilities),
+            order_appearance: &[],
+            position_appearance: &[],
             pnl: display.position_pnl.then_some(display.position_pnl_unit),
             bracket_pnl: display.bracket_pnl.then_some(display.bracket_pnl_unit),
             last_price: last,
@@ -455,6 +457,8 @@ impl Trading {
                 stop_loss: false,
                 order_exits: self.capabilities().brackets,
                 menu: None,
+                order_appearance: &[],
+                position_appearance: &[],
                 pnl: None,
                 bracket_pnl: self
                     .display
