@@ -244,9 +244,11 @@ impl Chart {
     }
 
     /// Names months and weekdays in time axis, crosshair, tooltip and forecast date labels in
-    /// `locale`'s language, such as `"de-DE"` (see
-    /// [`LocaleTimeFormatter`](crate::scales::LocaleTimeFormatter)).
-    /// `None` restores English names.
+    /// `locale`'s language: a language code such as `"de"`, alone or with a region such as
+    /// `"de-AT"`, in any letter case. A language alone uses its most common region, `"de"` as
+    /// `"de-DE"`; [`LocaleTimeFormatter::locale`](crate::scales::LocaleTimeFormatter::locale)
+    /// lists the accepted forms. `None` restores English names, which other forms and languages
+    /// without names also get.
     ///
     /// The names need the `locales` cargo feature, on by default; without it they stay English.
     pub fn set_locale(&mut self, locale: Option<String>) {

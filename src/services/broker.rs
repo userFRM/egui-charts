@@ -17,10 +17,11 @@ use crate::model::{
 /// Methods are called on the UI thread and must return at once. Talk to the broker elsewhere and
 /// answer or push from any thread, runtime or browser task.
 ///
-/// Every price and quantity pushed must be finite. Quantities are positive, except a position's,
-/// which is signed, and an order's filled quantity, which runs from 0 to the requested quantity;
-/// the terminal skips events that break this. Prices are in the symbol's price units and
-/// quantities in its trading units.
+/// Every price and quantity pushed must be finite, including each take-profit level's
+/// [`stop_loss`](crate::model::TakeProfitLevel::stop_loss). Quantities are positive, except a
+/// position's, which is signed, and an order's filled quantity, which runs from 0 to the requested
+/// quantity; the terminal skips events that break this. Prices are in the symbol's price units
+/// and quantities in its trading units.
 ///
 /// A paper account that trades one symbol and fills market orders at a fixed price:
 ///
