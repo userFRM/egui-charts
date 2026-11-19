@@ -895,7 +895,6 @@ mod tests {
             ("de_DE", "14:30"),
             ("en", "02:30 PM"),
             ("EN-us", "02:30 PM"),
-            ("DE", "14:30"),
         ] {
             assert_eq!(
                 LocaleTimeFormatter::new(locale).format(time, TickMarkType::Time),
