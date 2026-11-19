@@ -106,8 +106,8 @@ pub struct SavedPane {
 
 /// What a chart shows and how: everything a user sets on it, without the bars, which come from
 /// the host's feed. Take one with [`Chart::snapshot`] and apply it with [`Chart::restore`].
-/// The trading and alert settings of the settings dialog belong to the host and are not part
-/// of it.
+/// The trading and alert settings and futures data choices of the settings dialog belong to
+/// the host and are not part of it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ChartSnapshot {
@@ -191,6 +191,10 @@ pub struct ChartSnapshot {
     /// each restored study starts with its columns shown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_by: Option<u64>,
+    /// Where the Buy and Sell panel sits, as the share of the room left of and above it, from
+    /// 0 to 1. `None` uses its default place, centred at the top, also in older saved layouts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote_panel: Option<[f32; 2]>,
 }
 
 /// Why [`Chart::restore`] did not show a snapshot.
@@ -313,6 +317,7 @@ impl Chart {
             settings: {
                 let mut settings = ChartSettingsState::from_chart(self);
                 settings.adjust_for_dividends = self.dividend_adjusted();
+                settings.extended_hours = None;
                 settings
             },
             config: Some(self.config.clone()),
@@ -395,6 +400,7 @@ impl Chart {
             drawings,
             other_symbol_drawings,
             saved_by: Some(self.data_table_identity),
+            quote_panel: self.quote_panel_at,
         };
         // A layout that restore would refuse is an error now rather than at the next load.
         check(&snapshot, factory, self.main_series_scale)
@@ -486,13 +492,13 @@ impl Chart {
         self.main_series_style.alerts = snapshot.main_series_alerts;
         self.main_series_style.display_format = snapshot.main_series_display_format;
         let mut settings = snapshot.settings.clone();
+        // The snapshot's own field holds the session, set above.
+        settings.extended_hours = None;
         // Layouts saved before a precision could be chosen hold the one shown, which followed
-        // the next instrument; the saved scale holds the chosen one.
-        settings.precision = super::settings::PrecisionMode::from_decimals(
-            snapshot
-                .price_scale
-                .as_ref()
-                .and_then(crate::scales::PriceScale::chosen_precision),
+        // the next instrument; the saved scale holds the chosen decimals or fraction.
+        settings.precision = snapshot.price_scale.as_ref().map_or(
+            super::settings::PrecisionMode::Default,
+            super::settings::PrecisionMode::from_scale,
         );
         if settings.chart_type == crate::model::ChartType::HollowCandles {
             // Settings saved before hollow candles had a style hold the switches of the candles.
@@ -737,6 +743,7 @@ impl Chart {
             }
         }
         self.pane_layout.maximized = snapshot.maximized.map(|at| panes[&at]);
+        self.quote_panel_at = snapshot.quote_panel;
         if self.state.time_scale().numeric_positions().is_some() {
             let positions =
                 crate::model::numeric_positions(self.state.shown(), snapshot.numeric_unit);
@@ -1547,6 +1554,62 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A Correlation - Log saves and restores under its own name with its edited inputs and
+    /// style.
+    #[test]
+    fn correlation_log_restores_under_its_own_name_with_its_inputs_and_style() {
+        use crate::studies::{IndicatorFactory, InputValue};
+        let bars: Vec<_> = (0..30)
+            .map(|i| {
+                Bar::new(
+                    Utc.timestamp_opt(i * 60, 0).unwrap(),
+                    10.0,
+                    11.0,
+                    9.0,
+                    10.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        let id = chart.add_indicator(IndicatorFactory::new().create("Correlation - Log").unwrap());
+        let study = chart.indicator_mut(id).unwrap();
+        for (input, value) in [
+            ("symbol_1", InputValue::Symbol("B".into())),
+            ("length", InputValue::Length(30)),
+            ("log_returns", InputValue::Toggle(false)),
+        ] {
+            study.set_input(input, value).unwrap();
+        }
+        let mut settings = study.settings();
+        settings.plots[0].width = 3.0;
+        settings.plots[0].color = egui::Color32::RED;
+        study.apply_settings(&[], settings).unwrap();
+        let saved = |chart: &Chart| {
+            let (_, study) = chart.indicators().next().unwrap();
+            let inputs: Vec<_> = study
+                .inputs()
+                .into_iter()
+                .map(|input| (input.id, input.value))
+                .collect();
+            (study.registered_name().to_owned(), inputs, study.settings())
+        };
+        let json = SavedLayout {
+            mode: ChartLayoutMode::Single,
+            charts: vec![chart.snapshot().unwrap()],
+            sizing: None,
+            link_groups: None,
+        }
+        .to_json()
+        .unwrap();
+        let mut restored = Chart::new(BarData::from_bars(bars));
+        restored
+            .restore(&SavedLayout::from_json(&json).unwrap().charts[0])
+            .unwrap();
+        assert_eq!(saved(&restored), saved(&chart));
+        assert_eq!(saved(&restored).0, "Correlation - Log");
     }
 
     /// A custom study saved with another study's output in a Source input its calculation never

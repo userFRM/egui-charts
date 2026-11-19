@@ -168,10 +168,10 @@ fn tail_updates() {
     let mut names: Vec<_> = factory
         .list()
         .into_iter()
-        .filter(|name| !name.starts_with("Vol Profile ") && name != "Visible Average Price")
+        .filter(|name| name != "Visible Average Price")
         .collect();
     names.sort_unstable();
-    for count in [1_000, 100_000, 1_000_000] {
+    for count in [1_000_usize, 100_000, 1_000_000] {
         let mut bars: Vec<_> = (0..count + 5)
             .map(|i| {
                 let p = 100.0 + (i as f64 / 7.0).sin();
@@ -187,6 +187,7 @@ fn tail_updates() {
             .collect();
         for name in &names {
             let mut study = factory.create(name).expect("a built-in study");
+            study.set_visible_range(count.saturating_sub(2_000)..count);
             study.calculate(&bars[..count]);
             let mut ticks = Vec::new();
             for _ in 0..5 {

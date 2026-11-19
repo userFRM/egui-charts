@@ -98,12 +98,20 @@ fn report_replacement_selection_export_and_clear() {
         h.get_by_role_and_label(Role::Tab, "Properties").click();
         h.run();
         assert!(h.query_by_label("inf%").is_none());
-        let replacement = StrategyReport::new("Second run", "SECOND", Timeframe::Day1, 2000.0);
+        let mut replacement = StrategyReport::new("Second run", "SECOND", Timeframe::Day1, 2000.0);
+        replacement.unavailable = Some("Exchange rates from USD to EUR are unavailable".into());
         h.state_mut().0.set_report(Some(replacement), &[]);
         h.run();
         assert_eq!(h.state().0.report().unwrap().symbol, "SECOND");
         assert!(h.state().0.selected.is_none());
         assert!(matches!(h.state().0.tab, Tab::Summary));
+        // A report without figures says why instead of showing zero metrics or exports.
+        h.get_by_label("Exchange rates from USD to EUR are unavailable");
+        assert!(h.query_by_label("Net profit").is_none());
+        assert!(
+            h.query_by_role_and_label(Role::Button, "Export summary CSV")
+                .is_none()
+        );
         h.state_mut().0.set_report(None, &[]);
         h.run();
         assert!(h.state().0.report().is_none());
@@ -143,4 +151,61 @@ fn equity_curve_uses_the_full_width_at_every_time_resolution() {
             .unwrap();
         assert!(points[1].x - points[0].x > 200.0, "{step}");
     }
+}
+
+#[test]
+fn summary_shows_trade_figures_for_all_long_and_short() {
+    let start = DateTime::UNIX_EPOCH;
+    let mut report = StrategyReport::new("Sides", "SIDES", Timeframe::Hour1, 1000.0);
+    for (side, profit) in [(OrderSide::Buy, 50.25), (OrderSide::Sell, -30.5)] {
+        let mut trade = StrategyTrade::new(side, 1.0, start, 100.0);
+        trade.exit = Some(StrategyExit::new(
+            start + chrono::TimeDelta::hours(1),
+            100.0,
+            profit,
+        ));
+        report.trades.push(trade);
+    }
+    let mut panel = StrategyReportPanel::default();
+    panel.set_report(Some(report), &[]);
+    let mut h = Harness::builder()
+        .with_size(Vec2::new(1440.0, 1200.0))
+        .with_context_setup(|ctx| crate::theme::apply_to_egui(ctx, &crate::theme::Theme::light()))
+        .build_ui_state(
+            |ui, (panel, actions): &mut (StrategyReportPanel, Vec<StrategyReportAction>)| {
+                let action = panel.show(ui);
+                if action != StrategyReportAction::None {
+                    actions.push(action);
+                }
+            },
+            (panel, Vec::new()),
+        );
+    h.run();
+    let labels = std::cell::RefCell::new(Vec::new());
+    h.query_all_by(|n: &egui_kittest::kittest::AccessKitNode<'_>| {
+        if n.role() == Role::Label
+            && let Some(label) = n.value()
+        {
+            labels.borrow_mut().push(label);
+        }
+        false
+    })
+    .count();
+    let labels = labels.into_inner();
+    let header = labels.iter().position(|l| l == "All").unwrap();
+    assert_eq!(&labels[header..header + 3], ["All", "Long", "Short"]);
+    let row = |name| {
+        let i = labels.iter().position(|l| l == name).unwrap();
+        labels[i + 1..i + 4].to_vec()
+    };
+    assert_eq!(row("Net profit"), ["19.75", "50.25", "-30.50"]);
+    assert_eq!(row("Average losing trade"), ["30.50", "N/A", "30.50"]);
+    h.get_by_role_and_label(Role::Button, "Export summary CSV")
+        .click();
+    h.run();
+    let Some(StrategyReportAction::ExportSummaryCsv { content, .. }) = h.state().1.last() else {
+        panic!("summary export action");
+    };
+    assert!(content.contains("summary,Net profit,50.25,money,,long\n"));
+    assert!(content.contains("summary,Net profit,-30.5,money,,short\n"));
 }

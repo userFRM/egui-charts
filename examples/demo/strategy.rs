@@ -183,6 +183,11 @@ impl DemoApp {
         if self.strategy_report.report().is_none() {
             return;
         }
+        self.strategy_report.set_instrument_currency(
+            self.chart
+                .instrument()
+                .and_then(|instrument| instrument.currency.clone()),
+        );
         let chart_type = self.chart.chart_type();
         if self.live_strategy.is_none() && self.strategy_report.settings().chart_type != chart_type
         {
@@ -421,9 +426,9 @@ mod tests {
             let bars = source(slope, 121);
             let report = sample_backtest("SAMPLE", Timeframe::Min1, &bars);
             let performance = report.performance();
-            assert_eq!(performance.net_profit, profit);
-            assert_eq!(performance.closed_trades, 3);
-            assert_eq!(performance.total_fees, 6.0);
+            assert_eq!(performance.all.net_profit, profit);
+            assert_eq!(performance.all.closed_trades, 3);
+            assert_eq!(performance.all.total_fees, 6.0);
             assert_eq!(performance.skipped_equity_points, 0);
             assert_eq!(report.equity_curve().len(), 122);
             assert_eq!(report.equity[0].1, 10_000.0);

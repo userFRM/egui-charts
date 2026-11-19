@@ -146,6 +146,7 @@ impl Chart {
             series_scales: Default::default(),
             study_ids: Vec::new(),
             study_limit: None,
+            chained_study_limit: None,
             study_inputs: Vec::new(),
             study_autoscale: Vec::new(),
             pending_from: Vec::new(),
@@ -186,6 +187,7 @@ impl Chart {
             legend_statuses: Vec::new(),
             quote: None,
             quote_action: None,
+            quote_panel_at: None,
             server_time_offset: None,
             bar_close_time: None,
             indicator_settings_request: None,
@@ -274,6 +276,8 @@ impl Chart {
             trading_bid_ask: false,
             #[cfg(feature = "ui")]
             order_quantity: None,
+            #[cfg(feature = "ui")]
+            order_quantity_text: None,
             #[cfg(feature = "ui")]
             quantity_clicked: None,
             // Selection (Widget API)
@@ -893,7 +897,7 @@ impl ChartBuilder {
         self
     }
 
-    /// Toggle session-break dividers at day, week, month and year boundaries.
+    /// Toggle session-break dividers, drawn at each new session on intraday intervals.
     #[must_use]
     pub fn with_session_breaks(mut self, show: bool) -> Self {
         self.config.show_session_breaks = show;

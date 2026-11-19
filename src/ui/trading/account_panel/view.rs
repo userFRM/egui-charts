@@ -161,6 +161,9 @@ impl Trading {
                     false => broker,
                 };
                 egui::Popup::menu(&broker).show(|ui| {
+                    if ui.button(l10n::text(ui.ctx(), "Change broker")).clicked() {
+                        action = Some(AccountPanelAction::ChangeBroker);
+                    }
                     if ui.button(l10n::text(ui.ctx(), "Disconnect")).clicked() {
                         action = Some(AccountPanelAction::Disconnect);
                     }
@@ -206,6 +209,12 @@ impl Trading {
                             account.margin,
                             false,
                             Some("The margin the open positions hold"),
+                        ),
+                        (
+                            "Margin buffer",
+                            account.margin_buffer,
+                            false,
+                            Some("The equity left above the margin the open positions hold"),
                         ),
                         (
                             "Available funds",
@@ -532,6 +541,35 @@ impl Trading {
                     close: None,
                 })
                 .collect(),
+            Tab::Closed => self
+                .account_panel
+                .closed
+                .iter()
+                .rev()
+                .map(|closed| {
+                    let s = closed.symbol.as_str();
+                    let label = if closed.side == OrderSide::Buy {
+                        "Long"
+                    } else {
+                        "Short"
+                    };
+                    Row {
+                        cells: vec![
+                            symbol(s),
+                            side(closed.side, label),
+                            plain(quantity(s, closed.quantity)),
+                            plain(price(s, closed.average_price)),
+                            plain(price(s, closed.exit_price)),
+                            colored(money(Some(closed.realized_pnl), true)),
+                            plain(time(closed.opened)),
+                            plain(time(Some(closed.closed))),
+                        ],
+                        symbol: Some(closed.symbol.clone()),
+                        edit: None,
+                        close: None,
+                    }
+                })
+                .collect(),
             Tab::Executions => self
                 .account_panel
                 .fills
@@ -715,6 +753,7 @@ impl Trading {
                         Tab::Positions => "No open positions",
                         Tab::Orders => "No working orders",
                         Tab::History => "No finished orders",
+                        Tab::Closed => "No closed positions",
                         Tab::Balance => "No balance changes",
                         Tab::Journal => "No journal entries",
                         Tab::Executions => "No executions",
@@ -884,15 +923,13 @@ impl Trading {
         }
         match row_action {
             Some((RowAction::Position(position), _)) => {
-                self.pending = Some(TradingLineAction::Close(position.clone()));
+                self.ask(TradingLineAction::Close(position.clone()), true);
             }
             Some((RowAction::Order(order), false)) => {
-                self.pending = Some(TradingLineAction::Cancel(order.clone()));
+                self.ask(TradingLineAction::Cancel(order.clone()), false);
             }
             Some((RowAction::Order(order), true)) => {
-                self.ticket.open = false;
-                self.load_rules(&order.request.symbol);
-                self.account_panel.editing = Some((order.clone(), order.request.clone()));
+                self.edit_order(order.clone(), order.request.clone());
             }
             None => {}
         }
@@ -902,12 +939,22 @@ impl Trading {
 
     /// The edit dialog of a working order: its quantity, prices and brackets. Saving sends the
     /// change to the broker; the dialog is the user's confirmation.
-    fn show_order_editor(&mut self, ctx: &egui::Context, chart_symbol: &str) {
+    pub(in crate::ui::trading) fn show_order_editor(
+        &mut self,
+        ctx: &egui::Context,
+        chart_symbol: &str,
+    ) {
         let Some(symbol) =
             (self.account_panel.editing.as_ref()).map(|(order, _)| order.request.symbol.clone())
         else {
             return;
         };
+        // The chart and the account panel both draw the dialog; it shows once a pass.
+        let pass = ctx.cumulative_pass_nr();
+        if self.account_panel.editor_pass == Some(pass) {
+            return;
+        }
+        self.account_panel.editor_pass = Some(pass);
         let price_decimals = self.numbers(&symbol, chart_symbol).decimals;
         let brackets = self.capabilities().brackets;
         let level_stops = self.capabilities().take_profit_level_stops;

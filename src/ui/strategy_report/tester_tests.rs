@@ -51,7 +51,7 @@ fn built_in_run_edits_costs_and_inputs_and_replaces_fill_signals() {
             let report = h.state().0.report().unwrap();
             // Three rising closes place the long at bar 3, filled at bar 4's open of 100.
             // Three falling closes reverse it at bar 7's open of 101: one unit earns 1.
-            assert_eq!(report.performance().net_profit, 1.0);
+            assert_eq!(report.performance().all.net_profit, 1.0);
             assert_eq!(report.trades[0].entry_time, bars()[4].time);
             assert_eq!(report.trades[0].exit.as_ref().unwrap().time, bars()[7].time);
             assert!(!h.state().0.is_stale());
@@ -75,7 +75,10 @@ fn built_in_run_edits_costs_and_inputs_and_replaces_fill_signals() {
             h.run();
             h.get_by_role_and_label(Role::Button, "Run").click();
             h.run();
-            assert_eq!(h.state().0.report().unwrap().performance().net_profit, -1.0);
+            assert_eq!(
+                h.state().0.report().unwrap().performance().all.net_profit,
+                -1.0
+            );
             assert!(!h.state().0.is_stale());
             h.state_mut()
                 .0
@@ -89,7 +92,7 @@ fn built_in_run_edits_costs_and_inputs_and_replaces_fill_signals() {
             assert_eq!(report.trades[0].side, OrderSide::Buy);
             assert_eq!(report.trades[0].entry_time, bars()[2].time);
             assert_eq!(
-                report.performance().net_profit,
+                report.performance().all.net_profit,
                 -5.0,
                 "102 to 99, less two unit fees"
             );
@@ -590,6 +593,67 @@ fn requested_history_is_scoped_and_superseded_by_edits_and_chart_changes() {
 }
 
 #[test]
+fn runs_report_the_instrument_currency_and_convert_into_another_at_requested_rates() {
+    let mut tester = StrategyTester::default();
+    tester.select_strategy("Consecutive Up/Down").unwrap();
+    tester.set_instrument_currency(Some("USD".into()));
+    let mut h = Harness::builder().with_max_steps(32).build_ui_state(
+        |ui, tester: &mut StrategyTester| {
+            tester.show(ui, "TEST", Timeframe::Min1, &bars());
+        },
+        tester,
+    );
+    // Without an account currency the run needs no history and reports the instrument's.
+    assert_eq!(
+        h.state_mut()
+            .request_run("TEST", Timeframe::Min1, &bars(), false),
+        Ok(None)
+    );
+    h.run();
+    assert_eq!(h.state().report().unwrap().currency.as_deref(), Some("USD"));
+    let mut settings = h.state().settings().clone();
+    settings.currency = Some("EUR".into());
+    h.state_mut().set_settings(settings).unwrap();
+    let Some(StrategyTesterAction::RequestHistory(request)) = h
+        .state_mut()
+        .request_run("TEST", Timeframe::Min1, &bars(), false)
+        .unwrap()
+    else {
+        panic!("missing exchange rate request");
+    };
+    assert_eq!(
+        request.exchange_rate,
+        Some(StudyDataRequest::exchange_rate("USD", "EUR"))
+    );
+    let rate = Bar::new(bars()[0].time, 0.5, 0.5, 0.5, 0.5, 0.0);
+    h.state_mut()
+        .set_history_with_rates(&request, bars(), Vec::new(), vec![rate])
+        .unwrap();
+    h.run();
+    let report = h.state().report().unwrap();
+    assert_eq!(report.currency.as_deref(), Some("EUR"));
+    // The long from 100 to 101 earns 1 USD, 0.5 EUR.
+    assert_eq!(report.performance().all.net_profit, 0.5);
+    // An optimisation without the rates skips each trial instead of listing zero results.
+    h.state_mut().ranges[0].enabled = true;
+    h.state_mut().ranges[0].from = InputValue::Length(1);
+    h.state_mut().ranges[0].to = InputValue::Length(2);
+    h.state_mut()
+        .start_job(
+            "TEST",
+            Timeframe::Min1,
+            bars(),
+            Vec::new(),
+            Vec::new(),
+            true,
+        )
+        .unwrap();
+    h.run();
+    assert!(h.state().trials.is_empty());
+    assert_eq!(h.state().skipped, [("Exchange rates unavailable", 2)]);
+}
+
+#[test]
 fn optimisation_counts_decimal_grid_yields_sorts_and_applies_inputs() {
     use crate::studies::InputKind;
     let input = StudyInput::new(
@@ -666,7 +730,14 @@ fn optimisation_counts_decimal_grid_yields_sorts_and_applies_inputs() {
     tester.ranges[0].to = InputValue::Length(3);
     assert_eq!(optimisation::grid(&tester.ranges).unwrap().0, 3);
     tester
-        .start_job("TEST", Timeframe::Min1, bars(), Vec::new(), true)
+        .start_job(
+            "TEST",
+            Timeframe::Min1,
+            bars(),
+            Vec::new(),
+            Vec::new(),
+            true,
+        )
         .unwrap();
     assert!(
         tester

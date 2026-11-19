@@ -122,7 +122,8 @@ impl IndicatorFactory {
     /// Register every built-in indicator under its canonical name.
     ///
     /// Types use their defaults; automatic drawings select a construction kind and
-    /// stream studies select aggregation parameters. Names come from each study.
+    /// stream studies select aggregation parameters, and each candlestick pattern is also
+    /// registered alone under its label. Names come from each study.
     /// Exported studies outside the catalogue are registered first, without a category, so a
     /// listed study of the same name would replace them.
     fn register_builtin(&mut self) {
@@ -299,6 +300,7 @@ impl IndicatorFactory {
                 VolProfileVisible,
                 VolProfileFixed,
                 VolProfileSession,
+                VolProfileSessionHd,
                 VolProfilePeriodic,
                 VolProfileAnchored,
                 VolProfileAutoAnchored,
@@ -330,6 +332,7 @@ impl IndicatorFactory {
                 Ratio,
                 Spread,
                 Correlation,
+                CorrelationLog,
                 RciRibbon,
                 MajorityRule,
                 AccumulationSwingIndex,
@@ -361,6 +364,16 @@ impl IndicatorFactory {
                 CandlestickPatterns,
             ],
         );
+        // Individual patterns are found and saved under the same labels as their toggles.
+        for index in 0..CandlestickPatterns::PATTERN_COUNT {
+            self.constructors.insert(
+                CandlestickPatterns::only(index).name().to_owned(),
+                (
+                    Some(Self::PATTERNS),
+                    Box::new(move || Box::new(CandlestickPatterns::only(index))),
+                ),
+            );
+        }
         for kind in [
             OrderFlowKind::Spread,
             OrderFlowKind::BookSize {
@@ -389,6 +402,13 @@ impl IndicatorFactory {
                 max: f64::MAX,
             },
             OrderFlowKind::LevelsTradedThrough { seconds: 0 },
+            OrderFlowKind::BookBalance {
+                near_levels: 5,
+                far_levels: 10,
+                near_distance: 0.0,
+                far_distance: 0.0,
+            },
+            OrderFlowKind::PriceRange { seconds: 60 },
         ] {
             let name = OrderFlowStudy::new(kind).name().to_owned();
             self.constructors.insert(
@@ -399,7 +419,7 @@ impl IndicatorFactory {
                 ),
             );
         }
-        register_builtins!(@help self, "type", SMIErgodicIndicator, SMIErgodicOscillator, RisingWedge, FallingWedge, Ratio, Spread, Correlation, AdvanceDeclineRatio, AdvanceDeclineLine, CumulativeVolumeIndex);
+        register_builtins!(@help self, "type", SMIErgodicIndicator, SMIErgodicOscillator, RisingWedge, FallingWedge, Ratio, Spread, Correlation, CorrelationLog, AdvanceDeclineRatio, AdvanceDeclineLine, CumulativeVolumeIndex);
         for cumulative in [false, true] {
             let name = OrderFlowStudy::execution_delta(cumulative)
                 .name()

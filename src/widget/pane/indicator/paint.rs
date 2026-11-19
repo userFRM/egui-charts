@@ -569,20 +569,25 @@ impl IndicatorPane {
         job
     }
 
-    /// Reserves three controls after the legend, keeping them inside short panes.
+    /// Reserves the study's buttons after the legend, keeping them inside short panes.
+    /// `held_x` keeps their left edge in place while the legend reads the bar under the pointer.
     pub(super) fn legend_controls_rect(
         &self,
         painter: &egui::Painter,
         rect: Rect,
         indicator: &dyn Indicator,
+        held_x: Option<f32>,
     ) -> Option<Rect> {
         if !self.config.show_legend {
             return None;
         }
         let theme = painter.ctx().active_theme();
-        let galley = self.legend_galley(painter, rect, indicator, theme.ui.text);
         let width = crate::chart::rendering::controls_width(indicator, self.show_settings);
-        let x = (rect.left() + theme.spacing.sm + galley.size().x + theme.spacing.md)
+        let x = held_x
+            .unwrap_or_else(|| {
+                let galley = self.legend_galley(painter, rect, indicator, theme.ui.text);
+                rect.left() + theme.spacing.sm + galley.size().x + theme.spacing.md
+            })
             .min(rect.right() - width - if self.pane_controls { 40.0 } else { 0.0 })
             .max(rect.left());
         Some(
@@ -1505,7 +1510,7 @@ mod tests {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 150.0));
                 let controls = pane
-                    .legend_controls_rect(ui.painter(), rect, &study)
+                    .legend_controls_rect(ui.painter(), rect, &study, None)
                     .unwrap();
                 controls_left = controls.left();
                 pane.draw_legend(ui.painter(), rect, &study, Color32::WHITE);
