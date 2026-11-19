@@ -457,24 +457,14 @@ impl<'a> Legend<'a> {
                 );
             }
         }
-        // The change from `reference` to `value`, absolute and as a percentage.
         let change_text = |reference: f64, value: f64| {
-            let change = value - reference;
-            let pct = percent_change(reference, value);
-            let absolute = self.formatters.price.map_or_else(
-                || {
-                    crate::scales::group_thousands(
-                        format!("{change:+.precision$}"),
-                        self.thousands_sep,
-                    )
-                },
-                |formatter| formatter.format_change(change),
-            );
-            let percent = self
-                .formatters
-                .percentage
-                .map_or_else(|| format!("{pct:+.2}%"), |formatter| formatter.format(pct));
-            (change, absolute, percent)
+            price_change_text(
+                &self.formatters,
+                self.thousands_sep,
+                precision,
+                reference,
+                value,
+            )
         };
         if self.show_change || self.show_change_percent {
             let reference = self.previous_close.unwrap_or(self.bar.open);
@@ -991,6 +981,28 @@ impl<'a> Legend<'a> {
             })
             .map_or_else(|| price_decimals(price), usize::from)
     }
+}
+
+/// The change from `reference` to `value`, absolute and in percent of the reference's
+/// magnitude, as the legend writes it: the price formatter's change format, else `precision`
+/// decimals grouped by `thousands_sep`, and the percentage formatter, else two decimals.
+pub(crate) fn price_change_text(
+    formatters: &super::ValueFormatters<'_>,
+    thousands_sep: Option<char>,
+    precision: usize,
+    reference: f64,
+    value: f64,
+) -> (f64, String, String) {
+    let change = value - reference;
+    let pct = percent_change(reference, value);
+    let absolute = formatters.price.map_or_else(
+        || crate::scales::group_thousands(format!("{change:+.precision$}"), thousands_sep),
+        |formatter| formatter.format_change(change),
+    );
+    let percent = formatters
+        .percentage
+        .map_or_else(|| format!("{pct:+.2}%"), |formatter| formatter.format(pct));
+    (change, absolute, percent)
 }
 
 /// A glyph of the market status pill.
