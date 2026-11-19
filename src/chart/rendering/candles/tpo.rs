@@ -787,8 +787,8 @@ fn place_profiles(
     // Level labels sit in the room left before each next session, so they show only while every
     // session in full view keeps at least as much width for its own profile.
     let label_room = label_room(config, placed.iter().map(|p| p.0));
-    // The forming session has infinite room, but its priced gutter must still fit the plot.
-    let labels = (!config.labels.prices || label_room < price_rect.width())
+    // The forming session has infinite room; keep visible room for both its priced gutter and profile.
+    let labels = (!config.labels.prices || price_rect.width() >= 2.0 * label_room)
         && placed
             .iter()
             .filter(|(.., cut)| !cut)
@@ -2656,11 +2656,11 @@ mod tests {
             false,
         );
         let mut failures = Vec::new();
-        for width in [400.0, 80.0] {
+        for (width, priced_captions_fit) in [(400.0, true), (80.0, false), (101.0, false)] {
             let rect = Rect::from_x_y_ranges(0.0..=width, 0.0..=400.0);
             for (case, bars, config, expected) in &rows {
-                // The longest priced gutters are 100 px for F1 and at least 82 px for F2.
-                let mut expected = if width == 80.0 && config.labels.prices {
+                // Priced gutters need 100 px for F1 and at least 82 px for F2, plus profile room.
+                let mut expected = if !priced_captions_fit && config.labels.prices {
                     vec![]
                 } else {
                     expected.clone()
