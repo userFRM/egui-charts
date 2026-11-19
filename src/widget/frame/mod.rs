@@ -3537,7 +3537,8 @@ impl Chart {
                 // Trading prices market orders at the last price, so Buy and Sell need no quote.
                 #[cfg(feature = "ui")]
                 let last_price = order_quantity.and_then(|_| {
-                    crate::model::last_with_value(self.bars(SeriesId::MAIN)).map(|bar| bar.close)
+                    crate::model::last_with_value(self.bars(super::SeriesId::MAIN))
+                        .map(|bar| bar.close)
                 });
                 #[cfg(not(feature = "ui"))]
                 let last_price = None;
