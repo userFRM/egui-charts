@@ -95,7 +95,9 @@ pub use options_volume::{
     OptionsVolume, OptionsVolumeQuery, OptionsVolumeReader, OptionsVolumeSink,
 };
 #[cfg(feature = "studies")]
-pub(crate) use volume_profile::{ExposureProfile, StrikeExposure, grid_row};
+pub(crate) use volume_profile::{
+    ExposureProfile, StrikeExposure, grid_row, price_span, whole_tick_rows,
+};
 #[cfg_attr(
     not(any(test, feature = "widget")),
     expect(dead_code, reason = "only the chart widget consumes a feed")

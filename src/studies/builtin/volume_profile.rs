@@ -4,6 +4,7 @@
 //! high, which estimates where the volume traded. With a finer source interval the study asks
 //! the host for that history, through [`Indicator::data_requests`], and distributes each finer
 //! bar instead; a chart bar without finer bars keeps the estimate, so no volume is lost.
+//! With an instrument tick size and Whole ticks per row, Row count picks whole tick rows too.
 //! While the source interval follows the chart, the study reads the interval the chart
 //! instrument suggests for the length of its profiles,
 //! [`Instrument::profile_resolutions`](crate::model::Instrument::profile_resolutions).
@@ -12,8 +13,8 @@
 //! they narrow the estimate without making it exact.
 //! Where the chart holds the executions of a profile's bars, through
 //! [`Indicator::order_flow_inputs`], the profile sums them instead, in rows of whole ticks: the
-//! Height input, or Height in ticks, rounded to whole ticks, or the traded ticks over Row count,
-//! rounded up and widened where rows counted from multiples of that height would exceed Row count.
+//! Height input, or Height in ticks, rounded to whole ticks, or, with Whole ticks per row, the
+//! whole ticks per row that cover the traded ticks in the number of rows closest to Row count.
 //! A profile whose executions start after its first bar sums those held and reports itself
 //! partial; one without them, or whose bars do not each hold their own executions, keeps the bars.
 //!
@@ -73,6 +74,8 @@ struct ProfileStudy {
     row_size: f64,
     /// Instrument ticks per row, in place of `row_size`; 0 for `row_size`.
     row_ticks: usize,
+    /// Whole ticks per row closest to Row count while no height is set.
+    whole_ticks: bool,
     /// Share of a profile's span that its widest row takes; a visible profile fills its strip.
     width: f64,
     extend: [bool; 3],
@@ -131,6 +134,8 @@ struct ProfileStudy {
 #[derive(Clone, Debug)]
 struct CachedProfile {
     plot: StudyProfile,
+    /// Requested layout; `plot.config` holds the effective whole-tick height.
+    layout: VolumeProfileConfig,
     opening: Option<VolumeProfile>,
     coverage: f64,
     dirty: bool,
@@ -284,6 +289,7 @@ impl ProfileStudy {
             value_area: 0.7,
             row_size: 0.0,
             row_ticks: 0,
+            whole_ticks: true,
             width: 0.3,
             extend: [false; 3],
             display: ProfileDisplay::UpDown,
@@ -357,6 +363,12 @@ impl ProfileStudy {
                 "Height in ticks (0 = Height)",
                 InputValue::Length(self.row_ticks),
                 InputKind::Length(0, 100_000),
+            ),
+            StudyInput::new(
+                "whole_tick_rows",
+                "Whole ticks per row",
+                InputValue::Toggle(self.whole_ticks),
+                InputKind::Toggle,
             ),
             StudyInput::new(
                 "display",
@@ -548,6 +560,7 @@ impl ProfileStudy {
             ("value_area", InputValue::Number(v)) => self.value_area = v / 100.0,
             ("row_size", InputValue::Number(v)) => self.row_size = v,
             ("row_ticks", InputValue::Length(v)) => self.row_ticks = v,
+            ("whole_tick_rows", InputValue::Toggle(v)) => self.whole_ticks = v,
             ("display", InputValue::Choice(v)) => self.display = DISPLAYS[v],
             ("source_interval", InputValue::Timeframe(v)) => self.source = v,
             ("feed_source", InputValue::Toggle(v)) => self.feed_source = v,
@@ -802,10 +815,22 @@ impl ProfileStudy {
         range: &Range<usize>,
         config: &VolumeProfileConfig,
         flow: &OrderFlowFootprints,
-    ) -> Option<VolumeProfile> {
+    ) -> Option<(VolumeProfile, VolumeProfileConfig)> {
         let tick = flow.tick_size?;
         let (bar, complete) = self.executions_of(range, flow)?;
-        VolumeProfile::of_executions(&bar, config, tick, tick, complete)
+        let mut config = *config;
+        if self.whole_ticks && config.row_size().is_none() {
+            let (&first, &last) = (bar.levels.keys().next()?, bar.levels.keys().next_back()?);
+            if let Some(ticks) =
+                crate::data::whole_tick_rows(first as f64, last as f64 + 1.0, config.rows())
+            {
+                config = config
+                    .with_row_size(Some(ticks as f64 * tick))
+                    .unwrap_or(config);
+            }
+        }
+        VolumeProfile::of_executions(&bar, &config, tick, tick, complete)
+            .map(|profile| (profile, config))
     }
 
     /// The choice of the Sessions input and the calendar it divides intraday bars by: `None` for
@@ -1116,6 +1141,23 @@ impl ProfileStudy {
         Some(config)
     }
 
+    /// Apply whole instrument ticks to Row count when neither height nor adaptation sets it.
+    fn range_config(&self, bars: &[Bar], config: VolumeProfileConfig) -> VolumeProfileConfig {
+        if self.whole_ticks
+            && !self.adaptive
+            && config.row_size().is_none()
+            && let Some(tick) = self.tick_size
+            && let Some((low, high)) = crate::data::price_span(bars)
+            && let Some(ticks) =
+                crate::data::whole_tick_rows(low / tick, high / tick, config.rows())
+        {
+            return config
+                .with_row_size(Some(ticks as f64 * tick))
+                .unwrap_or(config);
+        }
+        config
+    }
+
     /// The profiles of `ranges` under `config`, from the cache where it holds them.
     fn profiles_of(
         &self,
@@ -1133,11 +1175,12 @@ impl ProfileStudy {
         // Copied once, from the bar before the first profile built here on.
         let mut held: Option<Option<OrderFlowFootprints>> = None;
         for range in ranges {
+            let effective = self.range_config(&self.data[range.clone()], config);
             if let Some(plot) = cache.iter().find(|cached| {
-                cached.plot.bars == range && cached.plot.config == config && !cached.dirty
+                cached.plot.bars == range && cached.layout == config && !cached.dirty
             }) {
                 profiles.push(plot.plot.clone());
-            } else if let Some(profile) = held
+            } else if let Some((profile, effective)) = held
                 .get_or_insert_with(|| self.held_executions(range.start))
                 .as_ref()
                 .and_then(|flow| self.executed_profile(&range, &config, flow))
@@ -1145,7 +1188,7 @@ impl ProfileStudy {
                 let plot = StudyProfile {
                     bars: range.clone(),
                     profile: Arc::new(profile),
-                    config,
+                    config: effective,
                     color: self.colors[0].to_srgba_unmultiplied(),
                     right_aligned: self.kind == Kind::Visible,
                     width,
@@ -1154,6 +1197,7 @@ impl ProfileStudy {
                 cache.retain(|cached| cached.plot.bars != range);
                 cache.push(CachedProfile {
                     plot,
+                    layout: config,
                     opening: None,
                     coverage: 0.0,
                     dirty: false,
@@ -1167,8 +1211,8 @@ impl ProfileStudy {
                     &self.data[range.clone()],
                     end,
                     &self.fine,
-                    config.rows(),
-                    config.row_size(),
+                    effective.rows(),
+                    effective.row_size(),
                 );
                 let coverage = covered as f64 / range.len() as f64;
                 let Some(profile) = profile else {
@@ -1177,7 +1221,7 @@ impl ProfileStudy {
                 let plot = StudyProfile {
                     bars: range.clone(),
                     profile: Arc::new(profile),
-                    config,
+                    config: effective,
                     color: self.colors[0].to_srgba_unmultiplied(),
                     right_aligned: self.kind == Kind::Visible,
                     width,
@@ -1186,6 +1230,7 @@ impl ProfileStudy {
                 cache.retain(|cached| cached.plot.bars != range);
                 cache.push(CachedProfile {
                     plot,
+                    layout: config,
                     opening: None,
                     coverage,
                     dirty: false,
@@ -1196,7 +1241,8 @@ impl ProfileStudy {
                     .filter(|cached| {
                         cached.plot.bars.start == range.start
                             && cached.plot.bars.end <= range.end
-                            && cached.plot.config == config
+                            && cached.layout == config
+                            && cached.plot.config == effective
                     })
                     .max_by_key(|cached| cached.plot.bars.end)
                     .and_then(|cached| {
@@ -1207,19 +1253,19 @@ impl ProfileStudy {
                         Some(opening)
                     })
                     .or_else(|| {
-                        VolumeProfile::from_bars(&self.data[range.start..range.end - 1], config)
+                        VolumeProfile::from_bars(&self.data[range.start..range.end - 1], effective)
                     });
                 let profile = opening
                     .as_ref()
                     .and_then(|p| p.with_bar(&self.data[range.end - 1]))
-                    .or_else(|| VolumeProfile::from_bars(&self.data[range.clone()], config));
+                    .or_else(|| VolumeProfile::from_bars(&self.data[range.clone()], effective));
                 let Some(profile) = profile else {
                     continue;
                 };
                 let plot = StudyProfile {
                     bars: range.clone(),
                     profile: Arc::new(profile),
-                    config,
+                    config: effective,
                     color: self.colors[0].to_srgba_unmultiplied(),
                     right_aligned: self.kind == Kind::Visible,
                     width,
@@ -1228,6 +1274,7 @@ impl ProfileStudy {
                 cache.retain(|cached| cached.plot.bars != range);
                 cache.push(CachedProfile {
                     plot,
+                    layout: config,
                     opening,
                     coverage: 0.0,
                     dirty: false,
@@ -2019,7 +2066,43 @@ mod tests {
             Range<usize>,
             Expected,
         );
+        let wide = vec![
+            trade("2026-03-07T00:00:10Z", 100.0, 1.0, Some(Buy)),
+            trade("2026-03-07T00:00:20Z", 199.0, 1.0, Some(Buy)),
+        ];
+        let ends = |n: usize| {
+            std::iter::once(1.0)
+                .chain(std::iter::repeat_n(0.0, n - 2))
+                .chain([1.0])
+                .collect::<Vec<_>>()
+        };
         let rows: Vec<Case> = vec![
+            (
+                "closest ticks at 30 rows",
+                fixed(30, &bars[2], &bars[3]),
+                bars.clone(),
+                wide.clone(),
+                minute.clone(),
+                0..4,
+                vec![(
+                    2..4,
+                    complete,
+                    Some((3, 98.5, ends(34), ends(34), vec![0.0; 34])),
+                )],
+            ),
+            (
+                "closest ticks at 25 rows",
+                fixed(25, &bars[2], &bars[3]),
+                bars.clone(),
+                wide,
+                minute.clone(),
+                0..4,
+                vec![(
+                    2..4,
+                    complete,
+                    Some((4, 99.5, ends(25), ends(25), vec![0.0; 25])),
+                )],
+            ),
             // Levels 100..=104 take 5 rows of 24.
             (
                 "single ticks within the row count",
@@ -2044,9 +2127,9 @@ mod tests {
                     Some((3, 98.5, vec![4.0, 3.0], vec![3.0, 0.0], vec![1.0, 0.0])),
                 )],
             ),
-            // Levels 101..=104: 2 ticks give rows 50, 51, 52, too many; 4 ticks give 25 and 26.
+            // Levels 101..=104 take 2 ticks per row, spanning rows 50, 51 and 52.
             (
-                "levels across a multiple take wider rows",
+                "levels across a multiple keep the closest whole ticks",
                 fixed(2, &bars[3], &bars[3]),
                 bars.clone(),
                 trades.clone(),
@@ -2055,7 +2138,13 @@ mod tests {
                 vec![(
                     3..4,
                     complete,
-                    Some((4, 99.5, vec![1.0, 3.0], vec![1.0, 0.0], vec![0.0, 0.0])),
+                    Some((
+                        2,
+                        99.5,
+                        vec![1.0, 0.0, 3.0],
+                        vec![1.0, 0.0, 0.0],
+                        vec![0.0, 0.0, 0.0],
+                    )),
                 )],
             ),
             // round(1.6) = 2 ticks: rows 50, 51, 52.
@@ -3086,20 +3175,23 @@ mod tests {
     fn session_rows_follow_whole_ticks_of_the_instrument() {
         let at = "2026-03-05T15:00:00Z".parse().unwrap();
         let session = || Box::new(VolProfileSession::new(24)) as Box<dyn Indicator>;
-        for (mut study, tick, row_ticks, height, expected) in [
-            (session(), Some(0.25), 4, 0.0, Some(1.0)),
-            (session(), Some(0.01), 4, 0.0, Some(0.04)),
-            (session(), Some(1e-8), 4, 0.0, Some(4e-8)),
-            (session(), Some(1e6), 4, 0.0, Some(4e6)),
-            (session(), Some(0.25), 0, 0.5, Some(0.5)),
-            (session(), None, 4, 0.5, Some(0.5)),
-            (session(), None, 4, 0.0, None),
+        for (mut study, tick, row_ticks, height, expected, rows, whole, count) in [
+            (session(), Some(0.25), 4, 0.0, Some(1.0), 24, true, None),
+            (session(), Some(0.01), 4, 0.0, Some(0.04), 24, true, None),
+            (session(), Some(1e-8), 4, 0.0, Some(4e-8), 24, true, None),
+            (session(), Some(1e6), 4, 0.0, Some(4e6), 24, true, None),
+            (session(), Some(0.25), 0, 0.5, Some(0.5), 24, true, None),
+            (session(), None, 4, 0.5, Some(0.5), 24, true, None),
+            (session(), None, 4, 0.0, None, 24, true, None),
             (
                 Box::new(VolProfilePeriodic::new(24)) as Box<dyn Indicator>,
                 Some(0.25),
                 4,
                 0.0,
                 Some(1.0),
+                24,
+                true,
+                None,
             ),
             (
                 Box::new(VolProfileVisible::new(24)) as Box<dyn Indicator>,
@@ -3107,6 +3199,9 @@ mod tests {
                 4,
                 0.0,
                 Some(1.0),
+                24,
+                true,
+                None,
             ),
             (
                 Box::new(VolProfileFixed::new(24)) as Box<dyn Indicator>,
@@ -3114,6 +3209,9 @@ mod tests {
                 4,
                 0.0,
                 Some(1.0),
+                24,
+                true,
+                None,
             ),
             (
                 Box::new(VolProfileAnchored::new(24)) as Box<dyn Indicator>,
@@ -3121,6 +3219,9 @@ mod tests {
                 4,
                 0.0,
                 Some(1.0),
+                24,
+                true,
+                None,
             ),
             (
                 Box::new(VolProfileAutoAnchored::new(24)) as Box<dyn Indicator>,
@@ -3128,8 +3229,90 @@ mod tests {
                 4,
                 0.0,
                 Some(1.0),
+                24,
+                true,
+                None,
             ),
+            (
+                Box::new(VolProfileVisible::new(30)) as Box<dyn Indicator>,
+                Some(0.01),
+                0,
+                0.0,
+                Some(3.0 * 0.01),
+                30,
+                true,
+                Some(34),
+            ),
+            (
+                Box::new(VolProfileFixed::new(30)) as Box<dyn Indicator>,
+                Some(0.01),
+                0,
+                0.0,
+                Some(3.0 * 0.01),
+                30,
+                true,
+                Some(34),
+            ),
+            (
+                Box::new(VolProfileSession::new(30)) as Box<dyn Indicator>,
+                Some(0.01),
+                0,
+                0.0,
+                Some(3.0 * 0.01),
+                30,
+                true,
+                Some(34),
+            ),
+            (
+                Box::new(VolProfilePeriodic::new(30)) as Box<dyn Indicator>,
+                Some(0.01),
+                0,
+                0.0,
+                Some(3.0 * 0.01),
+                30,
+                true,
+                Some(34),
+            ),
+            (
+                Box::new(VolProfileAnchored::new(30)) as Box<dyn Indicator>,
+                Some(0.01),
+                0,
+                0.0,
+                Some(3.0 * 0.01),
+                30,
+                true,
+                Some(34),
+            ),
+            (
+                Box::new(VolProfileAutoAnchored::new(30)) as Box<dyn Indicator>,
+                Some(0.01),
+                0,
+                0.0,
+                Some(3.0 * 0.01),
+                30,
+                true,
+                Some(34),
+            ),
+            // A high on the row edge opens an empty top row, as an explicit height does.
+            (
+                session(),
+                Some(0.01),
+                0,
+                0.0,
+                Some(0.04),
+                25,
+                true,
+                Some(26),
+            ),
+            (session(), Some(0.01), 0, 0.0, None, 30, false, Some(30)),
+            (session(), None, 0, 0.0, None, 30, true, Some(30)),
         ] {
+            study
+                .set_input("row_count", InputValue::Length(rows))
+                .unwrap();
+            study
+                .set_input("whole_tick_rows", InputValue::Toggle(whole))
+                .unwrap();
             let mut instrument = Instrument::new("X");
             instrument.tick_size = tick;
             study.set_instrument(Some(&instrument));
@@ -3139,10 +3322,19 @@ mod tests {
             study
                 .set_input("row_size", InputValue::Number(height))
                 .unwrap();
-            let (low, high) = (1000.0 * tick.unwrap_or(0.01), 1010.0 * tick.unwrap_or(0.01));
+            let (low, high) = (1000.0 * tick.unwrap_or(0.01), 1100.0 * tick.unwrap_or(0.01));
             study.calculate(&[Bar::new(at, low, high, low, high, 1.0)]);
+            let profiles = study.volume_profiles(0..1);
+            if let Some(count) = count {
+                assert_eq!(
+                    profiles[0].profile.volume().len(),
+                    count,
+                    "{}",
+                    study.name()
+                );
+            }
             assert_eq!(
-                study.volume_profiles(0..1)[0].config.row_size(),
+                profiles[0].config.row_size(),
                 expected,
                 "{} tick {tick:?} ticks {row_ticks} height {height}",
                 study.name()

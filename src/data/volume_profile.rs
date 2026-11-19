@@ -302,6 +302,14 @@ fn valid_bar(bar: &Bar) -> bool {
         && bar.volume >= 0.0
 }
 
+/// Lowest low and highest high of the bars a profile distributes.
+pub(crate) fn price_span(bars: &[Bar]) -> Option<(f64, f64)> {
+    bars.iter()
+        .filter(|bar| valid_bar(bar))
+        .map(|bar| (bar.low, bar.high))
+        .reduce(|(low, high), (lo, hi)| (low.min(lo), high.max(hi)))
+}
+
 impl VolumeProfile {
     /// Group host options turnover into rows centered on multiples of `row_size`.
     /// A row at strike K includes [K - row_size/2, K + row_size/2); a boundary
@@ -543,16 +551,7 @@ impl VolumeProfile {
     /// `rows` equal price rows (a bar without range puts it in the row of its
     /// price). A flat span uses one narrow row; `None` for an unrepresentable grid.
     pub(crate) fn of(bars: &[Bar], rows: usize, row_size: Option<f64>) -> Option<Self> {
-        let low = bars
-            .iter()
-            .filter(|b| valid_bar(b))
-            .map(|b| b.low)
-            .fold(f64::INFINITY, f64::min);
-        let high = bars
-            .iter()
-            .filter(|b| valid_bar(b))
-            .map(|b| b.high)
-            .fold(f64::NEG_INFINITY, f64::max);
+        let (low, high) = price_span(bars)?;
         if rows == 0 || rows > 10_000 {
             return None;
         }
@@ -725,6 +724,31 @@ fn grid_floor(value: f64) -> f64 {
 fn grid_edge(value: f64, scale: f64) -> Option<f64> {
     let nearest = value.round();
     ((value - nearest).abs() <= 4.0 * f64::EPSILON * scale).then_some(nearest)
+}
+
+/// Whole ticks per row closest to the requested row count on a zero-aligned grid.
+/// Compares the span per row rounded down and up, taking the larger tick count on a tie.
+/// Rejects nonfinite, reversed or unrepresentable spans and zero rows.
+#[cfg(feature = "studies")]
+pub(crate) fn whole_tick_rows(low: f64, high: f64, rows: usize) -> Option<u64> {
+    let span = high - low;
+    if !low.is_finite() || !high.is_finite() || !span.is_finite() || span < 0.0 || rows == 0 {
+        return None;
+    }
+    let raw = span / rows as f64;
+    [raw.floor().max(1.0), raw.ceil().max(1.0)]
+        .into_iter()
+        .filter_map(|ticks| {
+            let (lo, hi) = (low / ticks, high / ticks);
+            if ticks >= 2_f64.powi(53) || lo.abs() >= 2_f64.powi(52) || hi.abs() >= 2_f64.powi(52) {
+                return None;
+            }
+            let top = grid_edge(hi, hi.abs()).unwrap_or_else(|| hi.ceil());
+            let count = (top - grid_floor(lo)).max(1.0);
+            Some((ticks as u64, (count - rows as f64).abs()))
+        })
+        .min_by(|(a, error_a), (b, error_b)| error_a.total_cmp(error_b).then_with(|| b.cmp(a)))
+        .map(|(ticks, _)| ticks)
 }
 
 /// The row of a grid from `low` in rows of `height` that `price` lies in, counted from its first

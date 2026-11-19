@@ -417,6 +417,7 @@ impl StudyTemplate {
             && value("smooth1").is_some()
             && value("smooth1") == value("smooth2");
         let mut template = self.clone();
+        let mut changed = true;
         match study {
             // Older Knoxville saves drew only momentum and its confirmation marks.
             "Knoxville Divergence" if declares("price_lines") && !has("price_lines") => {
@@ -797,9 +798,25 @@ impl StudyTemplate {
                     plot.visible = false;
                 }
             }
-            _ => return None,
+            _ => changed = false,
         }
-        Some(template)
+        // Profile inputs added since a save, set to draw what it drew.
+        if matches!(
+            study,
+            "Vol Profile VR"
+                | "Vol Profile FR"
+                | "Vol Profile Session"
+                | "Vol Profile Periodic"
+                | "Vol Profile Anchored"
+                | "Vol Profile Auto Anchored"
+        ) && !has("whole_tick_rows")
+        {
+            template
+                .inputs
+                .push(("whole_tick_rows".to_owned(), InputValue::Toggle(false)));
+            changed = true;
+        }
+        changed.then_some(template)
     }
 }
 
@@ -1410,6 +1427,7 @@ mod tests {
         for (id, kept) in &saved.inputs {
             assert_eq!(value(id), Some(kept), "{id}");
         }
+        assert_eq!(value("whole_tick_rows"), Some(&Toggle(false)));
         assert_eq!(value("row_ticks"), Some(&Length(0)));
         assert_eq!(value("width"), Some(&Number(30.0)));
     }
