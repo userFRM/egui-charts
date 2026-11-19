@@ -213,7 +213,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Validated one-click orders, chart context-menu entry and broker/account selection components.
 - [x] Order and position lines show levels and profit/loss; confirmed actions modify/cancel orders, close/reverse positions and edit brackets.
 - [x] A depth ladder supports order entry, drag modification and right-click cancellation through the broker interface.
-- [x] Account summary, including the reported equity left above positions' margin with a tooltip, and positions, orders, history, executions, balance and journal tables, with CSV export.
+- [x] Account summary, including the reported equity left above positions' margin with a tooltip, and positions, orders, order history, closed positions, executions, balance and journal tables, with column selection, CSV export and older history pages. The paper account records closed round trips, including partial closes and reversals.
 - [x] Execution markers, rejection/fill notifications and execution sound intents.
 - [x] `StrategyReportPanel` accepts `StrategyReport` data and shows trade lists, equity/drawdown plots, performance metrics, supplied properties and chart navigation; trades export as CSV.
 - [x] `Backtest::update` processes new closed bars incrementally, retains observed forming-bar fills when tick recalculation is enabled, and rebuilds corrected history.

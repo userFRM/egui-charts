@@ -9,8 +9,9 @@ use super::{AccountEvent, Broker, Events};
 use crate::data::{FeedError, Reply};
 use crate::model::rounding_tolerance;
 use crate::model::{
-    Account, BalanceChange, Capabilities, Execution, JournalEntry, Order, OrderId, OrderRequest,
-    OrderSide, OrderStatus, OrderType, Position, PositionBracket, TimeInForce, TradingRules,
+    Account, BalanceChange, Capabilities, ClosedPosition, Execution, JournalEntry, Order, OrderId,
+    OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket, TimeInForce,
+    TradingRules,
 };
 
 /// A paper account: a [`Broker`] that fills orders against the prices the host feeds it, so the
@@ -29,14 +30,17 @@ use crate::model::{
 /// and is cancelled once nothing is left; when the stop loss fills, the take profits are cancelled.
 /// Each symbol has one net position with its average
 /// price: a fill against it books the realised profit or loss of the closed quantity, and a fill
-/// beyond it opens the other side at the fill price. A position holds its market value divided by
+/// beyond it opens the other side at the fill price. A fill that flattens or reverses a symbol
+/// records its completed round trip, including partial closes, with profit or loss before
+/// commissions. A position holds its market value divided by
 /// the leverage as margin, and a working order the same for its quantity at its price. Each fill
 /// pays the commission rate times its value. Placement and modification reserve buying power
 /// across all symbols, including working orders and their commissions. Market orders that
 /// reduce exposure remain possible when funds are insufficient. Position exits only reduce the
 /// remaining position.
 /// Every change is pushed as an [`AccountEvent`], with
-/// the most recent 1,000 finished orders, executions, balance changes and journal entries.
+/// the most recent 1,000 finished orders, executions, closed positions, balance changes and
+/// journal entries.
 /// The history bound keeps a reconnect snapshot below the event stream's burst limit for
 /// ordinary interactive accounts.
 ///
@@ -80,9 +84,24 @@ struct State {
     /// profit's stop loss, which it shrinks, and a stop loss's take profits, which it cancels.
     exits: HashMap<OrderId, Vec<OrderId>>,
     positions: HashMap<String, Position>,
+    trips: HashMap<String, Trip>,
+    closed_positions: Vec<ClosedPosition>,
     last: HashMap<String, f64>,
     balance_history: Vec<BalanceChange>,
     journal: Vec<JournalEntry>,
+}
+
+/// Accumulates a symbol's entries and partial closes until it becomes flat or reverses.
+struct Trip {
+    side: OrderSide,
+    opened: DateTime<Utc>,
+    /// Total entry quantity and the sum of its fill values.
+    entered: f64,
+    entry_value: f64,
+    /// Total closed quantity and the sum of its fill values.
+    exited: f64,
+    exit_value: f64,
+    realized: f64,
 }
 
 /// Describes an order in the journal, such as "buy 2 AAPL limit 185".
@@ -366,6 +385,66 @@ impl State {
         self.finished.push(order);
     }
 
+    /// Follows an opening, adding or reducing fill through its round trip. The rounded remaining
+    /// position decides when to finish the trip and whether the fill also opens the next one.
+    fn track(
+        &mut self,
+        request: &OrderRequest,
+        held: f64,
+        price: f64,
+        realized: f64,
+        remaining: f64,
+    ) -> Option<ClosedPosition> {
+        let now = self.now();
+        let open = |quantity: f64| Trip {
+            side: request.side,
+            opened: now,
+            entered: quantity,
+            entry_value: quantity * price,
+            exited: 0.0,
+            exit_value: 0.0,
+            realized: 0.0,
+        };
+        if held == 0.0 {
+            self.trips
+                .insert(request.symbol.clone(), open(request.quantity));
+            return None;
+        }
+        let symbol = request.symbol.as_str();
+        if request.side.reduces(held) {
+            let mut trip = self.trips.remove(symbol)?;
+            let closed = request.quantity.min(held.abs());
+            trip.exited += closed;
+            trip.exit_value += closed * price;
+            trip.realized += realized;
+            let reversed = remaining != 0.0 && (remaining > 0.0) != (held > 0.0);
+            if remaining != 0.0 && !reversed {
+                self.trips.insert(symbol.to_owned(), trip);
+                return None;
+            }
+            if reversed {
+                self.trips.insert(symbol.to_owned(), open(remaining.abs()));
+            }
+            let mut closed = ClosedPosition::new(
+                symbol,
+                trip.side,
+                trip.exited,
+                trip.entry_value / trip.entered,
+                trip.exit_value / trip.exited,
+                trip.realized,
+                now,
+            );
+            closed.opened = Some(trip.opened);
+            Some(closed)
+        } else {
+            if let Some(trip) = self.trips.get_mut(symbol) {
+                trip.entered += request.quantity;
+                trip.entry_value += request.quantity * price;
+            }
+            None
+        }
+    }
+
     /// Fills `order` in full at `price`: updates the net position, books the realised profit
     /// and the commission, and turns brackets into exit orders.
     fn fill(&mut self, terms: &PaperAccount, mut order: Order, price: f64) {
@@ -397,6 +476,7 @@ impl State {
             } else {
                 remaining
             };
+        let closed = self.track(&request, held, price, realized, position.quantity);
         self.value(terms, &mut position);
         if position.quantity != 0.0 {
             self.positions
@@ -420,6 +500,13 @@ impl State {
         }
         self.executions.push(execution);
         self.push(AccountEvent::Position(position.clone()));
+        if let Some(closed) = closed {
+            self.push(AccountEvent::ClosedPosition(closed.clone()));
+            if self.closed_positions.len() == 1_000 {
+                self.closed_positions.remove(0);
+            }
+            self.closed_positions.push(closed);
+        }
         self.log(format!(
             "Order {id} filled: {} at {price}",
             describe(&request)
@@ -666,6 +753,9 @@ impl Broker for PaperAccount {
         for execution in &state.executions {
             state.push(AccountEvent::Execution(execution.clone()));
         }
+        for closed in &state.closed_positions {
+            state.push(AccountEvent::ClosedPosition(closed.clone()));
+        }
         for change in &state.balance_history {
             state.push(AccountEvent::Balance(change.clone()));
         }
@@ -825,6 +915,72 @@ mod tests {
             .1
             .downcast::<Result<OrderId, FeedError>>()
             .unwrap()
+    }
+
+    #[test]
+    fn closed_positions_span_a_round_trip_from_its_opening_fill_to_the_close_or_reversal() {
+        let paper = PaperAccount::new("USD", 100_000.0);
+        let at = |minute: i64| DateTime::from_timestamp(1_704_067_200 + 60 * minute, 0).unwrap();
+        let inbox = Arc::new(Inbox::default());
+        let (_listener, events) = Listener::new(&inbox, 2);
+        paper.connect(events);
+        use OrderSide::{Buy, Sell};
+        for (minute, price, side, quantity) in [
+            (0, 100.0, Buy, 2.0),
+            (1, 110.0, Buy, 2.0),
+            (2, 120.0, Sell, 1.0),
+            (3, 90.0, Sell, 5.0),
+            (4, 80.0, Buy, 2.0),
+            (5, 100.0, Buy, 0.1),
+            (6, 100.0, Buy, 0.2),
+            (7, 100.0, Sell, 0.3),
+        ] {
+            paper.set_replay_time(Some(at(minute)));
+            paper.set_price("SYM", price);
+            place(
+                &paper,
+                OrderRequest::new("SYM", side, quantity, OrderType::Market),
+            )
+            .unwrap();
+        }
+        let live = inbox
+            .drain()
+            .answers
+            .into_iter()
+            .map(|(_, event)| *event.downcast::<AccountEvent>().unwrap())
+            .collect();
+        for events in [live, snapshot(&paper)] {
+            let closed: Vec<_> = events
+                .into_iter()
+                .filter_map(|event| match event {
+                    AccountEvent::ClosedPosition(closed) => Some(closed),
+                    _ => None,
+                })
+                .collect();
+            // Long: entries cost 420, exits return 120 + 270 = 390; short: 180 - 160.
+            let expected = [
+                (Buy, 4.0, 105.0, 97.5, -30.0, 0, 3),
+                (Sell, 2.0, 90.0, 80.0, 20.0, 3, 4),
+                (Buy, 0.3, 100.0, 100.0, 0.0, 5, 7),
+            ];
+            assert_eq!(closed.len(), expected.len());
+            for (closed, (side, quantity, entry, exit, pnl, opened, end)) in
+                closed.iter().zip(expected)
+            {
+                assert_eq!(closed.symbol, "SYM");
+                assert_eq!(closed.side, side);
+                assert_eq!(closed.opened, Some(at(opened)));
+                assert_eq!(closed.closed, at(end));
+                for (actual, expected) in [
+                    (closed.quantity, quantity),
+                    (closed.average_price, entry),
+                    (closed.exit_price, exit),
+                    (closed.realized_pnl, pnl),
+                ] {
+                    assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -1159,10 +1315,19 @@ mod tests {
     fn reconnect_keeps_recent_history_within_the_stream_limit() {
         let paper = PaperAccount::new("USD", 1_000_000.0).commission(0.001);
         paper.set_price("SYM", 100.0);
-        for _ in 0..1_001 {
+        for i in 0..2_002 {
             place(
                 &paper,
-                OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Market),
+                OrderRequest::new(
+                    "SYM",
+                    if i % 2 == 0 {
+                        OrderSide::Buy
+                    } else {
+                        OrderSide::Sell
+                    },
+                    1.0,
+                    OrderType::Market,
+                ),
             )
             .unwrap();
         }
@@ -1177,6 +1342,10 @@ mod tests {
             .map(|(_, e)| *e.downcast::<AccountEvent>().unwrap())
             .collect();
         for count in [
+            events
+                .iter()
+                .filter(|e| matches!(e, AccountEvent::ClosedPosition(_)))
+                .count(),
             events
                 .iter()
                 .filter(|e| matches!(e, AccountEvent::Order(_)))

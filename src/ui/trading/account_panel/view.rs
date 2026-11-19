@@ -520,6 +520,35 @@ impl Trading {
                     close: None,
                 })
                 .collect(),
+            Tab::Closed => self
+                .account_panel
+                .closed
+                .iter()
+                .rev()
+                .map(|closed| {
+                    let s = closed.symbol.as_str();
+                    let label = if closed.side == OrderSide::Buy {
+                        "Long"
+                    } else {
+                        "Short"
+                    };
+                    Row {
+                        cells: vec![
+                            symbol(s),
+                            side(closed.side, label),
+                            plain(quantity(s, closed.quantity)),
+                            plain(price(s, closed.average_price)),
+                            plain(price(s, closed.exit_price)),
+                            colored(money(Some(closed.realized_pnl), true)),
+                            plain(time(closed.opened)),
+                            plain(time(Some(closed.closed))),
+                        ],
+                        symbol: Some(closed.symbol.clone()),
+                        edit: None,
+                        close: None,
+                    }
+                })
+                .collect(),
             Tab::Executions => self
                 .account_panel
                 .fills
@@ -703,6 +732,7 @@ impl Trading {
                         Tab::Positions => "No open positions",
                         Tab::Orders => "No working orders",
                         Tab::History => "No finished orders",
+                        Tab::Closed => "No closed positions",
                         Tab::Balance => "No balance changes",
                         Tab::Journal => "No journal entries",
                         Tab::Executions => "No executions",
