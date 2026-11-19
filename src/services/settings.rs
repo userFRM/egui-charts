@@ -37,6 +37,10 @@ pub struct UserSettings {
     /// does not know is left out when reading.
     #[serde(deserialize_with = "known_items")]
     pub cursor_favorites: Vec<CursorType>,
+    /// Registered favourites by id, after built-in drawing favourites. Unregistered ids stay
+    /// saved so the tool returns when registered again; non-string items are left out on read.
+    #[serde(deserialize_with = "known_items")]
+    pub custom_drawing_favorites: Vec<String>,
     /// Whether the user hid the favourites strip with its close or toggle button.
     pub drawing_favorites_hidden: bool,
     /// The top-left corner of the favourites strip, in logical points, where the user left it;
@@ -392,6 +396,70 @@ mod tests {
         assert_eq!(
             serde_json::to_value(older).unwrap()["cursor_favorites"],
             serde_json::json!([])
+        );
+    }
+
+    /// Registered favourites round trip, older documents keep built-in favourites and a missing
+    /// registration stays saved while the floating strip omits its button.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn registered_tool_favourites_round_trip() {
+        use crate::ui::drawing_toolbar::DrawingToolbar;
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let mut settings = UserSettings::from_json(r#"{"version":1,"drawing_favorites":["TrendLine"],"custom_drawing_favorites":["midpoint","gone"]}"#).unwrap();
+        let written: serde_json::Value = serde_json::from_str(&settings.to_json()).unwrap();
+        assert_eq!(
+            written["custom_drawing_favorites"],
+            serde_json::json!(["midpoint", "gone"])
+        );
+        assert_eq!(
+            UserSettings::from_json(&settings.to_json()).unwrap(),
+            settings
+        );
+        let older =
+            UserSettings::from_json(r#"{"version":1,"drawing_favorites":["TrendLine"]}"#).unwrap();
+        assert_eq!(older.drawing_favorites, [DrawingToolType::TrendLine]);
+        assert!(older.custom_drawing_favorites.is_empty());
+        let mixed =
+            UserSettings::from_json(r#"{"version":1,"custom_drawing_favorites":["midpoint",7]}"#)
+                .unwrap();
+        assert_eq!(mixed.custom_drawing_favorites, ["midpoint"]);
+        let mut toolbar = DrawingToolbar::new();
+        toolbar
+            .registry
+            .register("midpoint", crate::drawings::registry::tests::midpoint())
+            .unwrap();
+        toolbar.state.favorites = settings.drawing_favorites.clone();
+        toolbar.state.custom_favorites = settings.custom_drawing_favorites.clone();
+        let mut harness = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, toolbar: &mut DrawingToolbar| {
+                    toolbar.show_floating_with_action(ui, egui::pos2(20., 20.));
+                },
+                toolbar,
+            );
+        harness.run();
+        assert!(
+            harness
+                .query_by_role_and_label(Role::Button, "Midpoint")
+                .is_some()
+        );
+        assert!(
+            harness
+                .query_by_role_and_label(Role::Button, "Trend Line")
+                .is_some()
+        );
+        assert!(
+            harness
+                .query_by_role_and_label(Role::Button, "gone")
+                .is_none()
+        );
+        assert_eq!(
+            settings.custom_drawing_favorites.pop().as_deref(),
+            Some("gone")
         );
     }
 

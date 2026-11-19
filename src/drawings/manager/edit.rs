@@ -823,7 +823,10 @@ impl DrawingManager {
     /// Use `Chart::create_drawing` when the anchors are UTC times rather than bar indices.
     pub fn add_drawing(&mut self, mut drawing: Drawing) -> Result<usize, &'static str> {
         self.validate_drawing(&drawing)?;
-        if drawing.custom_tool.is_none() && !self.registry.availability(drawing.tool_type).enabled {
+        if !self
+            .registry
+            .creates(drawing.custom_tool.as_deref(), drawing.tool_type)
+        {
             return Err("Drawing tool is disabled");
         }
         drawing.id = self.take_id();
@@ -865,7 +868,10 @@ impl DrawingManager {
     pub(super) fn validate_created(&self, drawing: &Drawing) -> Result<(), &'static str> {
         crate::drawings::validation::validate_stored(drawing, self.mapped_bars.as_ref())?;
         self.validate_custom_tool(drawing)?;
-        if drawing.custom_tool.is_none() && !self.registry.availability(drawing.tool_type).enabled {
+        if !self
+            .registry
+            .creates(drawing.custom_tool.as_deref(), drawing.tool_type)
+        {
             return Err("Drawing tool is disabled");
         }
         Ok(())

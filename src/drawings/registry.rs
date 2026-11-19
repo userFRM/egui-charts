@@ -24,7 +24,7 @@ pub trait DrawingRenderer: Send + Sync {
     }
 }
 
-/// Whether a built-in tool appears in a picker and can create new drawings. Existing drawings
+/// Whether a tool appears in a picker and can create new drawings. Existing drawings
 /// remain visible and editable, so hiding a tool never makes a saved annotation disappear.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -87,6 +87,9 @@ impl Default for StyleControls {
 /// }
 /// let mut tool = RegisteredDrawingTool::new("Dot", 1, Arc::new(Dot));
 /// tool.style.fill = false;
+/// tool.category = Some("Lines".into());
+/// # #[cfg(feature = "icons")]
+/// # { tool.icon = Some(egui_charts::icons::Icon::new("host/dot.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>")); }
 /// let mut registry = DrawingToolRegistry::default();
 /// registry.register("dot", tool).unwrap();
 /// ```
@@ -101,10 +104,18 @@ pub struct RegisteredDrawingTool {
     pub implementation: Arc<dyn DrawingRenderer>,
     /// Built-in style rows the properties dialog offers; all by default.
     pub style: StyleControls,
+    /// Toolbar category: "Lines", "Fibonacci", "Patterns", "Projection", "Brushes/Shapes" or
+    /// "Text/Annotations". `None` or any other name keeps the tool off the toolbar.
+    pub category: Option<String>,
+    /// Toolbar and favourites picture, tinted as built-in icons are; `None` uses the polyline.
+    /// Images are cached by name, so use a unique name such as `host/<tool id>.svg`.
+    #[cfg(feature = "icons")]
+    pub icon: Option<crate::icons::Icon>,
 }
 
 impl RegisteredDrawingTool {
-    /// A tool named `name` that completes after `anchors` clicks, with all style rows enabled.
+    /// A tool named `name` that completes after `anchors` clicks, with all style rows enabled,
+    /// no toolbar category and no picture of its own.
     pub fn new(
         name: impl Into<String>,
         anchors: usize,
@@ -115,17 +126,24 @@ impl RegisteredDrawingTool {
             anchors,
             implementation,
             style: StyleControls::default(),
+            category: None,
+            #[cfg(feature = "icons")]
+            icon: None,
         }
     }
 }
 
 impl std::fmt::Debug for RegisteredDrawingTool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RegisteredDrawingTool")
+        let mut debug = f.debug_struct("RegisteredDrawingTool");
+        debug
             .field("name", &self.name)
             .field("anchors", &self.anchors)
             .field("style", &self.style)
-            .finish_non_exhaustive()
+            .field("category", &self.category);
+        #[cfg(feature = "icons")]
+        debug.field("icon", &self.icon);
+        debug.finish_non_exhaustive()
     }
 }
 
@@ -136,6 +154,7 @@ impl std::fmt::Debug for RegisteredDrawingTool {
 pub struct DrawingToolRegistry {
     custom: BTreeMap<String, RegisteredDrawingTool>,
     builtins: HashMap<DrawingToolType, ToolAvailability>,
+    custom_availability: HashMap<String, ToolAvailability>,
 }
 
 impl DrawingToolRegistry {
@@ -193,6 +212,32 @@ impl DrawingToolRegistry {
     /// Availability of a built-in tool; all tools are visible and enabled by default.
     pub fn availability(&self, tool: DrawingToolType) -> ToolAvailability {
         self.builtins.get(&tool).copied().unwrap_or_default()
+    }
+
+    /// Hides or disables a registered tool as [`Self::set_availability`] does a built-in one.
+    /// The id need not be registered yet.
+    pub fn set_custom_availability(
+        &mut self,
+        id: impl Into<String>,
+        availability: ToolAvailability,
+    ) {
+        self.custom_availability.insert(id.into(), availability);
+    }
+
+    /// Availability of a registered tool id; visible and enabled by default.
+    pub fn custom_availability(&self, id: &str) -> ToolAvailability {
+        self.custom_availability
+            .get(id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Whether a new drawing of the registered or built-in tool may be created.
+    pub(crate) fn creates(&self, custom: Option<&str>, tool: DrawingToolType) -> bool {
+        match custom {
+            Some(id) => self.custom_availability(id).enabled,
+            None => self.availability(tool).enabled,
+        }
     }
 
     /// Built-in picker entries, excluding hidden tools and including disabled entries.
@@ -348,7 +393,7 @@ pub(crate) mod tests {
         chart.drawings_mut().custom_tool_defaults = manager.custom_tool_defaults.clone();
         chart.set_symbol("A");
         chart.set_symbol("B");
-        chart.load_drawings(Vec::new());
+        assert!(chart.replace_drawings(Vec::new()).is_empty());
         assert_eq!(
             chart
                 .drawings()

@@ -2434,6 +2434,7 @@ impl DemoApp {
         self.drawing_toolbar
             .sync_from_domain_state(&DrawingToolbarDomainState {
                 sel_tool: dm.active_tool(),
+                sel_custom_tool: dm.active_custom_tool().map(str::to_owned),
                 magnet_mode: dm.options.magnet_mode,
                 snap_to_indicators: dm.options.snap_to_indicators,
                 magnet_type,
