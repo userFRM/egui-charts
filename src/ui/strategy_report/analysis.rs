@@ -128,14 +128,13 @@ fn histogram(ui: &mut Ui, data: &ReportData) {
         (plot.left(), lower, Align2::LEFT_TOP),
         (plot.right(), upper, Align2::RIGHT_TOP),
     ];
-    if lower < 0.0 && upper > 0.0 {
-        // Work in bin units so opposite extreme results cannot overflow their span.
-        let zero = -(lower / width) / bins.len() as f64;
-        labels.push((
-            plot.left() + zero as f32 * plot.width(),
-            0.0,
-            Align2::CENTER_TOP,
-        ));
+    if let Some(i) = bins
+        .iter()
+        .position(|bin| bin.lower == 0.0)
+        .filter(|&i| i > 0)
+    {
+        let zero = i as f32 / bins.len() as f32;
+        labels.push((plot.left() + zero * plot.width(), 0.0, Align2::CENTER_TOP));
     }
     for (x, value, align) in labels {
         painter.text(

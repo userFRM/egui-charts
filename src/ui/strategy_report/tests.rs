@@ -300,3 +300,52 @@ fn range_limits_summary_charts_and_trades() {
         }
     }
 }
+
+#[test]
+fn distribution_zero_edge_stays_centred_for_extreme_finite_returns() {
+    let mut report = StrategyReport::new("Extremes", "TEST", Timeframe::Min1, 1000.0);
+    for profit in [-f64::MAX, f64::MAX] {
+        let mut trade = StrategyTrade::new(OrderSide::Buy, 1.0, DateTime::UNIX_EPOCH, 1.0);
+        trade.exit = Some(StrategyExit::new(DateTime::UNIX_EPOCH, 1.0, profit));
+        report.trades.push(trade);
+    }
+    // Width 2e307 gives bins -9 through 8: zero is edge 9 of 18, at the centre.
+    // The first lower edge, -1.8e308, cannot be represented as a finite f64.
+    for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+        let (win, loss) = (theme.ui.success, theme.ui.error);
+        let mut panel = StrategyReportPanel::default();
+        panel.set_report(Some(report.clone()), &[]);
+        panel.tab = Tab::Distribution;
+        let mut h = Harness::builder()
+            .with_size(Vec2::new(320.0, 400.0))
+            .with_context_setup(move |ctx| crate::theme::apply_to_egui(ctx, &theme))
+            .build_ui_state(
+                |ui, panel: &mut StrategyReportPanel| {
+                    panel.show(ui);
+                },
+                panel,
+            );
+        h.run();
+        let shapes = &h.output().shapes;
+        let zero = shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "0.00%" => {
+                    Some(text.pos.x + text.galley.size().x / 2.0)
+                }
+                _ => None,
+            })
+            .expect("the zero edge is labelled");
+        let mut left = f32::INFINITY;
+        let mut right = f32::NEG_INFINITY;
+        for shape in shapes {
+            if let egui::Shape::Rect(rect) = &shape.shape
+                && (rect.fill == win || rect.fill == loss)
+            {
+                left = left.min(rect.rect.left());
+                right = right.max(rect.rect.right());
+            }
+        }
+        assert!(zero.is_finite() && (zero - (left + right) / 2.0).abs() < 1.0);
+    }
+}
