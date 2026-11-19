@@ -212,7 +212,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] `Trading` connects order tickets, account tables and chart overlays to a supplied `Broker`. Ticket and depth-ladder quantity-limit reasons use the symbol's host quantity text, with grouped quantities at the step's decimals as the fallback and enough precision to retain a finer limit.
 - [x] Market, limit, stop and stop-limit tickets, units/value sizing, risk-percent sizing on every order type, time in force, presets and attached stop-loss/take-profit levels. Switching between units and an amount preserves the order quantity; money exits show no price and keep their entered value when the quantity is zero or invalid.
 - [x] Validated one-click orders, chart context-menu entry and broker/account selection components.
-- [x] Order and position lines show levels and profit/loss; confirmed actions modify/cancel orders, close/reverse positions and edit brackets.
+- [x] Order and position lines show levels and profit/loss; confirmed actions modify/cancel orders, close/reverse positions and edit brackets. Their confirmations write order, exit-level and position quantities through the symbol's host formatter, with the account tables' grouped quantity text as the fallback.
 - [x] A depth ladder supports order entry, drag modification and right-click cancellation through the broker interface.
 - [x] Account summary, positions, orders, history, executions, balance and journal tables, with CSV export.
 - [x] Execution markers, rejection/fill notifications and execution sound intents.
