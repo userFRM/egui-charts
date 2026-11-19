@@ -242,7 +242,7 @@ impl PresetLevel {
 pub enum Kind {
     /// At the best price available now.
     Market,
-    /// At the entered price or better.
+    /// At the entered price or a more favourable one.
     Limit,
     /// As a market order once the market trades at the entered price.
     Stop,
