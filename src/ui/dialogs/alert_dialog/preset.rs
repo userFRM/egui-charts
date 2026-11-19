@@ -268,6 +268,7 @@ fn without_thresholds(condition: &AlertCondition) -> Option<AlertCondition> {
     use AlertCondition as C;
     let channel = |comparison| channel_condition(comparison, 0.0, 0.0);
     Some(match condition {
+        C::Holds => C::Holds,
         C::StrategyFills(_) | C::DetectorSignals(_) | C::CustomEvents(_) | C::Position { .. } => {
             return None;
         }
@@ -612,7 +613,19 @@ mod tests {
             id: "absent".into(),
             condition: 0,
         };
+        let available = AlertSource::StudyCondition {
+            id: "3".into(),
+            condition: 0,
+        };
         let cases = [
+            (
+                available.clone(),
+                C::Holds,
+                price.clone(),
+                C::Above(100.0),
+                available.clone(),
+                C::Holds,
+            ),
             // A missing declared condition cannot replace a price rule with Holds.
             (
                 declared.clone(),
@@ -865,7 +878,10 @@ mod tests {
                 C::Below(100.0),
             ),
         ];
-        let sources = [(study(), AlertSourceName::from("RSI signal"))];
+        let sources = [
+            (study(), AlertSourceName::from("RSI signal")),
+            (available, AlertSourceName::from("Declared condition")),
+        ];
         for (stored_source, stored, current_source, current, source, condition) in cases {
             let mut saved = Alert::new("OLD", stored.clone());
             saved.source = stored_source;

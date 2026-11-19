@@ -757,7 +757,12 @@ mod tests {
             for (formation, expected) in
                 std::iter::once((hit, true)).chain(miss.iter().map(|bars| (*bars, false)))
             {
-                let data = with(flat.clone(), formation);
+                let mut data = flat.clone();
+                data.extend(
+                    formation
+                        .iter()
+                        .map(|&(o, h, l, c)| Bar::new(Utc::now(), o, h, l, c, 1.0)),
+                );
                 let last = data.len() - 1;
                 for only in [None, Some(index)] {
                     let mut study = only
