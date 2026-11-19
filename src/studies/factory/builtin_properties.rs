@@ -197,6 +197,15 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(OrderFlowStudy::new(OrderFlowKind::LevelsTradedThrough {
             seconds: l(0),
         })),
+        Box::new(OrderFlowStudy::new(OrderFlowKind::BookBalance {
+            near_levels: l(0),
+            far_levels: l(1),
+            near_distance: x(0.0),
+            far_distance: x(0.0),
+        })),
+        Box::new(OrderFlowStudy::new(OrderFlowKind::PriceRange {
+            seconds: l(0),
+        })),
         Box::new(NetVolume::new()),
         Box::new(VolumePriceTrend::new()),
         Box::new(PriceVolumeTrendStudy::new(l(0))),

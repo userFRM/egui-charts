@@ -25,8 +25,8 @@ const ANCHORS: [Option<AnchorPeriod>; 8] = [
 ///
 /// Changing an aggregation input starts a fresh source: the host must replay historical events
 /// if it needs values before that change. Reset period, representation and marker settings reuse
-/// the held source. Book size is the last synchronized snapshot in the bar; spread
-/// averages every accepted quote equally. Bars without the relevant stream remain gaps.
+/// the held source. Book size and book balance use the last synchronized snapshot in the bar;
+/// spread averages every accepted quote equally. Bars without the relevant stream remain gaps.
 #[derive(Clone, Debug)]
 pub struct OrderFlowStudy {
     kind: OrderFlowKind,
@@ -47,6 +47,10 @@ pub struct OrderFlowStudy {
     anchor: Option<AnchorPeriod>,
     volume_precision: Option<usize>,
     markers: CvdMarkers,
+    /// Earlier bars used to rank each execution range.
+    lookback: usize,
+    /// Low and high percentile boundaries for Volatility Regime.
+    regime: [f64; 2],
 }
 
 impl OrderFlowStudy {
@@ -74,6 +78,8 @@ impl OrderFlowStudy {
             anchor: None,
             volume_precision: None,
             markers: CvdMarkers::default(),
+            lookback: 100,
+            regime: [20.0, 80.0],
         }
     }
 
@@ -200,9 +206,43 @@ impl OrderFlowStudy {
                     }
                 }
             }
+            OrderFlowKind::PriceRange { .. } => {
+                let start = from.saturating_sub(self.lookback);
+                let rows = self.rows(data, start);
+                let range = |at: usize| rows[at - start].filter(|row| row[0].is_finite());
+                let [lower, upper] = self.regime;
+                for at in from..data.len() {
+                    let Some(row) = range(at) else { continue };
+                    let (mut below, mut count) = (0_usize, 0_usize);
+                    for earlier in (at.saturating_sub(self.lookback)..at).filter_map(range) {
+                        count += 1;
+                        // Decimal price subtraction can leave equal ranges a few ulps apart.
+                        let scale = row[1]
+                            .abs()
+                            .max(row[2].abs())
+                            .max(earlier[1].abs().max(earlier[2].abs()));
+                        if row[0] - earlier[0] > 4.0 * f64::EPSILON * scale {
+                            below += 1;
+                        }
+                    }
+                    if count == 0 {
+                        continue;
+                    }
+                    let rank = below as f64 / count as f64 * 100.0;
+                    let regime = if rank < lower {
+                        -1.0
+                    } else if rank > upper {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    self.values.set_value(0, at, rank);
+                    self.values.set_value(1, at, regime);
+                }
+            }
             _ => {
                 for (at, row) in self.rows(data, from).into_iter().enumerate() {
-                    for (line, value) in row.iter().flatten().enumerate() {
+                    for (line, value) in row.iter().flatten().take(self.line_count()).enumerate() {
                         self.values.set_value(line, from + at, *value);
                     }
                 }
@@ -223,8 +263,8 @@ impl OrderFlowStudy {
         }
     }
 
-    /// Book size over the individual orders `filter` accepts: a minimum size, a minimum and a
-    /// maximum resting age and excluded participants, all but the last also set by the study's
+    /// Book size or book balance over the individual orders `filter` accepts: a minimum size,
+    /// minimum and maximum resting ages and excluded participants, all but the last also set by the study's
     /// inputs. Needs a feed that sends order events, see [`OrderFlowInput::with_order_filter`].
     /// Starts a fresh source.
     pub fn with_order_filter(mut self, filter: OrderFilter) -> Self {
@@ -257,6 +297,8 @@ impl Indicator for OrderFlowStudy {
         match self.kind {
             OrderFlowKind::Spread => "Quoted Spread",
             OrderFlowKind::BookSize { .. } => "Book Size",
+            OrderFlowKind::BookBalance { .. } => "Book Balance",
+            OrderFlowKind::PriceRange { .. } => "Volatility Regime",
             OrderFlowKind::TradeRate { .. } => "Trade Rate",
             OrderFlowKind::AggressorRate { .. } => "Aggressor Rate",
             OrderFlowKind::LevelsExecuted { .. } => "Levels Executed",
@@ -305,12 +347,13 @@ impl Indicator for OrderFlowStudy {
     fn value_format(&self) -> crate::scales::StudyFormat {
         use crate::scales::StudyFormat;
         match self.kind {
-            OrderFlowKind::Spread
+            OrderFlowKind::BookBalance { .. }
+            | OrderFlowKind::Spread
             | OrderFlowKind::TradeRate { .. }
             | OrderFlowKind::AggressorRate { .. } => StudyFormat::Fixed(2),
-            OrderFlowKind::LevelsExecuted { .. } | OrderFlowKind::LevelsTradedThrough { .. } => {
-                StudyFormat::Fixed(0)
-            }
+            OrderFlowKind::LevelsExecuted { .. }
+            | OrderFlowKind::LevelsTradedThrough { .. }
+            | OrderFlowKind::PriceRange { .. } => StudyFormat::Fixed(0),
             _ => StudyFormat::Volume,
         }
     }
@@ -340,6 +383,16 @@ impl Indicator for OrderFlowStudy {
     }
     fn format_plot_value(&self, line: usize, value: f64) -> String {
         use crate::scales::StudyFormat;
+        if line == 1 && matches!(self.kind, OrderFlowKind::PriceRange { .. }) {
+            return if value < 0.0 {
+                "Low"
+            } else if value > 0.0 {
+                "High"
+            } else {
+                "Normal"
+            }
+            .to_owned();
+        }
         if line == 0 {
             match self.kind {
                 OrderFlowKind::TradeRate { volume: true, .. } => {
@@ -390,7 +443,9 @@ impl Indicator for OrderFlowStudy {
             return if self.markers.enabled() { 7 } else { 3 };
         }
         match self.kind {
-            OrderFlowKind::FlowSum { .. } => 2,
+            OrderFlowKind::FlowSum { .. }
+            | OrderFlowKind::BookBalance { .. }
+            | OrderFlowKind::PriceRange { .. } => 2,
             OrderFlowKind::FilteredCvd { .. } => 1,
             _ => 3,
         }
@@ -449,6 +504,8 @@ impl Indicator for OrderFlowStudy {
             OrderFlowKind::BookSize { .. } => {
                 &["Bid size (lots)", "Ask size (lots)", "Difference (lots)"]
             }
+            OrderFlowKind::BookBalance { .. } => &["Near balance (%)", "Far balance (%)"],
+            OrderFlowKind::PriceRange { .. } => &["Range percentile", "Regime"],
             OrderFlowKind::LevelsExecuted { .. } => &["Ask levels", "Bid levels", "Total levels"],
             OrderFlowKind::LevelsTradedThrough { .. } => {
                 &["Bid levels", "Ask levels", "Total levels"]
@@ -456,8 +513,11 @@ impl Indicator for OrderFlowStudy {
         };
         names.iter().map(|name| (*name).to_owned()).collect()
     }
+    fn readout_only(&self, line: usize) -> bool {
+        line == 1 && matches!(self.kind, OrderFlowKind::PriceRange { .. })
+    }
     fn plot_tagged(&self, line: usize) -> bool {
-        line < 3
+        line < 3 && !self.readout_only(line)
     }
     fn plot_style(&self, line: usize) -> PlotStyle {
         PlotStyle {
@@ -480,6 +540,27 @@ impl Indicator for OrderFlowStudy {
                     )),
         }
     }
+    fn pane(&self) -> crate::studies::StudyPane {
+        use crate::studies::{StudyPane, palette::MUTED};
+        match self.kind {
+            OrderFlowKind::BookBalance { .. } => StudyPane {
+                height: None,
+                range: Some((-100.0, 100.0)),
+                levels: vec![(0.0, MUTED, "Balanced")],
+                fill_between_levels: false,
+            },
+            OrderFlowKind::PriceRange { .. } => StudyPane {
+                height: None,
+                range: Some((0.0, 100.0)),
+                levels: vec![
+                    (self.regime[1], MUTED, "High"),
+                    (self.regime[0], MUTED, "Low"),
+                ],
+                fill_between_levels: true,
+            },
+            _ => StudyPane::default(),
+        }
+    }
     fn inputs(&self) -> Vec<StudyInput> {
         let length = |id, label, value, min, max| {
             StudyInput::new(
@@ -489,23 +570,8 @@ impl Indicator for OrderFlowStudy {
                 InputKind::Length(min, max),
             )
         };
-        let combine = StudyInput::new(
-            "combine_fills",
-            "Combine fills of an aggressive order",
-            InputValue::Toggle(self.basis == SizeBasis::AggressiveOrder),
-            InputKind::Toggle,
-        )
-        .with_default(InputValue::Toggle(false));
-        match self.kind {
-            OrderFlowKind::Spread => vec![],
-            OrderFlowKind::BookSize { levels, distance } => vec![
-                length("levels", "Nearest levels", levels, 1, 10000),
-                StudyInput::new(
-                    "distance",
-                    "Price distance (0 uses levels)",
-                    InputValue::Number(distance),
-                    InputKind::Number(0.0, f64::MAX),
-                ),
+        let order_filter = || {
+            [
                 StudyInput::new(
                     "min_size",
                     "Minimum order size (needs order events)",
@@ -524,6 +590,79 @@ impl Indicator for OrderFlowStudy {
                     InputValue::Number(self.filter.max_age.map_or(0.0, |age| age.as_seconds_f64())),
                     InputKind::Number(0.0, 86400.0),
                 ),
+            ]
+        };
+        let combine = StudyInput::new(
+            "combine_fills",
+            "Combine fills of an aggressive order",
+            InputValue::Toggle(self.basis == SizeBasis::AggressiveOrder),
+            InputKind::Toggle,
+        )
+        .with_default(InputValue::Toggle(false));
+        match self.kind {
+            OrderFlowKind::Spread => vec![],
+            OrderFlowKind::BookSize { levels, distance } => {
+                let mut inputs = vec![
+                    length("levels", "Nearest levels", levels, 1, 10000),
+                    StudyInput::new(
+                        "distance",
+                        "Price distance (0 uses levels)",
+                        InputValue::Number(distance),
+                        InputKind::Number(0.0, f64::MAX),
+                    ),
+                ];
+                inputs.extend(order_filter());
+                inputs
+            }
+            OrderFlowKind::BookBalance {
+                near_levels,
+                far_levels,
+                near_distance,
+                far_distance,
+            } => {
+                let mut inputs = vec![
+                    length("near_levels", "Near levels", near_levels, 1, 10000),
+                    length(
+                        "far_levels",
+                        "Far levels beyond the near band",
+                        far_levels,
+                        1,
+                        10000,
+                    ),
+                    StudyInput::new(
+                        "near_distance",
+                        "Near price distance (0 uses levels)",
+                        InputValue::Number(near_distance),
+                        InputKind::Number(0.0, f64::MAX),
+                    ),
+                    StudyInput::new(
+                        "far_distance",
+                        "Far price distance beyond the near band",
+                        InputValue::Number(far_distance),
+                        InputKind::Number(0.0, f64::MAX),
+                    ),
+                ];
+                inputs.extend(order_filter());
+                inputs
+            }
+            OrderFlowKind::PriceRange { seconds } => vec![
+                length("seconds", "Window seconds", seconds, 1, 86400),
+                length("lookback", "Lookback bars", self.lookback, 1, 1000)
+                    .with_default(InputValue::Length(100)),
+                StudyInput::new(
+                    "lower",
+                    "Low regime below percentile",
+                    InputValue::Number(self.regime[0]),
+                    InputKind::Number(0.0, 100.0),
+                )
+                .with_default(InputValue::Number(20.0)),
+                StudyInput::new(
+                    "upper",
+                    "High regime above percentile",
+                    InputValue::Number(self.regime[1]),
+                    InputKind::Number(0.0, 100.0),
+                )
+                .with_default(InputValue::Number(80.0)),
             ],
             OrderFlowKind::TradeRate {
                 volume,
@@ -699,6 +838,9 @@ impl Indicator for OrderFlowStudy {
             return Err(crate::studies::StudyError::rejected(&self.inputs(), id));
         }
         match (id, &value) {
+            ("lookback", InputValue::Length(n)) => self.lookback = *n,
+            ("lower", InputValue::Number(v)) => self.regime[0] = *v,
+            ("upper", InputValue::Number(v)) => self.regime[1] = *v,
             ("divergence", InputValue::Toggle(on)) => self.markers.divergence = *on,
             ("exhaustion", InputValue::Toggle(on)) => self.markers.exhaustion = *on,
             ("swing_bars", InputValue::Length(n)) => self.markers.swing_bars = *n,
@@ -707,7 +849,13 @@ impl Indicator for OrderFlowStudy {
         }
         if matches!(
             id,
-            "divergence" | "exhaustion" | "swing_bars" | "exhaustion_bars"
+            "divergence"
+                | "exhaustion"
+                | "swing_bars"
+                | "exhaustion_bars"
+                | "lookback"
+                | "lower"
+                | "upper"
         ) {
             self.values = IndicatorValues::new();
             self.candles.clear();
@@ -755,15 +903,47 @@ impl Indicator for OrderFlowStudy {
             (OrderFlowKind::BookSize { distance, .. }, "distance", InputValue::Number(v)) => {
                 *distance = v
             }
-            (OrderFlowKind::BookSize { .. }, "min_size", InputValue::Number(v)) => {
+            (
+                OrderFlowKind::BookBalance { near_levels, .. },
+                "near_levels",
+                InputValue::Length(v),
+            ) => *near_levels = v,
+            (
+                OrderFlowKind::BookBalance { far_levels, .. },
+                "far_levels",
+                InputValue::Length(v),
+            ) => *far_levels = v,
+            (
+                OrderFlowKind::BookBalance { near_distance, .. },
+                "near_distance",
+                InputValue::Number(v),
+            ) => *near_distance = v,
+            (
+                OrderFlowKind::BookBalance { far_distance, .. },
+                "far_distance",
+                InputValue::Number(v),
+            ) => *far_distance = v,
+            (
+                OrderFlowKind::BookSize { .. } | OrderFlowKind::BookBalance { .. },
+                "min_size",
+                InputValue::Number(v),
+            ) => {
                 self.filter.min_size = v;
                 self.reset();
             }
-            (OrderFlowKind::BookSize { .. }, "min_age", InputValue::Number(v)) => {
+            (
+                OrderFlowKind::BookSize { .. } | OrderFlowKind::BookBalance { .. },
+                "min_age",
+                InputValue::Number(v),
+            ) => {
                 self.filter.min_age = (v > 0.0).then(|| TimeDelta::milliseconds((v * 1e3) as i64));
                 self.reset();
             }
-            (OrderFlowKind::BookSize { .. }, "max_age", InputValue::Number(v)) => {
+            (
+                OrderFlowKind::BookSize { .. } | OrderFlowKind::BookBalance { .. },
+                "max_age",
+                InputValue::Number(v),
+            ) => {
                 self.filter.max_age = (v > 0.0).then(|| TimeDelta::milliseconds((v * 1e3) as i64));
                 self.reset();
             }
@@ -774,7 +954,8 @@ impl Indicator for OrderFlowStudy {
                 OrderFlowKind::TradeRate { seconds, .. }
                 | OrderFlowKind::AggressorRate { seconds, .. }
                 | OrderFlowKind::LevelsExecuted { seconds, .. }
-                | OrderFlowKind::LevelsTradedThrough { seconds },
+                | OrderFlowKind::LevelsTradedThrough { seconds }
+                | OrderFlowKind::PriceRange { seconds },
                 "seconds",
                 InputValue::Length(v),
             ) => *seconds = v,
@@ -1022,6 +1203,18 @@ mod tests {
             ),
             (OrderFlowKind::FlowSum { bars: 2 }, 18.125, "18", "18.125"),
             (OrderFlowKind::FlowSum { bars: 2 }, 4554.0, "4.55K", "4.55K"),
+            (
+                OrderFlowKind::BookBalance {
+                    near_levels: 5,
+                    far_levels: 10,
+                    near_distance: 0.0,
+                    far_distance: 0.0,
+                },
+                1.25,
+                "1.25",
+                "1.25",
+            ),
+            (OrderFlowKind::PriceRange { seconds: 60 }, 1.25, "1", "1"),
             (OrderFlowKind::Spread, 1.25, "1.25", "1.25"),
             (
                 OrderFlowKind::TradeRate {
@@ -1067,16 +1260,226 @@ mod tests {
         }
     }
 
-    fn assert_lines(study: &OrderFlowStudy, want: &[[f64; 6]]) {
+    fn assert_lines<const N: usize>(study: &OrderFlowStudy, want: &[[f64; N]]) {
         let got = lines(study);
         assert_eq!(got.len(), want.len());
         for (got, want) in got.iter().zip(want) {
+            assert_eq!(got.len(), want.len());
             for (got, want) in got.iter().zip(want) {
                 assert!(
                     got == want || (got.is_nan() && want.is_nan()),
                     "{got:?} against {want:?}"
                 );
             }
+        }
+    }
+
+    /// The near 30/10 and far 10/30 lots give +50% and -50%. Decimal edges belong
+    /// only to the near band; absent, lost and empty books have no value.
+    #[test]
+    fn book_balance_reads_near_and_far_bands_without_double_counting() {
+        use crate::model::{OrderBook, OrderBookLevel};
+        let book = OrderBook {
+            ts: start(),
+            symbol: "SAMPLE".into(),
+            bids: [
+                (100.0, 20.0),
+                (99.9, 10.0),
+                (99.8, 6.0),
+                (99.7, 4.0),
+                (99.6, 50.0),
+            ]
+            .map(|(price, size)| OrderBookLevel {
+                price,
+                size,
+                order_cnt: None,
+            })
+            .to_vec(),
+            asks: [
+                (100.1, 4.0),
+                (100.2, 6.0),
+                (100.3, 25.0),
+                (100.4, 5.0),
+                (100.5, 50.0),
+            ]
+            .map(|(price, size)| OrderBookLevel {
+                price,
+                size,
+                order_cnt: None,
+            })
+            .to_vec(),
+        };
+        for (name, near_levels, far_levels, near_distance, far_distance) in [
+            ("levels", 2, 2, 0.0, 0.0),
+            ("decimal distance edges", 1, 1, 0.1, 0.25),
+        ] {
+            let mut study = OrderFlowStudy::new(OrderFlowKind::BookBalance {
+                near_levels,
+                far_levels,
+                near_distance,
+                far_distance,
+            });
+            assert_eq!(study.line_count(), 2, "{name}");
+            assert_eq!(study.pane().range, Some((-100.0, 100.0)), "{name}");
+            for minute in [0, 2] {
+                study.input.push_book(
+                    &study.clock,
+                    start() + TimeDelta::minutes(minute) + TimeDelta::seconds(5),
+                    Some(&book),
+                );
+            }
+            study.input.push_book(
+                &study.clock,
+                start() + TimeDelta::minutes(2) + TimeDelta::seconds(10),
+                None,
+            );
+            study.input.push_book(
+                &study.clock,
+                start() + TimeDelta::minutes(3) + TimeDelta::seconds(5),
+                Some(&OrderBook {
+                    ts: start(),
+                    symbol: "SAMPLE".into(),
+                    bids: vec![],
+                    asks: vec![],
+                }),
+            );
+            study.calculate(&bars());
+            assert_lines(
+                &study,
+                &[
+                    [50.0, NAN, NAN, NAN, NAN, NAN],
+                    [-50.0, NAN, NAN, NAN, NAN, NAN],
+                ],
+            );
+        }
+    }
+
+    /// Four quiet windows tie despite decimal rounding; the wider window ranks 100.
+    /// Ranks exactly on either boundary are normal, and incremental refresh sees earlier bars.
+    #[test]
+    fn volatility_regime_ranks_window_ranges_against_earlier_bars() {
+        let mut study = OrderFlowStudy::new(OrderFlowKind::PriceRange { seconds: 30 });
+        for (id, value) in [
+            ("lookback", InputValue::Length(4)),
+            ("lower", InputValue::Number(25.0)),
+            ("upper", InputValue::Number(75.0)),
+        ] {
+            study.set_input(id, value).unwrap();
+        }
+        let data: Vec<_> = (0..9)
+            .map(|m| Bar::new(start() + TimeDelta::minutes(m), 1.0, 1.0, 1.0, 1.0, 0.0))
+            .collect();
+        for (m, (first, second)) in [
+            (100.1, 100.2),
+            (100.2, 100.3),
+            (100.3, 100.4),
+            (100.4, 100.5),
+            (100.5, 100.6),
+            (100.6, 101.1),
+            (101.1, 100.8),
+            (100.8, 101.0),
+            (101.0, 100.85),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for (seconds, price) in [(10, first), (20, second)] {
+                study.input.push_trade(
+                    &study.clock,
+                    &Tick::new(
+                        start() + TimeDelta::minutes(m as i64) + TimeDelta::seconds(seconds),
+                        price,
+                        1.0,
+                        None,
+                    ),
+                );
+            }
+        }
+        let expected = [
+            [NAN, 0.0, 0.0, 0.0, 0.0, 100.0, 75.0, 50.0, 25.0],
+            [NAN, -1.0, -1.0, -1.0, -1.0, 1.0, 0.0, 0.0, 0.0],
+        ];
+        study.calculate(&data);
+        assert_lines(&study, &expected);
+        let mut part = study.clone();
+        part.calculate(&data[..6]);
+        part.update(&data, 6);
+        assert_lines(&part, &expected);
+        for (value, word) in [(-1.0, "Low"), (0.0, "Normal"), (1.0, "High")] {
+            assert_eq!(study.format_plot_value(1, value), word);
+        }
+        assert!(study.readout_only(1));
+        assert!(!study.plot_tagged(1));
+        assert_eq!(study.pane().range, Some((0.0, 100.0)));
+        assert_eq!(
+            study
+                .pane()
+                .levels
+                .iter()
+                .map(|level| level.0)
+                .collect::<Vec<_>>(),
+            [75.0, 25.0]
+        );
+        // Ranking inputs reuse the tape; a recalculation still has the source's ranges.
+        study.set_input("lookback", InputValue::Length(1)).unwrap();
+        study.calculate(&data);
+        assert_eq!(study.values().value(0, 7), Some(0.0));
+    }
+
+    /// Non-default values must survive the same template path used by saved chart layouts.
+    #[test]
+    fn book_balance_and_volatility_regime_inputs_survive_templates() {
+        use crate::studies::{IndicatorFactory, StudyTemplate};
+        let factory = IndicatorFactory::new();
+        for (name, edits) in [
+            (
+                "Book Balance",
+                vec![
+                    ("near_levels", InputValue::Length(3)),
+                    ("far_levels", InputValue::Length(7)),
+                    ("near_distance", InputValue::Number(0.5)),
+                    ("far_distance", InputValue::Number(1.25)),
+                    ("min_size", InputValue::Number(2.0)),
+                    ("min_age", InputValue::Number(1.5)),
+                    ("max_age", InputValue::Number(30.0)),
+                ],
+            ),
+            (
+                "Volatility Regime",
+                vec![
+                    ("seconds", InputValue::Length(30)),
+                    ("lookback", InputValue::Length(50)),
+                    ("lower", InputValue::Number(10.0)),
+                    ("upper", InputValue::Number(90.0)),
+                ],
+            ),
+        ] {
+            let mut study = factory.create(name).unwrap();
+            let original = StudyTemplate::from_study(study.as_ref()).inputs;
+            for (id, value) in &edits {
+                study.set_input(id, value.clone()).unwrap();
+            }
+            let edited = StudyTemplate::from_study(study.as_ref());
+            assert_eq!(
+                edited.inputs,
+                edits
+                    .iter()
+                    .map(|(id, value)| (id.to_string(), value.clone()))
+                    .collect::<Vec<_>>(),
+                "{name}"
+            );
+            assert!(
+                edited.inputs.iter().zip(original).all(|(a, b)| *a != b),
+                "{name}"
+            );
+            let saved = serde_json::to_string(&edited).unwrap();
+            let template: StudyTemplate = serde_json::from_str(&saved).unwrap();
+            let restored = template.create_with(&factory).unwrap();
+            assert_eq!(
+                StudyTemplate::from_study(restored.as_ref()).inputs,
+                edited.inputs,
+                "{name}"
+            );
         }
     }
 
@@ -1155,33 +1558,47 @@ mod tests {
         }
     }
 
-    /// Guards the resting age inputs of book size: seconds set the filter's age bound that the
+    /// Guards the resting age inputs of both book studies: seconds set the filter's age bound that the
     /// study's source applies and reads back, and 0 removes the bound.
     #[test]
-    fn resting_age_inputs_set_the_book_size_filter() {
-        let ten = Some(TimeDelta::seconds(10));
-        for (id, value, ages) in [
-            ("min_age", 10.0, (ten, None)),
-            ("max_age", 10.0, (None, ten)),
-            ("max_age", 0.0, (None, None)),
-        ] {
-            let mut study = OrderFlowStudy::new(OrderFlowKind::BookSize {
+    fn resting_age_inputs_set_the_book_filters() {
+        for kind in [
+            OrderFlowKind::BookSize {
                 levels: 10,
                 distance: 0.0,
-            });
-            study.set_input(id, InputValue::Number(value)).unwrap();
-            let read = study
-                .inputs()
-                .into_iter()
-                .find(|i| i.id == id)
-                .map(|i| i.value);
-            assert_eq!(read, Some(InputValue::Number(value)), "{id}");
-            let filter = study
-                .order_flow_inputs()
-                .first()
-                .and_then(|input| input.order_filter())
-                .unwrap_or_default();
-            assert_eq!((filter.min_age, filter.max_age), ages, "{id} {value}");
+            },
+            OrderFlowKind::BookBalance {
+                near_levels: 5,
+                far_levels: 10,
+                near_distance: 0.0,
+                far_distance: 0.0,
+            },
+        ] {
+            let ten = Some(TimeDelta::seconds(10));
+            for (id, value, ages) in [
+                ("min_age", 10.0, (ten, None)),
+                ("max_age", 10.0, (None, ten)),
+                ("max_age", 0.0, (None, None)),
+            ] {
+                let mut study = OrderFlowStudy::new(kind);
+                study.set_input(id, InputValue::Number(value)).unwrap();
+                let read = study
+                    .inputs()
+                    .into_iter()
+                    .find(|i| i.id == id)
+                    .map(|i| i.value);
+                assert_eq!(read, Some(InputValue::Number(value)), "{kind:?} {id}");
+                let filter = study
+                    .order_flow_inputs()
+                    .first()
+                    .and_then(|input| input.order_filter())
+                    .unwrap_or_default();
+                assert_eq!(
+                    (filter.min_age, filter.max_age),
+                    ages,
+                    "{kind:?} {id} {value}"
+                );
+            }
         }
     }
 
