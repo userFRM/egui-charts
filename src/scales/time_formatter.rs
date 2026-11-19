@@ -128,8 +128,11 @@ pub struct DefaultTimeFormatter {
 
     /// `strftime` pattern for the date in crosshair and tooltip labels, such as
     /// `"%d.%m.%Y"`, followed by the clock for intraday bars. `None` uses the
-    /// built-in dates; an invalid pattern falls back to them.
+    /// built-in dates; an invalid or empty pattern falls back to them.
     pub date_format: Option<String>,
+
+    /// Whether crosshair and tooltip dates name the weekday.
+    pub weekday_names: WeekdayNames,
 }
 
 impl Default for DefaultTimeFormatter {
@@ -138,6 +141,7 @@ impl Default for DefaultTimeFormatter {
             use_24_hour: true,
             show_seconds: true,
             date_format: None,
+            weekday_names: WeekdayNames::Default,
         }
     }
 }
@@ -148,6 +152,7 @@ impl DefaultTimeFormatter {
             use_24_hour: self.use_24_hour,
             show_seconds: self.show_seconds,
             date_format: self.date_format.as_deref(),
+            weekday_names: self.weekday_names,
             #[cfg(feature = "locales")]
             locale: None,
         }
@@ -158,6 +163,7 @@ impl DefaultTimeFormatter {
             Box::new(ClockTimeFormatter {
                 use_24_hour: self.use_24_hour,
                 show_seconds: self.show_seconds,
+                weekday_names: self.weekday_names,
             })
         } else {
             Box::new(self)
@@ -184,6 +190,7 @@ impl TimeFormatter for DefaultTimeFormatter {
 struct ClockTimeFormatter {
     use_24_hour: bool,
     show_seconds: bool,
+    weekday_names: WeekdayNames,
 }
 
 impl TimeFormatter for ClockTimeFormatter {
@@ -192,6 +199,7 @@ impl TimeFormatter for ClockTimeFormatter {
             use_24_hour: self.use_24_hour,
             show_seconds: self.show_seconds,
             date_format: None,
+            weekday_names: self.weekday_names,
         }
         .format(time, mark_type)
     }
@@ -201,6 +209,7 @@ impl TimeFormatter for ClockTimeFormatter {
             use_24_hour: self.use_24_hour,
             show_seconds: self.show_seconds,
             date_format: None,
+            weekday_names: self.weekday_names,
         }
         .format_crosshair(time, bar_seconds)
     }
@@ -215,6 +224,7 @@ struct Style<'a> {
     use_24_hour: bool,
     show_seconds: bool,
     date_format: Option<&'a str>,
+    weekday_names: WeekdayNames,
     /// Language of the names; `None` writes English ones.
     #[cfg(feature = "locales")]
     locale: Option<chrono::Locale>,
@@ -248,16 +258,42 @@ impl Style<'_> {
             (_, true) => "%H:%M",
             (_, false) => "%I:%M %p",
         };
+        // Some locales have no AM/PM marker; keep a 12-hour clock unambiguous.
+        #[cfg(feature = "locales")]
+        if !self.use_24_hour
+            && let Some(locale) = self.locale
+            && time.format_localized("%p", locale).to_string().is_empty()
+        {
+            let pattern = pattern.replace("%p", &time.format("%p").to_string());
+            return self.write(time, &pattern).unwrap_or_default();
+        }
         self.write(time, pattern).unwrap_or_default()
     }
 
     fn format_crosshair(&self, time: DateTime<Utc>, bar_seconds: i64) -> String {
+        let daily = bar_seconds >= 86_400;
+        let weekday = |default| match self.weekday_names {
+            WeekdayNames::Default => default,
+            WeekdayNames::Always => true,
+            WeekdayNames::Never => false,
+        };
         let date = self
             .date_format
-            .and_then(|pattern| self.write(time, pattern));
+            .filter(|pattern| !pattern.is_empty())
+            .and_then(|pattern| {
+                if weekday(false) && !pattern.contains("%a") && !pattern.contains("%A") {
+                    self.write(time, &format!("%a {pattern}"))
+                } else {
+                    self.write(time, pattern)
+                }
+            });
         let custom_date = date.is_some();
-        let daily = bar_seconds >= 86_400;
-        let pattern = if daily { "%b %d" } else { "%a %d %b '%y" };
+        let pattern = match (daily, weekday(!daily)) {
+            (true, false) => "%b %d",
+            (true, true) => "%a %b %d",
+            (false, true) => "%a %d %b '%y",
+            (false, false) => "%d %b '%y",
+        };
         #[cfg(feature = "locales")]
         let date = date.or_else(|| self.locale.and_then(|_| self.write(time, pattern)));
         // The built-in English date writes straight into the label without a temporary String.
@@ -292,6 +328,7 @@ impl Style<'_> {
 ///
 /// The names need the `locales` cargo feature, on by default; without it they
 /// are English, as with an unknown locale.
+/// A 12-hour clock in a locale without an AM/PM marker, such as German, uses the English one.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct LocaleTimeFormatter {
@@ -308,6 +345,9 @@ pub struct LocaleTimeFormatter {
     /// `strftime` pattern for the date in crosshair and tooltip labels; see
     /// [`DefaultTimeFormatter::date_format`].
     pub date_format: Option<String>,
+
+    /// Whether crosshair and tooltip dates name the weekday.
+    pub weekday_names: WeekdayNames,
 }
 
 impl LocaleTimeFormatter {
@@ -320,6 +360,7 @@ impl LocaleTimeFormatter {
             use_24_hour,
             show_seconds: true,
             date_format: None,
+            weekday_names: WeekdayNames::Default,
         }
     }
 
@@ -333,6 +374,7 @@ impl LocaleTimeFormatter {
             use_24_hour: self.use_24_hour,
             show_seconds: self.show_seconds,
             date_format: self.date_format.as_deref(),
+            weekday_names: self.weekday_names,
             #[cfg(feature = "locales")]
             locale: Some(
                 chrono::Locale::try_from(self.locale.replace('-', "_").as_str())
@@ -542,6 +584,24 @@ impl TimezoneMode {
     }
 }
 
+/// Whether crosshair, tooltip and forecast dates name the weekday. Time axis marks that show
+/// a date in place of a hidden clock follow this choice too.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum WeekdayNames {
+    /// Follow the date format: built-in dates name the weekday on intraday bars, as in
+    /// `Wed 13 Mar '24 14:30`, and omit it on daily bars, as in `Mar 13, 2024`.
+    /// Custom patterns name it where they contain `%a` or `%A`.
+    #[default]
+    Default,
+    /// Name it on every date: `Wed Mar 13, 2024` on daily bars. A custom pattern without
+    /// `%a` or `%A` gets the short name before it, as in `Wed 13.03.2024`.
+    Always,
+    /// Omit it from built-in dates, as in `13 Mar '24 14:30`. Custom patterns are written
+    /// as given, including a weekday they explicitly name.
+    Never,
+}
+
 /// Timezone-aware formatter wrapper
 /// Converts ts to target timezone before formatting
 pub(crate) struct TimezoneAwareFormatter<T> {
@@ -629,6 +689,7 @@ pub struct TimeFormatterBuilder {
     show_seconds: bool,
     locale: Option<String>,
     date_format: Option<String>,
+    weekday_names: WeekdayNames,
     formatter: Option<Box<dyn TimeFormatter>>,
     timezone: Option<TimezoneMode>,
     time_visible: bool,
@@ -641,6 +702,7 @@ impl std::fmt::Debug for TimeFormatterBuilder {
             .field("show_seconds", &self.show_seconds)
             .field("locale", &self.locale)
             .field("date_format", &self.date_format)
+            .field("weekday_names", &self.weekday_names)
             .field("timezone", &self.timezone)
             .field("time_visible", &self.time_visible)
             .finish_non_exhaustive()
@@ -655,6 +717,7 @@ impl TimeFormatterBuilder {
             show_seconds: true,
             locale: None,
             date_format: None,
+            weekday_names: WeekdayNames::Default,
             formatter: None,
             timezone: None,
             time_visible: true,
@@ -692,12 +755,18 @@ impl TimeFormatterBuilder {
         self
     }
 
+    /// Set whether crosshair and tooltip dates name the weekday.
+    pub fn with_weekday_names(mut self, weekday_names: WeekdayNames) -> Self {
+        self.weekday_names = weekday_names;
+        self
+    }
+
     /// Format with `formatter`, with per-tick access to the locale and default text.
     ///
     /// The time zone and clock visibility still apply: `formatter` receives
     /// wall-clock times in the chosen zone, and dates in place of intraday
     /// clocks when the time is hidden. Its own options replace the 24-hour,
-    /// seconds, locale and date format settings, unless
+    /// seconds, weekday names, locale and date format settings, unless
     /// [`format_tick`](TimeFormatter::format_tick) returns `None` for a tick.
     pub fn with_formatter(mut self, formatter: Box<dyn TimeFormatter>) -> Self {
         self.formatter = Some(formatter);
@@ -718,12 +787,14 @@ impl TimeFormatterBuilder {
                 use_24_hour: self.use_24_hour,
                 show_seconds: self.show_seconds,
                 date_format: self.date_format,
+                weekday_names: self.weekday_names,
             })
         } else {
             DefaultTimeFormatter {
                 use_24_hour: self.use_24_hour,
                 show_seconds: self.show_seconds,
                 date_format: self.date_format,
+                weekday_names: self.weekday_names,
             }
             .into_box()
         };
@@ -865,6 +936,22 @@ mod tests {
             japanese.format(time, TickMarkType::Month),
             localized("3月", "Mar")
         );
+        // Empty locale markers need a fallback, while existing translations stay intact.
+        for (locale, expected) in [
+            ("de-DE", "02:30 PM"),
+            ("ja-JP", localized("02:30 午後", "02:30 PM")),
+            ("en-GB", localized("02:30 pm", "02:30 PM")),
+        ] {
+            let twelve_hour = LocaleTimeFormatter {
+                use_24_hour: false,
+                ..LocaleTimeFormatter::new(locale)
+            };
+            assert_eq!(
+                twelve_hour.format(time, TickMarkType::Time),
+                expected,
+                "{locale}"
+            );
+        }
         assert_eq!(
             LocaleTimeFormatter::new("xx-YY").format(time, TickMarkType::Month),
             "Mar"
@@ -889,6 +976,14 @@ mod tests {
             dated("%Q").format_crosshair(time, 60),
             "Wed 13 Mar '24 14:30"
         );
+        assert_eq!(dated("").format_crosshair(time, 60), "Wed 13 Mar '24 14:30");
+        assert_eq!(dated("").format_crosshair(time, 86_400), "Mar 13, 2024");
+        let named = DefaultTimeFormatter {
+            date_format: Some("%A %d.%m.%Y".into()),
+            weekday_names: WeekdayNames::Always,
+            ..Default::default()
+        };
+        assert_eq!(named.format_crosshair(time, 86_400), "Wednesday 13.03.2024");
         let current = time.with_year(Utc::now().year()).unwrap();
         let previous = current.with_year(current.year() - 1).unwrap();
         let default = DefaultTimeFormatter::default().clone_box();

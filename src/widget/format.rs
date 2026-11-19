@@ -224,10 +224,12 @@ impl Chart {
         &self,
         timezone: crate::scales::TimezoneMode,
     ) -> Box<dyn crate::scales::TimeFormatter> {
+        let time_scale = &self.chart_options.time_scale;
         let mut builder = TimeFormatterBuilder::new()
-            .with_24_hour(true)
-            .with_seconds(self.chart_options.time_scale.seconds_visible)
-            .with_time_visible(self.chart_options.time_scale.time_visible)
+            .with_24_hour(time_scale.use_24_hour)
+            .with_seconds(time_scale.seconds_visible)
+            .with_time_visible(time_scale.time_visible)
+            .with_weekday_names(time_scale.weekday_names)
             .with_timezone(timezone);
         if let Some(locale) = &self.locale {
             builder = builder.with_locale(locale.clone());
@@ -252,10 +254,12 @@ impl Chart {
     }
 
     /// Writes crosshair, tooltip and forecast dates with a `strftime` pattern, such as
-    /// `"%d.%m.%Y"`, followed by the clock for intraday bars. `None` restores the built-in dates,
-    /// which an invalid pattern also falls back to.
+    /// `"%d.%m.%Y"`, followed by the clock for intraday bars. `None` or an empty pattern restores
+    /// the built-in dates, which an invalid pattern also falls back to.
+    /// [`TimeScaleOptions::weekday_names`](crate::config::TimeScaleOptions::weekday_names) can
+    /// add the weekday to a pattern without one.
     pub fn set_date_format(&mut self, date_format: Option<String>) {
-        self.date_format = date_format;
+        self.date_format = date_format.filter(|pattern| !pattern.is_empty());
     }
 
     /// Formats time axis marks with [`TimeFormatter::format_tick`], whose default calls
@@ -265,10 +269,10 @@ impl Chart {
     /// `format_tick` receives the chart's locale in a
     /// [`TickMarkContext`](crate::scales::TickMarkContext) and can return `None` to use the
     /// built-in locale-aware text for that tick. Otherwise the
-    /// formatter replaces the built-in one, the locale and the date format. It receives
-    /// wall-clock times in the zone [`format_time`](Self::format_time) reads them in, and the
-    /// time scale's [`time_visible`](crate::config::TimeScaleOptions::time_visible) option
-    /// still applies.
+    /// formatter replaces the built-in one, the locale, date format, clock and weekday names.
+    /// It receives wall-clock times in the zone [`format_time`](Self::format_time) reads them
+    /// in, and the time scale's
+    /// [`time_visible`](crate::config::TimeScaleOptions::time_visible) option still applies.
     /// `None` restores the built-in formatter.
     ///
     /// [`TimeFormatter::format`]: crate::scales::TimeFormatter::format
