@@ -842,7 +842,7 @@ Studies,Indicators,Williams %R,verified,library,src/studies/builtin/williams_r.r
 Studies,Indicators,Williams Alligator,verified,library,src/studies/builtin/williams_alligator.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Williams Fractal,verified,library,src/studies/builtin/williams_fractals.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Woodies CCI,unverified,library,src/studies/builtin/woodies_cci.rs;src/studies/inputs.rs,1118;3183;3446;3253;3656
-Studies,Indicators,Zig Zag,incomplete,library,src/studies/builtin/zigzag.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs,3493
+Studies,Indicators,Zig Zag,incomplete,library,src/studies/builtin/zigzag.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs;src/studies/template.rs,3493;3563
 Studies,Strategy tester,Backtest engine,unverified,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs;src/services/paper.rs;docs/strategy-report.md;src/strategies/live.rs,2059;2285;2446;3184;3185
 Studies,Strategy tester,Built-in Bollinger Bands strategy,unverified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/bollinger_bands.rs,1155;3493;3528;3253
 Studies,Strategy tester,Built-in Bollinger Bands strategy Directed,unverified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/bollinger_bands.rs,1155;3493;3528;3253
