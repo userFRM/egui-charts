@@ -1793,16 +1793,18 @@ mod tests {
             false,
         );
         let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0));
-        for (enabled, minutes, high, bar_minute, expected) in [
-            (true, 60, 104.0, 0, vec![96.0, 108.0, 92.0, 112.0]),
-            (false, 60, 104.0, 0, vec![]),
-            (true, 0, 104.0, 0, vec![]),
+        for (enabled, minutes, high, bar_minute, marker, expected) in [
+            (true, 60, 104.0, 0, true, vec![96.0, 108.0, 92.0, 112.0]),
+            (false, 60, 104.0, 0, true, vec![]),
+            (true, 0, 104.0, 0, true, vec![]),
             // History starts 90 minutes after the session opens, outside the 60-minute balance.
-            (true, 60, 104.0, 90, vec![]),
-            (true, 60, 100.0, 0, vec![]),
+            (true, 60, 104.0, 90, true, vec![]),
+            (true, 60, 100.0, 0, true, vec![]),
+            (true, 60, 104.0, 0, false, vec![96.0, 108.0, 92.0, 112.0]),
         ] {
             let params: crate::model::ChartTypeParams = serde_json::from_value(serde_json::json!({
                 "tpo_initial_balance_minutes": minutes,
+                "tpo_initial_balance": marker,
                 "tpo_initial_balance_extensions": enabled,
                 "tpo_row_ticks": 1
             }))
@@ -1852,12 +1854,17 @@ mod tests {
                     Shape::Rect(r) if r.rect.width() == 2.0 => Some(r.fill),
                     _ => None,
                 });
+                if !marker {
+                    assert!(balance_color.is_none());
+                }
                 let lines: Vec<_> = output
                     .shapes
                     .iter()
                     .filter_map(|shape| match &shape.shape {
                         Shape::LineSegment { points, stroke } => {
-                            assert_eq!(Some(stroke.color), balance_color);
+                            if let Some(color) = balance_color {
+                                assert_eq!(stroke.color, color);
+                            }
                             assert!(points[0].x < points[1].x && points[1].x <= 40.0);
                             assert_eq!(points[0].y, points[1].y);
                             Some(points[0].y)

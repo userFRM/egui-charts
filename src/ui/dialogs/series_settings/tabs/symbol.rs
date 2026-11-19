@@ -784,12 +784,16 @@ impl SymbolTab {
                 });
                 ui.end_row();
                 let label = ui.label(l10n::text(ui.ctx(), "Initial balance"));
-                ui.add(
-                    egui::DragValue::new(&mut params.tpo_initial_balance_minutes)
-                        .range(1..=1440)
-                        .suffix(l10n::text(ui.ctx(), " min")),
-                )
-                .labelled_by(label.id);
+                ui.label_inputs_by(label.id, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut params.tpo_initial_balance, "");
+                        ui.add(
+                            egui::DragValue::new(&mut params.tpo_initial_balance_minutes)
+                                .range(1..=1440)
+                                .suffix(l10n::text(ui.ctx(), " min")),
+                        );
+                    })
+                });
                 ui.end_row();
                 for (name, enabled) in [
                     ("Poor highs and lows", &mut params.tpo_poor_highs_lows),

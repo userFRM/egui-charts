@@ -933,6 +933,8 @@ pub struct ChartTypeParams {
     pub tpo_profile_period: super::TPOProfilePeriod,
     /// TPO: each period in its own column, as in [`TPOConfig::split_periods`](super::TPOConfig::split_periods).
     pub tpo_split_periods: bool,
+    /// TPO: draw the initial balance marker. On by default; its period and extensions apply either way.
+    pub tpo_initial_balance: bool,
     /// TPO: sessions combined into one profile, as in
     /// [`TPOConfig::composites`](super::TPOConfig::composites).
     pub tpo_composites: Vec<std::ops::RangeInclusive<chrono::DateTime<chrono::Utc>>>,
@@ -1038,6 +1040,7 @@ impl Default for ChartTypeParams {
             tpo_outside_value_area_opacity: 45,
             tpo_profile_period: super::TPOProfilePeriod::Session,
             tpo_split_periods: false,
+            tpo_initial_balance: true,
             tpo_composites: Vec::new(),
             tpo_splits: Vec::new(),
         }
@@ -1053,6 +1056,7 @@ impl ChartTypeParams {
             tick_size: tick_size.map_or(0.0, |tick| tick * f64::from(self.tpo_row_ticks)),
             period_minutes: self.tpo_period_minutes,
             initial_balance_minutes: self.tpo_initial_balance_minutes,
+            show_initial_balance: self.tpo_initial_balance,
             show_poor_highs_lows: self.tpo_poor_highs_lows,
             show_initial_balance_extensions: self.tpo_initial_balance_extensions,
             value_area_pct: self.tpo_value_area / 100.0,
@@ -1240,6 +1244,7 @@ mod tests {
             "tpo_outside_value_area_opacity": 80,
             "tpo_profile_period": "Week",
             "tpo_split_periods": true,
+            "tpo_initial_balance": false,
             "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
                 "developing_value_area": true, "extend_poc": true, "extend_vah": true,
                 "extend_val": true,
@@ -1319,6 +1324,7 @@ mod tests {
         assert_eq!(legacy["tpo_outside_value_area_opacity"], 45);
         assert_eq!(legacy["tpo_profile_period"], "Session");
         assert_eq!(legacy["tpo_split_periods"], false);
+        assert_eq!(legacy["tpo_initial_balance"], true);
         assert_eq!(
             legacy["footprint_colors"],
             serde_json::json!([null, null, null, null])
