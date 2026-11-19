@@ -1428,7 +1428,8 @@ pub(super) mod tests {
         assert_eq!(closes(&chart), [10.0, 14.0, 20.0]);
     }
 
-    /// Metric streams keep exact publication times, refresh dependent studies, and use
+    /// Metric streams give each bar the last point before its close, update the live bar,
+    /// hold points until the next, refresh dependent studies, and use
     /// the normal subscription lifetime when the chart's instrument changes.
     #[test]
     fn metric_history_and_live_points_refresh_the_pane_and_its_consumers() {
@@ -1472,14 +1473,14 @@ pub(super) mod tests {
         settle(&mut chart);
         assert_eq!(
             output(&chart, metric),
-            [None, Some(10.0), Some(10.0), Some(20.0), Some(20.0)]
+            [Some(10.0), Some(10.0), Some(20.0), Some(20.0), Some(20.0)]
         );
         assert_eq!(
             output(&chart, average),
-            [None, None, Some(10.0), Some(15.0), Some(20.0)]
+            [None, Some(10.0), Some(15.0), Some(20.0), Some(20.0)]
         );
         let sink = feed.metrics.lock().unwrap()[0].sink.clone();
-        for (minutes, value) in [(15, 14.0), (110, 30.0)] {
+        for (minutes, value) in [(15, 14.0), (110, 30.0), (125, 40.0)] {
             sink.push_metric(MetricPoint {
                 time: DateTime::UNIX_EPOCH + Duration::minutes(minutes),
                 value,
@@ -1494,11 +1495,11 @@ pub(super) mod tests {
         }
         assert_eq!(
             output(&chart, metric),
-            [None, Some(14.0), Some(14.0), Some(20.0), Some(30.0)]
+            [Some(14.0), Some(14.0), Some(20.0), Some(30.0), Some(40.0)]
         );
         assert_eq!(
             output(&chart, average),
-            [None, None, Some(14.0), Some(17.0), Some(25.0)]
+            [None, Some(14.0), Some(17.0), Some(25.0), Some(35.0)]
         );
         chart.set_symbol("OTHER");
         settle(&mut chart);

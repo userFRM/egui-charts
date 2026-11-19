@@ -1,4 +1,4 @@
-//! Pane study for a scalar metric published by the host's data source.
+//! Pane study for a metric published by the host's data source.
 
 use super::{Indicator, IndicatorValue, IndicatorValues, StudyData, StudyDataRequest};
 
@@ -8,7 +8,9 @@ use crate::scales::StudyFormat;
 use crate::studies::palette;
 use egui::Color32;
 
-/// A host metric, held by time on the chart's bars and drawn in an independent pane.
+/// A host metric drawn in an independent pane. Each chart bar shows the latest point
+/// published before the bar closes, and the current bar the latest point published so far
+/// within it; a point is held until the next one, and bars before the first point have no value.
 /// Its output can be selected as another study's [`super::StudySource::Study`].
 ///
 /// Connected charts request its history and live updates through the datafeed. Hosts
@@ -20,6 +22,8 @@ pub struct MetricStudy {
     values: IndicatorValues,
     color: Color32,
     visible: bool,
+    /// The chart's bar calendar, which dates each bar's close.
+    clock: crate::model::BarClock,
 }
 
 impl MetricStudy {
@@ -30,6 +34,7 @@ impl MetricStudy {
             values: IndicatorValues::new(),
             color: palette::ACCENT,
             visible: true,
+            clock: crate::model::BarClock::exact(),
         }
     }
 }
@@ -78,16 +83,34 @@ impl Indicator for MetricStudy {
     }
     fn update_data(&mut self, data: &[Bar], _: usize, sources: &[StudyData<'_>]) {
         let request = &self.data_requests()[0];
-        let source = sources.iter().find(|source| &source.request == request);
+        let points = sources
+            .iter()
+            .find(|source| &source.request == request)
+            .map_or(&[][..], |source| source.bars);
         self.values = data
             .iter()
-            .map(|bar| {
-                source
-                    .and_then(|source| source.bar_at(bar.time).map(|i| source.bars[i].close))
-                    .map_or(IndicatorValue::None, IndicatorValue::Single)
+            .enumerate()
+            .map(|(at, bar)| {
+                // The clock bounds the live bar too; a point at its close waits for the next bar.
+                let close = self
+                    .clock
+                    .next_open(self.clock.bar_open(bar.time))
+                    .or_else(|| data.get(at + 1).map(|next| next.time));
+                let end = close.map_or(points.len(), |close| {
+                    points.partition_point(|point| point.time < close)
+                });
+                end.checked_sub(1).map_or(IndicatorValue::None, |last| {
+                    IndicatorValue::Single(points[last].close)
+                })
             })
             .collect();
     }
+    fn set_bar_clock(&mut self, clock: &crate::model::BarClock) -> bool {
+        let changed = self.clock != *clock;
+        self.clock = clock.clone();
+        changed
+    }
+
     fn values(&self) -> &IndicatorValues {
         &self.values
     }
@@ -117,38 +140,31 @@ mod tests {
     use crate::model::{BarClock, Timeframe};
     use chrono::DateTime;
 
-    /// Publication instants are exact: earlier chart bars have no value, later bars
-    /// carry the last point, and a correction replaces every bar that held that point.
+    /// Each bar reads strictly before its close, holds earlier points, and accepts live updates.
     #[test]
     fn irregular_metric_points_hold_until_the_next_publication() {
         let time = |seconds| DateTime::from_timestamp(seconds, 0).unwrap();
-        let points = [(30, 10.0), (150, 20.0), (301, 5.0)];
-        let mut bars: Vec<Bar> = points
-            .into_iter()
-            .map(|(t, value)| {
-                MetricPoint {
-                    time: time(t),
-                    value,
-                }
-                .into()
-            })
-            .collect();
-        let chart: Vec<_> = [0, 30, 60, 120, 150, 180, 240, 300, 360]
-            .into_iter()
-            .map(|t| Bar::new(time(t), 1.0, 1.0, 1.0, 1.0, 1.0))
-            .collect();
-        let mut study = MetricStudy::new(MetricSeries {
-            id: "oi".into(),
-            name: "Open interest".into(),
-            unit: "contracts".into(),
-            format: StudyFormat::Volume,
-        });
-        let request = study.data_requests().pop().unwrap();
-        // 10 applies from second 30, 20 from second 150, and 5 from second 301.
-        for (edit, expected) in [
+        let day = |d| 1_704_067_200 + d * 86_400;
+        type Row = (
+            &'static str,
+            Option<Timeframe>,
+            Vec<i64>,
+            Vec<(i64, f64)>,
+            Vec<Option<f64>>,
+        );
+        let irregular = vec![0, 30, 60, 120, 150, 180, 240, 300, 360];
+        let daily: Vec<_> = (0..=20).map(|d| (day(d), d as f64)).collect();
+        let mut live = daily.clone();
+        live.push((day(20) + 43_200, 99.0));
+        let mut boundary = live.clone();
+        boundary.push((day(21), 50.0));
+        let rows: Vec<Row> = vec![
             (
+                "irregular publications, no clock",
                 None,
-                [
+                irregular.clone(),
+                vec![(30, 10.0), (150, 20.0), (301, 5.0)],
+                vec![
                     None,
                     Some(10.0),
                     Some(10.0),
@@ -156,13 +172,16 @@ mod tests {
                     Some(20.0),
                     Some(20.0),
                     Some(20.0),
-                    Some(20.0),
+                    Some(5.0),
                     Some(5.0),
                 ],
             ),
             (
-                Some(12.0),
-                [
+                "a correction replaces the point",
+                None,
+                irregular,
+                vec![(30, 12.0), (150, 20.0), (301, 5.0)],
+                vec![
                     None,
                     Some(12.0),
                     Some(12.0),
@@ -170,38 +189,65 @@ mod tests {
                     Some(20.0),
                     Some(20.0),
                     Some(20.0),
-                    Some(20.0),
+                    Some(5.0),
                     Some(5.0),
                 ],
             ),
-        ] {
-            if let Some(value) = edit {
-                bars[0] = MetricPoint {
-                    time: time(30),
-                    value,
-                }
-                .into();
+            (
+                "weekly bars over daily points",
+                Some(Timeframe::Week1),
+                vec![day(0), day(7), day(14)],
+                daily,
+                vec![Some(6.0), Some(13.0), Some(20.0)],
+            ),
+            (
+                "a point inside the live bar",
+                Some(Timeframe::Week1),
+                vec![day(0), day(7), day(14)],
+                live,
+                vec![Some(6.0), Some(13.0), Some(99.0)],
+            ),
+            (
+                "a point at the live bar's close",
+                Some(Timeframe::Week1),
+                vec![day(0), day(7), day(14)],
+                boundary,
+                vec![Some(6.0), Some(13.0), Some(99.0)],
+            ),
+        ];
+        for (name, interval, times, points, expected) in rows {
+            let mut study = MetricStudy::new(MetricSeries::new(
+                "oi",
+                "Open interest",
+                StudyFormat::Volume,
+            ));
+            if let Some(interval) = interval {
+                study.set_bar_clock(&BarClock::new(interval));
             }
+            let chart: Vec<_> = times
+                .into_iter()
+                .map(|t| Bar::new(time(t), 1.0, 1.0, 1.0, 1.0, 1.0))
+                .collect();
+            let points: Vec<_> = points
+                .into_iter()
+                .map(|(t, v)| MetricPoint::new(time(t), v).into())
+                .collect();
             let source = StudyData {
-                request: request.clone(),
-                bars: &bars,
+                request: study.data_requests().pop().unwrap(),
+                bars: &points,
                 clock: BarClock::new(Timeframe::Ticks(1.try_into().unwrap())),
                 instrument: None,
                 timeframe: Timeframe::Min1,
             };
             study.update_data(&chart, 0, &[source]);
             for (i, want) in expected.into_iter().enumerate() {
-                assert_eq!(
-                    study.values().value(0, i),
-                    want,
-                    "bar {i}, correction {edit:?}"
-                );
+                assert_eq!(study.values().value(0, i), want, "{name}, bar {i}");
             }
+            study.calculate(&chart);
+            assert!(
+                study.values().columns().is_empty(),
+                "missing histories stay unavailable"
+            );
         }
-        study.calculate(&chart);
-        assert!(
-            study.values().columns().is_empty(),
-            "missing histories stay unavailable"
-        );
     }
 }
