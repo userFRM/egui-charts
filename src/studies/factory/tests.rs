@@ -355,6 +355,9 @@ fn catalogue_studies_open_with_their_usual_lengths() {
         ("CMO", "period", 9),
         ("HV", "period", 10),
         ("TSI", "signal_period", 13),
+        ("Knoxville Divergence", "momentum_period", 20),
+        ("Knoxville Divergence", "rsi_period", 21),
+        ("Knoxville Divergence", "lookback", 150),
         ("Advance/Decline", "period", 10),
     ];
     let factory = IndicatorFactory::new();
