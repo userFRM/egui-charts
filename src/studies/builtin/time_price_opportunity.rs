@@ -2,7 +2,9 @@
 
 use crate::model::{Bar, Instrument, TPOColorMode, TPOConfig, TPODisplayMode};
 use crate::studies::{Indicator, IndicatorValues, InputKind, InputValue, StudyInput};
+use chrono::{DateTime, SecondsFormat, Utc};
 use egui::Color32;
+use std::ops::RangeInclusive;
 
 /// Display choices of the study, in input order. Saved choices are indices, so new ones go last.
 const DISPLAYS: [TPODisplayMode; 3] = [
@@ -49,6 +51,30 @@ impl TimePriceOpportunity {
         }
     }
 
+    /// Input values that store the profile menu's merges and splits.
+    pub(crate) fn profile_edit_inputs(
+        composites: &[RangeInclusive<DateTime<Utc>>],
+        splits: &[DateTime<Utc>],
+    ) -> [(String, InputValue); 2] {
+        let instant = |time: &DateTime<Utc>| time.to_rfc3339_opts(SecondsFormat::AutoSi, true);
+        [
+            (
+                "composites".into(),
+                InputValue::Text(
+                    composites
+                        .iter()
+                        .map(|r| format!("{}/{}", instant(r.start()), instant(r.end())))
+                        .collect::<Vec<_>>()
+                        .join(";"),
+                ),
+            ),
+            (
+                "splits".into(),
+                InputValue::Text(splits.iter().map(instant).collect::<Vec<_>>().join(";")),
+            ),
+        ]
+    }
+
     fn update_tick_size(&mut self) {
         self.config.tick_size = self
             .instrument_tick
@@ -72,7 +98,7 @@ impl Indicator for TimePriceOpportunity {
     }
     fn inputs(&self) -> Vec<StudyInput> {
         let defaults = TPOConfig::default();
-        vec![
+        let mut inputs = vec![
             StudyInput::new(
                 "period",
                 "Period (minutes)",
@@ -282,7 +308,20 @@ impl Indicator for TimePriceOpportunity {
                 InputKind::Toggle,
             )
             .with_default(InputValue::Toggle(defaults.show_volume_profile)),
-        ]
+        ];
+        for (id, value) in Self::profile_edit_inputs(&self.config.composites, &self.config.splits) {
+            let label = if id == "composites" {
+                "Merged profiles"
+            } else {
+                "Profile splits"
+            };
+            inputs.push(
+                StudyInput::new(id, label, value, InputKind::Text)
+                    .with_default(InputValue::Text(String::new()))
+                    .shown_when("display", Vec::new()),
+            );
+        }
+        inputs
     }
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         match (id, value) {
@@ -339,6 +378,42 @@ impl Indicator for TimePriceOpportunity {
             ("poor_low", InputValue::Toggle(show)) => self.config.show_poor_low = show,
             ("extend_poor", InputValue::Toggle(show)) => self.config.extend_poor_extremes = show,
             ("volume_profile", InputValue::Toggle(show)) => self.config.show_volume_profile = show,
+            ("composites", InputValue::Text(text)) => {
+                let ranges = if text.is_empty() {
+                    Some(Vec::new())
+                } else {
+                    text.split(';')
+                        .map(|range| {
+                            let (start, end) = range.split_once('/')?;
+                            let start = DateTime::parse_from_rfc3339(start)
+                                .ok()?
+                                .with_timezone(&Utc);
+                            let end = DateTime::parse_from_rfc3339(end).ok()?.with_timezone(&Utc);
+                            (start <= end).then_some(start..=end)
+                        })
+                        .collect::<Option<Vec<_>>>()
+                };
+                self.config.composites = ranges
+                    .ok_or_else(|| crate::studies::StudyError::rejected(&self.inputs(), id))?;
+            }
+            ("splits", InputValue::Text(text)) => {
+                let instants = if text.is_empty() {
+                    Some(Vec::new())
+                } else {
+                    text.split(';')
+                        .map(|time| {
+                            DateTime::parse_from_rfc3339(time)
+                                .ok()
+                                .map(|time| time.with_timezone(&Utc))
+                        })
+                        .collect::<Option<Vec<_>>>()
+                };
+                let mut instants = instants
+                    .ok_or_else(|| crate::studies::StudyError::rejected(&self.inputs(), id))?;
+                instants.sort_unstable();
+                instants.dedup();
+                self.config.splits = instants;
+            }
             _ => return Err(crate::studies::StudyError::rejected(&self.inputs(), id)),
         }
         Ok(())

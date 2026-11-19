@@ -1355,7 +1355,15 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
         split.set_visible_logical_range(crate::model::LogicalRange::new(-1.0, 9.0));
         let (_, shapes) = frame(&mut split, &mut split_menus, vec![]);
         let profiles = |chart: &Chart| -> Vec<(DateTime<chrono::Utc>, String, f64)> {
-            let mut config = chart.chart_type_params().tpo_config(None);
+            let mut config = if chart.chart_type() == ChartType::TimePriceOpportunity {
+                chart.chart_type_params().tpo_config(None)
+            } else {
+                chart
+                    .indicators()
+                    .find_map(|(_, study)| study.tpo())
+                    .unwrap()
+                    .clone()
+            };
             config.tick_size = 1.0;
             to_tpo_profiles(chart.bars(SeriesId::MAIN), &config, &chart.bar_clock())
                 .iter()
@@ -1552,6 +1560,147 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
             "Split profile at selected period",
         );
         assert_eq!(profiles(&columns), parts);
+
+        let mut study_chart = Chart::new(BarData::from_bars(bars.clone()));
+        study_chart.set_timeframe(Timeframe::Min30);
+        study_chart.set_instrument(Some(crate::model::Instrument::new("X").with_tick_size(1.0)));
+        let study_id =
+            study_chart.add_indicator(Box::new(crate::studies::TimePriceOpportunity::default()));
+        let mut study_menus = ChartMenus::default();
+        frame(&mut study_chart, &mut study_menus, vec![]);
+        study_chart.set_visible_logical_range(crate::model::LogicalRange::new(-1.0, 9.0));
+        assert_eq!(profiles(&study_chart), whole);
+        pick(
+            &mut study_chart,
+            &mut study_menus,
+            0,
+            "Merge with next profile",
+        );
+        assert_eq!(profiles(&study_chart), joined);
+        let (_, shapes) = frame(&mut study_chart, &mut study_menus, vec![]);
+        let map = study_chart.get_chart_mapping();
+        // Only the second session's C reaches row 101.
+        let c = letter(
+            &shapes,
+            "C",
+            map.rect.left()..map.rect.right(),
+            map.price_to_y(101.0),
+        )
+        .unwrap();
+        pick_at(
+            &mut study_chart,
+            &mut study_menus,
+            c,
+            "Split profile at selected period",
+        );
+        let divided = [
+            (at(0), "AABBBCCDDAAABBB".to_owned(), 102.0),
+            (day(1) + Duration::minutes(60), "CCCDDD".to_owned(), 100.0),
+        ];
+        assert_eq!(profiles(&study_chart), divided);
+        assert!(study_chart.undo());
+        assert_eq!(profiles(&study_chart), joined);
+        assert!(study_chart.undo());
+        assert_eq!(profiles(&study_chart), whole);
+        assert!(study_chart.redo());
+        assert!(study_chart.redo());
+        assert_eq!(profiles(&study_chart), divided);
+        let layout = SavedLayout::new(
+            ChartLayoutMode::Single,
+            vec![study_chart.snapshot().unwrap()],
+        );
+        let saved = SavedLayout::from_json(&layout.to_json().unwrap()).unwrap();
+        let mut restored = Chart::new(BarData::from_bars(bars.clone()));
+        restored.restore(&saved.charts[0]).unwrap();
+        assert_eq!(profiles(&restored), divided);
+        let (restored_id, _) = restored.indicators().next().unwrap();
+        let mut restored_menus = ChartMenus::default();
+        frame(&mut restored, &mut restored_menus, vec![]);
+        let map = restored.get_chart_mapping();
+        let stale = TpoMenu::open(
+            &restored,
+            Pos2::new(
+                map.idx_to_x(0).max(map.rect.left()) + 4.0,
+                map.price_to_y(101.0),
+            ),
+        )
+        .unwrap();
+        // A menu opened before another boundary edit must not overwrite the newer input.
+        restored
+            .indicator_mut(restored_id)
+            .unwrap()
+            .set_input(
+                "splits",
+                crate::studies::InputValue::Text("1970-01-02T01:30:00Z".into()),
+            )
+            .unwrap();
+        restored.user_action(|chart| stale.apply(chart, &ContextMenuAction::ResetProfileEdits));
+        assert!(
+            !restored
+                .indicators()
+                .next()
+                .unwrap()
+                .1
+                .tpo()
+                .unwrap()
+                .splits
+                .is_empty()
+        );
+        let config = study_chart
+            .indicators()
+            .find(|(id, _)| *id == study_id)
+            .unwrap()
+            .1
+            .tpo()
+            .unwrap();
+        let before = (config.composites.clone(), config.splits.clone());
+        for (id, invalid) in [
+            ("splits", "bad"),
+            ("splits", "1970-01-02T01:30:00Z;bad"),
+            (
+                "composites",
+                "1970-01-03T00:00:00Z/1970-01-04T00:00:00Z;bad",
+            ),
+            ("composites", "1970-01-03T00:00:00Z/1970-01-02T00:00:00Z"),
+        ] {
+            assert!(
+                study_chart
+                    .indicator_mut(study_id)
+                    .unwrap()
+                    .set_input(id, crate::studies::InputValue::Text(invalid.into()))
+                    .is_err()
+            );
+            let config = study_chart
+                .indicators()
+                .find(|(id, _)| *id == study_id)
+                .unwrap()
+                .1
+                .tpo()
+                .unwrap();
+            assert_eq!(
+                (&config.composites, &config.splits),
+                (&before.0, &before.1),
+                "{id}: {invalid}"
+            );
+        }
+        pick(
+            &mut study_chart,
+            &mut study_menus,
+            0,
+            "Reset merges and splits",
+        );
+        assert_eq!(profiles(&study_chart), whole);
+        assert!(study_chart.undo());
+        assert_eq!(profiles(&study_chart), divided);
+        frame(&mut study_chart, &mut study_menus, vec![]);
+        let map = study_chart.get_chart_mapping();
+        let pos = Pos2::new(
+            map.idx_to_x(0).max(map.rect.left()) + 4.0,
+            map.price_to_y(101.0),
+        );
+        assert!(TpoMenu::open(&study_chart, pos).is_some());
+        study_chart.set_indicators_hidden(true);
+        assert!(TpoMenu::open(&study_chart, pos).is_none());
 
         let bars = (0..14)
             .map(|i| {

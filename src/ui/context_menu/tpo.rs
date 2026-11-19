@@ -1,14 +1,25 @@
 //! Merge, split and reset displayed TPO profiles through composite ranges and split instants.
 
 use super::{ContextMenuAction, MenuEntry, MenuItem};
-use crate::model::{BarClock, ChartType, ChartTypeParams};
+use crate::model::{BarClock, ChartType, ChartTypeParams, TPOConfig};
+use crate::studies::TimePriceOpportunity;
 use crate::widget::{Chart, SeriesId};
 use chrono::{DateTime, Utc};
 use egui::Pos2;
 use std::ops::RangeInclusive;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TpoOwner {
+    /// Profile edits of the main TPO series.
+    ChartType,
+    /// Profile edits stored on a TPO study.
+    Study(SeriesId),
+}
+
 #[derive(Debug)]
 pub(super) struct TpoMenu {
+    owner: TpoOwner,
+    config: TPOConfig,
     params: ChartTypeParams,
     clock: BarClock,
     symbol: String,
@@ -22,27 +33,53 @@ pub(super) struct TpoMenu {
 
 impl TpoMenu {
     pub(super) fn open(chart: &Chart, pos: Pos2) -> Option<Self> {
-        if chart.chart_type() != ChartType::TimePriceOpportunity || !chart.is_main_series_visible()
-        {
-            return None;
-        }
         let params = chart.chart_type_params().clone();
-        let clock = chart.profile_clock();
+        let clock = chart.tpo_clock();
         let bars = chart.bars(SeriesId::MAIN);
         let (start, end) = chart.state().visible_range();
         let tick = chart.instrument().and_then(|i| i.tick_size);
-        let config = params.tpo_config(tick);
-        let (open, period) = crate::chart::rendering::candles::tpo::profile_at(
-            bars,
-            start..end,
-            chart.state().revision(),
-            &config,
-            tick,
-            &clock,
-            &chart.get_chart_mapping(),
-            pos,
-        )?;
-        let composite = |time| params.tpo_composites.iter().position(|r| r.contains(&time));
+        let mapping = chart.get_chart_mapping();
+        let hit = |config: &TPOConfig| {
+            crate::chart::rendering::candles::tpo::profile_at(
+                bars,
+                start..end,
+                chart.state().revision(),
+                config,
+                tick,
+                &clock,
+                &mapping,
+                pos,
+            )
+        };
+        let (owner, config, (open, period)) =
+            if chart.chart_type() == ChartType::TimePriceOpportunity {
+                if !chart.is_main_series_visible() {
+                    return None;
+                }
+                let config = params.tpo_config(tick);
+                let profile = hit(&config)?;
+                (TpoOwner::ChartType, config, profile)
+            } else {
+                if chart.chart_type().is_time_independent()
+                    || chart.chart_type() == ChartType::SessionVolumeProfile
+                    || chart.indicators_hidden()
+                {
+                    return None;
+                }
+                chart
+                    .indicators()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .find_map(|(id, study)| {
+                        if !study.is_visible() || !chart.indicator_user_edit_enabled(id) {
+                            return None;
+                        }
+                        let config = study.tpo()?;
+                        Some((TpoOwner::Study(id), config.clone(), hit(config)?))
+                    })?
+            };
+        let composite = |time| config.composites.iter().position(|r| r.contains(&time));
         let sessions = clock.sessions();
         let opens: Vec<_> =
             crate::model::tpo::session_starts(bars, &sessions, config.split_hours(), &[])
@@ -50,12 +87,9 @@ impl TpoMenu {
                 .map(|i| bars[i].time)
                 .collect();
         let mut groups: Vec<RangeInclusive<DateTime<Utc>>> = Vec::new();
-        for i in crate::model::tpo::session_starts(
-            bars,
-            &sessions,
-            config.split_hours(),
-            &params.tpo_splits,
-        ) {
+        for i in
+            crate::model::tpo::session_starts(bars, &sessions, config.split_hours(), &config.splits)
+        {
             let time = bars[i].time;
             let previous = bars[..i]
                 .iter()
@@ -67,7 +101,7 @@ impl TpoMenu {
                         && composite(*last.start()) == composite(time))
                         || (opens.binary_search(&time).is_ok()
                             && !crate::model::tpo::split_between(
-                                &params.tpo_splits,
+                                &config.splits,
                                 previous,
                                 time,
                             )
@@ -87,7 +121,7 @@ impl TpoMenu {
         let range = |i: usize| {
             let group = &groups[i];
             composite(*group.start())
-                .map_or_else(|| group.clone(), |i| params.tpo_composites[i].clone())
+                .map_or_else(|| group.clone(), |i| config.composites[i].clone())
         };
         let merge = |first: usize, second: usize| {
             let composite_kept = composite(*groups[first].start()).is_some()
@@ -96,7 +130,7 @@ impl TpoMenu {
             (*range(first).start()..=*range(second).end(), composite_kept)
         };
         let split = period.filter(|time| *time > open).map(|time| {
-            let mut splits = params.tpo_splits.clone();
+            let mut splits = config.splits.clone();
             if opens.binary_search(&time).is_err()
                 || config.profile_period != crate::model::TPOProfilePeriod::Session
             {
@@ -104,7 +138,7 @@ impl TpoMenu {
                 splits.sort_unstable();
                 splits.dedup();
             }
-            let mut composites = params.tpo_composites.clone();
+            let mut composites = config.composites.clone();
             if let Some(i) = composite(open) {
                 let range = composites.remove(i);
                 let previous = crate::model::tpo::session_starts(
@@ -132,6 +166,8 @@ impl TpoMenu {
             previous: at.checked_sub(1).map(|i| merge(i, at)),
             next: (at + 1 < groups.len()).then(|| merge(at, at + 1)),
             split,
+            owner,
+            config,
             params,
             clock,
             symbol: chart.symbol().to_owned(),
@@ -158,7 +194,7 @@ impl TpoMenu {
             (
                 "Reset merges and splits",
                 ContextMenuAction::ResetProfileEdits,
-                !self.params.tpo_composites.is_empty() || !self.params.tpo_splits.is_empty(),
+                !self.config.composites.is_empty() || !self.config.splits.is_empty(),
             ),
         ]
         .into_iter()
@@ -171,14 +207,34 @@ impl TpoMenu {
     }
 
     pub(super) fn apply(&self, chart: &mut Chart, action: &ContextMenuAction) {
-        if chart.chart_type() != ChartType::TimePriceOpportunity
-            || chart.chart_type_params() != &self.params
-            || chart.symbol() != self.symbol
-            || chart.profile_clock() != self.clock
-        {
+        if chart.symbol() != self.symbol || chart.tpo_clock() != self.clock {
             return;
         }
-        let mut params = self.params.clone();
+        match self.owner {
+            TpoOwner::ChartType
+                if chart.chart_type() != ChartType::TimePriceOpportunity
+                    || chart.chart_type_params() != &self.params =>
+            {
+                return;
+            }
+            TpoOwner::Study(id) => {
+                let current = chart
+                    .indicators()
+                    .find(|(study_id, _)| *study_id == id)
+                    .and_then(|(_, study)| study.tpo());
+                if !chart.indicator_user_edit_enabled(id)
+                    || current.is_none_or(|config| {
+                        config.composites != self.config.composites
+                            || config.splits != self.config.splits
+                    })
+                {
+                    return;
+                }
+            }
+            _ => {}
+        }
+        let mut composites = self.config.composites.clone();
+        let mut splits = self.config.splits.clone();
         match action {
             ContextMenuAction::MergeTpoPrevious | ContextMenuAction::MergeTpoNext => {
                 let merge = if *action == ContextMenuAction::MergeTpoPrevious {
@@ -189,30 +245,42 @@ impl TpoMenu {
                 let Some((range, composite)) = merge else {
                     return;
                 };
-                params
-                    .tpo_splits
-                    .retain(|time| !(range.start() < time && time <= range.end()));
+                splits.retain(|time| !(range.start() < time && time <= range.end()));
                 if *composite {
                     // Keep host endpoints beyond the loaded history when replacing composites.
-                    params
-                        .tpo_composites
-                        .retain(|r| r.end() < range.start() || r.start() > range.end());
-                    params.tpo_composites.push(range.clone());
+                    composites.retain(|r| r.end() < range.start() || r.start() > range.end());
+                    composites.push(range.clone());
                 }
             }
             ContextMenuAction::SplitTpoProfile => {
-                let Some((composites, splits)) = &self.split else {
+                let Some((new_composites, new_splits)) = &self.split else {
                     return;
                 };
-                params.tpo_composites = composites.clone();
-                params.tpo_splits = splits.clone();
+                composites = new_composites.clone();
+                splits = new_splits.clone();
             }
             ContextMenuAction::ResetProfileEdits => {
-                params.tpo_composites.clear();
-                params.tpo_splits.clear();
+                composites.clear();
+                splits.clear();
             }
             _ => return,
         }
-        chart.apply_chart_type_params(params);
+        match self.owner {
+            TpoOwner::ChartType => {
+                let mut params = self.params.clone();
+                params.tpo_composites = composites;
+                params.tpo_splits = splits;
+                chart.apply_chart_type_params(params);
+            }
+            TpoOwner::Study(id) => {
+                if let Some(study) = chart.indicator_mut(id) {
+                    let settings = study.settings();
+                    let _ = study.apply_settings(
+                        &TimePriceOpportunity::profile_edit_inputs(&composites, &splits),
+                        settings,
+                    );
+                }
+            }
+        }
     }
 }

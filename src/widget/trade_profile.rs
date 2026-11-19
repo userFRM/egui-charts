@@ -105,6 +105,21 @@ impl Chart {
         self.profile_division().0
     }
 
+    /// The calendar TPO profiles are painted on: the chart's, in the instrument's zone when it
+    /// has no trading hours.
+    #[cfg(feature = "ui")]
+    pub(crate) fn tpo_clock(&self) -> BarClock {
+        let mut clock = self.bar_clock();
+        if let Some(zone) = self
+            .instrument()
+            .filter(|i| i.session.is_none())
+            .and_then(|i| i.time_zone.as_ref())
+        {
+            clock = clock.with_timezone(zone.clone());
+        }
+        clock
+    }
+
     /// The calendar that divides the chart into profile sessions and the choice that divides
     /// those further: the pre-market, post-market or segment choice, otherwise
     /// [`ProfileSession::Chart`].

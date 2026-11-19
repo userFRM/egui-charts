@@ -1095,6 +1095,11 @@ mod tests {
             ("poor_low", InputValue::Toggle(true)),
             ("extend_poor", InputValue::Toggle(true)),
             ("volume_profile", InputValue::Toggle(true)),
+            (
+                "composites",
+                InputValue::Text("1970-01-01T00:00:00Z/1970-01-02T00:00:00Z".into()),
+            ),
+            ("splits", InputValue::Text("1970-01-02T01:00:00Z".into())),
         ] {
             tpo.set_input(id, value.clone()).unwrap();
             assert_eq!(
