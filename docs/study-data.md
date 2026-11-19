@@ -37,7 +37,8 @@ reference prices show N/A.
 
 Each symbol in Performance's Symbol list adds a row measured from that symbol's own latest daily
 close: the study requests the symbol's daily bars on every interval, from the oldest date any
-row's periods reach, and a symbol without them shows N/A. Its Timeframe list sets the period
+row's periods reach, and a symbol without them shows N/A. While Include chart symbol is on, a
+listed chart symbol shares the chart symbol's first row. Its Timeframe list sets the period
 columns, such as 5D, 1W, 3M, YTD or 2Y; its six plots keep the chart symbol's standard periods.
 
 With Use Daily Bars enabled on an intraday chart, Pivot Points Standard and Projected Pivot

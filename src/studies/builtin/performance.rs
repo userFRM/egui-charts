@@ -10,10 +10,11 @@
 //! those daily bars back to the oldest period's date, one year before the latest with the
 //! default periods. Missing history and a zero reference close have no value.
 //!
-//! The table has a row for the chart symbol and one for each symbol of the Symbol list, whose
-//! daily bars the study requests on every interval and measures from that symbol's own latest
-//! close, and a column for each period of the Timeframe list. The six plots keep the chart
-//! symbol's standard periods.
+//! The table has a row for the chart symbol and one for each other symbol of the Symbol list,
+//! whose daily bars the study requests on every interval and measures from that symbol's own
+//! latest close, and a column for each period of the Timeframe list. With Include chart symbol
+//! off, a listed chart symbol has a row of its own. The six plots keep the chart symbol's
+//! standard periods.
 
 use super::anchor_period::ExchangeDays;
 use crate::model::{Bar, Instrument, Timeframe};
@@ -184,8 +185,8 @@ impl Performance {
     }
 
     /// Fills the table from the latest closes: a row for the chart symbol when it is included,
-    /// then one for each compared symbol, under a column for each listed period, each change on
-    /// its sign's colour at an intensity growing up to the cutoff.
+    /// then one for each other compared symbol, under a column for each listed period, each
+    /// change on its sign's colour at an intensity growing up to the cutoff.
     fn fill_table(&mut self) {
         let periods = table_periods(&self.periods);
         let changes = |latest: Option<&(NaiveDate, f64)>, histories: [&[(NaiveDate, f64)]; 2]| {
@@ -207,6 +208,10 @@ impl Performance {
             rows.push((label, changes(self.history.last(), histories)));
         }
         for (symbol, closes) in &self.compared {
+            // The chart symbol's row stands for a listed copy of it.
+            if self.include_chart_symbol && *symbol == self.chart_symbol {
+                continue;
+            }
             rows.push((symbol.clone(), changes(closes.last(), [&closes[..], &[]])));
         }
         let fill = |change: Option<f64>| match change {
@@ -680,6 +685,7 @@ mod tests {
     /// The chart symbol and each listed symbol get a row under a column per listed period, each
     /// symbol measured from its own latest daily close and one without history showing N/A,
     /// and each change fills its cell with its sign's colour, at full intensity from the cutoff.
+    /// A listed chart symbol shares its row while it is included.
     #[test]
     fn performance_compares_symbols_over_the_listed_periods() {
         use crate::model::{BarClock, Timeframe};
@@ -850,5 +856,46 @@ mod tests {
             (table.position, table.width, table.height),
             (TablePosition::TopLeft, Some(0.5), Some(0.25))
         );
+
+        // With the chart symbol included, a listed copy of it is not a second row: the chart's
+        // row comes first with the chart's own changes, the other listed symbols follow in list
+        // order. Without it, the listed AAPL is a row of its own, N/A without daily bars.
+        let aapl = (
+            "AAPL".to_owned(),
+            vec![
+                Some(20.0),
+                Some(44.0),
+                Some(80.0),
+                Some(125.0),
+                Some(80.0),
+                None,
+            ],
+        );
+        let msft_row = (
+            "MSFT".to_owned(),
+            [25.0, -50.0, 50.0, 100.0, 50.0, 20.0].map(Some).to_vec(),
+        );
+        for (symbols, include, expected) in [
+            ("AAPL, MSFT", true, [aapl.clone(), msft_row.clone()]),
+            ("MSFT, AAPL", true, [aapl.clone(), msft_row.clone()]),
+            ("MSFT", true, [aapl, msft_row.clone()]),
+            (
+                "AAPL, MSFT",
+                false,
+                [("AAPL".to_owned(), vec![None; 6]), msft_row],
+            ),
+        ] {
+            let mut study = Performance::new();
+            study.set_chart_symbol("AAPL");
+            study.set_timeframe(Timeframe::Min1);
+            study
+                .set_input("symbols", InputValue::Text(symbols.into()))
+                .unwrap();
+            study
+                .set_input("include_chart_symbol", InputValue::Toggle(include))
+                .unwrap();
+            study.update_data(&chart, 0, std::slice::from_ref(&source));
+            assert_eq!(rows(&study), expected, "{symbols}, include {include}");
+        }
     }
 }
