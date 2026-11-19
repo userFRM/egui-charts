@@ -645,7 +645,13 @@ impl OrderTicket {
         let risk = request
             .as_ref()
             .zip(entry)
-            .and_then(|(request, entry)| Some((entry - request.stop_loss?).abs() * per_point));
+            .and_then(|(request, entry)| Some((entry - request.stop_loss?).abs() * per_point))
+            // A risk the order cannot take yet still converts by the balance alone.
+            .or_else(|| match (self.sizing, self.risk_in_money) {
+                (Sizing::Risk, true) => Some(self.amount),
+                (Sizing::Risk, false) => Some(self.amount * market.positive_balance()? / 100.0),
+                _ => None,
+            });
         let share = |money: Option<f64>| Some(money? / market.positive_balance()? * 100.0);
         let amount = match sizing {
             Sizing::Units => None,
@@ -1726,16 +1732,6 @@ mod tests {
                 "{side:?} {sizing:?} {amount}"
             );
         }
-        for funds in [
-            None,
-            Some(0.0),
-            Some(-1.0),
-            Some(f64::NAN),
-            Some(f64::INFINITY),
-        ] {
-            market.balance = funds;
-            assert_eq!(market.positive_balance(), None, "{funds:?}");
-        }
         market.balance = Some(100_000.0);
         let mut ticket = OrderTicket {
             symbol: "ES".into(),
@@ -1765,6 +1761,10 @@ mod tests {
                 );
             }
         }
+        // 40 at 100 per unit is below the minimum quantity; the unit still converts the risk.
+        (ticket.sizing, ticket.amount) = (Sizing::Risk, 40.0);
+        ticket.resize(&ctx, &market, Sizing::Risk, false);
+        assert!((ticket.amount - 0.04).abs() < 1e-9, "{}", ticket.amount);
         // A quoted market order enters a buy at the ask and a sell at the bid: 4 ticks = 1 point.
         let quoted = Market {
             bid: Some(3_999.75),

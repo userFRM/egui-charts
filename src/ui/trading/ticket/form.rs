@@ -223,11 +223,20 @@ impl OrderTicket {
                 let response = dropdown(ui, caption);
                 let mut risk_in_money = self.risk_in_money;
                 egui::Popup::menu(&response).show(|ui| {
-                    ui.selectable_value(
-                        &mut risk_in_money,
-                        false,
-                        l10n::text(ui.ctx(), "Risk, % balance"),
+                    let share = ui.add_enabled(
+                        balance.is_some(),
+                        egui::Button::selectable(
+                            !risk_in_money,
+                            l10n::text(ui.ctx(), "Risk, % balance"),
+                        ),
                     );
+                    if share.clicked() {
+                        risk_in_money = false;
+                    }
+                    share.on_disabled_hover_text(l10n::text(
+                        ui.ctx(),
+                        "Needs the account's balance",
+                    ));
                     ui.selectable_value(&mut risk_in_money, true, in_money);
                 });
                 if risk_in_money != self.risk_in_money {
