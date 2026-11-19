@@ -191,6 +191,10 @@ impl OrderPreset {
             take_profit_levels: Vec::new(),
             first_level_stop_loss: None,
             stop_loss: None,
+            sizing: Some(PresetSizing::Units),
+            exits: true,
+            order_type: None,
+            time_in_force: None,
         }
     }
 }
@@ -228,10 +232,6 @@ impl PresetLevel {
             take_profit,
             share,
             stop_loss: None,
-            sizing: Some(PresetSizing::Units),
-            exits: true,
-            order_type: None,
-            time_in_force: None,
         }
     }
 }
