@@ -38,6 +38,7 @@ jobs:
       docs: ${{ steps.inputs.outputs.docs }}
       security: ${{ steps.inputs.outputs.security }}
       counts: ${{ steps.inputs.outputs.counts }}
+      linux: ${{ steps.inputs.outputs.linux }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -48,6 +49,9 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.sha || format('origin/{0}', github.event.repository.default_branch) }}
           HEAD_REF: ${{ github.event.pull_request.head.sha || github.sha }}
           EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          LINUX_RUNNER: ${{ vars.LINUX_RUNNER }}
         run: |
           # The pull request run measures the merge of the head into the base branch, so the
           # performance baseline is the base branch itself; the changed paths are the head's own.
@@ -78,12 +82,21 @@ jobs:
           fi
           printf '%s\n' "rust=$rust" "terminal=$terminal" "native=$native" "fmt=$fmt" \
             "docs=$docs" "security=$security" "counts=$counts" >> "$GITHUB_OUTPUT"
+          # Branches of this repository run the Linux check, feature, UI, terminal, format, documentation,
+          # API and security jobs on the runner label the LINUX_RUNNER repository variable names, when it
+          # is set. Forks and Dependabot keep GitHub-hosted runners, and so do the platform test matrix,
+          # the browser tests and the timing jobs, whose baselines are measured there.
+          linux=ubuntu-latest
+          if [[ -n $LINUX_RUNNER && $HEAD_REPO == "$GITHUB_REPOSITORY" && $PR_AUTHOR != 'dependabot[bot]' ]]; then
+            linux=$LINUX_RUNNER
+          fi
+          echo "linux=$linux" >> "$GITHUB_OUTPUT"
 
   semver:
     needs: changes
     if: "!cancelled() && github.event.pull_request.draft != true"
     name: Public API compatibility
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.changes.outputs.linux || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - name: Check input classification
@@ -112,7 +125,7 @@ jobs:
     needs: changes
     if: "!cancelled() && github.event.pull_request.draft != true"
     name: Check (${{ matrix.rust }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.changes.outputs.linux || 'ubuntu-latest' }}
     timeout-minutes: 15
     strategy:
       matrix:
@@ -358,7 +371,7 @@ jobs:
     needs: changes
     if: "!cancelled() && github.event.pull_request.draft != true"
     name: Test (Linux feature subsets and examples)
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.changes.outputs.linux || 'ubuntu-latest' }}
     timeout-minutes: 40
     steps:
       - name: Check input classification
@@ -409,7 +422,7 @@ jobs:
     needs: changes
     if: "!cancelled() && github.event.pull_request.draft != true"
     name: Test (Linux UI without named time zones)
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.changes.outputs.linux || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - name: Check input classification
@@ -773,7 +786,7 @@ jobs:
     needs: changes
     if: "!cancelled() && github.event.pull_request.draft != true"
     name: Terminal package
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.changes.outputs.linux || 'ubuntu-latest' }}
     timeout-minutes: 30
     steps:
       - name: Check input classification
@@ -802,7 +815,7 @@ jobs:
     needs: changes
     if: "!cancelled() && github.event.pull_request.draft != true"
     name: Format
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.changes.outputs.linux || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Check input classification
@@ -826,7 +839,7 @@ jobs:
     needs: changes
     if: "!cancelled() && github.event.pull_request.draft != true"
     name: Documentation
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.changes.outputs.linux || 'ubuntu-latest' }}
     timeout-minutes: 30
     steps:
       - name: Check input classification
@@ -863,7 +876,7 @@ jobs:
     needs: changes
     if: "!cancelled() && github.event.pull_request.draft != true"
     name: Security audit
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.changes.outputs.linux || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - name: Check input classification

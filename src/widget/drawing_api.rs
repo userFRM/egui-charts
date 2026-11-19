@@ -67,7 +67,8 @@ impl Chart {
     /// Returns a drawing's UTC anchors and prices, or `None` for an unknown id or an index
     /// without a time mapping. Retains exact supplied times between bars and in whitespace.
     /// An anchored text reports the time and price under the point it was last drawn at, which
-    /// change as the chart scrolls and zooms.
+    /// change as the chart scrolls and zooms; while a text moved outside the view waits to be
+    /// drawn inside its pane, the point it was given.
     pub fn drawing_points(&self, id: usize) -> Option<Vec<(DateTime<Utc>, f64)>> {
         self.drawings()
             .drawings
@@ -81,7 +82,8 @@ impl Chart {
 
     /// Replaces a drawing's anchors as one undoable edit. Invalid points and locked drawings
     /// leave the original untouched. Screen positions are rebuilt on the next frame.
-    /// An anchored text moves to the new point and keeps its place in the pane from there.
+    /// An anchored text moves to the new point and keeps its place in the pane from the first
+    /// frame that draws that point inside the pane.
     pub fn set_drawing_points(
         &mut self,
         id: usize,
@@ -104,8 +106,8 @@ impl Chart {
         self.drawings_mut()
             .edit_drawing(id, |target| {
                 target.chart_points = drawing.chart_points;
-                // A pane position would keep the text where it was; the next frame takes one
-                // at the new point.
+                // A pane position would keep the text where it was; the first frame that draws
+                // the new point inside the pane takes one there.
                 target.screen_anchor = None;
             })
             .map_err(DrawingError::Invalid)
@@ -269,6 +271,40 @@ impl Chart {
                 chart
                     .drawings_mut()
                     .edit_drawing(id, |drawing| drawing.regression_trend = Some(config))
+            })
+            .map_err(DrawingError::Invalid)?;
+        }
+        Ok(())
+    }
+
+    /// Replace a projection's levels, target zone backgrounds, coefficient labels and leg style
+    /// as one undoable edit. Unknown ids, locked drawings, other tools and invalid settings
+    /// change nothing.
+    pub fn set_projection_config(
+        &mut self,
+        id: usize,
+        config: crate::drawings::ProjectionConfig,
+    ) -> Result<(), DrawingError> {
+        let drawing = self
+            .drawings()
+            .drawings
+            .iter()
+            .find(|drawing| drawing.id == id)
+            .ok_or(DrawingError::UnknownDrawing(id))?;
+        if drawing.locked {
+            return Err(DrawingError::Locked(id));
+        }
+        if drawing.tool_type != crate::drawings::DrawingToolType::ProjectionTool {
+            return Err(DrawingError::Invalid("Drawing is not a projection"));
+        }
+        if !config.is_valid() {
+            return Err(DrawingError::Invalid("Invalid projection settings"));
+        }
+        if drawing.projection.as_ref() != Some(&config) {
+            self.user_action(|chart| {
+                chart
+                    .drawings_mut()
+                    .edit_drawing(id, |drawing| drawing.projection = Some(config))
             })
             .map_err(DrawingError::Invalid)?;
         }
@@ -508,6 +544,26 @@ impl Chart {
             .iter()
             .map(|pane| pane.id)
             .find(|pane| pane.0 == owner || self.pane_series_iter(*pane).any(|id| id.0 == owner))
+    }
+
+    /// The pane that draws the drawing being placed, once it has an anchor. `None` without one,
+    /// or when no pane draws its owner.
+    pub(super) fn placement_pane(&self) -> Option<PaneId> {
+        let drawing = (self.drawings.curr_drawing.as_ref())
+            .filter(|drawing| !drawing.chart_points.is_empty())?;
+        match drawing.pane {
+            Some(_) => self.owner_pane(drawing),
+            None => Some(self.main_series_pane()).filter(|pane| self.panes().contains(pane)),
+        }
+    }
+
+    /// Cancels the drawing being placed when `pane`, the pane that drew it before a removal or a
+    /// history step, no longer draws it, so its anchors never land in another pane. The tool
+    /// stays selected.
+    pub(super) fn keep_placement_in(&mut self, pane: Option<PaneId>) {
+        if pane.is_some() && self.placement_pane() != pane {
+            self.drawings.cancel_curr_drawing();
+        }
     }
 
     /// Moves drawing `id` into `pane` as one undoable edit, keeping its anchors and style; the
@@ -1134,6 +1190,91 @@ mod tests {
         chart.drawings_mut().drawings[0].tool_type = DrawingToolType::AnchoredVWAP;
         assert_eq!(chart.drawings().drawings[0].vwap, Some(edited));
         assert!(chart.undo());
+        assert!(!chart.can_undo());
+    }
+
+    /// Projection edits validate before changing drawings or history and commit once.
+    #[test]
+    fn projection_settings_are_validated_and_undoable() {
+        use crate::drawings::{DrawingTemplate, ProjectionConfig};
+        let mut chart = crate::widget::test_frames::chart(&[80.0], &[200.0]);
+        let mut drawing = Drawing::new(7, DrawingToolType::ProjectionTool);
+        drawing.chart_points = vec![
+            ChartPoint::new(10.0, 100.0),
+            ChartPoint::new(20.0, 150.0),
+            ChartPoint::new(40.0, 120.0),
+        ];
+        drawing.completed = true;
+        let original = drawing.projection.clone();
+        chart.drawings_mut().drawings.push(drawing);
+        assert_eq!(
+            chart.set_projection_config(77, ProjectionConfig::default()),
+            Err(DrawingError::UnknownDrawing(77))
+        );
+        for (tool, locked, expected) in [
+            (
+                DrawingToolType::TrendLine,
+                false,
+                DrawingError::Invalid("Drawing is not a projection"),
+            ),
+            (
+                DrawingToolType::ProjectionTool,
+                true,
+                DrawingError::Locked(7),
+            ),
+        ] {
+            let drawing = &mut chart.drawings_mut().drawings[0];
+            drawing.tool_type = tool;
+            drawing.locked = locked;
+            assert_eq!(
+                chart.set_projection_config(7, ProjectionConfig::default()),
+                Err(expected)
+            );
+        }
+        let drawing = &mut chart.drawings_mut().drawings[0];
+        drawing.locked = false;
+        for (coefficient, width) in [
+            (f32::NAN, None),
+            (f32::INFINITY, None),
+            (-0.5, None),
+            (100.5, None),
+            (1.0, Some(0.0)),
+            (1.0, Some(-1.0)),
+            (1.0, Some(f32::NAN)),
+            (1.0, Some(f32::INFINITY)),
+            (1.0, Some(100.5)),
+        ] {
+            let mut invalid = ProjectionConfig::default();
+            invalid.levels[0].coefficient = coefficient;
+            invalid.levels[0].width = width;
+            assert_eq!(
+                chart.set_projection_config(7, invalid.clone()),
+                Err(DrawingError::Invalid("Invalid projection settings"))
+            );
+            assert!(
+                chart
+                    .drawings_mut()
+                    .edit_drawing(7, |d| d.projection = Some(invalid.clone()))
+                    .is_err()
+            );
+            let mut template = DrawingTemplate::from_drawing(&chart.drawings().drawings[0]);
+            template.settings.projection = Some(invalid);
+            let mut peer = chart.drawings().drawings[0].clone();
+            assert!(template.apply_to(&mut peer).is_err());
+            assert_eq!(chart.drawings().drawings[0].projection, original);
+            assert!(!chart.can_undo());
+        }
+        let mut edited = ProjectionConfig::default();
+        edited.levels[0].coefficient = 0.0;
+        edited.levels[0].width = Some(100.0);
+        let mut far = edited.levels[0].clone();
+        far.coefficient = 100.0;
+        edited.levels.push(far);
+        chart.set_projection_config(7, edited.clone()).unwrap();
+        chart.set_projection_config(7, edited.clone()).unwrap();
+        assert_eq!(chart.drawings().drawings[0].projection, Some(edited));
+        assert!(chart.undo());
+        assert_eq!(chart.drawings().drawings[0].projection, original);
         assert!(!chart.can_undo());
     }
 

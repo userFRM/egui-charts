@@ -18,6 +18,7 @@ fn request() -> HistoryRequest {
         since: None,
         count: 2,
         extended_hours: false,
+        overnight_hours: false,
         adjusted: false,
         conversion: None,
     }
@@ -433,7 +434,8 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
         let mut targets = Vec::new();
         for body in [
             r#"{"supported_resolutions":["1","15","60","240","1D"],"exchanges":[{"value":"X"}],"symbols_types":[{"value":"stock"}]}"#,
-            r#"{"name":"ABC","ticker":"X:ABC","description":"ABC Inc","exchange":"X","type":"stock","minmov":5,"pricescale":100,"currency_code":"USD","volume_precision":2,"timezone":"UTC","session":"0930-1600:23456","supported_resolutions":["15"],"data_status":"streaming"}"#,
+            r#"{"name":"ABC","ticker":"X:ABC","description":"ABC Inc","exchange":"X","type":"stock","minmov":5,"pricescale":100,"currency_code":"USD","unit":"barrel","volume_precision":2,"timezone":"UTC","session":"0930-1600:23456","supported_resolutions":["15"],"data_status":"streaming"}"#,
+            r#"{"name":"ABC","ticker":"X:ABC","currency_code":"EUR","unit":"tonne"}"#,
             r#"[{"symbol":"X:BAD","timezone":"Mars/Olympus_Mons"},{"symbol":"X:ABC","description":"ABC Inc","type":"stock","exchange":"X","country":"GB","sector":"Energy","source":"Provider/A","root":"ABC","logo":"bytes://company","exchange_logo":"bytes://venue"}]"#,
             r#"{"s":"no_data","nextTime":-60}"#,
         ] {
@@ -491,6 +493,7 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
     assert_eq!(instrument.symbol, "X:ABC");
     assert_eq!(instrument.tick_size, Some(0.05)); // Five hundredths per price tick.
     assert_eq!(instrument.currency.as_deref(), Some("USD"));
+    assert_eq!(instrument.unit.as_deref(), Some("barrel"));
     assert_eq!(instrument.volume_decimals, Some(2));
     assert_eq!(
         instrument.supported_timeframes,
@@ -511,6 +514,11 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
         session.windows[0].open,
         chrono::NaiveTime::from_hms_opt(9, 30, 0).unwrap()
     );
+    feed.resolve_converted("X:ABC", "EUR/tonne", inbox.reply(2));
+    let converted = (*take().downcast::<Result<Instrument, FeedError>>().unwrap()).unwrap();
+    assert_eq!(converted.symbol, "X:ABC");
+    assert_eq!(converted.currency.as_deref(), Some("EUR"));
+    assert_eq!(converted.unit.as_deref(), Some("tonne"));
     let mut query = SymbolQuery::new("X:A & B");
     query.symbol_type = Some(SymbolType::Stock);
     query.exchange = Some("X/Y".into());
@@ -519,7 +527,7 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
     query.source = Some("Provider/A".into());
     query.offset = 7;
     query.limit = 10;
-    feed.search(query, inbox.reply(2));
+    feed.search(query, inbox.reply(3));
     let found = (*take()
         .downcast::<Result<Vec<Instrument>, FeedError>>()
         .unwrap())
@@ -533,19 +541,20 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
     assert_eq!(found[0].root.as_deref(), Some("ABC"));
     assert_eq!(found[0].logo.as_deref(), Some("bytes://company"));
     assert_eq!(found[0].exchange_logo.as_deref(), Some("bytes://venue"));
-    feed.history(request, inbox.reply(3));
+    feed.history(request, inbox.reply(4));
     let page = (*take().downcast::<Result<HistoryPage, FeedError>>().unwrap()).unwrap();
     assert_eq!(page.continue_before, DateTime::from_timestamp(-59, 0));
     let targets = server.join().unwrap();
     assert_eq!(
-        &targets[..3],
+        &targets[..4],
         [
             "/data/config",
             "/data/symbols?symbol=X%3AABC",
+            "/data/symbols?symbol=X%3AABC&conversion=EUR%2Ftonne",
             "/data/search?query=X%3AA%20%26%20B&type=stock&exchange=X%2FY&offset=7&limit=10&country=GB&sector=Energy%20%26%20utilities&source=Provider%2FA"
         ]
     );
-    assert!(targets[3].contains("&resolution=3M&countback=2&"));
+    assert!(targets[4].contains("&resolution=3M&countback=2&"));
 }
 
 #[test]
@@ -568,6 +577,7 @@ fn old_subscription_cannot_publish_or_schedule_after_cancellation() {
                 timeframe: Timeframe::Min1,
                 clock,
                 extended_hours: false,
+                overnight_hours: false,
                 conversion: None,
                 sink,
             },
@@ -674,6 +684,7 @@ fn stalled_requests_answer_a_network_error() {
         timeframe: Timeframe::Min1,
         clock,
         extended_hours: false,
+        overnight_hours: false,
         conversion: None,
         sink,
     });
@@ -716,6 +727,7 @@ fn only_connection_attempts_report_connecting() {
                 timeframe: Timeframe::Min1,
                 clock,
                 extended_hours: false,
+                overnight_hours: false,
                 conversion: None,
                 sink,
             },

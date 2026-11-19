@@ -418,11 +418,26 @@ impl StudyTemplate {
             && value("smooth1") == value("smooth2");
         let mut template = self.clone();
         match study {
-            // Older Knoxville saves drew only momentum and its confirmation marks.
-            "Knoxville Divergence" if declares("price_lines") && !has("price_lines") => {
-                template
-                    .inputs
-                    .push(("price_lines".to_owned(), InputValue::Toggle(false)));
+            // Older Knoxville saves drew only momentum and its confirmation marks, and saves
+            // from before the window rule took pivot sides and the momentum pane's own scale.
+            "Knoxville Divergence"
+                if (declares("price_lines") && !has("price_lines"))
+                    || ((has("left") || has("right")) && !declares("left")) =>
+            {
+                if declares("price_lines") && !has("price_lines") {
+                    template
+                        .inputs
+                        .push(("price_lines".to_owned(), InputValue::Toggle(false)));
+                }
+                if !declares("left") {
+                    template
+                        .inputs
+                        .retain(|(id, _)| !matches!(id.as_str(), "left" | "right"));
+                    // Marks at prices must share their pane's price scale.
+                    if template.scale == Some(StudyScale::Independent) {
+                        template.scale = None;
+                    }
+                }
             }
             // One multiplier set both bands before each had its own.
             "LinReg Channel" if has("multiplier") => {
@@ -469,6 +484,12 @@ impl StudyTemplate {
                 template
                     .inputs
                     .push(("midpoint".to_owned(), InputValue::Toggle(true)));
+            }
+            // Missed pivots were swings before they could follow a period.
+            "Missed Pivot Levels" if !has("period") => {
+                template
+                    .inputs
+                    .push(("period".to_owned(), InputValue::Choice(0)));
             }
             // Higher-interval candles drew their saved interval before one could follow the chart's.
             "Higher Interval Candles" if !has("auto_interval") => {
@@ -949,8 +970,9 @@ mod tests {
             Box::new(CVD::default()),
             Box::new(HL2::default()),
             Box::new(HLC3::default()),
-            Box::new(PriceChannel::default()),
             Box::new(EhlersFisher::default()),
+            // A catalogue study whose saved copies were written while it was outside the catalogue.
+            Box::new(PriceChannel::default()),
             // A catalogue study with the bars per year it is annualized over.
             Box::new(CloseToCloseVol::default().with_trading_days(365.0)),
             // Fewer averages than the ribbon that the name creates, with a crossing pair.
@@ -1125,6 +1147,17 @@ mod tests {
             expected.plot_variants.push(Vec::new());
             assert_eq!(restored.settings(), expected, "{}", saved.name);
             let inputs = restored.inputs();
+            if saved.name == "Missed Pivot Levels" {
+                assert_eq!(
+                    inputs
+                        .iter()
+                        .find(|input| input.id == "period")
+                        .unwrap()
+                        .value,
+                    InputValue::Choice(0)
+                );
+                assert_eq!(Some(restored.scale()), saved.scale);
+            }
             for (id, value) in &saved.inputs {
                 assert_eq!(
                     inputs
@@ -1232,6 +1265,17 @@ mod tests {
                 "Time Price Opportunity",
                 vec![("midpoint", Toggle(false))],
                 vec![("midpoint", Toggle(false))],
+            ),
+            // Saved before levels could follow a period, when they were swings.
+            (
+                "Missed Pivot Levels",
+                vec![("left", Length(5))],
+                vec![("left", Length(5)), ("period", Choice(0))],
+            ),
+            (
+                "Missed Pivot Levels",
+                vec![("period", Choice(2))],
+                vec![("period", Choice(2))],
             ),
             // Saved before the interval could follow the chart's, as new studies do.
             (
@@ -1429,8 +1473,9 @@ mod tests {
     /// input labels retain the ids, values and styles of the saved studies.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
-        // This Knoxville template was saved before price lines existed. Its pane outputs stay
-        // styled as saved; enabling price lines and saving again retains that explicit choice.
+        // This Knoxville template was saved before price lines and before the window rule. It
+        // keeps its inputs and styles, without pivot sides and on the price scale, with lines
+        // off; enabling them and saving again retains that choice.
         let saved: StudyTemplate = serde_json::from_str(
             r#"{"name":"Knoxville Divergence","inputs":[["momentum_period",{"Length":1}],["rsi_period",{"Length":2}],["left",{"Length":1}],["right",{"Length":1}],["lookback",{"Length":10}],["oversold",{"Length":30}],["overbought",{"Length":70}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.KnoxvilleDivergence.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleUp","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
         ).unwrap();
@@ -1439,8 +1484,39 @@ mod tests {
         let mut restored = saved.create().unwrap();
         restored.calculate(&bars);
         assert_eq!(restored.settings().plots, saved.settings.plots);
-        assert!(!restored.is_overlay());
-        assert_eq!(restored.values().value(1, 4), Some(-1.5));
+        let inputs = restored.inputs();
+        for (id, value) in [
+            ("momentum_period", InputValue::Length(1)),
+            ("rsi_period", InputValue::Length(2)),
+            ("lookback", InputValue::Length(10)),
+            ("oversold", InputValue::Length(30)),
+            ("overbought", InputValue::Length(70)),
+            ("price_lines", InputValue::Toggle(false)),
+        ] {
+            assert_eq!(
+                inputs
+                    .iter()
+                    .find(|input| input.id == id)
+                    .map(|input| &input.value),
+                Some(&value),
+                "{id}"
+            );
+        }
+        assert!(
+            !inputs
+                .iter()
+                .any(|input| matches!(input.id.as_str(), "left" | "right"))
+        );
+        assert!(restored.is_overlay());
+        assert_eq!(restored.scale(), StudyScale::Main);
+        assert!(restored.pane().levels.is_empty());
+        assert!(
+            !restored.plot_style(0).visible,
+            "momentum is only a legend readout"
+        );
+        assert_eq!(restored.values().value(0, 3), Some(-1.5));
+        assert_eq!(restored.values().value(1, 3), Some(7.5));
+        assert_eq!(restored.values().value(1, 4), None);
         assert!(restored.price_segments().is_empty());
         restored
             .set_input("price_lines", InputValue::Toggle(true))
@@ -1450,17 +1526,34 @@ mod tests {
             .create()
             .unwrap();
         again.calculate(&bars);
-        let mut fresh = ConfiguredStudy::new(Box::new(crate::studies::KnoxvilleDivergence::new(
-            1, 2, 1, 1, 10,
-        )));
+        let mut fresh = crate::studies::KnoxvilleDivergence::default();
+        for (id, value) in [("momentum_period", 1), ("rsi_period", 2), ("lookback", 10)] {
+            fresh.set_input(id, InputValue::Length(value)).unwrap();
+        }
+        let mut fresh = ConfiguredStudy::new(Box::new(fresh));
         fresh.calculate(&bars);
-        assert_eq!(fresh.price_segments().len(), 1);
+        assert_eq!(
+            fresh.price_segments(),
+            [crate::studies::StudySegment {
+                start_bar: 1,
+                start_price: 8.0,
+                end_bar: 3,
+                end_price: 7.5,
+                plot: 1,
+            }]
+        );
         assert_eq!(restored.price_segments(), fresh.price_segments());
         assert_eq!(again.price_segments(), fresh.price_segments());
 
         // Chart saves made before the input labels changed keep every saved id, value and
         // style while the editor describes the three study-local controls distinctly.
         for (saved, id, label) in [
+            // Literal default study captured on origin/main 04d6d16e7, before period pivots.
+            (
+                r#"{"name":"Missed Pivot Levels","inputs":[["left",{"Length":10}],["right",{"Length":10}],["tolerance",{"Number":0.1}],["max_levels",{"Length":20}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MissedPivots.html","plots":[{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[15,3,4,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+                "left",
+                "Pivot left bars",
+            ),
             // Saved before Elliott Wave gained its swing and display inputs.
             (
                 r#"{"name":"Elliott Wave","inputs":[["left",{"Length":2}],["right",{"Length":3}],["history",{"Length":7}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ElliottWave.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Circles","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleUp","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
