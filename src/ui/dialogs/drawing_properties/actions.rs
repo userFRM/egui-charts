@@ -766,6 +766,7 @@ mod tests {
                     &mut props,
                     &mut pickers,
                     &mut Default::default(),
+                    None,
                 );
             });
             let labels: Vec<_> = output

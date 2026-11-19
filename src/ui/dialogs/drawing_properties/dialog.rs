@@ -40,6 +40,7 @@ pub struct DrawingPropertiesDialog {
     template_name: String,
     saving_template: bool,
     default_template: Option<DrawingTemplate>,
+    custom_tool: Option<crate::drawings::RegisteredDrawingTool>,
     /// Validation error from the most recent edit.
     pub error: Option<String>,
 }
@@ -67,11 +68,13 @@ impl DrawingPropertiesDialog {
             template_name: String::new(),
             saving_template: false,
             default_template: None,
+            custom_tool: None,
         }
     }
 
     /// Open the dialog for a specific drawing
     pub fn open(&mut self, id: DrawingId, name: String, props: DrawingProps) {
+        self.custom_tool = None;
         self.is_open = true;
         self.drawing_id = Some(id);
         self.drawing_name = name;
@@ -96,6 +99,11 @@ impl DrawingPropertiesDialog {
             chart.drawings().registry.tool_name(drawing).into(),
             DrawingProps::from_drawing(drawing, chart),
         );
+        self.custom_tool = drawing
+            .custom_tool
+            .as_deref()
+            .and_then(|id| chart.drawings().registry.get(id))
+            .cloned();
         let manager = chart.drawings();
         self.default_template = Some(DrawingTemplate::from_drawing(&match drawing
             .custom_tool
@@ -519,6 +527,7 @@ impl DrawingPropertiesDialog {
                         &mut self.props,
                         &mut state.pickers,
                         &mut state.text_pickers,
+                        self.custom_tool.as_ref(),
                     );
                 }
                 PropertiesTab::Inputs => {
@@ -639,6 +648,55 @@ mod tests {
     use crate::model::BarData;
     use crate::widget::Chart;
     use egui::{Color32, Pos2, Rect, Shape};
+
+    /// The registered settings editor is reachable, and Ok records its edit as one undo step.
+    #[test]
+    fn registered_tool_settings_show_in_the_style_tab() {
+        let ctx = Context::default();
+        let mut chart = Chart::new(BarData::new());
+        let mut tool = crate::drawings::registry::tests::midpoint();
+        tool.style.fill = false;
+        tool.style.line_ends = false;
+        chart
+            .drawings_mut()
+            .registry
+            .register("midpoint", tool)
+            .unwrap();
+        let mut drawing = Drawing::custom("midpoint");
+        drawing.id = 7;
+        drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+        chart.drawings_mut().drawings.push(drawing);
+        let mut dialog = DrawingPropertiesDialog::new();
+        assert!(dialog.open_for_chart(&chart, DrawingId(7)));
+        frame(&mut dialog, &mut chart, &ctx, vec![]);
+        let labels = frame(&mut dialog, &mut chart, &ctx, vec![]);
+        for (label, present) in [
+            ("Radius", true),
+            ("Color", true),
+            ("Line width", true),
+            ("Line style", true),
+            ("Fill", false),
+            ("Line start", false),
+            ("Line end", false),
+        ] {
+            assert_eq!(
+                labels.iter().any(|(text, _)| text == label),
+                present,
+                "{label}"
+            );
+        }
+        click(&mut dialog, &mut chart, &ctx, "Ok");
+        assert_eq!(
+            chart.drawings().drawings[0].custom_settings,
+            serde_json::json!({"radius": 10})
+        );
+        assert!(chart.undo());
+        assert_eq!(
+            chart.drawings().drawings[0].custom_settings,
+            serde_json::Value::Null
+        );
+        assert!(!chart.can_undo());
+    }
 
     fn frame(
         dialog: &mut DrawingPropertiesDialog,

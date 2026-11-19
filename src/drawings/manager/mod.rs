@@ -957,6 +957,7 @@ impl DrawingManager {
     }
 
     /// Saves a visible default under its registered tool id or built-in tool type.
+    #[cfg(any(feature = "ui", test))]
     pub(crate) fn save_tool_default(&mut self, mut template: super::DrawingTemplate) {
         template.settings.visible = true;
         match template.settings.custom_tool.clone() {

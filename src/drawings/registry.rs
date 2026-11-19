@@ -15,8 +15,10 @@ pub trait DrawingRenderer: Send + Sync {
     /// Tests the tool's geometry in screen points. This result is authoritative, including
     /// after painting; returning false keeps custom decorative areas out of selection.
     fn hit_test(&self, drawing: &Drawing, point: Pos2, tolerance: f32) -> bool;
-    /// Edits the tool's settings and returns whether they changed. The manager retains undo,
-    /// lock checks and persistence notifications. Tools without settings keep the default.
+    /// Edits the tool's settings and returns whether they changed. The properties dialog shows
+    /// this below the rows [`RegisteredDrawingTool::style`] keeps and applies all edits together.
+    /// `DrawingManager::show_custom_settings` shows it alone as one undoable edit. Tools without
+    /// settings keep the default.
     fn settings(&self, _ui: &mut Ui, _settings: &mut serde_json::Value) -> bool {
         false
     }
@@ -42,8 +44,54 @@ impl Default for ToolAvailability {
     }
 }
 
-/// A registered tool's host-facing name, anchor count and implementation.
+/// Built-in style rows offered for a registered tool. Turn off values the renderer does not
+/// read; every row is on by default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct StyleControls {
+    /// The line colour.
+    pub color: bool,
+    /// The line width.
+    pub line_width: bool,
+    /// The line pattern.
+    pub line_style: bool,
+    /// The start and end styles.
+    pub line_ends: bool,
+    /// The fill switch and colour.
+    pub fill: bool,
+}
+
+impl Default for StyleControls {
+    fn default() -> Self {
+        Self {
+            color: true,
+            line_width: true,
+            line_style: true,
+            line_ends: true,
+            fill: true,
+        }
+    }
+}
+
+/// A registered tool's name, anchor count, implementation and style controls. Build with
+/// [`Self::new`] and assign the optional presentation fields.
+///
+/// ```
+/// use egui_charts::drawings::{ChartView, Drawing, DrawingRenderer, DrawingToolRegistry, RegisteredDrawingTool};
+/// use std::sync::Arc;
+///
+/// struct Dot;
+/// impl DrawingRenderer for Dot {
+///     fn render(&self, _: &Drawing, _: &egui::Painter, _: egui::Rect, _: &ChartView) {}
+///     fn hit_test(&self, _: &Drawing, _: egui::Pos2, _: f32) -> bool { false }
+/// }
+/// let mut tool = RegisteredDrawingTool::new("Dot", 1, Arc::new(Dot));
+/// tool.style.fill = false;
+/// let mut registry = DrawingToolRegistry::default();
+/// registry.register("dot", tool).unwrap();
+/// ```
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct RegisteredDrawingTool {
     /// Picker label supplied by the host.
     pub name: String,
@@ -51,6 +99,24 @@ pub struct RegisteredDrawingTool {
     pub anchors: usize,
     /// Shared implementation, separate from each drawing's saved settings.
     pub implementation: Arc<dyn DrawingRenderer>,
+    /// Built-in style rows the properties dialog offers; all by default.
+    pub style: StyleControls,
+}
+
+impl RegisteredDrawingTool {
+    /// A tool named `name` that completes after `anchors` clicks, with all style rows enabled.
+    pub fn new(
+        name: impl Into<String>,
+        anchors: usize,
+        implementation: Arc<dyn DrawingRenderer>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            anchors,
+            implementation,
+            style: StyleControls::default(),
+        }
+    }
 }
 
 impl std::fmt::Debug for RegisteredDrawingTool {
@@ -58,6 +124,7 @@ impl std::fmt::Debug for RegisteredDrawingTool {
         f.debug_struct("RegisteredDrawingTool")
             .field("name", &self.name)
             .field("anchors", &self.anchors)
+            .field("style", &self.style)
             .finish_non_exhaustive()
     }
 }
@@ -147,11 +214,7 @@ pub(crate) mod tests {
     pub(crate) struct Midpoint;
 
     pub(crate) fn midpoint() -> RegisteredDrawingTool {
-        RegisteredDrawingTool {
-            name: "Midpoint".into(),
-            anchors: 2,
-            implementation: Arc::new(Midpoint),
-        }
+        RegisteredDrawingTool::new("Midpoint", 2, Arc::new(Midpoint))
     }
     impl DrawingRenderer for Midpoint {
         fn render(&self, drawing: &Drawing, painter: &Painter, _rect: Rect, _view: &ChartView) {
@@ -298,17 +361,7 @@ pub(crate) mod tests {
     #[test]
     fn registered_tools_use_host_geometry_and_retain_settings_through_history_and_storage() {
         let mut manager = DrawingManager::new();
-        manager
-            .registry
-            .register(
-                "midpoint",
-                RegisteredDrawingTool {
-                    name: "Midpoint".into(),
-                    anchors: 2,
-                    implementation: Arc::new(Midpoint),
-                },
-            )
-            .unwrap();
+        manager.registry.register("midpoint", midpoint()).unwrap();
         manager.set_custom_tool("midpoint").unwrap();
         manager.start_drawing_with_coords(
             DrawingToolType::Polyline,
