@@ -2405,7 +2405,7 @@ impl ChartLayout {
     }
 
     fn geometry(&self, rect: Rect, count: usize) -> (Vec<Rect>, Vec<Divider>) {
-        if self.mode == ChartLayoutMode::Tabs || self.maximized.is_some() {
+        if self.mode == ChartLayoutMode::Tabs || self.maximized.is_some_and(|slot| slot < count) {
             return (self.rects(rect, count), Vec::new());
         }
         let split = self.mode.tracks().split();
