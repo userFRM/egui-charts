@@ -1674,7 +1674,7 @@ mod tests {
             "a shared name does not identify a built-in"
         );
         assert!(serde_json::to_value(SMA::new(1).settings()).unwrap()["help_url"].is_string());
-        let articles: [(Box<dyn Indicator>, &str); 10] = [
+        let articles: [(Box<dyn Indicator>, &str); 11] = [
             (
                 Box::new(crate::studies::SMIErgodicIndicator::default()),
                 "SMIErgodicIndicator",
@@ -1696,6 +1696,10 @@ mod tests {
             (
                 Box::new(crate::studies::Correlation::default()),
                 "Correlation",
+            ),
+            (
+                Box::new(crate::studies::CorrelationLog::default()),
+                "CorrelationLog",
             ),
             (
                 Box::new(crate::studies::AdvanceDeclineRatio::default()),
