@@ -57,8 +57,8 @@ pub enum ContextMenuAction {
         /// Instrument identifier used by the host.
         symbol: String,
     },
-    /// A limit, stop or stop-limit order at the clicked price, for the user to confirm in the order ticket
-    /// ([`Trading::open_ticket`](crate::ui::trading::Trading::open_ticket)).
+    /// A limit, stop or stop-limit order at the clicked price, for the user to confirm in the order
+    /// ticket ([`Trading::open_ticket`](crate::ui::trading::Trading::open_ticket)).
     Order(OrderRequest),
     /// Open the object tree panel
     ObjectTree,
