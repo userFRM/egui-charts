@@ -1476,7 +1476,12 @@ mod tests {
             ..Default::default()
         };
         for accept in [false, true] {
-            for edit in ["Shading scale", "Full shade volume"] {
+            for edit in [
+                "Shading scale",
+                "Full shade volume",
+                "Automatic row height",
+                "Smallest row with numbers",
+            ] {
                 let mut dialog = SettingsDialog::new();
                 dialog.set_control_visible(crate::ui::Control::Templates, false);
                 dialog.open(ChartSettingsState {
@@ -1514,6 +1519,21 @@ mod tests {
                             .get_by_role_and_label(Role::Button, "Bars in view")
                             .click();
                         expected.footprint_intensity = FootprintIntensity::Visible;
+                    }
+                    "Automatic row height" | "Smallest row with numbers" => {
+                        let value = if edit == "Automatic row height" {
+                            24.0
+                        } else {
+                            10.0
+                        };
+                        harness
+                            .get_by_role_and_label(Role::SpinButton, edit)
+                            .set_value_accesskit(value);
+                        if edit == "Automatic row height" {
+                            expected.footprint_auto_row_height = value as f32;
+                        } else {
+                            expected.footprint_min_text_height = value as f32;
+                        }
                     }
                     _ => {
                         harness

@@ -350,17 +350,34 @@ impl SymbolTab {
                 }
             }
             ui.end_row();
-            if method == 1 {
+            if method == 0 {
+                let label = ui.label(l10n::text(ui.ctx(), "Automatic row height"));
+                ui.add(
+                    egui::DragValue::new(&mut params.footprint_auto_row_height)
+                        .range(10.0..=40.0)
+                        .suffix(l10n::text(ui.ctx(), " pt")),
+                )
+                .labelled_by(label.id);
+                ui.end_row();
+            } else if method == 1 {
                 let label = ui.label(l10n::text(ui.ctx(), "Ticks per row"));
                 ui.add(egui::DragValue::new(&mut params.footprint_row_ticks).range(1..=1_000_000))
                     .labelled_by(label.id);
                 ui.end_row();
-            } else if method == 2 {
+            } else {
                 let label = ui.label(l10n::text(ui.ctx(), "ATR length"));
                 ui.add(egui::DragValue::new(&mut params.footprint_row_atr_length).range(1..=200))
                     .labelled_by(label.id);
                 ui.end_row();
             }
+            let label = ui.label(l10n::text(ui.ctx(), "Smallest row with numbers"));
+            ui.add(
+                egui::DragValue::new(&mut params.footprint_min_text_height)
+                    .range(10.0..=40.0)
+                    .suffix(l10n::text(ui.ctx(), " pt")),
+            )
+            .labelled_by(label.id);
+            ui.end_row();
         });
         Self::section(ui, "Levels", true, |ui| {
             Self::switch(ui, "Point of control", &mut params.footprint_poc);

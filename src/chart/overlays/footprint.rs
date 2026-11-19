@@ -16,6 +16,8 @@ use std::sync::Arc;
 
 /// The smallest and largest font size a footprint number is drawn at, in points.
 const FONT_LIMITS: [f32; 2] = [8.0, 24.0];
+/// Readable row heights accepted by the chart type's zoom grouping and number threshold.
+const ROW_HEIGHT_LIMITS: [f32; 2] = [10.0, 40.0];
 /// The share of a ladder column each of its side cells takes.
 const LADDER_CELL_SHARE: f32 = 0.39;
 /// The height of a ladder bar's totals and box, three rows of the 10 point font and their margins.
@@ -180,6 +182,7 @@ impl Default for FootprintConfig {
 impl FootprintConfig {
     /// The footprint of the chart type under `params`, its rows `row_ticks` instrument ticks
     /// tall, as `ChartTypeParams::footprint_row_size` resolves them, or grouped by zoom at zero.
+    /// Automatic row height and smallest text row height are held within 10 to 40 points.
     pub(crate) fn from_chart_params(
         params: &ChartTypeParams,
         colors: [Color32; 4],
@@ -198,7 +201,9 @@ impl FootprintConfig {
             imbalance_bid_color: params.footprint_imbalance_colors[1],
             text_color,
             neutral_color,
-            auto_row_height: (row_ticks == 0).then_some(16.0),
+            auto_row_height: (row_ticks == 0)
+                .then(|| readable_row_height(params.footprint_auto_row_height, 16.0)),
+            min_text_height: readable_row_height(params.footprint_min_text_height, 12.0),
             row_ticks,
             imbalance_ratio: params.footprint_imbalance_ratio,
             imbalance_min_volume: params.footprint_imbalance_min_volume,
@@ -912,6 +917,15 @@ pub(crate) fn render_footprint_read(
                 ui.label(l10n::text(ui.ctx(), "Marked bars contain recorded executions only. Missing executions are not reconstructed; profiles, statistics, studies and replay exclude these bars."));
             });
         }
+    }
+}
+
+/// A chart-type row height within the readable limits, or `default` for NaN.
+fn readable_row_height(height: f32, default: f32) -> f32 {
+    if height.is_nan() {
+        default
+    } else {
+        height.clamp(ROW_HEIGHT_LIMITS[0], ROW_HEIGHT_LIMITS[1])
     }
 }
 
@@ -3270,6 +3284,93 @@ mod tests {
 
     /// The same minimum gates grouped cells and zones, and changing it refreshes cached zones.
     #[cfg(feature = "studies")]
+    /// One tick is 160/3.5*0.25 = 11.43 points: automatic height 16 groups two,
+    /// while height 10 leaves one. A minimum of 12 hides single-row numbers; 10 keeps them.
+    #[test]
+    fn chart_type_row_heights_choose_numbers_or_the_overview() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+        for (price, size, side) in [
+            (100.0, 2.0, OrderSide::Sell),
+            (100.0, 3.0, OrderSide::Buy),
+            (100.25, 4.0, OrderSide::Buy),
+        ] {
+            flow.push(&Tick::new(time, price, size, Some(side)))
+                .unwrap();
+        }
+        let bars = [Bar::new(time, 100.0, 100.25, 100.0, 100.25, 9.0)];
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 160.0));
+        let map = ChartMapping::new(
+            rect,
+            240.0,
+            0,
+            0,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(98.5, 102.0),
+                0.0,
+                160.0,
+                false,
+            ),
+        );
+        for (auto, minimum, expected) in [
+            (16.0, 12.0, vec!["2 × 7"]),
+            (10.0, 12.0, vec![]),
+            (10.0, 10.0, vec!["0 × 4", "2 × 3"]),
+            (f32::NAN, 12.0, vec!["2 × 7"]),
+            (10.0, f32::NAN, vec![]),
+        ] {
+            let params = ChartTypeParams {
+                footprint_modes: vec![FootprintMode::BidAsk],
+                footprint_value_area: None,
+                footprint_auto_row_height: auto,
+                footprint_min_text_height: minimum,
+                ..Default::default()
+            };
+            let config = FootprintConfig::from_chart_params(&params, [Color32::WHITE; 4], 0);
+            let mut output = egui::Context::default().run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ui| render_footprint(ui.painter(), &map, &bars, &flow, &config),
+            );
+            output.textures_delta.clear();
+            let mut texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Text(text) => Some(text.galley.text()),
+                    _ => None,
+                })
+                .collect();
+            texts.sort_unstable();
+            assert_eq!(texts, expected, "automatic {auto}, minimum {minimum}");
+        }
+        for (height, expected) in [
+            (0.0, 10.0),
+            (100.0, 40.0),
+            (f32::NEG_INFINITY, 10.0),
+            (f32::INFINITY, 40.0),
+        ] {
+            let params = ChartTypeParams {
+                footprint_auto_row_height: height,
+                footprint_min_text_height: height,
+                ..Default::default()
+            };
+            let config = FootprintConfig::from_chart_params(&params, [Color32::WHITE; 4], 0);
+            assert_eq!(
+                (config.auto_row_height, config.min_text_height),
+                (Some(expected), expected)
+            );
+            assert_eq!(
+                FootprintConfig::from_chart_params(&params, [Color32::WHITE; 4], 1).auto_row_height,
+                None
+            );
+        }
+    }
+
     #[test]
     fn imbalance_minimum_applies_after_grouping_to_cells_and_zones() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();

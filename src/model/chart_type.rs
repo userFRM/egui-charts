@@ -829,6 +829,11 @@ pub struct ChartTypeParams {
     /// Footprint: length of the average true range that sizes rows, 1 to 200; with fewer
     /// complete bars the average takes as many as there are.
     pub footprint_row_atr_length: u32,
+    /// Footprint: minimum height of rows grouped by zoom, in points within 10 to 40.
+    pub footprint_auto_row_height: f32,
+    /// Footprint: rows shorter than this, in points within 10 to 40, lose their numbers;
+    /// a column without numbers shows the overview.
+    pub footprint_min_text_height: f32,
     /// Footprint: put a strip along the outer edge of a side that dominates under the imbalance
     /// settings, under [`FootprintColor::VolumeSteps`].
     pub footprint_imbalance: bool,
@@ -1002,6 +1007,8 @@ impl Default for ChartTypeParams {
             footprint_row_ticks: 0,
             footprint_row_atr: false,
             footprint_row_atr_length: 14,
+            footprint_auto_row_height: 16.0,
+            footprint_min_text_height: 12.0,
             footprint_imbalance: true,
             footprint_poc: true,
             footprint_value_area: Some(0.7),
@@ -1262,6 +1269,7 @@ mod tests {
         let settings = serde_json::json!({
             "footprint_modes": ["Delta", "BidAskTrades", "Trades", "AverageSize"], "footprint_row_ticks": 2,
             "footprint_intensity": {"Volume": 2500.0},
+            "footprint_auto_row_height": 24.0, "footprint_min_text_height": 10.0,
             "footprint_row_atr": true, "footprint_row_atr_length": 30,
             "footprint_value_area": 0.010003969988090037,
             "footprint_statistics": true,
@@ -1349,6 +1357,8 @@ mod tests {
         let legacy: ChartTypeParams = serde_json::from_str(r#"{"tpo_row_ticks":2}"#).unwrap();
         let legacy = serde_json::to_value(legacy).unwrap();
         assert_eq!(legacy["footprint_intensity"], "Bar");
+        assert_eq!(legacy["footprint_auto_row_height"], 16.0);
+        assert_eq!(legacy["footprint_min_text_height"], 12.0);
         assert_eq!(legacy["footprint_statistics"], false);
         assert_eq!(legacy["footprint_row_ticks"], 0);
         assert_eq!(legacy["footprint_row_atr"], false);
