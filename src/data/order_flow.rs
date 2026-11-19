@@ -91,6 +91,25 @@ pub enum OrderFlowKind {
         /// Rolling seconds, or zero for per-bar totals.
         seconds: usize,
     },
+    /// Last synchronized resting balance, `(bid - ask) / (bid + ask) * 100`, of two
+    /// non-overlapping bands, from -100 (asks only) to 100 (bids only).
+    /// With zero `near_distance`, the near band takes `near_levels` levels per side and
+    /// the far band the next `far_levels`. Otherwise, the near band reaches `near_distance`
+    /// price units from each side's inside market, inclusive; the far band reaches
+    /// `far_distance` further, inclusive. Level counts are unused in distance mode.
+    /// An empty or lost band has no value (NaN), as does a band whose total size overflows.
+    /// The third output is unused (NaN). An [`OrderFilter`] applies as for
+    /// [`BookSize`](Self::BookSize).
+    BookBalance {
+        /// Near levels per side when `near_distance` is zero.
+        near_levels: usize,
+        /// Further levels per side, after the near band, in level mode.
+        far_levels: usize,
+        /// Near price distance, or zero to select both bands by level count.
+        near_distance: f64,
+        /// Further price distance beyond the near edge, in distance mode.
+        far_distance: f64,
+    },
 }
 
 impl OrderFlowKind {
@@ -133,6 +152,17 @@ impl OrderFlowKind {
             },
             Self::LevelsTradedThrough { seconds } => Self::LevelsTradedThrough {
                 seconds: seconds.min(86400),
+            },
+            Self::BookBalance {
+                near_levels,
+                far_levels,
+                near_distance,
+                far_distance,
+            } => Self::BookBalance {
+                near_levels: near_levels.clamp(1, 10000),
+                far_levels: far_levels.clamp(1, 10000),
+                near_distance: size_bound(near_distance),
+                far_distance: size_bound(far_distance),
             },
             Self::Spread => Self::Spread,
         }
@@ -509,9 +539,9 @@ impl OrderFlowInput {
         Self(Arc::new(Mutex::new(self.state().clone())))
     }
 
-    /// The same source, with book size summed over the individual orders `filter` accepts. The
+    /// The same source, with book size and book balance summed over the individual orders `filter` accepts. The
     /// feed must send order events; with aggregate depth only, or when the filter needs a
-    /// participant or placement time that no held order has, a book size bar has no value (NaN),
+    /// participant or placement time that no held order has, a book size or book balance bar has no value (NaN),
     /// instead of an unfiltered one. Other aggregations ignore it. A filter that accepts every
     /// order is the same as none.
     pub fn with_order_filter(self, filter: OrderFilter) -> Self {
@@ -536,7 +566,7 @@ impl OrderFlowInput {
         self
     }
 
-    /// Feed services read by this source. Book size with an order filter needs individual
+    /// Feed services read by this source. Filtered book size and book balance need individual
     /// orders; executions need trade-side classification only for side-dependent outputs.
     pub fn services(&self) -> &'static [crate::model::FeedService] {
         use crate::model::FeedService::*;
@@ -545,10 +575,13 @@ impl OrderFlowInput {
             Source::Fixed(OrderFlowKind::Spread | OrderFlowKind::LevelsTradedThrough { .. }) => {
                 &[BestBidAsk]
             }
-            Source::Fixed(OrderFlowKind::BookSize { .. }) if state.filter.is_some() => {
+            Source::Fixed(OrderFlowKind::BookSize { .. } | OrderFlowKind::BookBalance { .. })
+                if state.filter.is_some() =>
+            {
                 &[OrderDepth]
             }
-            Source::Fixed(OrderFlowKind::BookSize { .. }) | Source::Book(_) => &[Depth],
+            Source::Fixed(OrderFlowKind::BookSize { .. } | OrderFlowKind::BookBalance { .. })
+            | Source::Book(_) => &[Depth],
             Source::Footprint
             | Source::Fixed(
                 OrderFlowKind::TradeRate { .. } | OrderFlowKind::AggressorRate { .. },
@@ -562,13 +595,15 @@ impl OrderFlowInput {
         }
     }
 
-    /// The filter of book size, if it has one.
+    /// The filter of book size or book balance, if it has one.
     pub(crate) fn order_filter(&self) -> Option<OrderFilter> {
         let state = self.state();
-        state
-            .filter
-            .clone()
-            .filter(|_| matches!(state.source, Source::Fixed(OrderFlowKind::BookSize { .. })))
+        state.filter.clone().filter(|_| {
+            matches!(
+                state.source,
+                Source::Fixed(OrderFlowKind::BookSize { .. } | OrderFlowKind::BookBalance { .. })
+            )
+        })
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -1362,6 +1397,7 @@ impl OrderFlowInput {
                 Source::Fixed(
                     OrderFlowKind::Spread
                     | OrderFlowKind::BookSize { .. }
+                    | OrderFlowKind::BookBalance { .. }
                     | OrderFlowKind::TradeRate { .. }
                     | OrderFlowKind::AggressorRate { .. }
                     | OrderFlowKind::LevelsExecuted { .. }
@@ -1598,11 +1634,10 @@ impl OrderFlowInput {
         if levels.is_none() {
             state.inside = None;
         }
-        let (count, distance) = match state.source {
-            Source::Fixed(OrderFlowKind::BookSize {
-                levels: count,
-                distance,
-            }) => (count, distance),
+        let kind = match state.source {
+            Source::Fixed(
+                kind @ (OrderFlowKind::BookSize { .. } | OrderFlowKind::BookBalance { .. }),
+            ) => kind,
             Source::Book(count) => return state.push_bar_book(clock, time, count, levels),
             _ => return,
         };
@@ -1611,7 +1646,7 @@ impl OrderFlowInput {
         }
         let mut row = [f64::NAN; 3];
         if let Some(levels) = levels {
-            let mut sizes = [0.0; 2];
+            let mut sizes = [[0.0; 2]; 2];
             let mut seen = [0; 2];
             let mut inside = [None; 2];
             for (bid, level) in levels {
@@ -1621,14 +1656,49 @@ impl OrderFlowInput {
                 let side = usize::from(!bid);
                 let first = *inside[side].get_or_insert(level.price);
                 let tolerance = 4.0 * f64::EPSILON * level.price.abs().max(first.abs());
-                if (distance > 0.0 && (level.price - first).abs() <= distance + tolerance)
-                    || (distance == 0.0 && seen[side] < count.max(1))
-                {
-                    sizes[side] += level.size;
+                let within = |count: usize, distance: f64| {
+                    if distance > 0.0 {
+                        (level.price - first).abs() <= distance + tolerance
+                    } else {
+                        seen[side] < count
+                    }
+                };
+                let band = match kind {
+                    OrderFlowKind::BookSize { levels, distance } => {
+                        within(levels, distance).then_some(0)
+                    }
+                    OrderFlowKind::BookBalance {
+                        near_levels,
+                        far_levels,
+                        near_distance,
+                        far_distance,
+                    } => {
+                        let far = if near_distance > 0.0 {
+                            near_distance + far_distance
+                        } else {
+                            0.0
+                        };
+                        if within(near_levels, near_distance) {
+                            Some(0)
+                        } else if within(near_levels + far_levels, far) {
+                            Some(1)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(band) = band {
+                    sizes[band][side] += level.size;
                 }
                 seen[side] += 1;
             }
-            row = [sizes[0], sizes[1], sizes[0] - sizes[1]];
+            row = match kind {
+                OrderFlowKind::BookBalance { .. } => {
+                    [balance(sizes[0]), balance(sizes[1]), f64::NAN]
+                }
+                _ => [sizes[0][0], sizes[0][1], sizes[0][0] - sizes[0][1]],
+            };
         }
         let Some(open) = state.open(clock, time) else {
             return;
@@ -1648,6 +1718,16 @@ fn signed_size(trade: &Tick, measured: f64, min: f64, max: f64, size: f64) -> f6
         Some(OrderSide::Buy) => size,
         Some(OrderSide::Sell) => -size,
         None => 0.0,
+    }
+}
+
+/// Percentage resting balance; no value without a finite positive total.
+fn balance([bid, ask]: [f64; 2]) -> f64 {
+    let total = bid + ask;
+    if total > 0.0 && total.is_finite() {
+        (bid - ask) / total * 100.0
+    } else {
+        f64::NAN
     }
 }
 
@@ -2383,13 +2463,26 @@ mod tests {
             levels: 5,
             distance: 0.0,
         };
-        let cases: [(_, &[crate::model::FeedService]); 13] = [
+        let cases: [(_, &[crate::model::FeedService]); 14] = [
             (OrderFlowInput::new(Spread), &[BestBidAsk]),
             (
                 OrderFlowInput::new(LevelsTradedThrough { seconds: 0 }),
                 &[BestBidAsk],
             ),
             (OrderFlowInput::new(book), &[Depth]),
+            (
+                OrderFlowInput::new(BookBalance {
+                    near_levels: 5,
+                    far_levels: 10,
+                    near_distance: 0.0,
+                    far_distance: 0.0,
+                })
+                .with_order_filter(OrderFilter {
+                    min_size: 10.0,
+                    ..Default::default()
+                }),
+                &[OrderDepth],
+            ),
             (
                 OrderFlowInput::new(book).with_order_filter(OrderFilter {
                     min_size: 10.0,

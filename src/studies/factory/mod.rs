@@ -388,6 +388,12 @@ impl IndicatorFactory {
                 max: f64::MAX,
             },
             OrderFlowKind::LevelsTradedThrough { seconds: 0 },
+            OrderFlowKind::BookBalance {
+                near_levels: 5,
+                far_levels: 10,
+                near_distance: 0.0,
+                far_distance: 0.0,
+            },
         ] {
             let name = OrderFlowStudy::new(kind).name().to_owned();
             self.constructors.insert(
