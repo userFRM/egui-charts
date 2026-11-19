@@ -481,8 +481,8 @@ fn trades(ui: &mut Ui, data: &ReportData, selected: &mut Option<usize>) -> Optio
                                 .map_or_else(|| "N/A".into(), |e| e.price.to_string()),
                             money(t.exit.as_ref().map(|e| e.profit), &data.report),
                             money(Some(t.fees), &data.report),
-                            number(excursion.map(|e| e.adverse)),
-                            number(excursion.map(|e| e.favourable)),
+                            money(excursion.map(|e| e.adverse), &data.report),
+                            money(excursion.map(|e| e.favourable), &data.report),
                             t.label.clone().unwrap_or_default(),
                         ] {
                             row.col(|ui| {
