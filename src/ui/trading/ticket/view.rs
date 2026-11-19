@@ -257,8 +257,9 @@ impl OrderTicket {
                     )
                     .accessible_name(l10n::text(ui.ctx(), "New name"));
                     let name = name.trim();
-                    let allowed =
-                        !name.is_empty() && name != old && !saved.iter().any(|p| p.name == name);
+                    let allowed = !name.is_empty()
+                        && name != old.as_str()
+                        && !saved.iter().any(|p| p.name == name);
                     if ui
                         .add_enabled(allowed, egui::Button::new(l10n::text(ui.ctx(), "Rename")))
                         .clicked()
