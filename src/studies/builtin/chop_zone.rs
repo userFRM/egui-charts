@@ -24,7 +24,8 @@
 //! | -5 or less | dark red |
 //!
 //! The plot colour draws the steepest rise; each other band is a state of the plot with its own
-//! colour in the Style tab. A bar whose 30-bar range is zero has no value.
+//! colour in the Style tab. A bar without an angle, before the EMA and the range have their full
+//! lengths or where the 30-bar range is zero, draws its column in the flat colour.
 //!
 //! # Example
 //! ```
@@ -100,9 +101,13 @@ impl ChopZone {
         }
     }
 
-    /// The colour band of the angle at `bar`, from the steepest rise to the steepest fall.
+    /// The colour band of the angle at `bar`, from the steepest rise to the steepest fall; flat
+    /// where the bar has a column but no angle.
     fn band(&self, bar: usize) -> Option<usize> {
-        let angle = self.angles.value(0, bar)?;
+        self.values.value(0, bar)?;
+        let Some(angle) = self.angles.value(0, bar) else {
+            return Some(4);
+        };
         Some(match angle {
             a if a >= 5.0 => 0,
             a if a >= 3.57 => 1,
@@ -207,8 +212,8 @@ impl Indicator for ChopZone {
             });
         let start = from.min(self.values.len()).min(data.len());
         self.values.truncate(start);
-        for i in start..data.len() {
-            self.values.push(if self.angles.value(0, i).is_some() {
+        for bar in &data[start..] {
+            self.values.push(if bar.close.is_finite() {
                 IndicatorValue::Single(1.0)
             } else {
                 IndicatorValue::None

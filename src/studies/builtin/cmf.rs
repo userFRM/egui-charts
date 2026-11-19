@@ -7,6 +7,7 @@
 //! CMF = Sum(Money Flow Volume, period) / Sum(Volume, period)
 //! Where Money Flow Volume = Money Flow Multiplier * Volume
 //! And Money Flow Multiplier = ((Close - Low) - (High - Close)) / (High - Low)
+//! A bar whose window holds no volume has no value.
 //!
 //! # Interpretation
 //! - CMF > 0: Buying pressure (accumulation)
@@ -110,13 +111,12 @@ impl ChaikinMoneyFlow {
             let sum_mfv: f64 = mfv[start..=i].iter().sum();
             let sum_vol: f64 = volumes[start..=i].iter().sum();
 
-            let cmf = if sum_vol > 0.0 {
-                sum_mfv / sum_vol
+            // Money flow over no volume is undefined, not balanced.
+            values.push(if sum_vol > 0.0 {
+                IndicatorValue::Single(sum_mfv / sum_vol)
             } else {
-                0.0
-            };
-
-            values.push(IndicatorValue::Single(cmf));
+                IndicatorValue::None
+            });
         }
 
         values
@@ -218,5 +218,39 @@ impl Indicator for ChaikinMoneyFlow {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!("CMF({})", self.period)]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::studies::test_support::make_range_bar;
+
+    /// Money flow over a window without volume is undefined, not balanced: 20 bars with volume, 20 without,
+    /// then one with volume again.
+    #[test]
+    fn a_window_without_volume_has_no_value() {
+        let bar = |close: f64, volume: f64| Bar {
+            volume,
+            ..make_range_bar(12.0, 10.0, close)
+        };
+        let data: Vec<Bar> = (0..41)
+            .map(|i| match i {
+                0..20 => bar(11.5, 1000.0),
+                20..40 => bar(11.5, 0.0),
+                _ => bar(10.5, 1000.0),
+            })
+            .collect();
+        let mut cmf = ChaikinMoneyFlow::new(20);
+        cmf.calculate(&data);
+        let expected = |i: usize| match i {
+            0..19 => None,
+            19..39 => Some(0.5),
+            39 => None,
+            _ => Some(-0.5),
+        };
+        for i in 0..data.len() {
+            assert_eq!(cmf.values().value(0, i), expected(i), "bar {i}");
+        }
     }
 }
