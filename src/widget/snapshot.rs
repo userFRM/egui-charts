@@ -314,6 +314,7 @@ impl Chart {
                 let mut settings = ChartSettingsState::from_chart(self);
                 settings.adjust_for_dividends = self.dividend_adjusted();
                 settings.extended_hours = None;
+                settings.overnight_hours = None;
                 settings
             },
             config: Some(self.config.clone()),
@@ -487,8 +488,9 @@ impl Chart {
         self.main_series_style.alerts = snapshot.main_series_alerts;
         self.main_series_style.display_format = snapshot.main_series_display_format;
         let mut settings = snapshot.settings.clone();
-        // The snapshot's own field holds the session, set above.
+        // The snapshot's own fields hold the hours, set above.
         settings.extended_hours = None;
+        settings.overnight_hours = None;
         // Layouts saved before a precision could be chosen hold the one shown, which followed
         // the next instrument; the saved scale holds the chosen decimals or fraction.
         settings.precision = snapshot.price_scale.as_ref().map_or(

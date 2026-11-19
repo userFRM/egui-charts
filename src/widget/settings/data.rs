@@ -741,6 +741,11 @@ pub struct ChartSettingsState {
     /// `None` keeps the chart's choice, as do settings saved without this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extended_hours: Option<bool>,
+    /// Include overnight hours, as [`Chart::set_overnight_hours`](crate::widget::Chart::set_overnight_hours)
+    /// requests them. Applied before extended hours, so regular hours turn both off.
+    /// `None` keeps the chart's choice, as do settings saved without this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overnight_hours: Option<bool>,
     /// Ask the host for continuous futures history back-adjusted at each roll. The host owns
     /// the data, so [`apply_to_chart`](Self::apply_to_chart) leaves reloading to the host;
     /// [`from_chart`](Self::from_chart) leaves this off.
@@ -843,6 +848,7 @@ impl Default for ChartSettingsState {
             price_target_negative_color: None,
             adjust_for_dividends: false,
             extended_hours: None,
+            overnight_hours: None,
             back_adjust_futures: false,
             settlement_as_close: true,
 

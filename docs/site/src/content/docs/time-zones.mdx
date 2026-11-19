@@ -111,7 +111,9 @@ After showing the toolbar, call
 each frame, setting `session_menu_open` on `OpenSessionMenu`, to offer regular and
 extended hours, plus overnight hours where supported or already selected. A choice
 applies as one undo step and reloads history. Instruments without session hours
-show 24/7 and offer no hours choice.
+show 24/7 and offer no hours choice. The Session selector on the Symbol tab
+of chart settings offers the same choices when the host passes the instrument to
+`SettingsDialog::set_feed_capabilities`. Accepting it also reloads as one undo step.
 
 Enable [`show_session_breaks`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html#structfield.show_session_breaks)
 for a line at each new session on intraday intervals and

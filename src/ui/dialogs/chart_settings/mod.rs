@@ -73,6 +73,8 @@ pub struct SettingsDialog {
     order_flow_layers: [bool; 4],
     /// Whether the host's feed answers analyst price targets for the chart's instrument.
     price_targets_offered: bool,
+    /// Whether regular/extended and overnight hours can be chosen.
+    hours_offered: (bool, bool),
     /// The axis font family the dialog was opened with, shown while the settings hold none.
     opened_font_family: Option<egui::FontFamily>,
     /// The precision the dialog was opened with, listed while the list lacks it.
@@ -179,6 +181,7 @@ impl SettingsDialog {
             sound_preview: None,
             order_flow_layers: [true; 4],
             price_targets_offered: true,
+            hours_offered: (true, true),
             opened_font_family: None,
             opened_precision: PrecisionMode::Default,
             loaded_margins: (0.0, 0.0),
@@ -223,6 +226,8 @@ impl SettingsDialog {
     /// [`Chart::instrument`](crate::Chart::instrument) again when they change. A missing instrument
     /// hides both; a non-positive, non-finite or missing tick size hides the Order flow tab only.
     /// Before the first call, everything is offered. Hidden controls retain their saved values.
+    /// The Symbol tab omits Session for an instrument without trading hours and offers overnight
+    /// hours with overnight windows or while chosen; no instrument offers regular and extended hours.
     pub fn set_feed_capabilities(
         &mut self,
         capabilities: Option<&crate::data::FeedCapabilities>,
@@ -249,6 +254,10 @@ impl SettingsDialog {
             declares(FeedService::Trades) || declares(FeedService::LiveTrades),
         ];
         self.price_targets_offered = declared(FeedService::PriceTargets);
+        self.hours_offered = (
+            crate::ui::timeframe_toolbar::state::has_trading_hours(instrument),
+            crate::ui::timeframe_toolbar::state::has_overnight_windows(instrument),
+        );
         if !self.order_flow_layers.iter().any(|available| *available)
             && self.active_tab == SettingsTab::OrderFlow
         {
@@ -844,6 +853,7 @@ impl SettingsDialog {
                     .thousands_sep
                     .or(scales.thousands_sep);
                 let extended_hours = template.extended_hours.or(self.settings.extended_hours);
+                let overnight_hours = template.overnight_hours.or(self.settings.overnight_hours);
                 let date_format = template
                     .scales_and_lines
                     .date_format
@@ -891,6 +901,7 @@ impl SettingsDialog {
                 self.settings.scales_and_lines.weekday_names = weekday_names;
                 self.settings.show_session_breaks = session_breaks;
                 self.settings.extended_hours = extended_hours;
+                self.settings.overnight_hours = overnight_hours;
                 self.settings.price_target_positive_color = positive;
                 self.settings.price_target_negative_color = negative;
                 self.settings.margins.right_bars = right_bars;
@@ -2826,6 +2837,7 @@ mod tests {
             for (group, choice) in [
                 ("", "show_session_breaks"),
                 ("", "extended_hours"),
+                ("", "overnight_hours"),
                 ("", "back_adjust_futures"),
                 ("", "settlement_as_close"),
                 ("", "price_target_positive_color"),
@@ -2855,7 +2867,7 @@ mod tests {
             chart.config_mut().axis_font_family = FontFamily::Monospace;
             chart.config_mut().thousands_sep = Some('\'');
             chart.config_mut().show_session_breaks = true;
-            chart.set_extended_hours(true);
+            chart.set_overnight_hours(true);
             chart.config_mut().price_target_positive_color = Color32::BLUE;
             chart.config_mut().price_target_negative_color = Color32::YELLOW;
             chart.pane_options_mut().separator_color = Some(Color32::RED);
@@ -2880,6 +2892,7 @@ mod tests {
             assert!(!shown.settlement_as_close);
             assert!(!shown.back_adjust_futures);
             assert_eq!(shown.extended_hours, Some(true), "{pixels:?}");
+            assert_eq!(shown.overnight_hours, Some(true), "{pixels:?}");
             assert_eq!(shown.margins.right_bars, row, "{pixels:?}");
             assert_eq!(dialog.margin_right_str, row.to_string(), "{pixels:?}");
             assert_eq!(
@@ -2929,6 +2942,7 @@ mod tests {
             assert_eq!(config.thousands_sep, Some('\''));
             assert!(config.show_session_breaks);
             assert!(chart.extended_hours());
+            assert!(chart.overnight_hours());
             assert_eq!(
                 (
                     config.price_target_positive_color,
