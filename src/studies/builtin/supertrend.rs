@@ -10,6 +10,10 @@
 //!
 //! Each bar has a value on exactly one of the two lines; the other is NaN.
 //!
+//! The first bar with an ATR starts a down trend on the upper band. A down trend turns up when a
+//! close rises above the upper band, and an up trend turns down when a close falls below the lower
+//! band.
+//!
 //! # Interpretation
 //! - SuperTrend below price (green): Bullish trend
 //! - SuperTrend above price (red): Bearish trend
@@ -161,7 +165,8 @@ impl Indicator for SuperTrend {
                 let bullish = if state.usable == period {
                     state.upper = upper;
                     state.lower = lower;
-                    true
+                    // A down trend until a close rises above the upper band, as published.
+                    false
                 } else {
                     let was_upper = state.trend == state.upper;
                     if upper < state.upper || previous > state.upper {
