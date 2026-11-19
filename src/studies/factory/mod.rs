@@ -218,6 +218,7 @@ impl IndicatorFactory {
                 AroonOscillator,
                 BullBearPower,
                 AdvanceDeclineRatioBars,
+                AdvanceDecline,
                 PriceMomentumOscillator,
                 PringsSpecialK,
                 SMIErgodicIndicator,
@@ -428,7 +429,7 @@ impl IndicatorFactory {
                 name,
                 (
                     Some("Support and resistance"),
-                    Box::new(move || Box::new(AutoDrawing::new(kind, 5.0, 10).with_atr(3.0, 10))),
+                    Box::new(move || Box::new(AutoDrawing::catalogue(kind))),
                 ),
             );
         }

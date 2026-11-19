@@ -1,7 +1,8 @@
 //! Ratio, spread and rolling correlation of two timestamp-aligned series.
 //!
 //! Each of the two series is a price source of the chart symbol, when its symbol is empty, or of
-//! a host-supplied symbol at the chart's interval. The studies are calculated per chart bar:
+//! a host-supplied symbol at the chart's interval, or at the study's Interval when it is
+//! calculated on another one. The studies are calculated per chart bar:
 //! the first series is `a`, the second `b`, and a series is aligned to a bar when it has a bar
 //! in the same interval.
 //!

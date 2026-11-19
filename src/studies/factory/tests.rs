@@ -357,9 +357,15 @@ fn catalogue_studies_open_with_their_usual_lengths() {
         ("Knoxville Divergence", "momentum_period", 20),
         ("Knoxville Divergence", "rsi_period", 21),
         ("Knoxville Divergence", "lookback", 150),
+        ("Advance/Decline", "period", 10),
     ];
+    let factory = IndicatorFactory::new();
     for (name, id, length) in rows {
-        let inputs = IndicatorFactory::new().create(name).unwrap().inputs();
+        assert!(
+            factory.list().iter().any(|listed| listed == name),
+            "{name} is not listed"
+        );
+        let inputs = factory.create(name).unwrap().inputs();
         let input = inputs.iter().find(|input| input.id == id);
         assert_eq!(
             input.map(|input| &input.value),
