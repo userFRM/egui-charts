@@ -67,7 +67,8 @@ impl<'a> ExecutionMark<'a> {
 }
 
 /// Draws host fills on the price pane, using the same marks as
-/// [`Trading::show`](super::Trading::show). Fills on the same side and bar share up to three stacked triangles and a count of the rest.
+/// [`Trading::show`](super::Trading::show). Fills on the same side and bar share up to three
+/// stacked triangles and a count of the rest.
 /// Buys point up below the bar's low; sells point down above its high. Hover lists the fills,
 /// and [`TradingSettings::show_execution_labels`] adds their side and total quantity.
 /// [`TradingSettings::show_execution_prices`] adds their quantity-weighted average fill price.
@@ -132,7 +133,8 @@ pub fn render_executions(
 /// low, or down in the sell colour just over its high, and beyond them a "+N" line for the fills
 /// not drawn. With labels enabled, a line beyond the stack gives the side and total quantity. Text
 /// that would overlap newer text moves outward, up to [`MAX_LABEL_ROWS`] rows, or is left out.
-/// Hovering a mark lists its fills with their side, quantity, price and time, up to [`MAX_HOVER_FILLS`].
+/// Hovering a mark lists its fills with their side, quantity, price and time, up to
+/// [`MAX_HOVER_FILLS`].
 pub(super) fn show(
     ui: &mut Ui,
     chart: &Chart,
