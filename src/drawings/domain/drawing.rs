@@ -12,8 +12,8 @@ use super::{
     AnnotationMarker, ArrowStyle, BarsPatternConfig, BarsPatternMode, ChartPoint, DrawingToolType,
     ElliottDegree, FibonacciConfig, FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig,
     ImageConfig, LineMeasurements, MiddleLineStyle, NoteTextStyle, PitchforkConfig,
-    PositionReadout, PositionSize, PositionSizing, PositionStyle, RegressionTrendConfig,
-    TimeframeVisibility, VwapConfig,
+    PositionReadout, PositionSize, PositionSizing, PositionStyle, RangeSettings,
+    RegressionTrendConfig, TimeframeVisibility, VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -288,6 +288,11 @@ pub struct Drawing {
     /// line, and the reach of a vertical line. Other tools ignore these settings.
     #[serde(default = "LineMeasurements::left_out")]
     pub line_measurements: LineMeasurements,
+    /// Readouts, card, box border and vertical reach of a date range or date and price range.
+    /// Other tools ignore these settings. Older drawings keep every readout in the theme's
+    /// colours at the drawing's saved font size.
+    #[serde(default = "RangeSettings::left_out")]
+    pub range_settings: RangeSettings,
     /// Quantity of the long and short position tools
     pub position_size: Option<PositionSize>,
     /// Instrument economics for long and short position sizing. Older drawings use unit sizing.
@@ -676,6 +681,7 @@ impl Drawing {
             price_axis_label: true,
             time_axis_label: true,
             line_measurements: LineMeasurements::for_tool(tool_type),
+            range_settings: RangeSettings::default(),
             position_size: None,
             position_sizing: PositionSizing::default(),
             position_readout: PositionReadout::default(),
@@ -1319,12 +1325,15 @@ impl Serialize for Drawing {
 
 impl<'de> Deserialize<'de> for Drawing {
     /// A saved `gann` object takes the fields it leaves out from [`GannConfig::for_tool`] of the
-    /// drawing's tool, which a drawing without one draws.
+    /// drawing's tool, which a drawing without one draws. Range settings it leaves out take
+    /// the drawing's font size for the readouts.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         GannConfig::forget_left_out();
         LineMeasurements::forget_left_out();
+        RangeSettings::forget_left_out();
         let mut drawing = Self::deserialize(deserializer)?;
         drawing.line_measurements.fill_left_out(drawing.tool_type);
+        drawing.range_settings.fill_left_out(drawing.font_size);
         if let Some(gann) = &mut drawing.gann {
             gann.fill_left_out(drawing.tool_type);
         }

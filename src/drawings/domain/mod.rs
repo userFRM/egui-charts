@@ -31,8 +31,8 @@ pub use options::{
     AnnotationMarker, ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight,
     HandlePos, LineMeasurementPosition, LineMeasurements, LineTextHorizontalAlign,
     LineTextOrientation, LineTextVerticalAlign, MiddleLineStyle, NoteTextStyle, PositionReadout,
-    PositionSize, PositionSizing, PositionStyle, RegressionBandLine, RegressionTrendConfig,
-    TimeframeVisibility,
+    PositionSize, PositionSizing, PositionStyle, RangeSettings, RegressionBandLine,
+    RegressionTrendConfig, TimeframeVisibility,
 };
 pub use pitchfork::{PitchforkConfig, PitchforkLevel};
 pub use template::DrawingTemplate;

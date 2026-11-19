@@ -41,9 +41,9 @@ pub use domain::{
     GannLevel, GhostCandle, GhostFeedConfig, HandlePos, ImageConfig, LineMeasurementPosition,
     LineMeasurements, LineTextHorizontalAlign, LineTextOrientation, LineTextVerticalAlign,
     MiddleLineStyle, NoteTextStyle, ParseToolTypeError, PitchforkConfig, PitchforkLevel,
-    PositionReadout, PositionSize, PositionSizing, PositionStyle, RegressionBandLine,
-    RegressionTrendConfig, TimeframeVisibility, VwapBand, VwapBandLine, VwapBandMode, VwapConfig,
-    VwapFill, VwapPlotType,
+    PositionReadout, PositionSize, PositionSizing, PositionStyle, RangeSettings,
+    RegressionBandLine, RegressionTrendConfig, TimeframeVisibility, VwapBand, VwapBandLine,
+    VwapBandMode, VwapConfig, VwapFill, VwapPlotType,
 };
 
 // Re-export manager types

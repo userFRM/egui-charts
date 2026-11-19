@@ -1424,6 +1424,118 @@ impl LineMeasurements {
     }
 }
 
+thread_local! {
+    /// Whether the last drawing read on this thread left out its range settings.
+    static RANGE_SETTINGS_LEFT_OUT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Readouts, readout card, box border and vertical reach of a date range and a date and price
+/// range; other tools ignore these settings. A new drawing shows every readout on a card in the
+/// theme's tooltip colours, draws its box edges in its line colour, width and pattern and keeps
+/// its time edges to its box.
+///
+/// ```
+/// use egui_charts::drawings::RangeSettings;
+///
+/// let mut settings = RangeSettings::default();
+/// settings.volume = false;
+/// settings.text_color = Some([242, 54, 69, 255]);
+/// settings.extend_top = true;
+/// assert!(settings.is_valid());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct RangeSettings {
+    /// Price change from the first anchor to the second. A date range shows no price readouts.
+    pub price_change: bool,
+    /// Price change as a percentage of the first anchor's price.
+    pub percent_change: bool,
+    /// Price change in instrument pips, or ticks when pips are not defined.
+    pub pip_change: bool,
+    /// Number of bars between the anchors.
+    pub bar_count: bool,
+    /// Time between the anchors, on a time axis.
+    pub elapsed_time: bool,
+    /// Volume traded over the bars from one anchor to the other.
+    pub volume: bool,
+    /// Colour of the readouts, whose alpha is their opacity; `None` takes the theme's axis text
+    /// colour.
+    pub text_color: Option<[u8; 4]>,
+    /// Size of the readouts, in points.
+    pub font_size: f32,
+    /// Whether the readouts sit on a card.
+    pub background: bool,
+    /// Colour of the card, whose alpha is its opacity; `None` takes the theme's tooltip colour.
+    pub background_color: Option<[u8; 4]>,
+    /// Whether the box edges are drawn: at the measured times and, on a date and price range,
+    /// at the measured prices.
+    pub border: bool,
+    /// Colour of the box edges; `None` takes the drawing colour.
+    pub border_color: Option<[u8; 4]>,
+    /// Width of the box edges, in points; `None` takes the drawing's line width.
+    pub border_width: Option<f32>,
+    /// Pattern of the box edges; `None` takes the drawing's line style.
+    pub border_style: Option<crate::model::LineStyle>,
+    /// Whether a date range's time edges run up to the top of the pane.
+    pub extend_top: bool,
+    /// Whether a date range's time edges run down to the bottom of the pane.
+    pub extend_bottom: bool,
+}
+
+impl Default for RangeSettings {
+    fn default() -> Self {
+        Self {
+            price_change: true,
+            percent_change: true,
+            pip_change: true,
+            bar_count: true,
+            elapsed_time: true,
+            volume: true,
+            text_color: None,
+            font_size: 12.0,
+            background: true,
+            background_color: None,
+            border: true,
+            border_color: None,
+            border_width: None,
+            border_style: None,
+            extend_top: false,
+            extend_bottom: false,
+        }
+    }
+}
+
+impl RangeSettings {
+    /// Whether the font size lies in 1 to 256 points and a set border width above 0 and at
+    /// most 100 points.
+    pub fn is_valid(&self) -> bool {
+        crate::styles::typography::FONT_SIZES.contains(&self.font_size)
+            && self.border_width.is_none_or(|width| {
+                width > 0.0 && width <= crate::drawings::validation::MAX_STROKE_WIDTH
+            })
+    }
+
+    /// Notes that the drawing being read has no range settings, and gives the [`Default`] ones.
+    pub(crate) fn left_out() -> Self {
+        RANGE_SETTINGS_LEFT_OUT.set(true);
+        Self::default()
+    }
+
+    /// Clears the note of [`Self::left_out`], before a drawing is read.
+    pub(crate) fn forget_left_out() {
+        RANGE_SETTINGS_LEFT_OUT.set(false);
+    }
+
+    /// Takes `font_size`, the drawing's own, for the readouts when the drawing just read left
+    /// these settings out: its card was drawn at that size.
+    pub(crate) fn fill_left_out(&mut self, font_size: f32) {
+        if RANGE_SETTINGS_LEFT_OUT.replace(false) {
+            self.font_size = font_size;
+        }
+    }
+}
+
 /// How a long or short position drawing sizes its quantity.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]

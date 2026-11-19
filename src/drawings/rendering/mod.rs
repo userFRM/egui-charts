@@ -322,7 +322,7 @@ impl Drawing {
             DrawingToolType::Measure => self.render_measure(painter, view),
             DrawingToolType::PriceRange
             | DrawingToolType::DateRange
-            | DrawingToolType::DateAndPriceRange => self.render_range(painter, rect, stroke, view),
+            | DrawingToolType::DateAndPriceRange => {}
 
             // Annotations (7 tools)
             DrawingToolType::TextLabel | DrawingToolType::AnchoredText => {
@@ -369,6 +369,15 @@ impl Drawing {
             self.render_text_hint(painter);
         }
         self.finish_style(painter, start, rect);
+        // Ranges style their border, text and readout independently.
+        if matches!(
+            self.tool_type,
+            DrawingToolType::PriceRange
+                | DrawingToolType::DateRange
+                | DrawingToolType::DateAndPriceRange
+        ) {
+            self.render_range(painter, rect, stroke, view);
+        }
         // After the drawing's style, so that bold text leaves the regression trend's correlation alone.
         if let Some(label) = correlation {
             painter.add(label);
@@ -520,7 +529,8 @@ impl Drawing {
                 | T::FixedRangeVolumeProfile
                 | T::HeadAndShoulders
                 | T::TrianglePattern
-        );
+        ) || (self.tool_type == T::DateRange
+            && (self.range_settings.extend_top || self.range_settings.extend_bottom));
         Some(if time_only {
             Rect::from_x_y_ranges(bounds.x_range(), egui::Rangef::EVERYTHING)
         } else {
