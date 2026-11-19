@@ -167,12 +167,12 @@ impl SymbolTab {
         ui.end_row();
     }
 
-    fn optional_number(
+    fn optional_number<N: egui::emath::Numeric>(
         ui: &mut Ui,
         name: &str,
-        value: &mut Option<f64>,
-        default: f64,
-        range: std::ops::RangeInclusive<f64>,
+        value: &mut Option<N>,
+        default: N,
+        range: std::ops::RangeInclusive<N>,
         suffix: &str,
     ) {
         let mut enabled = value.is_some();
@@ -450,6 +450,19 @@ impl SymbolTab {
                 ui.add(egui::DragValue::new(&mut params.footprint_stack).range(1..=1000))
                     .labelled_by(label.id);
                 ui.end_row();
+            }
+            if params.footprint_stacked_imbalances
+                || params.footprint_naked_poc
+                || params.footprint_unfinished_auctions
+            {
+                Self::optional_number(
+                    ui,
+                    "Expire after bars",
+                    &mut params.footprint_extend_bars,
+                    50,
+                    1..=100_000,
+                    "",
+                );
             }
             let mut cluster = params.footprint_cluster_share.map(|share| share * 100.0);
             Self::optional_number(ui, "Volume clusters", &mut cluster, 25.0, 0.0..=100.0, "%");

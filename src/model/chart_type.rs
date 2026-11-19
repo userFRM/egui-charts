@@ -390,14 +390,14 @@ pub enum FootprintColor {
     Fixed,
     /// The buy colour for a positive delta and the sell colour for a negative one, with the
     /// opacity growing with the delta's absolute size relative to the largest of the
-    /// [`FootprintIntensity`] scale, by default the bar's. A zero delta takes the neutral colour at full opacity.
+    /// [`FootprintIntensity`] scale, by default the bar's. A zero delta takes the neutral colour
+    /// at full opacity.
     DeltaOpacity,
     /// Sell and buy volume shaded separately, each in one of four strengths of its own colour by
     /// the quarter it falls in between the smallest and the largest volume of its side in the
     /// bar, or in the bars in view, or between zero and an entered volume, as
     /// [`FootprintIntensity`] chooses. The POC row takes the text colour, the value area is two
-    /// dotted lines, and a side
-    /// that dominates under the imbalance settings gets a strip along its outer edge.
+    /// dotted lines, and a side that dominates under the imbalance settings gets a strip along its outer edge.
     VolumeSteps,
 }
 
@@ -866,6 +866,10 @@ pub struct ChartTypeParams {
     pub footprint_delta_percent: Option<f64>,
     /// Footprint: minimum buy/sell or sell/buy multiple for a bar marker; None hides it.
     pub footprint_ratio: Option<f64>,
+    /// Footprint: later bars with complete executions an unrevisited POC, stacked imbalance
+    /// zone or unfinished high or low extends over before expiry. `None` extends until a
+    /// revisit or the last bar; `Some(0)` expires at its own bar.
+    pub footprint_extend_bars: Option<usize>,
     /// Footprint: write the ask/bid ratios at the bar extremes.
     pub footprint_extreme_ratio: bool,
     /// Footprint: outline rows between the close and the extreme beyond it.
@@ -1024,6 +1028,7 @@ impl Default for ChartTypeParams {
             footprint_single_print_max: None,
             footprint_delta_percent: None,
             footprint_ratio: None,
+            footprint_extend_bars: None,
             footprint_extreme_ratio: false,
             footprint_pullback: false,
             footprint_abbreviate: true,
@@ -1269,6 +1274,7 @@ mod tests {
         let settings = serde_json::json!({
             "footprint_modes": ["Delta", "BidAskTrades", "Trades", "AverageSize"], "footprint_row_ticks": 2,
             "footprint_intensity": {"Volume": 2500.0},
+            "footprint_extend_bars": 8,
             "footprint_auto_row_height": 24.0, "footprint_min_text_height": 10.0,
             "footprint_row_atr": true, "footprint_row_atr_length": 30,
             "footprint_value_area": 0.010003969988090037,
@@ -1353,10 +1359,31 @@ mod tests {
             let mut restored = crate::widget::Chart::new(crate::model::BarData::new());
             restored.restore(&saved.charts[0]).unwrap();
             assert_eq!(restored.chart_type_params(), &applied);
+            let mut legacy: serde_json::Value =
+                serde_json::from_str(&layout.to_json().unwrap()).unwrap();
+            let fields = legacy["charts"][0]["chart_type_params"]
+                .as_object_mut()
+                .unwrap();
+            for name in [
+                "footprint_intensity",
+                "footprint_auto_row_height",
+                "footprint_min_text_height",
+                "footprint_extend_bars",
+            ] {
+                assert!(fields.remove(name).is_some(), "{name}");
+            }
+            let saved = crate::widget::SavedLayout::from_json(&legacy.to_string()).unwrap();
+            restored.restore(&saved.charts[0]).unwrap();
+            let defaults = restored.chart_type_params();
+            assert_eq!(defaults.footprint_intensity, FootprintIntensity::Bar);
+            assert_eq!(defaults.footprint_auto_row_height, 16.0);
+            assert_eq!(defaults.footprint_min_text_height, 12.0);
+            assert_eq!(defaults.footprint_extend_bars, None);
         }
         let legacy: ChartTypeParams = serde_json::from_str(r#"{"tpo_row_ticks":2}"#).unwrap();
         let legacy = serde_json::to_value(legacy).unwrap();
         assert_eq!(legacy["footprint_intensity"], "Bar");
+        assert_eq!(legacy["footprint_extend_bars"], serde_json::Value::Null);
         assert_eq!(legacy["footprint_auto_row_height"], 16.0);
         assert_eq!(legacy["footprint_min_text_height"], 12.0);
         assert_eq!(legacy["footprint_statistics"], false);

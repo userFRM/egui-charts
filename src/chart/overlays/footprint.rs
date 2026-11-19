@@ -242,6 +242,7 @@ impl FootprintConfig {
                 imbalance_ratio: params.footprint_imbalance_ratio,
                 imbalance_min_volume: params.footprint_imbalance_min_volume,
                 diagonal: params.footprint_diagonal,
+                extend_bars: params.footprint_extend_bars,
                 ..Default::default()
             }),
             ..Default::default()
@@ -2354,6 +2355,70 @@ mod tests {
             abbreviate: false,
             ..Default::default()
         }
+    }
+
+    /// Nothing after bar 0 reaches its POC at 100. With five later bars allowed,
+    /// bars 1 through 5 exhaust the extension and it ends at bar 5 rather than bar 6.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn chart_type_expiry_ends_an_unrevisited_poc_at_the_fifth_later_bar() {
+        use crate::studies::{FootprintStudyKind, FootprintStudyState};
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        let bars: Vec<_> = (0..7)
+            .map(|i| {
+                let at = time + chrono::TimeDelta::minutes(i);
+                if i == 0 {
+                    flow.push(&Tick::new(at, 100.0, 10.0, Some(OrderSide::Buy)))
+                        .unwrap();
+                    flow.push(&Tick::new(at, 101.0, 1.0, Some(OrderSide::Buy)))
+                        .unwrap();
+                    Bar::new(at, 100.0, 101.0, 100.0, 101.0, 11.0)
+                } else {
+                    flow.push(&Tick::new(at, 105.0, 1.0, Some(OrderSide::Buy)))
+                        .unwrap();
+                    Bar::new(at, 105.0, 105.0, 105.0, 105.0, 1.0)
+                }
+            })
+            .collect();
+        let ctx = egui::Context::default();
+        for (expiry, end, state) in [
+            (None, None, FootprintStudyState::Unvisited),
+            (
+                Some(5),
+                Some(time + chrono::TimeDelta::minutes(5)),
+                FootprintStudyState::Expired,
+            ),
+            (Some(0), Some(time), FootprintStudyState::Expired),
+            (Some(7), None, FootprintStudyState::Unvisited),
+        ] {
+            let params = ChartTypeParams {
+                footprint_naked_poc: true,
+                footprint_extend_bars: expiry,
+                ..Default::default()
+            };
+            let config = FootprintConfig::from_chart_params(&params, [Color32::WHITE; 4], 1);
+            let studies = cached_annotations(&ctx, &annotation_mapping(), &bars, &flow, &config);
+            let poc: Vec<_> = studies
+                .iter()
+                .filter(|s| s.start == time && s.kind == FootprintStudyKind::NakedPoc)
+                .collect();
+            assert_eq!(poc.len(), 1);
+            assert_eq!(
+                (poc[0].low, poc[0].high, poc[0].end, poc[0].state),
+                (100, 100, end, state),
+                "{expiry:?}"
+            );
+        }
+        let expiry_only = ChartTypeParams {
+            footprint_extend_bars: Some(5),
+            ..Default::default()
+        };
+        assert!(
+            FootprintConfig::from_chart_params(&expiry_only, [Color32::WHITE; 4], 1)
+                .studies
+                .is_none()
+        );
     }
 
     /// Volumes fall into equal quarters of their side's range, whatever the other side traded, and

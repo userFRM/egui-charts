@@ -1473,6 +1473,7 @@ mod tests {
         let seeded = ChartTypeParams {
             footprint_intensity: FootprintIntensity::Volume(500.0),
             footprint_naked_poc: true,
+            footprint_extend_bars: Some(5),
             ..Default::default()
         };
         for accept in [false, true] {
@@ -1481,6 +1482,8 @@ mod tests {
                 "Full shade volume",
                 "Automatic row height",
                 "Smallest row with numbers",
+                "Expiry value",
+                "Expiry off",
             ] {
                 let mut dialog = SettingsDialog::new();
                 dialog.set_control_visible(crate::ui::Control::Templates, false);
@@ -1533,6 +1536,27 @@ mod tests {
                             expected.footprint_auto_row_height = value as f32;
                         } else {
                             expected.footprint_min_text_height = value as f32;
+                        }
+                    }
+                    "Expiry value" | "Expiry off" => {
+                        harness.get_by_label("Annotations").scroll_to_me();
+                        harness.run();
+                        harness.get_by_label("Annotations").click();
+                        harness.run();
+                        if edit == "Expiry value" {
+                            harness
+                                .get_by_role_and_label(Role::SpinButton, "Expire after bars")
+                                .set_value_accesskit(8.0);
+                            expected.footprint_extend_bars = Some(8);
+                        } else {
+                            harness
+                                .get_by_role_and_label(Role::CheckBox, "Expire after bars")
+                                .scroll_to_me();
+                            harness.run();
+                            harness
+                                .get_by_role_and_label(Role::CheckBox, "Expire after bars")
+                                .click();
+                            expected.footprint_extend_bars = None;
                         }
                     }
                     _ => {
