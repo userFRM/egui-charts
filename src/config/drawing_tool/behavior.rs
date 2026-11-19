@@ -254,6 +254,25 @@ impl DrawingToolType {
         )
     }
 
+    /// Whether the drawing's text follows the Show text switch, `marker.show_text`: a horizontal
+    /// line, a horizontal ray, an arrow mark and the parallel, flat top/bottom and disjoint
+    /// channels. A pin's popup reads the same switch itself; other tools always show their text.
+    #[cfg(feature = "drawings")]
+    pub(crate) fn has_text_switch(&self) -> bool {
+        matches!(
+            self,
+            Self::HorizontalLine
+                | Self::HorizontalRay
+                | Self::ArrowMarkUp
+                | Self::ArrowMarkDown
+                | Self::ArrowMarkLeft
+                | Self::ArrowMarkRight
+                | Self::ParallelChannel
+                | Self::FlatTopBottom
+                | Self::DisjointChannel
+        )
+    }
+
     /// Whether a double click edits the drawing's text in place instead of opening its settings.
     pub fn edits_text_inline(&self) -> bool {
         self.is_text_annotation()
