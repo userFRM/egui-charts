@@ -958,7 +958,7 @@ Terminal,Trading panel,Bottom trading panel container,unverified,library,src/ui/
 Terminal,Trading panel,Brackets: take-profit and stop-loss attached to an entry,incomplete,host,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/ui/trading/mod.rs;src/services/paper.rs,3282;3283;3429
 Terminal,Trading panel,Buy/Sell buttons on the chart,incomplete,host,src/ui/symbol_header.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;terminal/src/trading.rs,3242
 Terminal,Trading panel,DOM / depth-of-market ladder with click-to-trade,incomplete,host,src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs;src/ui/trading/dom.rs;src/widget/feed/mod.rs,236
-Terminal,Trading panel,"Drag orders, take-profit and stop-loss on the chart to modify",unverified,host,src/chart/rendering/trading_lines/mod.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs,
+Terminal,Trading panel,"Drag orders, take-profit and stop-loss on the chart to modify",unverified,host,src/chart/rendering/trading_lines/mod.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs,3531
 Terminal,Trading panel,Execution markers on the chart,unverified,library,src/ui/trading/mod.rs;src/ui/trading/view.rs;src/ui/trading/executions.rs;src/ui/trading/format.rs,3242
 Terminal,Trading panel,Order and position lines on the chart,incomplete,library,src/chart/rendering/trading_lines/mod.rs;src/chart/rendering/trading_lines/position.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/chart/rendering/axes/mod.rs;src/widget/frame/mod.rs,
 Terminal,Trading panel,Order ticket,incomplete,library,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/view.rs;src/ui/trading/ticket/form.rs;src/ui/trading/mod.rs;src/ui/trading/widgets.rs;terminal/src/trading.rs,3278;3280;3282;3284;3429

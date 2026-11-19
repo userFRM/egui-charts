@@ -23,8 +23,8 @@ use crate::theme::{Theme, ThemeExt};
 pub enum TradingLineAction {
     /// Cancel the working order.
     Cancel(Order),
-    /// Replace the working order with the request: the user dragged its price, a take profit or
-    /// its stop loss, removed one of them, or dragged a take profit or stop loss out of its label.
+    /// Replace the working order with the request: the user dragged its price, the limit
+    /// price of a stop-limit order, a take profit or its stop loss, removed one of them, or dragged a take profit or stop loss out of its label.
     Modify(Order, OrderRequest),
     /// Close the position at the market.
     Close(Position),
@@ -193,6 +193,8 @@ enum Level {
     Entry,
     TakeProfit,
     StopLoss,
+    /// The limit price of a stop-limit order, drawn beside its stop.
+    Limit,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -210,7 +212,8 @@ const PADDING: f32 = 6.0;
 /// Draws the working orders with their brackets and the open positions of one symbol on the
 /// chart, and returns what the user asked for. Pass only the orders and positions of the
 /// chart's symbol, and call it after drawing the chart. The price axis is left to the caller; see
-/// [`TradingLines::tags`].
+/// [`TradingLines::tags`]. A stop-limit order draws its stop and its limit as two lines joined
+/// at the node column; each is dragged on its own, and exits follow the stop.
 pub fn render_trading_lines<'a>(
     ui: &mut Ui,
     mapping: &ChartMapping,
@@ -266,6 +269,11 @@ pub fn render_trading_lines<'a>(
         let initial_entry = entry_price(&request.order_type);
         // Each level: its kind, its index among the take-profit levels, its price and quantity.
         let mut levels = vec![(Level::Entry, 0, initial_entry, open)];
+        if let OrderType::StopLimit { stop, limit } = request.order_type
+            && limit != stop
+        {
+            levels.push((Level::Limit, 0, Some(limit), open));
+        }
         if request.take_profit_levels.is_empty() {
             levels.push((Level::TakeProfit, 0, request.take_profit, open));
         }
@@ -289,7 +297,7 @@ pub fn render_trading_lines<'a>(
             let Some(price) = price.filter(|price| price.is_finite()) else {
                 continue;
             };
-            let price = if level != Level::Entry {
+            let price = if !matches!(level, Level::Entry | Level::Limit) {
                 price
                     + parent_price
                         .zip(initial_entry)
@@ -297,13 +305,15 @@ pub fn render_trading_lines<'a>(
             } else {
                 price
             };
-            let appearance = if level == Level::Entry {
+            let appearance = if matches!(level, Level::Entry | Level::Limit) {
                 entry_level
             } else {
                 level
             };
             let (name, color) = match appearance {
-                Level::Entry => (l10n::text(ui.ctx(), kind), side_color(request.side)),
+                Level::Entry | Level::Limit => {
+                    (l10n::text(ui.ctx(), kind), side_color(request.side))
+                }
                 Level::TakeProfit => (l10n::text(ui.ctx(), "TP"), theme.ui.take_profit),
                 Level::StopLoss => (l10n::text(ui.ctx(), "SL"), theme.ui.stop_loss),
             };
@@ -314,14 +324,19 @@ pub fn render_trading_lines<'a>(
                 .or(parent_price)
                 .or(options.last_price);
             let ctx = ui.ctx().clone();
-            let body = |price: f64| match (appearance, options.bracket_pnl, entry) {
-                (Level::TakeProfit | Level::StopLoss, Some(unit), Some(entry)) => {
-                    let gain = (price - entry)
-                        * parent.map_or(direction(request.side), |p| p.quantity.signum());
-                    let money = gain * quantity * options.point_value;
-                    pnl_text(&ctx, unit, money, gain, entry, options).0
+            let body = |price: f64| {
+                if level == Level::Limit {
+                    return l10n::text(&ctx, "Limit");
                 }
-                _ => name.clone(),
+                match (appearance, options.bracket_pnl, entry) {
+                    (Level::TakeProfit | Level::StopLoss, Some(unit), Some(entry)) => {
+                        let gain = (price - entry)
+                            * parent.map_or(direction(request.side), |p| p.quantity.signum());
+                        let money = gain * quantity * options.point_value;
+                        pnl_text(&ctx, unit, money, gain, entry, options).0
+                    }
+                    _ => name.clone(),
+                }
             };
             let line = PriceLine::new(price, color).with_style(
                 if appearance == Level::Entry && options.submit {
@@ -331,7 +346,7 @@ pub fn render_trading_lines<'a>(
                 },
             );
             // Removing a bracket changes the order, so it needs the same support as a drag.
-            let cancel = level == Level::Entry || options.modify;
+            let cancel = level == Level::Entry || (level != Level::Limit && options.modify);
             // What an exit dragged out of the entry's label makes if the price reaches it.
             let exit_pnl = |unit, at: f64| {
                 let gain = (at - price) * direction(request.side);
@@ -370,9 +385,15 @@ pub fn render_trading_lines<'a>(
             let drawn = tags.get(first_tag).map_or(price, |tag| tag.0);
             if appearance == Level::Entry && tags.len() > first_tag {
                 outlined.push(first_tag);
-                parent_price = Some(drawn);
+                if level == Level::Entry {
+                    parent_price = Some(drawn);
+                }
             }
-            if let Some(parent) = parent {
+            if level == Level::Limit {
+                if let Some(stop) = parent_price {
+                    connector(ui, mapping, stop, drawn, color);
+                }
+            } else if let Some(parent) = parent {
                 connector(
                     ui,
                     mapping,
@@ -426,10 +447,9 @@ pub fn render_trading_lines<'a>(
                         changed.order_type = match request.order_type {
                             OrderType::Limit(_) => OrderType::Limit(price),
                             OrderType::Stop(_) => OrderType::Stop(price),
-                            OrderType::StopLimit { limit, .. } => OrderType::StopLimit {
-                                stop: price,
-                                limit: shift(limit),
-                            },
+                            OrderType::StopLimit { limit, .. } => {
+                                OrderType::StopLimit { stop: price, limit }
+                            }
                             other => other,
                         };
                         changed.take_profit = changed.take_profit.map(shift);
@@ -447,6 +467,13 @@ pub fn render_trading_lines<'a>(
                     None => remove_take_profit_level(&mut changed, index),
                 },
                 Level::StopLoss => changed.stop_loss = price,
+                Level::Limit => {
+                    if let (Some(price), OrderType::StopLimit { stop, .. }) =
+                        (price, request.order_type)
+                    {
+                        changed.order_type = OrderType::StopLimit { stop, limit: price };
+                    }
+                }
             }
             action = action.or(Some(TradingLineAction::Modify(order.clone(), changed)));
         }
@@ -1018,6 +1045,116 @@ fn connector(ui: &Ui, mapping: &ChartMapping, entry: f64, exit: f64, color: Colo
 mod tests {
     use super::*;
     use crate::model::{OrderId, OrderStatus};
+
+    /// Both stop-limit prices are visible and independent; exits keep following the stop.
+    #[test]
+    fn stop_limit_orders_drag_their_stop_and_limit_apart() {
+        for theme in [Theme::light(), Theme::dark()] {
+            for (label, target, expected, take_profit) in [
+                (
+                    "Limit",
+                    102.0,
+                    OrderType::StopLimit {
+                        stop: 101.0,
+                        limit: 102.0,
+                    },
+                    103.0,
+                ),
+                (
+                    "Stop limit",
+                    100.5,
+                    OrderType::StopLimit {
+                        stop: 100.5,
+                        limit: 101.5,
+                    },
+                    102.5,
+                ),
+            ] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+                let mut request = OrderRequest::new(
+                    "SYM",
+                    OrderSide::Buy,
+                    1.0,
+                    OrderType::StopLimit {
+                        stop: 101.0,
+                        limit: 101.5,
+                    },
+                );
+                request.take_profit = Some(103.0);
+                let order = Order::new(OrderId::new("S"), request, OrderStatus::Working);
+                let mut options = TradingLineOptions::new("USD", 0.01);
+                options.modify = true;
+                let mut start = Pos2::ZERO;
+                let mut end = Pos2::ZERO;
+                let mut action = None;
+                for frame in 0..7 {
+                    let events = match frame {
+                        3 => vec![egui::Event::PointerMoved(start)],
+                        4 => vec![egui::Event::PointerButton {
+                            pos: start,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                        5 => vec![egui::Event::PointerMoved(end)],
+                        6 => vec![egui::Event::PointerButton {
+                            pos: end,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                        _ => vec![],
+                    };
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            chart.show(ui);
+                            let mapping = chart.get_chart_mapping();
+                            end.y = mapping.price_to_y(target);
+                            let lines = render_trading_lines(ui, &mapping, [&order], [], &options);
+                            if frame == 2 {
+                                let buy = crate::theme::trading_side_color(&theme, OrderSide::Buy);
+                                assert_eq!(
+                                    lines.tags,
+                                    [(101.0, buy), (101.5, buy), (103.0, theme.ui.take_profit)]
+                                );
+                                assert_eq!(lines.outlined, [0, 1]);
+                            }
+                            action = action.take().or(lines.action);
+                        },
+                    );
+                    if frame == 2 {
+                        start = output
+                            .shapes
+                            .iter()
+                            .find_map(|shape| match &shape.shape {
+                                egui::Shape::Text(text) if text.galley.text() == label => {
+                                    Some(text.pos + text.galley.size() / 2.0)
+                                }
+                                _ => None,
+                            })
+                            .expect("price label");
+                        end.x = start.x;
+                    }
+                    output.drop_without_applying_deltas();
+                }
+                let mut changed = order.request.clone();
+                changed.order_type = expected;
+                changed.take_profit = Some(take_profit);
+                assert_eq!(
+                    action,
+                    Some(TradingLineAction::Modify(order, changed)),
+                    "{label}"
+                );
+            }
+        }
+    }
 
     /// Only a projected order's line is dashed, a label's body is an opaque tint, and the submit
     /// button has no outline.
