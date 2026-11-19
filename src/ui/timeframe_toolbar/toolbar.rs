@@ -729,7 +729,7 @@ impl TimeframeToolbar {
         self.state.timezone = timezone;
     }
 
-    /// Set the session type
+    /// Set the session type, such as [`SessionType::from_chart`] of the chart the toolbar serves
     pub fn set_session(&mut self, session: SessionType) {
         self.state.session_type = session;
     }
