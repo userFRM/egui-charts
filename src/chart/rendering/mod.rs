@@ -64,6 +64,6 @@ pub use trading_lines::{
     TradingLines, render_trading_lines,
 };
 #[cfg(feature = "ui")]
-pub(crate) use trading_lines::{entry_price, exit_request, held_exits};
+pub(crate) use trading_lines::{entry_price, exit_request, held_exits, pnl_text};
 pub(crate) use watermark::render_watermark;
 pub use watermark::{Watermark, WatermarkLine};

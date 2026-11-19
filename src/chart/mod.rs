@@ -31,4 +31,4 @@ pub use rendering::{
     render_axis_currency, render_crosshair_full, render_event_band, render_trading_lines,
 };
 #[cfg(feature = "ui")]
-pub(crate) use rendering::{entry_price, exit_request, held_exits};
+pub(crate) use rendering::{entry_price, exit_request, held_exits, pnl_text};
