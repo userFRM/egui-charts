@@ -514,7 +514,14 @@ mod tests {
 
     #[test]
     fn big_trades_reach_the_threshold_by_kind() {
-        type Edit = fn(&mut BigTradeRule);
+        type Row = (
+            &'static str,
+            u8,
+            f64,
+            fn(&mut BigTradeRule),
+            Vec<Tick>,
+            Vec<SignalEvent>,
+        );
         let passive = || {
             (1..=10)
                 .map(|i| {
@@ -523,7 +530,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let same_time = || vec![fill(1, 99.75, 100.0, OrderSide::Sell, None); 6];
-        let rows: Vec<(&str, u8, f64, Edit, Vec<Tick>, Vec<SignalEvent>)> = vec![
+        let rows: Vec<Row> = vec![
             (
                 "fractional sizes reach the threshold",
                 1,
