@@ -952,6 +952,25 @@ impl Footprint {
     /// own size, the default, or on the combined size of its aggressive order, as [`SizeBasis`]
     /// describes. Must be called before adding trades; otherwise returns an error without changing
     /// it.
+    ///
+    /// ```
+    /// use egui_charts::{
+    ///     data::{Footprint, SizeBasis},
+    ///     model::{BarClock, OrderSide, Tick, Timeframe},
+    /// };
+    ///
+    /// let time = "2026-01-05T10:00:00Z".parse()?;
+    /// let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1)?;
+    /// flow.set_size_filter(50.0, f64::MAX)?;
+    /// flow.set_size_basis(SizeBasis::AggressiveOrder)?;
+    /// let fill = |price| {
+    ///     Tick::new(time, price, 25.0, Some(OrderSide::Buy)).with_aggressor_order_id(7)
+    /// };
+    /// assert!(!flow.push(&fill(100.0))?);
+    /// assert!(flow.push(&fill(101.0))?);
+    /// assert_eq!(flow.bars()[&time].ask, 50.0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn set_size_basis(&mut self, basis: SizeBasis) -> Result<(), FeedError> {
         if self.last.is_some() || self.trade_bars.forming.is_some() {
             return Err(FeedError::InvalidData(

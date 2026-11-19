@@ -52,9 +52,9 @@ pub struct VolumeBubblesConfig {
     /// [`Ungrouped`](BubbleGrouping::Ungrouped) and
     /// [`AggressiveOrder`](BubbleGrouping::AggressiveOrder) draw at most the 20 largest visible
     /// trades of at least the mean plus two standard deviations of the visible trades' sizes,
-    /// the latest of
-    /// those tied at the 20th size first, and the other groupings draw every bubble. `Some(0.0)`
-    /// draws every trade. A trade is visible when it is centred inside the plot in price and time.
+    /// the latest of those tied at the 20th size first, and the other groupings draw every
+    /// bubble. `Some(0.0)` draws every trade. A trade is visible when it is centred inside the
+    /// plot in price and time.
     pub min_size_filter: Option<f64>,
     /// Which trades share a bubble.
     pub grouping: BubbleGrouping,
@@ -453,7 +453,6 @@ impl VolumeBubbles {
                     index.clear();
                 }
             }
-
             _ => {
                 let lower = match self.config.grouping {
                     BubbleGrouping::TimeWindow(_) => first - TimeDelta::milliseconds(self.window),
@@ -1365,7 +1364,6 @@ mod tests {
 ("without a minimum the large-trade rule ranks the orders",
     VolumeBubblesConfig { grouping: AggressiveOrder, ..config.clone() }, ranked(),
     vec![(73.333_33, 98.0, 40.0, green, None)]),
-
             ("only the large prints draw, a quarter of the size at half the diameter",
                 VolumeBubblesConfig::default(), session,
                 vec![(100.0, 100.0, 20.0, green, None), (260.0, 140.0, 40.0, red, None)]),
