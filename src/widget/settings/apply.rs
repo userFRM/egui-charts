@@ -171,6 +171,7 @@ impl ChartSettingsState {
             price_source: Some(chart.config().price_source),
             events: chart.event_visibility().clone(),
             show_session_breaks: Some(config.show_session_breaks),
+            extended_hours: Some(chart.extended_hours()),
             order_flow: super::OrderFlowSettings {
                 show_heatmap: chart
                     .feed_link
@@ -505,6 +506,9 @@ impl ChartSettingsState {
         );
         chart.set_event_visibility(self.events.clone());
         chart.set_price_targets_visible(self.show_price_targets);
+        if let Some(extended) = self.extended_hours {
+            chart.set_extended_hours(extended);
+        }
         chart.chart_options.time_scale.timezone = timezone;
         if self.scales_appearance.lines_color != axis_line_color(chart.config()) {
             // A transparent line is no line; any other colour draws on the price axes and the time axis.
@@ -3012,42 +3016,49 @@ mod tests {
         assert!(range.max - range.min < 0.0875, "{range:?}");
     }
 
-    /// The session breaks switch and the bar the last price line follows reach the chart, read
-    /// back and are undone. Settings saved before these, the axis font family and the thousands
+    /// The session breaks switch, the extended hours choice and the bar the last price line
+    /// follows reach the chart, read back and are undone. Settings saved before these, the axis font family and the thousands
     /// separator could be chosen hold none of them and keep the chart's.
     #[test]
-    fn session_breaks_and_last_price_bar_apply_and_read_back() {
+    fn session_choices_and_last_price_bar_apply_and_read_back() {
         use crate::model::PriceLineSource::{LastBar, LastVisible};
         use crate::widget::{SeriesId, test_frames::chart};
         let read = |chart: &Chart| {
             let style = chart.series_style(SeriesId::MAIN).unwrap();
-            (chart.config().show_session_breaks, style.price_line_source)
+            (
+                chart.config().show_session_breaks,
+                style.price_line_source,
+                chart.extended_hours(),
+            )
         };
         let mut chart = chart(&[100.0], &[110.0]);
         let new_chart = ChartSettingsState::from_chart(&chart);
-        for (breaks, source) in [(true, LastVisible), (false, LastBar)] {
+        for (breaks, source, extended) in [(true, LastVisible, true), (false, LastBar, false)] {
             let mut settings = ChartSettingsState::from_chart(&chart);
             settings.show_session_breaks = Some(breaks);
+            settings.extended_hours = Some(extended);
             settings.scales_and_lines.price_line_source = Some(source);
             chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
-            assert_eq!(read(&chart), (breaks, source));
+            assert_eq!(read(&chart), (breaks, source, extended));
             let settings = ChartSettingsState::from_chart(&chart);
             assert_eq!(
                 (
                     settings.show_session_breaks,
-                    settings.scales_and_lines.price_line_source
+                    settings.scales_and_lines.price_line_source,
+                    settings.extended_hours
                 ),
-                (Some(breaks), Some(source))
+                (Some(breaks), Some(source), Some(extended))
             );
         }
         assert!(chart.undo());
-        assert_eq!(read(&chart), (true, LastVisible));
+        assert_eq!(read(&chart), (true, LastVisible, true));
 
         chart.config_mut().axis_font_family = egui::FontFamily::Monospace;
         chart.config_mut().thousands_sep = Some('_');
         let mut saved = serde_json::to_value(new_chart).unwrap();
         for (group, choice) in [
             ("", "show_session_breaks"),
+            ("", "extended_hours"),
             ("/scales_and_lines", "price_line_source"),
             ("/scales_and_lines", "thousands_sep"),
             ("/scales_appearance", "font_family"),
@@ -3057,7 +3068,7 @@ mod tests {
         }
         let saved: ChartSettingsState = serde_json::from_value(saved).unwrap();
         saved.apply_to_chart(&mut chart).unwrap();
-        assert_eq!(read(&chart), (true, LastVisible));
+        assert_eq!(read(&chart), (true, LastVisible, true));
         assert_eq!(chart.config().axis_font_family, egui::FontFamily::Monospace);
         assert_eq!(chart.config().thousands_sep, Some('_'));
     }

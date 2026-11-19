@@ -774,6 +774,7 @@ impl SettingsDialog {
                     .scales_and_lines
                     .thousands_sep
                     .or(scales.thousands_sep);
+                let extended_hours = template.extended_hours.or(self.settings.extended_hours);
                 let session_breaks = template
                     .show_session_breaks
                     .or(self.settings.show_session_breaks);
@@ -798,6 +799,7 @@ impl SettingsDialog {
                 self.settings.scales_and_lines.price_line_style = line_style;
                 self.settings.scales_and_lines.thousands_sep = separator;
                 self.settings.show_session_breaks = session_breaks;
+                self.settings.extended_hours = extended_hours;
                 self.settings.margins.right_bars = right_bars;
                 // A template saved before volume candles had a style shows what they drew, which
                 // Ok then applies with any edits made before it.
@@ -871,6 +873,7 @@ impl SettingsDialog {
                 ..Default::default()
             };
             // What a new chart holds, where the default settings hold no choice.
+            self.settings.extended_hours = Some(false);
             self.settings.scales_appearance.font_family = Some(Default::default());
             self.settings.scales_and_lines.price_line_source = Some(Default::default());
             let style = crate::model::SeriesStyle::default();
@@ -2352,6 +2355,7 @@ mod tests {
             .unwrap();
             for (group, choice) in [
                 ("", "show_session_breaks"),
+                ("", "extended_hours"),
                 ("/scales_and_lines", "price_line_source"),
                 ("/scales_and_lines", "thousands_sep"),
                 ("/scales_appearance", "font_family"),
@@ -2365,6 +2369,7 @@ mod tests {
             chart.config_mut().axis_font_family = FontFamily::Monospace;
             chart.config_mut().thousands_sep = Some('\'');
             chart.config_mut().show_session_breaks = true;
+            chart.set_extended_hours(true);
             let style = chart.series_style_mut(SeriesId::MAIN).unwrap();
             style.price_line_source = PriceLineSource::LastVisible;
             let margin = chart.chart_options().time_scale.clone();
@@ -2381,10 +2386,12 @@ mod tests {
             assert_eq!(
                 (
                     shown.show_session_breaks,
+                    shown.extended_hours,
                     shown.scales_and_lines.price_line_source,
                     shown.scales_and_lines.thousands_sep,
                 ),
                 (
+                    Some(true),
                     Some(true),
                     Some(PriceLineSource::LastVisible),
                     Some(ThousandsSeparator::Apostrophe),
@@ -2397,6 +2404,7 @@ mod tests {
             assert_eq!(config.axis_font_family, FontFamily::Monospace);
             assert_eq!(config.thousands_sep, Some('\''));
             assert!(config.show_session_breaks);
+            assert!(chart.extended_hours());
             let style = chart.series_style(SeriesId::MAIN).unwrap();
             assert_eq!(style.price_line_source, PriceLineSource::LastVisible);
         }

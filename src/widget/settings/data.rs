@@ -673,6 +673,11 @@ pub struct ChartSettingsState {
     /// adjusted history; [`from_chart`](Self::from_chart) leaves it off.
     #[serde(default)]
     pub adjust_for_dividends: bool,
+    /// Regular hours (`false`) or regular and extended hours (`true`), as
+    /// [`Chart::set_extended_hours`](crate::widget::Chart::set_extended_hours) requests them.
+    /// `None` keeps the chart's choice, as do settings saved without this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extended_hours: Option<bool>,
 
     // Order flow tab
     /// Independent heatmap, live book and trade bubble settings; older documents keep them off.
@@ -756,6 +761,7 @@ impl Default for ChartSettingsState {
             timezone: "UTC".to_string(),
             show_price_targets: false,
             adjust_for_dividends: false,
+            extended_hours: None,
 
             order_flow: OrderFlowSettings::default(),
 

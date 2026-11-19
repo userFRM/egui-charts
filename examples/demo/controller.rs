@@ -1036,6 +1036,7 @@ impl DemoApp {
             .set_display_timezone(&self.chart.display_timezone());
         let clock_changed = self.timeframe_toolbar.state.timezone != clock;
         self.follow_chart_symbol(clock_changed);
+        self.follow_chart_session();
     }
 
     /// Loads the bars of the symbol and interval the chart shows after it changed them itself.
@@ -1162,6 +1163,23 @@ impl DemoApp {
             params.range_size = size;
             params.range_size_method = BoxSizeMethod::Fixed;
             self.chart.set_chart_type_params(params);
+        }
+    }
+
+    /// Follows a session chosen by the chart settings or undo with the toolbar and demo feed.
+    fn follow_chart_session(&mut self) {
+        let extended = self.chart.extended_hours();
+        if self.own_data.is_none()
+            && DemoSymbol::has_hours(&self.state.symbol)
+            && extended != (self.timeframe_toolbar.state.session_type == SessionType::ETH)
+        {
+            self.timeframe_toolbar.set_session(if extended {
+                SessionType::ETH
+            } else {
+                SessionType::RTH
+            });
+            self.stop_replay();
+            self.apply_session();
         }
     }
 
@@ -1492,9 +1510,16 @@ impl DemoApp {
         }
         if state.adjust_for_dividends != self.timeframe_toolbar.state.adjust_for_dividends {
             self.timeframe_toolbar.state.adjust_for_dividends = state.adjust_for_dividends;
+            let extended = self.chart.extended_hours();
+            self.timeframe_toolbar.set_session(if extended {
+                SessionType::ETH
+            } else {
+                SessionType::RTH
+            });
             self.stop_replay();
             self.apply_session();
         }
+        self.follow_chart_session();
     }
 
     /// Whether the current preset shows other charts to copy to.
