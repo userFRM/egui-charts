@@ -3,6 +3,9 @@
 //! Prices are in the symbol's price units and quantities in its trading units. Every price and
 //! quantity is finite. Quantities are positive, except a position's, which is signed, and an
 //! order's filled quantity, which starts at 0.
+//!
+//! Fields added to the serializable trading types follow the compatibility promise on
+//! [`SavedPaperAccount`](crate::services::SavedPaperAccount).
 
 use chrono::{DateTime, Utc};
 
@@ -15,7 +18,7 @@ pub(crate) fn rounding_tolerance(scale: f64, relative: f64) -> f64 {
 }
 
 /// Identifies an order. The broker chooses it.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct OrderId(
     /// The broker's own identifier for the order.
     pub String,
@@ -60,7 +63,7 @@ impl OrderSide {
 }
 
 /// How an order executes. Prices are in the symbol's price units.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum OrderType {
     /// At the best price available now.
@@ -111,7 +114,7 @@ impl OrderType {
 
 /// The role of an exit order attached to the net position in its symbol. The set is closed: an
 /// attached exit either takes profit or stops a loss.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PositionBracket {
     /// A profit-taking limit exit.
     TakeProfit,
@@ -128,7 +131,7 @@ pub enum PositionBracket {
 /// let mut level = TakeProfitLevel::new(110.0, 2.0);
 /// level.stop_loss = Some(95.0);
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct TakeProfitLevel {
     /// The price at which it closes [`quantity`](Self::quantity): above the entry for a buy,
@@ -140,6 +143,7 @@ pub struct TakeProfitLevel {
     /// [level stops](Capabilities::take_profit_level_stops): below the entry for a buy, above
     /// for a sell. When either fills, the other is cancelled. `None` leaves the level to the
     /// order's [`stop_loss`](OrderRequest::stop_loss).
+    #[serde(default)]
     pub stop_loss: Option<f64>,
 }
 
@@ -155,7 +159,7 @@ impl TakeProfitLevel {
 }
 
 /// An order as the user or the host asks for it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct OrderRequest {
     /// The symbol as the feed knows it.
@@ -254,7 +258,7 @@ impl TimeInForce {
 
 /// An order the broker holds. Pushed again on every change; the terminal replaces the order with
 /// the same id.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Order {
     /// The broker's id for the order: an event with the same id replaces it.
@@ -289,7 +293,7 @@ impl Order {
 }
 
 /// Where an order stands. `Filled`, `Cancelled` and `Rejected` end the order.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum OrderStatus {
     /// Accepted and waiting to fill, possibly partly filled.
@@ -305,7 +309,7 @@ pub enum OrderStatus {
 }
 
 /// The net position in one symbol.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Position {
     /// The symbol as the feed knows it.
@@ -354,7 +358,7 @@ impl Position {
 }
 
 /// One fill of an order.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Execution {
     /// The order this fill belongs to.
@@ -401,7 +405,7 @@ impl Execution {
 /// let mut position = ClosedPosition::new("AAPL", OrderSide::Buy, 3.0, 110.0, 125.0, 45.0, closed);
 /// position.opened = Some(opened);
 /// ```
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct ClosedPosition {
     /// The symbol as the feed knows it.
@@ -492,7 +496,7 @@ impl Account {
 }
 
 /// A change of the account's cash balance, such as a closed trade's profit or a commission.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct BalanceChange {
     /// When the balance changed.
@@ -519,7 +523,7 @@ impl BalanceChange {
 
 /// One line of the account's trading journal: an order placed, changed, cancelled or filled, a
 /// position closed, or anything else the broker logs.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct JournalEntry {
     /// When it happened.
@@ -620,7 +624,7 @@ pub struct OrderPreview {
 }
 
 /// How a symbol trades at the broker. The order ticket sizes orders by these rules.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct TradingRules {
     /// The symbol as the feed knows it.
@@ -649,6 +653,23 @@ pub struct TradingRules {
 }
 
 impl TradingRules {
+    /// Whether the rules are usable: a positive finite step, minimum and point value, a maximum
+    /// no smaller than the minimum, a positive finite leverage and pip value where set, and at
+    /// least one time in force, with a default that needs no entered expiry.
+    pub(crate) fn is_valid(&self) -> bool {
+        let positive = |value: f64| value.is_finite() && value > 0.0;
+        positive(self.quantity_step)
+            && positive(self.min_quantity)
+            && positive(self.point_value)
+            && self
+                .max_quantity
+                .is_none_or(|max| positive(max) && max >= self.min_quantity)
+            && self.leverage.is_none_or(positive)
+            && self.pip_value.is_none_or(positive)
+            && !self.time_in_force.is_empty()
+            && self.time_in_force[0] != TimeInForce::GoodTillDate
+    }
+
     /// Whole units from 1 without a maximum, a point value of 1 and day orders: the rules the
     /// ticket assumes when the broker reports none.
     pub fn new(symbol: impl Into<String>) -> Self {

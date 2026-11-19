@@ -14,6 +14,17 @@ use crate::model::{
     TradingRules,
 };
 
+/// The times in force the account supports, the default first.
+const TIMES_IN_FORCE: [TimeInForce; 3] = [
+    TimeInForce::GoodTillCancelled,
+    TimeInForce::ImmediateOrCancel,
+    TimeInForce::FillOrKill,
+];
+
+/// Finished orders, executions, closed positions, balance changes and journal entries kept, which
+/// keeps a reconnect snapshot below the event stream's burst limit.
+const HISTORY: usize = 1_000;
+
 /// The most take-profit levels an order may carry.
 const MAX_TAKE_PROFIT_LEVELS: usize = 4;
 
@@ -23,32 +34,34 @@ const MAX_TAKE_PROFIT_LEVELS: usize = 4;
 ///
 /// Feed it the last price of every symbol it trades with [`set_price`](Self::set_price), live or
 /// replayed. During replay, call [`set_replay_time`](Self::set_replay_time) before each price so
-/// fills and history use the source bar's time. Only good-till-cancelled orders are supported;
-/// the account has no trading-session calendar. Market orders fill at the last price; limit and
-/// stop orders fill at the first price that reaches them, a limit at that price or better;
-/// a triggered stop-limit works on as a limit order. An order's take profits and stop loss become
-/// exit orders once it fills, for the quantity the fill opened: take-profit levels each close their
-/// own quantity, the first ones first when the fill opened less than the order's quantity, as after
+/// fills and history use the source bar's time. Good-till-cancelled orders work until they fill or
+/// are cancelled. Immediate-or-cancel and fill-or-kill orders fill at placement where a marketable
+/// order would, and are cancelled at once otherwise; since every fill is complete, the two behave
+/// alike. Day, week and month orders are refused, since the account has no trading-session
+/// calendar, and a working order cannot change its time in force. Market orders fill at the bid or
+/// ask of a usable [quote](Self::set_bid_ask), otherwise at the last price; limit and stop orders
+/// fill at the first price that reaches them, a limit at that price or better; a triggered
+/// stop-limit works on as a limit order. An order's take profits and stop loss become exit orders
+/// once it fills, for the quantity the fill opened: take-profit levels each close their own
+/// quantity, the first ones first when the fill opened less than the order's quantity, as after
 /// closing an opposite position. A level's own stop loss closes the same quantity as its take
-/// profit, and whichever fills cancels the other. The order's stop loss closes the quantity of
-/// the levels without one: when one of their take profits fills, it shrinks by that quantity
-/// and is cancelled once nothing is left; when it fills, those take profits are cancelled.
-/// An order carries at most 4 levels.
-/// Each symbol has one net position with its average
-/// price: a fill against it books the realised profit or loss of the closed quantity, and a fill
-/// beyond it opens the other side at the fill price. A fill that flattens or reverses a symbol
-/// records its completed round trip, including partial closes, with profit or loss before
-/// commissions. A position holds its market value divided by
-/// the leverage as margin, and a working order the same for its quantity at its price. Each fill
-/// pays the commission rate times its value. Placement and modification reserve buying power
-/// across all symbols, including working orders and their commissions. Market orders that
-/// reduce exposure remain possible when funds are insufficient. Position exits only reduce the
-/// remaining position.
-/// Every change is pushed as an [`AccountEvent`], with
-/// the most recent 1,000 finished orders, executions, closed positions, balance changes and
-/// journal entries.
-/// The history bound keeps a reconnect snapshot below the event stream's burst limit for
-/// ordinary interactive accounts.
+/// profit, and whichever fills cancels the other. The order's stop loss closes the quantity of the
+/// levels without one: when one of their take profits fills, it shrinks by that quantity and is
+/// cancelled once nothing is left; when it fills, those take profits are cancelled. An order
+/// carries at most 4 levels. Each symbol has one net position with its average price: a fill
+/// against it books the realised profit or loss of the closed quantity, and a fill beyond it opens
+/// the other side at the fill price. A fill that flattens or reverses a symbol records its completed
+/// round trip, including partial closes, with profit or loss before commissions. Values use the
+/// point value and leverage of the symbol's [rules](Self::set_rules); a symbol without rules has a
+/// point value of 1 and the account's leverage. A position holds its market value divided by the
+/// leverage as margin, and a working order the same for its quantity at its price. Each fill pays
+/// its commission: the rate times its value, plus the amount per order and the amount per unit of
+/// its quantity, booked as one balance change. Placement and modification reserve buying power
+/// across all symbols, including working orders and their commissions. Market orders that reduce
+/// exposure remain possible when funds are insufficient. Position exits only reduce the remaining
+/// position. Every change is pushed as an [`AccountEvent`], with the most recent 1,000 finished
+/// orders, executions, closed positions, balance changes and journal entries. The history bound
+/// keeps a reconnect snapshot below the event stream's burst limit for ordinary interactive accounts.
 ///
 /// ```
 /// use std::sync::Arc;
@@ -63,7 +76,40 @@ pub struct PaperAccount {
     initial: f64,
     leverage: f64,
     commission: f64,
+    commission_per_order: f64,
+    commission_per_unit: f64,
     state: Mutex<State>,
+}
+
+/// What a [`PaperAccount`] keeps between sessions, from [`PaperAccount::save`]: its settings,
+/// symbol rules, balance, working orders with their exits, positions and history, without the
+/// prices, quotes and replay clock, which the host feeds again. Write it in any serde format
+/// and read it back for [`PaperAccount::restore`].
+///
+/// Fields added later to this type and the trading types it holds will carry `#[serde(default)]`,
+/// so accounts saved by an earlier version keep loading.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SavedPaperAccount {
+    currency: String,
+    initial: f64,
+    leverage: f64,
+    commission: f64,
+    commission_per_order: f64,
+    commission_per_unit: f64,
+    rules: Vec<TradingRules>,
+    balance: f64,
+    next_id: u64,
+    working: Vec<Order>,
+    exits: Vec<(OrderId, Vec<OrderId>)>,
+    positions: Vec<Position>,
+    finished: Vec<Order>,
+    executions: Vec<Execution>,
+    balance_history: Vec<BalanceChange>,
+    journal: Vec<JournalEntry>,
+    #[serde(default)]
+    trips: Vec<(String, Trip)>,
+    #[serde(default)]
+    closed_positions: Vec<ClosedPosition>,
 }
 
 impl std::fmt::Debug for PaperAccount {
@@ -73,6 +119,8 @@ impl std::fmt::Debug for PaperAccount {
             .field("initial", &self.initial)
             .field("leverage", &self.leverage)
             .field("commission", &self.commission)
+            .field("commission_per_order", &self.commission_per_order)
+            .field("commission_per_unit", &self.commission_per_unit)
             .finish_non_exhaustive()
     }
 }
@@ -95,14 +143,26 @@ struct State {
     trips: HashMap<String, Trip>,
     closed_positions: Vec<ClosedPosition>,
     last: HashMap<String, f64>,
+    rules: HashMap<String, TradingRules>,
+    quotes: HashMap<String, (f64, f64)>,
     balance_history: Vec<BalanceChange>,
     journal: Vec<JournalEntry>,
 }
 
+/// Negative and non-finite costs count as zero.
+fn cost(value: f64) -> f64 {
+    if value.is_finite() {
+        value.max(0.0)
+    } else {
+        0.0
+    }
+}
+
 /// Accumulates a symbol's entries and partial closes until it becomes flat or reverses.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 struct Trip {
     side: OrderSide,
-    opened: DateTime<Utc>,
+    opened: Option<DateTime<Utc>>,
     /// Total entry quantity and the sum of its fill values.
     entered: f64,
     entry_value: f64,
@@ -144,6 +204,8 @@ impl PaperAccount {
             initial: balance,
             leverage: 1.0,
             commission: 0.0,
+            commission_per_order: 0.0,
+            commission_per_unit: 0.0,
             state: Mutex::new(state),
         }
     }
@@ -160,8 +222,28 @@ impl PaperAccount {
 
     /// Sets the commission each fill pays, as a fraction of its value, such as 0.001 for 0.1%.
     pub fn commission(mut self, rate: f64) -> Self {
-        self.commission = if rate.is_finite() { rate.max(0.0) } else { 0.0 };
+        self.commission = cost(rate);
         self
+    }
+
+    /// Sets a fixed commission each fill pays per order, in the account's currency, beside the
+    /// rate of [`commission`](Self::commission) and the amount per unit. Negative and non-finite
+    /// amounts count as 0.
+    pub fn commission_per_order(mut self, amount: f64) -> Self {
+        self.commission_per_order = cost(amount);
+        self
+    }
+
+    /// Sets a commission each fill pays per unit of its quantity, such as per share or per
+    /// contract, in the account's currency, beside the rate and the amount per order. Negative
+    /// and non-finite amounts count as 0.
+    pub fn commission_per_unit(mut self, amount: f64) -> Self {
+        self.commission_per_unit = cost(amount);
+        self
+    }
+
+    fn commission_of(&self, quantity: f64, value: f64) -> f64 {
+        value * self.commission + self.commission_per_order + quantity * self.commission_per_unit
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
@@ -185,6 +267,71 @@ impl PaperAccount {
         }
     }
 
+    /// Takes `bid` and `ask` as the quote of `symbol`: while both are known and the bid is not
+    /// above the ask, market orders fill a buy at the ask and a sell at the bid, including the
+    /// orders that close or reverse a position. Otherwise, and once either is `None` or not
+    /// finite, they fill at the last price. Limit and stop orders trigger and fill on the last
+    /// price as before. The account still needs the last price of every symbol it trades.
+    pub fn set_bid_ask(&self, symbol: &str, bid: Option<f64>, ask: Option<f64>) {
+        let mut state = self.lock();
+        match (bid, ask) {
+            (Some(bid), Some(ask)) if bid.is_finite() && ask.is_finite() && bid <= ask => {
+                state.quotes.insert(symbol.to_owned(), (bid, ask));
+            }
+            _ => {
+                state.quotes.remove(symbol);
+            }
+        }
+    }
+
+    /// Gives `rules.symbol` its trading rules: the quantity step, minimum and maximum quantity,
+    /// point value, leverage and times in force that [`rules`](Broker::rules) answers, so the
+    /// order ticket sizes its orders by them. Fills, profit and loss, trade and market values,
+    /// margin, commissions and buying power use the symbol's point value and leverage. Rules
+    /// without a leverage take the account's, and a leverage below 1 counts as 1. Times in force
+    /// the account does not support are left out, and good till cancelled is offered when none is
+    /// left. Replaces earlier rules of the symbol, revalues its position and pushes the account.
+    /// The account checks no quantity against the rules. Returns `false`, and keeps the earlier
+    /// rules, when `rules` are not valid: a step, minimum or point value that is not positive and
+    /// finite, a maximum below the minimum, a leverage or pip value that is not positive and
+    /// finite, or no time in force.
+    ///
+    /// ```
+    /// use egui_charts::model::TradingRules;
+    /// use egui_charts::services::PaperAccount;
+    ///
+    /// let paper = PaperAccount::new("USD", 100_000.0)
+    ///     .commission_per_order(1.0)
+    ///     .commission_per_unit(0.25);
+    /// let mut rules = TradingRules::new("BTCUSD");
+    /// rules.quantity_step = 0.001;
+    /// rules.min_quantity = 0.001;
+    /// rules.leverage = Some(2.0);
+    /// assert!(paper.set_rules(rules));
+    /// paper.set_price("BTCUSD", 50_000.0);
+    /// paper.set_bid_ask("BTCUSD", Some(49_999.0), Some(50_001.0));
+    /// ```
+    pub fn set_rules(&self, mut rules: TradingRules) -> bool {
+        if !rules.is_valid() {
+            return false;
+        }
+        rules.time_in_force.retain(|t| TIMES_IN_FORCE.contains(t));
+        if rules.time_in_force.is_empty() {
+            rules.time_in_force.push(TimeInForce::GoodTillCancelled);
+        }
+        rules.leverage = rules.leverage.map(|leverage| leverage.max(1.0));
+        let mut state = self.lock();
+        let symbol = rules.symbol.clone();
+        state.rules.insert(symbol.clone(), rules);
+        if let Some(mut position) = state.positions.remove(&symbol) {
+            state.value(self, &mut position);
+            state.positions.insert(symbol, position.clone());
+            state.push(AccountEvent::Position(position));
+        }
+        state.push(state.account(self));
+        true
+    }
+
     /// Uses `time` for orders, executions, balance changes and journal entries during replay.
     /// Set it to the revealed source bar's time before feeding its price. `None` restores the
     /// live UTC clock.
@@ -192,23 +339,182 @@ impl PaperAccount {
         self.lock().replay_time = time;
     }
 
-    /// Returns the account to its starting balance without orders, positions or history,
-    /// retaining the host's prices and replay clock. The terminal shows the fresh account once
-    /// it connects again, such as through
-    /// `ui::trading::Trading::set_service` with the `ui` feature.
+    /// The account as [`restore`](Self::restore) reads it back.
+    ///
+    /// ```
+    /// use egui_charts::services::{PaperAccount, SavedPaperAccount};
+    ///
+    /// let paper = PaperAccount::new("USD", 100_000.0).commission_per_order(1.0);
+    /// let json = serde_json::to_string(&paper.save()).unwrap();
+    /// // At the next launch:
+    /// let saved: SavedPaperAccount = serde_json::from_str(&json).unwrap();
+    /// let paper = PaperAccount::restore(saved).expect("a finite balance");
+    /// paper.set_price("AAPL", 187.5);
+    /// ```
+    pub fn save(&self) -> SavedPaperAccount {
+        let state = self.lock();
+        let mut rules: Vec<_> = state.rules.values().cloned().collect();
+        rules.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+        let mut positions: Vec<_> = state.positions.values().cloned().collect();
+        positions.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+        let mut trips: Vec<_> = state
+            .trips
+            .iter()
+            .map(|(symbol, trip)| (symbol.clone(), trip.clone()))
+            .collect();
+        trips.sort_by(|a, b| a.0.cmp(&b.0));
+        let exits = state
+            .working
+            .iter()
+            .filter_map(|order| Some((order.id.clone(), state.exits.get(&order.id)?.clone())))
+            .collect();
+        SavedPaperAccount {
+            currency: self.currency.clone(),
+            initial: self.initial,
+            leverage: self.leverage,
+            commission: self.commission,
+            commission_per_order: self.commission_per_order,
+            commission_per_unit: self.commission_per_unit,
+            rules,
+            balance: state.balance,
+            next_id: state.next_id,
+            working: state.working.clone(),
+            exits,
+            positions,
+            finished: state.finished.clone(),
+            executions: state.executions.clone(),
+            balance_history: state.balance_history.clone(),
+            journal: state.journal.clone(),
+            trips,
+            closed_positions: state.closed_positions.clone(),
+        }
+    }
+
+    /// The account `saved` describes, with its settings, symbol rules, balance, working orders and
+    /// their exits, positions and history, and order ids that continue from it. Feed the prices of
+    /// its symbols with [`set_price`](Self::set_price): until then its orders cannot be placed or
+    /// changed, and the first price fills the working orders it reaches. Settings out of range
+    /// count as their builders say, rules that are not valid are left out, and only the newest
+    /// 1,000 entries of each history are kept. Positions and account figures retain their saved
+    /// marks until a host price arrives. Returns `None` when the saved balance or starting balance
+    /// is not finite. Older saves without round-trip tracking start it from the saved position's
+    /// quantity and average price, with no reported opening time or earlier partial closes.
+    pub fn restore(mut saved: SavedPaperAccount) -> Option<Self> {
+        if !saved.initial.is_finite() || !saved.balance.is_finite() {
+            return None;
+        }
+        let paper = Self::new(saved.currency, saved.initial)
+            .leverage(saved.leverage)
+            .commission(saved.commission)
+            .commission_per_order(saved.commission_per_order)
+            .commission_per_unit(saved.commission_per_unit);
+        for rules in saved.rules {
+            paper.set_rules(rules);
+        }
+        saved
+            .finished
+            .drain(..saved.finished.len().saturating_sub(HISTORY));
+        saved
+            .executions
+            .drain(..saved.executions.len().saturating_sub(HISTORY));
+        saved
+            .closed_positions
+            .drain(..saved.closed_positions.len().saturating_sub(HISTORY));
+        saved
+            .balance_history
+            .drain(..saved.balance_history.len().saturating_sub(HISTORY));
+        saved
+            .journal
+            .drain(..saved.journal.len().saturating_sub(HISTORY));
+        {
+            let mut state = paper.lock();
+            state.balance = saved.balance;
+            state.next_id = saved.next_id;
+            state.working = saved.working;
+            state.exits = saved.exits.into_iter().collect();
+            state.trips = saved.trips.into_iter().collect();
+            for position in &saved.positions {
+                // Earlier saves have no trip totals or opening time; retain their known cost basis.
+                state
+                    .trips
+                    .entry(position.symbol.clone())
+                    .or_insert_with(|| Trip {
+                        side: if position.quantity > 0.0 {
+                            OrderSide::Buy
+                        } else {
+                            OrderSide::Sell
+                        },
+                        opened: None,
+                        entered: position.quantity.abs(),
+                        entry_value: position.quantity.abs() * position.average_price,
+                        exited: 0.0,
+                        exit_value: 0.0,
+                        realized: 0.0,
+                    });
+            }
+            state.positions = saved
+                .positions
+                .into_iter()
+                .map(|p| (p.symbol.clone(), p))
+                .collect();
+            state.finished = saved.finished;
+            state.executions = saved.executions;
+            state.closed_positions = saved.closed_positions;
+            state.balance_history = saved.balance_history;
+            state.journal = saved.journal;
+        }
+        Some(paper)
+    }
+
+    /// Returns the account to its starting balance without orders, positions or history. It keeps
+    /// its settings and symbol rules, the host's prices, quotes and replay clock, and the count its
+    /// order ids continue from. It ends the event stream of the last [`connect`](Broker::connect),
+    /// so the terminal connects again at its next poll and shows the fresh account; a host that
+    /// reads the stream itself calls `connect` again once [`Events::is_active`] is false.
     pub fn reset(&self) {
         let mut state = self.lock();
-        let last = std::mem::take(&mut state.last);
+        if let Some(events) = state.events.take() {
+            events.end();
+        }
+        let State {
+            replay_time,
+            next_id,
+            last,
+            rules,
+            quotes,
+            ..
+        } = std::mem::take(&mut *state);
         *state = State {
             balance: self.initial,
-            replay_time: state.replay_time,
+            replay_time,
+            next_id,
             last,
+            rules,
+            quotes,
             ..State::default()
         };
     }
 }
 
 impl State {
+    /// The point value and leverage of `symbol`: its rules', else 1 and the account's leverage.
+    fn terms_of(&self, terms: &PaperAccount, symbol: &str) -> (f64, f64) {
+        let rules = self.rules.get(symbol);
+        (
+            rules.map_or(1.0, |rules| rules.point_value),
+            rules
+                .and_then(|rules| rules.leverage)
+                .unwrap_or(terms.leverage),
+        )
+    }
+
+    /// The times in force `symbol` accepts.
+    fn time_in_force(&self, symbol: &str) -> &[TimeInForce] {
+        self.rules
+            .get(symbol)
+            .map_or(&TIMES_IN_FORCE, |rules| &rules.time_in_force)
+    }
+
     fn now(&self) -> DateTime<Utc> {
         self.replay_time.unwrap_or_else(Utc::now)
     }
@@ -222,7 +528,7 @@ impl State {
     fn log(&mut self, text: String) {
         let entry = JournalEntry::new(self.now(), text);
         self.push(AccountEvent::Journal(entry.clone()));
-        if self.journal.len() == 1_000 {
+        if self.journal.len() == HISTORY {
             self.journal.remove(0);
         }
         self.journal.push(entry);
@@ -235,7 +541,7 @@ impl State {
         self.balance += amount;
         let change = BalanceChange::new(self.now(), self.balance, amount, action);
         self.push(AccountEvent::Balance(change.clone()));
-        if self.balance_history.len() == 1_000 {
+        if self.balance_history.len() == HISTORY {
             self.balance_history.remove(0);
         }
         self.balance_history.push(change);
@@ -247,14 +553,15 @@ impl State {
             .last
             .get(&position.symbol)
             .copied()
-            .unwrap_or(position.average_price);
+            .unwrap_or(position.last_price.unwrap_or(position.average_price));
+        let (pv, lev) = self.terms_of(terms, &position.symbol);
         let size = position.quantity.abs();
         position.last_price = Some(last);
-        position.unrealized_pnl = Some((last - position.average_price) * position.quantity);
-        position.trade_value = Some(size * position.average_price);
-        position.market_value = Some(size * last);
-        position.leverage = Some(terms.leverage);
-        position.margin = Some(size * last.abs() / terms.leverage);
+        position.unrealized_pnl = Some((last - position.average_price) * position.quantity * pv);
+        position.trade_value = Some(size * position.average_price * pv);
+        position.market_value = Some(size * last * pv);
+        position.leverage = Some(lev);
+        position.margin = Some(size * last.abs() * pv / lev);
     }
 
     fn account(&self, terms: &PaperAccount) -> AccountEvent {
@@ -296,16 +603,16 @@ impl State {
                 .last
                 .get(&position.symbol)
                 .copied()
-                .unwrap_or(position.average_price);
-            equity += (price - position.average_price) * position.quantity;
-            margin += position.quantity.abs() * price.abs() / terms.leverage;
+                .unwrap_or(position.last_price.unwrap_or(position.average_price));
+            let (pv, lev) = self.terms_of(terms, &position.symbol);
+            equity += (price - position.average_price) * position.quantity * pv;
+            margin += position.quantity.abs() * price.abs() * pv / lev;
         }
         (equity, margin)
     }
 
     fn reservations(&self, terms: &PaperAccount, replacing: Option<&OrderId>) -> (f64, f64) {
-        let value: f64 = self
-            .working
+        self.working
             .iter()
             .filter(|order| {
                 Some(&order.id) != replacing
@@ -318,10 +625,35 @@ impl State {
                     OrderType::StopLimit { limit, .. } => limit,
                     _ => self.last.get(&order.request.symbol).copied().unwrap_or(0.0),
                 };
-                order.request.quantity * price.abs()
+                let (pv, lev) = self.terms_of(terms, &order.request.symbol);
+                let value = order.request.quantity * price.abs() * pv;
+                (
+                    value / lev,
+                    terms.commission_of(order.request.quantity, value),
+                )
             })
-            .sum();
-        (value / terms.leverage, value * terms.commission)
+            .fold((0.0, 0.0), |(margin, commission), (m, c)| {
+                (margin + m, commission + c)
+            })
+    }
+
+    /// Where `request` fills now at the last price `last`: a market order at the quote's ask for a
+    /// buy and bid for a sell, else at `last`; a limit or stop order at `last` once `last` reaches
+    /// it, a stop-limit order once `last` reaches both its stop and its limit. `None` if it does
+    /// not fill now.
+    fn fills_at(&self, request: &OrderRequest, last: f64) -> Option<f64> {
+        let at_last = |order_type: OrderType| order_type.fill_price(request.side, last, last);
+        match request.order_type {
+            OrderType::Market => Some(match self.quotes.get(&request.symbol) {
+                Some(&(_, ask)) if request.side == OrderSide::Buy => ask,
+                Some(&(bid, _)) => bid,
+                None => last,
+            }),
+            OrderType::StopLimit { limit, .. } => {
+                at_last(request.order_type).and(at_last(OrderType::Limit(limit)))
+            }
+            order_type => at_last(order_type),
+        }
     }
 
     /// Projects this request against the whole account, excluding the order it replaces.
@@ -347,31 +679,33 @@ impl State {
             return Ok(());
         }
         let last = self.last[&request.symbol];
-        let reached =
-            |order_type: OrderType| order_type.fill_price(request.side, last, last).is_some();
-        let immediate = reached(request.order_type)
-            && match request.order_type {
-                OrderType::StopLimit { limit, .. } => reached(OrderType::Limit(limit)),
-                _ => true,
-            };
+        let fill = self.fills_at(request, last);
+        let immediate = fill.is_some();
         if immediate && after.abs() < held.abs() {
             return Ok(());
         }
         let (equity, mut margin) = self.equity_and_margin(terms);
-        let price = match request.order_type {
-            _ if immediate => last,
-            OrderType::Market => last,
+        let price = fill.unwrap_or(match request.order_type {
             OrderType::Limit(price) | OrderType::Stop(price) => price,
             OrderType::StopLimit { limit, .. } => limit,
-        };
+            _ => last,
+        });
         let (reserved, commissions) = self.reservations(terms, replacing);
-        let value = request.quantity * price.abs();
+        let (pv, lev) = self.terms_of(terms, &request.symbol);
+        let value = request.quantity * price.abs() * pv;
         if immediate {
-            margin += (after.abs() - held.abs()) * last.abs() / terms.leverage;
+            margin += (after.abs() - held.abs()) * last.abs() * pv / lev;
         } else {
-            margin += value / terms.leverage;
+            margin += value / lev;
         }
-        let needed = margin + reserved + commissions + value * terms.commission;
+        // A fill away from last changes equity as well as the margin it holds.
+        let spread = if immediate {
+            (price - last) * signed * pv
+        } else {
+            0.0
+        };
+        let needed =
+            margin + reserved + commissions + terms.commission_of(request.quantity, value) + spread;
         if !needed.is_finite() || !equity.is_finite() || needed > equity {
             return Err(FeedError::Other(format!(
                 "Insufficient buying power: {needed:.2} {} needed, {equity:.2} available",
@@ -390,7 +724,7 @@ impl State {
         order.status = status;
         order.closed = Some(self.now());
         self.push(AccountEvent::Order(order.clone()));
-        if self.finished.len() == 1_000 {
+        if self.finished.len() == HISTORY {
             self.finished.remove(0);
         }
         self.finished.push(order);
@@ -409,7 +743,7 @@ impl State {
         let now = self.now();
         let open = |quantity: f64| Trip {
             side: request.side,
-            opened: now,
+            opened: Some(now),
             entered: quantity,
             entry_value: quantity * price,
             exited: 0.0,
@@ -445,7 +779,7 @@ impl State {
                 trip.realized,
                 now,
             );
-            closed.opened = Some(trip.opened);
+            closed.opened = trip.opened;
             Some(closed)
         } else {
             if let Some(trip) = self.trips.get_mut(symbol) {
@@ -469,13 +803,14 @@ impl State {
             .remove(&request.symbol)
             .unwrap_or_else(|| Position::new(&request.symbol, 0.0, price));
         let held = position.quantity;
+        let (pv, _) = self.terms_of(terms, &request.symbol);
         let mut realized = 0.0;
         if held * signed >= 0.0 {
             position.average_price =
                 (held * position.average_price + signed * price) / (held + signed);
         } else {
             let closed = signed.abs().min(held.abs());
-            realized = closed * (price - position.average_price) * held.signum();
+            realized = closed * (price - position.average_price) * held.signum() * pv;
             if signed.abs() > held.abs() {
                 position.average_price = price;
             }
@@ -506,14 +841,14 @@ impl State {
         let id = order.id.clone();
         self.finish(order, OrderStatus::Filled);
         self.push(AccountEvent::Execution(execution.clone()));
-        if self.executions.len() == 1_000 {
+        if self.executions.len() == HISTORY {
             self.executions.remove(0);
         }
         self.executions.push(execution);
         self.push(AccountEvent::Position(position.clone()));
         if let Some(closed) = closed {
             self.push(AccountEvent::ClosedPosition(closed.clone()));
-            if self.closed_positions.len() == 1_000 {
+            if self.closed_positions.len() == HISTORY {
                 self.closed_positions.remove(0);
             }
             self.closed_positions.push(closed);
@@ -531,7 +866,7 @@ impl State {
             ),
         );
         self.book(
-            -request.quantity * price.abs() * terms.commission,
+            -terms.commission_of(request.quantity, request.quantity * price.abs() * pv),
             format!("Commission for order {id}"),
         );
         if held != 0.0 && position.quantity == 0.0 {
@@ -718,9 +1053,7 @@ impl State {
             }
             if let Some(fill) = fill {
                 let order = self.working.remove(index);
-                let mut request = order.request.clone();
-                request.order_type = OrderType::Market;
-                match self.buying_power(terms, &request, Some(&order.id)) {
+                match self.buying_power(terms, &order.request, Some(&order.id)) {
                     Ok(()) => self.fill(terms, order, fill),
                     Err(error) => {
                         self.log(format!("Order {} rejected: {error}", order.id));
@@ -737,7 +1070,7 @@ impl State {
 }
 
 /// Reject malformed requests before they can change the account.
-fn validate(order: &OrderRequest, last: f64) -> Result<(), FeedError> {
+fn validate(order: &OrderRequest, last: f64, point_value: f64) -> Result<(), FeedError> {
     let price = match order.order_type {
         OrderType::Market => last,
         OrderType::Limit(price) | OrderType::Stop(price) => price,
@@ -762,7 +1095,7 @@ fn validate(order: &OrderRequest, last: f64) -> Result<(), FeedError> {
     if !order.quantity.is_finite()
         || order.quantity <= 0.0
         || !price.is_finite()
-        || !(order.quantity * price).is_finite()
+        || !(order.quantity * price * point_value).is_finite()
         || order.take_profit.is_some_and(no_profit)
         || bad_levels
         || order.stop_loss.is_some_and(no_loss)
@@ -770,9 +1103,6 @@ fn validate(order: &OrderRequest, last: f64) -> Result<(), FeedError> {
         return Err(FeedError::Other(
             "invalid quantity, price or brackets".into(),
         ));
-    }
-    if order.time_in_force != TimeInForce::GoodTillCancelled {
-        return Err(FeedError::NotSupported);
     }
     Ok(())
 }
@@ -807,8 +1137,14 @@ impl Broker for PaperAccount {
         let Some(&last) = state.last.get(&order.symbol) else {
             return reply.send(Err(FeedError::SymbolNotFound(order.symbol)));
         };
-        if let Err(error) = validate(&order, last) {
+        if let Err(error) = validate(&order, last, state.terms_of(self, &order.symbol).0) {
             return reply.send(Err(error));
+        }
+        if !state
+            .time_in_force(&order.symbol)
+            .contains(&order.time_in_force)
+        {
+            return reply.send(Err(FeedError::NotSupported));
         }
         let id = state.id();
         reply.send(Ok(id.clone()));
@@ -835,8 +1171,24 @@ impl Broker for PaperAccount {
             state.finish(order, OrderStatus::Rejected(error.to_string()));
             return;
         }
-        if order.request.order_type == OrderType::Market {
-            state.fill(self, order, last);
+        let immediate = matches!(
+            order.request.time_in_force,
+            TimeInForce::ImmediateOrCancel | TimeInForce::FillOrKill
+        );
+        if order.request.order_type == OrderType::Market || immediate {
+            match state.fills_at(&order.request, last) {
+                Some(price) => state.fill(self, order, price),
+                None => {
+                    // Immediate orders that cannot fill now are cancelled, never left working.
+                    state.log(format!(
+                        "Order {} cancelled: {}",
+                        order.id,
+                        describe(&order.request)
+                    ));
+                    state.finish(order, OrderStatus::Cancelled);
+                    state.push(state.account(self));
+                }
+            }
         } else {
             let symbol = order.request.symbol.clone();
             state.push(AccountEvent::Order(order.clone()));
@@ -874,9 +1226,14 @@ impl Broker for PaperAccount {
                 "an order's symbol, side and position bracket cannot change".into(),
             )));
         }
-        let last = state.last[&order.symbol];
-        if let Err(error) = validate(&order, last) {
+        let Some(&last) = state.last.get(&order.symbol) else {
+            return reply.send(Err(FeedError::SymbolNotFound(order.symbol)));
+        };
+        if let Err(error) = validate(&order, last, state.terms_of(self, &order.symbol).0) {
             return reply.send(Err(error));
+        }
+        if order.time_in_force != TimeInForce::GoodTillCancelled {
+            return reply.send(Err(FeedError::NotSupported));
         }
         if (state.exits.contains_key(&id) || order.position_bracket.is_some())
             && (state.positions.get(&order.symbol).is_none_or(|position| {
@@ -914,9 +1271,14 @@ impl Broker for PaperAccount {
     }
 
     fn rules(&self, symbol: &str, reply: Reply<TradingRules>) {
-        let mut rules = TradingRules::new(symbol);
-        rules.time_in_force = vec![TimeInForce::GoodTillCancelled];
-        rules.leverage = Some(self.leverage);
+        let state = self.lock();
+        let mut rules = state.rules.get(symbol).cloned().unwrap_or_else(|| {
+            let mut rules = TradingRules::new(symbol);
+            rules.time_in_force = TIMES_IN_FORCE.to_vec();
+            rules
+        });
+        rules.leverage = Some(state.terms_of(self, symbol).1);
+        drop(state);
         reply.send(Ok(rules));
     }
 }
@@ -955,9 +1317,645 @@ mod tests {
             .unwrap()
     }
 
+    fn rules_of(paper: &PaperAccount, symbol: &str) -> TradingRules {
+        let inbox = Arc::new(Inbox::default());
+        paper.rules(symbol, inbox.reply(0));
+        (*inbox
+            .drain()
+            .answers
+            .pop()
+            .unwrap()
+            .1
+            .downcast::<Result<TradingRules, FeedError>>()
+            .unwrap())
+        .unwrap()
+    }
+
+    /// Symbol terms affect answers, fractional fills, valuation, reservations and realised money;
+    /// unusable rules leave the earlier terms intact, and other symbols keep the account defaults.
+    #[test]
+    fn symbol_rules_set_the_answer_point_value_and_leverage() {
+        let paper = PaperAccount::new("USD", 100_000.0).leverage(10.0);
+        let mut expected = TradingRules::new("SYM");
+        expected.time_in_force = TIMES_IN_FORCE.to_vec();
+        expected.leverage = Some(10.0);
+        let mut invalid = expected.clone();
+        invalid.quantity_step = 0.0;
+        assert!(!paper.set_rules(invalid));
+        assert_eq!(rules_of(&paper, "SYM"), expected);
+
+        let mut rules = TradingRules::new("SYM");
+        (rules.quantity_step, rules.min_quantity) = (0.01, 0.01);
+        rules.max_quantity = Some(100.0);
+        rules.point_value = 50.0;
+        rules.leverage = Some(20.0);
+        rules.time_in_force = vec![
+            TimeInForce::Day,
+            TimeInForce::ImmediateOrCancel,
+            TimeInForce::GoodTillCancelled,
+        ];
+        assert!(paper.set_rules(rules.clone()));
+        rules.time_in_force = vec![
+            TimeInForce::ImmediateOrCancel,
+            TimeInForce::GoodTillCancelled,
+        ];
+        assert_eq!(rules_of(&paper, "SYM"), rules);
+        for field in [
+            "step",
+            "minimum",
+            "maximum",
+            "point value",
+            "leverage",
+            "pip",
+            "duration",
+        ] {
+            let mut invalid = rules.clone();
+            match field {
+                "step" => invalid.quantity_step = 0.0,
+                "minimum" => invalid.min_quantity = -1.0,
+                "maximum" => invalid.max_quantity = Some(0.001),
+                "point value" => invalid.point_value = f64::NAN,
+                "leverage" => invalid.leverage = Some(0.0),
+                "pip" => invalid.pip_value = Some(f64::INFINITY),
+                _ => invalid.time_in_force.clear(),
+            }
+            assert!(!paper.set_rules(invalid), "{field}");
+            assert_eq!(rules_of(&paper, "SYM"), rules, "{field}");
+        }
+        paper.set_price("SYM", 100.0);
+        place(
+            &paper,
+            OrderRequest::new("SYM", OrderSide::Buy, 0.5, OrderType::Market),
+        )
+        .unwrap();
+        paper.set_price("SYM", 101.0);
+        paper.set_price("OTHER", 100.0);
+        place(
+            &paper,
+            OrderRequest::new("OTHER", OrderSide::Buy, 1.0, OrderType::Market),
+        )
+        .unwrap();
+        place(
+            &paper,
+            OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(90.0)),
+        )
+        .unwrap();
+        let state = paper.lock();
+        let position = &state.positions["SYM"];
+        assert_eq!(position.quantity, 0.5);
+        assert_eq!(position.unrealized_pnl, Some(25.0));
+        assert_eq!(position.trade_value, Some(2_500.0));
+        assert_eq!(position.market_value, Some(2_525.0));
+        assert_eq!(position.leverage, Some(20.0));
+        assert_eq!(position.margin, Some(126.25));
+        assert_eq!(state.positions["OTHER"].margin, Some(10.0));
+        let AccountEvent::Account(account) = state.account(&paper) else {
+            unreachable!()
+        };
+        assert_eq!(account.margin, Some(136.25));
+        assert_eq!(account.equity, Some(100_025.0));
+        assert_eq!(account.orders_margin, Some(225.0));
+        drop(state);
+        let inbox = Arc::new(Inbox::default());
+        paper.place(
+            OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Market),
+            inbox.reply(0),
+        );
+        assert_eq!(
+            *inbox
+                .drain()
+                .answers
+                .pop()
+                .unwrap()
+                .1
+                .downcast::<Result<OrderId, FeedError>>()
+                .unwrap(),
+            Err(FeedError::NotSupported)
+        );
+        rules.point_value = 100.0;
+        assert!(paper.set_rules(rules.clone()));
+        assert_eq!(paper.lock().positions["SYM"].unrealized_pnl, Some(50.0));
+        assert_eq!(paper.lock().positions["SYM"].margin, Some(252.5));
+        rules.point_value = 50.0;
+        assert!(paper.set_rules(rules.clone()));
+        place(
+            &paper,
+            OrderRequest::new("SYM", OrderSide::Sell, 0.5, OrderType::Market),
+        )
+        .unwrap();
+        assert_eq!(paper.lock().balance, 100_025.0);
+
+        rules.leverage = Some(0.5);
+        assert!(paper.set_rules(rules.clone()));
+        assert_eq!(rules_of(&paper, "SYM").leverage, Some(1.0));
+        rules.leverage = None;
+        assert!(paper.set_rules(rules.clone()));
+        assert_eq!(rules_of(&paper, "SYM").leverage, Some(10.0));
+        paper.reset();
+        rules.leverage = Some(10.0);
+        assert_eq!(rules_of(&paper, "SYM"), rules);
+    }
+
+    /// Markets use a usable two-sided quote; missing, invalid and crossed quotes fall back to
+    /// last, which still triggers and prices pending orders even when the ask exceeds the limit.
+    #[test]
+    fn market_orders_fill_at_the_quote_and_others_at_the_last_price() {
+        use OrderSide::{Buy, Sell};
+        for (bid, ask, kind, side, price) in [
+            (Some(99.9), Some(100.1), OrderType::Market, Buy, 100.1),
+            (Some(99.9), Some(100.1), OrderType::Market, Sell, 99.9),
+            (None, None, OrderType::Market, Buy, 100.0),
+            (None, None, OrderType::Market, Sell, 100.0),
+            (Some(99.9), None, OrderType::Market, Buy, 100.0),
+            (None, Some(100.1), OrderType::Market, Sell, 100.0),
+            (Some(f64::NAN), Some(100.1), OrderType::Market, Buy, 100.0),
+            (
+                Some(99.9),
+                Some(f64::INFINITY),
+                OrderType::Market,
+                Sell,
+                100.0,
+            ),
+            (Some(100.1), Some(99.9), OrderType::Market, Buy, 100.0),
+            (Some(99.0), Some(99.0), OrderType::Market, Buy, 99.0),
+            (
+                Some(99.9),
+                Some(100.1),
+                OrderType::Limit(100.05),
+                Buy,
+                100.0,
+            ),
+            (Some(99.9), Some(100.1), OrderType::Stop(99.95), Buy, 100.0),
+        ] {
+            let paper = PaperAccount::new("USD", 100_000.0);
+            paper.set_price("SYM", 100.0);
+            paper.set_bid_ask("SYM", Some(98.0), Some(102.0));
+            paper.set_bid_ask("SYM", bid, ask);
+            for _ in 0..2 {
+                place(&paper, OrderRequest::new("SYM", side, 1.0, kind)).unwrap();
+                let state = paper.lock();
+                assert_eq!(
+                    state.executions[0].price, price,
+                    "{bid:?}/{ask:?} {kind:?} {side:?}"
+                );
+                assert_eq!(state.positions["SYM"].average_price, price);
+                assert_eq!(state.positions["SYM"].last_price, Some(100.0));
+                drop(state);
+                paper.reset();
+            }
+        }
+        // At either side of the spread, 100 margin plus 0.10 unrealised loss needs 100.10.
+        for side in [Buy, Sell] {
+            let paper = PaperAccount::new("USD", 100.0);
+            paper.set_price("SYM", 100.0);
+            paper.set_bid_ask("SYM", Some(99.9), Some(100.1));
+            place(
+                &paper,
+                OrderRequest::new("SYM", side, 1.0, OrderType::Market),
+            )
+            .unwrap();
+            let state = paper.lock();
+            assert!(state.executions.is_empty());
+            assert!(matches!(state.finished[0].status, OrderStatus::Rejected(_)));
+        }
+    }
+
+    /// Every cost is booked once per fill and reserved per working order; the rate includes
+    /// point value, while the per-unit amount uses quantity alone. Entry checks include each fee.
+    #[test]
+    fn commissions_book_the_rate_per_order_and_per_unit() {
+        for (rate, per_order, per_unit, point_value, fill, working) in [
+            (0.001, 0.0, 0.0, 1.0, 0.2, 0.09),
+            (0.0, 5.0, 0.0, 1.0, 5.0, 5.0),
+            (0.0, 0.0, 0.5, 1.0, 1.0, 0.5),
+            (0.001, 5.0, 0.5, 50.0, 16.0, 10.0),
+        ] {
+            let account = |balance| {
+                let paper = PaperAccount::new("USD", balance)
+                    .commission(rate)
+                    .commission_per_order(per_order)
+                    .commission_per_unit(per_unit);
+                let mut rules = TradingRules::new("SYM");
+                rules.point_value = point_value;
+                assert!(paper.set_rules(rules));
+                paper.set_price("SYM", 100.0);
+                paper
+            };
+            let paper = account(100_000.0);
+            place(
+                &paper,
+                OrderRequest::new("SYM", OrderSide::Buy, 2.0, OrderType::Market),
+            )
+            .unwrap();
+            place(
+                &paper,
+                OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(90.0)),
+            )
+            .unwrap();
+            let near = |a: f64, b: f64| assert!((a - b).abs() < 1e-9, "{a} != {b}");
+            let state = paper.lock();
+            assert_eq!(state.balance_history.len(), 1);
+            assert!(
+                state.balance_history[0]
+                    .action
+                    .starts_with("Commission for order")
+            );
+            near(state.balance_history[0].amount, -fill);
+            near(state.balance, 100_000.0 - fill);
+            let AccountEvent::Account(a) = state.account(&paper) else {
+                unreachable!()
+            };
+            near(
+                a.available_funds.unwrap(),
+                a.equity.unwrap() - a.margin.unwrap() - a.orders_margin.unwrap() - working,
+            );
+            drop(state);
+            let short = account(200.0 * point_value + fill - 0.01);
+            place(
+                &short,
+                OrderRequest::new("SYM", OrderSide::Buy, 2.0, OrderType::Market),
+            )
+            .unwrap();
+            assert!(matches!(
+                short.lock().finished[0].status,
+                OrderStatus::Rejected(_)
+            ));
+        }
+    }
+
+    /// A fixed saved record catches required fields that would prevent earlier accounts loading.
+    #[test]
+    fn a_saved_account_keeps_its_stored_format() {
+        // Written once by save; keep this record unchanged when adding fields.
+        let json = r#"{
+          "currency": "USD",
+          "initial": 10000.0,
+          "leverage": 5.0,
+          "commission": 0.001,
+          "commission_per_order": 1.0,
+          "commission_per_unit": 0.25,
+          "rules": [
+            {
+              "symbol": "ES",
+              "quantity_step": 0.25,
+              "min_quantity": 0.25,
+              "max_quantity": null,
+              "point_value": 50.0,
+              "pip_value": null,
+              "time_in_force": [
+                "GoodTillCancelled"
+              ],
+              "leverage": 20.0
+            }
+          ],
+          "balance": 9988.5,
+          "next_id": 4,
+          "working": [
+            {
+              "id": "2",
+              "request": {
+                "symbol": "ES",
+                "side": "Sell",
+                "quantity": 2.0,
+                "order_type": {
+                  "Limit": 105.0
+                },
+                "take_profit": null,
+                "take_profit_levels": [],
+                "stop_loss": null,
+                "time_in_force": "GoodTillCancelled",
+                "position_bracket": "TakeProfit"
+              },
+              "status": "Working",
+              "filled": 0.0,
+              "fill_price": null,
+              "placed": "2024-01-01T00:00:00Z",
+              "closed": null
+            },
+            {
+              "id": "3",
+              "request": {
+                "symbol": "ES",
+                "side": "Sell",
+                "quantity": 2.0,
+                "order_type": {
+                  "Stop": 95.0
+                },
+                "take_profit": null,
+                "take_profit_levels": [],
+                "stop_loss": null,
+                "time_in_force": "GoodTillCancelled",
+                "position_bracket": "StopLoss"
+              },
+              "status": "Working",
+              "filled": 0.0,
+              "fill_price": null,
+              "placed": "2024-01-01T00:00:00Z",
+              "closed": null
+            },
+            {
+              "id": "4",
+              "request": {
+                "symbol": "ES",
+                "side": "Buy",
+                "quantity": 1.0,
+                "order_type": {
+                  "Limit": 90.0
+                },
+                "take_profit": 100.0,
+                "take_profit_levels": [],
+                "stop_loss": 80.0,
+                "time_in_force": "GoodTillCancelled",
+                "position_bracket": null
+              },
+              "status": "Working",
+              "filled": 0.0,
+              "fill_price": null,
+              "placed": "2024-01-01T00:00:00Z",
+              "closed": null
+            }
+          ],
+          "exits": [
+            [
+              "2",
+              [
+                "3"
+              ]
+            ],
+            [
+              "3",
+              [
+                "2"
+              ]
+            ]
+          ],
+          "positions": [
+            {
+              "symbol": "ES",
+              "quantity": 2.0,
+              "average_price": 100.0,
+              "unrealized_pnl": 100.0,
+              "last_price": 101.0,
+              "trade_value": 10000.0,
+              "market_value": 10100.0,
+              "leverage": 20.0,
+              "margin": 505.0,
+              "expiration": null
+            }
+          ],
+          "finished": [
+            {
+              "id": "1",
+              "request": {
+                "symbol": "ES",
+                "side": "Buy",
+                "quantity": 2.0,
+                "order_type": "Market",
+                "take_profit": null,
+                "take_profit_levels": [
+                  {
+                    "price": 105.0,
+                    "quantity": 2.0,
+                    "stop_loss": null
+                  }
+                ],
+                "stop_loss": 95.0,
+                "time_in_force": "GoodTillCancelled",
+                "position_bracket": null
+              },
+              "status": "Filled",
+              "filled": 2.0,
+              "fill_price": 100.0,
+              "placed": "2024-01-01T00:00:00Z",
+              "closed": "2024-01-01T00:00:00Z"
+            }
+          ],
+          "executions": [
+            {
+              "order": "1",
+              "time": "2024-01-01T00:00:00Z",
+              "side": "Buy",
+              "price": 100.0,
+              "quantity": 2.0
+            }
+          ],
+          "balance_history": [
+            {
+              "time": "2024-01-01T00:00:00Z",
+              "balance": 9988.5,
+              "amount": -11.5,
+              "action": "Commission for order 1"
+            }
+          ],
+          "journal": [
+            {
+              "time": "2024-01-01T00:00:00Z",
+              "text": "Order 1 placed: buy 2 ES at market"
+            }
+          ]
+        }"#;
+        let saved: SavedPaperAccount = serde_json::from_str(json).unwrap();
+        let paper = PaperAccount::restore(saved).unwrap();
+        let saved = paper.save();
+        assert_eq!(saved.balance, 9_988.5);
+        assert_eq!(saved.rules[0].point_value, 50.0);
+        assert_eq!(
+            saved
+                .working
+                .iter()
+                .map(|order| (
+                    order.id.clone(),
+                    order.request.order_type,
+                    order.request.quantity,
+                    order.request.position_bracket,
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    OrderId::new("2"),
+                    OrderType::Limit(105.0),
+                    2.0,
+                    Some(PositionBracket::TakeProfit)
+                ),
+                (
+                    OrderId::new("3"),
+                    OrderType::Stop(95.0),
+                    2.0,
+                    Some(PositionBracket::StopLoss)
+                ),
+                (OrderId::new("4"), OrderType::Limit(90.0), 1.0, None),
+            ]
+        );
+        assert_eq!(saved.working[2].request.take_profit, Some(100.0));
+        assert_eq!(saved.working[2].request.stop_loss, Some(80.0));
+        assert_eq!(
+            saved.exits,
+            vec![
+                (OrderId::new("2"), vec![OrderId::new("3")]),
+                (OrderId::new("3"), vec![OrderId::new("2")]),
+            ]
+        );
+        let mut position = Position::new("ES", 2.0, 100.0);
+        position.unrealized_pnl = Some(100.0);
+        position.last_price = Some(101.0);
+        position.trade_value = Some(10_000.0);
+        position.market_value = Some(10_100.0);
+        position.leverage = Some(20.0);
+        position.margin = Some(505.0);
+        assert_eq!(saved.positions, vec![position]);
+        assert_eq!(
+            (
+                saved.finished.len(),
+                saved.executions.len(),
+                saved.balance_history.len(),
+                saved.journal.len()
+            ),
+            (1, 1, 1, 1)
+        );
+        assert_eq!(
+            saved.finished[0].request.take_profit_levels,
+            vec![TakeProfitLevel::new(105.0, 2.0)]
+        );
+        paper.set_replay_time(DateTime::from_timestamp(1_704_067_200, 0));
+        paper.set_price("ES", 101.0);
+        assert_eq!(
+            place(
+                &paper,
+                OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Market)
+            ),
+            Ok(OrderId::new("5"))
+        );
+        paper.set_price("ES", 104.0);
+        place(
+            &paper,
+            OrderRequest::new("ES", OrderSide::Sell, 3.0, OrderType::Market),
+        )
+        .unwrap();
+        let saved = paper.save();
+        assert_eq!(saved.closed_positions.len(), 1);
+        let closed = &saved.closed_positions[0];
+        assert_eq!(closed.opened, None);
+        assert_eq!(closed.side, OrderSide::Buy);
+        assert_eq!(closed.quantity, 3.0);
+        assert!((closed.average_price - 301.0 / 3.0).abs() < 1e-9);
+        assert_eq!(closed.exit_price, 104.0);
+        assert!((closed.realized_pnl - 550.0).abs() < 1e-9);
+    }
+
+    /// A JSON round trip preserves terms, history, working exits and the next id. Restored orders
+    /// refuse changes before host prices arrive; a filled take profit still cancels its stop loss.
+    #[test]
+    fn a_saved_account_restores_its_state_and_settings() {
+        let time = DateTime::from_timestamp(1_704_067_200, 0).unwrap();
+        let paper = PaperAccount::new("USD", 10_000.0)
+            .leverage(5.0)
+            .commission(0.001)
+            .commission_per_order(1.0)
+            .commission_per_unit(0.25);
+        paper.set_replay_time(Some(time));
+        let mut rules = TradingRules::new("ES");
+        (
+            rules.quantity_step,
+            rules.min_quantity,
+            rules.point_value,
+            rules.leverage,
+        ) = (0.25, 0.25, 50.0, Some(20.0));
+        rules.time_in_force = vec![TimeInForce::GoodTillCancelled];
+        assert!(paper.set_rules(rules));
+        paper.set_price("ES", 100.0);
+        // Keep one unit outside the bracket: its stop must cancel when the protected two close.
+        place(
+            &paper,
+            OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Market),
+        )
+        .unwrap();
+        let mut entry = OrderRequest::new("ES", OrderSide::Buy, 2.0, OrderType::Market);
+        entry.take_profit = Some(105.0);
+        entry.stop_loss = Some(95.0);
+        place(&paper, entry).unwrap();
+        let mut limit = OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Limit(90.0));
+        limit.time_in_force = TimeInForce::GoodTillCancelled;
+        let id = place(&paper, limit.clone()).unwrap();
+        paper.set_price("ES", 101.0);
+        let json = serde_json::to_string(&paper.save()).unwrap();
+        let saved: SavedPaperAccount = serde_json::from_str(&json).unwrap();
+        let restored = PaperAccount::restore(saved).unwrap();
+        assert_eq!(serde_json::to_string(&restored.save()).unwrap(), json);
+        assert_eq!(snapshot(&restored), snapshot(&paper));
+        let inbox = Arc::new(Inbox::default());
+        limit.order_type = OrderType::Limit(91.0);
+        restored.modify(id, limit, inbox.reply(0));
+        assert_eq!(
+            *inbox
+                .drain()
+                .answers
+                .pop()
+                .unwrap()
+                .1
+                .downcast::<Result<(), FeedError>>()
+                .unwrap(),
+            Err(FeedError::SymbolNotFound("ES".into()))
+        );
+        restored.set_replay_time(Some(time));
+        restored.set_price("ES", 101.0);
+        assert_eq!(snapshot(&restored), snapshot(&paper));
+        assert_eq!(rules_of(&restored, "ES"), rules_of(&paper, "ES"));
+        for account in [&paper, &restored] {
+            account.set_price("ES", 106.0);
+        }
+        assert_eq!(snapshot(&restored), snapshot(&paper));
+        let market = OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Market);
+        assert_eq!(place(&restored, market.clone()), place(&paper, market));
+        assert_eq!(snapshot(&restored), snapshot(&paper));
+
+        // Edited settings follow the builders, invalid rules are ignored and histories remain
+        // bounded.
+        let mut saved = paper.save();
+        saved.leverage = 0.0;
+        saved.commission = -1.0;
+        saved.commission_per_order = f64::INFINITY;
+        saved.commission_per_unit = f64::NAN;
+        saved.rules[0].point_value = 0.0;
+        saved.finished = vec![saved.finished[0].clone(); HISTORY + 3];
+        saved.executions = vec![saved.executions[0].clone(); HISTORY + 3];
+        saved.balance_history = vec![saved.balance_history[0].clone(); HISTORY + 3];
+        saved.journal = vec![saved.journal[0].clone(); HISTORY + 3];
+        let restored = PaperAccount::restore(saved).unwrap();
+        let saved = restored.save();
+        assert_eq!(
+            (
+                saved.leverage,
+                saved.commission,
+                saved.commission_per_order,
+                saved.commission_per_unit
+            ),
+            (1.0, 0.0, 0.0, 0.0)
+        );
+        assert!(saved.rules.is_empty());
+        assert_eq!(
+            [
+                saved.finished.len(),
+                saved.executions.len(),
+                saved.balance_history.len(),
+                saved.journal.len()
+            ],
+            [HISTORY; 4]
+        );
+        for initial in [true, false] {
+            let mut saved = paper.save();
+            if initial {
+                saved.initial = f64::NAN;
+            } else {
+                saved.balance = f64::INFINITY;
+            }
+            assert!(PaperAccount::restore(saved).is_none());
+        }
+    }
+
     #[test]
     fn closed_positions_span_a_round_trip_from_its_opening_fill_to_the_close_or_reversal() {
         let paper = PaperAccount::new("USD", 100_000.0);
+        let mut restored = PaperAccount::restore(paper.save()).unwrap();
         let at = |minute: i64| DateTime::from_timestamp(1_704_067_200 + 60 * minute, 0).unwrap();
         let inbox = Arc::new(Inbox::default());
         let (_listener, events) = Listener::new(&inbox, 2);
@@ -973,13 +1971,19 @@ mod tests {
             (6, 100.0, Buy, 0.2),
             (7, 100.0, Sell, 0.3),
         ] {
-            paper.set_replay_time(Some(at(minute)));
-            paper.set_price("SYM", price);
-            place(
-                &paper,
-                OrderRequest::new("SYM", side, quantity, OrderType::Market),
-            )
-            .unwrap();
+            for account in [&paper, &restored] {
+                account.set_replay_time(Some(at(minute)));
+                account.set_price("SYM", price);
+                place(
+                    account,
+                    OrderRequest::new("SYM", side, quantity, OrderType::Market),
+                )
+                .unwrap();
+            }
+            assert_eq!(restored.save(), paper.save());
+            let json = serde_json::to_string(&restored.save()).unwrap();
+            restored = PaperAccount::restore(serde_json::from_str(&json).unwrap()).unwrap();
+            assert_eq!(serde_json::to_string(&restored.save()).unwrap(), json);
         }
         let live = inbox
             .drain()
@@ -987,7 +1991,7 @@ mod tests {
             .into_iter()
             .map(|(_, event)| *event.downcast::<AccountEvent>().unwrap())
             .collect();
-        for events in [live, snapshot(&paper)] {
+        for events in [live, snapshot(&paper), snapshot(&restored)] {
             let closed: Vec<_> = events
                 .into_iter()
                 .filter_map(|event| match event {
@@ -1019,6 +2023,10 @@ mod tests {
                 }
             }
         }
+        let mut saved = restored.save();
+        saved.closed_positions = vec![saved.closed_positions[0].clone(); HISTORY + 3];
+        let restored = PaperAccount::restore(saved).unwrap();
+        assert_eq!(restored.save().closed_positions.len(), HISTORY);
     }
 
     #[test]
@@ -1736,49 +2744,36 @@ mod tests {
         }
     }
 
+    /// With no partial fills, IOC and FOK either fill in full at placement or cancel without
+    /// ever working. Session durations and duration changes to a working order stay unsupported.
     #[test]
-    fn only_gtc_orders_are_offered_and_accepted_without_session_boundaries() {
+    fn immediate_orders_fill_at_once_or_are_cancelled_and_session_orders_are_refused() {
+        use OrderSide::{Buy, Sell};
+        use TimeInForce::{
+            Day, FillOrKill, GoodTillCancelled, GoodTillDate, ImmediateOrCancel, Month, Week,
+        };
         let paper = PaperAccount::new("USD", 1_000.0);
         paper.set_price("SYM", 100.0);
-        let inbox = Arc::new(Inbox::default());
-        paper.rules("SYM", inbox.reply(0));
-        let rules = *inbox
-            .drain()
-            .answers
-            .pop()
-            .unwrap()
-            .1
-            .downcast::<Result<TradingRules, FeedError>>()
-            .unwrap();
         assert_eq!(
-            rules.unwrap().time_in_force,
-            vec![TimeInForce::GoodTillCancelled]
+            rules_of(&paper, "SYM").time_in_force,
+            [GoodTillCancelled, ImmediateOrCancel, FillOrKill]
         );
-        let mut request = OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(90.0));
-        request.time_in_force = TimeInForce::GoodTillCancelled;
+        let mut request = OrderRequest::new("SYM", Buy, 1.0, OrderType::Limit(90.0));
+        request.time_in_force = GoodTillCancelled;
         let id = place(&paper, request.clone()).unwrap();
         let before = snapshot(&paper);
-        for time_in_force in [
-            TimeInForce::Day,
-            TimeInForce::Week,
-            TimeInForce::Month,
-            TimeInForce::GoodTillDate,
-            TimeInForce::ImmediateOrCancel,
-            TimeInForce::FillOrKill,
+        let inbox = Arc::new(Inbox::default());
+        for tif in [
+            Day,
+            Week,
+            Month,
+            GoodTillDate,
+            ImmediateOrCancel,
+            FillOrKill,
         ] {
-            request.time_in_force = time_in_force;
-            request.expires = (time_in_force == TimeInForce::GoodTillDate)
-                .then(|| "2026-12-01T21:00:00Z".parse().unwrap());
-            paper.place(request.clone(), inbox.reply(0));
-            let result = *inbox
-                .drain()
-                .answers
-                .pop()
-                .unwrap()
-                .1
-                .downcast::<Result<OrderId, FeedError>>()
-                .unwrap();
-            assert_eq!(result, Err(FeedError::NotSupported));
+            request.time_in_force = tif;
+            request.expires =
+                (tif == GoodTillDate).then(|| "2026-12-01T21:00:00Z".parse().unwrap());
             paper.modify(id.clone(), request.clone(), inbox.reply(0));
             let result = *inbox
                 .drain()
@@ -1790,6 +2785,102 @@ mod tests {
                 .unwrap();
             assert_eq!(result, Err(FeedError::NotSupported));
             assert_eq!(snapshot(&paper), before);
+        }
+        for (tif, kind, side, status) in [
+            (
+                ImmediateOrCancel,
+                OrderType::Limit(101.0),
+                Buy,
+                Some(OrderStatus::Filled),
+            ),
+            (
+                FillOrKill,
+                OrderType::Limit(99.0),
+                Sell,
+                Some(OrderStatus::Filled),
+            ),
+            (
+                ImmediateOrCancel,
+                OrderType::Limit(99.0),
+                Buy,
+                Some(OrderStatus::Cancelled),
+            ),
+            (
+                FillOrKill,
+                OrderType::Limit(101.0),
+                Sell,
+                Some(OrderStatus::Cancelled),
+            ),
+            (
+                ImmediateOrCancel,
+                OrderType::Market,
+                Buy,
+                Some(OrderStatus::Filled),
+            ),
+            (
+                FillOrKill,
+                OrderType::Stop(99.0),
+                Buy,
+                Some(OrderStatus::Filled),
+            ),
+            (
+                ImmediateOrCancel,
+                OrderType::StopLimit {
+                    stop: 99.0,
+                    limit: 99.5,
+                },
+                Buy,
+                Some(OrderStatus::Cancelled),
+            ),
+            (
+                FillOrKill,
+                OrderType::StopLimit {
+                    stop: 99.0,
+                    limit: 101.0,
+                },
+                Buy,
+                Some(OrderStatus::Filled),
+            ),
+            (Day, OrderType::Market, Buy, None),
+            (Week, OrderType::Market, Buy, None),
+            (Month, OrderType::Market, Buy, None),
+            (GoodTillDate, OrderType::Market, Buy, None),
+        ] {
+            let paper = PaperAccount::new("USD", 1_000.0);
+            paper.set_price("SYM", 100.0);
+            let mut request = OrderRequest::new("SYM", side, 1.0, kind);
+            request.time_in_force = tif;
+            request.expires =
+                (tif == GoodTillDate).then(|| "2026-12-01T21:00:00Z".parse().unwrap());
+            paper.place(request, inbox.reply(0));
+            let result = *inbox
+                .drain()
+                .answers
+                .pop()
+                .unwrap()
+                .1
+                .downcast::<Result<OrderId, FeedError>>()
+                .unwrap();
+            let events = snapshot(&paper);
+            if let Some(status) = status {
+                let id = result.unwrap();
+                let state = paper.lock();
+                assert!(state.working.is_empty(), "{tif:?} {kind:?}");
+                assert_eq!(state.finished.len(), 1);
+                let order = &state.finished[0];
+                assert_eq!((&order.id, &order.status), (&id, &status));
+                if status == OrderStatus::Filled {
+                    assert_eq!((order.filled, order.fill_price), (1.0, Some(100.0)));
+                    assert_eq!(state.executions.len(), 1);
+                } else {
+                    assert_eq!((order.filled, order.fill_price), (0.0, None));
+                    assert!(state.positions.is_empty() && state.executions.is_empty());
+                }
+            } else {
+                assert_eq!(result, Err(FeedError::NotSupported));
+                assert_eq!(events.len(), 1);
+                assert!(matches!(events[0], AccountEvent::Account(_)));
+            }
         }
     }
 

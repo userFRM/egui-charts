@@ -88,6 +88,7 @@ impl VwapBand {
 /// let mut band = VwapBand::new(true, 1.5).unwrap();
 /// band.lower = line;
 /// let mut config = VwapConfig::default();
+/// config.executions = true;
 /// config.bands[1] = band;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -297,8 +298,14 @@ impl VwapFill {
 pub struct VwapConfig {
     /// The bands, each drawn when enabled.
     pub bands: [VwapBand; 3],
-    /// Bar price the VWAP and its deviation average.
+    /// Bar price the VWAP and its deviation average on bars that do not count executions.
     pub source: PriceSource,
+    /// Whether each bar whose executions the chart holds in full counts their volume at the
+    /// middle of each row's ticks. Other bars count their volume at [`source`](Self::source).
+    /// While a visible drawing counts executions, the chart holds them on time-based intervals
+    /// and on every interval of its footprint chart types. Alerts evaluated without the chart
+    /// count every bar at the source. Off by default and for drawings saved without it.
+    pub executions: bool,
     /// Unit of the band multipliers.
     pub band_mode: VwapBandMode,
     /// Whether the VWAP line is drawn; the bands and fills keep their own switches.
@@ -350,6 +357,7 @@ impl Default for VwapConfig {
         Self {
             bands: [band(0, true), band(1, false), band(2, false)],
             source: PriceSource::HLC3,
+            executions: false,
             band_mode: VwapBandMode::Deviation,
             show_line: true,
             plot_type: VwapPlotType::Line,
@@ -379,9 +387,15 @@ mod tests {
     fn saved_settings_restore_and_are_checked() {
         let saved = r#"{"bands":[{"enabled":true,"multiplier":1.0,"color":[76,175,80,255]},{"enabled":false,"multiplier":2.0,"color":[128,128,0,255]},{"enabled":false,"multiplier":3.0,"color":[0,137,123,255]}]}"#;
         let config: VwapConfig = serde_json::from_str(saved).unwrap();
+        assert!(!config.executions);
         let mut legacy = VwapConfig::default();
         legacy.band_fill.color = None;
         assert_eq!(config, legacy);
+        // Full settings saved before executions were an option retain every style and source.
+        let saved = r#"{"bands":[{"enabled":true,"multiplier":1.0,"upper":{"visible":true,"color":[76,175,80,255],"line_style":"Solid","width":1.0,"plot_type":"Line","track_price":false,"opacity":1.0},"lower":{"visible":true,"color":[76,175,80,255],"line_style":"Solid","width":1.0,"plot_type":"Line","track_price":false,"opacity":1.0}},{"enabled":false,"multiplier":2.0,"upper":{"visible":true,"color":[128,128,0,255],"line_style":"Solid","width":1.0,"plot_type":"Line","track_price":false,"opacity":1.0},"lower":{"visible":true,"color":[128,128,0,255],"line_style":"Solid","width":1.0,"plot_type":"Line","track_price":false,"opacity":1.0}},{"enabled":false,"multiplier":3.0,"upper":{"visible":true,"color":[0,137,123,255],"line_style":"Solid","width":1.0,"plot_type":"Line","track_price":false,"opacity":1.0},"lower":{"visible":true,"color":[0,137,123,255],"line_style":"Solid","width":1.0,"plot_type":"Line","track_price":false,"opacity":1.0}}],"source":"HLC3","band_mode":"Deviation","show_line":true,"plot_type":"Line","track_price":false,"precision":null,"band_fill":{"visible":true,"color":[76,175,80,255],"opacity":0.05},"background":{"visible":false,"color":[76,175,80,255],"opacity":0.05}}"#;
+        let config: VwapConfig = serde_json::from_str(saved).unwrap();
+        assert!(!config.executions);
+        assert_eq!(config, VwapConfig::default());
         for bad in [
             r#"{"precision":9}"#,
             r#"{"band_fill":{"visible":true,"color":null,"opacity":1.5}}"#,

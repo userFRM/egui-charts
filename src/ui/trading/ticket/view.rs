@@ -30,6 +30,7 @@ impl OrderTicket {
         market: &Market<'_>,
         presets: &mut BTreeMap<String, Vec<OrderPreset>>,
         one_click: &mut bool,
+        compact: &mut bool,
     ) -> Option<Action> {
         if let Some(editing) = &self.editing {
             self.editing = market
@@ -45,7 +46,7 @@ impl OrderTicket {
             self.time_in_force = market.rules.time_in_force[0];
         }
         ui.spacing_mut().item_spacing.y = 8.0;
-        self.header(ui, market, presets, one_click);
+        self.header(ui, market, presets, one_click, compact);
         self.switch(ui);
         let mut action = match self.tab {
             Tab::Order => {
@@ -57,7 +58,7 @@ impl OrderTicket {
                     .inner;
                 egui::ScrollArea::vertical()
                     .auto_shrink(false)
-                    .show(ui, |ui| self.form(ui, market));
+                    .show(ui, |ui| self.form(ui, market, *compact));
                 action
             }
             Tab::Dom => {
@@ -189,6 +190,7 @@ impl OrderTicket {
         market: &Market<'_>,
         presets: &mut BTreeMap<String, Vec<OrderPreset>>,
         one_click: &mut bool,
+        compact: &mut bool,
     ) {
         ui.horizontal(|ui| {
             ui.set_min_height(32.0);
@@ -208,7 +210,7 @@ impl OrderTicket {
                     .show(ui);
                 egui::Popup::menu(&more)
                     .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                    .show(|ui| self.more(ui, market, presets, one_click));
+                    .show(|ui| self.more(ui, market, presets, one_click, compact));
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     let (mark, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
                     paint_symbol_mark(
@@ -250,11 +252,17 @@ impl OrderTicket {
         market: &Market<'_>,
         presets: &mut BTreeMap<String, Vec<OrderPreset>>,
         one_click: &mut bool,
+        compact: &mut bool,
     ) {
         ui.checkbox(one_click, l10n::text(ui.ctx(), "One-click trading"))
             .on_hover_text(l10n::text(
                 ui.ctx(),
                 "Buy and Sell, and the depth ladder, place orders at once, without confirmation",
+            ));
+        ui.checkbox(compact, l10n::text(ui.ctx(), "Compact form"))
+            .on_hover_text(l10n::text(
+                ui.ctx(),
+                "Show only the side, the order type, the price and the quantity above the send button",
             ));
         ui.separator();
         ui.weak(l10n::text(ui.ctx(), "Presets"));
@@ -613,7 +621,7 @@ mod tests {
             .with_context_setup(egui_extras::install_image_loaders)
             .build_ui_state(
                 |ui, (ticket, presets): &mut (OrderTicket, BTreeMap<String, Vec<OrderPreset>>)| {
-                    ticket.more(ui, &market, presets, &mut false);
+                    ticket.more(ui, &market, presets, &mut false, &mut false);
                 },
                 (
                     OrderTicket::default(),
@@ -646,7 +654,7 @@ mod tests {
                 )| {
                     let mut market = super::super::tests::market(&rules);
                     market.account = account;
-                    ticket.more(ui, &market, presets, &mut false);
+                    ticket.more(ui, &market, presets, &mut false, &mut false);
                 },
                 (
                     OrderTicket {
@@ -783,7 +791,7 @@ mod tests {
                     market.timezone = crate::scales::TimezoneMode::Timezone(
                         crate::model::TimezoneId::fixed_offset(-5 * 3600).unwrap(),
                     );
-                    ticket.show(ui, &market, &mut BTreeMap::new(), &mut false);
+                    ticket.show(ui, &market, &mut BTreeMap::new(), &mut false, &mut false);
                 },
                 (
                     OrderTicket {
@@ -899,6 +907,7 @@ mod tests {
                                 &market,
                                 &mut std::collections::BTreeMap::new(),
                                 &mut false,
+                                &mut false,
                             );
                         },
                     );
@@ -930,6 +939,7 @@ mod tests {
                             ui,
                             &market,
                             &mut std::collections::BTreeMap::new(),
+                            &mut false,
                             &mut false,
                         );
                     })
@@ -1112,6 +1122,7 @@ mod tests {
                             &market,
                             &mut std::collections::BTreeMap::new(),
                             &mut one_click,
+                            &mut false,
                         )
                     },
                 );
@@ -1306,6 +1317,7 @@ mod tests {
                             market,
                             &mut std::collections::BTreeMap::new(),
                             &mut true,
+                            &mut false,
                         )
                     },
                 );

@@ -14,9 +14,11 @@ impl ObjectTreePanel {
     /// removal, renaming non-drawing rows and the layout-wide drawings by symbol. Drawing names are
     /// saved and undone with the drawing.
     /// Bulk actions apply to drawings, studies and added bar series. Visibility includes the main
-    /// series; bar-series ordering stays within its pane. Deleting keeps locked drawings, which
-    /// stay selected, and reports them with
+    /// series; bar-series ordering stays within its pane. Deleting keeps locked drawings and
+    /// those whose user edits are off selected, and reports only locked drawings with
     /// [`ChartEvent::LockedDrawingsKept`](crate::widget::ChartEvent::LockedDrawingsKept).
+    /// Duplicate and Duplicate selected add the study copies the
+    /// [study caps](Chart::set_study_limit) allow, in the order of `sources`, and leave out the others.
     pub fn apply_to_chart(
         &mut self,
         chart: &mut Chart,
@@ -132,7 +134,7 @@ impl ObjectTreePanel {
                         d.folder.starts_with(path)
                             && match action {
                                 ObjectTreeAction::SetFolderVisible(_, _) => d.visible != *value,
-                                _ => d.locked != *value,
+                                _ => d.locked != *value && d.user_edit_enabled,
                             }
                     })
                     .map(|d| d.id)
@@ -195,9 +197,16 @@ impl ObjectTreePanel {
                 }
             }
             ObjectTreeAction::ToggleLock(id) => {
-                let _ = chart
-                    .drawings_mut()
-                    .edit_drawing(*id, |d| d.locked = !d.locked);
+                if chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .any(|d| d.id == *id && d.user_edit_enabled)
+                {
+                    let _ = chart
+                        .drawings_mut()
+                        .edit_drawing(*id, |d| d.locked = !d.locked);
+                }
             }
             ObjectTreeAction::LockAll | ObjectTreeAction::UnlockAll => {
                 let locked = matches!(action, ObjectTreeAction::LockAll);
@@ -205,7 +214,7 @@ impl ObjectTreePanel {
                     .drawings()
                     .drawings
                     .iter()
-                    .filter(|d| d.locked != locked)
+                    .filter(|d| d.locked != locked && d.user_edit_enabled)
                     .map(|d| d.id)
                     .collect();
                 for id in ids {
@@ -229,7 +238,7 @@ impl ObjectTreePanel {
                 for source in others {
                     delete(chart, source);
                 }
-                // Locked drawings stay selected, as after Delete on the chart.
+                // Keep the surviving selection, as after Delete on the chart.
                 let kept: Vec<_> = chart
                     .drawings()
                     .drawings
@@ -256,6 +265,7 @@ impl ObjectTreePanel {
             }
             ObjectTreeAction::MoveToPane(id, pane) => {
                 if !sources.iter().any(|s| s.id == *id && s.is_drawing())
+                    || !chart.drawings().user_can_edit(*id)
                     || !chart.move_drawing_to_pane(*id, *pane)
                 {
                     return false;
@@ -376,8 +386,10 @@ fn duplicate(chart: &mut Chart, source: &SourceItem) {
                     chart.indicator_inputs(id).unwrap_or_default().to_owned(),
                 )
             });
-        if let Some((copy, inputs)) = copy {
-            let id = chart.add_indicator(copy);
+        if let Some((copy, inputs)) = copy
+            // The copy counts against the study caps, as the interface's other additions do.
+            && let Ok(id) = chart.try_add_indicator(copy)
+        {
             chart.set_indicator_inputs(id, inputs);
         }
     } else if source.is_drawing() {
@@ -466,6 +478,8 @@ mod tests {
         for drawing in chart.drawings().listed_drawings() {
             let mut item = SourceItem::drawing(drawing.id, drawing.tool_type, drawing.color32());
             item.visible = drawing.visible;
+            item.locked = drawing.locked;
+            item.user_edit_enabled = drawing.user_edit_enabled;
             item.z_index = drawing.z_order;
             rows.push(item);
         }
@@ -476,6 +490,54 @@ mod tests {
     fn apply(tree: &mut ObjectTreePanel, chart: &mut Chart, action: ObjectTreeAction) {
         let rows = rows(chart);
         chart.user_action(|chart| tree.apply_to_chart(chart, &action, &rows));
+    }
+
+    /// Every destructive tree command respects the drawing's host editing permission.
+    #[test]
+    fn object_tree_commands_keep_drawings_without_user_edits() {
+        for row in 0..7 {
+            for enabled in [true, false] {
+                let mut chart = chart(&[100.0], &[200.0]);
+                let pane = chart.add_pane();
+                for id in [3, 4] {
+                    let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+                    drawing.chart_points = vec![
+                        ChartPoint::new(10.0, 120.0 + id as f64),
+                        ChartPoint::new(20.0, 130.0 + id as f64),
+                    ];
+                    drawing.completed = true;
+                    drawing.user_edit_enabled = id != 3 || enabled;
+                    drawing.locked = id == 3 && row == 2;
+                    chart.drawings_mut().drawings.push(drawing);
+                }
+                let mut tree = ObjectTreePanel::new();
+                tree.state_mut().select(3);
+                tree.state_mut().toggle_selection(4);
+                chart.drawings_mut().select_drawings([3, 4]);
+                let before = chart.drawings().drawings[0].clone();
+                let action = [
+                    ObjectTreeAction::ToggleLock(3),
+                    ObjectTreeAction::LockAll,
+                    ObjectTreeAction::UnlockAll,
+                    ObjectTreeAction::MoveToPane(3, pane),
+                    ObjectTreeAction::Delete(3),
+                    ObjectTreeAction::DeleteSelected,
+                    ObjectTreeAction::RemoveAllDrawings,
+                ][row]
+                    .clone();
+                apply(&mut tree, &mut chart, action.clone());
+                let unchanged = chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .find(|d| d.id == 3)
+                    .is_some_and(|d| {
+                        serde_json::to_string(d).unwrap() == serde_json::to_string(&before).unwrap()
+                            && d.chart_points == before.chart_points
+                    });
+                assert_eq!(unchanged, !enabled, "{action:?}, enabled {enabled}");
+            }
+        }
     }
 
     #[test]
@@ -669,5 +731,165 @@ mod tests {
             ],
             "folders after creating Sub under A, then under A/B: {observed:?}"
         );
+    }
+
+    #[test]
+    fn duplicates_stop_at_the_study_cap() {
+        for (cap, selected, expected) in [
+            (Some(2), false, vec!["SMA(2)", "SMA(5)"]),
+            (Some(2), true, vec!["SMA(2)", "SMA(5)"]),
+            (Some(3), true, vec!["SMA(2)", "SMA(5)", "SMA(2)"]),
+            (None, true, vec!["SMA(2)", "SMA(5)", "SMA(2)", "SMA(5)"]),
+        ] {
+            let mut chart = chart(&[100.0], &[200.0]);
+            let a = chart.add_indicator(Box::new(crate::studies::SMA::new(2)));
+            let b = chart.add_indicator(Box::new(crate::studies::SMA::new(5)));
+            chart.set_study_limit(cap);
+            let undoable = chart.can_undo();
+            let mut tree = ObjectTreePanel::new();
+            let action = if selected {
+                tree.state_mut().select(usize::MAX / 2 + a.0);
+                tree.state_mut().toggle_selection(usize::MAX / 2 + b.0);
+                ObjectTreeAction::DuplicateSelected
+            } else {
+                ObjectTreeAction::Duplicate(usize::MAX / 2 + a.0)
+            };
+            apply(&mut tree, &mut chart, action);
+            assert_eq!(
+                chart
+                    .indicators()
+                    .flat_map(|(_, s)| s.line_names())
+                    .collect::<Vec<_>>(),
+                expected,
+                "cap {cap:?}, selected {selected}"
+            );
+            if cap == Some(2) {
+                assert_eq!(chart.can_undo(), undoable);
+            }
+        }
+    }
+
+    #[test]
+    fn studies_on_studies_stop_at_their_cap_on_every_path() {
+        use crate::studies::{IndicatorFactory, RSI, SMA, StudyError, StudySource};
+
+        let fixture = || {
+            let mut chart = chart(&[100.0], &[200.0]);
+            assert_eq!(chart.chained_study_limit(), None);
+            let rsi = chart.add_indicator(Box::new(RSI::new(14)));
+            let linked = chart.add_indicator(Box::new(SMA::new(3)));
+            chart
+                .set_indicator_source(linked, StudySource::Study { id: rsi.0, plot: 0 })
+                .unwrap();
+            let price = chart.add_indicator(Box::new(SMA::new(7)));
+            chart.set_chained_study_limit(Some(1));
+            (chart, rsi, linked, price)
+        };
+        let state = |chart: &Chart| {
+            chart
+                .indicators()
+                .map(|(id, s)| {
+                    (
+                        id,
+                        s.inputs()
+                            .into_iter()
+                            .map(|i| (i.id, i.value))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        for path in ["add", "paste", "template set", "duplicate", "source"] {
+            let (mut chart, rsi, linked, price) = fixture();
+            let before = state(&chart);
+            let undoable = chart.can_undo();
+            match path {
+                "add" => {
+                    let copy = chart
+                        .indicators()
+                        .find(|(id, _)| *id == linked)
+                        .unwrap()
+                        .1
+                        .clone_box();
+                    let Err(StudyError::ChainedStudyLimitReached(refused)) =
+                        chart.try_add_indicator(copy)
+                    else {
+                        panic!("the chained cap refuses another study on a study");
+                    };
+                    assert_eq!(
+                        refused
+                            .into_inner()
+                            .inputs()
+                            .into_iter()
+                            .map(|i| (i.id, i.value))
+                            .collect::<Vec<_>>(),
+                        before[1].1
+                    );
+                }
+                "paste" => {
+                    let text = chart.copy_indicator(linked).unwrap();
+                    assert!(matches!(
+                        chart.paste_indicator(&text, &IndicatorFactory::new()),
+                        Err(StudyError::InvalidInput { .. })
+                    ));
+                }
+                "template set" => {
+                    let mut set = chart.study_template_set();
+                    set.studies.push(set.studies[1].clone());
+                    assert!(chart.apply_chosen_study_template_set(&set).is_err());
+                }
+                "duplicate" => apply(
+                    &mut ObjectTreePanel::new(),
+                    &mut chart,
+                    ObjectTreeAction::Duplicate(usize::MAX / 2 + linked.0),
+                ),
+                "source" => assert!(matches!(
+                    chart.set_indicator_source(price, StudySource::Study { id: rsi.0, plot: 0 }),
+                    Err(StudyError::InvalidInput { id, .. }) if id == "source"
+                )),
+                _ => unreachable!(),
+            }
+            assert_eq!(state(&chart), before, "{path}");
+            assert_eq!(chart.can_undo(), undoable, "{path}");
+        }
+
+        let (mut chart, _, linked, price) = fixture();
+        assert!(chart.try_add_indicator(Box::new(SMA::new(9))).is_ok());
+        assert!(
+            chart
+                .set_indicator_source(
+                    linked,
+                    StudySource::Study {
+                        id: price.0,
+                        plot: 0
+                    }
+                )
+                .is_ok()
+        );
+        // A refusal does not stop a later selected price study from being copied.
+        let mut tree = ObjectTreePanel::new();
+        tree.state_mut().select(usize::MAX / 2 + linked.0);
+        tree.state_mut().toggle_selection(usize::MAX / 2 + price.0);
+        apply(&mut tree, &mut chart, ObjectTreeAction::DuplicateSelected);
+        assert_eq!(
+            chart
+                .indicators()
+                .skip(1)
+                .flat_map(|(_, s)| s.line_names())
+                .collect::<Vec<_>>(),
+            ["SMA(3)", "SMA(7)", "SMA(9)", "SMA(7)"]
+        );
+        chart.set_chained_study_limit(None);
+        let copy = chart
+            .indicators()
+            .find(|(id, _)| *id == linked)
+            .unwrap()
+            .1
+            .clone_box();
+        assert!(chart.try_add_indicator(copy).is_ok());
+
+        let (mut chart, _, _, _) = fixture();
+        let set = chart.study_template_set();
+        assert!(chart.apply_chosen_study_template_set(&set).is_ok());
     }
 }

@@ -94,6 +94,8 @@ pub struct Trading {
     ticket: OrderTicket,
     /// A change the user asked for on a line, waiting for confirmation.
     pending: Option<TradingLineAction>,
+    /// The position to protect, with the take profit and stop loss entered so far.
+    protecting: Option<(Position, Option<f64>, Option<f64>)>,
     /// The quantity in a pending Close dialog; each new confirmation resets it.
     close_quantity: Option<f64>,
     /// An order the user asked the broker to preview, until it is placed or discarded.
@@ -210,6 +212,7 @@ impl Default for Trading {
             placing: Vec::new(),
             ticket: OrderTicket::default(),
             pending: None,
+            protecting: None,
             close_quantity: None,
             preview: None,
             decimals: 2,
@@ -362,6 +365,7 @@ impl Trading {
             self.refuse(Sent::Place(order), NOT_LIVE);
         }
         self.pending = None;
+        self.protecting = None;
         self.account = None;
         self.connection = None;
         self.orders.clear();
@@ -516,21 +520,6 @@ impl Trading {
 
 /// Why an order is refused while the broker is not live.
 const NOT_LIVE: &str = "the broker is not connected";
-
-/// Whether every number of `rules` is positive and finite and a time in force is offered.
-fn valid(rules: &TradingRules) -> bool {
-    let positive = |value: f64| value.is_finite() && value > 0.0;
-    positive(rules.quantity_step)
-        && positive(rules.min_quantity)
-        && positive(rules.point_value)
-        && rules
-            .max_quantity
-            .is_none_or(|max| positive(max) && max >= rules.min_quantity)
-        && rules.leverage.is_none_or(positive)
-        && rules.pip_value.is_none_or(positive)
-        && !rules.time_in_force.is_empty()
-        && rules.time_in_force[0] != crate::model::TimeInForce::GoodTillDate
-}
 
 #[cfg(test)]
 mod tests {

@@ -64,7 +64,7 @@ impl DemoApp {
             .filter(|id| {
                 manager.drawings.iter().any(|drawing| {
                     drawing.id == *id
-                        && !drawing.locked
+                        && drawing.accepts_user_edits()
                         && drawing.tool_type == tool.tool_type
                         && drawing.custom_tool == tool.custom_tool
                 })

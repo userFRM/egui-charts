@@ -151,7 +151,8 @@ pub struct Instrument {
     pub pip_size: Option<f64>,
     /// Decimals of price labels.
     pub price_decimals: Option<u8>,
-    /// Decimals of volume readouts, including abbreviated K/M/B values.
+    /// Decimals of volume readouts, including abbreviated K/M/B values, of studies in volume
+    /// units without a precision chosen in their settings, and of measured volume.
     pub volume_decimals: Option<u8>,
     /// Currency of prices, such as "USD". A code that mixes upper and lower case names a minor
     /// unit and matches only itself, such as "GBp" for pence against "GBP"; other codes match
@@ -386,7 +387,7 @@ impl Instrument {
 /// Whether two currency codes name the same currency. A code that mixes upper and lower case
 /// names a minor unit, such as `GBp` for pence, and matches only itself; other codes match
 /// regardless of ASCII case, so `gbp` is `GBP`.
-#[cfg(any(feature = "studies", feature = "drawings"))]
+#[cfg(any(feature = "studies", feature = "drawings", feature = "strategies"))]
 pub(crate) fn same_currency(a: &str, b: &str) -> bool {
     let mixed = |code: &str| {
         code.bytes().any(|c| c.is_ascii_lowercase()) && code.bytes().any(|c| c.is_ascii_uppercase())

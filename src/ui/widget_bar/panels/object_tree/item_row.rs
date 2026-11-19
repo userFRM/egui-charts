@@ -74,7 +74,9 @@ pub fn render_item_row(
         ui.indent(format!("item_props_{id}"), |ui| {
             if let Some(props) = &item.properties {
                 // Show expandable properties
-                render_properties(ui, props, id, &mut action);
+                ui.add_enabled_ui(item.user_edit_enabled && !item.locked, |ui| {
+                    render_properties(ui, props, id, &mut action);
+                });
             }
         });
     }
@@ -331,15 +333,18 @@ fn render_row_content(
         } else {
             &embedded_icons::UNLOCK
         };
-        let lock_response = ui.allocate_rect(lock_rect, Sense::click());
+        let lockable = item.user_edit_enabled;
+        let lock_response = ui.allocate_rect(
+            lock_rect,
+            if lockable {
+                Sense::click()
+            } else {
+                Sense::hover()
+            },
+        );
         let translated_label = l10n::text(ui.ctx(), if item.locked { "Unlock" } else { "Lock" });
         lock_response.widget_info(|| {
-            egui::WidgetInfo::selected(
-                egui::Role::Button,
-                lock_response.enabled(),
-                item.locked,
-                &translated_label,
-            )
+            egui::WidgetInfo::selected(egui::Role::Button, lockable, item.locked, &translated_label)
         });
         crate::styles::focus::draw_focus_ring(ui, &lock_response, 0.0);
         if ui.is_rect_visible(lock_rect) {
@@ -349,6 +354,11 @@ fn render_row_content(
                 ui.visuals().widgets.hovered.fg_stroke.color
             } else {
                 ui.visuals().widgets.noninteractive.fg_stroke.color
+            };
+            let icon_color = if lockable {
+                icon_color
+            } else {
+                icon_color.gamma_multiply(ui.visuals().disabled_alpha())
             };
             lock_icon
                 .as_image_tinted(vec2(14.0, 14.0), icon_color)
@@ -400,7 +410,7 @@ fn render_row_content(
     if item.source_type != SourceType::DataSource || item.is_added_series() {
         let del_rect =
             Rect::from_center_size(egui::pos2(right_x - 8.0, center_y), vec2(16.0, 16.0));
-        let locked = item.is_drawing() && item.locked;
+        let locked = item.is_drawing() && (item.locked || !item.user_edit_enabled);
         let del_response = ui.allocate_rect(
             del_rect,
             if locked {
