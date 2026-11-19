@@ -1228,7 +1228,7 @@ pub(crate) mod test_frames {
     }
 
     /// The fill and stroke colours of `shapes`, mesh vertices included.
-    #[cfg(feature = "studies")]
+    #[cfg(feature = "ui")]
     pub(crate) fn painted_colors(shapes: &[Shape]) -> Vec<egui::Color32> {
         shapes
             .iter()
