@@ -2849,7 +2849,7 @@ mod tests {
                 id: "oi".into(),
                 name: "Open interest".into(),
                 unit: "contracts".into(),
-                format: super::super::StudyFormat::Volume,
+                format: crate::scales::StudyFormat::Volume,
             },
         )));
         for inner in excluded {
