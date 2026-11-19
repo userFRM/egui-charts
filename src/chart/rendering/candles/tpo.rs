@@ -1214,11 +1214,7 @@ fn entry_color(
 ) -> Color32 {
     match config.color_mode {
         TPOColorMode::ByPeriod => {
-            let last = profile
-                .letters
-                .last()
-                .map_or(1, |letter| letter.period_idx)
-                .max(1);
+            let last = profile.width().saturating_sub(1).max(1);
             let position = (period_idx as f32 / last as f32).min(1.0)
                 * (render_config.period_colors.len() - 1) as f32;
             let index = position as usize;
@@ -1252,6 +1248,118 @@ mod tests {
     use super::*;
     use crate::model::{Bar, Timeframe, to_tpo_profiles};
     use chrono::{Duration, Utc};
+
+    #[test]
+    fn block_colours_follow_the_colour_settings_in_both_themes() {
+        use crate::model::ChartTypeParams;
+        let epoch = chrono::DateTime::UNIX_EPOCH;
+        let bars: Vec<_> = [(0, 103.0), (30, 101.0), (60, 100.0), (1440, 100.0)]
+            .into_iter()
+            .map(|(minute, high)| {
+                Bar::new(
+                    epoch + Duration::minutes(minute),
+                    100.0,
+                    high,
+                    100.0,
+                    high,
+                    1.0,
+                )
+            })
+            .collect();
+        let params = ChartTypeParams {
+            tpo_row_ticks: 1,
+            tpo_composites: vec![epoch..=epoch + Duration::days(1)],
+            ..Default::default()
+        };
+        let rgb = Color32::from_rgb;
+        type Row = (&'static str, ChartTypeParams, [[Color32; 8]; 2]);
+        let rows: [Row; 1] = [(
+            "default",
+            params,
+            [
+                [
+                    rgb(96, 25, 45),
+                    rgb(96, 25, 45),
+                    rgb(214, 56, 100),
+                    rgb(87, 191, 153),
+                    rgb(214, 56, 100),
+                    rgb(87, 191, 153),
+                    rgb(93, 36, 245),
+                    rgb(214, 56, 100),
+                ],
+                [
+                    rgb(237, 165, 185),
+                    rgb(237, 165, 185),
+                    rgb(214, 56, 100),
+                    rgb(75, 164, 131),
+                    rgb(214, 56, 100),
+                    rgb(75, 164, 131),
+                    rgb(93, 36, 245),
+                    rgb(214, 56, 100),
+                ],
+            ],
+        )];
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0));
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(90.0, 115.0),
+            0.0,
+            400.0,
+            false,
+        );
+        for (name, params, expected) in rows {
+            let config = TPOConfig {
+                show_poc: false,
+                show_initial_balance: false,
+                show_opening_range: false,
+                display_mode: TPODisplayMode::Blocks,
+                ..params.tpo_config(Some(1.0))
+            };
+            let profile = to_tpo_profiles(&bars, &config, &Timeframe::Min30.into()).remove(0);
+            // Counts 4,2,1,1 give POC 100 and a six-TPO value area covering 100 and 101.
+            assert_eq!(
+                (
+                    profile.poc_price,
+                    profile.value_area_low,
+                    profile.value_area_high
+                ),
+                (100.0, 100.0, 101.0)
+            );
+            for (theme, expected) in [crate::theme::Theme::dark(), crate::theme::Theme::light()]
+                .into_iter()
+                .zip(expected)
+            {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                ctx.begin_pass(egui::RawInput::default());
+                draw_session_profile(
+                    &ctx.layer_painter(egui::LayerId::background()),
+                    rect,
+                    &coords,
+                    &profile,
+                    &config,
+                    &TpoRenderConfig::default(),
+                    10.25,
+                    12.0,
+                    f32::INFINITY,
+                    false,
+                    Color32::GREEN,
+                    Color32::RED,
+                );
+                let mut output = ctx.end_pass();
+                output.textures_delta.clear();
+                let fills: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Rect(r) => Some(r.fill),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(fills, expected, "{name}, background {:?}", theme.chart.bg);
+            }
+        }
+    }
 
     #[test]
     fn poor_extremes_mark_only_rows_with_multiple_periods() {
