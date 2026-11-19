@@ -243,7 +243,7 @@ impl Drawing {
             DrawingToolType::Triangle => self.render_triangle(painter, color, stroke),
             DrawingToolType::Arc => self.render_arc(painter, color, stroke),
             DrawingToolType::Polyline => self.render_polyline(painter, color, stroke),
-            DrawingToolType::DoubleCurve => self.render_double_curve(painter),
+            DrawingToolType::DoubleCurve => self.render_double_curve(painter, rect),
 
             // Fibonacci (10 tools)
             DrawingToolType::FibonacciRetracement | DrawingToolType::FibonacciExtension => {
@@ -350,7 +350,7 @@ impl Drawing {
             DrawingToolType::Pitchfan => self.render_pitchfork(painter, rect),
             DrawingToolType::Sector => self.render_sector(painter),
             DrawingToolType::Path => self.render_path(painter),
-            DrawingToolType::Curve => self.render_curve(painter),
+            DrawingToolType::Curve => self.render_curve(painter, rect),
             DrawingToolType::PriceNote => self.render_price_note(painter, view),
             DrawingToolType::Table => self.render_table(painter),
             DrawingToolType::Comment => self.render_comment(painter),

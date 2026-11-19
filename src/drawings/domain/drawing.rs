@@ -273,10 +273,12 @@ pub struct Drawing {
     #[serde(default)]
     pub note_text_style: Option<NoteTextStyle>,
     /// Extend line to left edge; a trend line, ray, extended line, info line or trend angle
-    /// extends past its first anchor, whichever way it was drawn
+    /// extends past its first anchor, whichever way it was drawn, and a curve or double curve
+    /// continues along its tangent past its first anchor
     pub extend_left: bool,
     /// Extend line to right edge; a trend line, ray, extended line, info line or trend angle
-    /// extends past its second anchor, whichever way it was drawn
+    /// extends past its second anchor, whichever way it was drawn, and a curve or double curve
+    /// continues along its tangent past its last anchor
     pub extend_right: bool,
     /// Arrow style at start of line
     pub arrow_start_style: ArrowStyle,

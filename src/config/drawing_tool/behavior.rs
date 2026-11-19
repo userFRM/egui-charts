@@ -97,6 +97,8 @@ impl DrawingToolType {
             Self::TrendLine
                 | Self::Ray
                 | Self::ExtendedLine
+                | Self::Curve
+                | Self::DoubleCurve
                 | Self::Rect
                 | Self::InfoLine
                 | Self::TrendAngle

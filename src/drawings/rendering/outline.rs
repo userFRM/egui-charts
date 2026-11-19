@@ -207,14 +207,15 @@ impl Drawing {
             }
             T::Curve => {
                 let [p0, p1, p2] = self.curve_controls()?;
-                outline.lines = shapes::curve_points(p0, p1, p2, clip, 1.0)
+                outline.lines = self
+                    .extended_curve(shapes::quadratic_controls(p0, p1, p2), rect, clip, 1.0)
                     .windows(2)
                     .map(|w| [w[0], w[1]])
                     .collect();
             }
             T::DoubleCurve => {
                 outline.lines = self
-                    .double_curve_points(clip, 1.0)?
+                    .extended_curve(self.double_curve_controls()?, rect, clip, 1.0)
                     .windows(2)
                     .map(|w| [w[0], w[1]])
                     .collect();

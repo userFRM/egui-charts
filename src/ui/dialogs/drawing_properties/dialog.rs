@@ -720,6 +720,8 @@ mod tests {
                 (Tool::HorizontalLine, false, false, true, (true, true)),
                 (Tool::Rect, true, true, true, (true, true)),
                 (Tool::Brush, true, false, false, (true, true)),
+                (Tool::Curve, true, true, false, (true, true)),
+                (Tool::DoubleCurve, true, true, false, (true, true)),
                 (Tool::TrendLine, false, true, true, (true, true)),
                 (Tool::TrendAngle, false, true, true, (true, true)),
                 (Tool::TextLabel, false, false, true, (false, false)),
