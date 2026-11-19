@@ -99,10 +99,11 @@ Direct callers supply [`StudyData`](https://userfrm.github.io/egui-charts/docs/a
 invalid prices, negative volume or unordered timestamps leave accepted values unchanged.
 Pass `from = 0` whenever a requested history changes. A nonzero `from` reuses those histories
 and updates the changed chart bars; the chart supplies this invalidation automatically.
-An unavailable or stale interval leaves gaps. Include the earlier intrabar when its close is
-needed to classify a doji. Empty history clears the values, and 24-hour Volume returns to
-summing chart bars; missing parent intervals remain unavailable, while supplied zero volume
-produces zero. Accounts, feed selection, retrieval, subscriptions and retries belong to the
+An unavailable or stale interval leaves gaps. A doji at the previous intrabar's close takes that
+intrabar's side, so include the earlier intrabars back to the last one that closed away from
+its open or from the close before it. Empty history clears the values, and 24-hour Volume
+returns to summing chart bars; missing parent intervals remain unavailable, while supplied zero
+volume produces zero. Accounts, feed selection, retrieval, subscriptions and retries belong to the
 host. No split is inferred from a parent candle's direction or total volume.
 
 [`Indicator::table`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.table) exposes labelled percentages independently of plots, including Performance's
