@@ -399,9 +399,42 @@ pub fn render_live_tpo(
         ..Default::default()
     };
     let x = |i| idx_to_coord(i, chart_rect_min_x);
+    let extend = |profile: &TPOProfile, ends: [Option<Pos2>; 2]| {
+        let from = profile.letters.last().map_or(full_data.len(), |last| {
+            full_data.partition_point(|bar| bar.time < last.ts)
+        });
+        for (start, above) in ends.into_iter().zip([true, false]) {
+            let Some(start) = start else { continue };
+            let price = if above {
+                profile.profile_high
+            } else {
+                profile.profile_low
+            };
+            let mut end = price_rect.right();
+            for (i, bar) in full_data.iter().enumerate().skip(from) {
+                let bar_x = x(i);
+                if bar_x > price_rect.right() {
+                    break;
+                }
+                if (above && bar.high > price) || (!above && bar.low < price) {
+                    end = bar_x;
+                    break;
+                }
+            }
+            if end > start.x {
+                painter.line_segment(
+                    [start, Pos2::new(end, start.y)],
+                    Stroke::new(
+                        DESIGN_TOKENS.stroke.light,
+                        painter.ctx().active_theme().chart.axis_text,
+                    ),
+                );
+            }
+        }
+    };
     visit_profiles(
         full_data,
-        visible,
+        visible.clone(),
         revision,
         (base_config, instrument_tick),
         clock,
@@ -422,40 +455,67 @@ pub fn render_live_tpo(
                 bearish_color,
             );
             if config.extend_poor_extremes && room.is_finite() {
-                let from = profile.letters.last().map_or(full_data.len(), |last| {
-                    full_data.partition_point(|bar| bar.time < last.ts)
-                });
-                for (start, above) in ends.into_iter().zip([true, false]) {
-                    let Some(start) = start else { continue };
-                    let price = if above {
-                        profile.profile_high
-                    } else {
-                        profile.profile_low
-                    };
-                    let mut end = price_rect.right();
-                    for (i, bar) in full_data.iter().enumerate().skip(from) {
-                        let bar_x = x(i);
-                        if bar_x > price_rect.right() {
-                            break;
-                        }
-                        if (above && bar.high > price) || (!above && bar.low < price) {
-                            end = bar_x;
-                            break;
-                        }
-                    }
-                    if end > start.x {
-                        painter.line_segment(
-                            [start, Pos2::new(end, start.y)],
-                            Stroke::new(
-                                DESIGN_TOKENS.stroke.light,
-                                painter.ctx().active_theme().chart.axis_text,
-                            ),
-                        );
-                    }
-                }
+                extend(profile, ends);
             }
         },
     );
+    if !base_config.extend_poor_extremes
+        || (!base_config.show_poor_high && !base_config.show_poor_low)
+        || base_config.latest_session_only
+        || visible.start == 0
+        || visible.is_empty()
+        || visible.end > full_data.len()
+    {
+        return;
+    }
+    let Some(config) = row_config(base_config, instrument_tick, price_map) else {
+        return;
+    };
+    let sessions = clock.sessions();
+    let history = whole_sessions(full_data, 0..visible.start, &sessions, &config);
+    let units = cached_profiles(
+        &full_data[history.clone()],
+        revision,
+        history.start,
+        &config,
+        clock,
+        &sessions,
+    );
+    // A completed profile can leave the plot while its unrepaired extremes still cross it.
+    // Keep these lines separate from placement and fitting, which use visible profiles only.
+    for (first, len, profiles) in units.iter() {
+        for (i, profile) in profiles.iter().enumerate() {
+            let end = profiles.get(i + 1).map_or(first + len, |next| {
+                full_data.partition_point(|bar| bar.time < next.session_date)
+            });
+            if end == full_data.len() || x(end) > price_rect.left() {
+                continue;
+            }
+            let mark = |shown: bool, poor: bool, price| {
+                let y = price_map.price_to_y(price);
+                (shown
+                    && poor
+                    && y.is_finite()
+                    && (price_rect.top()..=price_rect.bottom()).contains(&y))
+                .then(|| Pos2::new(price_rect.left(), y))
+            };
+            extend(
+                profile,
+                [
+                    mark(
+                        config.show_poor_high,
+                        profile.has_poor_high,
+                        profile.profile_high,
+                    ),
+                    mark(
+                        config.show_poor_low,
+                        profile.has_poor_low,
+                        profile.profile_low,
+                    ),
+                ],
+            );
+        }
+    }
 }
 
 /// Visits the renderer's placed distributions, for painting and price fitting.
@@ -2001,12 +2061,14 @@ mod tests {
                 )
             })
             .collect();
-        for (extend, high, low, expected) in [
-            (false, true, true, vec![]),
+        for (extend, high, low, start, latest, expected) in [
+            (false, true, true, 0, false, vec![]),
             (
                 true,
                 true,
                 true,
+                0,
+                false,
                 vec![
                     (104.0, 270.0),
                     (100.0, 400.0),
@@ -2014,23 +2076,63 @@ mod tests {
                     (101.0, 400.0),
                 ],
             ),
-            (true, true, false, vec![(104.0, 270.0), (103.0, 270.0)]),
+            (
+                true,
+                true,
+                false,
+                0,
+                false,
+                vec![(104.0, 270.0), (103.0, 270.0)],
+            ),
+            // The first profile is offscreen; its high still ends at bar 9 and its low at the edge.
+            (
+                true,
+                true,
+                true,
+                4,
+                false,
+                vec![
+                    (103.0, 150.0),
+                    (101.0, 400.0),
+                    (104.0, 150.0),
+                    (100.0, 400.0),
+                ],
+            ),
+            (
+                true,
+                true,
+                true,
+                8,
+                false,
+                vec![(104.0, 30.0), (100.0, 400.0), (103.0, 30.0), (101.0, 400.0)],
+            ),
+            // Both highs were repaired before this crop; the lows remain unrepaired.
+            (
+                true,
+                true,
+                true,
+                10,
+                false,
+                vec![(100.0, 400.0), (101.0, 400.0)],
+            ),
+            (true, true, true, 8, true, vec![]),
         ] {
             let params: crate::model::ChartTypeParams = serde_json::from_value(serde_json::json!({"tpo_row_ticks":1,"tpo_extend_poor":extend,"tpo_poor_high":high,"tpo_poor_low":low})).unwrap();
-            let config = params.tpo_config(Some(1.0));
+            let mut config = params.tpo_config(Some(1.0));
+            config.latest_session_only = latest;
             let ctx = egui::Context::default();
             ctx.begin_pass(egui::RawInput::default());
             render_live_tpo(
                 &ctx.layer_painter(egui::LayerId::background()),
                 rect,
                 &bars,
-                0..bars.len(),
+                start..bars.len(),
                 0,
                 &map,
                 &config,
                 Some(1.0),
                 &Timeframe::Min30.into(),
-                |i, _| i as f32 * 30.0,
+                |i, _| (i as f32 - start as f32) * 30.0,
                 0.0,
                 Color32::GREEN,
                 Color32::RED,
@@ -2055,7 +2157,10 @@ mod tests {
                 .into_iter()
                 .map(|(price, end)| (map.price_to_y(price), end))
                 .collect();
-            assert_eq!(lines, expected, "extend {extend}, high {high}, low {low}");
+            assert_eq!(
+                lines, expected,
+                "extend {extend}, high {high}, low {low}, start {start}, latest {latest}"
+            );
         }
     }
     #[test]
