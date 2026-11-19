@@ -238,6 +238,7 @@ impl Chart {
         &mut self,
         drawings: Vec<Drawing>,
     ) -> Vec<(usize, &'static str)> {
+        self.flush_drawing_events();
         let mut manager = DrawingManager::new();
         manager.set_sync_enabled(self.drawings.sync_enabled);
         manager.registry = self.drawings.registry.clone();
@@ -256,6 +257,8 @@ impl Chart {
             .enumerate()
             .filter_map(|(at, drawing)| Some((at, manager.add_synced_drawing(drawing).err()?)))
             .collect();
+        manager.events.clear();
+        manager.events_dropped = 0;
         self.drawings = manager;
         self.history.clear();
         refused
