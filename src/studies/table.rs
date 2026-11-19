@@ -33,6 +33,15 @@ pub struct StudyTable {
     pub position: TablePosition,
     /// Size of the table's text.
     pub text_size: TableTextSize,
+    /// Width of the table as a share of its pane's width, or `None` to fit its columns. Columns
+    /// stretch to fill a wider table and scroll in a narrower one. A share of 0 or less, or NaN,
+    /// fits; the table never leaves the pane's margins.
+    pub width: Option<f32>,
+    /// Height of the table as a share of its pane's height, less any tables stacked below it, or
+    /// `None` to fit its rows in at most half that height. Rows stretch to fill a taller table and
+    /// scroll in a shorter one. A share of 0 or less, or NaN, fits; the table never leaves the
+    /// pane's margins.
+    pub height: Option<f32>,
 }
 
 /// Where a study table sits in its pane. The `Debug` names are the choices study inputs list. The
@@ -157,7 +166,7 @@ pub(crate) fn paint(
     let theme = ui.active_theme();
     let font = FontId::proportional(table.text_size.points());
     // Rows are twice the font size high: 22 points at the normal size.
-    let row_height = 2.0 * table.text_size.points();
+    let mut row_height = 2.0 * table.text_size.points();
     let text = |cell: &StudyCell| match cell {
         StudyCell::Text(text) => text.clone(),
         StudyCell::Percent(Some(value)) if value.is_finite() => format!("{value:+.2}%"),
@@ -185,8 +194,8 @@ pub(crate) fn paint(
             );
         }
     }
-    let width = widths.iter().sum::<f32>();
-    let height = row_height * (table.rows.len() + 2) as f32;
+    let mut width = widths.iter().sum::<f32>();
+    let mut height = row_height * (table.rows.len() + 2) as f32;
     let mut available = rect.shrink(8.0);
     available.min.y += 24.0;
     if !available.is_positive() || rect.height() < 44.0 {
@@ -197,10 +206,33 @@ pub(crate) fn paint(
         .size()
         .x
         + 16.0;
-    let size = vec2(
-        width.max(title_width).min(available.width()),
-        height.min(available.height()).min(rect.height() * 0.5),
+    // A share of 0 or less, or NaN, fits the cells.
+    let shares = (
+        table.width.filter(|share| *share > 0.0),
+        table.height.filter(|share| *share > 0.0),
     );
+    let size = vec2(
+        shares
+            .0
+            .map_or(width.max(title_width), |share| rect.width() * share)
+            .min(available.width()),
+        shares
+            .1
+            .map_or(height.min(rect.height() * 0.5), |share| {
+                rect.height() * share
+            })
+            .min(available.height()),
+    );
+    // Cells stretch to fill a table sized larger than they are.
+    if shares.0.is_some() && width < size.x {
+        let scale = size.x / width;
+        widths.iter_mut().for_each(|column| *column *= scale);
+        width = size.x;
+    }
+    if shares.1.is_some() && height < size.y {
+        row_height *= size.y / height;
+        height = size.y;
+    }
     let (across, down) = match table.position {
         TablePosition::TopLeft => (0.0, 0.0),
         TablePosition::TopCenter => (0.5, 0.0),
@@ -278,7 +310,7 @@ pub(crate) fn paint(
                     };
                     let color = if let Some(fill) = fill {
                         painter.rect_filled(cell_rect, 0.0, fill);
-                        if row_index > 0 {
+                        if styled && row_index > 0 {
                             painter.rect_stroke(
                                 cell_rect,
                                 0.0,
@@ -287,7 +319,12 @@ pub(crate) fn paint(
                             );
                         }
                         let text = table.text_color.unwrap_or(egui::Color32::WHITE);
-                        crate::theme::readable_color(text, egui::Color32::BLACK, &[fill], 4.5)
+                        crate::theme::readable_color(
+                            text,
+                            egui::Color32::BLACK,
+                            &[theme.ui.panel_bg_floating.blend(fill)],
+                            4.5,
+                        )
                     } else {
                         match cell {
                             StudyCell::Percent(Some(value)) if value.is_finite() => {
@@ -468,6 +505,111 @@ mod tests {
                     }
                     output.drop_without_applying_deltas();
                 }
+            }
+        }
+    }
+
+    /// A width or height share sizes the table to that share of its pane, within the pane's
+    /// margins, its cells stretched to fill it, while a NaN share fits the cells. Text over a
+    /// translucent cell background reads against the colour shown, and a table without a header
+    /// colour draws no white grid round its cells.
+    #[test]
+    fn sized_tables_take_their_share_of_the_pane() {
+        use egui::{Color32, Pos2, RawInput, Rect, Shape, Stroke, pos2, vec2};
+
+        let faint = crate::studies::palette::UP.gamma_multiply(0.1);
+        let sized = StudyTable {
+            title: "Sized".into(),
+            columns: vec!["A".into(), "B".into()],
+            rows: vec![vec![
+                StudyCell::Text("faint".into()),
+                StudyCell::Text("last".into()),
+            ]],
+            cell_colors: vec![vec![faint, Color32::GOLD]],
+            ..Default::default()
+        };
+        // An 800 by 300 pane leaves (8, 32) to (792, 292) inside its 8-point margin and below its
+        // 24-point legend row; three 22-point rows (title, headings, one row) fit in 66 points.
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 300.0));
+        for (_, theme) in crate::theme::presets() {
+            for (position, width, height, [left, top, right, bottom]) in [
+                (
+                    TablePosition::BottomRight,
+                    Some(0.5),
+                    Some(0.5),
+                    [392.0, 142.0, 792.0, 292.0],
+                ),
+                (
+                    TablePosition::BottomLeft,
+                    Some(0.25),
+                    Some(0.25),
+                    [8.0, 217.0, 208.0, 292.0],
+                ),
+                // Twice the pane's width stays within its margins; NaN fits the rows.
+                (
+                    TablePosition::BottomCenter,
+                    Some(2.0),
+                    Some(f32::NAN),
+                    [8.0, 226.0, 792.0, 292.0],
+                ),
+            ] {
+                let table = StudyTable {
+                    position,
+                    width,
+                    height,
+                    ..sized.clone()
+                };
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut bounds = Rect::NOTHING;
+                let mut shapes = Vec::new();
+                for time in [0.0, 1.0 / 60.0] {
+                    let output = ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(rect),
+                            time: Some(time),
+                            ..Default::default()
+                        },
+                        |ui| bounds = paint(ui, rect, &table, ui.scope_id().with("table")),
+                    );
+                    shapes = output
+                        .shapes
+                        .iter()
+                        .map(|clipped| clipped.shape.clone())
+                        .collect();
+                    output.drop_without_applying_deltas();
+                }
+                assert_eq!(
+                    bounds,
+                    Rect::from_min_max(pos2(left, top), pos2(right, bottom)),
+                    "{position:?}"
+                );
+                let last = shapes.iter().find_map(|shape| match shape {
+                    Shape::Rect(cell) if cell.fill == Color32::GOLD => Some(cell.rect),
+                    _ => None,
+                });
+                let last = last.expect("last cell painted");
+                assert!(
+                    (last.max - bounds.max).length() < 0.5,
+                    "{position:?}: the last cell {last:?} ends inside {bounds:?}"
+                );
+                let text = shapes.iter().find_map(|shape| match shape {
+                    Shape::Text(text) if text.galley.text() == "faint" => {
+                        Some(text.galley.job.sections[0].format.color)
+                    }
+                    _ => None,
+                });
+                let text = text.expect("text over the faint fill");
+                let shown = theme.ui.panel_bg_floating.blend(faint);
+                assert!(
+                    crate::theme::contrast(text, shown) >= 4.5,
+                    "{position:?}: {text:?} over {shown:?}"
+                );
+                assert!(
+                    !shapes.iter().any(|shape| matches!(shape,
+                        Shape::Rect(cell) if cell.stroke == Stroke::new(1.0, Color32::WHITE))),
+                    "a white grid without a header colour"
+                );
             }
         }
     }
