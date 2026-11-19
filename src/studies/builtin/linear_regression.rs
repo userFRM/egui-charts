@@ -19,7 +19,7 @@ pub struct LinearRegression {
 }
 
 impl LinearRegression {
-    /// Create with a lookback of `period` bars, clamped to at least 1.
+    /// Create with a lookback of `period` bars, clamped to at least 1. A period of 1 reproduces the closes.
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
@@ -74,7 +74,12 @@ impl LinearRegression {
                     sum_x2 += x * x;
                 }
 
-                let slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x * sum_x);
+                // A one-bar window has no slope: its fitted line is flat through the bar.
+                let slope = if self.period > 1 {
+                    (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x * sum_x)
+                } else {
+                    0.0
+                };
                 let intercept = (sum_y - slope * sum_x) / n;
 
                 // Value at the end of the regression line (current bar)
@@ -304,5 +309,22 @@ impl Indicator for LinearRegressionSlope {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!("Slope({})", self.period)]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::studies::test_support::make_bar;
+
+    /// The Period input accepts 1, where the least-squares denominator is zero; a one-bar fit is the bar.
+    #[test]
+    fn a_one_bar_regression_equals_its_closes() {
+        let closes = [10.0, 12.5, -3.25, 0.1, 7e15];
+        let data: Vec<Bar> = closes.into_iter().map(make_bar).collect();
+        let mut curve = LinearRegression::new(1);
+        curve.calculate(&data);
+        let got: Vec<_> = (0..data.len()).map(|i| curve.values().value(0, i)).collect();
+        assert_eq!(got, closes.map(Some));
     }
 }
