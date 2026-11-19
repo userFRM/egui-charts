@@ -806,6 +806,7 @@ impl StudyTemplate {
             "Vol Profile VR"
                 | "Vol Profile FR"
                 | "Vol Profile Session"
+                | "Vol Profile Session HD"
                 | "Vol Profile Periodic"
                 | "Vol Profile Anchored"
                 | "Vol Profile Auto Anchored"
@@ -1447,6 +1448,21 @@ mod tests {
                 Toggle(false)
             );
         }
+
+        let hd: StudyTemplate = serde_json::from_str(r#"{"name":"Vol Profile Session HD","inputs":[["sessions",{"Choice":3}],["session_start",{"Length":570}],["session_end",{"Length":960}],["show_values",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileSessionHd.html","plots":[{"color":[255,152,0,255],"width":1.0,"pattern":"Solid","plot_type":"StepLine","visible":false},{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"StepLine","visible":false},{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"StepLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        let study = hd.create().unwrap();
+        assert_eq!(study.name(), "Vol Profile Session HD");
+        assert!(!study.inputs().iter().any(|input| input.id == "row_count"));
+        let template = StudyTemplate::from_study(study.as_ref());
+        let restored =
+            serde_json::from_str::<StudyTemplate>(&serde_json::to_string(&template).unwrap())
+                .unwrap()
+                .create()
+                .unwrap();
+        assert_eq!(
+            serde_json::to_value(StudyTemplate::from_study(restored.as_ref())).unwrap(),
+            serde_json::to_value(template).unwrap()
+        );
 
         // A chart save of an anchored profile from before tick heights and width were inputs
         // keeps its settings and inputs and takes the defaults of both.

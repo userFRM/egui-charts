@@ -368,7 +368,7 @@ pub use volume::{Volume, VolumeAverage, VolumeColorRule};
 pub(crate) use volume_profile::time_text;
 pub use volume_profile::{
     ProfileInput, VolProfileAnchored, VolProfileAutoAnchored, VolProfileFixed, VolProfilePeriodic,
-    VolProfileSession, VolProfileVisible,
+    VolProfileSession, VolProfileSessionHd, VolProfileVisible,
 };
 pub use vwap::{VolumeWeightedAvgPrice, VwapAnchor};
 pub use vwap_auto_anchored::{AutoAnchor, VwapAutoAnchored};

@@ -72,6 +72,7 @@ enum Kind {
 #[derive(Clone, Debug)]
 struct ProfileStudy {
     kind: Kind,
+    hd: bool,
     rows: usize,
     value_area: f64,
     row_size: f64,
@@ -295,6 +296,7 @@ impl ProfileStudy {
     fn new(kind: Kind, rows: usize) -> Self {
         Self {
             kind,
+            hd: false,
             rows: rows.max(1),
             value_area: 0.7,
             row_size: 0.0,
@@ -657,6 +659,14 @@ impl ProfileStudy {
             )
             .in_style_tab(),
         );
+        if self.hd {
+            inputs.retain(|input| {
+                !matches!(
+                    input.id.as_str(),
+                    "row_count" | "row_size" | "row_ticks" | "whole_tick_rows" | "adaptive_rows"
+                )
+            });
+        }
         inputs
     }
 
@@ -1736,19 +1746,20 @@ fn restarted(
 }
 
 macro_rules! profile_study {
-    ($ty:ident, $kind:ident, $name:literal, $doc:literal) => {
+    ($ty:ident, $kind:ident, $name:literal, $doc:literal, $hd:literal) => {
         #[doc = $doc]
         #[derive(Clone, Debug)]
         pub struct $ty {
             profile: ProfileStudy,
         }
         impl $ty {
-            /// Create a profile with this many equal price rows, at least one.
+            /// Create a profile targeting this many price rows, at least one.
             /// Counts above 1,000 produce no profile; settings accept 1 to 1,000.
             pub fn new(row_count: usize) -> Self {
-                Self {
-                    profile: ProfileStudy::new(Kind::$kind, row_count),
-                }
+                let mut profile = ProfileStudy::new(Kind::$kind, row_count);
+                profile.hd = $hd;
+                profile.adaptive = $hd;
+                Self { profile }
             }
 
             /// What each profile in the `visible` chart bars was built from, with the share of
@@ -1907,37 +1918,51 @@ profile_study!(
     VolProfileVisible,
     Visible,
     "Vol Profile VR",
-    "Volume distributed over the bars currently visible in the chart."
+    "Volume distributed over the bars currently visible in the chart.",
+    false
 );
 profile_study!(
     VolProfileFixed,
     Fixed,
     "Vol Profile FR",
-    "Volume between inclusive saved start and end times; all loaded bars until times are chosen."
+    "Volume between inclusive saved start and end times; all loaded bars until times are chosen.",
+    false
 );
 profile_study!(
     VolProfileSession,
     Session,
     "Vol Profile Session",
-    "One volume profile per exchange trading day, chosen session hours or segment of the day, including the whole session of visible bars."
+    "One volume profile per exchange trading day, chosen session hours or segment of the day, including the whole session of visible bars.",
+    false
 );
 profile_study!(
     VolProfilePeriodic,
     Periodic,
     "Vol Profile Periodic",
-    "One volume profile per chosen number of calendar periods, bars, minutes or hours, one week by default."
+    "One volume profile per chosen number of calendar periods, bars, minutes or hours, one week by default.",
+    false
 );
 profile_study!(
     VolProfileAnchored,
     Anchored,
     "Vol Profile Anchored",
-    "Volume from a saved start time to the latest bar; all loaded bars until an anchor is chosen."
+    "Volume from a saved start time to the latest bar; all loaded bars until an anchor is chosen.",
+    false
 );
 profile_study!(
     VolProfileAutoAnchored,
     Auto,
     "Vol Profile Auto Anchored",
-    "Volume from the latest calendar anchor, an extreme in the chosen lookback, or the latest earnings, dividend or split the chart holds."
+    "Volume from the latest calendar anchor, an extreme in the chosen lookback, or the latest earnings, dividend or split the chart holds.",
+    false
+);
+
+profile_study!(
+    VolProfileSessionHd,
+    Session,
+    "Vol Profile Session HD",
+    "Volume profiles per session with rows that follow the zoom.",
+    true
 );
 
 impl VolProfileFixed {
@@ -2650,6 +2675,39 @@ mod tests {
                 assert_eq!(plot.profile.volume(), volume);
             }
         }
+        let mut hd = crate::studies::IndicatorFactory::new()
+            .create("Vol Profile Session HD")
+            .expect("HD has its own catalogue entry");
+        for id in [
+            "row_count",
+            "row_size",
+            "row_ticks",
+            "whole_tick_rows",
+            "adaptive_rows",
+        ] {
+            assert!(!hd.inputs().iter().any(|input| input.id == id));
+        }
+        assert!(hd.set_input("row_count", InputValue::Length(4)).is_err());
+        hd.set_instrument(Some(&Instrument::new("SYNTH").with_tick_size(0.25)));
+        hd.calculate(&bars);
+        for (view, height, expected) in [
+            (
+                0..3,
+                0.5,
+                vec![
+                    [vec![5.0; 20], vec![0.0]].concat(),
+                    vec![20.0, 20.0, 20.0, 20.0, 0.0],
+                ],
+            ),
+            (1..3, 0.25, vec![[vec![10.0; 8], vec![0.0]].concat()]),
+        ] {
+            let profiles = hd.volume_profiles(view);
+            assert_eq!(profiles.len(), expected.len());
+            for (profile, expected) in profiles.iter().zip(expected) {
+                assert_eq!(profile.profile.row_height(), height);
+                assert_eq!(profile.profile.volume(), expected);
+            }
+        }
         let mut live = bars.to_vec();
         live.push(Bar::new(
             at("2026-03-03T11:00:00Z"),
@@ -3281,7 +3339,10 @@ mod tests {
         let year: Vec<_> = (0..7)
             .map(|day| bar(at("2025-12-29T00:00:00Z") + TimeDelta::days(day)))
             .collect();
-        for (restart, expected) in [(None, vec![0..3, 3..7]), (Some(false), std::iter::once(0..7).collect())] {
+        for (restart, expected) in [
+            (None, vec![0..3, 3..7]),
+            (Some(false), std::iter::once(0..7).collect()),
+        ] {
             let mut study = VolProfilePeriodic::default();
             study.set_timeframe(Timeframe::Day1);
             if let Some(restart) = restart {

@@ -2057,7 +2057,11 @@ mod tests {
                 &["Vol Profile Session"],
                 &["Vol Profile Periodic"],
             ),
-            ("Session Volume Profile HD", &["Vol Profile Session"], &[]),
+            (
+                "Session Volume Profile HD",
+                &["Vol Profile Session HD"],
+                &[],
+            ),
             (
                 "Periodic Volume Profile",
                 &["Vol Profile Periodic"],
