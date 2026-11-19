@@ -4,24 +4,32 @@ use super::{SessionBreak, SessionBreakType, SessionProvider, local_instant, loca
 use crate::model::{Bar, OverrideWindow, Session, Timeframe, TimezoneId};
 use chrono::{DateTime, Datelike, Days, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 
+/// The hours a window belongs to, by the list of [`Session`] that holds it. Where windows
+/// overlap, the earlier kind holds the instant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum WindowKind {
+    /// [`Session::windows`].
+    Regular,
+    /// [`Session::extended_windows`]: the pre-market and post-market.
+    Extended,
+    /// [`Session::overnight_windows`].
+    Overnight,
+}
+
 /// A window that closes on one trading date.
 struct Hours {
     open: NaiveTime,
     close: NaiveTime,
-    extended: bool,
+    kind: WindowKind,
 }
 
 impl Hours {
-    fn new(open: NaiveTime, close: NaiveTime, extended: bool) -> Self {
-        Self {
-            open,
-            close,
-            extended,
-        }
+    fn new(open: NaiveTime, close: NaiveTime, kind: WindowKind) -> Self {
+        Self { open, close, kind }
     }
 
     /// Whether the window opens on the day before it closes.
-    fn overnight(&self) -> bool {
+    fn spans_midnight(&self) -> bool {
         self.close <= self.open && self.open != NaiveTime::MIN
     }
 }
@@ -41,6 +49,8 @@ pub(crate) enum MarketSession {
     PreMarket,
     /// Inside extended hours that no regular hours of the same trading date follow.
     PostMarket,
+    /// Inside overnight hours, outside regular and extended hours.
+    Overnight,
     /// Outside trading hours, including gaps between windows, weekends and holidays.
     Closed,
 }
@@ -76,6 +86,12 @@ impl ExchangeSessionProvider {
             calendar_zone: None,
             ..Self::new(TimezoneId::utc(), session)
         }
+    }
+
+    /// The trading hours, `None` for calendar days.
+    #[cfg(feature = "studies")]
+    pub(crate) fn session(&self) -> Option<&Session> {
+        self.session.as_ref()
     }
 
     /// The calendar that aligned daily and longer bars; `None` uses the system's local zone.
@@ -164,14 +180,24 @@ impl ExchangeSessionProvider {
         }
     }
 
-    /// Whether `time` lies in extended hours and outside regular hours.
+    /// Whether `time` lies in extended or overnight hours, outside regular hours.
     pub fn is_extended(&self, time: DateTime<Utc>) -> bool {
-        let closes = self.window_closes(time, true);
-        closes.iter().any(|(extended, ..)| *extended)
-            && !closes.iter().any(|(extended, ..)| !extended)
+        matches!(
+            self.window_kind(time),
+            Some(WindowKind::Extended | WindowKind::Overnight)
+        )
     }
 
-    /// Whether the exchange is open, optionally including extended windows.
+    /// The kind holding `time`, with regular before extended before overnight at overlaps.
+    /// Without windows, or outside all windows, returns `None`.
+    pub(crate) fn window_kind(&self, time: DateTime<Utc>) -> Option<WindowKind> {
+        self.window_closes(time, true)
+            .iter()
+            .map(|&(kind, ..)| kind)
+            .min()
+    }
+
+    /// Whether the exchange is open, optionally including extended and overnight windows.
     pub fn is_open(&self, time: DateTime<Utc>, extended_hours: bool) -> bool {
         let Some(session) = &self.session else {
             return true;
@@ -221,9 +247,13 @@ impl ExchangeSessionProvider {
             return Some(MarketSession::Open);
         }
         let windows = self.window_closes(time, true);
-        let pre = windows.iter().any(|&(_, date, close)| {
+        let extended: Vec<_> = windows
+            .iter()
+            .filter(|(kind, ..)| *kind == WindowKind::Extended)
+            .collect();
+        let pre = extended.iter().any(|&&(_, date, close)| {
             self.hours_on(date).iter().any(|hours| {
-                !hours.extended
+                hours.kind == WindowKind::Regular
                     && self
                         .window_open(date, hours)
                         .is_some_and(|open| open >= close)
@@ -231,16 +261,18 @@ impl ExchangeSessionProvider {
         });
         Some(if pre {
             MarketSession::PreMarket
+        } else if !extended.is_empty() {
+            MarketSession::PostMarket
         } else if windows.is_empty() {
             MarketSession::Closed
         } else {
-            MarketSession::PostMarket
+            MarketSession::Overnight
         })
     }
 
     /// Closing instant of the active trading window. Outside trading hours, including holidays,
     /// returns `None`. Continuous sessions end at the next local midnight.
-    /// Extended windows participate only when requested.
+    /// Extended and overnight windows participate only when requested.
     pub fn session_close(&self, time: DateTime<Utc>, extended: bool) -> Option<DateTime<Utc>> {
         let session = self.session.as_ref()?;
         let date = self.wall_time(time).date();
@@ -272,7 +304,8 @@ impl ExchangeSessionProvider {
         let session = self.session.as_ref()?;
         if session.windows.is_empty()
             && session.overrides.is_empty()
-            && (!extended || session.extended_windows.is_empty())
+            && (!extended
+                || (session.extended_windows.is_empty() && session.overnight_windows.is_empty()))
         {
             return None;
         }
@@ -298,7 +331,7 @@ impl ExchangeSessionProvider {
             let close = self
                 .hours_on(date)
                 .iter()
-                .filter(|hours| extended || !hours.extended)
+                .filter(|hours| extended || hours.kind == WindowKind::Regular)
                 .filter_map(|hours| self.window_span(date, hours))
                 .map(|(_, close)| close)
                 .max();
@@ -310,45 +343,58 @@ impl ExchangeSessionProvider {
         None
     }
 
-    /// The windows that close on `date`, tagged extended or regular: those of its override, else
+    /// The windows that close on `date`, with their kind: those of its override, else
     /// none on a holiday, else the weekly windows of its weekday.
     fn hours_on(&self, date: NaiveDate) -> Vec<Hours> {
         let Some(session) = &self.session else {
             return Vec::new();
         };
         if let Some(day) = session.overrides.iter().find(|day| day.date == date) {
-            let tag = |extended| move |w: &OverrideWindow| Hours::new(w.open, w.close, extended);
+            let tag = |kind| move |w: &OverrideWindow| Hours::new(w.open, w.close, kind);
             return day
                 .windows
                 .iter()
-                .map(tag(false))
-                .chain(day.extended_windows.iter().map(tag(true)))
+                .map(tag(WindowKind::Regular))
+                .chain(day.extended_windows.iter().map(tag(WindowKind::Extended)))
+                .chain(day.overnight_windows.iter().map(tag(WindowKind::Overnight)))
                 .collect();
         }
         if session.holidays.contains(&date) {
             return Vec::new();
         }
-        let tag = |extended| {
+        let tag = |kind| {
             move |w: &crate::model::SessionWindow| {
                 w.days
                     .contains(&date.weekday())
-                    .then(|| Hours::new(w.open, w.close, extended))
+                    .then(|| Hours::new(w.open, w.close, kind))
             }
         };
         session
             .windows
             .iter()
-            .filter_map(tag(false))
-            .chain(session.extended_windows.iter().filter_map(tag(true)))
+            .filter_map(tag(WindowKind::Regular))
+            .chain(
+                session
+                    .extended_windows
+                    .iter()
+                    .filter_map(tag(WindowKind::Extended)),
+            )
+            .chain(
+                session
+                    .overnight_windows
+                    .iter()
+                    .filter_map(tag(WindowKind::Overnight)),
+            )
             .collect()
     }
 
     /// Whether `date` has no windows and is open all day unless it is a holiday: a session
-    /// without weekly windows and without an override for the date.
+    /// without regular, extended or overnight weekly windows and without an override for the date.
     fn continuous_on(&self, date: NaiveDate) -> bool {
         self.session.as_ref().is_some_and(|session| {
             session.windows.is_empty()
                 && session.extended_windows.is_empty()
+                && session.overnight_windows.is_empty()
                 && !session.overrides.iter().any(|day| day.date == date)
         })
     }
@@ -366,7 +412,7 @@ impl ExchangeSessionProvider {
 
     /// The opening instant of a window that closes on `close_date`.
     fn window_open(&self, close_date: NaiveDate, hours: &Hours) -> Option<DateTime<Utc>> {
-        let open_date = if hours.overnight() {
+        let open_date = if hours.spans_midnight() {
             close_date.pred_opt()?
         } else {
             close_date
@@ -380,7 +426,7 @@ impl ExchangeSessionProvider {
         close_date: NaiveDate,
         hours: &Hours,
     ) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
-        let end_date = if hours.open == hours.close && !hours.overnight() {
+        let end_date = if hours.open == hours.close && !hours.spans_midnight() {
             close_date.succ_opt()?
         } else {
             close_date
@@ -390,14 +436,13 @@ impl ExchangeSessionProvider {
         Some((self.window_open(close_date, hours)?, close))
     }
 
-    /// The closing instants of the windows containing `time`, each tagged extended or regular
-    /// and with the date it closes on.
-    /// Extended windows are left out unless `extended`.
+    /// The closing instants of the windows containing `time`, each with its kind
+    /// and closing date. Extended and overnight windows are left out unless `extended`.
     fn window_closes(
         &self,
         time: DateTime<Utc>,
         extended: bool,
-    ) -> Vec<(bool, NaiveDate, DateTime<Utc>)> {
+    ) -> Vec<(WindowKind, NaiveDate, DateTime<Utc>)> {
         let date = self.wall_time(time).date();
         let mut closes = Vec::new();
         for (close_date, next_day) in [(Some(date), false), (date.succ_opt(), true)] {
@@ -405,14 +450,16 @@ impl ExchangeSessionProvider {
                 continue;
             };
             for hours in self.hours_on(close_date) {
-                if (hours.extended && !extended) || (next_day && !hours.overnight()) {
+                if (hours.kind != WindowKind::Regular && !extended)
+                    || (next_day && !hours.spans_midnight())
+                {
                     continue;
                 }
                 if let Some((open, close)) = self.window_span(close_date, &hours)
                     && time >= open
                     && time < close
                 {
-                    closes.push((hours.extended, close_date, close));
+                    closes.push((hours.kind, close_date, close));
                 }
             }
         }
@@ -471,7 +518,13 @@ impl ExchangeSessionProvider {
                 .checked_sub_days(Days::new(9))
                 .unwrap_or(NaiveDate::MIN);
             if let Some(session) = &self.session {
-                let windows = || session.windows.iter().chain(&session.extended_windows);
+                let windows = || {
+                    session
+                        .windows
+                        .iter()
+                        .chain(&session.extended_windows)
+                        .chain(&session.overnight_windows)
+                };
                 let continuous = windows().next().is_none();
                 let scheduled = windows().any(|window| !window.days.is_empty());
                 if continuous || scheduled {
@@ -534,8 +587,8 @@ impl ExchangeSessionProvider {
     }
 
     /// The instant the session holding the intraday bar at `time` opened: the open of its trading
-    /// day, or with `split` of the day's stretch of extended or regular hours holding it, which
-    /// starts where the other kind of hours last closed. `None` without trading hours, on daily
+    /// day, or with `split` of the day's stretch of regular, extended or overnight hours holding
+    /// it, starting where another kind of hours last closed. `None` without trading hours, on daily
     /// and longer bars, whose profiles span several days, and with `split` for a bar outside the
     /// hours after the other kind of hours closed.
     pub(crate) fn session_open(&self, time: DateTime<Utc>, split: bool) -> Option<DateTime<Utc>> {
@@ -551,11 +604,11 @@ impl ExchangeSessionProvider {
         if !split || self.continuous_on(date) {
             return Some(open);
         }
-        let extended = self.is_extended(time);
+        let kind = self.window_kind(time).unwrap_or(WindowKind::Regular);
         let hours = self.hours_on(date);
         let spans = hours
             .iter()
-            .filter_map(|hours| Some((hours.extended == extended, self.window_span(date, hours)?)));
+            .filter_map(|hours| Some((hours.kind == kind, self.window_span(date, hours)?)));
         let resumed = spans
             .clone()
             .filter(|&(same, (_, close))| !same && close <= time)
@@ -1056,7 +1109,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             [true, false, false, true, true, true, true, false]
         );
-        use MarketSession::{Closed, Open, PostMarket, PreMarket};
+        use MarketSession::{Closed, Open, Overnight, PostMarket, PreMarket};
         assert_eq!(
             bars.iter()
                 .map(|bar| provider.market_session(bar.time))
@@ -1199,6 +1252,63 @@ mod tests {
                 let _ = provider.session_break_between(&time, &time);
             }
         }
+        let t = |at: &str| at.parse::<DateTime<Utc>>().unwrap();
+        let hours = Session::new([SessionWindow::new(weekdays, clock(9, 30), clock(16, 0))])
+            .with_extended_windows([
+                SessionWindow::new(weekdays, clock(4, 0), clock(9, 30)),
+                SessionWindow::new(weekdays, clock(16, 0), clock(20, 0)),
+            ])
+            .with_overnight_windows([SessionWindow::new(weekdays, clock(20, 0), clock(4, 0))]);
+        let provider = ExchangeSessionProvider::new(TimezoneId::utc(), Some(hours.clone()));
+        for (at, expected) in [
+            ("2024-07-09T22:00:00Z", Overnight),
+            ("2024-07-10T05:00:00Z", PreMarket),
+            ("2024-07-09T20:00:00Z", Overnight),
+            ("2024-07-10T03:59:59Z", Overnight),
+            ("2024-07-10T04:00:00Z", PreMarket),
+            ("2024-07-09T19:59:59Z", PostMarket),
+            ("2024-07-09T12:00:00Z", Open),
+            ("2024-07-12T20:00:00Z", Closed),
+            ("2024-07-14T20:00:00Z", Overnight),
+        ] {
+            assert_eq!(provider.market_session(t(at)), Some(expected), "{at}");
+        }
+        // Monday's holiday closes the window starting on Sunday; an override replaces all kinds.
+        let monday = "2024-07-15".parse().unwrap();
+        for (session, expected) in [
+            (hours.clone().with_holidays([monday]), Closed),
+            (
+                hours
+                    .clone()
+                    .with_overrides([crate::model::SessionOverride::new(monday)]),
+                Closed,
+            ),
+            (
+                hours.clone().with_holidays([monday]).with_overrides([
+                    crate::model::SessionOverride::new(monday).with_overnight_windows([
+                        crate::model::OverrideWindow::new(clock(20, 0), clock(4, 0)),
+                    ]),
+                ]),
+                Overnight,
+            ),
+        ] {
+            let provider = ExchangeSessionProvider::new(TimezoneId::utc(), Some(session));
+            assert_eq!(
+                provider.market_session(t("2024-07-14T20:00:00Z")),
+                Some(expected)
+            );
+        }
+        let overlap =
+            hours.with_overnight_windows([SessionWindow::new(weekdays, clock(0, 0), clock(23, 0))]);
+        let provider = ExchangeSessionProvider::new(TimezoneId::utc(), Some(overlap));
+        assert_eq!(
+            provider.window_kind(t("2024-07-09T12:00:00Z")),
+            Some(WindowKind::Regular)
+        );
+        assert_eq!(
+            provider.window_kind(t("2024-07-10T05:00:00Z")),
+            Some(WindowKind::Extended)
+        );
     }
 
     #[test]

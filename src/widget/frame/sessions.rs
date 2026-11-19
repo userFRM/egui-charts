@@ -203,6 +203,7 @@ mod tests {
     #[test]
     fn configured_sessions_reach_breaks_and_extended_shading() {
         use crate::model::{Bar, BarData, Timeframe};
+        const PREMARKET: egui::Color32 = egui::Color32::from_rgba_premultiplied(40, 170, 90, 30);
         let times = [
             "2024-03-08T23:00:00Z",
             "2024-03-11T07:59:00Z",
@@ -213,11 +214,14 @@ mod tests {
             "2024-03-11T23:59:00Z",
             "2024-03-12T00:00:00Z",
         ];
-        for (shade, custom, metadata, expected) in [
-            (true, false, false, vec![2]),
-            (false, false, false, vec![2]),
-            (true, true, false, vec![1, 6]),
-            (true, false, true, vec![3]),
+        for (shade, custom, metadata, overnight, pre, post, expected) in [
+            (true, false, false, false, true, true, vec![2]),
+            (false, false, false, false, true, true, vec![2]),
+            (true, true, false, false, true, true, vec![1, 6]),
+            (true, false, true, false, true, true, vec![3]),
+            (true, false, true, true, true, true, vec![1, 7]),
+            (true, false, true, false, false, true, vec![3]),
+            (true, false, true, false, true, false, vec![3]),
         ] {
             let ctx = egui::Context::default();
             let bars = times
@@ -244,7 +248,12 @@ mod tests {
                             .with_extended_windows([
                                 SessionWindow::new(weekdays, clock(5, 0), clock(9, 30)),
                                 SessionWindow::new(weekdays, clock(16, 0), clock(20, 0)),
-                            ]),
+                            ])
+                            .with_overnight_windows(if overnight {
+                                vec![SessionWindow::new(weekdays, clock(20, 0), clock(5, 0))]
+                            } else {
+                                vec![]
+                            }),
                         ),
                 ));
                 chart.chart_options.time_scale.timezone =
@@ -261,7 +270,12 @@ mod tests {
             chart.config.session_break_color = egui::Color32::from_rgb(201, 37, 180);
             chart.config.extended_hours_color =
                 egui::Color32::from_rgba_unmultiplied(90, 40, 170, 30);
+            chart.config.overnight_hours_color =
+                egui::Color32::from_rgba_unmultiplied(170, 90, 40, 30);
             chart.config.show_extended_hours = shade;
+            chart.config.premarket_color = Some(PREMARKET);
+            chart.config.shade_premarket = pre;
+            chart.config.shade_postmarket = post;
             if custom {
                 chart.set_session_provider(Some(std::sync::Arc::new(
                     crate::model::DailySessionProvider::new(21, 0),
@@ -273,7 +287,7 @@ mod tests {
                 .iter()
                 .filter_map(|shape| match shape {
                     Shape::LineSegment { points, stroke }
-                        if stroke.color == chart.config.session_break_color.gamma_multiply(0.6) =>
+                        if stroke.color == chart.config.session_break_color =>
                     {
                         Some(points[0].x)
                     }
@@ -287,17 +301,58 @@ mod tests {
                     .map(|index| map.idx_to_x(*index))
                     .collect::<Vec<_>>()
             );
-            let fills: Vec<_> = painted
+            // The pre-market has its own colour; the post-market uses the shared fallback.
+            for (color, spans) in [
+                (
+                    PREMARKET,
+                    if shade && pre {
+                        vec![(if metadata { 3 } else { 2 }, 4)]
+                    } else {
+                        vec![]
+                    },
+                ),
+                (
+                    chart.config.extended_hours_color,
+                    if shade && post {
+                        vec![(0, 1), (5, 7)]
+                    } else {
+                        vec![]
+                    },
+                ),
+            ] {
+                let fills: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Rect(rect) if rect.fill == color => Some(rect.rect),
+                        _ => None,
+                    })
+                    .collect();
+                let expected: Vec<_> = spans
+                    .into_iter()
+                    .map(|(first, end)| {
+                        Rect::from_min_max(
+                            Pos2::new(map.idx_to_x(first) - map.bar_spacing / 2.0, map.rect.top()),
+                            Pos2::new(
+                                map.idx_to_x(end - 1) + map.bar_spacing / 2.0,
+                                map.rect.bottom(),
+                            ),
+                        )
+                        .intersect(map.rect)
+                    })
+                    .collect();
+                assert_eq!(fills, expected, "{color:?} pre={pre} post={post}");
+            }
+            let overnight_fills: Vec<_> = painted
                 .iter()
                 .filter_map(|shape| match shape {
-                    Shape::Rect(rect) if rect.fill == chart.config.extended_hours_color => {
+                    Shape::Rect(rect) if rect.fill == chart.config.overnight_hours_color => {
                         Some(rect.rect)
                     }
                     _ => None,
                 })
                 .collect();
-            let expected: Vec<_> = if shade {
-                [(0, 1), (if metadata { 3 } else { 2 }, 4), (5, 7)]
+            let expected: Vec<_> = if shade && overnight {
+                [(1, 3), (7, 8)]
                     .into_iter()
                     .map(|(first, end)| {
                         Rect::from_min_max(
@@ -313,7 +368,58 @@ mod tests {
             } else {
                 vec![]
             };
-            assert_eq!(fills, expected);
+            assert_eq!(overnight_fills, expected);
+        }
+    }
+
+    /// Session breaks paint their colour and width as set on every kind of boundary, days on an
+    /// hourly chart and weeks and months on a daily one, and shade no session.
+    #[test]
+    fn session_breaks_paint_as_configured_without_shading() {
+        use crate::model::{Bar, BarData, LineStyle, Timeframe};
+        use egui::{Color32, Stroke};
+        let start: chrono::DateTime<chrono::Utc> = "2024-01-01T00:00:00Z".parse().unwrap();
+        for (timeframe, step) in [
+            (Timeframe::Hour1, chrono::Duration::hours(1)),
+            (Timeframe::Day1, chrono::Duration::days(1)),
+        ] {
+            let bars = (0..120)
+                .map(|i| Bar::new(start + step * i, 100.0, 102.0, 99.0, 101.0, 1.0))
+                .collect();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.set_timeframe(timeframe);
+            chart.config.show_volume = false;
+            chart.config.show_grid = false;
+            chart.config.show_session_breaks = true;
+            chart.config.session_break_style = LineStyle::Solid;
+            chart.config.session_break_color = Color32::RED;
+            chart.config.session_break_width = 2.0;
+            let painted = shapes(&egui::Context::default(), &mut chart, 0.0, vec![]);
+            let plot = chart.last_rendered_price_rect;
+            let breaks: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::LineSegment { points, stroke }
+                        if points[0].x == points[1].x
+                            && points[0].y == plot.top()
+                            && points[1].y == plot.bottom() =>
+                    {
+                        Some(*stroke)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                !breaks.is_empty() && breaks.iter().all(|s| *s == Stroke::new(2.0, Color32::RED)),
+                "{timeframe:?}: {breaks:?}"
+            );
+            let shading = chart.config.background_color.gamma_multiply(0.94);
+            assert!(
+                !painted
+                    .iter()
+                    .any(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == shading)),
+                "{timeframe:?}"
+            );
         }
     }
 

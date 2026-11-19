@@ -66,15 +66,14 @@ macro_rules! register_builtins {
 ///
 /// On construction, catalogue studies are registered under their canonical
 /// [`Indicator::name`] (e.g. `"SMA"`, `"RSI"`, `"MACD"`, `"SuperTrend"`) using
-/// its conventional default parameters. Each name selects a distinct calculation
-/// or source range. Additional indicators can be registered at runtime with
-/// [`register`](Self::register).
+/// its conventional default parameters. Additional indicators can be registered at runtime
+/// with [`register`](Self::register).
 ///
-/// [`create`](Self::create) and [`has`](Self::has) also resolve the names of six exported
+/// [`create`](Self::create) and [`has`](Self::has) also resolve the names of five exported
 /// studies the catalogue leaves out, so that a template, a copied study or a saved layout of
-/// one is recreated: `CVD`, `HL2`, `HLC3`, `Price Channel`, `Ehlers Fisher` and
-/// `MA Combination`, which creates [`MACombination::ribbon`] for its inputs to reshape. They have
-/// no category and are not in [`list`](Self::list) or [`count`](Self::count).
+/// one is recreated: `CVD`, `HL2`, `HLC3`, `Ehlers Fisher` and `MA Combination`, which creates
+/// [`MACombination::ribbon`] for its inputs to reshape. They have no category and are not in
+/// [`list`](Self::list) or [`count`](Self::count).
 pub struct IndicatorFactory {
     /// The category of each name, `None` for a built-in outside the catalogue, and its constructor.
     constructors: HashMap<String, (Option<&'static str>, IndicatorConstructor)>,
@@ -128,14 +127,13 @@ impl IndicatorFactory {
     /// listed study of the same name would replace them.
     fn register_builtin(&mut self) {
         // Exported studies outside the catalogue, resolved by name so that saved copies load.
-        register_builtins!(@help self, "struct", CVD, HL2, HLC3, PriceChannel, EhlersFisher, MACombination, OrderFlowStudy, ChartPatterns, OptionsVolumeProfile);
+        register_builtins!(@help self, "struct", CVD, HL2, HLC3, EhlersFisher, MACombination, OrderFlowStudy, ChartPatterns, OptionsVolumeProfile);
         #[cfg(feature = "drawings")]
         register_builtins!(@help self, "struct", AutoDrawing);
-        let unlisted: [fn() -> Box<dyn Indicator>; 6] = [
+        let unlisted: [fn() -> Box<dyn Indicator>; 5] = [
             || Box::new(CVD::default()),
             || Box::new(HL2::default()),
             || Box::new(HLC3::default()),
-            || Box::new(PriceChannel::default()),
             || Box::new(EhlersFisher::default()),
             || Box::new(MACombination::ribbon()),
         ];
@@ -218,6 +216,7 @@ impl IndicatorFactory {
                 AroonOscillator,
                 BullBearPower,
                 AdvanceDeclineRatioBars,
+                AdvanceDecline,
                 PriceMomentumOscillator,
                 PringsSpecialK,
                 SMIErgodicIndicator,
@@ -250,6 +249,7 @@ impl IndicatorFactory {
                 TrueRange,
                 KeltnerChannels,
                 DonchianChannels,
+                PriceChannel,
                 StandardDeviation,
                 HistoricalVolatility,
                 CloseToCloseVol,
@@ -313,6 +313,7 @@ impl IndicatorFactory {
                 FallingWedge,
                 MissedPivots,
                 KeyLevels,
+                AutoKeyLevels,
                 IntradayPivotPoints,
                 ProjectedPivotPoints,
                 WilliamsFractals,
@@ -444,7 +445,7 @@ impl IndicatorFactory {
                 name,
                 (
                     Some("Support and resistance"),
-                    Box::new(move || Box::new(AutoDrawing::new(kind, 5.0, 10).with_atr(3.0, 10))),
+                    Box::new(move || Box::new(AutoDrawing::catalogue(kind))),
                 ),
             );
         }
@@ -511,6 +512,10 @@ impl IndicatorFactory {
     /// Capture a study with [`StudyTemplate::from_study`], edit its typed inputs or settings,
     /// then pass it here. A chooser supplied this factory through `IndicatorDialog::with_factory`
     /// uses the same defaults. Explicit edits to a created study take precedence.
+    /// A study this factory creates, also from a saved template with
+    /// [`StudyTemplate::create_with`], reports the value a new study starts with as the
+    /// [`default`](StudyInput::default) of each input that these defaults or that template name,
+    /// which resetting the inputs restores.
     ///
     /// ```
     /// use egui_charts::studies::{IndicatorFactory, InputValue, StudyTemplate};
@@ -557,6 +562,19 @@ impl IndicatorFactory {
             study.set_registered_name(name);
         }
         Some(study)
+    }
+
+    /// The inputs a study created under `name` starts with, or `None` without host defaults for
+    /// `name` or when its constructor no longer accepts them.
+    pub(crate) fn input_defaults(&self, name: &str) -> Option<Vec<(String, InputValue)>> {
+        let study = self.defaults.get(name)?.build(self, false).ok()?;
+        Some(
+            study
+                .inputs()
+                .into_iter()
+                .map(|input| (input.id, input.value))
+                .collect(),
+        )
     }
 
     /// Reconstruct saved state without applying defaults intended for new studies.

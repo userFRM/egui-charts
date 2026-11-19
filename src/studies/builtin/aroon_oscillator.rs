@@ -10,7 +10,8 @@
 //! Oscillator = Aroon Up - Aroon Down
 //! ```
 //! Both use the window of [`Aroon`]: the current bar and the `length` bars before it, a tie
-//! counting the most recent bar. The value ranges from -100 to 100.
+//! counting the most recent bar. The value ranges from -100 to 100. Guides at 90 and -90 mark
+//! a strong uptrend or downtrend.
 //!
 //! # Example
 //! ```
@@ -136,7 +137,11 @@ impl Indicator for AroonOscillator {
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             range: Some((-100.0, 100.0)),
-            levels: vec![(0.0, palette::GRAY, "Zero")],
+            levels: vec![
+                (90.0, palette::GRAY, "Upper guide"),
+                (0.0, palette::GRAY, "Zero"),
+                (-90.0, palette::GRAY, "Lower guide"),
+            ],
             ..Default::default()
         }
     }
