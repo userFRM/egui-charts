@@ -472,8 +472,9 @@ pub struct ChartConfig {
     pub show_price_line: bool,
     /// Draw a line at the preceding session close independently of its tag.
     pub show_prev_close_line: bool,
-    /// Colour, width and pattern of the previous close line and its tag. Without a colour it
-    /// follows the theme's secondary text colour.
+    /// Colour, width and pattern of the previous close line and its tag. Without a colour it is
+    /// mid grey, #555555, in a light theme and follows the theme's secondary text colour in a
+    /// dark one.
     #[serde(default)]
     pub prev_close_line: ChartLineStyle,
     /// Whether to show previous close value line
@@ -554,9 +555,13 @@ pub struct ChartConfig {
     /// When to show the maximize and menu buttons of the panes.
     #[serde(default = "pane_buttons_on_hover")]
     pub pane_buttons: NavigationButtons,
-    /// Draw a vertical line at each session, day, week, month or year boundary, by the interval.
+    /// Draw a vertical line at the first bar of each trading session, or of each day without
+    /// trading hours, on intraday intervals. Daily and longer intervals draw none while this is
+    /// on.
     pub show_session_breaks: bool,
-    /// Colour of session break lines, painted as set for every kind of boundary.
+    /// Colour of session break lines. Default: the theme's
+    /// [`ChartColors::session_break`](crate::theme::ChartColors::session_break), the same blue in
+    /// every built-in theme.
     pub session_break_color: Color32,
     /// Pattern of session break lines.
     pub session_break_style: LineStyle,
@@ -755,7 +760,7 @@ impl Default for ChartConfig {
             pane_buttons: pane_buttons_on_hover(),
             // Session breaks disabled by default
             show_session_breaks: false,
-            session_break_color: chart.grid_line_major,
+            session_break_color: chart.session_break,
             session_break_style: LineStyle::Dashed,
             session_break_width: session_break_width(),
             session_config: None,
@@ -799,7 +804,7 @@ impl ChartConfig {
         self.bearish_border_color = Some(theme.chart.candle_down);
         self.bullish_wick_color = Some(theme.chart.candle_up);
         self.bearish_wick_color = Some(theme.chart.candle_down);
-        self.session_break_color = theme.chart.grid_line_major;
+        self.session_break_color = theme.chart.session_break;
         self.watermark_color = if theme.dark {
             theme.chart.grid_line
         } else {
@@ -810,6 +815,17 @@ impl ChartConfig {
                 .lerp_to_gamma(Color32::from_rgb(10, 16, 33), 0.18)
         };
         self
+    }
+
+    /// The colour of the previous close line and its tag while `prev_close_line` sets none:
+    /// mid grey, #555555, in a light theme, apart from the black scale text, and the theme's
+    /// secondary text colour in a dark one.
+    pub(crate) fn prev_close_fallback(theme: &Theme) -> Color32 {
+        if theme.dark {
+            theme.ui.text_secondary
+        } else {
+            Color32::from_gray(85)
+        }
     }
 }
 
@@ -884,8 +900,22 @@ mod tests {
 
     #[test]
     fn with_theme_recolours_session_breaks_and_watermark() {
-        let config = ChartConfig::default().with_theme(&Theme::light());
-        assert_eq!(config.session_break_color, Color32::from_rgb(229, 229, 229));
+        assert_eq!(
+            ChartConfig::default().session_break_color,
+            Color32::from_rgb(73, 133, 231)
+        );
+        for (name, theme) in crate::theme::presets() {
+            let config = ChartConfig::default().with_theme(&theme);
+            assert_eq!(
+                config.session_break_color,
+                Color32::from_rgb(73, 133, 231),
+                "{name}"
+            );
+        }
+        let mut theme = Theme::light();
+        theme.chart.session_break = Color32::RED;
+        let config = ChartConfig::default().with_theme(&theme);
+        assert_eq!(config.session_break_color, Color32::RED);
         assert_eq!(config.watermark_color, Color32::from_rgb(211, 212, 215));
     }
 
