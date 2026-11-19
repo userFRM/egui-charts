@@ -350,6 +350,72 @@ impl SettingsDialog {
                         &mut dialog.settings.scales_and_lines.show_prev_close,
                     );
                 });
+                self.draw_setting_row_with_controls(
+                    ui,
+                    "Previous close line",
+                    theme,
+                    |ui, dialog| {
+                        let mut line = dialog
+                            .settings
+                            .scales_and_lines
+                            .prev_close_line
+                            .unwrap_or_default();
+                        let before = line;
+                        let state = &mut dialog.color_picker_states.prev_close_line;
+                        let mut color = state.sel_color;
+                        if pick_color(ui, state, "prev_close_line_color", &mut color) {
+                            line.color = Some(color);
+                        }
+                        ui.add_space(theme.spacing.lg);
+                        styled_dropdown(
+                            ui,
+                            "prev_close_line_style",
+                            DESIGN_TOKENS.sizing.settings_dialog.small_dropdown_width,
+                            theme.ui.text,
+                            line_style_preview(line.style),
+                            |ui| {
+                                for style in LineStyle::all() {
+                                    let label = l10n::text(ui.ctx(), line_style_preview(*style));
+                                    if ui.selectable_label(line.style == *style, label).clicked() {
+                                        line.style = *style;
+                                    }
+                                }
+                            },
+                        );
+                        ui.add_space(theme.spacing.lg);
+                        // A width the host set outside the offered range stays until it is dragged.
+                        ui.add(
+                            egui::DragValue::new(&mut line.width)
+                                .range(1.0..=4.0)
+                                .clamp_existing_to_range(false)
+                                .speed(0.5)
+                                .suffix(l10n::text(ui.ctx(), " px")),
+                        )
+                        .accessible_name(l10n::text(ui.ctx(), "Previous close line width"));
+                        if line != before {
+                            dialog.settings.scales_and_lines.prev_close_line = Some(line);
+                        }
+                    },
+                );
+                self.draw_setting_row_with_controls(ui, "Bid and ask", theme, |ui, dialog| {
+                    let scales = &mut dialog.settings.scales_and_lines;
+                    let before = (
+                        scales.show_bid_ask,
+                        scales.show_bid_ask_lines.unwrap_or(scales.show_bid_ask),
+                    );
+                    let mut line = before.1;
+                    price_line_dropdown(
+                        ui,
+                        "bid_ask_mode",
+                        theme.ui.text,
+                        &mut scales.show_bid_ask,
+                        &mut line,
+                    );
+                    // Any choice pins the lines, which otherwise follow the tags.
+                    if (scales.show_bid_ask, line) != before {
+                        scales.show_bid_ask_lines = Some(line);
+                    }
+                });
                 styled_checkbox(
                     ui,
                     &mut self.settings.scales_and_lines.show_high_low,

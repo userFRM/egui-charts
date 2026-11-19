@@ -7,6 +7,9 @@
 //! AO = SMA(median_price, 5) - SMA(median_price, 34)
 //! Where median_price = (high + low) / 2
 //!
+//! Drawn as a histogram: a bar at or below the one before it takes the falling colour and
+//! width, the others the rising ones. Columns remain available as a plot type.
+//!
 //! # Interpretation
 //! - AO > 0: Bullish momentum
 //! - AO < 0: Bearish momentum
@@ -130,7 +133,7 @@ impl Indicator for AwesomeOscillator {
             color: self.positive_color,
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
-            plot_type: crate::studies::PlotType::Columns,
+            plot_type: crate::studies::PlotType::Histogram,
             visible: true,
         }
     }

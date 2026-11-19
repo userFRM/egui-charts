@@ -132,6 +132,7 @@ impl Default for DrawingManagerOptions {
 /// Last painted geometry, invalid once its anchors have moved.
 struct PaintedDrawing {
     id: usize,
+    start: usize,
     points: Vec<Pos2>,
     shapes: Vec<ClippedShape>,
     /// Where the handles of a drawing that fits itself to the bars sit.
@@ -272,6 +273,9 @@ pub struct DrawingManager {
     snap_service: SnapService,
     /// Geometry from the last paint, including laid-out text and data-driven shapes.
     painted: Mutex<Vec<PaintedDrawing>>,
+    /// Points where a series or study is drawn over drawings: no drawing whose `series_layer`
+    /// is below the count is hit there. Set by the chart where it hit tests its series.
+    covers: Mutex<Vec<(Pos2, usize)>>,
     /// Nearby bar and overlay points, refreshed by the chart before pointer handling.
     pub(crate) snap_targets: Vec<Pos2>,
 
@@ -379,6 +383,7 @@ impl DrawingManager {
             history: HistoryService::new(),
             snap_service: SnapService::new(),
             painted: Mutex::new(Vec::new()),
+            covers: Mutex::new(Vec::new()),
             snap_targets: Vec::new(),
             options: DrawingManagerOptions::default(),
             dragging_handle: None,
@@ -1098,9 +1103,9 @@ mod tests {
         }
     }
 
-    /// Of two overlapping drawings, the one with the higher `z_order` is hit, whichever was
-    /// added last, the manager's layer operations set `z_order`, which is what is saved, and a
-    /// drawing a host adds goes on top.
+    /// Overlapping drawings are hit by their place among series and studies, then `z_order`,
+    /// whichever was added last. Manager moves set both, while a host addition or paste lands
+    /// on top, including a paste of a drawing sent behind the series.
     #[test]
     fn z_order_decides_which_overlapping_drawing_is_hit() {
         use crate::drawings::services::ZOrderService;
@@ -1121,8 +1126,12 @@ mod tests {
         manager.send_to_back(1);
         assert_eq!(manager.hit_test(on_both), Some(2));
         assert!(z(&manager, 1) < z(&manager, 2));
+        assert_eq!(manager.drawings[0].series_layer, Some(0));
+        manager.drawings[0].z_order = 100;
+        assert_eq!(manager.hit_test(on_both), Some(2));
 
         manager.bring_to_front(1);
+        assert_eq!(manager.drawings[0].series_layer, None);
         assert_eq!(manager.hit_test(on_both), Some(1));
         assert!(z(&manager, 1) > z(&manager, 2));
 
@@ -1141,6 +1150,7 @@ mod tests {
         assert_eq!(manager.hit_test(on_both), Some(fresh_id));
 
         // Pasting a lower layer puts the copy above existing drawings too.
+        manager.send_to_back(2);
         manager.paste_drawings(&[manager.drawings[1].clone()]);
         manager.update_all_screen_coords(|bar| bar, |price| price as f32, 1.0);
         let copy_id = manager.drawings.last().unwrap().id;

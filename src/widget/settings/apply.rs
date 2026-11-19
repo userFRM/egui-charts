@@ -324,6 +324,8 @@ impl ChartSettingsState {
         settings.scales_and_lines.show_prev_close = config.show_prev_close_line;
         settings.scales_and_lines.show_countdown = config.show_countdown;
         settings.scales_and_lines.show_bid_ask = config.show_bid_ask;
+        settings.scales_and_lines.show_bid_ask_lines = config.show_bid_ask_lines;
+        settings.scales_and_lines.prev_close_line = Some(config.prev_close_line);
         settings.scales_and_lines.show_high_low = config.show_high_low;
         settings.margins.top_percent =
             (chart.state().price_scale().options().scale_margins.top * 100.0) as f32;
@@ -650,6 +652,12 @@ impl ChartSettingsState {
         config.show_prev_close_line = self.scales_and_lines.show_prev_close;
         config.show_countdown = self.scales_and_lines.show_countdown;
         config.show_bid_ask = self.scales_and_lines.show_bid_ask;
+        if let Some(lines) = self.scales_and_lines.show_bid_ask_lines {
+            config.show_bid_ask_lines = Some(lines);
+        }
+        if let Some(line) = self.scales_and_lines.prev_close_line {
+            config.prev_close_line = line;
+        }
         config.show_high_low = self.scales_and_lines.show_high_low;
         if let Some(separator) = self.scales_and_lines.thousands_sep {
             config.thousands_sep = thousands_sep(separator);
@@ -3052,6 +3060,8 @@ mod tests {
             (
                 chart.config().show_session_breaks,
                 style.price_line_source,
+                chart.config().prev_close_line,
+                chart.config().show_bid_ask_lines,
                 [
                     labels.format_crosshair(time, 60),
                     labels.format_crosshair(time, 86_400),
@@ -3061,6 +3071,11 @@ mod tests {
         };
         let mut chart = chart(&[100.0], &[110.0]);
         let new_chart = ChartSettingsState::from_chart(&chart);
+        let solid = crate::config::ChartLineStyle {
+            color: Some(Color32::GOLD),
+            width: 2.0,
+            style: crate::model::LineStyle::Solid,
+        };
         let rows = [
             (
                 true,
@@ -3069,6 +3084,8 @@ mod tests {
                 false,
                 Never,
                 ["13 Mar '24 02:30 PM", "Mar 13, 2024", "02:30 PM"],
+                solid,
+                true,
             ),
             (
                 false,
@@ -3077,6 +3094,8 @@ mod tests {
                 true,
                 Always,
                 ["Wed 13 Mar '24 14:30", "Wed Mar 13, 2024", "14:30"],
+                Default::default(),
+                false,
             ),
             (
                 false,
@@ -3085,18 +3104,25 @@ mod tests {
                 true,
                 Always,
                 ["Wed 13.03.2024 14:30", "Wed 13.03.2024", "14:30"],
+                Default::default(),
+                false,
             ),
         ];
-        for (breaks, source, date_format, use_24_hour, weekday_names, labels) in &rows {
+        for (breaks, source, date_format, use_24_hour, weekday_names, labels, line, lines) in &rows {
             let mut settings = ChartSettingsState::from_chart(&chart);
             settings.show_session_breaks = Some(*breaks);
             let scales = &mut settings.scales_and_lines;
             scales.price_line_source = Some(*source);
+            scales.prev_close_line = Some(*line);
+            scales.show_bid_ask_lines = Some(*lines);
             scales.date_format = Some(date_format.clone());
             scales.use_24_hour = Some(*use_24_hour);
             scales.weekday_names = Some(*weekday_names);
             chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
-            assert_eq!(read(&chart), (*breaks, *source, labels.map(String::from)));
+            assert_eq!(
+                read(&chart),
+                (*breaks, *source, *line, Some(*lines), labels.map(String::from))
+            );
             let settings = ChartSettingsState::from_chart(&chart);
             let scales = &settings.scales_and_lines;
             assert_eq!(
@@ -3105,27 +3131,40 @@ mod tests {
                     scales.price_line_source,
                     scales.date_format.clone(),
                     scales.use_24_hour,
-                    scales.weekday_names
+                    scales.weekday_names,
+                    scales.prev_close_line,
+                    scales.show_bid_ask_lines
                 ),
                 (
                     Some(*breaks),
                     Some(*source),
                     Some(date_format.clone()),
                     Some(*use_24_hour),
-                    Some(*weekday_names)
+                    Some(*weekday_names),
+                    Some(*line),
+                    Some(*lines)
                 )
             );
         }
         for row in [&rows[1], &rows[0]] {
             assert!(chart.undo());
-            assert_eq!(read(&chart), (row.0, row.1, row.5.map(String::from)));
+            assert_eq!(
+                read(&chart),
+                (row.0, row.1, row.6, Some(row.7), row.5.map(String::from))
+            );
         }
         // A date-only action also redoes, then returns to the older-save setup.
         assert!(chart.redo());
         assert!(chart.redo());
         assert_eq!(
             read(&chart),
-            (rows[2].0, rows[2].1, rows[2].5.map(String::from))
+            (
+                rows[2].0,
+                rows[2].1,
+                rows[2].6,
+                Some(rows[2].7),
+                rows[2].5.map(String::from)
+            )
         );
         assert!(chart.undo());
         assert!(chart.undo());
@@ -3141,6 +3180,8 @@ mod tests {
         for (group, choice) in [
             ("", "show_session_breaks"),
             ("/scales_and_lines", "price_line_source"),
+            ("/scales_and_lines", "prev_close_line"),
+            ("/scales_and_lines", "show_bid_ask_lines"),
             ("/scales_and_lines", "thousands_sep"),
             ("/scales_and_lines", "date_format"),
             ("/scales_and_lines", "use_24_hour"),
@@ -3157,6 +3198,8 @@ mod tests {
             (
                 true,
                 LastVisible,
+                solid,
+                Some(true),
                 ["Wed 13.03.2024 02:30 PM", "Wed 13.03.2024", "02:30 PM"].map(String::from)
             )
         );
