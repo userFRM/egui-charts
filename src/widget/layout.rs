@@ -5108,7 +5108,6 @@ mod tests {
                     RawInput {
                         screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
                         time: Some(time),
-                        modifiers,
                         events: if pressed {
                             vec![
                                 Event::ModifiersChanged(modifiers),
