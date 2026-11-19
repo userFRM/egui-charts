@@ -440,6 +440,7 @@ impl Chart {
                 self.scroll_animation = None;
                 self.stop_at_oldest_bar(right_edge);
                 self.move_drag_start(right_edge);
+                self.move_pending_range(right_edge, &merge_clock);
             }
             #[cfg(feature = "drawings")]
             self.project_drawing_points();
@@ -1001,6 +1002,7 @@ impl Chart {
             && (appended || shift_for_whitespace);
         if follow {
             self.scroll_to_live_edge();
+            self.move_pending_range(before.right_edge, clock);
         } else if !self.state.shows_elements() && before.tail.is_some() {
             self.keep_bars_in_view(clock, before.right_edge);
         }
@@ -1030,9 +1032,11 @@ impl Chart {
         });
         if appended && self.chart_options.time_scale.shift_visible_range_on_new_bar && near_live {
             self.scroll_to_live_edge();
+            self.move_pending_range(right_edge, &self.clock());
         } else if in_place {
             self.stop_at_oldest_bar(right_edge);
             self.move_drag_start(right_edge);
+            self.move_pending_range(right_edge, &self.clock());
         } else {
             self.keep_bars_in_view(&self.clock(), right_edge);
         }
@@ -1069,6 +1073,35 @@ impl Chart {
         }
         self.stop_at_oldest_bar(right_edge);
         self.move_drag_start(right_edge);
+        self.move_pending_range(right_edge, clock);
+    }
+
+    /// Keeps a range set before the first layout across the bars that changed since `before`, as
+    /// the view moved with them, so that the first layout fits it again: a time range keeps its
+    /// dates, and a logical range moves by as many indices as the slot the view keeps, or the
+    /// newest slot before it once that one is gone, so that it shows the same bars. Call it once
+    /// per change, after the view moved.
+    fn move_pending_range(&mut self, before: ViewEdge, clock: &BarClock) {
+        let view = self.time_scale_view();
+        let shown = self.state.shown();
+        let shift = before
+            .kept
+            .filter(|_| !shown.is_empty())
+            .map_or(0.0, |(time, after)| {
+                let slot = clock.bar_open(time);
+                // One past the kept slot now, against one past it before.
+                let at = shown.partition_point(|bar| clock.bar_open(bar.time) <= slot);
+                at as f32 - (before.slots - after) as f32
+            });
+        // Only a range the view still showed before the change: any other is dropped at layout.
+        if let Some((range, stamp)) = &mut self.pending_visible_range
+            && *stamp == (view.0, before.offset, view.2)
+        {
+            if let super::time_scale::PendingRange::Logical(logical) = range {
+                *logical = LogicalRange::new(logical.left + shift, logical.right + shift);
+            }
+            *stamp = view;
+        }
     }
 
     /// Moves the right offset a drag on the time axis or the plot started with by as much as the
@@ -1096,6 +1129,7 @@ impl Chart {
         };
         ViewEdge {
             right,
+            slots: shown.len(),
             offset: scale.right_offset_precise(),
             first: shown.first().map(|bar| bar.time),
             kept: shown.get(at).map(|bar| (bar.time, last - at)),
@@ -1136,6 +1170,8 @@ impl Chart {
 #[derive(Clone, Copy)]
 pub(super) struct ViewEdge {
     right: f64,
+    /// The number of slots shown.
+    slots: usize,
     offset: f64,
     first: Option<DateTime<Utc>>,
     /// The time of the bar in the slot the view keeps in place and the number of bars after it,

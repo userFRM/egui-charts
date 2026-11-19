@@ -3,6 +3,7 @@
 use super::FootprintBarView;
 use super::OrderFilter;
 use super::footprint::{Footprint, FootprintBar, FootprintState};
+use super::trades::{OrderSizes, SizeBasis};
 use crate::model::{BarClock, Level1Quote, OrderBook, OrderBookLevel, OrderSide, Placement, Tick};
 use chrono::{DateTime, TimeDelta, Utc};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -60,7 +61,9 @@ pub enum OrderFlowKind {
     },
     /// Buy minus sell volume per bar, counting only executions whose size lies in each of three
     /// inclusive `[min, max]` ranges, all from the same trades. A range with `min > max`
-    /// matches nothing; executions of unknown side count for no range.
+    /// matches nothing; executions of unknown side count for no range. With
+    /// [`OrderFlowInput::with_size_basis`] a range can test the combined size of each
+    /// execution's aggressive order instead.
     SizeDelta {
         /// Inclusive size ranges, one per output.
         ranges: [[f64; 2]; 3],
@@ -71,7 +74,8 @@ pub enum OrderFlowKind {
         bars: usize,
     },
     /// Buy minus sell volume, its highest and lowest running value including zero, per bar,
-    /// counting executions whose size lies in the inclusive range. A study accumulates the
+    /// counting executions whose size lies in the inclusive range, or whose aggressive order's
+    /// combined size does (see [`OrderFlowInput::with_size_basis`]). A study accumulates the
     /// delta into a cumulative volume delta. The sum starts at the oldest
     /// bar with a retained value, so it starts again from a later bar after the input drops its
     /// oldest bars (see [`OrderFlowInput`]).
@@ -384,6 +388,13 @@ impl Distinct {
     }
 }
 
+#[derive(Clone, Default)]
+struct PendingParts {
+    sizes: OrderSizes,
+    parts: Vec<(Tick, DateTime<Utc>, f64, bool)>,
+    rows: Vec<Option<([f64; 3], u64)>>,
+}
+
 #[derive(Clone)]
 struct State {
     source: Source,
@@ -409,6 +420,10 @@ struct State {
     dropped_revision: u64,
     changes: BTreeMap<DateTime<Utc>, u64>,
     filter: Option<OrderFilter>,
+    /// What the size ranges of SizeDelta and FilteredCvd measure.
+    basis: SizeBasis,
+    /// Allocated parts and their previous rows for orders of the newest timestamp.
+    pending: PendingParts,
     /// A footprint source's executions, from its first execution with a tick size.
     footprint: Option<FootprintState>,
     /// A book source's book at the end of each bar.
@@ -504,6 +519,23 @@ impl OrderFlowInput {
         self
     }
 
+    /// The same source, with the size ranges of [`SizeDelta`](OrderFlowKind::SizeDelta) and
+    /// [`FilteredCvd`](OrderFlowKind::FilteredCvd) measuring each execution's own size or the
+    /// combined size of its aggressive order, as [`SizeBasis`] describes. Other aggregations ignore
+    /// it. It applies to the executions pushed after it. Under
+    /// [`SizeBasis::AggressiveOrder`] the values of the bars of the newest timestamp can change
+    /// while fills of its orders arrive. Changing the basis finalizes those pending decisions.
+    pub fn with_size_basis(self, basis: SizeBasis) -> Self {
+        {
+            let mut state = self.state();
+            if state.basis != basis {
+                state.pending = PendingParts::default();
+            }
+            state.basis = basis;
+        }
+        self
+    }
+
     /// Feed services read by this source. Book size with an order filter needs individual
     /// orders; executions need trade-side classification only for side-dependent outputs.
     pub fn services(&self) -> &'static [crate::model::FeedService] {
@@ -556,7 +588,7 @@ impl OrderFlowInput {
     }
 
     /// Clears values on a new symbol, interval or subscription. The aggregation, order filter,
-    /// tick size and any replay cutoff stay.
+    /// size basis, tick size and any replay cutoff stay.
     pub fn clear(&self) {
         self.state().clear();
     }
@@ -856,6 +888,7 @@ impl OrderFlowInput {
                 | OrderFlowKind::FilteredCvd { .. },
             ) => {
                 state.bars.retain(|bar, _| *bar > open);
+                state.pending = PendingParts::default();
                 state.changes.retain(|bar, _| *bar > open);
                 state.cut = state.cut.max(Some(open));
                 let until = Some(until);
@@ -1126,6 +1159,7 @@ impl OrderFlowInput {
                 }
                 let mut state = self.state();
                 state.bars.retain(|open, _| *open > cut);
+                state.pending = PendingParts::default();
                 state.changes.retain(|open, _| *open > cut);
                 state.cut = Some(cut);
             }
@@ -1348,6 +1382,7 @@ impl OrderFlowInput {
                 let tick_size = state.tick_size;
                 let mut part = State::new(state.source);
                 part.tick_size = tick_size;
+                part.basis = state.basis;
                 // A row a nanosecond before the chart's oldest bar is a bar the chart dropped and
                 // the sink opened the oldest one right after it, so a fill at one instant may run
                 // from that bar into the oldest one.
@@ -1486,7 +1521,7 @@ impl OrderFlowInput {
                     {
                         replay.row = part.bars.get(&open).map(|(row, _)| *row);
                     } else if !trade_based && sums {
-                        let part = OrderFlowInput::new(kind);
+                        let part = OrderFlowInput::new(kind).with_size_basis(state.basis);
                         // The store's executions are valid, and those held are the cutoff bar's.
                         held.for_each(|trade| {
                             part.push_trade_part(clock, trade, open, trade.size, true)
@@ -1603,10 +1638,10 @@ impl OrderFlowInput {
     }
 }
 
-/// The execution's size, negative for a sell, when it is classified and its size lies in
-/// `min..=max`; zero otherwise.
-fn signed_size(trade: &Tick, min: f64, max: f64, size: f64) -> f64 {
-    if !(min..=max).contains(&trade.size) {
+/// `size` signed by the execution's side when `measured`, its own or its order's size,
+/// lies in `min..=max`; zero for an unknown side or a size outside the range.
+fn signed_size(trade: &Tick, measured: f64, min: f64, max: f64, size: f64) -> f64 {
+    if !(min..=max).contains(&measured) {
         return 0.0;
     }
     match trade.side {
@@ -1632,6 +1667,73 @@ impl State {
     }
 
     fn add_trade(&mut self, trade: &Tick, open: DateTime<Utc>, size: f64, first: bool) {
+        let Source::Fixed(kind) = self.source else {
+            return;
+        };
+        // Which size ranges count a size: three for SizeDelta, the first for FilteredCvd.
+        let counted = |size: f64| match kind {
+            OrderFlowKind::SizeDelta { ranges } => {
+                ranges.map(|[min, max]| (min..=max).contains(&size))
+            }
+            OrderFlowKind::FilteredCvd { min, max } => [(min..=max).contains(&size), false, false],
+            _ => [false; 3],
+        };
+        if self.basis != SizeBasis::AggressiveOrder
+            || !matches!(
+                kind,
+                OrderFlowKind::SizeDelta { .. } | OrderFlowKind::FilteredCvd { .. }
+            )
+        {
+            return self.add_measured(trade, open, size, first, trade.size);
+        }
+        if !self.pending.sizes.holds(trade) {
+            self.pending = PendingParts::default();
+        }
+        // Each execution adds to its order once, with its first part.
+        let (before, after) = if first {
+            self.pending.sizes.add(trade)
+        } else {
+            let size = self.pending.sizes.of(trade);
+            (size, size)
+        };
+        let from = (trade.aggressor_order_id)
+            .filter(|_| counted(before) != counted(after))
+            .and_then(|id| {
+                (self.pending.parts.iter())
+                    .position(|(fill, ..)| fill.aggressor_order_id == Some(id))
+            });
+        let start = match from {
+            Some(k) => {
+                // Restore the rows from before the order's first part, newest first.
+                for i in (k..self.pending.parts.len()).rev() {
+                    let open = self.pending.parts[i].1;
+                    match self.pending.rows[i] {
+                        Some(row) => self.bars.insert(open, row),
+                        None => self.bars.remove(&open),
+                    };
+                }
+                self.pending.rows.truncate(k);
+                k
+            }
+            None => self.pending.parts.len(),
+        };
+        self.pending.parts.push((trade.clone(), open, size, first));
+        for i in start..self.pending.parts.len() {
+            let (fill, open, size, first) = self.pending.parts[i].clone();
+            self.pending.rows.push(self.bars.get(&open).copied());
+            let measured = self.pending.sizes.of(&fill);
+            self.add_measured(&fill, open, size, first, measured);
+        }
+    }
+
+    fn add_measured(
+        &mut self,
+        trade: &Tick,
+        open: DateTime<Utc>,
+        size: f64,
+        first: bool,
+        measured: f64,
+    ) {
         let Source::Fixed(kind) = self.source else {
             return;
         };
@@ -1700,7 +1802,7 @@ impl State {
             OrderFlowKind::SizeDelta { ranges } => {
                 let mut row = self.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
                 for (sum, [min, max]) in row.iter_mut().zip(ranges) {
-                    *sum += signed_size(trade, min, max, size);
+                    *sum += signed_size(trade, measured, min, max, size);
                 }
                 row
             }
@@ -1708,13 +1810,13 @@ impl State {
                 let old = self.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
                 [
                     old[0] + size,
-                    old[1] + signed_size(trade, 0.0, f64::MAX, size),
+                    old[1] + signed_size(trade, trade.size, 0.0, f64::MAX, size),
                     0.0,
                 ]
             }
             OrderFlowKind::FilteredCvd { min, max } => {
                 let old = self.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
-                let delta = old[0] + signed_size(trade, min, max, size);
+                let delta = old[0] + signed_size(trade, measured, min, max, size);
                 [delta, old[1].max(delta), old[2].min(delta)]
             }
             _ => return,
@@ -1746,6 +1848,8 @@ impl State {
             dropped_revision: 0,
             changes: BTreeMap::new(),
             filter: None,
+            basis: SizeBasis::Fill,
+            pending: PendingParts::default(),
             footprint: None,
             books: BTreeMap::new(),
             book_rows: 0,
@@ -1772,6 +1876,7 @@ impl State {
         });
         *self = Self {
             filter: self.filter.take(),
+            basis: self.basis,
             tick_size: self.tick_size,
             replay,
             revision,
