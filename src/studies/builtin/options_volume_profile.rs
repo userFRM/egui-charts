@@ -1034,6 +1034,7 @@ impl Indicator for OptionsVolumeProfile {
             config,
             color: color.to_srgba_unmultiplied(),
             right_aligned,
+            strip: Some(0.3),
             width,
         }]
     }
@@ -2018,6 +2019,7 @@ mod tests {
                                     100.0..300.0,
                                     crate::painting::volume_profile::ProfileStyle::Study {
                                         right_aligned: true,
+                                        strip: true,
                                         width: 0.9,
                                     },
                                     &|price| 300.0 + direction * (price - 105.0) as f32,

@@ -12,8 +12,16 @@ pub(crate) fn profile_span(plot: &StudyProfile, coords: &super::ChartMapping) ->
     if plot.bars.is_empty() {
         return 0.0..0.0;
     }
-    if plot.right_aligned {
-        coords.rect.right() - coords.rect.width() * 0.3..coords.rect.right()
+    if let Some(share) = plot.strip {
+        if share.is_nan() || share <= 0.0 {
+            return 0.0..0.0;
+        }
+        let width = coords.rect.width() * share.min(1.0);
+        if plot.right_aligned {
+            coords.rect.right() - width..coords.rect.right()
+        } else {
+            coords.rect.left()..coords.rect.left() + width
+        }
     } else if plot.profile.source() == ProfileSource::Options {
         // Strikes have no bars to stand beside.
         coords.rect.left()..coords.rect.left() + coords.rect.width() * 0.3
@@ -54,7 +62,7 @@ pub(crate) fn hit_profile(
         // The point of control of a profile of the bars in view crosses the plot, past its rows.
         if !in_span
             && (profile.exposure.is_some()
-                || !crate::painting::volume_profile::measures_view(profile, plot.right_aligned))
+                || !crate::painting::volume_profile::measures_view(profile, plot.strip.is_some()))
         {
             return None;
         }
@@ -76,37 +84,47 @@ pub(crate) fn hit_profile(
         }
         let (poc, (va_low, va_high)) = profile.poc_and_value_area(plot.config.value_area())?;
         let y_at = |row: usize| price_to_y(profile.low + row as f64 * profile.row_height);
-        let on_poc = (point.y - (y_at(poc) + y_at(poc + 1)) * 0.5).abs() <= tolerance;
+        let on_poc = plot.config.show_poc
+            && (point.y - (y_at(poc) + y_at(poc + 1)) * 0.5).abs() <= tolerance;
         // Value area lines select only where they are painted.
-        let on_value_area = plot.config.show_value_area_lines
-            && in_span
-            && [y_at(va_low), y_at(va_high + 1)]
-                .into_iter()
-                .any(|y| (point.y - y).abs() <= tolerance);
-        let on_row = profile.volume.iter().enumerate().any(|(row, &volume)| {
-            let amount = if plot.config.display == ProfileDisplay::Delta {
-                (profile.up[row] - profile.down[row]).abs()
-            } else {
-                volume
-            };
-            if amount <= 0.0 {
-                return false;
-            }
-            let width =
-                (amount / profile.volume[poc]) as f32 * (span.end - span.start) * plot.width;
-            let left = if plot.right_aligned {
-                span.end - width
-            } else {
-                span.start
-            };
-            let (a, b) = (y_at(row), y_at(row + 1));
-            let top = a.min(b);
-            let bottom = a.max(b);
-            let bottom = bottom - ((bottom - top) * 0.5).min(1.0);
-            Rect::from_min_max(Pos2::new(left, top), Pos2::new(left + width, bottom))
-                .expand(tolerance)
-                .contains(point)
-        });
+        let on_value_area = in_span
+            && [
+                (
+                    y_at(va_high + 1),
+                    plot.config.show_value_area_lines || plot.config.show_value_area_high,
+                ),
+                (
+                    y_at(va_low),
+                    plot.config.show_value_area_lines || plot.config.show_value_area_low,
+                ),
+            ]
+            .into_iter()
+            .any(|(y, shown)| shown && (point.y - y).abs() <= tolerance);
+        let on_row = plot.config.show_rows
+            && profile.volume.iter().enumerate().any(|(row, &volume)| {
+                let amount = if plot.config.display == ProfileDisplay::Delta {
+                    (profile.up[row] - profile.down[row]).abs()
+                } else {
+                    volume
+                };
+                if amount <= 0.0 {
+                    return false;
+                }
+                let width =
+                    (amount / profile.volume[poc]) as f32 * (span.end - span.start) * plot.width;
+                let left = if plot.right_aligned {
+                    span.end - width
+                } else {
+                    span.start
+                };
+                let (a, b) = (y_at(row), y_at(row + 1));
+                let top = a.min(b);
+                let bottom = a.max(b);
+                let bottom = bottom - ((bottom - top) * 0.5).min(1.0);
+                Rect::from_min_max(Pos2::new(left, top), Pos2::new(left + width, bottom))
+                    .expand(tolerance)
+                    .contains(point)
+            });
         (on_row || on_poc || on_value_area).then(|| {
             coords
                 .x_to_idx(point.x)
