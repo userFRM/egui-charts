@@ -10,7 +10,7 @@ use crate::theme::ThemeExt;
 use crate::ui_kit::buttons::{Button, ButtonSize, IconButton};
 use crate::ui_kit::dialog::DialogFooter;
 use crate::ui_kit::modal::Modal;
-use chrono::{DateTime, Datelike, Days, Months, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Days, Months, NaiveDate, NaiveTime, Utc};
 use egui::text::CCursorRange;
 use egui::{
     Align, Align2, FontId, Key, Label, Layout, Modifiers, RichText, Role, Sense, Stroke,
@@ -24,6 +24,9 @@ const CELL: f32 = 32.0;
 const LINE: f32 = 16.0;
 /// Format of the date field.
 const DATE_FORMAT: &str = "%Y-%m-%d";
+
+/// Format of the time fields.
+const TIME_FORMAT: &str = "%H:%M";
 
 /// The date at `now` in `timezone`.
 fn today_in(now: DateTime<Utc>, timezone: &TimezoneMode) -> NaiveDate {
@@ -41,16 +44,42 @@ fn parse_date(text: &str) -> Option<NaiveDate> {
         .filter(|date| (1..=9999).contains(&date.year()))
 }
 
+/// The time in `text`: empty means the day's boundary.
+fn parse_time(text: &str) -> Result<Option<NaiveTime>, ()> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    NaiveTime::parse_from_str(text, TIME_FORMAT)
+        .map(Some)
+        .map_err(|_| ())
+}
+
 /// Action from date picker
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum DatePickerAction {
     /// No action requested.
     None,
-    /// Navigate to the supplied calendar date.
-    GoToDate(NaiveDate),
-    /// The first and the last day of the range, both included.
-    SetRange(NaiveDate, NaiveDate),
+    /// Go to `date`, at `time` when entered, in the time zone the chart shows.
+    GoToDate {
+        /// The day.
+        date: NaiveDate,
+        /// The time of day, or its start. Always `None` on daily and longer intervals.
+        time: Option<NaiveTime>,
+    },
+    /// Show the days from `start` to `end`, both included, in the time zone the chart shows,
+    /// between the entered times or the days' boundaries.
+    SetRange {
+        /// The first day.
+        start: NaiveDate,
+        /// The time on the first day, or its start.
+        start_time: Option<NaiveTime>,
+        /// The last day, not before `start`.
+        end: NaiveDate,
+        /// The time on the last day, or its end.
+        end_time: Option<NaiveTime>,
+    },
     /// Cancel the current interaction.
     Cancel,
 }
@@ -70,6 +99,12 @@ pub struct DatePicker {
     displayed_month: NaiveDate,
     /// Date input text
     date_input: String,
+    /// Whether the chart takes times within a day.
+    intraday: bool,
+    /// Optional time on the selected date or the range's first day.
+    time_input: String,
+    /// Optional time on the range's last day.
+    end_time_input: String,
     /// Custom range mode
     custom_range_mode: bool,
     /// Range start date
@@ -97,6 +132,9 @@ impl DatePicker {
             went_to: None,
             displayed_month: today,
             date_input: today.format(DATE_FORMAT).to_string(),
+            intraday: false,
+            time_input: String::new(),
+            end_time_input: String::new(),
             custom_range_mode: false,
             range_start: None,
             range_end: None,
@@ -106,8 +144,13 @@ impl DatePicker {
 
     /// Opens on today in `timezone`, the zone the chart shows its times in, or on the date
     /// the picker last went to once Go was used.
-    pub fn open_in(&mut self, timezone: TimezoneMode) {
+    /// With `intraday`, Go to date and both ends of a custom range take an optional time of day
+    /// as `HH:MM`; pass `false` for daily and longer intervals.
+    pub fn open_in(&mut self, timezone: TimezoneMode, intraday: bool) {
         self.timezone = timezone;
+        self.intraday = intraday;
+        self.time_input.clear();
+        self.end_time_input.clear();
         self.sel_date = self.went_to.unwrap_or_else(|| self.today());
         self.is_open = true;
         self.date_input = self.sel_date.format(DATE_FORMAT).to_string();
@@ -118,9 +161,15 @@ impl DatePicker {
     }
 
     /// [`open_in`](Self::open_in) the zone `chart` shows: its
-    /// [`display_timezone`](crate::widget::Chart::display_timezone).
+    /// [`display_timezone`](crate::widget::Chart::display_timezone), with time fields below a
+    /// day's interval, on trade-based intervals and when the chart has no interval.
     pub fn open_for_chart(&mut self, chart: &crate::widget::Chart) {
-        self.open_in(chart.display_timezone());
+        self.open_in(
+            chart.display_timezone(),
+            chart
+                .timeframe()
+                .is_none_or(|tf| tf.duration_ms() < 86_400_000),
+        );
     }
 
     fn today(&self) -> NaiveDate {
@@ -160,6 +209,8 @@ impl DatePicker {
         let row_height = ButtonSize::MD.pixels();
         let mut field_valid = true;
         let mut typed = None;
+        let mut time = Ok(None);
+        let mut end_time = Ok(None);
 
         ui.scope(|ui| {
             ui.spacing_mut().item_spacing.y = theme.spacing.lg;
@@ -214,17 +265,65 @@ impl DatePicker {
                 self.pick(date);
             }
 
+            if self.intraday {
+                let field = |ui: &mut Ui, label: &str, input: &mut String| {
+                    let label = ui.label(l10n::text(ui.ctx(), label));
+                    let response = TextEdit::singleline(input)
+                        .desired_width(f32::INFINITY)
+                        .min_size(Vec2::new(0.0, row_height))
+                        .align(Align2::LEFT_CENTER)
+                        .hint_text(l10n::text(ui.ctx(), "HH:MM"))
+                        .show(ui)
+                        .response
+                        .response
+                        .labelled_by(label.id);
+                    if parse_time(input).is_err() {
+                        ui.painter().rect_stroke(
+                            response.rect,
+                            ui.visuals().widgets.inactive.corner_radius,
+                            Stroke::new(1.0, theme.ui.error),
+                            StrokeKind::Inside,
+                        );
+                    }
+                };
+                if self.custom_range_mode {
+                    ui.columns(2, |columns| {
+                        field(&mut columns[0], "Start time", &mut self.time_input);
+                        field(&mut columns[1], "End time", &mut self.end_time_input);
+                    });
+                } else {
+                    field(ui, "Time", &mut self.time_input);
+                }
+                time = parse_time(&self.time_input);
+                if self.custom_range_mode {
+                    end_time = parse_time(&self.end_time_input);
+                }
+            }
+            let ordered = self.range_start != self.range_end
+                || !matches!((time, end_time), (Ok(Some(start)), Ok(Some(end))) if end <= start);
+
             // Always one line, so the dialog keeps its height while a range is picked.
             let (status, color) = if !field_valid {
                 (
                     l10n::text(ui.ctx(), "Enter a date as YYYY-MM-DD"),
                     theme.ui.error,
                 )
-            } else if !self.custom_range_mode {
+            } else if time.is_err() || end_time.is_err() {
                 (
-                    self.sel_date.format("%A %-d %B %Y").to_string(),
-                    theme.ui.text_secondary,
+                    l10n::text(ui.ctx(), "Enter the time as HH:MM"),
+                    theme.ui.error,
                 )
+            } else if self.custom_range_mode && self.range_start.is_some() && !ordered {
+                (
+                    l10n::text(ui.ctx(), "The end must be after the start"),
+                    theme.ui.error,
+                )
+            } else if !self.custom_range_mode {
+                let mut text = self.sel_date.format("%A %-d %B %Y").to_string();
+                if let Ok(Some(time)) = time {
+                    let _ = write!(text, " {}", time.format(TIME_FORMAT));
+                }
+                (text, theme.ui.text_secondary)
             } else {
                 let text = match (self.range_start, self.range_end) {
                     (Some(start), Some(end)) => {
@@ -232,6 +331,12 @@ impl DatePicker {
                         let mut end_text = String::with_capacity(10);
                         let _ = write!(start_text, "{start}");
                         let _ = write!(end_text, "{end}");
+                        if let Ok(Some(time)) = time {
+                            let _ = write!(start_text, " {}", time.format(TIME_FORMAT));
+                        }
+                        if let Ok(Some(time)) = end_time {
+                            let _ = write!(end_text, " {}", time.format(TIME_FORMAT));
+                        }
                         l10n::format_text(
                             ui.ctx(),
                             "From {start} to {end}",
@@ -241,6 +346,9 @@ impl DatePicker {
                     (Some(start), None) => {
                         let mut start_text = String::with_capacity(10);
                         let _ = write!(start_text, "{start}");
+                        if let Ok(Some(time)) = time {
+                            let _ = write!(start_text, " {}", time.format(TIME_FORMAT));
+                        }
                         l10n::format_text(
                             ui.ctx(),
                             "From {start}, pick the last day",
@@ -312,11 +420,18 @@ impl DatePicker {
         });
 
         let range = self.range_start.zip(self.range_end);
-        let can_go = if self.custom_range_mode {
-            range.is_some()
-        } else {
-            field_valid
-        };
+        let ordered = range.is_none_or(|(start, end)| {
+            start != end
+                || !matches!((time, end_time), (Ok(Some(start)), Ok(Some(end))) if end <= start)
+        });
+        let can_go = field_valid
+            && time.is_ok()
+            && end_time.is_ok()
+            && if self.custom_range_mode {
+                range.is_some() && ordered
+            } else {
+                true
+            };
 
         let mut today_clicked = false;
         let (go, cancel) = DialogFooter::new("Go")
@@ -338,11 +453,19 @@ impl DatePicker {
             match range {
                 Some((start, end)) if self.custom_range_mode => {
                     self.went_to = Some(start);
-                    DatePickerAction::SetRange(start, end)
+                    DatePickerAction::SetRange {
+                        start,
+                        start_time: time.ok().flatten(),
+                        end,
+                        end_time: end_time.ok().flatten(),
+                    }
                 }
                 _ => {
                     self.went_to = Some(self.sel_date);
-                    DatePickerAction::GoToDate(self.sel_date)
+                    DatePickerAction::GoToDate {
+                        date: self.sel_date,
+                        time: time.ok().flatten(),
+                    }
                 }
             }
         } else if cancel {
@@ -489,6 +612,193 @@ mod tests {
                 expected,
                 "{zone:?}"
             );
+        }
+    }
+
+    /// Intraday times reach the appropriate action end; invalid times cannot navigate, while
+    /// daily charts retain whole-day actions. Only a date applied with Go survives reopening.
+    #[test]
+    fn go_to_date_takes_a_time_on_intraday_charts() {
+        use crate::model::{BarData, Timeframe};
+        use crate::theme::Theme;
+        use crate::widget::Chart;
+        use egui::Role;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+
+        let day = |day| NaiveDate::from_ymd_opt(2026, 11, day).unwrap();
+        let time = |hour, minute| Some(NaiveTime::from_hms_opt(hour, minute, 0).unwrap());
+        let single = |time| {
+            Some(DatePickerAction::GoToDate {
+                date: day(17),
+                time,
+            })
+        };
+        let range = |start_time, end_time| {
+            Some(DatePickerAction::SetRange {
+                start: day(10),
+                start_time,
+                end: day(17),
+                end_time,
+            })
+        };
+        for theme in [Theme::light(), Theme::dark()] {
+            for (interval, days, start_time, end_time, expected) in [
+                (
+                    Some(Timeframe::Min1),
+                    None,
+                    "14:30",
+                    "",
+                    single(time(14, 30)),
+                ),
+                (Some(Timeframe::Min1), None, "", "", single(None)),
+                (Some(Timeframe::Min1), None, "25:00", "", None),
+                (Some(Timeframe::Day1), None, "", "", single(None)),
+                (None, None, "14:30", "", single(time(14, 30))),
+                (
+                    Some("2t".parse().unwrap()),
+                    None,
+                    "14:30",
+                    "",
+                    single(time(14, 30)),
+                ),
+                (
+                    Some(Timeframe::Min1),
+                    Some((10, 17)),
+                    "09:30",
+                    "16:00",
+                    range(time(9, 30), time(16, 0)),
+                ),
+                (
+                    Some(Timeframe::Min1),
+                    Some((17, 17)),
+                    "16:00",
+                    "09:30",
+                    None,
+                ),
+                (
+                    Some(Timeframe::Min1),
+                    Some((17, 17)),
+                    "09:30",
+                    "09:30",
+                    None,
+                ),
+                (
+                    Some(Timeframe::Min1),
+                    Some((10, 17)),
+                    "09:30",
+                    "25:00",
+                    None,
+                ),
+                (
+                    Some(Timeframe::Day1),
+                    Some((10, 17)),
+                    "",
+                    "",
+                    range(None, None),
+                ),
+            ] {
+                let mut chart = Chart::new(BarData::new());
+                if let Some(interval) = interval {
+                    chart.set_timeframe(interval);
+                }
+                let intraday = interval.is_none_or(|tf| tf.duration_ms() < 86_400_000);
+                let mut picker = DatePicker::new();
+                picker.open_for_chart(&chart);
+                let theme = theme.clone();
+                let mut h = Harness::builder()
+                    .allow_missing_glyphs()
+                    .with_size(Vec2::new(1440.0, 900.0))
+                    .with_context_setup(move |ctx| crate::theme::apply_to_egui(ctx, &theme))
+                    .build_ui_state(
+                        |ui, state: &mut (DatePicker, Option<DatePickerAction>)| {
+                            let action = state.0.show(ui.ctx());
+                            if action != DatePickerAction::None {
+                                state.1 = Some(action);
+                            }
+                        },
+                        (picker, None),
+                    );
+                h.run();
+                h.get_by_role_and_label(Role::TextInput, "Date")
+                    .type_text("2026-11-17");
+                h.run();
+                if let Some((start, end)) = days {
+                    h.get_by_role_and_label(Role::CheckBox, "Custom range")
+                        .click();
+                    h.run();
+                    for date in [day(start), day(end)] {
+                        h.get_by_role_and_label(
+                            Role::Button,
+                            &date.format("%A %-d %B %Y").to_string(),
+                        )
+                        .click();
+                        h.run();
+                    }
+                }
+                for (label, text) in if days.is_some() {
+                    [("Start time", start_time), ("End time", end_time)]
+                } else {
+                    [("Time", start_time), ("Time", "")]
+                } {
+                    if intraday {
+                        if !text.is_empty() {
+                            h.get_by_role_and_label(Role::TextInput, label).focus();
+                            h.run();
+                            h.get_by_role_and_label(Role::TextInput, label)
+                                .type_text(text);
+                            h.run();
+                        }
+                    } else {
+                        assert!(h.query_by_role_and_label(Role::TextInput, label).is_none());
+                    }
+                }
+                let go = h.get_by_role_and_label(Role::Button, "Go");
+                assert_eq!(
+                    go.accesskit_node().is_disabled(),
+                    expected.is_none(),
+                    "{interval:?} {days:?} {start_time} {end_time}"
+                );
+                if let Some(expected) = expected {
+                    go.click();
+                    h.run();
+                    assert_eq!(h.state().1.as_ref(), Some(&expected));
+                    let went_to = match expected {
+                        DatePickerAction::GoToDate { date, .. } => date,
+                        DatePickerAction::SetRange { start, .. } => start,
+                        _ => unreachable!(),
+                    };
+                    h.state_mut().0.open_for_chart(&chart);
+                    h.run();
+                    assert_eq!(h.state().0.sel_date, went_to);
+                    if intraday {
+                        let label = if days.is_some() { "Start time" } else { "Time" };
+                        assert_eq!(
+                            h.get_by_role_and_label(Role::TextInput, label)
+                                .accesskit_node()
+                                .value()
+                                .as_deref(),
+                            Some("")
+                        );
+                    }
+                    h.get_by_role_and_label(Role::TextInput, "Date")
+                        .type_text("2026-11-18");
+                    h.run();
+                    h.get_by_role_and_label(Role::Button, "Cancel").click();
+                    h.run();
+                    h.state_mut().0.open_for_chart(&chart);
+                    h.run();
+                    assert_eq!(
+                        h.state().0.sel_date,
+                        went_to,
+                        "Cancel preserves the last Go"
+                    );
+                } else {
+                    assert_eq!(h.state().1, None);
+                }
+            }
         }
     }
 }

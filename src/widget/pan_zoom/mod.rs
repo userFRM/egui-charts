@@ -811,7 +811,9 @@ impl Chart {
         {
             let bars = &self.state.data().bars;
             let next = bars.partition_point(|bar| bar.time < time);
-            let index = if next == 0 {
+            let index = if self.pending_scroll_next {
+                next.min(bars.len() - 1)
+            } else if next == 0 {
                 0
             } else if next == bars.len() || time - bars[next - 1].time <= bars[next].time - time {
                 next - 1

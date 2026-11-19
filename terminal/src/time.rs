@@ -3,7 +3,7 @@
 use super::core::Direction;
 use super::layout::{Region, panel_frame};
 use super::{Action, Terminal};
-use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, NaiveTime, TimeZone, Utc, Weekday};
+use chrono::{Datelike, Duration, Months, NaiveDate, NaiveTime, TimeZone, Utc, Weekday};
 use egui_charts::Chart;
 use egui_charts::config::{KeyboardAction, TimezoneMode};
 use egui_charts::localization as l10n;
@@ -116,8 +116,15 @@ impl Terminal {
                 bar => return Some(Action::BottomBar(bar)),
             },
             Action::DatePicker(picker) => match picker {
-                DatePickerAction::GoToDate(date) => self.go_to_date(date),
-                DatePickerAction::SetRange(start, end) => self.set_date_range(start, end),
+                DatePickerAction::GoToDate { date, time } => self.go_to_date(date, time),
+                DatePickerAction::SetRange {
+                    start,
+                    start_time,
+                    end,
+                    end_time,
+                } => {
+                    self.set_date_range(start, start_time, end, end_time);
+                }
                 _ => {}
             },
             Action::Shortcut(ShortcutRequest::IntervalEntry(text)) => self.open_entry(text),
@@ -216,15 +223,18 @@ impl Terminal {
         }
     }
 
-    /// Shows the days `start` to `end`, both included, in the zone of the active chart.
-    fn set_date_range(&mut self, start: NaiveDate, end: NaiveDate) {
-        let chart = self.chart();
-        let Some((from, next)) = local_midnight(chart, start)
-            .zip(end.succ_opt().and_then(|next| local_midnight(chart, next)))
-        else {
-            return;
-        };
-        self.apply_span(VisibleTimeRange::new(from, next - Duration::seconds(1)));
+    /// Shows the days `start` to `end`, both included, or the times on them, in the active
+    /// chart's zone.
+    fn set_date_range(
+        &mut self,
+        start: NaiveDate,
+        start_time: Option<NaiveTime>,
+        end: NaiveDate,
+        end_time: Option<NaiveTime>,
+    ) {
+        let mut slots: Vec<_> = self.charts.iter_mut().collect();
+        self.layout
+            .apply_local_date_range(&mut slots, start, start_time, end, end_time);
     }
 
     fn apply_span(&mut self, span: VisibleTimeRange) {
@@ -232,32 +242,10 @@ impl Terminal {
         self.layout.apply_date_range(&mut slots, span);
     }
 
-    /// Scrolls the active chart, and the charts synchronised with it, to the first bar of
-    /// `date` in each chart's own time zone.
-    fn go_to_date(&mut self, date: NaiveDate) {
-        let active = self.active;
-        for index in 0..self.charts.len() {
-            let synced = self.layout.sync.sync_date_range
-                && self.layout.sync_group(index) == self.layout.sync_group(active);
-            if index != active && !synced {
-                continue;
-            }
-            let chart = &mut self.charts[index];
-            let Some(start) = local_midnight(chart, date) else {
-                continue;
-            };
-            let bars = chart.bars(SeriesId::MAIN);
-            // Before the loaded history the chart requests older bars up to the day.
-            let target = if bars.first().is_some_and(|bar| bar.time <= start) {
-                bars.iter()
-                    .find(|bar| bar.time >= start)
-                    .or(bars.last())
-                    .map_or(start, |bar| bar.time)
-            } else {
-                start
-            };
-            chart.scroll_to_time(target);
-        }
+    /// Goes to the local date and time on the active chart and its linked charts.
+    fn go_to_date(&mut self, date: NaiveDate, time: Option<NaiveTime>) {
+        let mut slots: Vec<_> = self.charts.iter_mut().collect();
+        self.layout.go_to_local_time(&mut slots, date, time);
     }
 
     fn open_entry(&mut self, text: String) {
@@ -443,30 +431,6 @@ fn zone_name(chart: &Chart) -> String {
         || chrono::Local::now().offset().to_string(),
         |zone| zone.name().to_owned(),
     )
-}
-
-/// The first instant of `date` in the chart's time zone.
-fn local_midnight(chart: &Chart, date: NaiveDate) -> Option<DateTime<Utc>> {
-    let zone = chart_zone(chart);
-    let mut midnight = date.and_time(NaiveTime::MIN);
-    // A skipped midnight starts at the clock jump; a repeated midnight starts at its first instant.
-    for _ in 0..=24 * 60 * 60 {
-        let instant = match &zone {
-            Some(zone) => zone
-                .from_local_datetime(&midnight)
-                .earliest()
-                .map(|t| t.to_utc()),
-            None => chrono::Local
-                .from_local_datetime(&midnight)
-                .earliest()
-                .map(|t| t.to_utc()),
-        };
-        if instant.is_some() {
-            return instant;
-        }
-        midnight = midnight.checked_add_signed(Duration::seconds(1))?;
-    }
-    None
 }
 
 /// How many of `bars` fall in the lookback `range` ending at the latest bar. Session gaps and
@@ -819,7 +783,12 @@ mod tests {
                 terminal.layout.sync.sync_date_range = sync;
                 terminal.top_toolbar.chart_grid_selector.sync = terminal.layout.sync.clone();
                 let before = terminal.charts[1].get_time_scale_state();
-                terminal.run(Action::DatePicker(DatePickerAction::SetRange(day, day)));
+                terminal.run(Action::DatePicker(DatePickerAction::SetRange {
+                    start: day,
+                    start_time: None,
+                    end: day,
+                    end_time: None,
+                }));
                 frame(&mut terminal, size, vec![]);
                 for chart in terminal.charts.iter().take(if sync { 2 } else { 1 }) {
                     let span = chart.visible_time_range().unwrap();
@@ -867,7 +836,10 @@ mod tests {
         let mut terminal = terminal("AAPL", Timeframe::Hour1);
         pick_zone(&mut terminal, "America/New_York");
         // New York midnight is 05:00 UTC in winter. The first bar of the local day opens then.
-        terminal.run(Action::DatePicker(DatePickerAction::GoToDate(day(29))));
+        terminal.run(Action::DatePicker(DatePickerAction::GoToDate {
+            date: day(29),
+            time: None,
+        }));
         frame(&mut terminal, SIZE, vec![]);
         frame(&mut terminal, SIZE, vec![]);
         let span = terminal.chart().visible_time_range().unwrap();
@@ -877,10 +849,12 @@ mod tests {
             "{span:?}"
         );
         // The range holds both days: from 05:00 UTC on the 28th to 05:00 UTC on the 30th.
-        terminal.run(Action::DatePicker(DatePickerAction::SetRange(
-            day(28),
-            day(29),
-        )));
+        terminal.run(Action::DatePicker(DatePickerAction::SetRange {
+            start: day(28),
+            start_time: None,
+            end: day(29),
+            end_time: None,
+        }));
         frame(&mut terminal, SIZE, vec![]);
         let span = terminal.chart().visible_time_range().unwrap();
         assert!(

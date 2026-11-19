@@ -101,6 +101,7 @@ impl Chart {
             scroll_start_spacing: None,
             pending_start_idx: None,
             pending_scroll_time: None,
+            pending_scroll_next: false,
             pending_visible_range: None,
             scroll_animation: None,
             time_axis_rect: egui::Rect::NOTHING,
@@ -440,9 +441,25 @@ impl Chart {
     /// [`Chart::set_start_idx`] or tracking cancel it.
     pub fn scroll_to_time(&mut self, time: chrono::DateTime<chrono::Utc>) {
         self.pending_scroll_time = Some(time);
+        self.pending_scroll_next = false;
         self.pending_start_idx = None;
         self.disable_tracking_mode();
         self.kinetic_scroll = KineticScrollState::new();
+    }
+
+    /// Centres the first bar at or after `time` on `date`, or after the start of `date` without
+    /// a time, keeping the zoom. Dates read on the chart's calendar: the
+    /// [zone it shows](Self::display_timezone), or UTC where supplied bars of a day or longer
+    /// carry their trading date at 00:00 UTC. A wall time the clocks skip goes to the jump and a
+    /// repeated one to its first occurrence. A time after the last bar shows the last bar, and
+    /// with a feed a time before the loaded bars requests older history until it is reached, as
+    /// [`Chart::scroll_to_time`] does; panning, zooming or tracking cancel it. Applied on the
+    /// next frame. A date beyond the range chrono represents is ignored.
+    pub fn go_to_local_time(&mut self, date: chrono::NaiveDate, time: Option<chrono::NaiveTime>) {
+        if let Some(instant) = self.local_date_instant(date, time) {
+            self.scroll_to_time(instant);
+            self.pending_scroll_next = true;
+        }
     }
 
     /// Sets the chart type (Candles, Bars, Line, Area, Renko, Kagi).
