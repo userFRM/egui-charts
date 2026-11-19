@@ -373,8 +373,8 @@ impl Trading {
             let numbers = self.numbers(action_symbol, symbol);
             let (title, message, confirm) = describe(ui.ctx(), action, &numbers);
             let mut open = true;
-            let confirmed = if let (TradingLineAction::Close(position), Some(quantity)) =
-                (action, self.close_quantity.as_mut())
+            let confirmed = if let (TradingLineAction::Close(position), Some(mut quantity)) =
+                (action, self.close_quantity)
             {
                 let rules = if self.rules_ready && self.rules.symbol == position.symbol {
                     Ok(&self.rules)
@@ -383,16 +383,18 @@ impl Trading {
                 } else {
                     Err("Waiting for the symbol's trading rules")
                 };
-                close_dialog(
+                let confirmed = close_dialog(
                     ui.ctx(),
-                    title,
                     &message,
                     position.quantity.abs(),
-                    quantity,
+                    &mut quantity,
                     rules,
+                    &numbers,
                     &mut open,
                 )
-                .map(Some)
+                .map(Some);
+                self.close_quantity = Some(quantity);
+                confirmed
             } else {
                 ConfirmDialog::new("trading_confirm", title, message)
                     .confirm_text(confirm)
@@ -669,15 +671,15 @@ fn calculator(ui: &mut egui::Ui, text: &mut String, quantity: &mut f64, rules: &
 /// Dismissal sets `open` to false; confirmation returns the checked quantity.
 fn close_dialog(
     ctx: &egui::Context,
-    title: &str,
     message: &str,
     size: f64,
     quantity: &mut f64,
     rules: Result<&TradingRules, &str>,
+    numbers: &Numbers<'_>,
     open: &mut bool,
 ) -> Option<f64> {
     use super::widgets::{field, muted, number};
-    let response = Modal::new("trading_close", title)
+    let response = Modal::new("trading_close", "Close position")
         .width(DESIGN_TOKENS.sizing.dialog.confirm_width)
         .show(ctx, open, |ui| {
             ui.label(message);
@@ -695,9 +697,8 @@ fn close_dialog(
                 });
             });
             let part = match rules {
-                Ok(rules) => {
-                    close_part(*quantity, size, rules).map_err(|limit| limit.message(ui.ctx()))
-                }
+                Ok(rules) => close_part(*quantity, size, rules)
+                    .map_err(|limit| limit.message(ui.ctx(), numbers, places)),
                 Err(reason) => {
                     muted(ui, reason);
                     Ok(size)
@@ -2032,42 +2033,68 @@ mod tests {
     fn a_partial_close_sends_the_typed_quantity_in_the_symbols_steps() {
         use crate::model::TimeInForce;
         use egui_kittest::{Harness, kittest::Queryable};
-        // (partial close, rules answered, typed quantity, message shown, quantity placed)
+        struct Lots;
+        impl TradingFormatter for Lots {
+            fn quantity(&self, symbol: &str, quantity: f64) -> Option<String> {
+                (symbol == "SYM").then(|| format!("{quantity} lots"))
+            }
+        }
+        // (partial close, rules answered, host text, typed quantity, message shown, quantity placed)
         type Row = (
+            bool,
             bool,
             bool,
             Option<&'static str>,
             Option<&'static str>,
             Option<f64>,
         );
-        let below = "The quantity is below the minimum of 1";
-        let rows: [Row; 7] = [
-            (true, true, None, None, Some(3.0)),
-            (true, true, Some("2.7"), None, Some(2.5)),
-            (true, true, Some("1"), None, Some(1.0)),
-            (true, true, Some("0.9"), Some(below), None),
+        let below = "The quantity is below the minimum of 1.0";
+        let rows: [Row; 10] = [
+            (true, true, false, None, None, Some(3.0)),
+            (true, true, false, Some("2.7"), None, Some(2.5)),
+            (true, true, false, Some("1"), None, Some(1.0)),
+            (true, true, false, Some("0.9"), Some(below), None),
             (
                 true,
                 true,
+                false,
                 Some("3.5"),
-                Some("The quantity is above the maximum of 3"),
+                Some("The quantity is above the maximum of 3.0"),
                 None,
             ),
             (
                 true,
                 false,
+                false,
                 None,
                 Some("Waiting for the symbol's trading rules"),
                 Some(3.0),
             ),
-            (false, true, None, None, Some(3.0)),
+            (false, true, false, None, None, Some(3.0)),
+            (true, true, true, Some("2.7"), None, Some(2.5)),
+            (
+                true,
+                true,
+                true,
+                Some("0.9"),
+                Some("The quantity is below the minimum of 1 lots"),
+                None,
+            ),
+            (
+                true,
+                true,
+                true,
+                Some("3.5"),
+                Some("The quantity is above the maximum of 3 lots"),
+                None,
+            ),
         ];
         let mut rules = TradingRules::new("SYM");
         rules.quantity_step = 0.5;
         rules.min_quantity = 1.0;
         rules.max_quantity = Some(2.5);
         rules.time_in_force = vec![TimeInForce::GoodTillCancelled];
-        for (partial_close, ready, typed, message, placed) in rows {
+        for (partial_close, ready, host, typed, message, placed) in rows {
             let broker = Arc::new(Recorder {
                 state: vec![AccountEvent::Position(Position::new("SYM", 3.0, 100.0))],
                 partial_close,
@@ -2080,6 +2107,9 @@ mod tests {
             };
             let mut trading = Trading::default();
             trading.set_service(broker.clone());
+            if host {
+                trading.set_formatter(Some(Arc::new(Lots)));
+            }
             trading.poll(&egui::Context::default(), &mut Toasts::new());
             trading.account_panel.broker = "Broker".into();
             let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
