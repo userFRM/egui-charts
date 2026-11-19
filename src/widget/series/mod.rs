@@ -794,20 +794,42 @@ impl Chart {
         merged
     }
 
-    /// Removes a bar series or study and clears its selection. Removing the main series retains
-    /// the time axis for the remaining series and drawings and pauses its feed; on a chart without
-    /// the original pane its bars stay live instead, as [`remove_pane`](Self::remove_pane)
-    /// describes. Undo of the [`user_action`](Self::user_action) that removed a bar series
-    /// restores it with its markers, price lines, formatter and bar limit, and for the main
-    /// series the feed follows [`set_feed_paused`](Self::set_feed_paused) again. Returns `false`
-    /// for an unknown or already removed id.
+    /// Removes a bar series or study and clears its selection. Removing a study also removes the
+    /// studies that read its output ([`StudySource::Study`](crate::model::StudySource::Study)),
+    /// directly or through other studies, except a study whose
+    /// [user edits](Self::set_indicator_user_edit_enabled) are off: it keeps the removed id as its
+    /// source and shows no values until the host removes it or gives it another source. Removing
+    /// the main series retains the time axis for the remaining series and drawings and pauses its
+    /// feed; on a chart without the original pane its bars stay live instead, as
+    /// [`remove_pane`](Self::remove_pane) describes. Undo of the [`user_action`](Self::user_action)
+    /// that removed a bar series restores it with its markers, price lines, formatter and bar
+    /// limit, and for the main series the feed follows [`set_feed_paused`](Self::set_feed_paused)
+    /// again; undo of one that removed studies restores all of them, each reading its source
+    /// again. Returns `false` for an unknown or already removed id.
     ///
     /// The drawings that an added series or a study owns stay drawn in its pane, which takes
     /// them over as it takes a drawing moved into it. When the pane goes with the series or
     /// study, they are deleted with the pane's own drawings, locked ones included, as
     /// [`remove_pane`](Self::remove_pane) deletes them, and undo of the user action brings them
-    /// back.
+    /// back. A drawing being placed in the pane follows the same rule: the pane's next owner
+    /// takes it, or it is cancelled with the pane, and the drawing tool stays selected.
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
+        #[cfg(feature = "drawings")]
+        let placed = self.placement_pane();
+        let dependents = self.study_dependents(id);
+        let removed = self.remove_one_series(id);
+        if removed {
+            for dependent in dependents {
+                self.remove_one_series(dependent);
+            }
+        }
+        #[cfg(feature = "drawings")]
+        self.keep_placement_in(placed);
+        removed
+    }
+
+    /// Removes `id` alone and releases the drawings it owned.
+    fn remove_one_series(&mut self, id: SeriesId) -> bool {
         #[cfg(feature = "drawings")]
         let pane = self.series_pane(id).filter(|_| id != SeriesId::MAIN);
         let removed = self.remove_series_keeping_drawings(id);
@@ -818,15 +840,19 @@ impl Chart {
         removed
     }
 
-    /// Keeps drawn the drawings that `id`, just removed from `pane`, owned: the pane takes them
-    /// over as it takes a drawing moved into it. When the pane went with `id`, they are deleted
-    /// with the pane's own drawings, locked ones included, as `remove_pane` deletes them.
+    /// Keeps drawn the drawings that `id`, just removed from `pane`, owned, and the drawing being
+    /// placed there: the pane takes them over as it takes a drawing moved into it. When the pane
+    /// went with `id`, they are deleted with the pane's own drawings, locked ones included, as
+    /// `remove_pane` deletes them.
     #[cfg(feature = "drawings")]
     fn release_drawings(&mut self, id: SeriesId, pane: super::PaneId) {
         let held = |drawing: &crate::drawings::Drawing| {
             drawing.pane == Some(id.0) || drawing.pane == Some(pane.0)
         };
-        if !self.drawings.drawings.iter().any(held) {
+        // The drawing being placed counts from its first anchor, as its gesture does.
+        let placing = (self.drawings.curr_drawing.as_ref())
+            .is_some_and(|drawing| !drawing.chart_points.is_empty() && held(drawing));
+        if !placing && !self.drawings.drawings.iter().any(held) {
             return;
         }
         self.sync_panes();
@@ -836,6 +862,12 @@ impl Chart {
             let owner = (pane != self.main_series_pane())
                 .then(|| item.members.first().map_or(pane.0, |member| member.0));
             self.drawings.reassign_owner(id.0, owner);
+            // It follows the pane's finished drawings; it has no undo entry of its own.
+            if let Some(drawing) = (self.drawings.curr_drawing.as_mut())
+                .filter(|drawing| placing && drawing.pane == Some(id.0))
+            {
+                drawing.pane = owner;
+            }
         } else {
             let ids: Vec<_> = self
                 .drawings
