@@ -53,7 +53,7 @@ impl Drawing {
             painter.circle_filled(centre, DISC_RADIUS, disc);
             let glyph = Rect::from_center_size(centre, egui::Vec2::splat(GLYPH_SIZE));
             let ink = label_text_color(disc);
-            if !crate::drawings::glyphs::paint(painter, &self.marker.glyph, glyph, ink) {
+            if !crate::drawings::glyphs::paint(painter, &self.marker.glyph, glyph, ink, 0.0) {
                 painter.text(
                     centre,
                     egui::Align2::CENTER_CENTER,

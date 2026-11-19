@@ -277,6 +277,40 @@ impl Chart {
         Ok(())
     }
 
+    /// Replace a projection's levels, target zone backgrounds, coefficient labels and leg style
+    /// as one undoable edit. Unknown ids, locked drawings, other tools and invalid settings
+    /// change nothing.
+    pub fn set_projection_config(
+        &mut self,
+        id: usize,
+        config: crate::drawings::ProjectionConfig,
+    ) -> Result<(), DrawingError> {
+        let drawing = self
+            .drawings()
+            .drawings
+            .iter()
+            .find(|drawing| drawing.id == id)
+            .ok_or(DrawingError::UnknownDrawing(id))?;
+        if drawing.locked {
+            return Err(DrawingError::Locked(id));
+        }
+        if drawing.tool_type != crate::drawings::DrawingToolType::ProjectionTool {
+            return Err(DrawingError::Invalid("Drawing is not a projection"));
+        }
+        if !config.is_valid() {
+            return Err(DrawingError::Invalid("Invalid projection settings"));
+        }
+        if drawing.projection.as_ref() != Some(&config) {
+            self.user_action(|chart| {
+                chart
+                    .drawings_mut()
+                    .edit_drawing(id, |drawing| drawing.projection = Some(config))
+            })
+            .map_err(DrawingError::Invalid)?;
+        }
+        Ok(())
+    }
+
     /// Replace a position drawing's statistics, account currency and quantity precision in
     /// one undoable edit. A different currency needs a host-supplied conversion rate before
     /// monetary statistics can be calculated. Invalid settings and locked drawings change nothing.
@@ -1149,6 +1183,91 @@ mod tests {
         chart.drawings_mut().drawings[0].tool_type = DrawingToolType::AnchoredVWAP;
         assert_eq!(chart.drawings().drawings[0].vwap, Some(edited));
         assert!(chart.undo());
+        assert!(!chart.can_undo());
+    }
+
+    /// Projection edits validate before changing drawings or history and commit once.
+    #[test]
+    fn projection_settings_are_validated_and_undoable() {
+        use crate::drawings::{DrawingTemplate, ProjectionConfig};
+        let mut chart = crate::widget::test_frames::chart(&[80.0], &[200.0]);
+        let mut drawing = Drawing::new(7, DrawingToolType::ProjectionTool);
+        drawing.chart_points = vec![
+            ChartPoint::new(10.0, 100.0),
+            ChartPoint::new(20.0, 150.0),
+            ChartPoint::new(40.0, 120.0),
+        ];
+        drawing.completed = true;
+        let original = drawing.projection.clone();
+        chart.drawings_mut().drawings.push(drawing);
+        assert_eq!(
+            chart.set_projection_config(77, ProjectionConfig::default()),
+            Err(DrawingError::UnknownDrawing(77))
+        );
+        for (tool, locked, expected) in [
+            (
+                DrawingToolType::TrendLine,
+                false,
+                DrawingError::Invalid("Drawing is not a projection"),
+            ),
+            (
+                DrawingToolType::ProjectionTool,
+                true,
+                DrawingError::Locked(7),
+            ),
+        ] {
+            let drawing = &mut chart.drawings_mut().drawings[0];
+            drawing.tool_type = tool;
+            drawing.locked = locked;
+            assert_eq!(
+                chart.set_projection_config(7, ProjectionConfig::default()),
+                Err(expected)
+            );
+        }
+        let drawing = &mut chart.drawings_mut().drawings[0];
+        drawing.locked = false;
+        for (coefficient, width) in [
+            (f32::NAN, None),
+            (f32::INFINITY, None),
+            (-0.5, None),
+            (100.5, None),
+            (1.0, Some(0.0)),
+            (1.0, Some(-1.0)),
+            (1.0, Some(f32::NAN)),
+            (1.0, Some(f32::INFINITY)),
+            (1.0, Some(100.5)),
+        ] {
+            let mut invalid = ProjectionConfig::default();
+            invalid.levels[0].coefficient = coefficient;
+            invalid.levels[0].width = width;
+            assert_eq!(
+                chart.set_projection_config(7, invalid.clone()),
+                Err(DrawingError::Invalid("Invalid projection settings"))
+            );
+            assert!(
+                chart
+                    .drawings_mut()
+                    .edit_drawing(7, |d| d.projection = Some(invalid.clone()))
+                    .is_err()
+            );
+            let mut template = DrawingTemplate::from_drawing(&chart.drawings().drawings[0]);
+            template.settings.projection = Some(invalid);
+            let mut peer = chart.drawings().drawings[0].clone();
+            assert!(template.apply_to(&mut peer).is_err());
+            assert_eq!(chart.drawings().drawings[0].projection, original);
+            assert!(!chart.can_undo());
+        }
+        let mut edited = ProjectionConfig::default();
+        edited.levels[0].coefficient = 0.0;
+        edited.levels[0].width = Some(100.0);
+        let mut far = edited.levels[0].clone();
+        far.coefficient = 100.0;
+        edited.levels.push(far);
+        chart.set_projection_config(7, edited.clone()).unwrap();
+        chart.set_projection_config(7, edited.clone()).unwrap();
+        assert_eq!(chart.drawings().drawings[0].projection, Some(edited));
+        assert!(chart.undo());
+        assert_eq!(chart.drawings().drawings[0].projection, original);
         assert!(!chart.can_undo());
     }
 

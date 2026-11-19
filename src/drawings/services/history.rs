@@ -66,8 +66,8 @@ pub(crate) enum DrawingCommand {
     Reorder {
         /// Drawing the user moved.
         id: usize,
-        /// Previous layers of every affected drawing.
-        layers: Vec<(usize, i32)>,
+        /// Previous `series_layer` and z-order of every affected drawing.
+        layers: Vec<(usize, Option<usize>, i32)>,
         /// Previous edit time of the drawing the user moved.
         modified_at: Option<i64>,
     },
@@ -299,7 +299,7 @@ impl HistoryService {
     pub(crate) fn push_reorder(
         &mut self,
         id: usize,
-        layers: Vec<(usize, i32)>,
+        layers: Vec<(usize, Option<usize>, i32)>,
         modified_at: Option<i64>,
     ) {
         self.push_command(DrawingCommand::Reorder {
@@ -543,7 +543,7 @@ impl HistoryService {
 fn affected(command: &DrawingCommand) -> Vec<usize> {
     let mut ids = match command {
         DrawingCommand::Snapshot { ids, .. } => ids.clone(),
-        DrawingCommand::Reorder { layers, .. } => layers.iter().map(|(id, _)| *id).collect(),
+        DrawingCommand::Reorder { layers, .. } => layers.iter().map(|(id, ..)| *id).collect(),
         _ => vec![command.drawing_id()],
     };
     ids.sort_unstable();
@@ -551,17 +551,18 @@ fn affected(command: &DrawingCommand) -> Vec<usize> {
     ids
 }
 
-/// Takes a layer move through an undo or redo: each drawing's layer and the moved drawing's edit
-/// time change places with those recorded.
+/// Takes a layer move through an undo or redo: each drawing's layer and place among the series
+/// and studies and the moved drawing's edit time change places with those recorded.
 fn swap_layers(
     drawings: &mut [Drawing],
     moved: usize,
-    layers: &mut [(usize, i32)],
+    layers: &mut [(usize, Option<usize>, i32)],
     modified_at: &mut Option<i64>,
 ) {
-    for (id, layer) in layers {
+    for (id, series_layer, z_order) in layers {
         if let Some(drawing) = drawings.iter_mut().find(|d| d.id == *id) {
-            std::mem::swap(&mut drawing.z_order, layer);
+            std::mem::swap(&mut drawing.series_layer, series_layer);
+            std::mem::swap(&mut drawing.z_order, z_order);
         }
     }
     if let Some(drawing) = drawings.iter_mut().find(|d| d.id == moved) {
@@ -611,12 +612,12 @@ mod tests {
         d
     }
 
-    /// The live list as (id, stroke width, z-order), in list order, so a test sees which
-    /// drawings exist, which state each one is in and which is on top among equal z-orders.
-    fn state(drawings: &[Drawing]) -> Vec<(usize, f32, i32)> {
+    /// The live list as (id, stroke width, z-order, series layer), in list order, so a test sees
+    /// which drawings exist, their state and their place among drawings, series and studies.
+    fn state(drawings: &[Drawing]) -> Vec<(usize, f32, i32, Option<usize>)> {
         drawings
             .iter()
-            .map(|d| (d.id, d.stroke_width, d.z_order))
+            .map(|d| (d.id, d.stroke_width, d.z_order, d.series_layer))
             .collect()
     }
 
@@ -657,6 +658,7 @@ mod tests {
                 vec![
                     Drawing {
                         z_order: 1,
+                        series_layer: Some(0),
                         ..drawing(1, 1.0)
                     },
                     Drawing {
@@ -664,7 +666,7 @@ mod tests {
                         ..drawing(2, 1.0)
                     },
                 ],
-                |h| h.push_reorder(1, vec![(1, 0), (2, 0)], None),
+                |h| h.push_reorder(1, vec![(1, None, 0), (2, None, 0)], None),
             ),
             (
                 "add",
