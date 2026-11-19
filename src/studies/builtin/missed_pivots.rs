@@ -75,6 +75,17 @@ pub enum MissedPivotPeriod {
     Monthly,
 }
 
+impl MissedPivotPeriod {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Swings => "Swings",
+            Self::Daily => "Daily",
+            Self::Weekly => "Weekly",
+            Self::Monthly => "Monthly",
+        }
+    }
+}
+
 /// Missed Pivot Levels: pivot levels that price has not returned to.
 #[derive(Clone, Debug)]
 pub struct MissedPivots {

@@ -81,12 +81,18 @@ enum LevelsStart {
     CurrentBar,
 }
 
-impl std::fmt::Debug for LevelsStart {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+impl LevelsStart {
+    fn label(self) -> &'static str {
+        match self {
             Self::Period => "Start of period",
             Self::CurrentBar => "Current bar",
-        })
+        }
+    }
+}
+
+impl std::fmt::Debug for LevelsStart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
     }
 }
 
@@ -103,17 +109,34 @@ enum CustomAnchor {
     Dividends,
 }
 
+impl CustomAnchor {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Custom => "Custom",
+            Self::Earnings => "Earnings",
+            Self::Split => "Split",
+            Self::Dividends => "Dividends",
+        }
+    }
+}
+
 /// The unit the custom period counts.
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct CustomUnit(AnchorPeriod);
 
-impl std::fmt::Debug for CustomUnit {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self.0 {
+impl CustomUnit {
+    fn label(self) -> &'static str {
+        match self.0 {
             AnchorPeriod::Session => "Days",
             AnchorPeriod::Week => "Weeks",
             _ => "Months",
-        })
+        }
+    }
+}
+
+impl std::fmt::Debug for CustomUnit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
     }
 }
 
