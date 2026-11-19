@@ -88,7 +88,7 @@ pub enum MetricColors {
     Single(Color32),
     /// Bars whose value rose in `rising` and bars whose value fell in `falling`.
     /// A value falls below the previous bar's, or for candles below its open;
-    /// an unchanged value keeps the previous colour, and the first value is rising.
+    /// an unchanged value keeps the previous colour, and the first scalar value is rising.
     Change {
         /// Colour of rising and first values.
         rising: Color32,
