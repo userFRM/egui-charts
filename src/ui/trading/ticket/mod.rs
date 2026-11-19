@@ -2133,10 +2133,23 @@ mod tests {
                 let mut reopened = OrderTicket::default();
                 reopened.open(&request);
                 assert_eq!(reopened.request(&ctx, &market), Ok(request.clone()));
+                if let Some(expected_risk) = expected_risk {
+                    for in_money in [true, false] {
+                        reopened.open(&request);
+                        reopened.resize(&ctx, &market, Sizing::Risk, in_money);
+                        let expected = if in_money {
+                            expected_risk
+                        } else {
+                            expected_risk / 100_000.0 * 100.0
+                        };
+                        assert!((reopened.amount - expected).abs() < 1e-9);
+                        assert_eq!(reopened.quantity, request.quantity);
+                    }
+                }
                 if accepted && first.is_none() && shared.is_none() && second == ticks(8.0) {
                     // Both halves have take profits; only the second half has a stop.
                     let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                        ticket.show(ui, &market, &mut vec![], &mut false);
+                        ticket.show(ui, &market, &mut vec![], &mut false, &mut false);
                     });
                     let theme = ctx.active_theme();
                     for (color, width) in [(theme.ui.take_profit, 10.0), (theme.ui.stop_loss, 5.0)]
@@ -2201,7 +2214,7 @@ mod tests {
                 }
             }
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                ticket.show(ui, &market, &mut vec![], &mut false);
+                ticket.show(ui, &market, &mut vec![], &mut false, &mut false);
             });
             let add_level = |text: &egui::epaint::TextShape| text.galley.text() == "Add level";
             assert_eq!(

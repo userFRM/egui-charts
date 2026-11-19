@@ -1973,6 +1973,7 @@ mod tests {
                         limit: true,
                         brackets: true,
                         take_profit_levels: true,
+                        take_profit_level_stops: true,
                         preview: true,
                         ..Capabilities::default()
                     },
@@ -2117,13 +2118,14 @@ mod tests {
                 TakeProfitLevel::new(110.0, 1.0),
                 TakeProfitLevel::new(120.0, 1.0),
             ];
+            order.take_profit_levels[1].stop_loss = Some(95.0);
             order.stop_loss = Some(90.0);
             trading.open_ticket(order.clone());
             frame(&mut trading, vec![]);
             let texts = frame(&mut trading, vec![]).0;
             for wanted in [
                 "Take profit 110.00 for 1",
-                "Take profit 120.00 for 1",
+                "Take profit 120.00 for 1 with a stop loss at 95.00",
                 "Stop loss 90.00",
                 "Buy",
                 "Preview order",
