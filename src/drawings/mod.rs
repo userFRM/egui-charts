@@ -48,4 +48,6 @@ pub use domain::{
 
 // Re-export manager types
 pub use manager::{DrawingEventKind, DrawingManager, DrawingManagerOptions, DrawingState};
-pub use registry::{DrawingRenderer, DrawingToolRegistry, RegisteredDrawingTool, ToolAvailability};
+pub use registry::{
+    DrawingRenderer, DrawingToolRegistry, RegisteredDrawingTool, StyleControls, ToolAvailability,
+};
