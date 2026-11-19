@@ -17,7 +17,7 @@ use crate::widget::{Chart, SeriesId};
 use std::sync::Arc;
 
 impl Chart {
-    /// Whether a visible profile drawing reads trades on this chart type and interval.
+    /// Whether a visible drawing reads executions on this chart type and interval.
     #[cfg(feature = "drawings")]
     fn profile_drawings(&self, chart_executions: bool) -> bool {
         (chart_executions || self.drawing_timeframe().is_some())
@@ -25,7 +25,7 @@ impl Chart {
                 .drawings
                 .drawings
                 .iter()
-                .any(|drawing| drawing.reads_profile())
+                .any(|drawing| drawing.reads_executions())
     }
 
     #[cfg(not(feature = "drawings"))]
@@ -42,8 +42,8 @@ impl Chart {
             .instrument()
             .and_then(|instrument| instrument.tick_size);
         self.state.price_scale_mut().set_tick_size(tick_size);
-        // Footprint chart types and their profile drawings read trades on every interval;
-        // time-based profile drawings read them on every chart type.
+        // Footprint chart types and drawings that read executions read trades on every interval;
+        // time-based drawings read them on every chart type.
         let chart_executions = self.chart_type == ChartType::VolumeFootprint
             || (self.chart_type == ChartType::SessionVolumeProfile && cfg!(feature = "studies"));
         let profile_drawings = self.feed_link.is_some() && self.profile_drawings(chart_executions);
@@ -272,8 +272,14 @@ impl Chart {
         }
 
         let mut resnapshot = false;
+        let mut reload = false;
         for (id, updates) in drained.updates {
             if link.subscription != Some(id) {
+                continue;
+            }
+            // Reload replaces this subscription's history and everything it pushed in this drain.
+            if updates.reload {
+                reload = true;
                 continue;
             }
             // A seek empties the bars and rebuilds them through its position: the view follows
@@ -462,6 +468,10 @@ impl Chart {
                     .for_each(|c| history.push(c));
             }
             resnapshot |= updates.resnapshot;
+        }
+        if reload {
+            let clock = link.clock.clone();
+            self.reload(&mut link, clock);
         }
         if resnapshot && let Some(id) = link.subscription {
             link.feed.request_depth_snapshot(id);

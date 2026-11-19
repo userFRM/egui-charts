@@ -7,6 +7,7 @@ use crate::config::ChartConfig;
 use crate::model::{Bar, ChartType};
 use crate::studies::{Indicator, IndicatorFactory, InputValue, StudySource, StudyTemplateSet};
 use crate::widget::settings::ChartSettingsState;
+use crate::widget::studies::reads_study;
 use crate::widget::study_templates::{Keep, NO_STUDY};
 use crate::widget::{Chart, SeriesId};
 
@@ -75,6 +76,9 @@ pub enum LayoutCopyIssueKind {
     /// The chart is skipped: the copy would take it past its
     /// [study cap](Chart::set_study_limit).
     StudyLimit,
+    /// The chart is skipped: the copy would add studies reading another study's output past its
+    /// [chained study cap](Chart::set_chained_study_limit).
+    ChainedStudyLimit,
     /// The chart is skipped: it refuses these settings, for the given reason.
     UnsupportedSettings(String),
 }
@@ -96,6 +100,7 @@ impl std::fmt::Display for LayoutCopyIssueKind {
             }
             Self::UnsupportedStudy { study, reason } => write!(f, "skipped: {study}: {reason}"),
             Self::StudyLimit => write!(f, "skipped: study limit reached"),
+            Self::ChainedStudyLimit => write!(f, "skipped: chained study limit reached"),
             Self::UnsupportedSettings(reason) => write!(f, "skipped: {reason}"),
         }
     }
@@ -185,6 +190,20 @@ impl CopiedStudies {
             .count();
         if chart.study_limit.is_some_and(|limit| kept + added > limit) {
             issues.push(LayoutCopyIssueKind::StudyLimit);
+        }
+        let kept_chained = chart
+            .indicators()
+            .filter(|(_, study)| self.keep.keeps(*study) && reads_study(*study))
+            .count();
+        let added_chained = self
+            .set
+            .studies
+            .iter()
+            .filter_map(|template| template.create_with(factory).ok())
+            .filter(|study| self.keep.adds(study.as_ref()) && reads_study(study.as_ref()))
+            .count();
+        if chart.passes_chained_study_limit(kept_chained, added_chained) {
+            issues.push(LayoutCopyIssueKind::ChainedStudyLimit);
         }
         let no_bars = chart.state.data().bars.is_empty();
         if no_bars {
@@ -810,6 +829,21 @@ mod tests {
             }]
         );
         charts[1].set_study_limit(None);
+        // Only the studies on studies the set adds count, beside those the chart keeps.
+        charts[1].set_chained_study_limit(Some(0));
+        assert_eq!(
+            layout.copy_issues(&charts, 0, &LayoutCopy::Studies, &factory),
+            [LayoutCopyIssue {
+                slot: 1,
+                kind: LayoutCopyIssueKind::ChainedStudyLimit
+            }]
+        );
+        charts[1].set_chained_study_limit(Some(1));
+        assert_eq!(
+            layout.copy_issues(&charts, 0, &LayoutCopy::Studies, &factory),
+            []
+        );
+        charts[1].set_chained_study_limit(None);
         let own = charts[0].add_indicator(Box::new(crate::studies::EMA::new(3)));
         charts[0].set_indicator_user_edit_enabled(own, false);
         for _ in 0..2 {

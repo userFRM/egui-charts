@@ -46,21 +46,31 @@ struct ThemeShades;
 impl egui::cache::ComputerMut<(DrawingToolType, [Color32; 3]), Shades> for ThemeShades {
     fn compute(&mut self, (tool, [text, chart, panel]): (DrawingToolType, [Color32; 3])) -> Shades {
         let mut shades = Vec::new();
-        Drawing::new(0, tool).visit_theme_colors(|slot, &mut color| {
-            let [r, g, b, a] = color;
-            if a == u8::MAX {
-                let shade = crate::theme::readable_color(
-                    Color32::from_rgb(r, g, b),
-                    text,
-                    &[chart, panel],
-                    4.0,
-                )
-                .to_srgba_unmultiplied();
-                if shade != color {
-                    shades.push((slot, color, shade));
+        let mut drawings = vec![Drawing::new(0, tool)];
+        // Drawings saved before the current default keep their former colour's shade.
+        if let Some(former) = Drawing::former_default_color(tool) {
+            let mut old = Drawing::new(0, tool);
+            old.color = former;
+            old.text_color = old.text_color.map(|_| former);
+            drawings.push(old);
+        }
+        for mut drawing in drawings {
+            drawing.visit_theme_colors(|slot, &mut color| {
+                let [r, g, b, a] = color;
+                if a == u8::MAX {
+                    let shade = crate::theme::readable_color(
+                        Color32::from_rgb(r, g, b),
+                        text,
+                        &[chart, panel],
+                        4.0,
+                    )
+                    .to_srgba_unmultiplied();
+                    if shade != color && !shades.contains(&(slot, color, shade)) {
+                        shades.push((slot, color, shade));
+                    }
                 }
-            }
-        });
+            });
+        }
         shades
     }
 }
@@ -102,7 +112,14 @@ impl Drawing {
         }
         let theme = ctx.active_theme();
         let [chart, panel] = backgrounds(&theme);
-        let key = (self.tool_type, [theme.ui.text, chart, panel]);
+        // Projections saved without settings used the same blue palette as a trend line.
+        let tool = if self.tool_type == DrawingToolType::ProjectionTool && self.projection.is_none()
+        {
+            DrawingToolType::TrendLine
+        } else {
+            self.tool_type
+        };
+        let key = (tool, [theme.ui.text, chart, panel]);
         // Nothing below reads the context, which `memory_mut` holds locked.
         ctx.memory_mut(|memory| {
             let shades = memory
@@ -299,6 +316,8 @@ impl Drawing {
                 | DrawingToolType::Pitchfan
         );
         let custom_fork = fork && self.pitchfork.is_some();
+        let custom_projection =
+            self.tool_type == DrawingToolType::ProjectionTool && self.projection.is_some();
         // Keep body fills of annotations and legacy forks; analysis labels keep their own fill.
         let fill = |color: &mut Color32| {
             if color.a() > 0
@@ -329,7 +348,8 @@ impl Drawing {
                 *color = configured;
             }
         };
-        let dash = if custom_fork
+        let dash = if custom_projection
+            || custom_fork
             || matches!(
                 self.tool_type,
                 DrawingToolType::RegressionTrend
@@ -1151,6 +1171,43 @@ mod tests {
         }
     }
 
+    /// A circle, sine line, Elliott wave or regression trend saved in its tool's former default
+    /// colour keeps the shade it was drawn in on the light theme: that of the tool that still
+    /// starts in the colour.
+    #[test]
+    fn former_default_colours_keep_their_theme_shade() {
+        use DrawingToolType as T;
+        let ctx = egui::Context::default();
+        crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::light());
+        for (tool, former, peer) in [
+            (T::Circle, [242, 54, 69, 255], T::Ellipse),
+            (T::RegressionTrend, [242, 54, 69, 255], T::Ellipse),
+            (T::SineLine, [8, 153, 129, 255], T::Triangle),
+            (T::ElliottTriangle, [61, 133, 198, 255], T::ElliottImpulse),
+            (
+                T::ElliottDoubleCombo,
+                [61, 133, 198, 255],
+                T::ElliottImpulse,
+            ),
+            (
+                T::ElliottTripleCombo,
+                [61, 133, 198, 255],
+                T::ElliottImpulse,
+            ),
+        ] {
+            let mut saved = Drawing::new(1, tool);
+            saved.color = former;
+            saved.text_color = saved.text_color.map(|_| former);
+            let shade = Drawing::new(1, peer).theme_shaded(&ctx).unwrap().color;
+            assert_ne!(shade, former, "{peer:?} is drawn in another shade on white");
+            let shaded = saved.theme_shaded(&ctx).expect("a shaded drawing");
+            assert_eq!(shaded.color, shade, "{tool:?}");
+            if tool == T::Circle {
+                assert_eq!(shaded.text_color, Some(shade), "{tool:?}");
+            }
+        }
+    }
+
     /// A tool's default line and level colours keep 4:1 on the theme, while a drawing saved
     /// before the shade existed, a chosen colour, fills and the text on a note's fill are drawn
     /// as stored. By hand with the WCAG formula: orange (255, 152, 0) has 2.16:1 on white, and
@@ -1206,7 +1263,16 @@ mod tests {
         let mut chosen = Drawing::new(1, FlatTopBottom);
         chosen.set_line_color([255, 200, 0, 255]);
         let flat = Some(Color32::from_rgba_unmultiplied(255, 152, 0, 51));
+        let mut projection = Drawing::new(1, ProjectionTool);
+        projection.theme_shade = true;
         let cases = [
+            (
+                Theme::light(),
+                projection,
+                vec![rgb(127, 127, 127)],
+                Some(rgb(128, 128, 128)),
+                Some(Color32::from_rgba_unmultiplied(41, 98, 255, 51)),
+            ),
             (
                 Theme::light(),
                 Drawing::new(1, FlatTopBottom),

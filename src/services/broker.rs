@@ -5,8 +5,8 @@ use chrono::{DateTime, Utc};
 use super::Events;
 use crate::data::{FeedError, FeedStatus, MaybeSend, Reply};
 use crate::model::{
-    Account, BalanceChange, Execution, JournalEntry, Order, OrderId, OrderPreview, OrderRequest,
-    Position, TradingRules,
+    Account, BalanceChange, ClosedPosition, Execution, JournalEntry, Order, OrderId, OrderPreview,
+    OrderRequest, Position, TradingRules,
 };
 
 /// One trading account at the host's broker, real or simulated. The library holds no balances or
@@ -17,10 +17,11 @@ use crate::model::{
 /// Methods are called on the UI thread and must return at once. Talk to the broker elsewhere and
 /// answer or push from any thread, runtime or browser task.
 ///
-/// Every price and quantity pushed must be finite. Quantities are positive, except a position's,
-/// which is signed, and an order's filled quantity, which runs from 0 to the requested quantity;
-/// the terminal skips events that break this. Prices are in the symbol's price units and
-/// quantities in its trading units.
+/// Every price and quantity pushed must be finite, including each take-profit level's
+/// [`stop_loss`](crate::model::TakeProfitLevel::stop_loss). Quantities are positive, except a
+/// position's, which is signed, and an order's filled quantity, which runs from 0 to the requested
+/// quantity; the terminal skips events that break this. Prices are in the symbol's price units
+/// and quantities in its trading units.
 ///
 /// A paper account that trades one symbol and fills market orders at a fixed price:
 ///
@@ -93,7 +94,8 @@ pub trait Broker: MaybeSend + 'static {
     /// Pushes the account (balance, currency, capabilities) first, then the working orders and
     /// open positions, then orders, positions, executions and connection status as they change.
     /// A broker that keeps history pushes it after the open state: the finished orders, the
-    /// balance changes and the journal, oldest first, which the account panel lists.
+    /// closed positions, the balance changes and the journal, oldest first, which the account
+    /// panel lists.
     /// The terminal calls it when it starts and again, with a new stream, after the stream lagged;
     /// each stream starts from nothing, so push the whole current state again. The old stream is
     /// inactive from then on: push into the newest one only.
@@ -102,9 +104,10 @@ pub trait Broker: MaybeSend + 'static {
     /// sent, also when the answer arrives later.
     ///
     /// The terminal announces, with a notification and the execution sound for fills, a working
-    /// limit or stop order it has not seen on the stream, a rejected order and each execution,
-    /// when they are pushed after `connect` returned while the broker is live. What is pushed
-    /// before `connect` returns, or while the broker reports that it is not live, restates the
+    /// limit or stop order it has not seen on the stream, a rejected order, an order it listed
+    /// as working that ends cancelled without the user cancelling it in the terminal, and each
+    /// execution, when they are pushed after `connect` returned while the broker is live. What
+    /// is pushed before `connect` returns, or while the broker reports that it is not live, restates the
     /// account and is not announced: push the current state then, before returning or between
     /// [`FeedStatus::Connecting`] and [`FeedStatus::Live`].
     ///
@@ -112,7 +115,9 @@ pub trait Broker: MaybeSend + 'static {
     /// [`AccountEvent::Status`] with [`FeedStatus::Connecting`] or [`FeedStatus::Disconnected`],
     /// on each new stream too, and [`FeedStatus::Live`] once it is live again; until then the
     /// account panel and the order ticket mark the broker and the terminal reports it as not
-    /// connected. A broker that never pushes a status counts as connected. Meanwhile the terminal
+    /// connected. The terminal tells the user when the broker stops being live and when it is
+    /// live again after that, but not for a status pushed before `connect` returns.
+    /// A broker that never pushes a status counts as connected. Meanwhile the terminal
     /// sends no order, cancellation or change: it reports the ones the user confirms as refused,
     /// and a position order confirmed earlier that still waits for its trading rules too, and
     /// sends none of them later. It asks for [`rules`](Self::rules) and
@@ -167,23 +172,23 @@ pub trait Broker: MaybeSend + 'static {
     /// only the pushed history exists.
     ///
     /// A page holds [`AccountEvent::Order`] with a finished status, [`AccountEvent::Execution`],
-    /// [`AccountEvent::Balance`] or [`AccountEvent::Journal`] events, as the request's
-    /// [`HistoryKind`] says, oldest first, and never working orders or positions: those come only
-    /// from the pushed stream. The first page of a request holds the newest entries of its range
-    /// and each page after it, asked for with the [`next`](HistoryPage::next) cursor, the entries
-    /// before the previous one. Entries that were pushed live may appear again in a page: an order
+    /// [`AccountEvent::ClosedPosition`], [`AccountEvent::Balance`] or [`AccountEvent::Journal`]
+    /// events, as the request's [`HistoryKind`] says, oldest first, and never working orders or
+    /// positions: those come only from the pushed stream. The first page of a request holds the
+    /// newest entries of its range and each page after it, asked for with the
+    /// [`next`](HistoryPage::next) cursor, the entries before the previous one. Entries that were pushed live may appear again in a page: an order
     /// is matched by its id and other events by value, so repeat them unchanged. Answer for the
     /// account `connect` last served; a consumer drops an answer that arrives after the account
     /// changed.
     ///
     /// The account panel asks once the account arrived, while the broker is live, and the user
     /// scrolls to the end of a history: first for the range that ends one second after the oldest
-    /// entry it lists (for an order, when it closed), so that entries sharing that time are not
-    /// skipped, then for each `next` until it is `None` or the history lists 1,000 entries. After
-    /// an error, which it shows unless it is `NotSupported`, it asks for that history again only
-    /// after the next `connect`; after a [recoverable](FeedError::is_recoverable) error or one that
-    /// arrives while the broker reports that it is not live, it asks again once the broker
-    /// reports that it is live again.
+    /// entry it lists (for an order or closed position, when it closed), so entries sharing that
+    /// time are not skipped, then for each `next` until it is `None` or the history lists 1,000
+    /// entries. After an error, which it shows unless it is `NotSupported`, it asks for that
+    /// history again only after the next `connect`; after a
+    /// [recoverable](FeedError::is_recoverable) error or one that arrives while the broker reports
+    /// that it is not live, it asks again once the broker reports that it is live again.
     fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
         let _ = request;
         reply.send(Err(FeedError::NotSupported));
@@ -198,6 +203,8 @@ pub enum HistoryKind {
     Orders,
     /// Fills, as [`AccountEvent::Execution`].
     Executions,
+    /// Closed positions, as [`AccountEvent::ClosedPosition`].
+    ClosedPositions,
     /// Changes of the cash balance, as [`AccountEvent::Balance`].
     Balance,
     /// Lines of the trading journal, as [`AccountEvent::Journal`].
@@ -263,6 +270,8 @@ pub enum AccountEvent {
     Position(Position),
     /// One fill, drawn on charts of its order's symbol: push the order first.
     Execution(Execution),
+    /// A completed position, closed or reversed, for the closed positions history.
+    ClosedPosition(ClosedPosition),
     /// The connection to the broker; a stream starts as [`FeedStatus::Live`]. See
     /// [`Broker::connect`].
     Status(FeedStatus),

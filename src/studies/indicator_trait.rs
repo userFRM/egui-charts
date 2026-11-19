@@ -477,6 +477,13 @@ pub trait Indicator: Send {
         false
     }
 
+    /// Visible logical slots, including the empty space beyond the last bar. Supplied before
+    /// autoscaling, alongside `set_visible_range`, so projected levels can follow the right
+    /// edge without calculating again. The default ignores the viewport.
+    fn set_visible_logical_range(&mut self, range: crate::model::LogicalRange) {
+        let _ = range;
+    }
+
     /// The chart's current interval, supplied when added and when the interval changes.
     fn set_timeframe(&mut self, timeframe: crate::model::Timeframe) {
         let _ = timeframe;
@@ -856,6 +863,12 @@ pub trait Indicator: Send {
     /// frame.
     fn labels(&self) -> &[super::StudyLabel] {
         &[]
+    }
+
+    /// Paint labels as tags at their price, with a plot-coloured background and white text.
+    /// False keeps the ordinary text and its placement. Tag pointers face right.
+    fn labels_use_plot_background(&self) -> bool {
+        false
     }
 
     /// Draw [`labels`](Self::labels) on the main price chart, even when the study has its

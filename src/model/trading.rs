@@ -3,6 +3,9 @@
 //! Prices are in the symbol's price units and quantities in its trading units. Every price and
 //! quantity is finite. Quantities are positive, except a position's, which is signed, and an
 //! order's filled quantity, which starts at 0.
+//!
+//! Fields added to the serializable trading types follow the compatibility promise on
+//! [`SavedPaperAccount`](crate::services::SavedPaperAccount).
 
 use chrono::{DateTime, Utc};
 
@@ -15,7 +18,7 @@ pub(crate) fn rounding_tolerance(scale: f64, relative: f64) -> f64 {
 }
 
 /// Identifies an order. The broker chooses it.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct OrderId(
     /// The broker's own identifier for the order.
     pub String,
@@ -60,7 +63,7 @@ impl OrderSide {
 }
 
 /// How an order executes. Prices are in the symbol's price units.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum OrderType {
     /// At the best price available now.
@@ -111,7 +114,7 @@ impl OrderType {
 
 /// The role of an exit order attached to the net position in its symbol. The set is closed: an
 /// attached exit either takes profit or stops a loss.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PositionBracket {
     /// A profit-taking limit exit.
     TakeProfit,
@@ -119,9 +122,16 @@ pub enum PositionBracket {
     StopLoss,
 }
 
-/// A take profit that closes its own part of an order: one of
-/// [`OrderRequest::take_profit_levels`].
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A take profit that closes its own part of an order, with an optional stop loss of its own:
+/// one of [`OrderRequest::take_profit_levels`].
+///
+/// ```
+/// use egui_charts::model::TakeProfitLevel;
+///
+/// let mut level = TakeProfitLevel::new(110.0, 2.0);
+/// level.stop_loss = Some(95.0);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct TakeProfitLevel {
     /// The price at which it closes [`quantity`](Self::quantity): above the entry for a buy,
@@ -129,17 +139,27 @@ pub struct TakeProfitLevel {
     pub price: f64,
     /// Positive, in the symbol's trading units.
     pub quantity: f64,
+    /// The price at which a stop loss closes this level's quantity, for an account that accepts
+    /// [level stops](Capabilities::take_profit_level_stops): below the entry for a buy, above
+    /// for a sell. When either fills, the other is cancelled. `None` leaves the level to the
+    /// order's [`stop_loss`](OrderRequest::stop_loss).
+    #[serde(default)]
+    pub stop_loss: Option<f64>,
 }
 
 impl TakeProfitLevel {
-    /// A take profit that closes `quantity` at `price`.
+    /// A take profit that closes `quantity` at `price`, without a stop loss of its own.
     pub fn new(price: f64, quantity: f64) -> Self {
-        Self { price, quantity }
+        Self {
+            price,
+            quantity,
+            stop_loss: None,
+        }
     }
 }
 
 /// An order as the user or the host asks for it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct OrderRequest {
     /// The symbol as the feed knows it.
@@ -157,10 +177,13 @@ pub struct OrderRequest {
     /// Several take profits, each closing its own quantity, for an account that accepts
     /// [take-profit levels](Capabilities::take_profit_levels), in the order given. Their
     /// quantities add up to [`quantity`](Self::quantity). Empty for one take profit or none,
-    /// which [`take_profit`](Self::take_profit) holds.
+    /// which [`take_profit`](Self::take_profit) holds. No more than
+    /// [`max_take_profit_levels`](Capabilities::max_take_profit_levels).
     pub take_profit_levels: Vec<TakeProfitLevel>,
     /// The price at which a stop-loss order closes the filled quantity, for an account that
     /// accepts [brackets](Capabilities::brackets): below the entry for a buy, above for a sell.
+    /// With [`take_profit_levels`](Self::take_profit_levels) it closes the quantity of the levels
+    /// without a [stop loss of their own](TakeProfitLevel::stop_loss).
     pub stop_loss: Option<f64>,
     /// How long the order stays working.
     pub time_in_force: TimeInForce,
@@ -192,7 +215,9 @@ impl OrderRequest {
 }
 
 /// How long an order stays working.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[non_exhaustive]
 pub enum TimeInForce {
     /// Until the end of the trading day.
@@ -226,7 +251,7 @@ impl TimeInForce {
 
 /// An order the broker holds. Pushed again on every change; the terminal replaces the order with
 /// the same id.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Order {
     /// The broker's id for the order: an event with the same id replaces it.
@@ -261,7 +286,7 @@ impl Order {
 }
 
 /// Where an order stands. `Filled`, `Cancelled` and `Rejected` end the order.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum OrderStatus {
     /// Accepted and waiting to fill, possibly partly filled.
@@ -277,7 +302,7 @@ pub enum OrderStatus {
 }
 
 /// The net position in one symbol.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Position {
     /// The symbol as the feed knows it.
@@ -326,7 +351,7 @@ impl Position {
 }
 
 /// One fill of an order.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Execution {
     /// The order this fill belongs to.
@@ -360,6 +385,66 @@ impl Execution {
     }
 }
 
+/// A completed position, from the fill that opened it on a flat symbol or reversed the previous
+/// position to the fill that flattened or reversed it. Includes partial closes along the way.
+/// Prices use the symbol's price units and may be negative; quantity is positive.
+///
+/// ```
+/// use chrono::DateTime;
+/// use egui_charts::model::{ClosedPosition, OrderSide};
+///
+/// let opened = DateTime::from_timestamp(1_704_207_600, 0).unwrap();
+/// let closed = DateTime::from_timestamp(1_704_209_400, 0).unwrap();
+/// let mut position = ClosedPosition::new("AAPL", OrderSide::Buy, 3.0, 110.0, 125.0, 45.0, closed);
+/// position.opened = Some(opened);
+/// ```
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct ClosedPosition {
+    /// The symbol as the feed knows it.
+    pub symbol: String,
+    /// [`Buy`](OrderSide::Buy) for long, [`Sell`](OrderSide::Sell) for short.
+    pub side: OrderSide,
+    /// Total quantity closed over the position's lifetime, positive, in its symbol's trading units.
+    pub quantity: f64,
+    /// The quantity-weighted average entry price.
+    pub average_price: f64,
+    /// The quantity-weighted average exit price.
+    pub exit_price: f64,
+    /// Realised profit or loss in the account's currency, as reported by the broker. The
+    /// [paper account](crate::services::PaperAccount) excludes commissions, booked separately.
+    pub realized_pnl: f64,
+    /// The opening fill's time, when the broker reports it.
+    pub opened: Option<DateTime<Utc>>,
+    /// The time of the fill that flattened or reversed the position.
+    pub closed: DateTime<Utc>,
+}
+
+impl ClosedPosition {
+    /// A completed position with its side, total quantity, average entry and exit prices,
+    /// realised profit or loss and closing time, without a reported opening time.
+    pub fn new(
+        symbol: impl Into<String>,
+        side: OrderSide,
+        quantity: f64,
+        average_price: f64,
+        exit_price: f64,
+        realized_pnl: f64,
+        closed: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            symbol: symbol.into(),
+            side,
+            quantity,
+            average_price,
+            exit_price,
+            realized_pnl,
+            opened: None,
+            closed,
+        }
+    }
+}
+
 /// The account behind one [`Broker`](crate::services::Broker) value.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -374,6 +459,9 @@ pub struct Account {
     pub realized_pnl: Option<f64>,
     /// The margin the open positions hold, when the broker reports it.
     pub margin: Option<f64>,
+    /// The equity left above the [`margin`](Self::margin) the open positions hold, in
+    /// `currency`, when the broker reports it; negative once equity no longer covers that margin.
+    pub margin_buffer: Option<f64>,
     /// The margin the working orders would hold once filled, when the broker reports it.
     pub orders_margin: Option<f64>,
     /// The equity less the margin of the positions and the working orders, when the broker
@@ -392,6 +480,7 @@ impl Account {
             equity: None,
             realized_pnl: None,
             margin: None,
+            margin_buffer: None,
             orders_margin: None,
             available_funds: None,
             capabilities,
@@ -400,7 +489,7 @@ impl Account {
 }
 
 /// A change of the account's cash balance, such as a closed trade's profit or a commission.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct BalanceChange {
     /// When the balance changed.
@@ -427,7 +516,7 @@ impl BalanceChange {
 
 /// One line of the account's trading journal: an order placed, changed, cancelled or filled, a
 /// position closed, or anything else the broker logs.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct JournalEntry {
     /// When it happened.
@@ -474,8 +563,20 @@ pub struct Capabilities {
     /// [`OrderRequest::take_profit_levels`]. Needs [`brackets`](Self::brackets); without it the
     /// order ticket offers one take profit.
     pub take_profit_levels: bool,
+    /// Accepts a stop loss of its own for each take-profit level, through
+    /// [`TakeProfitLevel::stop_loss`]. Needs [`take_profit_levels`](Self::take_profit_levels);
+    /// without it the order's single stop loss protects every level.
+    pub take_profit_level_stops: bool,
+    /// The largest number of take-profit levels an order may carry, counting the first, or
+    /// `None` without a limit. Below 2 the order ticket offers no levels.
+    pub max_take_profit_levels: Option<usize>,
     /// Closes a position with an opposite market order, so the Close and Flatten controls work.
     pub close: bool,
+    /// Closes part of a position with a smaller opposite market order. With
+    /// [`close`](Self::close), Close on a position line, unless orders are instant, and on an
+    /// account row asks for the quantity to close; without this flag it closes the whole
+    /// position.
+    pub partial_close: bool,
     /// Reverses a position with an opposite market order of twice its size, so the Reverse
     /// controls work.
     pub reverse: bool,
@@ -516,7 +617,7 @@ pub struct OrderPreview {
 }
 
 /// How a symbol trades at the broker. The order ticket sizes orders by these rules.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct TradingRules {
     /// The symbol as the feed knows it.
@@ -543,6 +644,22 @@ pub struct TradingRules {
 }
 
 impl TradingRules {
+    /// Whether the rules are usable: a positive finite step, minimum and point value, a maximum
+    /// no smaller than the minimum, a positive finite leverage and pip value where set, and at
+    /// least one time in force.
+    pub(crate) fn is_valid(&self) -> bool {
+        let positive = |value: f64| value.is_finite() && value > 0.0;
+        positive(self.quantity_step)
+            && positive(self.min_quantity)
+            && positive(self.point_value)
+            && self
+                .max_quantity
+                .is_none_or(|max| positive(max) && max >= self.min_quantity)
+            && self.leverage.is_none_or(positive)
+            && self.pip_value.is_none_or(positive)
+            && !self.time_in_force.is_empty()
+    }
+
     /// Whole units from 1 without a maximum, a point value of 1 and day orders: the rules the
     /// ticket assumes when the broker reports none.
     pub fn new(symbol: impl Into<String>) -> Self {

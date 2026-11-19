@@ -91,7 +91,8 @@ pub struct ChartView<'a> {
     pub time_axis: bool,
     /// The executions behind `bars`, aggregated on the bars' clock. The volume profile drawings
     /// then show the executed volume in their rows, split by aggressor side, instead of
-    /// spreading bar volume over bar ranges; `None` estimates from the bars.
+    /// spreading bar volume over bar ranges, and an anchored VWAP set to count executions sums
+    /// them on bars held in full; `None` estimates from the bars.
     ///
     /// Hosts with an owned footprint construct the borrowed view without copying:
     /// ```
@@ -322,7 +323,7 @@ impl Drawing {
             DrawingToolType::Measure => self.render_measure(painter, view),
             DrawingToolType::PriceRange
             | DrawingToolType::DateRange
-            | DrawingToolType::DateAndPriceRange => self.render_range(painter, rect, stroke, view),
+            | DrawingToolType::DateAndPriceRange => {}
 
             // Annotations (7 tools)
             DrawingToolType::TextLabel | DrawingToolType::AnchoredText => {
@@ -369,6 +370,15 @@ impl Drawing {
             self.render_text_hint(painter);
         }
         self.finish_style(painter, start, rect);
+        // Ranges style their border, text and readout independently.
+        if matches!(
+            self.tool_type,
+            DrawingToolType::PriceRange
+                | DrawingToolType::DateRange
+                | DrawingToolType::DateAndPriceRange
+        ) {
+            self.render_range(painter, rect, stroke, view);
+        }
         // After the drawing's style, so that bold text leaves the regression trend's correlation alone.
         if let Some(label) = correlation {
             painter.add(label);
@@ -520,7 +530,8 @@ impl Drawing {
                 | T::FixedRangeVolumeProfile
                 | T::HeadAndShoulders
                 | T::TrianglePattern
-        );
+        ) || (self.tool_type == T::DateRange
+            && (self.range_settings.extend_top || self.range_settings.extend_bottom));
         Some(if time_only {
             Rect::from_x_y_ranges(bounds.x_range(), egui::Rangef::EVERYTHING)
         } else {
@@ -1926,7 +1937,8 @@ mod tests {
         );
         assert_eq!(
             label.texts.iter().map(text_of).collect::<Vec<_>>(),
-            ["200.00"]
+            // A new price label paints its bold price twice, a fraction apart.
+            ["200.00", "200.00"]
         );
         let [badge] = &label.paths[..] else {
             panic!("badge and pointer are one shape");

@@ -212,17 +212,23 @@ fn quote_box(
     response
 }
 
+/// Keep fractional order sizes exact below 1,000; abbreviate larger sizes with rounded-unit
+/// carry and no trailing decimal zeros. Non-finite quantities use a dash.
 fn compact_quantity(quantity: f64) -> String {
-    for (divisor, suffix) in [(1_000_000_000.0, "B"), (1_000_000.0, "M"), (1_000.0, "K")] {
-        if quantity.abs() >= divisor {
-            let number = format!("{:.2}", quantity / divisor);
-            return format!(
-                "{}{suffix}",
-                number.trim_end_matches('0').trim_end_matches('.')
-            );
-        }
+    if !quantity.is_finite() {
+        return "-".to_owned();
     }
-    quantity.to_string()
+    if quantity.abs() < 1_000.0 {
+        return quantity.to_string();
+    }
+    let text =
+        crate::scales::PriceFormatter::format(&crate::scales::VolumeFormatter::default(), quantity);
+    // Abbreviated values always end in one ASCII suffix, preceded by two decimal places.
+    let (number, suffix) = text.split_at(text.len() - 1);
+    format!(
+        "{}{suffix}",
+        number.trim_end_matches('0').trim_end_matches('.')
+    )
 }
 
 #[cfg(all(test, feature = "studies"))]
@@ -231,6 +237,22 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
     use egui::{Context, Event, Key, PointerButton, Shape};
+
+    #[test]
+    fn quote_quantity_carries_rounded_units() {
+        for (quantity, expected) in [
+            (999_999.0, "1M"),
+            (999_999_999.0, "1B"),
+            (-999_999.0, "-1M"),
+            (1_500.0, "1.5K"),
+            (10_000.0, "10K"),
+            (500.0, "500"),
+            (0.0015, "0.0015"),
+            (f64::NAN, "-"),
+        ] {
+            assert_eq!(compact_quantity(quantity), expected, "{quantity}");
+        }
+    }
 
     #[test]
     fn quote_controls_and_collapse_belong_to_each_legend() {

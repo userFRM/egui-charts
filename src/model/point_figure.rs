@@ -16,7 +16,27 @@ use chrono::{DateTime, Utc};
 /// The two key parameters are `box_size` (price units per box) and
 /// `reversal_boxes` (how many boxes of counter-movement trigger a new
 /// column). The traditional default is a 1-box size with 3-box reversal.
+///
+/// ```
+/// use chrono::{DateTime, Utc};
+/// use egui_charts::model::{Bar, PointFigureConfig, to_pnf_columns};
+///
+/// let mut config = PointFigureConfig::new(1.0, 1).with_close_only();
+/// config.one_step_back = true;
+/// let bars: Vec<Bar> = [100.0, 101.0, 100.0, 101.0]
+///     .into_iter()
+///     .enumerate()
+///     .map(|(i, close)| {
+///         let time: DateTime<Utc> = DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+///         Bar::new(time, close, close, close, close, 0.0)
+///     })
+///     .collect();
+/// let columns = to_pnf_columns(&bars, &config);
+/// assert_eq!(columns.len(), 2);
+/// assert!(columns[1].stepped_back);
+/// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct PointFigureConfig {
     /// Box size in price units
     pub box_size: f64,
@@ -28,6 +48,9 @@ pub struct PointFigureConfig {
     pub atr_period: usize,
     /// Traditional (high/low) or close-only method
     pub use_close: bool,
+    /// With a reversal of one box, draw a reversal that follows a column of one symbol in that
+    /// column instead of a new one. No effect at larger reversals.
+    pub one_step_back: bool,
 }
 
 impl Default for PointFigureConfig {
@@ -38,6 +61,7 @@ impl Default for PointFigureConfig {
             use_atr: false,
             atr_period: 14,
             use_close: false,
+            one_step_back: false,
         }
     }
 }
@@ -77,6 +101,7 @@ pub enum ColumnDirection {
 
 /// A single column of Xs (up) or Os (down) in a P&F chart.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct PnfColumn {
     /// Starting price (bottom for Up, top for Down)
     pub start_price: f64,
@@ -92,6 +117,10 @@ pub struct PnfColumn {
     pub box_size: f64,
     /// Inclusive number of boxes, saturated at `usize::MAX` when the count is larger.
     pub box_cnt: usize,
+    /// The box at `start_price` holds the symbol of the other direction: under
+    /// [`PointFigureConfig::one_step_back`], a reversal drew this column on from a column of
+    /// that one symbol. `direction` is the direction of the boxes after it.
+    pub stepped_back: bool,
 }
 
 /// Why [`PnfColumn::boxes`] did not list a column's box prices.
@@ -208,6 +237,8 @@ pub(crate) struct PnfBuilder {
     box_size: f64,
     reversal_amount: f64,
     use_close: bool,
+    /// Whether a reversal that follows a column of one box continues that column.
+    one_step_back: bool,
     /// The column in progress; `None` until the first bar.
     curr_column: Option<PnfColumn>,
     columns: Vec<PnfColumn>,
@@ -219,8 +250,25 @@ impl PnfBuilder {
             box_size,
             reversal_amount: box_size * config.reversal_boxes as f64,
             use_close: config.use_close,
+            one_step_back: config.one_step_back && config.reversal_boxes == 1,
             curr_column: None,
             columns: Vec::new(),
+        }
+    }
+
+    /// Closes `curr_column` and continues in `reversed`, or, one step back from a column of one
+    /// box, draws the reversal's boxes on in `curr_column` after its one symbol.
+    fn reverse(&mut self, curr_column: &mut PnfColumn, reversed: PnfColumn) {
+        if self.one_step_back && curr_column.box_cnt == 1 {
+            *curr_column = PnfColumn {
+                start_price: curr_column.start_price,
+                start_time: curr_column.start_time,
+                box_cnt: reversed.box_cnt.saturating_add(1),
+                stepped_back: true,
+                ..reversed
+            };
+        } else {
+            self.columns.push(std::mem::replace(curr_column, reversed));
         }
     }
 }
@@ -241,6 +289,7 @@ impl PriceBuilder for PnfBuilder {
                 end_time: bar.time,
                 box_size,
                 box_cnt: 1,
+                stepped_back: false,
             });
             return;
         };
@@ -273,9 +322,9 @@ impl PriceBuilder for PnfBuilder {
                         end_time: bar.time,
                         box_size,
                         box_cnt: box_count(curr_column.end_price - box_size, new_low, box_size),
+                        stepped_back: false,
                     };
-                    self.columns
-                        .push(std::mem::replace(&mut curr_column, reversed));
+                    self.reverse(&mut curr_column, reversed);
                 }
             }
             ColumnDirection::Down => {
@@ -300,9 +349,9 @@ impl PriceBuilder for PnfBuilder {
                         end_time: bar.time,
                         box_size,
                         box_cnt: box_count(curr_column.end_price + box_size, new_high, box_size),
+                        stepped_back: false,
                     };
-                    self.columns
-                        .push(std::mem::replace(&mut curr_column, reversed));
+                    self.reverse(&mut curr_column, reversed);
                 }
             }
         }
@@ -384,6 +433,70 @@ mod tests {
         }
     }
 
+    /// One step back draws a one box reversal that follows a column of one symbol in that
+    /// column. Boxes of 1 on the closes 100, 101, 100, 101: a rising column from 100 to 101, a
+    /// fall to 100 that is one O, and a rise to 101 that either follows it in a column of its own
+    /// or continues its column with an X. At a reversal of two boxes only the first column can
+    /// hold one symbol, and the fall from 100 to 98 still starts a column.
+    #[test]
+    fn one_step_back_continues_a_column_of_one_symbol() {
+        use ColumnDirection::{Down, Up};
+        // (closes, reversal boxes, one step back, columns as (direction, start, end, stepped back))
+        type Row<'a> = (
+            &'a [f64],
+            usize,
+            bool,
+            &'a [(ColumnDirection, f64, f64, bool)],
+        );
+        let swing = [100.0, 101.0, 100.0, 101.0];
+        let rows: [Row; 3] = [
+            (
+                &swing,
+                1,
+                false,
+                &[
+                    (Up, 100.0, 101.0, false),
+                    (Down, 100.0, 100.0, false),
+                    (Up, 101.0, 101.0, false),
+                ],
+            ),
+            (
+                &swing,
+                1,
+                true,
+                &[(Up, 100.0, 101.0, false), (Up, 100.0, 101.0, true)],
+            ),
+            (
+                &[100.0, 98.0],
+                2,
+                true,
+                &[(Up, 100.0, 100.0, false), (Down, 99.0, 98.0, false)],
+            ),
+        ];
+        for (closes, reversal, one_step_back, expected) in rows {
+            let data: Vec<_> = closes
+                .iter()
+                .enumerate()
+                .map(|(i, &c)| {
+                    let time = DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+                    Bar::new(time, c, c, c, c, 0.0)
+                })
+                .collect();
+            let config = PointFigureConfig {
+                one_step_back,
+                ..PointFigureConfig::new(1.0, reversal).with_close_only()
+            };
+            let columns: Vec<_> = to_pnf_columns(&data, &config)
+                .iter()
+                .map(|c| (c.direction, c.start_price, c.end_price, c.stepped_back))
+                .collect();
+            assert_eq!(
+                columns, expected,
+                "{closes:?} reversal {reversal}, {one_step_back}"
+            );
+        }
+    }
+
     #[test]
     fn test_column_boxes() {
         for (start, end, size, expected) in [
@@ -416,6 +529,7 @@ mod tests {
                 end_time: Utc::now(),
                 box_size: size,
                 box_cnt: 1,
+                stepped_back: false,
             };
             assert_eq!(column.boxes().ok(), expected, "{start}..{end} size {size}");
         }
