@@ -118,7 +118,8 @@ pub struct Trading {
     /// The chart settings' trading options: what [`show`](Self::show) draws, whether Buy and
     /// Sell trade at once, which events raise notifications and whether fills ask for a sound.
     /// Copy the chart settings' [`trading`](crate::widget::settings::ChartSettingsState::trading)
-    /// options here when the user applies them.
+    /// options here when the user applies them, and read them back when opening the dialog or
+    /// saving: [`apply_hide_action`](Self::apply_hide_action) changes them from the Hide menu.
     pub display: TradingSettings,
     /// The sound asked for by fills since the host last took it.
     sound: Option<String>,
