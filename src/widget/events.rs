@@ -274,10 +274,25 @@ pub enum ChartEvent {
     /// A delete of drawings, with Delete or Backspace, through [`Chart::delete_selected_drawings`]
     /// or from the object tree, kept this many of them because they are locked; the others were
     /// deleted. Tell the user, for example in a toast, that a drawing must be unlocked
-    /// before it can be deleted.
+    /// before it can be deleted. Drawings whose user edits are off are kept too, and not counted.
     #[cfg(feature = "drawings")]
     #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
     LockedDrawingsKept(usize),
+    /// A drawing of the current symbol changed: by the user, by undo or redo, or by a host call
+    /// on the chart or on its [`drawings_mut`](Chart::drawings_mut) manager. Each change is
+    /// queued in the order it happened, also where
+    /// [`DrawingManager::pending_sync`](crate::drawings::DrawingManager::pending_sync) coalesces
+    /// the saves. Loading drawings, reading them from storage, restoring a snapshot and direct
+    /// writes to [`DrawingManager::drawings`](crate::drawings::DrawingManager::drawings) report
+    /// nothing. A click on a drawing stays a [`Self::Click`] on [`PointerTarget::Drawing`].
+    #[cfg(feature = "drawings")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+    Drawing {
+        /// Id of the drawing, as [`PointerTarget::Drawing`] carries it.
+        id: usize,
+        /// What happened to it.
+        kind: crate::drawings::DrawingEventKind,
+    },
     /// A successful history page, `set_data` or `set_custom_data` completed, including an empty
     /// result. Live updates emit `DataUpdated` instead; failed or obsolete feed replies emit
     /// nothing.
@@ -447,9 +462,9 @@ impl Chart {
 
     /// Drains host notifications in occurrence order. Call after `show` each frame.
     ///
-    /// Symbol, interval, data and series setters enqueue immediately; view and pointer changes are
-    /// measured during `show`. Unchanged views and pointers emit nothing. Drain
-    /// regularly: the newest 1024 notifications remain queued until taken; overflow is
+    /// Symbol, interval, data and series setters and drawing changes enqueue as they happen;
+    /// view and pointer changes are measured during `show`. Unchanged views and pointers emit
+    /// nothing. Drain regularly: the newest 1024 notifications remain queued until taken; overflow is
     /// reported as `EventsDropped` before the retained events. A new chart's constructor data
     /// emits no load event. This queue does not consume context, quote or selection actions.
     ///
@@ -467,6 +482,8 @@ impl Chart {
     /// # });
     /// ```
     pub fn drain_events(&mut self) -> impl Iterator<Item = ChartEvent> + '_ {
+        #[cfg(feature = "drawings")]
+        self.flush_drawing_events();
         let dropped = std::mem::take(&mut self.host_events.dropped);
         (dropped > 0)
             .then_some(ChartEvent::EventsDropped(dropped))
@@ -474,8 +491,27 @@ impl Chart {
             .chain(self.host_events.queue.drain(..).map(|event| *event))
     }
 
+    /// Queues `event` after the drawing changes made before it.
+    pub(super) fn push_event(&mut self, event: ChartEvent) {
+        #[cfg(feature = "drawings")]
+        self.flush_drawing_events();
+        self.host_events.push(event);
+    }
+
+    /// Queues the drawing changes the manager recorded, oldest first, counting those it dropped.
+    #[cfg(feature = "drawings")]
+    pub(super) fn flush_drawing_events(&mut self) {
+        self.host_events.dropped = self
+            .host_events
+            .dropped
+            .saturating_add(std::mem::take(&mut self.drawings.events_dropped));
+        while let Some((id, kind)) = self.drawings.events.pop_front() {
+            self.host_events.push(ChartEvent::Drawing { id, kind });
+        }
+    }
+
     pub(super) fn data_loaded(&mut self, series: SeriesId) {
-        self.host_events.push(ChartEvent::DataLoaded {
+        self.push_event(ChartEvent::DataLoaded {
             series,
             bars: self.series_len(series),
         });
@@ -488,7 +524,7 @@ impl Chart {
 
     pub(super) fn data_operation(&mut self, series: SeriesId, operation: DataOperation) {
         if self.host_events.data_operations {
-            self.host_events.push(ChartEvent::DataOperation {
+            self.push_event(ChartEvent::DataOperation {
                 series,
                 operation,
                 bars: self.series_len(series),
@@ -497,6 +533,8 @@ impl Chart {
     }
 
     pub(super) fn data_updated(&mut self, series: SeriesId) {
+        #[cfg(feature = "drawings")]
+        self.flush_drawing_events();
         let bars = self.series_len(series);
         if let Some(ChartEvent::DataUpdated {
             series: last,
@@ -899,19 +937,17 @@ impl Chart {
         let range = self.visible_time_range();
         if range != self.host_events.range {
             self.host_events.range = range;
-            self.host_events
-                .push(ChartEvent::VisibleRangeChanged(range));
+            self.push_event(ChartEvent::VisibleRangeChanged(range));
         }
         let logical_range = self.visible_logical_range();
         if logical_range != self.host_events.logical_range {
             self.host_events.logical_range = logical_range;
-            self.host_events
-                .push(ChartEvent::VisibleLogicalRangeChanged(logical_range));
+            self.push_event(ChartEvent::VisibleLogicalRangeChanged(logical_range));
         }
         let size = self.time_scale_size();
         if size != self.host_events.time_scale_size {
             self.host_events.time_scale_size = size;
-            self.host_events.push(ChartEvent::TimeScaleResized(size));
+            self.push_event(ChartEvent::TimeScaleResized(size));
         }
         let position = if let Some(position) = self.host_events.touch_position {
             position.and_then(|pos| {
@@ -943,7 +979,7 @@ impl Chart {
         };
         if !unchanged {
             self.host_events.pointer = position.clone();
-            self.host_events.push(ChartEvent::CrosshairMoved(position));
+            self.push_event(ChartEvent::CrosshairMoved(position));
         }
     }
 
@@ -952,11 +988,10 @@ impl Chart {
         use crate::drawings::DrawingToolType;
 
         if let Some(drawing) = self.drawings.image_request.take() {
-            self.host_events
-                .push(ChartEvent::ImageRequested(ImageRequest {
-                    drawing,
-                    file: None,
-                }));
+            self.push_event(ChartEvent::ImageRequested(ImageRequest {
+                drawing,
+                file: None,
+            }));
         }
         let pos = ui.input(|input| {
             for file in &input.raw.dropped_files {
@@ -1015,7 +1050,7 @@ impl Chart {
             self.drawings.select(request.drawing);
         }
         for request in requests {
-            self.host_events.push(ChartEvent::ImageRequested(request));
+            self.push_event(ChartEvent::ImageRequested(request));
         }
     }
 
@@ -1050,7 +1085,7 @@ impl Chart {
                     continue;
                 };
                 self.host_events.click_frames[index] = Some(frame);
-                self.host_events.push(ChartEvent::Click {
+                self.push_event(ChartEvent::Click {
                     position: position.clone(),
                     button,
                 });
@@ -1074,7 +1109,7 @@ impl Chart {
                         && self.host_events.click_frames[2] != Some(frame)
                     {
                         self.host_events.click_frames[2] = Some(frame);
-                        self.host_events.push(ChartEvent::DoubleClick { position });
+                        self.push_event(ChartEvent::DoubleClick { position });
                     }
                 }
             }
@@ -1283,6 +1318,215 @@ mod tests {
     use super::*;
     use crate::widget::test_frames::{chart, frame};
     use egui::{Context, Event};
+
+    /// Each change of a drawing reaches the host once, by kind and drawing id and in order, and
+    /// undo and redo of it report the change they make.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn drawing_changes_reach_the_host_by_kind() {
+        use crate::drawings::domain::ChartPoint;
+        use crate::drawings::{Drawing, DrawingEventKind as K, DrawingToolType, HandlePos};
+        use egui::pos2;
+
+        fn line(from: f32) -> Drawing {
+            let mut line = Drawing::new(0, DrawingToolType::TrendLine);
+            line.chart_points = vec![
+                ChartPoint::new(from, 120.0),
+                ChartPoint::new(from + 10.0, 150.0),
+            ];
+            line
+        }
+        /// Drags `handle` of drawing 0, or its body for `None`, to `to`, with screen points equal
+        /// to bar indices and prices.
+        fn drag(chart: &mut Chart, handle: Option<HandlePos>, from: egui::Pos2, to: egui::Pos2) {
+            let manager = chart.drawings_mut();
+            manager.update_all_screen_coords(|bar| bar, |price| price as f32, 1.0);
+            match handle {
+                Some(handle) => manager.start_drag_handle(0, handle),
+                None => manager.start_drag_body(0, from),
+            }
+            manager.update_drag_handle(
+                to,
+                |x| x,
+                f64::from,
+                |price, from, to| price + f64::from(to - from),
+            );
+            manager.end_drag_handle();
+        }
+        fn drained(chart: &mut Chart) -> Vec<ChartEvent> {
+            chart.drain_events().collect()
+        }
+        fn drawing(id: usize, kinds: &[K]) -> Vec<ChartEvent> {
+            kinds
+                .iter()
+                .map(|&kind| ChartEvent::Drawing { id, kind })
+                .collect()
+        }
+
+        let mut chart = chart(&[100.0], &[200.0]);
+        chart
+            .user_action(|c| c.drawings_mut().add_drawing(line(10.0)))
+            .unwrap();
+        assert_eq!(drained(&mut chart), drawing(0, &[K::Created]));
+        // Edit, drawing, what the edit reports, what its undo reports; redo reports the edit.
+        type Row = (
+            &'static str,
+            fn(&mut Chart),
+            usize,
+            &'static [K],
+            &'static [K],
+        );
+        let rows: [Row; 8] = [
+            (
+                "hide",
+                |c| {
+                    c.drawings_mut()
+                        .edit_drawing(0, |d| d.visible = false)
+                        .unwrap()
+                },
+                0,
+                &[K::Hidden],
+                &[K::Shown],
+            ),
+            (
+                "show",
+                |c| {
+                    c.drawings_mut()
+                        .edit_drawing(0, |d| d.visible = true)
+                        .unwrap()
+                },
+                0,
+                &[K::Shown],
+                &[K::Hidden],
+            ),
+            (
+                "drag the body",
+                |c| drag(c, None, pos2(15.0, 135.0), pos2(17.0, 135.0)),
+                0,
+                &[K::Moved],
+                &[K::Moved],
+            ),
+            (
+                "drag an anchor",
+                |c| {
+                    drag(
+                        c,
+                        Some(HandlePos::End),
+                        pos2(22.0, 150.0),
+                        pos2(30.0, 160.0),
+                    )
+                },
+                0,
+                &[K::AnchorsChanged],
+                &[K::AnchorsChanged],
+            ),
+            (
+                "restyle",
+                |c| {
+                    c.drawings_mut()
+                        .edit_drawing(0, |d| d.stroke_width = 3.0)
+                        .unwrap()
+                },
+                0,
+                &[K::PropertiesChanged],
+                &[K::PropertiesChanged],
+            ),
+            (
+                "hide and restyle",
+                |c| {
+                    c.drawings_mut()
+                        .edit_drawing(0, |d| {
+                            d.visible = false;
+                            d.color = [1, 2, 3, 255];
+                        })
+                        .unwrap()
+                },
+                0,
+                &[K::Hidden, K::PropertiesChanged],
+                &[K::Shown, K::PropertiesChanged],
+            ),
+            (
+                "create",
+                |c| {
+                    c.drawings_mut().add_drawing(line(30.0)).unwrap();
+                },
+                1,
+                &[K::Created],
+                &[K::Removed],
+            ),
+            (
+                "delete",
+                |c| c.drawings_mut().delete_drawing(1),
+                1,
+                &[K::Removed],
+                &[K::Created],
+            ),
+        ];
+        for (name, edit, id, reported, undone) in rows {
+            chart.user_action(edit);
+            assert_eq!(drained(&mut chart), drawing(id, reported), "{name}");
+            assert!(chart.undo(), "{name}");
+            assert_eq!(drained(&mut chart), drawing(id, undone), "{name}: undo");
+            assert!(chart.redo(), "{name}");
+            assert_eq!(drained(&mut chart), drawing(id, reported), "{name}: redo");
+        }
+        // An edit that changes nothing reports nothing, though storage still saves the drawing.
+        chart.drawings_mut().edit_drawing(0, |_| {}).unwrap();
+        assert_eq!(drained(&mut chart), []);
+        // A drawing change keeps its place before a later notification.
+        chart
+            .drawings_mut()
+            .edit_drawing(0, |d| d.locked = true)
+            .unwrap();
+        let series = chart.add_series(crate::widget::SeriesOptions::default());
+        assert_eq!(
+            drained(&mut chart),
+            [
+                ChartEvent::Drawing {
+                    id: 0,
+                    kind: K::PropertiesChanged
+                },
+                ChartEvent::SeriesAdded(series),
+            ]
+        );
+        // More changes than the queue holds: the oldest are counted as dropped.
+        for _ in 0..1100 {
+            chart.drawings_mut().add_drawing(line(40.0)).unwrap();
+        }
+        let queued = drained(&mut chart);
+        assert_eq!(queued.len(), 1025);
+        assert_eq!(queued[0], ChartEvent::EventsDropped(76));
+        assert_eq!(
+            queued[1],
+            ChartEvent::Drawing {
+                id: 78,
+                kind: K::Created
+            }
+        );
+        // Notifications remain separate from both persistence and its coalescing.
+        chart.drawings_mut().set_sync_enabled(false);
+        chart
+            .drawings_mut()
+            .edit_drawing(0, |d| {
+                d.locked = false;
+                d.saveable = false;
+            })
+            .unwrap();
+        for visible in [true, false] {
+            chart
+                .drawings_mut()
+                .edit_drawing(0, |d| d.visible = visible)
+                .unwrap();
+        }
+        assert_eq!(
+            drained(&mut chart),
+            drawing(0, &[K::PropertiesChanged, K::Shown, K::Hidden])
+        );
+        // An already invalid drawing also reports no change for an unchanged NaN coordinate.
+        chart.drawings_mut().drawings[0].screen_anchor = Some([f32::NAN, 0.5]);
+        chart.drawings_mut().edit_drawing(0, |_| {}).unwrap();
+        assert_eq!(drained(&mut chart), []);
+    }
 
     /// Interleaved points occupy fractional main-series slots: minute 1 is at 0.5 between
     /// minutes 0 and 2, and minute 3 is at 1.125 between minutes 2 and 10.

@@ -129,6 +129,28 @@ impl Chart {
         .then_some(timeframe)
     }
 
+    /// The executions drawings read: the copy cut at candle replay's time, else the feed's
+    /// held executions; `None` without a feed or while the chart holds none.
+    pub(super) fn drawing_executions(&self) -> Option<crate::data::FootprintView<'_>> {
+        self.feed_link.as_ref().and_then(|link| {
+            if self.replay.is_some() {
+                link.replay_footprint.as_ref()?.1.as_ref().map(Into::into)
+            } else {
+                link.footprint.as_ref().map(|flow| flow.view())
+            }
+        })
+    }
+
+    /// Estimated and total bars of drawing `id` over the shown bars and executions drawings read.
+    #[cfg(feature = "ui")]
+    pub(crate) fn vwap_estimated_bars(&self, id: usize) -> Option<(usize, usize)> {
+        self.drawings
+            .drawings
+            .iter()
+            .find(|drawing| drawing.id == id)?
+            .anchored_vwap_estimated(self.state.shown(), self.drawing_executions())
+    }
+
     /// Suggested finer histories and first opens of the visible profile drawings' spans.
     pub(super) fn profile_histories(
         &self,
@@ -438,11 +460,7 @@ impl Chart {
                 == DrawingInteractionMode::ContinuousDraw
                 || (ui.input(|i| i.modifiers.shift)
                     && (DrawingManager::constrains_angle(active_tool)
-                        || matches!(
-                            active_tool,
-                            crate::drawings::DrawingToolType::Rect
-                                | crate::drawings::DrawingToolType::Ellipse
-                        )));
+                        || DrawingManager::squares_box(active_tool)));
             if uses_precise {
                 interaction::handle_active_tool(
                     ui,
@@ -478,6 +496,13 @@ impl Chart {
             );
         }
 
+        // A card placed this frame stands at the time its content was published.
+        if drawing_manager.drawings.len() > count_before
+            && drawing_manager.dragging_handle.is_none()
+            && let Some(id) = drawing_manager.drawings.last().map(|d| d.id)
+        {
+            self.place_new_post(drawing_manager, id);
+        }
         let edit_id = if drawing_manager.text_editor.is_some() {
             None
         } else if drawing_manager.drawings.len() > count_before
@@ -538,13 +563,7 @@ impl Chart {
             price_to_y: &price_to_y,
             y_to_price: &|y| price_map.y_to_price(y),
             time_axis: self.horizontal_scale.is_none(),
-            executions: self.feed_link.as_ref().and_then(|link| {
-                if self.replay.is_some() {
-                    link.replay_footprint.as_ref()?.1.as_ref().map(Into::into)
-                } else {
-                    link.footprint.as_ref().map(|flow| flow.view())
-                }
-            }),
+            executions: self.drawing_executions(),
             timeframe: self.drawing_timeframe(),
             finer: &finer,
         };
@@ -1318,22 +1337,26 @@ mod tests {
 
     /// A square has equal screen sides in any quadrant, including against a pane edge.
     #[test]
-    fn shift_rectangle_creation_is_square_in_preview_and_after_release() {
+    fn shift_box_creation_is_square_in_preview_and_after_release() {
+        use DrawingToolType as T;
         use egui::{pos2, vec2};
-        for (shift, delta) in [
-            (true, vec2(240.0, 60.0)),
-            (false, vec2(240.0, 60.0)),
-            (true, vec2(-240.0, 60.0)),
-            (true, vec2(240.0, -60.0)),
-            (true, vec2(-240.0, -60.0)),
-            (true, vec2(1000.0, 60.0)),
+        for (tool, shift, delta) in [
+            (T::Rect, true, vec2(240.0, 60.0)),
+            (T::Rect, false, vec2(240.0, 60.0)),
+            (T::Rect, true, vec2(-240.0, 60.0)),
+            (T::Rect, true, vec2(240.0, -60.0)),
+            (T::Rect, true, vec2(-240.0, -60.0)),
+            (T::Rect, true, vec2(1000.0, 60.0)),
+            (T::FibonacciCircles, true, vec2(1000.0, 60.0)),
+            (T::GannBox, true, vec2(1000.0, 60.0)),
+            (T::GannSquare, true, vec2(1000.0, 60.0)),
+            (T::GannFixed, true, vec2(1000.0, 60.0)),
+            (T::GannFan, true, vec2(1000.0, 60.0)),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
             frame(&ctx, &mut chart, 0.0, vec![]);
-            chart
-                .drawings_mut()
-                .set_active_tool(Some(DrawingToolType::Rect));
+            chart.drawings_mut().set_active_tool(Some(tool));
             let map = chart.get_chart_mapping();
             let center = chart.get_rendered_price_rect().center();
             let a = pos2(map.idx_to_x(map.x_to_idx(center.x)), center.y);
@@ -1371,11 +1394,11 @@ mod tests {
                 let d = points[1] - points[0];
                 assert!(
                     (d.x.abs() - expected_side).abs() < 0.01,
-                    "{delta:?}: {points:?}"
+                    "{tool:?} {delta:?}: {points:?}"
                 );
                 assert!(
                     (d.x.abs() - d.y.abs()).abs() < 0.01,
-                    "{delta:?}: {points:?}"
+                    "{tool:?} {delta:?}: {points:?}"
                 );
             };
             if shift {
@@ -1856,18 +1879,61 @@ mod tests {
     }
 
     /// With the eraser on, a click on a drawing deletes it, whether or not a drawing is
-    /// selected, unless it is locked or Escape has turned the eraser off.
+    /// selected, unless it is locked, protected or Escape has turned the eraser off.
     #[test]
-    fn an_eraser_click_deletes_the_drawing_unless_it_is_locked() {
-        for (tool, selected, locked, escaped, kept) in [
-            (DrawingToolType::HorizontalLine, false, false, false, 0),
-            (DrawingToolType::HorizontalLine, true, false, false, 0),
-            (DrawingToolType::HorizontalLine, true, true, false, 1),
-            (DrawingToolType::HorizontalLine, false, false, true, 1),
-            (DrawingToolType::FibonacciExtension, false, false, false, 0),
-            (DrawingToolType::FibonacciExtension, true, false, false, 0),
-            (DrawingToolType::FibonacciExtension, true, true, false, 1),
-            (DrawingToolType::FibonacciExtension, false, false, true, 1),
+    fn an_eraser_click_deletes_the_drawing_unless_it_is_locked_or_protected() {
+        for (tool, selected, locked, escaped, user_edit, kept) in [
+            (
+                DrawingToolType::HorizontalLine,
+                false,
+                false,
+                false,
+                true,
+                0,
+            ),
+            (DrawingToolType::HorizontalLine, true, false, false, true, 0),
+            (DrawingToolType::HorizontalLine, true, true, false, true, 1),
+            (DrawingToolType::HorizontalLine, false, false, true, true, 1),
+            (
+                DrawingToolType::FibonacciExtension,
+                false,
+                false,
+                false,
+                true,
+                0,
+            ),
+            (
+                DrawingToolType::FibonacciExtension,
+                true,
+                false,
+                false,
+                true,
+                0,
+            ),
+            (
+                DrawingToolType::FibonacciExtension,
+                true,
+                true,
+                false,
+                true,
+                1,
+            ),
+            (
+                DrawingToolType::FibonacciExtension,
+                false,
+                false,
+                true,
+                true,
+                1,
+            ),
+            (
+                DrawingToolType::HorizontalLine,
+                false,
+                false,
+                false,
+                false,
+                1,
+            ),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
@@ -1889,6 +1955,7 @@ mod tests {
                 vec![ChartPoint::new(50.0, 15.0)]
             };
             line.locked = locked;
+            line.user_edit_enabled = user_edit;
             chart.drawings_mut().drawings.push(line);
             if selected {
                 chart.drawings_mut().select(1);
@@ -1926,7 +1993,7 @@ mod tests {
             let left = chart.drawings().drawings.len();
             assert_eq!(
                 left, kept,
-                "{tool:?}: selected {selected}, locked {locked}, escaped {escaped}"
+                "{tool:?}: selected {selected}, locked {locked}, escaped {escaped}, user edits {user_edit}"
             );
         }
     }
@@ -1938,18 +2005,20 @@ mod tests {
         use crate::drawings::manager::DrawingSyncAction;
         use egui::pos2;
 
-        for (tool, modifiers, locked, crossed, pieces) in [
-            (DrawingToolType::Brush, Modifiers::CTRL, false, 15, 2),
+        for (tool, modifiers, locked, user_edit, crossed, pieces) in [
+            (DrawingToolType::Brush, Modifiers::CTRL, false, true, 15, 2),
             (
                 DrawingToolType::Highlighter,
                 Modifiers::COMMAND,
                 false,
+                true,
                 15,
                 2,
             ),
-            (DrawingToolType::Brush, Modifiers::CTRL, false, 0, 1),
-            (DrawingToolType::Brush, Modifiers::CTRL, true, 15, 0),
-            (DrawingToolType::Brush, Modifiers::NONE, false, 15, 0),
+            (DrawingToolType::Brush, Modifiers::CTRL, false, true, 0, 1),
+            (DrawingToolType::Brush, Modifiers::CTRL, true, true, 15, 0),
+            (DrawingToolType::Brush, Modifiers::NONE, false, true, 15, 0),
+            (DrawingToolType::Brush, Modifiers::CTRL, false, false, 15, 0),
         ] {
             let ctx = Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
@@ -1966,6 +2035,7 @@ mod tests {
                 })
                 .collect();
             stroke.locked = locked;
+            stroke.user_edit_enabled = user_edit;
             stroke.stored_id = Some("stroke".into());
             stroke.created_at = Some(123);
             chart.drawings_mut().drawings.push(stroke.clone());
@@ -2258,7 +2328,7 @@ mod tests {
             assert!(
                 chart
                     .drawings()
-                    .axis_tags(main, Color32::WHITE, &[], 0)
+                    .axis_tags(main, Color32::WHITE, &[], 0, None)
                     .any(|tag| matches!(
                         tag,
                         crate::drawings::manager::DrawingAxisTag::Time { x: tag_x, .. } if tag_x == x

@@ -92,6 +92,7 @@ struct ColorPickerStates {
     background_gradient_bottom: ColorPickerState,
     grid_h: ColorPickerState,
     grid_v: ColorPickerState,
+    pane_separator: ColorPickerState,
     crosshair: ColorPickerState,
     watermark: ColorPickerState,
     scales_text: ColorPickerState,
@@ -100,6 +101,9 @@ struct ColorPickerStates {
     symbol_value: ColorPickerState,
     study_value: ColorPickerState,
     extended_value: ColorPickerState,
+    price_target_positive: ColorPickerState,
+    price_target_negative: ColorPickerState,
+    prev_close_line: ColorPickerState,
 }
 
 impl Default for SettingsDialog {
@@ -131,11 +135,13 @@ impl SettingsDialog {
                 ),
                 grid_h: ColorPickerState::new(settings.grid_lines.horizontal_color),
                 grid_v: ColorPickerState::new(settings.grid_lines.vertical_color),
+                pane_separator: ColorPickerState::default(),
                 crosshair: ColorPickerState::new(settings.crosshair.color),
                 watermark: ColorPickerState::new(settings.watermark.color),
                 scales_text: ColorPickerState::new(settings.scales_appearance.text_color),
                 scales_lines: ColorPickerState::new(settings.scales_appearance.lines_color),
                 alert: ColorPickerState::new(settings.alerts.alert_color),
+                prev_close_line: ColorPickerState::new(Color32::PLACEHOLDER),
                 symbol_value: ColorPickerState::new(
                     settings
                         .scales_and_lines
@@ -151,6 +157,8 @@ impl SettingsDialog {
                 extended_value: ColorPickerState::new(
                     settings.scales_and_lines.extended_session_price_color,
                 ),
+                price_target_positive: ColorPickerState::default(),
+                price_target_negative: ColorPickerState::default(),
             },
             margin_top_str: format!("{}", settings.margins.top_percent),
             margin_bottom_str: format!("{}", settings.margins.bottom_percent),
@@ -336,6 +344,37 @@ impl SettingsDialog {
                 self.settings.crosshair.color,
                 theme.chart.crosshair_line,
             ),
+            (
+                &mut self.color_picker_states.price_target_positive,
+                self.settings
+                    .price_target_positive_color
+                    .unwrap_or(Color32::PLACEHOLDER),
+                crate::config::ChartConfig::price_target_colors(
+                    Color32::PLACEHOLDER,
+                    theme.chart.candle_up,
+                )
+                .1,
+            ),
+            (
+                &mut self.color_picker_states.price_target_negative,
+                self.settings
+                    .price_target_negative_color
+                    .unwrap_or(Color32::PLACEHOLDER),
+                crate::config::ChartConfig::price_target_colors(
+                    Color32::PLACEHOLDER,
+                    theme.chart.candle_down,
+                )
+                .1,
+            ),
+            (
+                &mut self.color_picker_states.prev_close_line,
+                self.settings
+                    .scales_and_lines
+                    .prev_close_line
+                    .and_then(|line| line.color)
+                    .unwrap_or(Color32::PLACEHOLDER),
+                crate::config::ChartConfig::prev_close_fallback(theme),
+            ),
         ] {
             picker.sel_color = if color == Color32::PLACEHOLDER {
                 themed
@@ -343,6 +382,12 @@ impl SettingsDialog {
                 color
             };
         }
+
+        // Until a colour is chosen the well shows the theme's, which the separators follow.
+        self.color_picker_states.pane_separator.sel_color = self
+            .settings
+            .pane_separator_color
+            .unwrap_or(theme.chart.grid_line);
 
         let mut is_open = self.is_open;
         let fixed_height = (self.config.height > 0.0).then_some(self.config.height);
@@ -770,13 +815,41 @@ impl SettingsDialog {
                     .scales_and_lines
                     .price_line_style
                     .or(scales.price_line_style);
+                let bid_ask_lines = template
+                    .scales_and_lines
+                    .show_bid_ask_lines
+                    .or(scales.show_bid_ask_lines);
+                let high_low_lines = template
+                    .scales_and_lines
+                    .show_high_low_lines
+                    .or(scales.show_high_low_lines);
+                let prev_close_line = template
+                    .scales_and_lines
+                    .prev_close_line
+                    .or(scales.prev_close_line);
                 let separator = template
                     .scales_and_lines
                     .thousands_sep
                     .or(scales.thousands_sep);
+                let date_format = template
+                    .scales_and_lines
+                    .date_format
+                    .clone()
+                    .or_else(|| scales.date_format.clone());
+                let use_24_hour = template.scales_and_lines.use_24_hour.or(scales.use_24_hour);
+                let weekday_names = template
+                    .scales_and_lines
+                    .weekday_names
+                    .or(scales.weekday_names);
                 let session_breaks = template
                     .show_session_breaks
                     .or(self.settings.show_session_breaks);
+                let positive = template
+                    .price_target_positive_color
+                    .or(self.settings.price_target_positive_color);
+                let negative = template
+                    .price_target_negative_color
+                    .or(self.settings.price_target_negative_color);
                 // The whole bars of the margin shown, or its pixels, are an unedited margin, which
                 // stays as shown.
                 let shown = &self.settings.margins;
@@ -796,8 +869,16 @@ impl SettingsDialog {
                 self.settings.scales_and_lines.price_line_source = line_source;
                 self.settings.scales_and_lines.price_line_width = line_width;
                 self.settings.scales_and_lines.price_line_style = line_style;
+                self.settings.scales_and_lines.show_bid_ask_lines = bid_ask_lines;
+                self.settings.scales_and_lines.show_high_low_lines = high_low_lines;
+                self.settings.scales_and_lines.prev_close_line = prev_close_line;
                 self.settings.scales_and_lines.thousands_sep = separator;
+                self.settings.scales_and_lines.date_format = date_format;
+                self.settings.scales_and_lines.use_24_hour = use_24_hour;
+                self.settings.scales_and_lines.weekday_names = weekday_names;
                 self.settings.show_session_breaks = session_breaks;
+                self.settings.price_target_positive_color = positive;
+                self.settings.price_target_negative_color = negative;
                 self.settings.margins.right_bars = right_bars;
                 // A template saved before volume candles had a style shows what they drew, which
                 // Ok then applies with any edits made before it.
@@ -868,6 +949,8 @@ impl SettingsDialog {
                 chart_type_params: Some(Default::default()),
                 price_source: Some(Default::default()),
                 show_session_breaks: Some(false),
+                price_target_positive_color: Some(Color32::PLACEHOLDER),
+                price_target_negative_color: Some(Color32::PLACEHOLDER),
                 ..Default::default()
             };
             // What a new chart holds, where the default settings hold no choice.
@@ -876,8 +959,15 @@ impl SettingsDialog {
             let style = crate::model::SeriesStyle::default();
             self.settings.scales_and_lines.price_line_width = Some(style.price_line_width);
             self.settings.scales_and_lines.price_line_style = Some(style.price_line_style);
+            self.settings.scales_and_lines.show_bid_ask_lines = Some(false);
+            self.settings.scales_and_lines.show_high_low_lines = Some(false);
+            self.settings.scales_and_lines.prev_close_line = Some(Default::default());
             self.settings.scales_and_lines.thousands_sep =
                 Some(crate::widget::settings::ThousandsSeparator::Comma);
+            self.settings.scales_and_lines.date_format =
+                Some(crate::widget::settings::DateFormat::Default);
+            self.settings.scales_and_lines.use_24_hour = Some(true);
+            self.settings.scales_and_lines.weekday_names = Some(Default::default());
             let palette = crate::config::ChartConfig::default().with_theme(theme);
             // The default styles of the chart types hold the dark preset's candle colours.
             let params = self.settings.chart_type_params.get_or_insert_default();
@@ -926,21 +1016,44 @@ mod tests {
 
     #[test]
     fn reset_colours_match_a_new_chart_under_each_theme() {
-        // The dialog is shown with `theme` while the application theme is `app`.
-        for (preset, theme, app) in [
-            ("light", Theme::light(), Theme::light()),
-            ("dark", Theme::dark(), Theme::dark()),
+        // The dialog is shown with `theme` while the application theme is `app`; `prev_close`
+        // is the previous close well's colour without a colour of its own, which follows `theme`.
+        for (preset, theme, app, prev_close) in [
+            (
+                "light",
+                Theme::light(),
+                Theme::light(),
+                Color32::from_rgb(85, 85, 85),
+            ),
+            (
+                "dark",
+                Theme::dark(),
+                Theme::dark(),
+                Color32::from_rgb(184, 184, 184),
+            ),
             (
                 "high contrast",
                 Theme::high_contrast(),
                 Theme::high_contrast(),
+                Color32::from_rgb(235, 235, 235),
             ),
-            ("light dialog in a dark app", Theme::light(), Theme::dark()),
-            ("dark dialog in a light app", Theme::dark(), Theme::light()),
+            (
+                "light dialog in a dark app",
+                Theme::light(),
+                Theme::dark(),
+                Color32::from_rgb(85, 85, 85),
+            ),
+            (
+                "dark dialog in a light app",
+                Theme::dark(),
+                Theme::light(),
+                Color32::from_rgb(184, 184, 184),
+            ),
             (
                 "high contrast dialog in a light app",
                 Theme::high_contrast(),
                 Theme::light(),
+                Color32::from_rgb(235, 235, 235),
             ),
         ] {
             for (templates_visible, size) in [
@@ -953,11 +1066,25 @@ mod tests {
                 crate::theme::apply_to_egui(&ctx, &app);
                 let mut chart = crate::ChartBuilder::new().with_theme(theme.clone()).build();
                 let expected = ChartSettingsState::from_chart(&chart);
+                chart.config_mut().price_target_positive_color = Color32::RED;
+                chart.config_mut().price_target_negative_color = Color32::GREEN;
+                chart.pane_options_mut().separator_color = Some(Color32::GREEN);
+                chart.set_date_format(Some("%d.%m.%Y".into()));
+                let mut options = chart.chart_options().clone();
+                options.time_scale.use_24_hour = false;
+                options.time_scale.weekday_names = crate::scales::WeekdayNames::Never;
+                chart.set_chart_options(options);
                 // A customised last price line, which Reset returns to a new chart's.
                 if let Some(style) = chart.series_style_mut(crate::widget::SeriesId::MAIN) {
                     style.price_line_width = 3.0;
                     style.price_line_style = crate::model::LineStyle::Solid;
                 }
+                // A chosen previous close colour, which Reset clears, so the well shows the
+                // theme's again.
+                chart.config_mut().prev_close_line.color = Some(Color32::GOLD);
+                chart.config_mut().prev_close_line.width = 3.0;
+                chart.config_mut().show_bid_ask_lines = Some(true);
+                chart.config_mut().show_high_low_lines = Some(true);
                 let mut settings = ChartSettingsState::from_chart(&chart);
                 settings.scales_appearance.text_color = Color32::RED;
                 settings.grid_lines.horizontal_color = Color32::GREEN;
@@ -966,6 +1093,7 @@ mod tests {
                 settings.watermark.color = Color32::RED;
                 settings.margins.top_percent = 12.5;
                 settings.margins.bottom_percent = 7.5;
+                settings.pane_separator_color = Some(Color32::GREEN);
                 let mut dialog = SettingsDialog::new();
                 dialog.set_control_visible(Control::Templates, templates_visible);
                 dialog.open(settings);
@@ -1025,12 +1153,41 @@ mod tests {
                 assert_eq!(saved.crosshair.color, Color32::PLACEHOLDER);
                 settings.apply_to_chart(&mut chart).unwrap();
                 let actual = ChartSettingsState::from_chart(&chart);
+                let scales = &actual.scales_and_lines;
+                assert_eq!(
+                    (
+                        scales.date_format.clone(),
+                        scales.use_24_hour,
+                        scales.weekday_names
+                    ),
+                    (
+                        Some(crate::widget::settings::DateFormat::Default),
+                        Some(true),
+                        Some(crate::scales::WeekdayNames::Default)
+                    ),
+                    "{preset}"
+                );
                 assert_eq!(
                     (
                         actual.scales_and_lines.price_line_width,
-                        actual.scales_and_lines.price_line_style
+                        actual.scales_and_lines.price_line_style,
+                        actual.scales_and_lines.prev_close_line,
+                        chart
+                            .config()
+                            .show_bid_ask_lines
+                            .unwrap_or(chart.config().show_bid_ask),
+                        chart
+                            .config()
+                            .show_high_low_lines
+                            .unwrap_or(chart.config().show_high_low),
                     ),
-                    (Some(1.0), Some(crate::model::LineStyle::Dashed)),
+                    (
+                        Some(1.0),
+                        Some(crate::model::LineStyle::Dashed),
+                        Some(crate::config::ChartLineStyle::default()),
+                        false,
+                        false
+                    ),
                     "{preset}"
                 );
                 let mismatches: Vec<_> = [
@@ -1060,9 +1217,44 @@ mod tests {
                         Color32::PLACEHOLDER,
                     ),
                     (
+                        "analyst target positive",
+                        chart.config().price_target_positive_color,
+                        Color32::PLACEHOLDER,
+                    ),
+                    (
+                        "analyst target negative",
+                        chart.config().price_target_negative_color,
+                        Color32::PLACEHOLDER,
+                    ),
+                    (
+                        "analyst target positive swatch",
+                        dialog.color_picker_states.price_target_positive.sel_color,
+                        Color32::from_rgba_unmultiplied(
+                            theme.chart.candle_up.r(),
+                            theme.chart.candle_up.g(),
+                            theme.chart.candle_up.b(),
+                            51,
+                        ),
+                    ),
+                    (
+                        "analyst target negative swatch",
+                        dialog.color_picker_states.price_target_negative.sel_color,
+                        Color32::from_rgba_unmultiplied(
+                            theme.chart.candle_down.r(),
+                            theme.chart.candle_down.g(),
+                            theme.chart.candle_down.b(),
+                            51,
+                        ),
+                    ),
+                    (
                         "crosshair swatch",
                         dialog.color_picker_states.crosshair.sel_color,
                         theme.chart.crosshair_line,
+                    ),
+                    (
+                        "pane separator swatch",
+                        dialog.color_picker_states.pane_separator.sel_color,
+                        theme.chart.grid_line,
                     ),
                     (
                         "candle up",
@@ -1109,6 +1301,11 @@ mod tests {
                         actual.watermark.color,
                         expected.watermark.color,
                     ),
+                    (
+                        "previous close swatch",
+                        dialog.color_picker_states.prev_close_line.sel_color,
+                        prev_close,
+                    ),
                 ]
                 .into_iter()
                 .filter(|(_, actual, expected)| actual != expected)
@@ -1116,6 +1313,11 @@ mod tests {
                 assert!(
                     mismatches.is_empty(),
                     "{preset}, templates visible: {templates_visible}, {size:?}: {mismatches:?}"
+                );
+                assert_eq!(
+                    chart.pane_options().separator_color,
+                    None,
+                    "{preset}, templates visible: {templates_visible}, {size:?}: pane separators"
                 );
                 // A new chart keeps a tenth of the pane free above and below, and 2.5 bars after
                 // the last one.
@@ -1146,7 +1348,7 @@ mod tests {
         type Row = fn(&mut ChartSettingsState) -> &mut Color32;
         let translucent = Color32::from_rgba_unmultiplied(255, 0, 255, 128);
         let theme = Theme::light();
-        let rows: [(&str, Row, Color32, u8); 18] = [
+        let rows: [(&str, Row, Color32, u8); 25] = [
             ("watermark", |s| &mut s.watermark.color, translucent, 128),
             (
                 "background",
@@ -1248,6 +1450,79 @@ mod tests {
                 translucent,
                 128,
             ),
+            (
+                "profile POC",
+                |s| {
+                    let profile = &mut s.chart_type_params.get_or_insert_default().profile;
+                    profile.poc_color.get_or_insert(Color32::TRANSPARENT)
+                },
+                translucent,
+                128,
+            ),
+            (
+                "profile value area high",
+                |s| {
+                    let profile = &mut s.chart_type_params.get_or_insert_default().profile;
+                    profile
+                        .value_area_high_color
+                        .get_or_insert(Color32::TRANSPARENT)
+                },
+                translucent,
+                128,
+            ),
+            (
+                "profile value area low",
+                |s| {
+                    let profile = &mut s.chart_type_params.get_or_insert_default().profile;
+                    profile
+                        .value_area_low_color
+                        .get_or_insert(Color32::TRANSPARENT)
+                },
+                translucent,
+                128,
+            ),
+            (
+                "profile up volume",
+                |s| {
+                    let profile = &mut s.chart_type_params.get_or_insert_default().profile;
+                    profile.up_volume_color.get_or_insert(Color32::TRANSPARENT)
+                },
+                translucent,
+                128,
+            ),
+            (
+                "profile down volume",
+                |s| {
+                    let profile = &mut s.chart_type_params.get_or_insert_default().profile;
+                    profile
+                        .down_volume_color
+                        .get_or_insert(Color32::TRANSPARENT)
+                },
+                translucent,
+                128,
+            ),
+            (
+                "profile up volume in value area",
+                |s| {
+                    let profile = &mut s.chart_type_params.get_or_insert_default().profile;
+                    profile
+                        .value_area_up_color
+                        .get_or_insert(Color32::TRANSPARENT)
+                },
+                translucent,
+                128,
+            ),
+            (
+                "profile down volume in value area",
+                |s| {
+                    let profile = &mut s.chart_type_params.get_or_insert_default().profile;
+                    profile
+                        .value_area_down_color
+                        .get_or_insert(Color32::TRANSPARENT)
+                },
+                translucent,
+                128,
+            ),
             ("alert", |s| &mut s.alerts.alert_color, translucent, 128),
         ];
         for (name, row, seeded, alpha) in rows {
@@ -1261,6 +1536,9 @@ mod tests {
             if name.starts_with("gradient") {
                 settings.chart_basic_styles.background_type = BackgroundType::VerticalGradient;
             }
+            if name.starts_with("profile") {
+                settings.chart_type = crate::model::ChartType::SessionVolumeProfile;
+            }
             settings.candle_colors.show_border = true;
             *row(&mut settings) = seeded;
             let mut dialog = SettingsDialog::new();
@@ -1272,6 +1550,7 @@ mod tests {
                     SettingsTab::ScalesAndLines
                 }
                 "alert" => SettingsTab::Alerts,
+                _ if name.starts_with("profile") => SettingsTab::Symbol,
                 _ => SettingsTab::Canvas,
             };
             let (shown_theme, setup_theme) = (theme.clone(), theme.clone());
@@ -2025,7 +2304,11 @@ mod tests {
                                 "tab labels must stay in the sidebar at {size:?}"
                             );
                         }
-                        if *tab == SettingsTab::Symbol && pass == 2 {
+                        // The target colour rows can put the candle heading below the fold.
+                        if *tab == SettingsTab::Symbol
+                            && pass == 2
+                            && (size.y >= TALLEST_TAB_HEIGHT || heading.is_some())
+                        {
                             assert_eq!(heading, Some(theme.text.small));
                         }
                     }
@@ -2287,6 +2570,73 @@ mod tests {
         }
     }
 
+    /// Choosing a pane separator colour on the Canvas tab paints the separator above the study
+    /// pane at the opacity its well showed, in one undoable step.
+    #[test]
+    fn pane_separator_colour_is_chosen_in_the_dialog() {
+        use crate::widget::test_frames::{chart, frame, shapes};
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+        chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+        // Half opaque, and the only well of the tab labelled #FF00FF.
+        let had = Color32::from_rgba_unmultiplied(255, 0, 255, 128);
+        chart.pane_options_mut().separator_color = Some(had);
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        let mut dialog = SettingsDialog::new();
+        dialog.open(ChartSettingsState::from_chart(&chart));
+        dialog.active_tab = SettingsTab::Canvas;
+        let theme = Theme::light();
+        let mut harness = Harness::builder()
+            .with_context_setup(|ctx| {
+                egui_extras::install_image_loaders(ctx);
+                crate::theme::apply_to_egui(ctx, &Theme::light());
+            })
+            .with_size(Vec2::new(1440.0, 900.0))
+            .build_ui_state(
+                move |ui, (dialog, accepted): &mut (SettingsDialog, _)| {
+                    if let SettingsAction::Apply(settings) = dialog.show(ui.ctx(), &theme) {
+                        *accepted = Some(settings);
+                    }
+                },
+                (dialog, None),
+            );
+        harness.run();
+        for well in ["#FF00FF", "#311B92"] {
+            harness.get_by_role_and_label(Role::ColorWell, well).click();
+            harness.run();
+        }
+        harness.get_by_label("Ok").click();
+        harness.run();
+        let settings = harness
+            .state_mut()
+            .1
+            .take()
+            .expect("Ok applies the settings");
+        // Saved in a template or layout and loaded again.
+        let settings: ChartSettingsState =
+            serde_json::from_value(serde_json::to_value(&settings).unwrap()).unwrap();
+        chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
+        frame(&ctx, &mut chart, 0.1, Vec::new());
+        let painted = shapes(&ctx, &mut chart, 0.2, Vec::new());
+        // The palette swatch rgb(49, 27, 146) retains the well's alpha of 128.
+        let chosen = Color32::from_rgba_unmultiplied(49, 27, 146, 128);
+        let top = chart.get_rendered_indicator_panes()[0].panel_rect.top();
+        assert!(
+            painted
+                .iter()
+                .any(|shape| matches!(shape, egui::Shape::Rect(rect)
+                if rect.fill == chosen && (rect.rect.bottom() - top).abs() < 1.0)),
+            "no separator in {chosen:?} at {top}"
+        );
+        assert!(chart.undo());
+        assert_eq!(chart.pane_options().separator_color, Some(had));
+        assert!(!chart.undo(), "only the separator changed");
+        assert!(chart.redo());
+        assert_eq!(chart.pane_options().separator_color, Some(chosen));
+    }
+
     /// Choosing a thousands separator on the Scales and lines tab groups the digits of the last
     /// price tag with it, or leaves them plain.
     #[test]
@@ -2330,19 +2680,127 @@ mod tests {
         }
     }
 
-    /// A template saved before the right margin could hold part of a bar, and before the font
-    /// family, the thousands separator, session breaks and the bar of the last price could be
-    /// chosen, holds the whole bars of a margin and none of those choices. Loaded on a chart
-    /// with a margin in bars or in pixels, it shows what it can of the chart's and Ok keeps the
-    /// chart's margin and choices.
+    /// High and low can show only their tags or only their lines from the Scales and lines tab.
+    #[test]
+    fn high_and_low_value_or_line_is_chosen_in_the_dialog() {
+        use crate::widget::test_frames::{chart, frame, shapes};
+        for (choice, tags, lines) in [("Value", true, false), ("Line", false, true)] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[110.0, 120.0]);
+            let high = Color32::from_rgb(201, 11, 11);
+            let low = Color32::from_rgb(11, 201, 11);
+            let config = chart.config_mut();
+            config.show_volume = false;
+            config.show_quote_boxes = false;
+            config.high_line.color = Some(high);
+            config.low_line.color = Some(low);
+            config.high_line.style = crate::model::LineStyle::Solid;
+            config.low_line.style = crate::model::LineStyle::Solid;
+            // Keep the other dropdowns distinct from this pair's Hidden and Value choices.
+            config.show_symbol_prev_close = true;
+            config.show_prev_close_line = true;
+            config.show_bid_ask = true;
+            config.show_symbol_last_change = true;
+            let mut dialog = SettingsDialog::new();
+            dialog.open(ChartSettingsState::from_chart(&chart));
+            dialog.active_tab = SettingsTab::ScalesAndLines;
+            let SettingsAction::Apply(settings) =
+                click_through(&mut dialog, &["scroll", "Hidden", choice, "Ok"])
+            else {
+                panic!("Ok must apply the settings");
+            };
+            settings.apply_to_chart(&mut chart).unwrap();
+            assert_eq!(
+                (
+                    chart.config().show_high_low,
+                    chart.config().show_high_low_lines
+                ),
+                (tags, Some(lines)),
+                "{choice}"
+            );
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            let painted = shapes(&ctx, &mut chart, 0.1, Vec::new());
+            let plot = chart.get_rendered_price_rect();
+            for (name, price, color) in [("High ", 120.0, high), ("Low ", 100.0, low)] {
+                let tag = painted.iter().any(|shape| {
+                    matches!(shape,
+                    egui::Shape::Text(text) if text.pos.x > plot.right()
+                        && text.galley.text().starts_with(name))
+                });
+                // The fixture's opens are 100 and its closes alternate 110 and 120.
+                let y = chart.last_price_map.price_to_y(price);
+                let line = painted.iter().any(|shape| {
+                    matches!(shape,
+                    egui::Shape::LineSegment { points, stroke } if stroke.color == color
+                        && points.iter().all(|point| (point.y - y).abs() < 0.01))
+                });
+                assert_eq!((tag, line), (tags, lines), "{choice}: {name}");
+            }
+        }
+    }
+
+    /// Time scale controls display a host pattern by its sample, and choose the date, clock and
+    /// weekday names. Invalid host patterns stay listed without a formatting panic.
+    #[test]
+    fn time_label_choices_are_made_in_the_dialog() {
+        use crate::scales::WeekdayNames;
+        use crate::widget::settings::DateFormat;
+        for (pattern, sample) in [("%A %d %B %Y", "Wednesday 13 March 2024"), ("%Q", "%Q")] {
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            chart.set_date_format(Some(pattern.into()));
+            let mut dialog = SettingsDialog::new();
+            dialog.open(ChartSettingsState::from_chart(&chart));
+            dialog.active_tab = SettingsTab::ScalesAndLines;
+            let labels = [
+                "scroll",
+                sample,
+                "13.03.2024",
+                "24-hour",
+                "12-hour",
+                "Default",
+                "Always",
+                "Ok",
+            ];
+            let SettingsAction::Apply(settings) = click_through(&mut dialog, &labels) else {
+                panic!("Ok must apply the settings");
+            };
+            let scales = &settings.scales_and_lines;
+            assert_eq!(
+                (
+                    scales.date_format.clone(),
+                    scales.use_24_hour,
+                    scales.weekday_names
+                ),
+                (
+                    Some(DateFormat::Pattern("%d.%m.%Y".into())),
+                    Some(false),
+                    Some(WeekdayNames::Always)
+                )
+            );
+        }
+    }
+
+    /// Templates saved before the fractional margin, font family, thousands separator, session
+    /// breaks, analyst target colours, last price bar and time label choices keep the chart's
+    /// choices. Their whole-bar margin keeps the chart's fractional margin when it is the same
+    /// margin unedited, whether the chart's margin is in bars or pixels.
+    /// Their pane separators follow the theme, as they did when such a template was saved.
     #[test]
     fn old_templates_keep_the_right_margin_and_the_choices_they_lack() {
         use crate::model::PriceLineSource;
+        use crate::scales::WeekdayNames;
+        use crate::widget::settings::DateFormat;
         use crate::widget::{SeriesId, settings::ThousandsSeparator, test_frames::chart};
         use egui::FontFamily;
+        // Serialized on origin/main d61351c84 with analyst targets enabled, before colour fields.
+        let older = r#"{"chart_type":"Candles","chart_type_params":null,"price_source":null,"candle_colors":{"color_by_previous_close":false,"show_body":true,"show_border":false,"show_wick":true,"body_up":[8,153,129,255],"body_down":[242,54,69,255],"border_up":[8,153,129,255],"border_down":[242,54,69,255],"wick_up":[8,153,129,255],"wick_down":[242,54,69,255]},"precision":"Default","timezone":"UTC","show_price_targets":true,"adjust_for_dividends":false,"order_flow":{"show_heatmap":false,"heatmap":{"brightness":1.0,"lower_cutoff":0.0,"full_intensity_size":null},"show_order_book":false,"order_book":{"filter":{"min_size":0.0,"min_age":null,"max_age":null,"exclude_participants":[]},"profile":"Total","quantity_unit":null,"tiers":null,"tier_colors":null},"show_volume_bubbles":false,"volume_bubbles":{"min_diameter":4.0,"max_diameter":40.0,"opacity":128,"buy_color":[8,153,129,255],"sell_color":[242,54,69,255],"neutral_color":[150,150,150,255],"color_by":"Side","scaling_mode":"Area","clamp_std_devs":null,"show_border":false,"border_color":[100,100,100,100],"min_size_filter":null,"grouping":"Ungrouped","shaded":true}},"status_line":{"show_logo":true,"show_symbol":true,"title_as_description":true,"show_market_status":true,"show_quote_boxes":true,"show_indicator_titles":true,"show_indicator_inputs":true,"show_indicator_values":true,"show_ohlc":true,"show_change":true,"show_change_percent":true,"show_volume":true,"show_last_day_change":false,"indicator_background_opacity":60},"scales_and_lines":{"axis_layout":{"side":null,"hide_unused":true},"show_currency":true,"show_unit":true,"show_scale_mode_buttons":true,"show_plus_button":true,"allow_label_overlap":false,"lock_price_to_bar_ratio":false,"price_to_bar_ratio":1.0,"symbol_price_color":null,"show_study_values":true,"study_value_color":null,"show_symbol_name":false,"show_study_names":false,"show_extended_session_price":true,"extended_session_price_color":[251,142,1,255],"auto_scale":true,"log_scale":false,"percentage_scale":false,"invert_scale":false,"price_scale_left":false,"show_last_price_label":true,"show_prev_close_label":false,"show_price_line":true,"price_line_source":null,"thousands_sep":null,"show_countdown":true,"show_bid_ask":false,"show_high_low":false,"show_prev_close":false},"chart_basic_styles":{"background_type":"Solid","background_color":[64,254,0,128],"background_gradient_top":[64,254,0,128],"background_gradient_bottom":[64,254,0,128]},"grid_lines":{"mode":"Both","horizontal_color":[34,34,34,255],"vertical_color":[34,34,34,255]},"crosshair":{"color":[184,184,184,255],"line_width":1.0,"line_style":"Dashed"},"watermark":{"mode":"ReplayMode","color":[33,33,33,51]},"scales_appearance":{"text_color":[184,184,184,255],"font_size":12,"lines_color":[0,0,0,0]},"btns":{"navigation":"Hidden","pane":"VisibleOnMouseOver"},"margins":{"top_percent":10.0,"bottom_percent":10.0,"right_bars":2.5},"trading":{"instant_orders":false,"bid_ask_labels":false,"play_execution_sound":false,"execution_sound":"","execution_sound_volume":1.0,"notifications":"All","show_positions":true,"position_pnl":true,"position_pnl_unit":"Money","reverse_button":true,"extend_lines":true,"label_alignment":"Right","include_in_image":false,"show_orders":true,"bracket_pnl":true,"bracket_pnl_unit":"Money","show_executions":true,"show_execution_labels":true},"alerts":{"play_sound":false,"sound":"","sound_volume":1.0,"show_alerts":true,"show_alert_labels":true,"alert_color":[255,152,0,255],"show_active_only":true,"notification_seconds":20,"close_toasts":true,"desktop_notifications":false},"events":{"show_dividends":true,"show_splits":true,"show_earnings":false,"show_earnings_breaks":false,"show_economic_events":false,"show_news":true,"show_news_notifications":false,"show_ideas":true}}"#;
         // The margin of a new chart, and 60 pixels at the default bar spacing of 6 points; the
         // margin row after loading the template.
-        for (pixels, row) in [(None, 2.5), (Some(60.0), 2.0)] {
+        for (pixels, row, literal) in [
+            (None, 2.5, None),
+            (Some(60.0), 2.0, None),
+            (None, 2.5, Some(older)),
+        ] {
             let mut saved =
                 serde_json::to_value(ChartSettingsState::from_chart(&chart(&[100.0], &[110.0])))
                     .unwrap();
@@ -2352,19 +2810,39 @@ mod tests {
             .unwrap();
             for (group, choice) in [
                 ("", "show_session_breaks"),
+                ("", "price_target_positive_color"),
+                ("", "price_target_negative_color"),
                 ("/scales_and_lines", "price_line_source"),
+                ("/scales_and_lines", "prev_close_line"),
+                ("/scales_and_lines", "show_bid_ask_lines"),
+                ("/scales_and_lines", "show_high_low_lines"),
                 ("/scales_and_lines", "thousands_sep"),
+                ("/scales_and_lines", "date_format"),
+                ("/scales_and_lines", "use_24_hour"),
+                ("/scales_and_lines", "weekday_names"),
                 ("/scales_appearance", "font_family"),
             ] {
                 let group = saved.pointer_mut(group).unwrap().as_object_mut().unwrap();
                 group.remove(choice).expect(choice);
             }
+            if let Some(document) = literal {
+                saved = serde_json::from_str(document).unwrap();
+            }
             let mut options = crate::config::ChartOptions::default();
             options.time_scale.right_offset_pixels = pixels;
+            options.time_scale.use_24_hour = false;
+            options.time_scale.weekday_names = WeekdayNames::Never;
             let mut chart = chart(&[100.0], &[110.0]).with_chart_options(options);
+            chart.set_date_format(Some("%d.%m.%Y".into()));
             chart.config_mut().axis_font_family = FontFamily::Monospace;
             chart.config_mut().thousands_sep = Some('\'');
             chart.config_mut().show_session_breaks = true;
+            chart.config_mut().price_target_positive_color = Color32::BLUE;
+            chart.config_mut().price_target_negative_color = Color32::YELLOW;
+            chart.pane_options_mut().separator_color = Some(Color32::RED);
+            chart.config_mut().prev_close_line.width = 3.0;
+            chart.config_mut().show_bid_ask_lines = Some(true);
+            chart.config_mut().show_high_low_lines = Some(true);
             let style = chart.series_style_mut(SeriesId::MAIN).unwrap();
             style.price_line_source = PriceLineSource::LastVisible;
             let margin = chart.chart_options().time_scale.clone();
@@ -2380,25 +2858,63 @@ mod tests {
             assert_eq!(dialog.margin_right_str, row.to_string(), "{pixels:?}");
             assert_eq!(
                 (
+                    shown
+                        .scales_and_lines
+                        .prev_close_line
+                        .map(|line| line.width),
+                    shown.scales_and_lines.show_bid_ask_lines,
+                    shown.scales_and_lines.show_high_low_lines,
                     shown.show_session_breaks,
+                    shown.price_target_positive_color,
+                    shown.price_target_negative_color,
                     shown.scales_and_lines.price_line_source,
                     shown.scales_and_lines.thousands_sep,
+                    shown.pane_separator_color,
+                    shown.scales_and_lines.date_format.clone(),
+                    shown.scales_and_lines.use_24_hour,
+                    shown.scales_and_lines.weekday_names,
                 ),
                 (
+                    Some(3.0),
                     Some(true),
+                    Some(true),
+                    Some(true),
+                    Some(Color32::BLUE),
+                    Some(Color32::YELLOW),
                     Some(PriceLineSource::LastVisible),
                     Some(ThousandsSeparator::Apostrophe),
+                    None,
+                    Some(DateFormat::Pattern("%d.%m.%Y".into())),
+                    Some(false),
+                    Some(WeekdayNames::Never),
                 ),
                 "{pixels:?}"
             );
             dialog.settings().apply_to_chart(&mut chart).unwrap();
             assert_eq!(chart.chart_options().time_scale, margin, "{pixels:?}");
+            assert_eq!(
+                ChartSettingsState::from_chart(&chart)
+                    .scales_and_lines
+                    .date_format,
+                Some(DateFormat::Pattern("%d.%m.%Y".into()))
+            );
             let config = chart.config();
             assert_eq!(config.axis_font_family, FontFamily::Monospace);
             assert_eq!(config.thousands_sep, Some('\''));
             assert!(config.show_session_breaks);
+            assert_eq!(
+                (
+                    config.price_target_positive_color,
+                    config.price_target_negative_color
+                ),
+                (Color32::BLUE, Color32::YELLOW)
+            );
+            assert_eq!(config.prev_close_line.width, 3.0);
+            assert_eq!(config.show_bid_ask_lines, Some(true));
+            assert_eq!(config.show_high_low_lines, Some(true));
             let style = chart.series_style(SeriesId::MAIN).unwrap();
             assert_eq!(style.price_line_source, PriceLineSource::LastVisible);
+            assert_eq!(chart.pane_options().separator_color, None, "{pixels:?}");
         }
     }
 

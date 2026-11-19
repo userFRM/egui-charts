@@ -316,7 +316,7 @@ impl Chart {
             #[cfg(feature = "drawings")]
             self.drawings.deselect();
             if let Some(id) = id {
-                self.host_events.push(ChartEvent::MarkClick {
+                self.push_event(ChartEvent::MarkClick {
                     id: id.clone(),
                     series: *series,
                     time: *time,

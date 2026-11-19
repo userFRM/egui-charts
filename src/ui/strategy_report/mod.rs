@@ -56,7 +56,8 @@ pub enum StrategyReportAction {
     None,
     /// Reveal this trade on the chart.
     SelectTrade(StrategyTradeSelection),
-    /// Save these valid trades as CSV.
+    /// Save these valid trades as CSV, written by [`StrategyReport::trades_csv_with_excursions`]
+    /// with the excursions the list of trades shows.
     ExportCsv(String),
     /// Save the whole-run summary metrics and run properties, as [`StrategyReport::summary_csv`]
     /// writes them, under the suggested file name.
@@ -228,12 +229,14 @@ impl StrategyReportPanel {
     }
 
     /// Draw the report and return this frame's host intent. No report draws nothing.
+    /// A report with [`StrategyReport::unavailable`] shows that reason instead of its summary and exports.
     pub fn show(&mut self, ui: &mut Ui) -> StrategyReportAction {
         let Some(data) = &mut self.data else {
             return StrategyReportAction::None;
         };
         let mut action = StrategyReportAction::None;
         let theme = ui.active_theme();
+        let available = data.report.unavailable.is_none();
         ui.horizontal_wrapped(|ui| {
             ui.label(
                 RichText::new(l10n::text(ui.ctx(), "Strategy report"))
@@ -245,14 +248,18 @@ impl StrategyReportPanel {
                 "{} · {}",
                 data.report.symbol, data.report.timeframe
             ));
-            if Button::new("Export trades CSV").show(ui).clicked() {
-                action = StrategyReportAction::ExportCsv(data.report.trades_csv());
-            }
-            if Button::new("Export summary CSV").show(ui).clicked() {
-                action = StrategyReportAction::ExportSummaryCsv {
-                    filename: summary_filename(&data.report),
-                    content: data.report.summary_csv(&data.performance, &data.comparison),
-                };
+            if available {
+                if Button::new("Export trades CSV").show(ui).clicked() {
+                    action = StrategyReportAction::ExportCsv(
+                        data.report.trades_csv_with_excursions(&data.comparison),
+                    );
+                }
+                if Button::new("Export summary CSV").show(ui).clicked() {
+                    action = StrategyReportAction::ExportSummaryCsv {
+                        filename: summary_filename(&data.report),
+                        content: data.report.summary_csv(&data.performance, &data.comparison),
+                    };
+                }
             }
         });
         egui::ScrollArea::horizontal()
@@ -272,7 +279,9 @@ impl StrategyReportPanel {
                 )
                 .show(ui);
             });
-        if data.performance.skipped_trades
+        if let Some(reason) = &data.report.unavailable {
+            ui.colored_label(theme.ui.warning, l10n::text(ui.ctx(), reason));
+        } else if data.performance.skipped_trades
             + data.performance.skipped_equity_points
             + data.comparison.skipped_bars
             > 0
@@ -290,7 +299,7 @@ impl StrategyReportPanel {
                 ),
             );
         }
-        if self.tab != Tab::Properties {
+        if self.tab != Tab::Properties && available {
             let mut changed = false;
             ui.horizontal_wrapped(|ui| {
                 for (label, value) in ["From (UTC)", "To (UTC)"]
@@ -343,12 +352,13 @@ impl StrategyReportPanel {
         }
         match self.tab {
             Tab::Summary => {
-                egui::ScrollArea::vertical()
-                    .id_salt("summary")
-                    .show(ui, |ui| {
-                        summary(ui, data, &mut self.compare);
-                    })
-                    .inner
+                if available {
+                    egui::ScrollArea::vertical()
+                        .id_salt("summary")
+                        .show(ui, |ui| {
+                            summary(ui, data, &mut self.compare);
+                        });
+                }
             }
             Tab::Trades => {
                 if let Some(index) = trades(ui, data, &mut self.selected) {
@@ -362,9 +372,21 @@ impl StrategyReportPanel {
                     });
                 }
             }
-            Tab::Periods => analysis::periods(ui, data),
-            Tab::Distribution => analysis::distribution(ui, data),
-            Tab::TradeTimes => analysis::times(ui, data),
+            Tab::Periods => {
+                if available {
+                    analysis::periods(ui, data);
+                }
+            }
+            Tab::Distribution => {
+                if available {
+                    analysis::distribution(ui, data);
+                }
+            }
+            Tab::TradeTimes => {
+                if available {
+                    analysis::times(ui, data);
+                }
+            }
             Tab::Properties => {
                 egui::ScrollArea::both()
                     .id_salt("properties")

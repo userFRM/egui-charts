@@ -12,6 +12,7 @@
 //! Ratio:       a / b
 //! Spread:      a - b
 //! Correlation: Pearson correlation of the last `length` values of a and b
+//! Correlation - Log: the correlation of log returns, over 25 returns by default
 //! ```
 //!
 //! With log returns the correlation uses `ln(v[t] / v[t - 1])` of each series over the last
@@ -30,8 +31,9 @@
 //!
 //! # Presentation
 //!
-//! The correlation opens as an area from zero, its line over a translucent fill, with a dashed
-//! guide at zero. The ratio and the spread open as lines without guides.
+//! The correlation coefficient opens as an area from zero, its line over a translucent fill,
+//! with a dashed guide at zero. Correlation - Log, the ratio and the spread open as lines without
+//! guides.
 
 use crate::model::{Bar, PriceSource};
 use crate::studies::palette;
@@ -46,12 +48,16 @@ pub type Ratio = SymbolPair<true, false>;
 pub type Spread = SymbolPair<false, false>;
 /// Rolling Pearson correlation of the two series.
 pub type Correlation = SymbolPair<false, true>;
+/// Rolling Pearson correlation of the log returns of the two series, "Correlation - Log": a
+/// [`Correlation`] that opens with log returns on, a length of 25 and a line without a guide.
+pub type CorrelationLog = SymbolPair<false, true, true>;
 
 /// A ratio, spread or correlation of two series, each a price source of a symbol. `RATIO` selects
 /// the ratio and `CORRELATION` the correlation; neither selects the spread. With both `true`,
-/// `CORRELATION` takes precedence and the study is the correlation.
+/// `CORRELATION` takes precedence and the study is the correlation. `LOG` makes the correlation
+/// [`CorrelationLog`]; the ratio and the spread ignore it.
 #[derive(Clone, Debug)]
-pub struct SymbolPair<const RATIO: bool, const CORRELATION: bool> {
+pub struct SymbolPair<const RATIO: bool, const CORRELATION: bool, const LOG: bool = false> {
     symbols: [String; 2],
     sources: [PriceSource; 2],
     length: usize,
@@ -63,15 +69,17 @@ pub struct SymbolPair<const RATIO: bool, const CORRELATION: bool> {
     visible: bool,
 }
 
-impl<const RATIO: bool, const CORRELATION: bool> SymbolPair<RATIO, CORRELATION> {
-    /// A correlation over `length` values, raised to at least 2. Other studies of the pair
-    /// ignore it.
+impl<const RATIO: bool, const CORRELATION: bool, const LOG: bool>
+    SymbolPair<RATIO, CORRELATION, LOG>
+{
+    /// A correlation over `length` values, raised to at least 2, of log returns for
+    /// [`CorrelationLog`]. Other studies of the pair ignore it.
     pub fn new(length: usize) -> Self {
         Self {
             symbols: [String::new(), String::new()],
             sources: [PriceSource::Close; 2],
             length: length.max(2),
-            log_returns: false,
+            log_returns: LOG,
             pairs: Vec::new(),
             values: IndicatorValues::new(),
             color: if CORRELATION {
@@ -140,13 +148,17 @@ impl<const RATIO: bool, const CORRELATION: bool> SymbolPair<RATIO, CORRELATION> 
     }
 }
 
-impl<const RATIO: bool, const CORRELATION: bool> Default for SymbolPair<RATIO, CORRELATION> {
+impl<const RATIO: bool, const CORRELATION: bool, const LOG: bool> Default
+    for SymbolPair<RATIO, CORRELATION, LOG>
+{
     fn default() -> Self {
-        Self::new(20)
+        Self::new(if LOG { 25 } else { 20 })
     }
 }
 
-impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO, CORRELATION> {
+impl<const RATIO: bool, const CORRELATION: bool, const LOG: bool> Indicator
+    for SymbolPair<RATIO, CORRELATION, LOG>
+{
     fn line_style(&self, _line: usize) -> crate::studies::IndicatorLineStyle {
         crate::studies::IndicatorLineStyle {
             width: if CORRELATION { 1.0 } else { 2.0 },
@@ -156,7 +168,11 @@ impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO,
 
     fn name(&self) -> &str {
         if CORRELATION {
-            "Correlation Coefficient"
+            if LOG {
+                "Correlation - Log"
+            } else {
+                "Correlation Coefficient"
+            }
         } else if RATIO {
             "Ratio"
         } else {
@@ -165,7 +181,10 @@ impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO,
     }
 
     fn desc(&self) -> &str {
-        if CORRELATION {
+        if CORRELATION && LOG {
+            // No full name before " - ": the browser splits descriptions there, and this name has a dash.
+            "Rolling Pearson correlation of the log returns of two aligned series"
+        } else if CORRELATION {
             "Correlation Coefficient - Rolling Pearson correlation of two aligned series"
         } else if RATIO {
             "Ratio - One aligned series divided by another"
@@ -226,7 +245,7 @@ impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO,
                     InputValue::Toggle(self.log_returns),
                     InputKind::Toggle,
                 )
-                .with_default(InputValue::Toggle(false)),
+                .with_default(InputValue::Toggle(defaults.log_returns)),
             );
         }
         inputs
@@ -327,8 +346,9 @@ impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO,
             color: self.colors().get(line).copied().unwrap_or(Color32::WHITE),
             width: self.line_style(line).width,
             pattern: crate::model::LineStyle::Solid,
-            // The correlation is an area from zero; the ratio and the spread are lines.
-            plot_type: if CORRELATION {
+            // The coefficient is an area from zero; Correlation - Log, the ratio and the
+            // spread are lines.
+            plot_type: if CORRELATION && !LOG {
                 crate::studies::PlotType::Area
             } else {
                 crate::studies::PlotType::Line
@@ -346,8 +366,8 @@ impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO,
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             range: CORRELATION.then_some((-1.1, 1.1)),
-            // Zero for a correlation; the ratio and the spread have no guide.
-            levels: if CORRELATION {
+            // Zero for the coefficient; Correlation - Log, the ratio and the spread have no guide.
+            levels: if CORRELATION && !LOG {
                 vec![(0.0, palette::GRAY.gamma_multiply_u8(128), "Zero")]
             } else {
                 Vec::new()
@@ -567,6 +587,55 @@ mod tests {
                 &run("Correlation Coefficient", &inputs, a, b),
                 &[None; 4],
                 "negative",
+            );
+        }
+    }
+
+    /// Correlation - Log opens with log returns on as a line without a guide, and gives the values
+    /// of Correlation Coefficient with the same inputs. The log returns of 1, e, e^3, e^2 and of
+    /// 1, e^2, e^3, e^5 are 1, 2, -1 and 2, 1, 2; with means 2/3 and 5/3,
+    /// r = (-4/3) / sqrt(14/3 * 2/3) = -2/sqrt(7).
+    #[test]
+    fn log_correlation_opens_as_a_line_of_log_return_correlation() {
+        let study = crate::studies::IndicatorFactory::new()
+            .create("Correlation - Log")
+            .unwrap();
+        let toggle = study
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == "log_returns");
+        assert_eq!(
+            toggle.map(|input| input.value),
+            Some(InputValue::Toggle(true))
+        );
+        assert_eq!(
+            study.plot_style(0),
+            crate::studies::PlotStyle {
+                color: palette::LIGHT_BLUE,
+                width: 1.0,
+                pattern: crate::model::LineStyle::Solid,
+                plot_type: crate::studies::PlotType::Line,
+                visible: true,
+            }
+        );
+        assert!(study.pane().levels.is_empty());
+        assert!(study.settings().price_line_plots.is_empty());
+        let s = Some;
+        let e = std::f64::consts::E;
+        let a = [s(1.0), s(e), s(e.powi(3)), s(e.powi(2))];
+        let b = [s(1.0), s(e.powi(2)), s(e.powi(3)), s(e.powi(5))];
+        let length = ("length", InputValue::Length(3));
+        near(
+            &run("Correlation - Log", std::slice::from_ref(&length), &a, &b),
+            &[None, None, None, s(-2.0 / 7f64.sqrt())],
+            "log returns",
+        );
+        for on in [true, false] {
+            let inputs = [length.clone(), ("log_returns", InputValue::Toggle(on))];
+            near(
+                &run("Correlation - Log", &inputs, &a, &b),
+                &run("Correlation Coefficient", &inputs, &a, &b),
+                "same inputs",
             );
         }
     }
