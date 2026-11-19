@@ -403,7 +403,7 @@ impl ChartMenus {
                 | RightClickTarget::Background { pos, .. } => (pos, POINTER_GAP),
                 RightClickTarget::Drawing { pos, .. } => (pos, DRAWING_MENU_OFFSET),
             };
-            let entries = self.build_menu_items(ctx, chart.shortcuts(), context);
+            let entries = self.build_menu_items(ctx, chart, context);
             if let Some(picked) = show_menu(
                 ctx,
                 Id::unique("chart_host_menu"),
@@ -481,9 +481,21 @@ impl ChartMenus {
     fn build_menu_items(
         &self,
         ctx: &Context,
-        shortcuts: &crate::widget::ShortcutMap,
+        chart: &Chart,
         context: HostMenuContext,
     ) -> Vec<MenuEntry<ChartContextAction>> {
+        let shortcuts = chart.shortcuts();
+        let pos = match context.target {
+            RightClickTarget::Element { pos, .. }
+            | RightClickTarget::Drawing { pos, .. }
+            | RightClickTarget::Background { pos, .. } => pos,
+        };
+        // The price as the chart's scale writes it at the click, as the host copies it.
+        let price_text = |price| {
+            chart
+                .format_menu_price(pos, price)
+                .unwrap_or_else(|| super::format_price(price))
+        };
         fn tagged<A>(
             entries: Vec<MenuEntry<A>>,
             tag: impl Fn(A) -> ChartContextAction,
@@ -492,7 +504,7 @@ impl ChartMenus {
         }
         let mut entries = match context.target {
             RightClickTarget::Background { .. } => tagged(
-                self.chart.build_menu_items(ctx, shortcuts),
+                self.chart.build_menu_items(ctx, shortcuts, &price_text),
                 ChartContextAction::Chart,
             ),
             RightClickTarget::Element {
@@ -502,7 +514,7 @@ impl ChartMenus {
                 ChartContextAction::Study { id, action }
             }),
             RightClickTarget::Element { .. } => tagged(
-                self.series.build_menu_items(ctx, shortcuts),
+                self.series.build_menu_items(ctx, shortcuts, &price_text),
                 ChartContextAction::Series,
             ),
             RightClickTarget::Drawing { .. } => tagged(
