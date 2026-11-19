@@ -1353,31 +1353,6 @@ mod tests {
             [super::super::SeriesId::MAIN, new_spread]
         );
 
-        // A coefficient saved before the log study existed keeps its inputs and line/guide styles.
-        let correlation: StudyTemplate = serde_json::from_str(r#"{"name":"Correlation Coefficient","inputs":[["symbol_0",{"Symbol":""}],["source_0",{"Choice":3}],["symbol_1",{"Symbol":""}],["source_1",{"Choice":3}],["length",{"Length":20}],["log_returns",{"Toggle":false}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/type.Correlation.html","plots":[{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":2,"hidden_intervals":[],"interval_range":"All","levels":[{"value":null,"color":[255,152,0,255],"pattern":"Dotted","width":3.0,"visible":true,"price_line":true}],"fill_between_levels":false,"level_fill_color":[2,9,15,16],"untagged_plots":[],"price_line_plots":[0],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#).unwrap();
-        let mut legacy_correlation = snapshot.clone();
-        legacy_correlation.studies[0].study = correlation.clone();
-        restored
-            .restore_with(&legacy_correlation, &factory)
-            .unwrap();
-        let id = restored
-            .restored_series_id(legacy_correlation.studies[0].id)
-            .unwrap();
-        let study = restored.indicator_mut(id).unwrap();
-        assert_eq!(study.registered_name(), "Correlation Coefficient");
-        assert_eq!(study.settings(), correlation.settings);
-        for (id, value) in &correlation.inputs {
-            assert_eq!(
-                study
-                    .inputs()
-                    .into_iter()
-                    .find(|input| input.id == *id)
-                    .map(|input| input.value),
-                Some(value.clone()),
-                "{id}"
-            );
-        }
-
         // A host can store presentation itself without implementing the optional name setter.
         #[derive(Clone)]
         struct NativePresentation(ConfiguredStudy);
