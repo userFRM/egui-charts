@@ -76,8 +76,8 @@ absolute-price fraction. Limits, including the limit execution of a stop-limit o
 protects a position with an optional fixed stop from its average fill price and a trailing stop.
 The trail starts at an activation distance in the position's favour and follows the best price
 the bar path reaches at an offset. It can activate and fill within one bar, and fills and slips
-like other stops. Requesting it with new distances keeps the best price; closing the position
-forgets it.
+like other stops. Activation at a closing fill carries into the next bar. Requesting it with new
+distances keeps the best price; closing the position forgets it.
 
 A report is in `settings.currency`, or in [`Backtest::instrument_currency`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#structfield.instrument_currency), the currency of the
 prices, when that is unset. When the settings name another currency, the engine converts what it

@@ -1784,6 +1784,8 @@ impl<'a> Run<'a> {
                     at_end = true;
                     continue;
                 }
+                // A closing fill can activate a trail without another path step.
+                self.trail(start, start);
                 return;
             };
             if price != start {
@@ -3130,6 +3132,12 @@ mod tests {
                 context.exit_trailing("X", Sell, Some(5.0), 4.0, 3.0);
             }
         }
+        fn trailing_at_close(bar: usize, context: &mut StrategyContext<'_>) {
+            if bar == 0 {
+                context.entry("A", Buy, None, OrderType::Market);
+                context.exit_trailing("X", Buy, None, 0.0, 3.0);
+            }
+        }
         fn trailing_again(bar: usize, context: &mut StrategyContext<'_>) {
             match bar {
                 0 => {
@@ -4397,6 +4405,20 @@ mod tests {
                 vec![(100.0, 100.0, 100.0, 100.0), (100.0, 110.0, 99.0, 108.0)],
                 vec![trade(Buy, 2.0, 1, 100.0, Some((1, 105.0, 10.0)), "A / X")],
                 vec![1000.0, 1000.0, 1010.0],
+                0,
+            ),
+            (
+                // The closing fill at 100 activates a zero-distance trail at 97. The next
+                // open gaps through it at 96: two units close for a loss of 8.
+                "a closing fill activates its trailing exit before the next opening gap",
+                trailing_at_close,
+                BacktestSettings {
+                    fill_on_close: true,
+                    ..terms.clone()
+                },
+                flat(&[100.0, 96.0]),
+                vec![trade(Buy, 2.0, 0, 100.0, Some((1, 96.0, -8.0)), "A / X")],
+                vec![1000.0, 1000.0, 992.0],
                 0,
             ),
             (
