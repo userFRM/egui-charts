@@ -9,11 +9,11 @@ use egui::Color32;
 /// `(close - open) / (high - low)` per bar, optionally smoothed with a simple average of
 /// `smooth_period` bars. The default does not smooth.
 ///
-/// - A bar without range (`high == low`) counts as 0.
+/// - A bar without range (`high == low`) has no value: the ratio divides zero by zero there.
 /// - With smoothing of length `n`, bars 0 to `n - 2` have no value, and a series shorter
 ///   than `n` has none on any bar. Length 1 (or 0) keeps the unsmoothed ratio on every bar.
-/// - A bar with a non-finite price has no value, and the average is taken as if it were not
-///   in the series.
+/// - A bar with a non-finite price has no value either. The average skips every bar without a
+///   value, as if it were not in the series, so it is the mean of the last `n` defined ratios.
 #[derive(Clone, Debug)]
 pub struct BalanceOfPower {
     /// Length of the simple average (0 or 1 = no smoothing)
@@ -40,18 +40,19 @@ impl BalanceOfPower {
         self
     }
 
-    /// The values over `data`, every bar of which has finite prices.
+    /// Whether `bar` has a ratio: finite prices and a range.
+    fn defined(bar: &Bar) -> bool {
+        [bar.open, bar.high, bar.low, bar.close]
+            .iter()
+            .all(|p| p.is_finite())
+            && bar.high != bar.low
+    }
+
+    /// The values over `data`, every bar of which is [`defined`](Self::defined).
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let raw: Vec<f64> = data
             .iter()
-            .map(|bar| {
-                let range = bar.high - bar.low;
-                if range == 0.0 {
-                    0.0
-                } else {
-                    (bar.close - bar.open) / range
-                }
-            })
+            .map(|bar| (bar.close - bar.open) / (bar.high - bar.low))
             .collect();
         (0..raw.len())
             .map(|i| match i + 1 {
@@ -94,22 +95,8 @@ impl Indicator for BalanceOfPower {
             &mut values,
             data,
             from,
-            usable_behind(self.smooth_period - 1, |b| {
-                [b.open, b.high, b.low, b.close]
-                    .iter()
-                    .all(|p| p.is_finite())
-            }),
-            |data| {
-                over_finite_bars(
-                    data,
-                    |b| {
-                        [b.open, b.high, b.low, b.close]
-                            .iter()
-                            .all(|p| p.is_finite())
-                    },
-                    |data| self.compute(data),
-                )
-            },
+            usable_behind(self.smooth_period - 1, Self::defined),
+            |data| over_finite_bars(data, Self::defined, |data| self.compute(data)),
         );
         self.values = values;
     }
@@ -153,6 +140,43 @@ impl Indicator for BalanceOfPower {
             vec![format!("BoP({})", self.smooth_period)]
         } else {
             vec!["BoP".to_string()]
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A flat live bar has no value, and smoothing averages the last defined ratios across it.
+    #[test]
+    fn a_bar_without_range_has_no_value_bar_by_bar() {
+        // Ratios 1/2, none, -1/4 and 1; two-bar averages 1/8 and 3/8.
+        let bars: Vec<Bar> = [
+            (0.0, 2.0, 0.0, 1.0),
+            (5.0, 5.0, 5.0, 5.0),
+            (2.0, 4.0, 0.0, 1.0),
+            (1.0, 3.0, 1.0, 3.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (open, high, low, close))| {
+            let time = chrono::DateTime::UNIX_EPOCH + chrono::Duration::minutes(i as i64);
+            Bar::new(time, open, high, low, close, 1.0)
+        })
+        .collect();
+        for (smooth, expected) in [
+            (1, [Some(0.5), None, Some(-0.25), Some(1.0)]),
+            (2, [None, None, Some(0.125), Some(0.375)]),
+        ] {
+            let mut study = BalanceOfPower::new(smooth);
+            for end in 1..=bars.len() {
+                study.update(&bars[..end], end - 1);
+            }
+            let values: Vec<_> = (0..bars.len())
+                .map(|bar| study.values().value(0, bar))
+                .collect();
+            assert_eq!(values, expected, "smoothing {smooth}");
         }
     }
 }
