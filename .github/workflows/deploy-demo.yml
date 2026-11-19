@@ -31,7 +31,8 @@ jobs:
   # are published, so a broken documentation build never lands.
   build:
     name: Build
-    runs-on: ubuntu-latest
+    # Branches of this repository build on the runner label LINUX_RUNNER names, as in ci.yml.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event.pull_request.user.login != 'dependabot[bot]' && vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 45
     env:
       # Native checks share disk with the web builds; debug symbols are unused here.
@@ -112,7 +113,7 @@ jobs:
   # The release wasm demo is the longest build of the site, so it runs beside the rest.
   demo:
     name: Build wasm demo
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event.pull_request.user.login != 'dependabot[bot]' && vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
