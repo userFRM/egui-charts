@@ -3053,6 +3053,27 @@ mod tests {
             study.apply_settings(&[], absent).unwrap();
             assert_eq!(study.settings(), defaults);
         }
+        // A template saved before the size basis existed keeps fill-based filtering and
+        // its exact presentation; the missing toggle takes its declared false default.
+        let saved = r#"{"name":"Size-Filtered CVD","inputs":[["min",{"Number":100.0}],["max",{"Number":1.7976931348623157e+308}],["anchor",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.OrderFlowStudy.html","plots":[{"color":[38,166,154,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[2,10,10,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let template = serde_json::from_str::<crate::studies::StudyTemplate>(saved).unwrap();
+        let older = template.create().unwrap();
+        assert_eq!(older.settings(), template.settings);
+        assert_eq!(
+            older
+                .inputs()
+                .iter()
+                .find(|input| input.id == "combine_fills")
+                .unwrap()
+                .value,
+            InputValue::Toggle(false)
+        );
+        let mut expected = template.inputs.clone();
+        expected.insert(2, ("combine_fills".to_owned(), InputValue::Toggle(false)));
+        assert_eq!(
+            crate::studies::StudyTemplate::from_study(older.as_ref()).inputs,
+            expected
+        );
         // A KST opens with a dashed zero guide. Saved before it had one, it restores with the
         // guide hidden, and a guide shown since keeps its style through a template.
         let declared =
