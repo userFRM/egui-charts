@@ -722,8 +722,9 @@ fn close_dialog(
 /// Full closes retain their existing exemption from symbol limits. A smaller close rounds
 /// down to the symbol's step and respects its bounds, without exceeding the held position.
 fn close_part(requested: f64, size: f64, rules: &TradingRules) -> Result<f64, QuantityLimit> {
-    // Formatting the size at its decimal precision can read back slightly differently.
-    if (requested - size).abs() <= size * 1e-9 {
+    // The field writes the size at 15 significant digits, which can read back a few ulps off;
+    // a part one step below the size stays a part down to steps of a trillionth of it.
+    if (requested - size).abs() <= size * 1e-12 {
         return Ok(size);
     }
     if requested > size {
@@ -2088,6 +2089,23 @@ mod tests {
                 placed.is_none(),
                 "a refused quantity keeps the dialog open: {typed:?}"
             );
+        }
+    }
+
+    /// Guards the exact quantity of a partial close at fine steps: a part one step below a large
+    /// position stays that part, and the position's size read back from the field's text closes
+    /// all of it. A regression closes the whole position for a part, or leaves a speck of it.
+    #[test]
+    fn a_part_one_fine_step_below_the_position_closes_only_that_part() {
+        let mut rules = TradingRules::new("SYM");
+        for (step, size, requested, closed) in [
+            (1e-8, 100.0, 99.999_999_99, 99.999_999_99),
+            (1.0, 1e9, 999_999_999.0, 999_999_999.0),
+            (0.1, 0.1 + 0.2, 0.3, 0.1 + 0.2),
+        ] {
+            rules.quantity_step = step;
+            rules.min_quantity = step;
+            assert_eq!(close_part(requested, size, &rules), Ok(closed), "{requested}");
         }
     }
 
