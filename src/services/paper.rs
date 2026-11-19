@@ -36,33 +36,30 @@ const MAX_TAKE_PROFIT_LEVELS: usize = 4;
 /// fills and history use the source bar's time. Good-till-cancelled orders work until they fill or
 /// are cancelled. Immediate-or-cancel and fill-or-kill orders fill at placement where a marketable
 /// order would, and are cancelled at once otherwise; since every fill is complete, the two behave
-/// alike. Day, week and month orders are refused, since the account has no trading-session calendar,
-/// and a working order cannot change its time in force. Market orders fill at the bid or ask of
-/// a usable [quote](Self::set_bid_ask), otherwise at the last price; limit and stop orders fill at
-/// the first price that reaches them, a limit at that price or better;
-/// a triggered stop-limit works on as a limit order. An order's take profits and stop loss become
-/// exit orders once it fills, for the quantity the fill opened: take-profit levels each close their
-/// own quantity, the first ones first when the fill opened less than the order's quantity, as after
+/// alike. Day, week and month orders are refused, since the account has no trading-session
+/// calendar, and a working order cannot change its time in force. Market orders fill at the bid or
+/// ask of a usable [quote](Self::set_bid_ask), otherwise at the last price; limit and stop orders
+/// fill at the first price that reaches them, a limit at that price or better; a triggered
+/// stop-limit works on as a limit order. An order's take profits and stop loss become exit orders
+/// once it fills, for the quantity the fill opened: take-profit levels each close their own
+/// quantity, the first ones first when the fill opened less than the order's quantity, as after
 /// closing an opposite position. A level's own stop loss closes the same quantity as its take
-/// profit, and whichever fills cancels the other. The order's stop loss closes the quantity of
-/// the levels without one: when one of their take profits fills, it shrinks by that quantity
-/// and is cancelled once nothing is left; when it fills, those take profits are cancelled.
-/// An order carries at most 4 levels.
-/// Each symbol has one net position with its average
-/// price: a fill against it books the realised profit or loss of the closed quantity, and a fill
-/// beyond it opens the other side at the fill price. Values use the point value and leverage of
-/// the symbol's [rules](Self::set_rules); a symbol without rules has a point value of 1 and the
-/// account's leverage. A position holds its market value divided by the leverage as margin, and
-/// a working order the same for its quantity at its price. Each fill pays its commission: the
-/// rate times its value, plus the amount per order and the amount per unit of its quantity,
-/// booked as one balance change. Placement and modification reserve buying power across all
-/// symbols, including working orders and their commissions. Market orders that
-/// reduce exposure remain possible when funds are insufficient. Position exits only reduce the
-/// remaining position.
-/// Every change is pushed as an [`AccountEvent`], with
-/// the most recent 1,000 finished orders, executions, balance changes and journal entries.
-/// The history bound keeps a reconnect snapshot below the event stream's burst limit for
-/// ordinary interactive accounts.
+/// profit, and whichever fills cancels the other. The order's stop loss closes the quantity of the
+/// levels without one: when one of their take profits fills, it shrinks by that quantity and is
+/// cancelled once nothing is left; when it fills, those take profits are cancelled. An order
+/// carries at most 4 levels. Each symbol has one net position with its average price: a fill
+/// against it books the realised profit or loss of the closed quantity, and a fill beyond it opens
+/// the other side at the fill price. Values use the point value and leverage of the symbol's
+/// [rules](Self::set_rules); a symbol without rules has a point value of 1 and the account's
+/// leverage. A position holds its market value divided by the leverage as margin, and a working
+/// order the same for its quantity at its price. Each fill pays its commission: the rate times its
+/// value, plus the amount per order and the amount per unit of its quantity, booked as one balance
+/// change. Placement and modification reserve buying power across all symbols, including working
+/// orders and their commissions. Market orders that reduce exposure remain possible when funds are
+/// insufficient. Position exits only reduce the remaining position. Every change is pushed as an
+/// [`AccountEvent`], with the most recent 1,000 finished orders, executions, balance changes and
+/// journal entries. The history bound keeps a reconnect snapshot below the event stream's burst
+/// limit for ordinary interactive accounts.
 ///
 /// ```
 /// use std::sync::Arc;
@@ -347,11 +344,11 @@ impl PaperAccount {
     /// The account `saved` describes, with its settings, symbol rules, balance, working orders and
     /// their exits, positions and history, and order ids that continue from it. Feed the prices of
     /// its symbols with [`set_price`](Self::set_price): until then its orders cannot be placed or
-    /// changed, and the first price fills the working orders it reaches. Settings out of range count
-    /// as their builders say, rules that are not valid are left out, and only the newest 1,000
-    /// entries of each history are kept. Positions and account figures retain their saved marks
-    /// until a host price arrives. Returns `None` when the saved balance or starting balance is
-    /// not finite.
+    /// changed, and the first price fills the working orders it reaches. Settings out of range
+    /// count as their builders say, rules that are not valid are left out, and only the newest
+    /// 1,000 entries of each history are kept. Positions and account figures retain their saved
+    /// marks until a host price arrives. Returns `None` when the saved balance or starting balance
+    /// is not finite.
     pub fn restore(mut saved: SavedPaperAccount) -> Option<Self> {
         if !saved.initial.is_finite() || !saved.balance.is_finite() {
             return None;
@@ -396,10 +393,10 @@ impl PaperAccount {
     }
 
     /// Returns the account to its starting balance without orders, positions or history. It keeps
-    /// its settings and symbol rules, the host's prices, quotes and replay clock, and the count
-    /// its order ids continue from. It ends the event stream of the last [`connect`](Broker::connect),
-    /// so the terminal connects again at its next poll and shows the fresh account; a host that reads the stream itself
-    /// calls `connect` again once [`Events::is_active`] is false.
+    /// its settings and symbol rules, the host's prices, quotes and replay clock, and the count its
+    /// order ids continue from. It ends the event stream of the last [`connect`](Broker::connect),
+    /// so the terminal connects again at its next poll and shows the fresh account; a host that
+    /// reads the stream itself calls `connect` again once [`Events::is_active`] is false.
     pub fn reset(&self) {
         let mut state = self.lock();
         if let Some(events) = state.events.take() {
@@ -564,8 +561,8 @@ impl State {
             })
     }
 
-    /// Where `request` fills now at the last price `last`: a market order at the quote's ask for
-    /// a buy and bid for a sell, else at `last`; a limit or stop order at `last` once `last` reaches
+    /// Where `request` fills now at the last price `last`: a market order at the quote's ask for a
+    /// buy and bid for a sell, else at `last`; a limit or stop order at `last` once `last` reaches
     /// it, a stop-limit order once `last` reaches both its stop and its limit. `None` if it does
     /// not fill now.
     fn fills_at(&self, request: &OrderRequest, last: f64) -> Option<f64> {
@@ -1505,7 +1502,8 @@ mod tests {
         assert_eq!(place(&restored, market.clone()), place(&paper, market));
         assert_eq!(snapshot(&restored), snapshot(&paper));
 
-        // Edited settings follow the builders, invalid rules are ignored and histories remain bounded.
+        // Edited settings follow the builders, invalid rules are ignored and histories remain
+        // bounded.
         let mut saved = paper.save();
         saved.leverage = 0.0;
         saved.commission = -1.0;
