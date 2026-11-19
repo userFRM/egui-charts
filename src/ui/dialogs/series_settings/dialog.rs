@@ -464,6 +464,7 @@ mod tests {
         let mut chart = price_based_chart(ChartType::Renko, [egui::Color32::GREEN; 2]);
         let mut settings = chart.series_settings();
         let params = &mut settings.chart_type_params;
+        params.pnf_one_step_back = true;
         params.renko_real_price = false;
         params.kagi_real_price = false;
         params.line_break_real_price = false;

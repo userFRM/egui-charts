@@ -751,6 +751,12 @@ impl SymbolTab {
                 ui.add(egui::DragValue::new(&mut params.pnf_reversal).range(1..=100))
                     .labelled_by(label.id);
                 ui.end_row();
+                // One step back applies to a reversal of one box only.
+                let label = ui.label(l10n::text(ui.ctx(), "One step back"));
+                let one_box = params.pnf_reversal == 1;
+                let switch = egui::Checkbox::without_text(&mut params.pnf_one_step_back);
+                ui.add_enabled(one_box, switch).labelled_by(label.id);
+                ui.end_row();
                 Self::switch(ui, REAL_PRICE, &mut params.pnf_real_price);
             }
             ChartType::LineBreak => {

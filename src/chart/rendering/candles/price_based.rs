@@ -83,11 +83,14 @@ impl<B: PriceBuilder> Built<B> {
 /// eight charts of one type.
 const CACHE_CAPACITY: usize = 16;
 
+/// Box size, reversal, source and one step back of a Point and Figure chart.
+type PnfKey = (f64, u32, PriceBasedSource, bool);
+
 thread_local! {
     static RENKO: RefCell<SpanCache<Built<RenkoBuilder>, (f64, PriceBasedSource, bool)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
     static KAGI: RefCell<SpanCache<Built<KagiBuilder>, (f64, PriceBasedSource)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
     static LINE_BREAK: RefCell<SpanCache<Built<LineBreakBuilder>, (usize, PriceBasedSource)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
-    static POINT_AND_FIGURE: RefCell<SpanCache<Built<PnfBuilder>, (f64, u32, PriceBasedSource)>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
+    static POINT_AND_FIGURE: RefCell<SpanCache<Built<PnfBuilder>, PnfKey>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
     static RANGE: RefCell<SpanCache<Built<RangeBarBuilder>, f64>> = const { RefCell::new(SpanCache::new(CACHE_CAPACITY)) };
 }
 
@@ -238,11 +241,17 @@ pub(super) fn point_and_figure(
     let (box_size, reversal) = (params.pnf_box_size, params.pnf_reversal);
     let config = PointFigureConfig {
         use_close: params.pnf_source == PriceBasedSource::Close,
+        one_step_back: params.pnf_one_step_back,
         ..PointFigureConfig::new(box_size, reversal as usize)
     };
     cached(
         &POINT_AND_FIGURE,
-        (box_size, reversal, params.pnf_source),
+        (
+            box_size,
+            reversal,
+            params.pnf_source,
+            params.pnf_one_step_back,
+        ),
         full,
         revision,
         point_figure::MAX_COLUMNS,

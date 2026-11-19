@@ -887,6 +887,9 @@ pub struct ChartTypeParams {
     pub pnf_reversal: u32,
     /// Line Break: the number of lines a close must break through to reverse, 1 to 10.
     pub line_break_count: usize,
+    /// Point and Figure: with a reversal of one box, draw a reversal that follows a column of one
+    /// symbol in that column, which then holds both symbols. No effect at larger reversals.
+    pub pnf_one_step_back: bool,
     /// Renko: label the last real price on the price scale; `false` labels the close of the
     /// newest brick.
     pub renko_real_price: bool,
@@ -1014,6 +1017,7 @@ impl Default for ChartTypeParams {
             pnf_box_size: 1.0,
             pnf_reversal: 3,
             line_break_count: 3,
+            pnf_one_step_back: false,
             renko_real_price: true,
             kagi_real_price: true,
             line_break_real_price: true,

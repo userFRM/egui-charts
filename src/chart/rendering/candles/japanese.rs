@@ -233,10 +233,11 @@ fn draw_pnf_column(
     for k in first..=last as usize {
         let offset = k as f64 * step;
         let y = coords.price_to_y(if up { start + offset } else { start - offset });
-        if up {
-            draw_x_symbol(painter, Pos2::new(x, y), half, color);
+        // One step back puts the symbol of the column it continues in its first box.
+        if up != (k == 0 && column.stepped_back) {
+            draw_x_symbol(painter, Pos2::new(x, y), half, bullish_color);
         } else {
-            draw_o_symbol(painter, Pos2::new(x, y), half, color);
+            draw_o_symbol(painter, Pos2::new(x, y), half, bearish_color);
         }
     }
 }
