@@ -385,8 +385,15 @@ pub struct Drawing {
     pub bars_pattern: Option<BarsPatternConfig>,
 
     // === Z-Order (rendering layer) ===
-    /// Z-order for rendering priority (higher = drawn on top)
+    /// Z-order among the drawings of the same `series_layer` (higher = drawn on top).
     pub z_order: i32,
+    /// How many series and studies of the drawing's pane are drawn under it, counted from the
+    /// back of the pane's draw order: `Some(0)` draws it under all of them. `None`, the default,
+    /// draws it over all of them, as drawings were drawn before this setting, and so does a
+    /// count of at least the number of series and studies in the pane. Drawings with the same
+    /// count are layered by [`z_order`](Self::z_order).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series_layer: Option<usize>,
 }
 
 fn enabled() -> bool {
@@ -801,6 +808,7 @@ impl Drawing {
             }),
             // Z-order (default: 0, higher values render on top)
             z_order: 0,
+            series_layer: None,
         }
     }
 

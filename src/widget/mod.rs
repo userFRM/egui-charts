@@ -448,6 +448,10 @@ pub struct Chart {
     /// Cursor mode state (Demonstration, Magic, Eraser effects)
     #[cfg(feature = "drawings")]
     pub(crate) cursor_modes: CursorModeState,
+    /// Shapes of drawings painted under a series or study this frame: the layer, the index they
+    /// move before when the frame ends, and where they were painted.
+    #[cfg(feature = "drawings")]
+    pub(crate) layered_drawings: Vec<tool_interaction::LayeredDrawing>,
     /// The main series' last value, price line, base line, autoscale and click tolerance.
     pub(crate) main_series_style: crate::model::SeriesStyle,
     /// The last bar's time and price when the last price pulse saw it, and the input time of
