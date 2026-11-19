@@ -718,6 +718,22 @@ impl StudyTemplate {
                     }
                 }
             }
+            // Seasonality tables saved before placement inputs sat at the lower right and
+            // drew falling months in their original red.
+            "Seasonality" if !has("table_position") => {
+                for (id, value) in [
+                    ("start_year", InputValue::Integer(1900)),
+                    ("table_position", InputValue::Choice(8)),
+                    (
+                        "negative_color",
+                        InputValue::Color(egui::Color32::from_rgb(242, 55, 69)),
+                    ),
+                ] {
+                    if !has(id) {
+                        template.inputs.push((id.to_owned(), value));
+                    }
+                }
+            }
             // Chart patterns saved before developing boundaries had their own plot drew them
             // in its default style.
             "Continuation Chart Patterns" | "Reversal Chart Patterns"
@@ -1580,6 +1596,46 @@ mod tests {
                 );
             }
         }
+
+        // A literal Seasonality saved before its display inputs keeps its year, plot and band
+        // colours and lower-right table position.
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Seasonality","inputs":[["start_year",{"Integer":1900}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.Seasonality.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Dashed","plot_type":"JoinedStepLine","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[1,10,8,16],"untagged_plots":[0,1,2,3,4],"price_line_plots":[],"plot_variants":[[],[],[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[2,31,26,51],"inverted_color":[48,11,14,51],"visible":true,"independent":true}],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        let mut study = saved.create().unwrap();
+        let inputs = study.inputs();
+        for (id, value) in [
+            ("start_year", InputValue::Integer(1900)),
+            (
+                "negative_color",
+                InputValue::Color(Color32::from_rgb(242, 55, 69)),
+            ),
+        ] {
+            assert_eq!(
+                inputs
+                    .iter()
+                    .find(|input| input.id == id)
+                    .map(|input| &input.value),
+                Some(&value),
+                "Seasonality {id}"
+            );
+        }
+        assert_eq!(study.settings(), saved.settings);
+        let bars = [(2020, 12, 100.0), (2021, 1, 112.0)].map(|(year, month, close)| {
+            Bar::new(
+                Utc.with_ymd_and_hms(year, month, 28, 0, 0, 0).unwrap(),
+                close,
+                close,
+                close,
+                close,
+                1.0,
+            )
+        });
+        study.calculate(&bars);
+        let table = study.table().unwrap();
+        assert_eq!(
+            (table.position, table.width, table.height),
+            (crate::studies::TablePosition::BottomRight, None, None)
+        );
+        assert_eq!(table.cell_colors[1][1], Color32::from_rgb(41, 98, 255));
 
         // A chart save of an anchored profile from before tick heights and width were inputs
         // keeps its settings and inputs and takes the defaults of both.
