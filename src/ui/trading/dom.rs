@@ -1132,9 +1132,10 @@ impl Ladder {
                             10.0,
                             color,
                         );
-                        if group.len() > 1 {
-                            egui::Popup::menu(&tag_response).show(|ui| {
-                                ui.label(l10n::text(ui.ctx(), "Choose an order to drag or cancel"));
+                        let menu_id = id.with("menu");
+                        egui::Popup::menu(&tag_response).id(menu_id).show(|ui| {
+                            if group.len() > 1 {
+                                ui.label(l10n::text(ui.ctx(), "Choose an order to drag, edit or cancel"));
                                 for order in group {
                                     let label = format!(
                                         "{} {} @ {} · {}",
@@ -1153,9 +1154,29 @@ impl Ladder {
                                         self.selected = Some(order.id.clone());
                                     }
                                 }
-                            });
+                                ui.separator();
+                            }
+                            if ui.add_enabled(market.capabilities.modify, egui::Button::new(l10n::text(ui.ctx(), "Edit order")))
+                                .on_disabled_hover_text(l10n::text(ui.ctx(), "The account does not support modifying orders"))
+                                .clicked() {
+                                action = Some(Action::Edit(working.clone()));
+                            }
+                            if ui.button(l10n::text(ui.ctx(), "Cancel order")).clicked() {
+                                action = Some(Action::Confirm(Box::new(TradingLineAction::Cancel(working.clone()))));
+                            }
+                        });
+                        let hint = if market.capabilities.modify {
+                            "{0} {1} @ {2} {label} · {3}. Drag to move, double-click to edit, right-click to cancel. {4} order(s) here; click for the menu"
+                        } else {
+                            "{0} {1} @ {2} {label} · {3}. The account does not support modifying orders; right-click to cancel. {4} order(s) here; click for the menu"
+                        };
+                        let tag_response = tag_response.on_hover_text(l10n::format_text(ui.ctx(), hint, &[("0", side.label().to_string()), ("1", numbers.quantity(working.request.quantity - working.filled, quantity_decimals)), ("2", numbers.price(at)), ("label", label.to_string()), ("3", working.id.0.to_string()), ("4", format!("{}", group.len()))]));
+                        if tag_response.double_clicked() {
+                            egui::Popup::close_id(ui.ctx(), menu_id);
+                            if market.capabilities.modify {
+                                action = Some(Action::Edit(working.clone()));
+                            }
                         }
-                        let tag_response = tag_response.on_hover_text(l10n::format_text(ui.ctx(), "{0} {1} @ {2} {label} · {3}. Drag to move, right-click to cancel. {4} order(s) here; click to choose", &[("0", side.label().to_string()), ("1", numbers.quantity(working.request.quantity - working.filled, quantity_decimals)), ("2", numbers.price(at)), ("label", label.to_string()), ("3", working.id.0.to_string()), ("4", format!("{}", group.len()))]));
                         if tag_response.secondary_clicked() {
                             action = Some(Action::Confirm(Box::new(TradingLineAction::Cancel(
                                 working.clone(),

@@ -262,6 +262,8 @@ pub(crate) enum Action {
     Cancel(Vec<OrderId>),
     /// Ask the user to confirm this change before sending it.
     Confirm(Box<TradingLineAction>),
+    /// Open this working order on the Order tab to modify it.
+    Edit(Order),
 }
 
 /// The state of the order ticket panel.
@@ -296,6 +298,8 @@ pub(crate) struct OrderTicket {
     cancel: Option<Vec<OrderId>>,
     /// Why the ladder refused its last order, shown on the DOM tab.
     dom_error: Option<String>,
+    /// The working order the Order tab modifies instead of placing a new one.
+    pub(super) editing: Option<Order>,
 }
 
 impl Default for OrderTicket {
@@ -326,6 +330,7 @@ impl Default for OrderTicket {
             confirm: None,
             cancel: None,
             dom_error: None,
+            editing: None,
         }
     }
 }
@@ -333,6 +338,7 @@ impl Default for OrderTicket {
 impl OrderTicket {
     /// Fills the ticket from `request` and opens it on its Order tab.
     pub fn open(&mut self, request: &OrderRequest) {
+        self.editing = None;
         self.confirm = None;
         self.cancel = None;
         if self.symbol != request.symbol {
@@ -389,6 +395,12 @@ impl OrderTicket {
     pub(super) fn change_symbol(&mut self, symbol: &str) {
         let request = OrderRequest::new(symbol, self.side, self.quantity, OrderType::Market);
         self.open(&request);
+    }
+
+    /// Opens the working order with its quantity, prices, time in force and brackets.
+    pub(super) fn edit(&mut self, order: &Order) {
+        self.open(&order.request);
+        self.editing = Some(order.clone());
     }
 
     /// The ask for a buy and the bid for a sell, if the market quotes them.
