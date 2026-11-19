@@ -58,8 +58,9 @@ mod watchlist;
 
 pub use alert::{
     Alert, AlertCalendar, AlertChannelComparison, AlertComparison, AlertCondition, AlertDelivery,
-    AlertFrequency, AlertId, AlertInputs, AlertRule, AlertSource, AlertSourceName, AlertStatus,
-    AlertStudy, CustomAlertEvent, NotificationSchedule, NotificationWindow,
+    AlertFrequency, AlertId, AlertInputs, AlertPositionProgress, AlertRule, AlertSource,
+    AlertSourceName, AlertStatus, AlertStudy, CustomAlertEvent, NotificationSchedule,
+    NotificationWindow,
 };
 pub use bar::{Bar, BarColors, BarData};
 #[cfg(feature = "widget")]
@@ -68,10 +69,12 @@ pub(crate) use bar::{
 };
 pub(crate) use bar::{last_with_value, percent_change};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
+#[cfg(feature = "widget")]
+pub(crate) use chart_style::or_candle;
 pub use chart_style::{
     AreaStyle, BarsStyle, BaselineStyle, CandlesStyle, ChartTypeStyles, ColumnsStyle, HeikinStyle,
-    HighLowStyle, HlcAreaStyle, HollowStyle, KagiStyle, LastPriceAnimation, LinePlotStyle,
-    LineType, VolumeCandlesStyle,
+    HighLowStyle, HlcAreaStyle, HollowStyle, KagiStyle, LastPriceAnimation, LineBreakStyle,
+    LinePlotStyle, LineType, PointFigureStyle, RangeStyle, RenkoStyle, VolumeCandlesStyle,
 };
 pub use chart_type::{
     BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams, CustomProfileSession,
@@ -82,7 +85,7 @@ pub use clock::BarClock;
 pub(crate) use clock::Placement;
 pub use color::ColorType;
 pub use date_range::DateRange;
-#[cfg(any(feature = "studies", feature = "drawings"))]
+#[cfg(any(feature = "studies", feature = "drawings", feature = "strategies"))]
 pub(crate) use instrument::same_currency;
 pub use instrument::{
     DataStatus, FeedService, Instrument, OverrideWindow, ProfileResolution, Session,
@@ -141,9 +144,9 @@ pub use tpo::{
 };
 pub(crate) use trading::rounding_tolerance;
 pub use trading::{
-    Account, BalanceChange, Capabilities, Execution, JournalEntry, Order, OrderId, OrderPreview,
-    OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket, TakeProfitLevel,
-    TimeInForce, TradingRules,
+    Account, BalanceChange, Capabilities, ClosedPosition, Execution, JournalEntry, Order, OrderId,
+    OrderPreview, OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket,
+    TakeProfitLevel, TimeInForce, TradingRules,
 };
 
 pub use watchlist::{Watchlist, WatchlistColumn, WatchlistFlag, WatchlistItem};

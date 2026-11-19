@@ -3,8 +3,8 @@
 use crate::drawings::domain::{GANN_MAX_ARC, GANN_SQUARE_UNITS};
 use crate::drawings::{
     BarsPatternMode, Drawing, DrawingToolType as Tool, ElliottDegree, FibonacciLevel, GannConfig,
-    GannFanDirection, GannLevel, PitchforkConfig, PitchforkLevel, PositionSize, VwapBand,
-    VwapBandLine, VwapBandMode, VwapFill, VwapPlotType,
+    GannFanDirection, GannLevel, PitchforkConfig, PitchforkLevel, PositionSize, ProjectionLevel,
+    VwapBand, VwapBandLine, VwapBandMode, VwapFill, VwapPlotType,
 };
 
 use crate::data::{ProfileDisplay, VolumeProfileConfig};
@@ -37,6 +37,7 @@ impl InputsTab {
                 | Tool::ModifiedSchiffPitchfork
                 | Tool::InsidePitchfork
                 | Tool::Pitchfan
+                | Tool::ProjectionTool
                 | Tool::GannBox
                 | Tool::GannSquare
                 | Tool::GannFixed
@@ -102,6 +103,7 @@ impl InputsTab {
             | Tool::ModifiedSchiffPitchfork
             | Tool::InsidePitchfork
             | Tool::Pitchfan => pitchfork(ui, drawing, grid_pickers(pickers, 0)),
+            Tool::ProjectionTool => projection(ui, drawing, grid_pickers(pickers, 0)),
             Tool::GannBox | Tool::GannSquare | Tool::GannFixed | Tool::GannFan => {
                 gann(ui, drawing, pickers, coordinates)
             }
@@ -235,8 +237,8 @@ impl InputsTab {
                             0 => PositionSize::Quantity(1.0),
                             1 => PositionSize::RiskAmount(100.0),
                             _ => PositionSize::RiskPercent {
-                                account_size: 10_000.0,
-                                percent: 1.0,
+                                account_size: 1_000.0,
+                                percent: 25.0,
                             },
                         };
                     }
@@ -1369,6 +1371,48 @@ fn pitchfork(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
     }
 }
 
+fn projection(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerState>) {
+    // A projection saved without settings shows the ones it is drawn with.
+    let mut config = drawing.projection_config().into_owned();
+    let original = config.clone();
+    ui.strong(l10n::text(ui.ctx(), "Projection levels"));
+    ui.label(l10n::text(
+        ui.ctx(),
+        "Multiples of the measured move, from the third point",
+    ));
+    level_grid(
+        ui,
+        "Level",
+        &mut config.levels,
+        pickers,
+        ProjectionLevel {
+            coefficient: 2.0,
+            visible: true,
+            color: drawing.color,
+            line_style: LineStyle::Solid,
+            width: None,
+        },
+        |level| LevelRow {
+            visible: &mut level.visible,
+            value: &mut level.coefficient,
+            legacy_label: None,
+            text: None,
+            color: &mut level.color,
+            line_style: Some(&mut level.line_style),
+            style_override: None,
+            width: Some((&mut level.width, drawing.stroke_width)),
+            range: 0.0..=crate::drawings::validation::MAX_PROJECTION_LEVEL,
+        },
+    );
+    ui.checkbox(
+        &mut config.show_coefficients,
+        l10n::text(ui.ctx(), "Show coefficients"),
+    );
+    if config != original {
+        drawing.projection = Some(config);
+    }
+}
+
 fn gann_row(level: &mut GannLevel, range: std::ops::RangeInclusive<f32>) -> LevelRow<'_> {
     LevelRow {
         visible: &mut level.visible,
@@ -1983,6 +2027,82 @@ mod tests {
             }
             assert_eq!(config(&h, 0), drawing.fib_config.clone().unwrap());
             assert_eq!(config(&h, 1), peer.fib_config.clone().unwrap());
+        }
+    }
+
+    /// New and legacy projections preview without history, Cancel restores the stored field
+    /// exactly, and Ok records all changed settings in one undo step.
+    #[test]
+    fn projection_controls_preview_cancel_and_commit() {
+        use crate::drawings::ProjectionConfig;
+        use egui::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        for original in [Some(ProjectionConfig::default()), None] {
+            for confirm in [false, true] {
+                let mut chart = crate::widget::test_frames::chart(&[80.0], &[200.0]);
+                let mut drawing = Drawing::new(7, Tool::ProjectionTool);
+                drawing.projection = original.clone();
+                drawing.completed = true;
+                drawing.chart_points = vec![
+                    ChartPoint::new(10.0, 100.0),
+                    ChartPoint::new(20.0, 150.0),
+                    ChartPoint::new(40.0, 120.0),
+                ];
+                let mut expected = drawing.projection_config().into_owned();
+                expected.levels[0].visible = false;
+                expected.show_coefficients = !expected.show_coefficients;
+                expected.trend_visible = false;
+                expected.show_background = false;
+                chart.drawings_mut().drawings.push(drawing);
+                let mut dialog = DrawingPropertiesDialog::new();
+                dialog.open_for_chart(&chart, DrawingId(7));
+                dialog.active_tab = PropertiesTab::Inputs;
+                let mut h = Harness::builder()
+                    .with_size(egui::vec2(1440.0, 900.0))
+                    .with_accessibility_check(false)
+                    .allow_missing_glyphs()
+                    .build_ui_state(
+                        |ui, (chart, dialog): &mut (Chart, DrawingPropertiesDialog)| {
+                            dialog.show_and_apply(ui.ctx(), chart);
+                        },
+                        (chart, dialog),
+                    );
+                h.run();
+                assert_eq!(
+                    h.state().0.drawings().drawings[0].projection,
+                    original,
+                    "inspection preserves legacy settings"
+                );
+                for label in ["Level 1 visible", "Show coefficients"] {
+                    h.get_by_role_and_label(Role::CheckBox, label).click();
+                    h.run();
+                }
+                h.state_mut().1.active_tab = PropertiesTab::Style;
+                h.run();
+                for label in ["Trend line", "Background"] {
+                    h.get_by_role_and_label(Role::CheckBox, label).click();
+                    h.run();
+                }
+                assert_eq!(
+                    h.state().0.drawings().drawings[0].projection,
+                    Some(expected.clone())
+                );
+                assert!(!h.state().0.can_undo());
+                if confirm {
+                    h.get_by_role_and_label(Role::Button, "Ok").click();
+                    h.run();
+                    assert_eq!(
+                        h.state().0.drawings().drawings[0].projection,
+                        Some(expected)
+                    );
+                    assert!(h.state_mut().0.undo());
+                    assert!(!h.state().0.can_undo());
+                } else {
+                    h.state_mut().1.close();
+                    h.run();
+                }
+                assert_eq!(h.state().0.drawings().drawings[0].projection, original);
+            }
         }
     }
 

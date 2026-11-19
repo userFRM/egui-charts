@@ -128,8 +128,9 @@ impl Chart {
     /// and without one the setting is off, as when the volume study is removed.
     ///
     /// Fails without changing the chart when the set holds more studies than the
-    /// [study cap](Self::set_study_limit) allows, when its panes name a position twice or past
-    /// its studies, or when a study cannot be built, with the error of
+    /// [study cap](Self::set_study_limit) allows or adds studies reading another study's output
+    /// past the [chained study cap](Self::set_chained_study_limit), when its panes name a position
+    /// twice or past its studies, or when a study cannot be built, with the error of
     /// [`StudyTemplate::create_with`]. Wrap the call in [`user_action`](Self::user_action) when
     /// it applies a user's choice, so that one undo restores the previous studies, symbol and
     /// interval.
@@ -145,7 +146,7 @@ impl Chart {
     /// Applies `set` as a user's choice, built from the built-in studies, as one
     /// [user action](Self::user_action) that a single undo reverses. The studies whose
     /// [user edits](Self::set_indicator_user_edit_enabled) are off stay, since no user command
-    /// removes them, and count against the [study cap](Self::set_study_limit), and the set's own
+    /// removes them, and count against the [study caps](Self::set_study_limit), and the set's own
     /// such studies are left out, so that applying it again adds none of them twice. The set's
     /// other studies replace the chart's others and are placed beside the kept ones as
     /// [`apply_study_template_set_with`](Self::apply_study_template_set_with) places them, each
@@ -160,7 +161,7 @@ impl Chart {
     }
 
     /// Applies `set` as a user's choice through `factory`, which resolves built-in and
-    /// host-registered studies, with the same permissions, study cap and undo behaviour as
+    /// host-registered studies, with the same permissions, study caps and undo behaviour as
     /// [`apply_chosen_study_template_set`](Self::apply_chosen_study_template_set).
     pub fn apply_chosen_study_template_set_with(
         &mut self,
@@ -172,7 +173,7 @@ impl Chart {
     }
 
     /// Adds the studies of `set` that `keep` adds in place of the chart's own, but for those
-    /// `keep` keeps, which count against the study cap with them. Returns the id of each study of
+    /// `keep` keeps, which count against the study caps with them. Returns the id of each study of
     /// the set by its position, `None` for those left out, and fails as
     /// [`apply_study_template_set_with`](Self::apply_study_template_set_with) does.
     pub(super) fn place_study_template_set(
@@ -207,6 +208,18 @@ impl Chart {
             .is_some_and(|limit| kept + studies.iter().flatten().count() > limit)
         {
             return Err("Study limit reached".into());
+        }
+        let kept_chained = self
+            .indicators()
+            .filter(|(_, study)| keep.keeps(*study) && super::studies::reads_study(*study))
+            .count();
+        let added_chained = studies
+            .iter()
+            .flatten()
+            .filter(|study| super::studies::reads_study(study.as_ref()))
+            .count();
+        if self.passes_chained_study_limit(kept_chained, added_chained) {
+            return Err("Chained study limit reached".into());
         }
         if let Some(symbol) = &set.symbol {
             self.set_symbol(symbol.clone());

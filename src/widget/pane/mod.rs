@@ -13,6 +13,29 @@ use super::{Chart, SeriesId, Watermark};
 use crate::drawings::persistence::StoredPane;
 use egui::{Color32, Rect, Vec2};
 
+/// A pane's items and layered drawings before `item` is removed or moved in its order.
+#[cfg(feature = "drawings")]
+pub(super) struct PaneStack {
+    pane: PaneId,
+    item: SeriesId,
+    items: Vec<SeriesId>,
+    drawings: Vec<usize>,
+}
+
+/// Keeps the other items on their side of a drawing over `before[..s]`. The moved item
+/// crosses the drawing only when it crosses another item on the other side of the drawing.
+#[cfg(feature = "drawings")]
+fn restacked(before: &[SeriesId], after: &[SeriesId], item: SeriesId, s: usize) -> usize {
+    let under = &before[..s];
+    let kept = under
+        .iter()
+        .filter(|id| **id != item && after.contains(id))
+        .count();
+    after.iter().position(|id| *id == item).map_or(kept, |to| {
+        kept + usize::from(to < kept || (to == kept && under.contains(&item)))
+    })
+}
+
 /// A study's name and input values, which identify it across charts.
 type PaneStudy = (String, Vec<(String, serde_json::Value)>);
 
@@ -759,10 +782,24 @@ impl Chart {
     /// Moves a bar series, including the main series, or study into `pane`, after its members.
     /// A study moved to the price pane becomes an overlay. Scale assignments join the
     /// destination pane's scales, retaining that pane's options and manual ranges.
-    /// The main series keeps its price scale and horizontal mapping.
+    /// The main series keeps its price scale and horizontal mapping. Drawings of the pane it
+    /// leaves stay over and under the same other series and studies.
     /// Returns `false` for an unknown id or pane, or a custom study
     /// presentation that rejects placement edits.
     pub fn move_series_to_pane(&mut self, series: SeriesId, pane: PaneId) -> bool {
+        #[cfg(feature = "drawings")]
+        let stack = self.pane_stack(series);
+        let moved = self.move_series_keeping_layers(series, pane);
+        #[cfg(feature = "drawings")]
+        if let Some(stack) = stack.filter(|_| moved) {
+            self.keep_stack(stack);
+        }
+        moved
+    }
+
+    /// Moves like [`Self::move_series_to_pane`] without restacking drawings, for a restore or
+    /// a study just added, which has no place among the drawings yet.
+    pub(super) fn move_series_keeping_layers(&mut self, series: SeriesId, pane: PaneId) -> bool {
         self.sync_panes();
         if self.pane_index(pane).is_none() {
             return false;
@@ -1000,11 +1037,14 @@ impl Chart {
 
     /// Moves study `id` in the draw order of its pane, among the pane's studies and, in the main
     /// pane, the price series. Returns `false` for an id that is not a study of the chart.
-    /// Drawings keep their place, counted from the back of the pane.
+    /// Drawings stay over and under the same other series and studies, and the study goes
+    /// over or under them by where it lands.
     pub fn reorder_indicator(&mut self, id: SeriesId, order: VisualOrder) -> bool {
         if !self.study_ids.contains(&id) {
             return false;
         }
+        #[cfg(feature = "drawings")]
+        let stack = self.pane_stack(id);
         self.sync_panes();
         let layout = &mut self.pane_layout;
         let Some(items) = std::iter::once(&mut layout.main)
@@ -1023,7 +1063,83 @@ impl Chart {
         };
         let item = items.remove(at);
         items.insert(to, item);
+        #[cfg(feature = "drawings")]
+        if let Some(stack) = stack {
+            self.keep_stack(stack);
+        }
         true
+    }
+
+    /// The pane whose series and studies `drawing` is layered among.
+    #[cfg(feature = "drawings")]
+    fn layer_pane(&self, drawing: &crate::drawings::Drawing) -> PaneId {
+        self.owner_pane(drawing)
+            .unwrap_or_else(|| self.main_series_pane())
+    }
+
+    /// The series and studies of `pane` back to front, as `series_layer` counts them.
+    #[cfg(feature = "drawings")]
+    fn layer_items(&self, pane: PaneId) -> Vec<SeriesId> {
+        if pane == self.main_series_pane() {
+            self.main_series_order().to_vec()
+        } else {
+            self.pane_series(pane)
+        }
+    }
+
+    /// The stack of the pane drawing `item`, before an edit removes or moves `item`.
+    #[cfg(feature = "drawings")]
+    pub(super) fn pane_stack(&mut self, item: SeriesId) -> Option<PaneStack> {
+        self.sync_panes();
+        let pane = self.series_pane(item)?;
+        let items = self.layer_items(pane);
+        let drawings = self
+            .drawings
+            .drawings
+            .iter()
+            .filter(|d| d.series_layer.is_some_and(|s| s <= items.len()))
+            .filter(|d| self.layer_pane(d) == pane)
+            .map(|d| d.id)
+            .collect();
+        Some(PaneStack {
+            pane,
+            item,
+            items,
+            drawings,
+        })
+    }
+
+    /// Keeps the drawings over and under the same other items, in the edit's undo step.
+    #[cfg(feature = "drawings")]
+    pub(super) fn keep_stack(&mut self, stack: PaneStack) {
+        if stack.drawings.is_empty() {
+            return;
+        }
+        self.sync_panes();
+        if self.pane_index(stack.pane).is_none() {
+            return; // The pane went with the item, and its drawings with it.
+        }
+        let after = self.layer_items(stack.pane);
+        let mut layers: Vec<_> = crate::drawings::services::in_z_order(&self.drawings.drawings)
+            .into_iter()
+            .filter(|d| stack.drawings.contains(&d.id) && self.layer_pane(d) == stack.pane)
+            .filter_map(|d| {
+                let s = d.series_layer.filter(|s| *s <= stack.items.len())?;
+                Some((
+                    d.id,
+                    restacked(&stack.items, &after, stack.item, s),
+                    d.z_order,
+                ))
+            })
+            .collect();
+        // Drawings of two layers that merge keep their order.
+        if !layers.is_sorted_by_key(|(_, s, z)| (*s, *z)) {
+            for (rank, layer) in layers.iter_mut().enumerate() {
+                layer.2 = i32::try_from(rank).unwrap_or(i32::MAX);
+            }
+        }
+        let record = self.history.recording();
+        self.drawings.restack(&layers, record);
     }
 
     /// Moves drawing `id` in the draw order of its pane, which holds the pane's series and studies
@@ -1047,19 +1163,11 @@ impl Chart {
             _ => {}
         }
         self.sync_panes();
-        let pane_of = |drawing: &crate::drawings::Drawing| {
-            self.owner_pane(drawing)
-                .unwrap_or_else(|| self.main_series_pane())
-        };
-        let pane = pane_of(self.drawings.drawings.iter().find(|d| d.id == id).unwrap());
-        let n = if pane == self.main_series_pane() {
-            self.main_series_order().len()
-        } else {
-            self.pane_series(pane).len()
-        };
+        let pane = self.layer_pane(self.drawings.drawings.iter().find(|d| d.id == id).unwrap());
+        let n = self.layer_items(pane).len();
         let mut mates = crate::drawings::services::in_z_order(&self.drawings.drawings)
             .into_iter()
-            .filter(|d| pane_of(d) == pane)
+            .filter(|d| self.layer_pane(d) == pane)
             .peekable();
         let mut sequence = Vec::new();
         for k in 0..n {

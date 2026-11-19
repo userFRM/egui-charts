@@ -61,7 +61,8 @@
 //! seed their EMAs with the mean of the first values and their signal with the mean of the first
 //! values of the oscillator, Force Index, Elder Ray, Bull Bear Power, TRIX and the Mass Index seed their EMAs with the mean of
 //! their first values, the Envelopes EMA and the Chaikin volatility and Chaikin Oscillator EMAs seed with their first input, an
-//! Accumulation/Distribution bar with a high equal to its low adds nothing, the Price Momentum Oscillator's smoothings
+//! Accumulation/Distribution bar with a high equal to its low adds nothing, a Balance of Power bar with a high equal
+//! to its low has no value and its average skips it, the Price Momentum Oscillator's smoothings
 //! and signal seed with the mean of their first inputs, the Relative Volatility Index and SMI Ergodic EMAs seed with
 //! their first input and an unchanged close counts as a falling bar in the Relative Volatility Index, and Parabolic
 //! SAR reverses when the price crosses it, not on a touch), otherwise a published one (Wilder's first true range is high minus

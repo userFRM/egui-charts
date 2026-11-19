@@ -100,7 +100,8 @@ pub enum BrokerPickerAction {
 /// add another and one to connect each. Picking a tile shows its connect card,
 /// whose Connect button returns [`BrokerPickerAction::Connect`] and closes the picker; the host
 /// then connects [`Trading`](super::Trading) to that broker. Open it with
-/// [`open`](Self::open), such as from the toolbar's Trade button while no broker is connected.
+/// [`open`](Self::open), such as from the toolbar's Trade button while no broker is connected,
+/// or for [`AccountPanelAction::ChangeBroker`](super::AccountPanelAction::ChangeBroker).
 #[derive(Debug)]
 pub struct BrokerPicker {
     /// The tiles, in order. [`new`](Self::new) puts the paper account first.

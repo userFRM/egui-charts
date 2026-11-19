@@ -316,6 +316,29 @@ pub enum ThousandsSeparator {
     Other(char),
 }
 
+/// The date of crosshair, tooltip and forecast labels, as
+/// [`Chart::set_date_format`](crate::Chart::set_date_format) sets it.
+///
+/// Built from a pattern and set field by field:
+///
+/// ```
+/// use egui_charts::scales::WeekdayNames;
+/// use egui_charts::widget::settings::{ChartSettingsState, DateFormat};
+///
+/// let mut settings = ChartSettingsState::default();
+/// settings.scales_and_lines.date_format = Some(DateFormat::Pattern("%d.%m.%Y".into()));
+/// settings.scales_and_lines.use_24_hour = Some(false);
+/// settings.scales_and_lines.weekday_names = Some(WeekdayNames::Always);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum DateFormat {
+    /// Built-in dates: `Wed 13 Mar '24` on intraday bars and `Mar 13, 2024` on daily bars.
+    Default,
+    /// A `strftime` pattern, such as `"%d.%m.%Y"`; invalid or empty patterns use built-in dates.
+    Pattern(String),
+}
+
 /// Scales and lines tab settings
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -394,14 +417,32 @@ pub struct ScalesAndLinesSettings {
     /// The thousands separator of price labels. `None` keeps the chart's separator, as do
     /// settings saved without this field.
     pub thousands_sep: Option<ThousandsSeparator>,
+    /// The date of crosshair, tooltip and forecast labels. `None` keeps the chart's format,
+    /// as do settings saved without this field.
+    pub date_format: Option<DateFormat>,
+    /// Whether time labels use a 24-hour clock or a 12-hour one with an AM/PM marker.
+    /// `None` keeps the chart's clock, as do settings saved without this field.
+    pub use_24_hour: Option<bool>,
+    /// Whether crosshair, tooltip and forecast dates name the weekday. `None` keeps the chart's
+    /// choice, as do settings saved without this field.
+    pub weekday_names: Option<crate::scales::WeekdayNames>,
     /// Whether to show countdown.
     pub show_countdown: bool,
-    /// Whether to show bid ask.
+    /// Whether to show the bid and ask tags.
     pub show_bid_ask: bool,
-    /// Whether to show high low.
+    /// Whether to draw the bid and ask lines, apart from their tags. `None` keeps the chart's
+    /// choice, as do settings saved without this field.
+    pub show_bid_ask_lines: Option<bool>,
+    /// Whether to show the high and low tags.
     pub show_high_low: bool,
+    /// Whether to draw the high and low lines, apart from their tags. `None` keeps the chart's
+    /// choice, as do settings saved without this field.
+    pub show_high_low_lines: Option<bool>,
     /// Whether to show prev close.
     pub show_prev_close: bool,
+    /// Colour, width and pattern of the previous close line. `None` keeps the chart's, as do
+    /// settings saved without this field.
+    pub prev_close_line: Option<crate::config::ChartLineStyle>,
 }
 
 impl Default for ScalesAndLinesSettings {
@@ -437,10 +478,16 @@ impl Default for ScalesAndLinesSettings {
             show_price_line: true,
             price_line_source: None,
             thousands_sep: None,
+            date_format: None,
+            use_24_hour: None,
+            weekday_names: None,
             show_countdown: true,
             show_bid_ask: false,
+            show_bid_ask_lines: None,
             show_high_low: false,
+            show_high_low_lines: None,
             show_prev_close: false,
+            prev_close_line: None,
         }
     }
 }
@@ -472,7 +519,7 @@ pub struct TradingSettings {
     pub show_positions: bool,
     /// Give each position's profit or loss on its label.
     pub position_pnl: bool,
-    /// The unit of the positions' profit or loss.
+    /// The unit of the positions' profit or loss, on their labels and in the depth ladder.
     pub position_pnl_unit: PnlUnit,
     /// Show a position's reverse button while its label is hovered.
     pub reverse_button: bool,
@@ -525,10 +572,12 @@ impl Default for TradingSettings {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum TradingNotifications {
-    /// Fills, partial fills, rejections and refused orders.
+    /// Everything Errors shows, and fills, partial fills, placed orders, orders the broker
+    /// cancelled and a broker that is live again.
     #[default]
     All,
-    /// Rejections and refused orders only.
+    /// Rejected orders, refused orders, cancellations and changes, and a broker that stops
+    /// being live.
     Errors,
     /// None.
     Off,
@@ -668,6 +717,16 @@ pub struct ChartSettingsState {
     /// Show analyst estimates answered by the host feed.
     #[serde(default)]
     pub show_price_targets: bool,
+    /// Colour of the analyst targets above their publication close, as
+    /// [`ChartConfig::price_target_positive_color`](crate::config::ChartConfig::price_target_positive_color).
+    /// `None`, as in settings saved before it existed, keeps the chart's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_target_positive_color: Option<Color32>,
+    /// Colour of the analyst targets below their publication close, as
+    /// [`ChartConfig::price_target_negative_color`](crate::config::ChartConfig::price_target_negative_color).
+    /// `None`, as in settings saved before it existed, keeps the chart's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_target_negative_color: Option<Color32>,
     /// Ask the host for history adjusted for dividends. The host owns the data, so
     /// [`apply_to_chart`](Self::apply_to_chart) leaves it to the host, which reloads the
     /// adjusted history; [`from_chart`](Self::from_chart) leaves it off.
@@ -692,6 +751,11 @@ pub struct ChartSettingsState {
     pub chart_basic_styles: ChartBasicStylesSettings,
     /// Grid directions and colors.
     pub grid_lines: GridLinesSettings,
+    /// Colour of the separators between panes, applied to
+    /// [`PaneOptions::separator_color`](crate::widget::PaneOptions::separator_color). `None`
+    /// follows the theme's grid line colour, as do settings saved without this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_separator_color: Option<Color32>,
     /// Crosshair line appearance.
     pub crosshair: CrosshairSettings,
     /// Watermark appearance.
@@ -755,6 +819,8 @@ impl Default for ChartSettingsState {
             precision: PrecisionMode::Default,
             timezone: "UTC".to_string(),
             show_price_targets: false,
+            price_target_positive_color: None,
+            price_target_negative_color: None,
             adjust_for_dividends: false,
 
             order_flow: OrderFlowSettings::default(),
@@ -765,6 +831,7 @@ impl Default for ChartSettingsState {
 
             chart_basic_styles: chart_basic_styles.clone(),
             grid_lines: grid_lines.clone(),
+            pane_separator_color: None,
             crosshair: CrosshairSettings::default(),
             watermark: WatermarkSettings::default(),
             scales_appearance: ScalesAppearanceSettings::default(),
