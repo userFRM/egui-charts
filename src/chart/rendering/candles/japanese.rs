@@ -2,12 +2,12 @@
 //!
 //! Includes: Renko, Kagi, Line Break, Point & Figure
 
-use super::helpers::{draw_brick, draw_o_symbol, draw_x_symbol};
-use crate::model::KagiStyle;
+use super::helpers::{brick_border, draw_brick, draw_o_symbol, draw_x_symbol};
 use crate::model::kagi::{KagiLine, KagiThickness};
 use crate::model::line_break::LineBreakLine;
 use crate::model::point_figure::PnfColumn;
 use crate::model::{ColumnDirection, RenkoBrick};
+use crate::model::{KagiStyle, RenkoStyle};
 use crate::scales::PriceMap;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 
@@ -15,6 +15,7 @@ pub(super) fn render_renko(
     painter: &Painter,
     bricks: &[RenkoBrick],
     show_wicks: bool,
+    style: &RenkoStyle,
     bar_width: f32,
     price_scale: &PriceMap,
     bullish_color: Color32,
@@ -26,10 +27,12 @@ pub(super) fn render_renko(
         let x = x_of(i);
 
         let bar = brick.to_bar();
-        let color = if bar.close > bar.open {
-            bullish_color
+        let up = bar.close > bar.open;
+        let color = if up { bullish_color } else { bearish_color };
+        let (border, wick) = if up {
+            (style.border_up, style.wick_up)
         } else {
-            bearish_color
+            (style.border_down, style.wick_down)
         };
         if show_wicks {
             painter.line_segment(
@@ -37,11 +40,14 @@ pub(super) fn render_renko(
                     Pos2::new(x, coords.price_to_y(brick.high)),
                     Pos2::new(x, coords.price_to_y(brick.low)),
                 ],
-                Stroke::new(1.0, color),
+                Stroke::new(1.0, wick.unwrap_or(color)),
             );
         }
         let rect = calc_brick_rect(x, bar.open, bar.close, &coords, bar_width);
-        draw_brick(painter, rect, color, 1.0);
+        let border = style
+            .border_visible
+            .then(|| border.unwrap_or_else(|| brick_border(color)));
+        draw_brick(painter, rect, color, border, 1.0);
     }
 }
 
@@ -93,6 +99,7 @@ pub(super) fn render_kagi(
 pub(super) fn render_line_break(
     painter: &Painter,
     lines: &[LineBreakLine],
+    style: &crate::model::LineBreakStyle,
     bar_width: f32,
     price_scale: &PriceMap,
     bullish_color: Color32,
@@ -114,7 +121,15 @@ pub(super) fn render_line_break(
             bearish_color
         };
         let rect = calc_line_break_rect(x, line.open, line.close, &coords, actual_width);
-        draw_brick(painter, rect, color, 1.0);
+        let own = if line.is_bullish() {
+            style.border_up
+        } else {
+            style.border_down
+        };
+        let border = style
+            .border_visible
+            .then(|| own.unwrap_or_else(|| brick_border(color)));
+        draw_brick(painter, rect, color, border, 1.0);
     }
 }
 
@@ -272,6 +287,7 @@ mod tests {
                         direction: RenkoDirection::Up,
                     }],
                     show_wicks,
+                    &RenkoStyle::default(),
                     8.0,
                     &map,
                     Color32::GREEN,

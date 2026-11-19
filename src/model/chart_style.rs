@@ -655,6 +655,62 @@ impl PointFigureStyle {
     }
 }
 
+/// The Line Break chart's line borders. A colour left `None` draws the border in its line's
+/// colour at 70% opacity, as a chart that has not set it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct LineBreakStyle {
+    /// Outline each line.
+    pub border_visible: bool,
+    /// Border of rising lines.
+    pub border_up: Option<Color32>,
+    /// Border of falling lines.
+    pub border_down: Option<Color32>,
+}
+
+impl Default for LineBreakStyle {
+    fn default() -> Self {
+        Self {
+            border_visible: true,
+            border_up: None,
+            border_down: None,
+        }
+    }
+}
+
+/// The Renko chart's brick borders and wicks. Colours left `None` draw as a chart that has not
+/// set them: the border in its brick's colour at 70% opacity and the wick in the brick's colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct RenkoStyle {
+    /// Outline each brick.
+    pub border_visible: bool,
+    /// Border of rising bricks.
+    pub border_up: Option<Color32>,
+    /// Border of falling bricks.
+    pub border_down: Option<Color32>,
+    /// Wick of rising bricks, drawn while
+    /// [`ChartTypeParams::renko_wicks`](super::ChartTypeParams::renko_wicks) is on.
+    pub wick_up: Option<Color32>,
+    /// Wick of falling bricks, drawn while
+    /// [`ChartTypeParams::renko_wicks`](super::ChartTypeParams::renko_wicks) is on.
+    pub wick_down: Option<Color32>,
+}
+
+impl Default for RenkoStyle {
+    fn default() -> Self {
+        Self {
+            border_visible: true,
+            border_up: None,
+            border_down: None,
+            wick_up: None,
+            wick_down: None,
+        }
+    }
+}
+
 /// The Range chart's bars.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -671,13 +727,15 @@ pub struct RangeStyle {
 }
 
 /// Styles of the candle, hollow candle, volume candle, Heikin-Ashi, bar, column, high-low, line,
-/// step, marker, area, HLC area, baseline, Kagi, Point and Figure and Range chart types.
+/// step, marker, area, HLC area, baseline, Renko, Kagi, Line Break, Point and Figure and Range
+/// chart types.
 /// Defaults use the design-token palette and remain independent of candle colours.
 ///
 /// ```
 /// use egui_charts::model::{
 ///     CandlesStyle, ChartTypeStyles, ColumnsStyle, HeikinStyle, HighLowStyle, HlcAreaStyle,
-///     HollowStyle, KagiStyle, PointFigureStyle, PriceSource, RangeStyle, VolumeCandlesStyle,
+///     HollowStyle, KagiStyle, LineBreakStyle, PointFigureStyle, PriceSource, RangeStyle,
+///     RenkoStyle, VolumeCandlesStyle,
 /// };
 ///
 /// let mut styles = ChartTypeStyles::default();
@@ -709,6 +767,12 @@ pub struct RangeStyle {
 /// let mut range = RangeStyle::default();
 /// range.thin_bars = true;
 /// styles.range = range;
+/// let mut renko = RenkoStyle::default();
+/// renko.border_visible = false;
+/// styles.renko = renko;
+/// let mut line_break = LineBreakStyle::default();
+/// line_break.border_visible = false;
+/// styles.line_break = line_break;
 /// styles.columns = ColumnsStyle::default();
 /// styles.step_line_price_source = Some(PriceSource::High);
 /// styles.line_gradient = true;
@@ -777,6 +841,10 @@ pub struct ChartTypeStyles {
     /// were drawn.
     #[serde(default = "HighLowStyle::saved_without_style")]
     pub high_low: HighLowStyle,
+    /// Renko chart.
+    pub renko: RenkoStyle,
+    /// Line Break chart.
+    pub line_break: LineBreakStyle,
     /// Kagi chart. Documents saved before its colours draw in the candle body colours, as they
     /// were drawn.
     #[serde(default = "KagiStyle::saved_without_colors")]
@@ -827,6 +895,8 @@ impl Default for ChartTypeStyles {
             bars: BarsStyle::default(),
             columns: ColumnsStyle::default(),
             high_low: HighLowStyle::default(),
+            renko: RenkoStyle::default(),
+            line_break: LineBreakStyle::default(),
             kagi: KagiStyle::default(),
             point_figure: PointFigureStyle::default(),
             range: RangeStyle::default(),

@@ -566,6 +566,18 @@ mod tests {
         [styles.point_figure.up_color, styles.point_figure.down_color] = point_figure;
         styles.range.thin_bars = true;
         styles.range.phantom_bars = true;
+        styles.renko = crate::model::RenkoStyle {
+            border_visible: false,
+            border_up: color(14),
+            border_down: color(15),
+            wick_up: color(16),
+            wick_down: color(17),
+        };
+        styles.line_break = crate::model::LineBreakStyle {
+            border_visible: false,
+            border_up: color(18),
+            border_down: color(19),
+        };
         chart.apply_series_settings(&settings);
         let json = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
         let mut restored = price_based_chart(ChartType::Candles, [egui::Color32::RED; 2]);
@@ -617,22 +629,10 @@ mod tests {
                             )),
                             _ => None,
                         });
-                        let inert_colour_controls = output.shapes.iter().any(|shape| {
-                            matches!(
-                                &shape.shape, egui::Shape::Text(text)
-                                if matches!(text.galley.text(), "Border" | "Wick")
-                            )
-                        });
                         let inactive = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if matches!(text.galley.text(), "Trading" | "Alerts" | "Events" | "Coming soon")));
                         output.drop_without_applying_deltas();
                         assert!(!inactive, "placeholder settings must not be offered");
                         if frame > 0 {
-                            if kind == ChartType::Renko {
-                                assert!(
-                                    !inert_colour_controls,
-                                    "Renko must only offer colours its renderer reads"
-                                );
-                            }
                             let ok = ok.expect("apply button is painted");
                             assert!(
                                 screen.contains_rect(ok.1) && ok.0.contains_rect(ok.1),

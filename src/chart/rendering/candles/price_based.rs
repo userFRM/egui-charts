@@ -834,14 +834,15 @@ mod tests {
         );
     }
 
-    /// The Range styles reach the painter. With a range of 2, the closes 100, 101 and
+    /// The Range, Renko and Line Break styles reach the painter. With a range of 2, the closes 100, 101 and
     /// 99 complete a bar from 100 up to 101 and down to 99, which thin bars draw as a stroke from
     /// 99 to 101 at the wick width with ticks at 100 and 99. With a range of 1, a bar that opens
     /// at 103.5 after a close at 100 completes the bars 100 to 101, 101 to 102 and 102 to 103 in
     /// one jump: only the first held a price, so phantom bars outline the second and third. A bar
-    /// that trades from 100 to 103.5 completes them along its path, and none is a gap.
+    /// that trades from 100 to 103.5 completes them along its path, and none is a gap. Bricks of
+    /// 1 from 100 to 102 take the border and wick colours set for rising bricks.
     #[test]
-    fn range_styles_reach_the_painter() {
+    fn range_and_renko_styles_reach_the_painter() {
         use crate::model::BarData;
         use crate::widget::{
             Chart,
@@ -953,6 +954,67 @@ mod tests {
                 [filled, Some(gap), Some(gap), filled],
                 "phantom bars {phantom_bars}, gaps {gap}"
             );
+        }
+
+        let (border, wick) = (Color32::from_rgb(1, 2, 3), Color32::from_rgb(4, 5, 6));
+        let mut params = ChartTypeParams {
+            renko_wicks: true,
+            ..Default::default()
+        };
+        params.styles.renko.border_up = Some(border);
+        params.styles.renko.wick_up = Some(wick);
+        let (painted, chart) = paint(
+            ChartType::Renko,
+            params,
+            bars(0, &[100.0, 101.0, 102.0], None),
+        );
+        let plot = chart.get_rendered_price_rect();
+        let borders = painted
+            .iter()
+            .filter(|shape| {
+                matches!(shape, Shape::Rect(r)
+                    if r.stroke.color == border && plot.contains(r.rect.center()))
+            })
+            .count();
+        let wicks = painted
+            .iter()
+            .filter(|shape| {
+                matches!(shape, Shape::LineSegment { points, stroke }
+                    if stroke.color == wick && points[0].x == points[1].x)
+            })
+            .count();
+        assert_eq!((borders, wicks), (2, 2), "renko borders and wicks");
+
+        for (visible, own, count) in [
+            (true, Some(border), 3),
+            (true, None, 3),
+            (false, Some(border), 0),
+            (false, None, 0),
+        ] {
+            let mut params = ChartTypeParams::default();
+            let style = &mut params.styles.line_break;
+            style.border_visible = visible;
+            style.border_up = own;
+            let (painted, chart) = paint(
+                ChartType::LineBreak,
+                params,
+                bars(0, &[100.0, 101.0, 102.0], None),
+            );
+            let plot = chart.get_rendered_price_rect();
+            let expected = own.unwrap_or_else(|| {
+                crate::chart::rendering::candles::helpers::brick_border(
+                    chart.config().bullish_color,
+                )
+            });
+            let borders = painted
+                .iter()
+                .filter(|shape| {
+                    matches!(shape, Shape::Rect(r)
+                    if r.stroke.width > 0.0 && r.stroke.color == expected
+                        && plot.contains(r.rect.center()))
+                })
+                .count();
+            assert_eq!(borders, count, "line break borders {visible}, {own:?}");
         }
     }
 

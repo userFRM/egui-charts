@@ -72,8 +72,8 @@ pub use box_size::{BoxSizeMethod, PriceBasedSource};
 pub(crate) use chart_style::or_candle;
 pub use chart_style::{
     AreaStyle, BarsStyle, BaselineStyle, CandlesStyle, ChartTypeStyles, ColumnsStyle, HeikinStyle,
-    HighLowStyle, HlcAreaStyle, HollowStyle, KagiStyle, LastPriceAnimation, LinePlotStyle,
-    LineType, PointFigureStyle, RangeStyle, VolumeCandlesStyle,
+    HighLowStyle, HlcAreaStyle, HollowStyle, KagiStyle, LastPriceAnimation, LineBreakStyle,
+    LinePlotStyle, LineType, PointFigureStyle, RangeStyle, RenkoStyle, VolumeCandlesStyle,
 };
 pub use chart_type::{
     BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams, CustomProfileSession,

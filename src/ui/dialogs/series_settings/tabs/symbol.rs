@@ -172,6 +172,36 @@ impl SymbolTab {
                         candles,
                     );
                 }
+                ChartType::Renko => {
+                    Self::candle_colors_section(ui, settings);
+                    let body = [settings.bullish_color, settings.bearish_color];
+                    let style = &mut settings.chart_type_params.styles.renko;
+                    Self::switch(ui, "Borders", &mut style.border_visible);
+                    Self::custom_colors_row(
+                        ui,
+                        "Border",
+                        [&mut style.border_up, &mut style.border_down],
+                        body.map(crate::chart::rendering::candles::brick_border),
+                    );
+                    Self::custom_colors_row(
+                        ui,
+                        "Wick",
+                        [&mut style.wick_up, &mut style.wick_down],
+                        body,
+                    );
+                }
+                ChartType::LineBreak => {
+                    Self::candle_colors_section(ui, settings);
+                    let body = [settings.bullish_color, settings.bearish_color];
+                    let style = &mut settings.chart_type_params.styles.line_break;
+                    Self::switch(ui, "Borders", &mut style.border_visible);
+                    Self::custom_colors_row(
+                        ui,
+                        "Border",
+                        [&mut style.border_up, &mut style.border_down],
+                        body.map(crate::chart::rendering::candles::brick_border),
+                    );
+                }
                 ChartType::Range => {
                     let style = &mut styles.range;
                     Self::switch(ui, "Thin bars", &mut style.thin_bars);
@@ -1103,38 +1133,54 @@ impl SymbolTab {
             return;
         }
 
-        for (label, up, down) in [
-            (
-                "Border",
+        let body = [settings.bullish_color, settings.bearish_color];
+        Self::custom_colors_row(
+            ui,
+            "Border",
+            [
                 &mut settings.bullish_border_color,
                 &mut settings.bearish_border_color,
-            ),
-            (
-                "Wick",
+            ],
+            body,
+        );
+        Self::custom_colors_row(
+            ui,
+            "Wick",
+            [
                 &mut settings.bullish_wick_color,
                 &mut settings.bearish_wick_color,
-            ),
-        ] {
-            ui.label(l10n::text(ui.ctx(), label));
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                Self::optional_color_picker(ui, up, settings.bullish_color);
-                Self::optional_color_picker(ui, down, settings.bearish_color);
-                for (color, default, label) in [
-                    (up, settings.bullish_color, "Custom up"),
-                    (down, settings.bearish_color, "Custom down"),
-                ] {
-                    let mut custom = color.is_some();
-                    if ui
-                        .checkbox(&mut custom, l10n::text(ui.ctx(), label))
-                        .changed()
-                    {
-                        *color = custom.then_some(color.unwrap_or(default));
-                    }
+            ],
+            body,
+        );
+    }
+
+    /// A row of rising and falling colours that are `None` until made custom, starting from
+    /// `defaults`.
+    fn custom_colors_row(
+        ui: &mut Ui,
+        label: &str,
+        [up, down]: [&mut Option<Color32>; 2],
+        [default_up, default_down]: [Color32; 2],
+    ) {
+        ui.label(l10n::text(ui.ctx(), label));
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            Self::optional_color_picker(ui, up, default_up);
+            Self::optional_color_picker(ui, down, default_down);
+            for (color, default, label) in [
+                (up, default_up, "Custom up"),
+                (down, default_down, "Custom down"),
+            ] {
+                let mut custom = color.is_some();
+                if ui
+                    .checkbox(&mut custom, l10n::text(ui.ctx(), label))
+                    .changed()
+                {
+                    *color = custom.then_some(color.unwrap_or(default));
                 }
-            });
-            ui.end_row();
-        }
+            }
+        });
+        ui.end_row();
     }
 
     /// Rows of a style's rising and falling colours; one saved before the style had them shows

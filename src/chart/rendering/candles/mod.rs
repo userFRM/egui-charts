@@ -30,6 +30,8 @@ pub use candle::render_candle;
 use crate::theme::ThemeExt;
 pub use heikin_ashi::HeikinAshiCache;
 pub(crate) use heikin_ashi::rising as heikin_rising;
+#[cfg(feature = "ui")]
+pub(crate) use helpers::brick_border;
 pub(crate) use helpers::prev_close;
 pub(crate) use line::{
     LAST_PRICE_PULSE_SECONDS, gradient_share, gradient_span, render_crosshair_marker,
@@ -412,6 +414,7 @@ pub fn render_chart_type(
                 painter,
                 built.shown(ctx.start_idx, ctx.visible_data.len()),
                 params.type_params.renko_wicks,
+                &params.type_params.styles.renko,
                 params.bar_width(),
                 ctx.price_scale,
                 params.bullish_color(),
@@ -436,6 +439,7 @@ pub fn render_chart_type(
             japanese::render_line_break(
                 painter,
                 built.shown(ctx.start_idx, ctx.visible_data.len()),
+                &params.type_params.styles.line_break,
                 params.bar_width(),
                 ctx.price_scale,
                 params.bullish_color(),
