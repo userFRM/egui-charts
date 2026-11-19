@@ -393,8 +393,10 @@ impl DrawingManager {
         }
     }
 
+    /// Swaps a body or move handle drag onto copies of the drawings it moves, leaving the
+    /// originals in place. An anchor handle drag reshapes its drawing and copies nothing.
     pub(crate) fn copy_dragged_drawings(&mut self) {
-        let Some((_, handle)) = self.dragging_handle else {
+        let Some((_, handle @ HandlePos::Middle)) = self.dragging_handle else {
             return;
         };
         let Some(old) = self.drag_old_state.take() else {

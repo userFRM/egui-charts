@@ -285,16 +285,38 @@ impl DrawingManager {
 
     /// Replaces every saveable drawing with `drawings`, restored from storage, as one undo step.
     /// Each keeps its stored identity (`stored_id`, `created_at`, `notes`) and layer and gets a
-    /// new id; drawings that are never saved stay. Queues a `Delete` for each drawing it removes
-    /// and a save for each it adds.
+    /// new id; drawings that are never saved stay, and so do those in a top-level folder kept on
+    /// one chart or in one layout, which storage does not hold, unless `drawings` holds one of
+    /// them again. Queues a `Delete` for each drawing it removes and a save for each it adds.
     pub(crate) fn replace_saved_drawings(&mut self, drawings: Vec<Drawing>) {
+        let replaced = |drawing: &Drawing| {
+            drawing.saveable
+                && (!drawing.confined()
+                    || drawings
+                        .iter()
+                        .any(|other| super::read_again(drawing, other)))
+        };
         let removed: Vec<_> = self
             .drawings
             .iter()
             .enumerate()
-            .filter(|(_, drawing)| drawing.saveable)
+            .filter(|(_, drawing)| replaced(drawing))
             .map(|(index, drawing)| (index, drawing.clone()))
             .collect();
+        // A confined drawing that stays keeps a stored id of its own beside the copy's.
+        let mut taken: HashSet<String> = drawings.iter().map(sync_id).collect();
+        for drawing in self
+            .drawings
+            .iter_mut()
+            .filter(|d| d.saveable && d.confined())
+        {
+            if !removed.iter().any(|(_, gone)| gone.id == drawing.id)
+                && taken.contains(&sync_id(drawing))
+            {
+                drawing.stored_id = Some(super::free_stored_id(drawing, &taken));
+                taken.insert(sync_id(drawing));
+            }
+        }
         if removed.is_empty() && drawings.is_empty() {
             return;
         }
@@ -309,7 +331,8 @@ impl DrawingManager {
         for (_, drawing) in &removed {
             self.queue(DrawingSyncAction::Delete(sync_id(drawing)));
         }
-        self.drawings.retain(|drawing| !drawing.saveable);
+        let gone: HashSet<usize> = removed.iter().map(|(_, drawing)| drawing.id).collect();
+        self.drawings.retain(|drawing| !gone.contains(&drawing.id));
         for drawing in added {
             let id = drawing.id;
             self.drawings.push(drawing);
