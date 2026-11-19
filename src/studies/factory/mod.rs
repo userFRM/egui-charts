@@ -300,6 +300,7 @@ impl IndicatorFactory {
                 VolProfileVisible,
                 VolProfileFixed,
                 VolProfileSession,
+                VolProfileSessionHd,
                 VolProfilePeriodic,
                 VolProfileAnchored,
                 VolProfileAutoAnchored,
