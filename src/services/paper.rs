@@ -1401,6 +1401,12 @@ mod tests {
         rules.time_in_force = vec![TimeInForce::GoodTillCancelled];
         assert!(paper.set_rules(rules));
         paper.set_price("ES", 100.0);
+        // Keep one unit outside the bracket: its stop must cancel when the protected two close.
+        place(
+            &paper,
+            OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Market),
+        )
+        .unwrap();
         let mut entry = OrderRequest::new("ES", OrderSide::Buy, 2.0, OrderType::Market);
         entry.take_profit = Some(105.0);
         entry.stop_loss = Some(95.0);
