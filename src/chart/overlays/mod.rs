@@ -34,8 +34,10 @@ pub use footprint::render_footprint_studies;
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 mod trade_profile;
+#[cfg(feature = "ui")]
+pub(crate) use trade_profile::SessionColors;
 #[cfg(feature = "studies")]
-pub(crate) use trade_profile::{SessionColors, render_session_volume_profiles};
+pub(crate) use trade_profile::render_session_volume_profiles;
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 pub use trade_profile::{TradeProfileSettings, render_trade_profiles};
