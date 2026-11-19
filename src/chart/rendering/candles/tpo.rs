@@ -703,9 +703,9 @@ fn draw_session_profile(
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
-    let Some(_) = profile.price_tpo_count.values().max() else {
+    if profile.price_tpo_count.is_empty() {
         return;
-    };
+    }
 
     let chart = painter.ctx().active_theme().chart;
     let tick_size = profile.tick_size;
