@@ -6358,7 +6358,6 @@ fn clearing_depth_history_frees_textures_and_refills() {
         },
     );
     sink.advance_time(time + TimeDelta::seconds(1));
-    frames.run(&mut chart);
     let ctx = frames.ctx.clone();
     let paint = |chart: &Chart| {
         ctx.run_ui(Default::default(), |ui| {
@@ -6371,7 +6370,9 @@ fn clearing_depth_history_frees_textures_and_refills() {
             delta.pos.is_some() && image.size == [1, 256] && image.pixels[99].a() > 0
         })
     };
-    let mut output = paint(&chart);
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        chart.show(ui);
+    });
     assert!(populated(&output));
     output.textures_delta.clear();
     feed.calls();
@@ -6395,7 +6396,9 @@ fn clearing_depth_history_frees_textures_and_refills() {
             .any(|call| matches!(call, Call::Depth(r) if r.before.is_none()))
     );
     sink.advance_time(time + TimeDelta::seconds(2));
-    frames.run(&mut chart);
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        chart.show(ui);
+    });
     let held: Vec<_> = chart
         .depth_history(SeriesId::MAIN)
         .unwrap()
@@ -6403,9 +6406,6 @@ fn clearing_depth_history_frees_textures_and_refills() {
         .map(|c| c.time)
         .collect();
     assert_eq!(held, [time + TimeDelta::seconds(1)]);
-    let mut output = frames.ctx.run_ui(Default::default(), |ui| {
-        chart.paint_liquidity(ui.painter(), &chart.get_chart_mapping());
-    });
     assert!(populated(&output));
     output.textures_delta.clear();
 }
