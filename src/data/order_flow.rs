@@ -984,25 +984,29 @@ impl OrderFlowInput {
             return;
         }
         let mut grouped = super::inbox::TradeBars::default();
-        let mut tape = trades.iter();
-        let matched = history.iter().all(|expected| {
-            let mut last = None;
-            for trade in tape.by_ref() {
+        let mut tape = trades.iter().peekable();
+        let mut candles = history.iter();
+        let matched = 'tape: {
+            while let Some(trade) = tape.next() {
                 let Ok(parts) = grouped.push(timeframe, trade, tick_size) else {
-                    return false;
+                    break 'tape false;
                 };
-                // Both tick and range intervals allocate each fill to exactly one bar.
-                let Some((bar, size)) = parts.into_iter().next() else {
-                    return false;
-                };
-                state.add_trade(trade, bar.time, size, true);
-                last = Some(bar);
-                if grouped.closed {
-                    break;
+                let n = parts.len();
+                let check_last = grouped.closed || tape.peek().is_none();
+                for (i, (bar, size)) in parts.into_iter().enumerate() {
+                    // Every non-final part closes a candle. The last may still be forming.
+                    if (i + 1 < n || check_last)
+                        && !candles
+                            .next()
+                            .is_some_and(|expected| super::merge::same_values(&bar, expected))
+                    {
+                        break 'tape false;
+                    }
+                    state.add_trade(trade, bar.time, size, i == 0);
                 }
             }
-            last.is_some_and(|bar| super::merge::same_values(&bar, expected))
-        }) && tape.next().is_none();
+            candles.next().is_none()
+        };
         if matched {
             state.paged_rate = true;
         } else {
