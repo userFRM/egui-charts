@@ -153,8 +153,8 @@ maximum column memory.
 [`Chart::clear_depth_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.clear_depth_history)
 empties held columns and heatmap textures, as the tab's Release memory button requests; live
 samples and historical pages within the retention fill it again. Hosts pass the chart's sampling
-with `SettingsDialog::set_depth_history_config` when opening the dialog, and handle its
-`SettingsAction::ClearDepthHistory` by calling `Chart::clear_depth_history`. The dialog stays
+with [`SettingsDialog::set_depth_history_config`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/dialogs/chart_settings/struct.SettingsDialog.html#method.set_depth_history_config) when opening the dialog, and handle its
+[`SettingsAction::ClearDepthHistory`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/top_toolbar/components/settings_menu/actions/enum.SettingsAction.html#variant.ClearDepthHistory) by calling `Chart::clear_depth_history`. The dialog stays
 open after that action; edited settings still apply only with Ok. The book is sampled
 where depth arrives, independently of UI frames. No column covers a period that ends while the
 aggregate or order-level book waits for a snapshot, so merging never averages an outage into the
