@@ -10,7 +10,7 @@ use crate::studies::TradeProfileRanges;
 use chrono::{DateTime, Utc};
 use std::ops::{Range, RangeInclusive};
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub(super) struct TradeProfiles {
     /// The symbol and calendar the edits were made under, with the choice that divides its
     /// sessions further: the extended hours and the segment choices share a calendar.
@@ -91,6 +91,13 @@ impl Chart {
     pub fn reset_trade_profile_ranges(&mut self) {
         self.trade_profiles.spans.clear();
         self.trade_profiles.splits.clear();
+    }
+
+    /// Whether the current symbol and calendar have execution profile merges or splits.
+    #[cfg(feature = "ui")]
+    pub(crate) fn has_trade_profile_edits(&self) -> bool {
+        self.profile_edits_current()
+            && !(self.trade_profiles.spans.is_empty() && self.trade_profiles.splits.is_empty())
     }
 
     /// The calendar that divides the chart into profile sessions, as the settings choose it.

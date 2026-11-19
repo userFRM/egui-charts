@@ -10,11 +10,13 @@ on:
   # Runs the suite on any branch, such as reviewed pull requests merged together before they land.
   workflow_dispatch:
 
-# A newer push to a pull request supersedes its running checks; every main commit keeps its run.
-# Draft state is part of the group: marking a draft ready fires a run that still carries the draft
-# payload, and that run only skips its jobs, so it must not cancel the real run beside it.
+# A newer push to a pull request supersedes its running checks. Pushes to a branch share one group,
+# as in deploy-demo.yml: main keeps its run in progress and only its newest pending commit, and every
+# run that starts finishes. Draft state is part of the group: marking a draft ready fires a run that
+# still carries the draft payload, and that run only skips its jobs, so it must not cancel the real
+# run beside it.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}-${{ github.event.pull_request.draft }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ github.event.pull_request.draft }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
