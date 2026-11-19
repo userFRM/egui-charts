@@ -3,7 +3,7 @@
 
 use super::{StrategyFactory, length, number, number_input, set_input};
 use crate::model::{Bar, OrderSide, OrderType};
-use crate::strategies::{Strategy, StrategyContext};
+use crate::strategies::{OrderSize, Strategy, StrategyContext};
 use crate::studies::{
     BollingerBands, Indicator, InputKind, InputValue, KeltnerChannels, MACD, Momentum,
     ParabolicSAR, RSI, SMA, Stochastic, StudyInput, SuperTrend, TechnicalRatings,
@@ -172,6 +172,14 @@ impl Strategy for StudyStrategy {
             return Err("oversold must be below overbought");
         }
         Ok(())
+    }
+
+    fn default_order_size(&self) -> Option<OrderSize> {
+        match self.rule {
+            Rule::SuperTrend => Some(OrderSize::EquityFraction(0.15)),
+            Rule::Rating => Some(OrderSize::EquityFraction(0.05)),
+            _ => None,
+        }
     }
 
     fn prepare(&mut self, bars: &[Bar]) {

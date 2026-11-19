@@ -15,8 +15,8 @@ mod timescale;
 mod tooltip;
 
 pub use chart::{
-    BackgroundStyle, ChartConfig, NavigationButtons, PriceAxisOptions, RealtimeButtonPos,
-    SessionConfig, WatermarkPos,
+    BackgroundStyle, ChartConfig, ChartLineStyle, NavigationButtons, PriceAxisOptions,
+    RealtimeButtonPos, SessionConfig, WatermarkPos,
 };
 pub use crosshair::{CrosshairMode, CrosshairOptions, CrosshairStyle};
 pub use cursor::CursorType;
