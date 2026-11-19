@@ -793,6 +793,10 @@ impl SettingsDialog {
                     .scales_and_lines
                     .show_bid_ask_lines
                     .or(scales.show_bid_ask_lines);
+                let high_low_lines = template
+                    .scales_and_lines
+                    .show_high_low_lines
+                    .or(scales.show_high_low_lines);
                 let prev_close_line = template
                     .scales_and_lines
                     .prev_close_line
@@ -834,6 +838,7 @@ impl SettingsDialog {
                 self.settings.scales_and_lines.price_line_width = line_width;
                 self.settings.scales_and_lines.price_line_style = line_style;
                 self.settings.scales_and_lines.show_bid_ask_lines = bid_ask_lines;
+                self.settings.scales_and_lines.show_high_low_lines = high_low_lines;
                 self.settings.scales_and_lines.prev_close_line = prev_close_line;
                 self.settings.scales_and_lines.thousands_sep = separator;
                 self.settings.scales_and_lines.date_format = date_format;
@@ -919,6 +924,7 @@ impl SettingsDialog {
             self.settings.scales_and_lines.price_line_width = Some(style.price_line_width);
             self.settings.scales_and_lines.price_line_style = Some(style.price_line_style);
             self.settings.scales_and_lines.show_bid_ask_lines = Some(false);
+            self.settings.scales_and_lines.show_high_low_lines = Some(false);
             self.settings.scales_and_lines.prev_close_line = Some(Default::default());
             self.settings.scales_and_lines.thousands_sep =
                 Some(crate::widget::settings::ThousandsSeparator::Comma);
@@ -1014,6 +1020,7 @@ mod tests {
                 }
                 chart.config_mut().prev_close_line.width = 3.0;
                 chart.config_mut().show_bid_ask_lines = Some(true);
+                chart.config_mut().show_high_low_lines = Some(true);
                 let mut settings = ChartSettingsState::from_chart(&chart);
                 settings.scales_appearance.text_color = Color32::RED;
                 settings.grid_lines.horizontal_color = Color32::GREEN;
@@ -1105,11 +1112,16 @@ mod tests {
                             .config()
                             .show_bid_ask_lines
                             .unwrap_or(chart.config().show_bid_ask),
+                        chart
+                            .config()
+                            .show_high_low_lines
+                            .unwrap_or(chart.config().show_high_low),
                     ),
                     (
                         Some(1.0),
                         Some(crate::model::LineStyle::Dashed),
                         Some(crate::config::ChartLineStyle::default()),
+                        false,
                         false
                     ),
                     "{preset}"
@@ -2565,6 +2577,65 @@ mod tests {
         }
     }
 
+    /// High and low can show only their tags or only their lines from the Scales and lines tab.
+    #[test]
+    fn high_and_low_value_or_line_is_chosen_in_the_dialog() {
+        use crate::widget::test_frames::{chart, frame, shapes};
+        for (choice, tags, lines) in [("Value", true, false), ("Line", false, true)] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[110.0, 120.0]);
+            let high = Color32::from_rgb(201, 11, 11);
+            let low = Color32::from_rgb(11, 201, 11);
+            let config = chart.config_mut();
+            config.show_volume = false;
+            config.show_quote_boxes = false;
+            config.high_line.color = Some(high);
+            config.low_line.color = Some(low);
+            config.high_line.style = crate::model::LineStyle::Solid;
+            config.low_line.style = crate::model::LineStyle::Solid;
+            // Keep the other dropdowns distinct from this pair's Hidden and Value choices.
+            config.show_symbol_prev_close = true;
+            config.show_prev_close_line = true;
+            config.show_bid_ask = true;
+            config.show_symbol_last_change = true;
+            let mut dialog = SettingsDialog::new();
+            dialog.open(ChartSettingsState::from_chart(&chart));
+            dialog.active_tab = SettingsTab::ScalesAndLines;
+            let SettingsAction::Apply(settings) =
+                click_through(&mut dialog, &["scroll", "Hidden", choice, "Ok"])
+            else {
+                panic!("Ok must apply the settings");
+            };
+            settings.apply_to_chart(&mut chart).unwrap();
+            assert_eq!(
+                (
+                    chart.config().show_high_low,
+                    chart.config().show_high_low_lines
+                ),
+                (tags, Some(lines)),
+                "{choice}"
+            );
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            let painted = shapes(&ctx, &mut chart, 0.1, Vec::new());
+            let plot = chart.get_rendered_price_rect();
+            for (name, price, color) in [("High ", 120.0, high), ("Low ", 100.0, low)] {
+                let tag = painted.iter().any(|shape| {
+                    matches!(shape,
+                    egui::Shape::Text(text) if text.pos.x > plot.right()
+                        && text.galley.text().starts_with(name))
+                });
+                // The fixture's opens are 100 and its closes alternate 110 and 120.
+                let y = chart.last_price_map.price_to_y(price);
+                let line = painted.iter().any(|shape| {
+                    matches!(shape,
+                    egui::Shape::LineSegment { points, stroke } if stroke.color == color
+                        && points.iter().all(|point| (point.y - y).abs() < 0.01))
+                });
+                assert_eq!((tag, line), (tags, lines), "{choice}: {name}");
+            }
+        }
+    }
+
     /// Time scale controls display a host pattern by its sample, and choose the date, clock and
     /// weekday names. Invalid host patterns stay listed without a formatting panic.
     #[test]
@@ -2632,6 +2703,7 @@ mod tests {
                 ("/scales_and_lines", "price_line_source"),
                 ("/scales_and_lines", "prev_close_line"),
                 ("/scales_and_lines", "show_bid_ask_lines"),
+                ("/scales_and_lines", "show_high_low_lines"),
                 ("/scales_and_lines", "thousands_sep"),
                 ("/scales_and_lines", "date_format"),
                 ("/scales_and_lines", "use_24_hour"),
@@ -2653,6 +2725,7 @@ mod tests {
             chart.pane_options_mut().separator_color = Some(Color32::RED);
             chart.config_mut().prev_close_line.width = 3.0;
             chart.config_mut().show_bid_ask_lines = Some(true);
+            chart.config_mut().show_high_low_lines = Some(true);
             let style = chart.series_style_mut(SeriesId::MAIN).unwrap();
             style.price_line_source = PriceLineSource::LastVisible;
             let margin = chart.chart_options().time_scale.clone();
@@ -2673,6 +2746,7 @@ mod tests {
                         .prev_close_line
                         .map(|line| line.width),
                     shown.scales_and_lines.show_bid_ask_lines,
+                    shown.scales_and_lines.show_high_low_lines,
                     shown.show_session_breaks,
                     shown.scales_and_lines.price_line_source,
                     shown.scales_and_lines.thousands_sep,
@@ -2683,6 +2757,7 @@ mod tests {
                 ),
                 (
                     Some(3.0),
+                    Some(true),
                     Some(true),
                     Some(true),
                     Some(PriceLineSource::LastVisible),
@@ -2708,6 +2783,7 @@ mod tests {
             assert!(config.show_session_breaks);
             assert_eq!(config.prev_close_line.width, 3.0);
             assert_eq!(config.show_bid_ask_lines, Some(true));
+            assert_eq!(config.show_high_low_lines, Some(true));
             let style = chart.series_style(SeriesId::MAIN).unwrap();
             assert_eq!(style.price_line_source, PriceLineSource::LastVisible);
             assert_eq!(chart.pane_options().separator_color, None, "{pixels:?}");
