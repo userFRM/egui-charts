@@ -314,7 +314,9 @@ impl NotificationPanel {
         let theme = ui.active_theme();
         let buy = trade.side == crate::model::OrderSide::Buy;
         let side_color = crate::theme::trading_side_color(&theme, trade.side);
-        let icon_color = if trade.executed {
+        let icon_color = if toast.kind == ToastKind::Error {
+            toast.kind.color(&theme.ui)
+        } else if trade.executed {
             theme.ui.take_profit
         } else {
             side_color
@@ -573,13 +575,17 @@ mod tests {
     use super::*;
 
     /// A trading notice is a card of its own over whatever is behind it, with a border, and its
-    /// title is at regular weight.
+    /// title is at regular weight. Error cards use the error tile colour instead of the side.
     #[test]
     fn trading_notices_are_bordered_cards_with_regular_titles() {
-        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+        for (theme, kind) in [crate::theme::Theme::light(), crate::theme::Theme::dark()]
+            .into_iter()
+            .flat_map(|theme| [ToastKind::Info, ToastKind::Error].map(|kind| (theme.clone(), kind)))
+        {
             let ctx = Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
-            let mut toast = Toast::info("Limit order placed").with_title("Limit order placed on");
+            let mut toast =
+                Toast::new(kind, "Limit order placed").with_title("Limit order placed on");
             toast.trading = Some(super::super::TradingToast {
                 symbol: "SYM".into(),
                 logo: None,
@@ -613,6 +619,13 @@ mod tests {
             };
             assert!(card(&|rect| rect.fill == theme.ui.panel_bg_floating));
             assert!(card(&|rect| rect.stroke.color == theme.ui.border));
+            let color = if kind == ToastKind::Error {
+                theme.ui.error
+            } else {
+                crate::theme::trading_side_color(&theme, crate::model::OrderSide::Buy)
+            };
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Rect(rect) if rect.fill == color.gamma_multiply(0.14))));
             output.drop_without_applying_deltas();
         }
     }

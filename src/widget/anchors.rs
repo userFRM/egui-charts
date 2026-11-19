@@ -792,13 +792,14 @@ mod tests {
     /// stored. An SMI record with equal `smooth1` and `smooth2`, as written before an equal pair
     /// shared one input, matches the SMI that lists them as `smoothing`. A study restored under
     /// host defaults that set the missing input for new studies matches too. A Knoxville record
-    /// from before the window rule, with pivot sides, matches the study without them. Loading
-    /// and pasting agree.
+    /// from before the window rule, with pivot sides, matches the study without them. An ADX
+    /// record from before the smoothing had an input matches the ADX whose smoothing equals its
+    /// period. Loading and pasting agree.
     #[cfg(feature = "studies")]
     #[test]
     fn stored_pane_survives_a_new_study_input() {
         use crate::studies::{
-            ConfiguredStudy, CustomIndicator, Indicator, IndicatorFactory, IndicatorValue,
+            ADX, ConfiguredStudy, CustomIndicator, Indicator, IndicatorFactory, IndicatorValue,
             InputValue, KnoxvilleDivergence, RSI, StochasticMomentumIndex, StudyTemplate,
         };
         let bars = [0, 60, 180]
@@ -815,6 +816,7 @@ mod tests {
             )
         };
         let smi: Study = || Box::new(StochasticMomentumIndex::new(10, 3, 3, 10));
+        let adx: Study = || Box::new(ADX::new(20));
         let knoxville: Study = || {
             // Layouts saved before the window rule keep the study in its own pane.
             let mut study = ConfiguredStudy::new(Box::new(KnoxvilleDivergence::default()));
@@ -903,6 +905,7 @@ mod tests {
             }
         };
         let (last, inner) = (without("wait_for_close"), without("smoothing_deviation"));
+        let no_smoothing = without("adx_smoothing");
         let (no_average, sma, ema) = (without("smoothing"), earlier(1), earlier(2));
         let (equal, unequal) = (split(3), split(4));
         let wait = |on| Some(("wait_for_close", InputValue::Toggle(on)));
@@ -915,7 +918,7 @@ mod tests {
             Option<(&'a str, InputValue)>,
             bool,
         );
-        let cases: [Case<'_>; 13] = [
+        let cases: [Case<'_>; 14] = [
             // From before an input existed: the last one, which the chart adds after the study's
             // own, or one of the study's own, which comes before the chart's.
             (rsi, &last, None, true),
@@ -923,6 +926,8 @@ mod tests {
             (rsi, &last, wait(false), false),
             (restored, &last, None, true),
             (knoxville, &pivots, None, true),
+            // Before the ADX smoothing had an input, the DI period set it too.
+            (adx, &no_smoothing, None, true),
             (rsi, &other_period, None, false),
             // From before the RSI average took the shared smoothing inputs, where EMA was 2.
             (rsi, &sma, smoothing(1), true),
