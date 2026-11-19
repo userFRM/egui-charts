@@ -209,7 +209,11 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(RelativeVolumeAtTime::new(l(0))),
         Box::new(ZigZag::new(x(5.0), l(0))),
         #[cfg(feature = "drawings")]
-        Box::new(AutoDrawing::new(AutoDrawingKind::TrendLine, x(5.0), l(0))),
+        Box::new(
+            AutoTrendLines::new()
+                .with_bars_to_breakout(l(0))
+                .with_pivots(true),
+        ),
         #[cfg(feature = "drawings")]
         Box::new(AutoDrawing::new(
             AutoDrawingKind::ParallelChannel,
@@ -320,6 +324,10 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(ChartPatterns::new(PatternFamily::Reversal)),
         Box::new(ChartPatterns::all()),
     ];
+    studies.extend(
+        (0..CandlestickPatterns::PATTERN_COUNT)
+            .map(|k| Box::new(CandlestickPatterns::only(k)) as Box<dyn Indicator>),
+    );
     studies.extend(
         PatternFamily::ALL
             .iter()
@@ -753,8 +761,7 @@ fn degenerate_lengths_and_hostile_bars_are_survivable() {
     for (study, conventional) in bottom.iter().zip(&conventional).filter(|(study, _)| {
         !matches!(
             study.name(),
-            "Auto Trend Line"
-                | "Auto Parallel Channel"
+            "Auto Parallel Channel"
                 | "Auto Fibonacci Retracement"
                 | "Auto Fibonacci Extension"
                 | "Auto Pitchfork"
