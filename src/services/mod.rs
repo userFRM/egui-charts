@@ -68,8 +68,8 @@ pub use chats::{
 #[cfg_attr(docsrs, doc(cfg(feature = "detectors")))]
 pub use detectors::{
     AbsorptionRule, BigTradeRule, CountAlert, CountWindow, DetectionAlert, DetectionCounts,
-    DetectionKind, Detector, DetectorSettings, IcebergRule, LiquidityRule, OrderFlowDetectors,
-    StopRunRule, StopSweepRule, Threshold,
+    DetectionKind, Detector, DetectorSettings, FootprintRule, IcebergRule, LiquidityRule,
+    OrderFlowDetectors, StopRunRule, StopSweepRule, Threshold,
 };
 #[cfg(feature = "widget")]
 pub(crate) use events::Listener;
