@@ -1583,6 +1583,7 @@ mod tests {
                 trades: &[],
                 session_open: None,
                 last_fill: None,
+                pnl_unit: crate::chart::PnlUnit::Money,
                 logo: None,
             };
             let ticket = OrderTicket {
