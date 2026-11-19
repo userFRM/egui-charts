@@ -182,7 +182,11 @@ impl DrawingContextMenu {
             .iter()
             .find(|d| d.id == drawing_id);
         if let Some(drawing) = drawing {
-            self.set_context(drawing.tool_type.as_str(), drawing.locked, drawing.visible);
+            self.set_context(
+                chart.drawings().registry.tool_name(drawing),
+                drawing.locked,
+                drawing.visible,
+            );
         }
         self.current_interval = chart.timeframe();
         self.timeframe_visibility = drawing

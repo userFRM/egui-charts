@@ -136,7 +136,8 @@ pub struct SourceItem {
 }
 
 impl SourceItem {
-    /// Create a new drawing source
+    /// Create a new drawing source. Hosts listing a chart's drawings use [`Self::for_drawing`],
+    /// which names a registered tool's drawings by the tool.
     ///
     /// # Arguments
     ///
@@ -166,6 +167,21 @@ impl SourceItem {
             folder: Vec::new(),
             folder_sync: None,
         }
+    }
+
+    /// A drawing row with the chart's tool name, the drawing's label, colour, visibility,
+    /// lock, layer, folder and synchronisation, and the panes it can move to.
+    pub fn for_drawing(chart: &crate::widget::Chart, drawing: &crate::drawings::Drawing) -> Self {
+        let mut item =
+            Self::drawing(drawing.id, drawing.tool_type, drawing.color32()).with_panes(chart);
+        item.name = chart.drawings().registry.tool_name(drawing).to_owned();
+        item.label = drawing.label.clone();
+        item.visible = drawing.visible;
+        item.locked = drawing.locked;
+        item.z_index = drawing.z_order;
+        item.folder = drawing.folder.clone();
+        item.folder_sync = drawing.folder_sync_mode();
+        item
     }
 
     /// Create a new indicator source

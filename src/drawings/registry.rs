@@ -99,6 +99,23 @@ impl DrawingToolRegistry {
         self.custom.iter().map(|(id, tool)| (id.as_str(), tool))
     }
 
+    /// The tool name for a drawing: its registered name, or its saved id if the tool is
+    /// missing or unnamed, otherwise the built-in name. Lists may put the drawing's label first.
+    pub fn tool_name<'a>(&'a self, drawing: &'a Drawing) -> &'a str {
+        match drawing.custom_tool.as_deref() {
+            Some(id) if !id.trim().is_empty() => self.custom_name(id),
+            _ => drawing.tool_type.as_str(),
+        }
+    }
+
+    /// A registered tool's picker name, or its id when missing or unnamed.
+    pub(crate) fn custom_name<'a>(&'a self, id: &'a str) -> &'a str {
+        self.get(id)
+            .map(|tool| tool.name.as_str())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or(id)
+    }
+
     /// Hides or disables a built-in tool. Hidden tools may still be created by the host when
     /// enabled; disabling rejects new creation through the manager and chart APIs. Duplicates,
     /// pastes and copies of its drawings are left out; restoring and syncing them is not affected.
@@ -123,11 +140,19 @@ impl DrawingToolRegistry {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::drawings::{ChartPoint, DrawingManager};
 
-    struct Midpoint;
+    pub(crate) struct Midpoint;
+
+    pub(crate) fn midpoint() -> RegisteredDrawingTool {
+        RegisteredDrawingTool {
+            name: "Midpoint".into(),
+            anchors: 2,
+            implementation: Arc::new(Midpoint),
+        }
+    }
     impl DrawingRenderer for Midpoint {
         fn render(&self, drawing: &Drawing, painter: &Painter, _rect: Rect, _view: &ChartView) {
             if let [a, b] = drawing.points.as_slice() {
@@ -140,10 +165,69 @@ mod tests {
                 _ => false,
             }
         }
-        fn settings(&self, _ui: &mut Ui, settings: &mut serde_json::Value) -> bool {
+        fn settings(&self, ui: &mut Ui, settings: &mut serde_json::Value) -> bool {
+            ui.label("Radius");
             *settings = serde_json::json!({"radius": 10});
             true
         }
+    }
+
+    /// Registered names reach the dialog and inventory; labels still come first in lists.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn registered_tool_drawings_carry_the_registered_name() {
+        let mut registry = DrawingToolRegistry::default();
+        registry.register("midpoint", midpoint()).unwrap();
+        let mut chart = crate::ChartBuilder::new()
+            .with_drawing_registry(registry)
+            .build();
+        chart.set_symbol("AAPL");
+        chart.set_data(
+            crate::widget::SeriesId::MAIN,
+            crate::widget::test_frames::chart(&[90.0], &[110.0])
+                .bars(crate::widget::SeriesId::MAIN)
+                .to_vec(),
+        );
+        let mut drawing = Drawing::custom("midpoint");
+        drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(0.0, 105.0)];
+        let id = chart.drawings_mut().add_drawing(drawing).unwrap();
+        let mut dialog = crate::ui::dialogs::drawing_properties::DrawingPropertiesDialog::new();
+        assert!(dialog.open_for_chart(
+            &chart,
+            crate::ui::dialogs::drawing_properties::DrawingId(id)
+        ));
+        assert_eq!(dialog.drawing_name, "Midpoint");
+        let inventory = crate::widget::ChartLayout::default().drawing_inventory(&[&mut chart]);
+        assert_eq!(inventory[0].drawings[0].name(), "Midpoint");
+        use crate::ui::widget_bar::panels::object_tree::SourceItem;
+        let d = &chart.drawings().drawings[0];
+        assert_eq!(
+            SourceItem::for_drawing(&chart, d).display_name(),
+            "Midpoint"
+        );
+        chart.drawings_mut().drawings[0].label = Some("Mine".into());
+        let d = &chart.drawings().drawings[0];
+        assert_eq!(SourceItem::for_drawing(&chart, d).display_name(), "Mine");
+        for (id, name) in [("gone", "gone"), ("", "Polyline"), ("  ", "Polyline")] {
+            assert_eq!(
+                chart.drawings().registry.tool_name(&Drawing::custom(id)),
+                name
+            );
+        }
+        let mut blank = midpoint();
+        blank.name = "  ".into();
+        chart
+            .drawings_mut()
+            .registry
+            .register("blank", blank)
+            .unwrap();
+        assert_eq!(
+            chart
+                .drawings()
+                .registry
+                .tool_name(&Drawing::custom("blank")),
+            "blank"
+        );
     }
 
     #[test]

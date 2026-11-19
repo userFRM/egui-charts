@@ -93,7 +93,7 @@ impl DrawingPropertiesDialog {
         };
         self.open(
             id,
-            drawing.tool_type.as_str().into(),
+            chart.drawings().registry.tool_name(drawing).into(),
             DrawingProps::from_drawing(drawing, chart),
         );
         self.default_template = Some(DrawingTemplate::from_drawing(
