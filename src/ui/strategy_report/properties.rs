@@ -197,9 +197,9 @@ pub(super) fn show(
             }
             _ => settings.slippage = Slippage::Increments(0),
         }
-        for (side, label) in [
-            (OrderSide::Buy, "Long funding (%)"),
-            (OrderSide::Sell, "Short funding (%)"),
+        for (side, label, rule) in [
+            (OrderSide::Buy, "Long funding (%)", "Long margin calls"),
+            (OrderSide::Sell, "Short funding (%)", "Short margin calls"),
         ] {
             let before = settings.funding(side) * 100.0;
             let mut percent = before;
@@ -211,6 +211,9 @@ pub(super) fn show(
                 };
                 *funding = Some(percent / 100.0);
             }
+            ui.label(l10n::text(ui.ctx(), rule));
+            ui.label(l10n::text(ui.ctx(), settings.margin_calls(side)));
+            ui.end_row();
         }
         number(
             ui,

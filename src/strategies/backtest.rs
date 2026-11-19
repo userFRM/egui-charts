@@ -180,6 +180,24 @@ impl BacktestSettings {
             .unwrap_or_else(|| 1.0 / self.leverage())
     }
 
+    /// Whether a deficit on `side` closes the whole position where equity crosses margin: the
+    /// liquidation rule kept for runs with leverage above one and no funding fraction for that
+    /// side. A funding fraction closes four times the shortfall instead.
+    fn whole_position_margin(&self, side: OrderSide) -> bool {
+        self.side_funding(side).is_none() && self.leverage() != 1.0
+    }
+
+    /// The margin-call rule on `side`, as the report properties and the tester name it.
+    pub(crate) fn margin_calls(&self, side: OrderSide) -> &'static str {
+        if self.funding(side) == 0.0 {
+            "Off"
+        } else if self.whole_position_margin(side) {
+            "Whole position at the margin crossing"
+        } else {
+            "Four times the shortfall at price points"
+        }
+    }
+
     fn fee(&self, quantity: f64, price: f64) -> f64 {
         match self.commission {
             Commission::Fraction(rate) => quantity * price.abs() * nonnegative(rate),
@@ -734,6 +752,14 @@ impl Backtest {
             (
                 "Short funding fraction".into(),
                 settings.funding(OrderSide::Sell).to_string(),
+            ),
+            (
+                "Long margin calls".into(),
+                settings.margin_calls(OrderSide::Buy).into(),
+            ),
+            (
+                "Short margin calls".into(),
+                settings.margin_calls(OrderSide::Sell).into(),
             ),
             (
                 "Verify limit crossing".into(),
@@ -1329,9 +1355,8 @@ impl<'a> Run<'a> {
         None
     }
 
-    // Keep the original shared-leverage API's liquidation rule for existing leveraged runs.
     fn legacy_margin(&self) -> bool {
-        self.settings.side_funding(self.lots[0].side).is_none() && self.settings.leverage() != 1.0
+        self.settings.whole_position_margin(self.lots[0].side)
     }
 
     fn liquidation_size(&self, price: f64) -> f64 {
@@ -2845,7 +2870,60 @@ mod tests {
         // a 1% fee costs 2 + 2.2, and two ticks of 0.5 reduce that gross profit to 16.
         // At 2x leverage, 15 long from 100 have equity 15p-500 and margin 7.5p:
         // the call is at p=200/3, equity=500, even if the bar later recovers to 100.
+        let mut run_properties = Vec::new();
         for (name, script, settings, prices, expected, equity, rejected) in [
+            (
+                "leverage alone closes the whole position at the margin crossing",
+                hold as fn(usize, &mut StrategyContext<'_>),
+                BacktestSettings {
+                    order_size: OrderSize::Fixed(15.0),
+                    leverage: 2.0,
+                    ..terms.clone()
+                },
+                vec![
+                    (100.0, 100.0, 100.0, 100.0),
+                    (100.0, 100.0, 100.0, 100.0),
+                    (100.0, 100.0, 60.0, 70.0),
+                ],
+                vec![trade(
+                    Buy,
+                    15.0,
+                    1,
+                    100.0,
+                    Some((2, 200.0 / 3.0, -500.0)),
+                    "A / Margin call",
+                )],
+                vec![1000.0, 1000.0, 1000.0, 500.0],
+                0,
+            ),
+            (
+                "funding at that leverage closes four times the shortfall at a price point",
+                hold,
+                BacktestSettings {
+                    order_size: OrderSize::Fixed(15.0),
+                    leverage: 2.0,
+                    long_funding: Some(0.5),
+                    ..terms.clone()
+                },
+                vec![
+                    (100.0, 100.0, 100.0, 100.0),
+                    (100.0, 100.0, 100.0, 100.0),
+                    (100.0, 100.0, 60.0, 70.0),
+                ],
+                vec![
+                    trade(
+                        Buy,
+                        4.0,
+                        1,
+                        100.0,
+                        Some((2, 60.0, -160.0)),
+                        "A / Margin call",
+                    ),
+                    trade(Buy, 11.0, 1, 100.0, None, "A"),
+                ],
+                vec![1000.0, 1000.0, 1000.0, 510.0],
+                0,
+            ),
             (
                 "long funding is independent of short funding",
                 hold as fn(usize, &mut StrategyContext<'_>),
@@ -3958,6 +4036,7 @@ mod tests {
                 Backtest::new("Terms", "TEST", Timeframe::Hour1, settings.initial_capital);
             engine.settings = settings;
             let report = engine.run(&mut Script(script), &source, &[]);
+            run_properties.push((name, report.properties.clone()));
             let mut asynchronous_strategy = Script(script);
             let mut future =
                 std::pin::pin!(engine.run_async(&mut asynchronous_strategy, &source, &[]));
@@ -4013,6 +4092,31 @@ mod tests {
                 );
             }
         }
+
+        let [whole, partial] = [
+            "leverage alone closes the whole position at the margin crossing",
+            "funding at that leverage closes four times the shortfall at a price point",
+        ]
+        .map(|run| {
+            run_properties
+                .iter()
+                .find(|(name, _)| *name == run)
+                .unwrap()
+                .1
+                .clone()
+        });
+        assert_ne!(
+            whole, partial,
+            "runs that liquidate differently list different properties"
+        );
+        assert!(whole.contains(&(
+            "Long margin calls".into(),
+            "Whole position at the margin crossing".into()
+        )));
+        assert!(partial.contains(&(
+            "Long margin calls".into(),
+            "Four times the shortfall at price points".into()
+        )));
 
         struct History {
             prepared: usize,

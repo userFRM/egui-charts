@@ -199,6 +199,8 @@ fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
         let mut tiny = h.state().settings().clone();
         tiny.price_increment = 1e-8;
         tiny.liquidation_increment = 1e-6;
+        tiny.leverage = 2.0;
+        tiny.long_funding = Some(0.5);
         h.state_mut().set_settings(tiny).unwrap();
         let output = egui::Context::default().run_ui(
             egui::RawInput {
@@ -212,8 +214,13 @@ fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
                 h.state_mut().show(ui, "TEST", Timeframe::Min1, &bars());
             },
         );
-        for value in ["0.00000001", "0.000001"] {
-            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == value)), "small increments must remain visible: {value}");
+        for value in [
+            "0.00000001",
+            "0.000001",
+            "Four times the shortfall at price points",
+            "Whole position at the margin crossing",
+        ] {
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == value)), "{value} must be shown");
         }
         output.drop_without_applying_deltas();
         let mut settings = h.state().settings().clone();

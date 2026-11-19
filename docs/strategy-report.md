@@ -90,6 +90,10 @@ at its open. For example, capital 1,000 and 15 long units entered at 100 with le
 equity `15p - 500` and margin `7.5p` at positive price `p`; a decline crosses at `p = 200/3`,
 leaving equity 500 before exit costs, even if the bar later recovers.
 
+The report properties *Long margin calls* and *Short margin calls* name each side's rule:
+`Four times the shortfall at price points`, `Whole position at the margin crossing`, or `Off`
+when that side requires no funding. The tester shows the rule below each funding field.
+
 [`require_limit_cross`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.require_limit_cross) makes limit entries, triggered stop-limits and profit-taking exits wait until
 the price trades through the limit by one [`price_increment`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.price_increment). They then fill at the limit, or at
 the open of a bar that gaps to or beyond that threshold. An order that can first fill at a price
