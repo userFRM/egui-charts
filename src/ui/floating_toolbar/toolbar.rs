@@ -263,24 +263,20 @@ impl FloatingSelectionToolbar {
         self.set_user_edit_enabled(drawing.user_edit_enabled);
         let (editable, unprotected) = (drawing.accepts_user_edits(), drawing.user_edit_enabled);
         self.set_object_visible(drawing.visible);
-        // A sticker's art and the ghost feed's candles keep their own colours.
-        self.set_colors(
-            if matches!(
-                drawing.tool_type,
-                DrawingToolType::Sticker | DrawingToolType::GhostFeed
-            ) {
-                Vec::new()
-            } else {
-                vec![ColorSlot {
-                    label: if drawing.tool_type.is_text_annotation() {
-                        "Text color"
-                    } else {
-                        "Line color"
-                    },
-                    color: drawing.color32(),
-                }]
-            },
-        );
+        // Without a colour slot, the fill is the first slot.
+        let fill_slot = usize::from(drawing.tool_type.supports_color());
+        self.set_colors(if drawing.tool_type.supports_color() {
+            vec![ColorSlot {
+                label: if drawing.tool_type.is_text_annotation() {
+                    "Text color"
+                } else {
+                    "Line color"
+                },
+                color: drawing.color32(),
+            }]
+        } else {
+            Vec::new()
+        });
         if drawing.tool_type.supports_fill() {
             self.color_slots.push(ColorSlot {
                 label: "Fill color",
@@ -306,10 +302,10 @@ impl FloatingSelectionToolbar {
                 let down = ui.input(|i| i.pointer.any_down());
                 chart.user_action(|chart| {
                     let edit = |drawing: &mut crate::drawings::Drawing| {
-                        if slot == 0 {
-                            drawing.recolor(color.to_srgba_unmultiplied());
-                        } else {
+                        if slot == fill_slot {
                             drawing.fill_color = Some(color.to_srgba_unmultiplied());
+                        } else {
+                            drawing.recolor(color.to_srgba_unmultiplied());
                         }
                     };
                     let _ = if down {
@@ -807,8 +803,8 @@ mod tests {
             (Tool::TextLabel, Some("Text color"), (false, false)),
             (Tool::ArrowMarkUp, Some("Line color"), (false, false)),
             (Tool::ArrowMarker, Some("Line color"), (false, false)),
-            (Tool::Pitchfork, Some("Line color"), (true, false)),
-            (Tool::Tweet, Some("Text color"), (false, true)),
+            (Tool::Pitchfork, None, (true, false)),
+            (Tool::Tweet, Some("Fill color"), (false, true)),
             (Tool::Sticker, None, (false, false)),
             (Tool::GhostFeed, None, (false, false)),
         ] {
@@ -837,20 +833,26 @@ mod tests {
         }
     }
 
-    /// The colour slot recolours the whole badge of a price label: the border that shares the
-    /// colour follows it, where it would otherwise stay behind as an outline in the old colour.
+    /// The first colour slot edits what it names. A price label's border follows its colour;
+    /// a post card's first slot fills the card, leaving its unused colour alone.
     #[test]
-    fn colour_slot_recolours_a_price_label_with_its_border() {
+    fn first_colour_slot_edits_what_it_names() {
         use crate::drawings::{Drawing, DrawingToolType};
         use crate::ui_kit::color_picker::{MAIN_COLORS, tests::click};
-        for user_edit in [true, false] {
+        for (tool, user_edit) in [
+            (DrawingToolType::PriceLabel, true),
+            (DrawingToolType::PriceLabel, false),
+            (DrawingToolType::Tweet, true),
+        ] {
             let swatch = MAIN_COLORS[3];
             let ctx = egui::Context::default();
             ctx.global_style_mut(|style| style.animation_time = 0.0);
             let mut chart = Chart::new(crate::model::BarData::new());
-            let mut label = Drawing::new(7, DrawingToolType::PriceLabel);
+            let mut label = Drawing::new(7, tool);
             // A border kept in the label's colour, as an older save holds it.
-            label.border_color = Some(label.color);
+            if tool == DrawingToolType::PriceLabel {
+                label.border_color = Some(label.color);
+            }
             label.user_edit_enabled = user_edit;
             let original = label.color;
             label.completed = true;
@@ -895,7 +897,11 @@ mod tests {
             } else {
                 original
             };
-            assert_eq!((label.color, label.border_color), (green, Some(green)));
+            if tool == DrawingToolType::Tweet {
+                assert_eq!((label.color, label.fill_color), (original, Some(green)));
+            } else {
+                assert_eq!((label.color, label.border_color), (green, Some(green)));
+            }
         }
     }
 

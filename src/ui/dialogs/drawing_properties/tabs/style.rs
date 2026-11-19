@@ -71,13 +71,8 @@ impl StyleTab {
                     ],
                 );
             }
-            // A sticker's art and the ghost feed's candles keep their own colours.
-            if tool != Some(DrawingToolType::FibonacciChannel)
+            if tool.is_none_or(|tool| tool.supports_color())
                 && tool != Some(DrawingToolType::PriceLabel)
-                && !matches!(
-                    tool,
-                    Some(DrawingToolType::Sticker | DrawingToolType::GhostFeed)
-                )
                 && !position
                 && !regression
                 && !projection
