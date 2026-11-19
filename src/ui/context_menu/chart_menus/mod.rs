@@ -623,6 +623,7 @@ impl ChartMenus {
                             | MenuRowId::DrawHorizontalLine
                             | MenuRowId::LimitOrder
                             | MenuRowId::StopOrder
+                            | MenuRowId::StopLimitOrder
                     )
                 )
             });

@@ -113,6 +113,7 @@ impl ContextMenuAction {
             Self::Order(order) => match order.order_type {
                 OrderType::Limit(_) => MenuRowId::LimitOrder,
                 OrderType::Stop(_) => MenuRowId::StopOrder,
+                OrderType::StopLimit { .. } => MenuRowId::StopLimitOrder,
                 _ => return None,
             },
             Self::ObjectTree => MenuRowId::ObjectTree,
