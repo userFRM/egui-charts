@@ -246,7 +246,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(ElliottWave::new(l(0), l(1), l(2))),
         Box::new(RisingWedge::new(l(0), l(1), l(2), l(3), l(4), l(5))),
         Box::new(FallingWedge::new(l(0), l(1), l(2), l(3), l(4), l(5))),
-        Box::new(KnoxvilleDivergence::new(l(0), l(1), l(2), l(3), l(4))),
+        Box::new(KnoxvilleDivergence::new(l(0), l(1), l(2))),
         Box::new(AdxBreakout::new(l(0), l(1), l(2))),
         Box::new(PriceChannel::new(l(0))),
         Box::new(LinearRegression::new(l(0))),
