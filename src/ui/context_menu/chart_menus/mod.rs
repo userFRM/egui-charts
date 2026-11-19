@@ -1,5 +1,10 @@
 use super::OrderFormatter;
-use super::{ChartContextMenu, ContextMenuAction, MenuEntry, MenuItem, POINTER_GAP, show_menu};
+use super::drawing::DrawingContextMenuAction;
+use super::series::SeriesContextMenuAction;
+use super::{
+    ChartContextMenu, ContextMenuAction, MenuEntry, MenuItem, MenuRow, MenuRowId, POINTER_GAP,
+    rows, show_menu,
+};
 use crate::chart::selection::{ChartElementId, SeriesId};
 use crate::icons::Icon;
 use crate::model::Capabilities;
@@ -16,23 +21,54 @@ use crate::widget::{Chart, RightClickTarget};
 use egui::{Context, Id};
 use std::sync::Arc;
 
+/// The chart menu a [`HostMenuContext`] belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ChartMenuKind {
+    /// The menu of the chart background.
+    Chart,
+    /// The menu of a bar series.
+    Series,
+    /// The menu of a study, opened from its plot or its legend row.
+    Study,
+    /// The menu of a drawing.
+    Drawing,
+    /// The menu of a price axis.
+    PriceAxis {
+        /// The pane of the axis.
+        pane: crate::widget::PaneId,
+        /// The axis within the pane, as [`Chart::pane_scales`] lists it.
+        axis: crate::widget::PaneScale,
+    },
+    /// The menu of the time axis.
+    TimeAxis,
+}
+
 /// The original click retained while a host menu action is being chosen.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct HostMenuContext {
     /// Background, series, study or drawing that was clicked, including its screen position.
+    /// A click on an axis reads as `Background` at the click.
     pub target: RightClickTarget,
-    /// UTC time of the nearest displayed bar or element; `None` outside loaded data.
+    /// UTC time of the nearest displayed bar or element; `None` outside loaded data and on a
+    /// price axis.
     pub time: Option<chrono::DateTime<chrono::Utc>>,
-    /// Value at the click, using the clicked pane's scale for drawings.
+    /// Value at the click, using the clicked pane's scale for drawings. On a price axis, the value
+    /// at the click height on the price scale of the pane's first series or study, which in the
+    /// main series' pane is the main series' scale; `NaN` on the time axis and where the pane
+    /// reads no value.
     pub price: f64,
+    /// The menu the click opened.
+    pub menu: ChartMenuKind,
 }
 
 impl HostMenuContext {
     /// A click on `target` at `price`, near the bar or element at `time` if there is one.
+    /// `menu` is the menu a click on `target` opens.
     ///
     /// ```
-    /// use egui_charts::ui::context_menu::HostMenuContext;
+    /// use egui_charts::ui::context_menu::{ChartMenuKind, HostMenuContext};
     /// use egui_charts::widget::RightClickTarget;
     ///
     /// let target = RightClickTarget::Background {
@@ -41,6 +77,7 @@ impl HostMenuContext {
     /// };
     /// let context = HostMenuContext::new(target, None, 100.0);
     /// assert_eq!(context.price, 100.0);
+    /// assert_eq!(context.menu, ChartMenuKind::Chart);
     /// ```
     pub fn new(
         target: RightClickTarget,
@@ -51,11 +88,21 @@ impl HostMenuContext {
             target,
             time,
             price,
+            menu: match target {
+                RightClickTarget::Element {
+                    id: ChartElementId::Indicator(_),
+                    ..
+                } => ChartMenuKind::Study,
+                RightClickTarget::Element { .. } => ChartMenuKind::Series,
+                RightClickTarget::Drawing { .. } => ChartMenuKind::Drawing,
+                RightClickTarget::Background { .. } => ChartMenuKind::Chart,
+            },
         }
     }
 }
 
-/// A host row appended to the chart, series and drawing menus in registration order.
+/// A host row appended to the chart, series, study and drawing menus in registration order;
+/// [`ChartMenus::set_menu_rows`] can move it.
 ///
 /// Use [`Self::when`] to restrict a row to particular click targets. Host ids must be unique
 /// within one [`ChartMenus`]. The host owns any services invoked by the returned action.
@@ -80,7 +127,7 @@ impl std::fmt::Debug for HostMenuEntry {
 }
 
 impl HostMenuEntry {
-    /// Create a row visible for every chart, series and drawing click.
+    /// Create a row visible for every chart, series, study and drawing click.
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -106,10 +153,9 @@ impl HostMenuEntry {
 /// A context-menu action surfaced by the turnkey right-click path, tagged with
 /// the menu it came from.
 ///
-/// The chart opens one of three menus depending on what the right-click landed
-/// on (background, a series/indicator, or a drawing); each menu has its own
-/// action enum. [`ChartMenus::show`] returns this unified value so a host can match a single
-/// type.
+/// The chart opens the menu of the background, series, study, drawing or axis at the click.
+/// [`ChartMenus::show`] returns the chosen action as this unified value so a host can match a
+/// single type.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum ChartContextAction {
@@ -127,9 +173,10 @@ pub enum ChartContextAction {
         /// Its new saved axis layout.
         options: crate::model::PaneAxisOptions,
     },
-    /// A registered host entry, with the original click context.
+    /// A registered host entry or a host row of [`ChartMenus::set_menu_rows`], with the original
+    /// click context.
     Host {
-        /// The registered entry id.
+        /// The entry id, or the action of the host row's [`MenuItem`].
         id: String,
         /// The click that opened the menu, retained even if the pointer or chart moves.
         context: HostMenuContext,
@@ -149,7 +196,7 @@ pub enum ChartContextAction {
     Drawing(crate::ui::dialogs::DrawingContextMenuAction),
 }
 
-/// The chart, series and drawing context menus of one [`Chart`].
+/// The chart, series, study, drawing and axis menus of one [`Chart`].
 ///
 /// Keep one next to the chart and call [`show`](Self::show) after each
 /// [`Chart::show`]: a right-click on the chart opens the menu for what it landed on, and the
@@ -173,8 +220,10 @@ pub struct ChartMenus {
     axes: crate::ui::context_menu::axis::AxisMenus,
     tpo: Option<TpoMenu>,
     trade_profile: Option<TradeProfileMenu>,
-    /// Host rows in display order. Empty by default.
+    /// Host rows in display order, after the built-in rows of the chart, series, study and
+    /// drawing menus. Empty by default.
     pub host_entries: Vec<HostMenuEntry>,
+    menu_rows: Option<rows::MenuRows>,
     context: Option<HostMenuContext>,
     context_pane: Option<crate::widget::PaneId>,
     just_opened: bool,
@@ -233,6 +282,40 @@ impl ChartMenus {
     /// names the menu has no such entry.
     pub fn set_watchlists(&mut self, names: impl IntoIterator<Item = impl Into<String>>) {
         self.chart.watchlists = names.into_iter().map(Into::into).collect();
+    }
+
+    /// Lets the host place, reorder and leave out the rows of every chart menu: the chart, series,
+    /// study and drawing menus and the price and time axis menus.
+    ///
+    /// On every frame a menu is open, `rows` receives the original click, whose
+    /// [`menu`](HostMenuContext::menu) names the menu, and the menu's rows after
+    /// [`set_control_visible`](Self::set_control_visible) and [`host_entries`](Self::host_entries),
+    /// and returns the rows to show. A [`MenuRow::BuiltIn`] row does what it does without this hook;
+    /// an id that is not a row of this menu, such as a submenu's id or a row of another menu, and a
+    /// second copy of a row are left out. A [`MenuRow::Host`] row returns
+    /// [`ChartContextAction::Host`]. Separators at either end or next to another separator and
+    /// submenus without rows are left out, and a menu without rows does not open. The price actions
+    /// menu of the pointer button keeps its rows. Return the same rows for the same click, so that an
+    /// open submenu stays open.
+    ///
+    /// ```
+    /// use egui_charts::ui::context_menu::{ChartMenuKind, ChartMenus, MenuItem, MenuRow, MenuRowId};
+    /// let mut menus = ChartMenus::default();
+    /// menus.set_menu_rows(|click, mut rows| {
+    ///     if click.menu == ChartMenuKind::Chart {
+    ///         rows.retain(|row| row.id() != Some(MenuRowId::ViewDataTable));
+    ///         let settings = rows.iter().position(|row| row.id() == Some(MenuRowId::ChartSettings));
+    ///         let ticket = MenuItem::new("Send to ticket", "ticket".to_owned());
+    ///         rows.insert(settings.unwrap_or(rows.len()), MenuRow::Host(ticket));
+    ///     }
+    ///     rows
+    /// });
+    /// ```
+    pub fn set_menu_rows(
+        &mut self,
+        rows: impl Fn(&HostMenuContext, Vec<MenuRow>) -> Vec<MenuRow> + 'static,
+    ) {
+        self.menu_rows = Some(rows::MenuRows(Box::new(rows)));
     }
 
     /// While Alt and the command modifier are held, shows a button at the pointer and returns the
@@ -319,11 +402,7 @@ impl ChartMenus {
             };
             self.context_pane = chart.pointer_price(pos).map(|(pane, _)| pane);
             let mapping = chart.get_chart_mapping();
-            let index = mapping.x_to_idx_f64(pos.x).round();
-            let time = (index >= 0.0)
-                .then(|| chart.state().shown().get(index as usize))
-                .flatten()
-                .map(|bar| bar.time);
+            let time = bar_time_at(chart, pos.x);
             let price = match target {
                 RightClickTarget::Element { price, .. }
                 | RightClickTarget::Background { price, .. } => price,
@@ -336,11 +415,7 @@ impl ChartMenus {
                         |pane| pane.mapping.y_to_price(pos.y),
                     ),
             };
-            self.context = Some(HostMenuContext {
-                target,
-                time,
-                price,
-            });
+            self.context = Some(HostMenuContext::new(target, time, price));
             self.tpo = match target {
                 RightClickTarget::Background { .. }
                 | RightClickTarget::Element {
@@ -478,7 +553,8 @@ impl ChartMenus {
                 self.drawing.close();
             }
         }
-        let axis_action = chart.user_action(|chart| self.axes.show(ctx, chart));
+        let axis_action =
+            chart.user_action(|chart| self.axes.show(ctx, chart, self.menu_rows.as_ref()));
         chart.menu_open = self.chart.is_open()
             || self.series.is_open()
             || self.study.is_open()
@@ -486,7 +562,7 @@ impl ChartMenus {
             || self.axes.is_open();
 
         // At most one menu is open at a time, so at most one action resolves.
-        axis_action.map(ChartContextAction::Chart).or(menu_action)
+        axis_action.or(menu_action)
     }
 
     fn build_menu_items(
@@ -507,78 +583,99 @@ impl ChartMenus {
                 .format_menu_price(pos, price)
                 .unwrap_or_else(|| super::format_price(price))
         };
-        fn tagged<A>(
-            entries: Vec<MenuEntry<A>>,
-            tag: impl Fn(A) -> ChartContextAction,
-        ) -> Vec<MenuEntry<ChartContextAction>> {
-            entries.into_iter().map(|entry| entry.map(&tag)).collect()
-        }
-        let mut entries = match context.target {
-            RightClickTarget::Background { .. } => tagged(
+        let mut store = Vec::new();
+        let mut rows = match context.target {
+            RightClickTarget::Background { .. } => rows::split(
                 self.chart.build_menu_items(ctx, shortcuts, &price_text),
-                ChartContextAction::Chart,
+                &ContextMenuAction::row_id,
+                &ChartContextAction::Chart,
+                &mut store,
             ),
             RightClickTarget::Element {
                 id: ChartElementId::Indicator(id),
                 ..
-            } => tagged(self.study.build_menu_items(ctx, shortcuts), |action| {
-                ChartContextAction::Study { id, action }
-            }),
-            RightClickTarget::Element { .. } => tagged(
-                self.series.build_menu_items(ctx, shortcuts, &price_text),
-                ChartContextAction::Series,
+            } => rows::split(
+                self.study.build_menu_items(ctx, shortcuts),
+                &|action| self.study.row_id(action),
+                &|action| ChartContextAction::Study { id, action },
+                &mut store,
             ),
-            RightClickTarget::Drawing { .. } => tagged(
+            RightClickTarget::Element { .. } => rows::split(
+                self.series.build_menu_items(ctx, shortcuts, &price_text),
+                &SeriesContextMenuAction::row_id,
+                &ChartContextAction::Series,
+                &mut store,
+            ),
+            RightClickTarget::Drawing { .. } => rows::split(
                 self.drawing.build_menu_items(ctx, shortcuts),
-                ChartContextAction::Drawing,
+                &DrawingContextMenuAction::row_id,
+                &ChartContextAction::Drawing,
+                &mut store,
             ),
         };
+        let host = |id| ChartContextAction::Host { id, context };
         if self.price_menu {
-            entries.retain(|entry| {
-                matches!(entry,
-                MenuEntry::Item(item) if matches!(item.action,
-                    ChartContextAction::Chart(ContextMenuAction::AddAlert { .. }
-                        | ContextMenuAction::DrawHorizontalLine(_)
-                        | ContextMenuAction::Order(_))))
+            rows.retain(|row| {
+                matches!(
+                    row,
+                    MenuRow::BuiltIn(
+                        MenuRowId::AddAlert
+                            | MenuRowId::DrawHorizontalLine
+                            | MenuRowId::LimitOrder
+                            | MenuRowId::StopOrder
+                    )
+                )
             });
-            return entries;
+            return rows::join(rows, &mut store, &host);
         }
         if let Some((pane, options)) = self.pane_axes
             && matches!(context.target, RightClickTarget::Background { .. })
         {
-            entries.push(MenuEntry::Submenu {
+            rows.push(MenuRow::Submenu {
+                id: Some(MenuRowId::PaneAxes),
                 label: "Pane axes".into(),
                 icon: None,
-                entries: super::axis::layout_entries(options)
-                    .into_iter()
-                    .map(|entry| {
-                        entry.map(&|action| match action {
-                            super::axis::LayoutAction::Options(options) => {
-                                ChartContextAction::PaneAxes { pane, options }
-                            }
-                            super::axis::LayoutAction::Merge(side) => {
-                                ChartContextAction::MergePaneAxes { pane, side }
-                            }
-                        })
-                    })
-                    .collect(),
+                rows: rows::split(
+                    super::axis::layout_entries(options),
+                    &|action| Some(action.row_id()),
+                    &|action| match action {
+                        super::axis::LayoutAction::Side(_, options)
+                        | super::axis::LayoutAction::HideUnused(options) => {
+                            ChartContextAction::PaneAxes { pane, options }
+                        }
+                        super::axis::LayoutAction::Merge(side) => {
+                            ChartContextAction::MergePaneAxes { pane, side }
+                        }
+                    },
+                    &mut store,
+                ),
             });
         }
         if let Some(tpo) = &self.tpo {
-            let mut profile = tagged(tpo.entries(), ChartContextAction::Chart);
-            if !entries.is_empty() {
-                profile.push(MenuEntry::Separator);
+            let mut profile = rows::split(
+                tpo.entries(),
+                &ContextMenuAction::row_id,
+                &ChartContextAction::Chart,
+                &mut store,
+            );
+            if !rows.is_empty() {
+                profile.push(MenuRow::Separator);
             }
-            profile.extend(entries);
-            entries = profile;
+            profile.extend(rows);
+            rows = profile;
         }
         if let Some(profile) = &self.trade_profile {
-            let mut profile = tagged(profile.entries(), ChartContextAction::Chart);
-            if !entries.is_empty() {
-                profile.push(MenuEntry::Separator);
+            let mut profile = rows::split(
+                profile.entries(),
+                &ContextMenuAction::row_id,
+                &ChartContextAction::Chart,
+                &mut store,
+            );
+            if !rows.is_empty() {
+                profile.push(MenuRow::Separator);
             }
-            profile.extend(entries);
-            entries = profile;
+            profile.extend(rows);
+            rows = profile;
         }
         let mut separated = false;
         for entry in &self.host_entries {
@@ -586,23 +683,30 @@ impl ChartMenus {
                 continue;
             }
             if !separated {
-                if !entries.is_empty() {
-                    entries.push(MenuEntry::Separator);
+                if !rows.is_empty() {
+                    rows.push(MenuRow::Separator);
                 }
                 separated = true;
             }
-            let mut item = MenuItem::new(
-                &entry.label,
-                ChartContextAction::Host {
-                    id: entry.id.clone(),
-                    context,
-                },
-            );
+            let mut item = MenuItem::new(&entry.label, entry.id.clone());
             item.icon = entry.icon;
-            entries.push(MenuEntry::Item(item));
+            rows.push(MenuRow::Host(item));
         }
-        entries
+        let rows = match &self.menu_rows {
+            Some(hook) => (hook.0)(&context, rows),
+            None => rows,
+        };
+        rows::join(rows, &mut store, &host)
     }
+}
+
+/// UTC time of the displayed bar nearest to screen `x`; `None` outside the loaded bars.
+pub(super) fn bar_time_at(chart: &Chart, x: f32) -> Option<chrono::DateTime<chrono::Utc>> {
+    let index = chart.get_chart_mapping().x_to_idx_f64(x).round();
+    (index >= 0.0)
+        .then(|| chart.state().shown().get(index as usize))
+        .flatten()
+        .map(|bar| bar.time)
 }
 
 #[cfg(test)]

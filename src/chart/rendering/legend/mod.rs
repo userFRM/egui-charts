@@ -733,7 +733,10 @@ impl<'a> Legend<'a> {
                             self.instrument
                                 .and_then(|instrument| instrument.volume_decimals)
                                 .map_or_else(
-                                    || format_volume(self.bar.volume),
+                                    || {
+                                        crate::scales::StudyFormat::Volume
+                                            .format(self.bar.volume, None)
+                                    },
                                     |decimals| {
                                         crate::scales::PriceFormatter::format(
                                             &crate::scales::VolumeFormatter {
@@ -1271,15 +1274,6 @@ impl<'a> Layout<'a> {
             );
         }
     }
-}
-
-fn format_volume(volume: f64) -> String {
-    for (divisor, suffix) in [(1_000_000_000.0, "B"), (1_000_000.0, "M"), (1_000.0, "K")] {
-        if volume.abs() >= divisor {
-            return format!("{:.2}{suffix}", volume / divisor);
-        }
-    }
-    format!("{volume:.0}")
 }
 
 #[cfg(test)]

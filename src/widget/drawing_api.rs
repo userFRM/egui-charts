@@ -612,8 +612,7 @@ impl Chart {
             .count();
         self.drawings.delete_drawings(ids);
         if kept > 0 {
-            self.host_events
-                .push(super::ChartEvent::LockedDrawingsKept(kept));
+            self.push_event(super::ChartEvent::LockedDrawingsKept(kept));
         }
     }
 
@@ -727,13 +726,19 @@ impl Chart {
                 if !price.is_finite() {
                     return Err(DrawingError::NonFinitePrice { point });
                 }
-                Ok(self.drawing_point_at(time, price).unwrap_or_else(|| {
-                    let mut point = ChartPoint::new(0.0, price);
-                    point.time_anchor = Some((time, 0.0));
-                    point
-                }))
+                Ok(self.anchor_at_time(time, price))
             })
             .collect()
+    }
+
+    /// The anchor at `time` and the finite `price`, also before the loaded history or without
+    /// bars, where it keeps `time` until the bars arrive.
+    pub(super) fn anchor_at_time(&self, time: DateTime<Utc>, price: f64) -> ChartPoint {
+        self.drawing_point_at(time, price).unwrap_or_else(|| {
+            let mut point = ChartPoint::new(0.0, price);
+            point.time_anchor = Some((time, 0.0));
+            point
+        })
     }
 }
 
@@ -1300,7 +1305,10 @@ mod tests {
         chart.set_regression_trend_config(7, edited).unwrap();
         assert_eq!(chart.drawings().drawings[0].regression_trend, Some(edited));
         assert!(chart.undo());
-        assert_eq!(chart.drawings().drawings[0].regression_trend, None);
+        assert_eq!(
+            chart.drawings().drawings[0].regression_trend,
+            Some(RegressionTrendConfig::drawing_default())
+        );
         assert!(!chart.can_undo());
         assert!(chart.redo());
         // An unchanged assignment does not create a second history entry.

@@ -745,8 +745,6 @@ impl Chart {
             link.instrument = None;
         }
         if symbol != self.symbol {
-            self.host_events
-                .push(super::ChartEvent::SymbolChanged(symbol.clone()));
             #[cfg(feature = "drawings")]
             self.anchor_drawing_points();
             #[cfg(feature = "drawings")]
@@ -769,6 +767,9 @@ impl Chart {
                 next.0.eraser_mode = self.drawings.eraser_mode;
                 next.0.set_hidden(self.drawings.is_hidden());
                 next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
+                self.flush_drawing_events();
+                next.0.events.clear();
+                next.0.events_dropped = 0;
                 std::mem::swap(&mut self.drawings, &mut next.0);
                 std::mem::swap(&mut self.marks, &mut next.1);
                 self.attach_pending_drawings();
@@ -792,6 +793,7 @@ impl Chart {
                     self.symbol_markers.insert(self.symbol.clone(), next_marks);
                 }
             }
+            self.push_event(super::ChartEvent::SymbolChanged(symbol.clone()));
             if !keep_history {
                 self.history.clear();
             }
@@ -856,8 +858,7 @@ impl Chart {
     pub fn set_timeframe(&mut self, timeframe: Timeframe) {
         if self.timeframe != Some(timeframe) {
             self.clear_source_signals();
-            self.host_events
-                .push(super::ChartEvent::TimeframeChanged(timeframe));
+            self.push_event(super::ChartEvent::TimeframeChanged(timeframe));
             self.bar_close_time = None;
         }
         if self.timeframe != Some(timeframe)
@@ -965,6 +966,8 @@ impl Chart {
 
     /// Reloads the current feed key on the next frame, retaining drawings and chart history.
     /// Use after changing host-side feed settings or to retry a permanent request failure.
+    /// A feed asks for the same reload of the chart's series through
+    /// [`Sink::reload_history`](crate::data::Sink::reload_history).
     pub fn reload_feed(&mut self) {
         self.study_data.clear_feed();
         if let Some(link) = &mut self.feed_link {

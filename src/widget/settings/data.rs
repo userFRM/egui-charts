@@ -436,8 +436,11 @@ pub struct ScalesAndLinesSettings {
     /// Whether to draw the bid and ask lines, apart from their tags. `None` keeps the chart's
     /// choice, as do settings saved without this field.
     pub show_bid_ask_lines: Option<bool>,
-    /// Whether to show high low.
+    /// Whether to show the high and low tags.
     pub show_high_low: bool,
+    /// Whether to draw the high and low lines, apart from their tags. `None` keeps the chart's
+    /// choice, as do settings saved without this field.
+    pub show_high_low_lines: Option<bool>,
     /// Whether to show prev close.
     pub show_prev_close: bool,
     /// Colour, width and pattern of the previous close line. `None` keeps the chart's, as do
@@ -485,6 +488,7 @@ impl Default for ScalesAndLinesSettings {
             show_bid_ask: false,
             show_bid_ask_lines: None,
             show_high_low: false,
+            show_high_low_lines: None,
             show_prev_close: false,
             prev_close_line: None,
         }
@@ -571,10 +575,12 @@ impl Default for TradingSettings {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum TradingNotifications {
-    /// Fills, partial fills, rejections and refused orders.
+    /// Everything Errors shows, and fills, partial fills, placed orders, orders the broker
+    /// cancelled and a broker that is live again.
     #[default]
     All,
-    /// Rejections and refused orders only.
+    /// Rejected orders, refused orders, cancellations and changes, and a broker that stops
+    /// being live.
     Errors,
     /// None.
     Off,
@@ -738,6 +744,11 @@ pub struct ChartSettingsState {
     pub chart_basic_styles: ChartBasicStylesSettings,
     /// Grid directions and colors.
     pub grid_lines: GridLinesSettings,
+    /// Colour of the separators between panes, applied to
+    /// [`PaneOptions::separator_color`](crate::widget::PaneOptions::separator_color). `None`
+    /// follows the theme's grid line colour, as do settings saved without this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_separator_color: Option<Color32>,
     /// Crosshair line appearance.
     pub crosshair: CrosshairSettings,
     /// Watermark appearance.
@@ -811,6 +822,7 @@ impl Default for ChartSettingsState {
 
             chart_basic_styles: chart_basic_styles.clone(),
             grid_lines: grid_lines.clone(),
+            pane_separator_color: None,
             crosshair: CrosshairSettings::default(),
             watermark: WatermarkSettings::default(),
             scales_appearance: ScalesAppearanceSettings::default(),

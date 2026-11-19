@@ -34,6 +34,18 @@ pub struct MenuItem<A = ContextMenuAction> {
 }
 
 impl<A> MenuItem<A> {
+    /// The same row with its action passed through `tag`.
+    pub(crate) fn map<B>(self, tag: impl FnOnce(A) -> B) -> MenuItem<B> {
+        MenuItem {
+            label: self.label,
+            shortcut: self.shortcut,
+            icon: self.icon,
+            action: tag(self.action),
+            enabled: self.enabled,
+            danger: self.danger,
+        }
+    }
+
     /// Create an enabled menu entry with a label and the action it returns.
     pub fn new(label: impl Into<String>, action: A) -> Self {
         Self {
@@ -76,6 +88,8 @@ pub(crate) enum MenuEntry<A> {
     Item(MenuItem<A>),
     /// A row that opens its entries beside the menu while it is hovered, or once clicked.
     Submenu {
+        /// The built-in submenu this is; `None` for a host submenu.
+        id: Option<super::MenuRowId>,
         label: String,
         icon: Option<&'static Icon>,
         entries: Vec<MenuEntry<A>>,
@@ -87,19 +101,14 @@ impl<A> MenuEntry<A> {
     /// The same entry with every action passed through `tag`.
     pub(crate) fn map<B>(self, tag: &impl Fn(A) -> B) -> MenuEntry<B> {
         match self {
-            Self::Item(item) => MenuEntry::Item(MenuItem {
-                label: item.label,
-                shortcut: item.shortcut,
-                icon: item.icon,
-                action: tag(item.action),
-                enabled: item.enabled,
-                danger: item.danger,
-            }),
+            Self::Item(item) => MenuEntry::Item(item.map(tag)),
             Self::Submenu {
+                id,
                 label,
                 icon,
                 entries,
             } => MenuEntry::Submenu {
+                id,
                 label,
                 icon,
                 entries: entries.into_iter().map(|entry| entry.map(tag)).collect(),
