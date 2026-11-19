@@ -52,6 +52,7 @@ impl SinkReader {
             quote: updates.quote,
             status: updates.status,
             error: updates.error,
+            reload: updates.reload,
         }
     }
 }
@@ -77,9 +78,11 @@ pub struct SinkUpdates {
     pub quote: Option<Level1Quote>,
     /// The latest connection status.
     pub status: Option<FeedStatus>,
-    /// The latest stream error: one the feed reported, a rejected quote, or bars dropped over
-    /// the limit of 100,000 pending slots.
+    /// The latest stream error: one the feed reported or a rejected quote.
     pub error: Option<FeedError>,
+    /// Whether the feed asked to load its history again through [`Sink::reload_history`], or
+    /// bars exceeded the limit of 100,000 pending slots, which asks for the same reload.
+    pub reload: bool,
 }
 
 /// A [`Reply`] outside a chart and its answer, to call a service's request method, such as in

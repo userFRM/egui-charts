@@ -41,6 +41,53 @@ impl Chart {
             .min_by_key(|tf| (tf.duration_ms() - median).abs())
             .unwrap_or_default()
     }
+
+    /// The calendar that divides the bars into profiles of the hours `selection` picks, and the
+    /// choice that then keeps only the bars of those hours
+    /// ([`ProfileSession::profiled`](crate::model::ProfileSession::profiled)): `selection` on
+    /// intraday bars, and [`ProfileSession::Chart`](crate::model::ProfileSession::Chart) on daily
+    /// and longer bars, which carry a trading date rather than a time of day. Regular and
+    /// extended hours still divide daily bars by their trading dates. The other choices on daily
+    /// bars, and a choice without the instrument hours it reads, keep the chart's calendar, in
+    /// the instrument's zone when it has no hours.
+    pub(in crate::widget) fn profile_hours<'a>(
+        &self,
+        selection: &'a crate::model::ProfileSession,
+    ) -> (crate::model::BarClock, &'a crate::model::ProfileSession) {
+        use crate::model::{ProfileSession, Timeframe, TimezoneId};
+        let mut clock = self.bar_clock();
+        let instrument = self.instrument();
+        // Daily and longer bars carry a trading date rather than a time of day to divide or re-zone.
+        let intraday =
+            self.timeframe.unwrap_or_default().duration_ms() < Timeframe::Day1.duration_ms();
+        let zone = instrument
+            .and_then(|i| i.time_zone.clone())
+            .unwrap_or_else(TimezoneId::utc);
+        let hours = instrument.and_then(|i| i.session.as_ref());
+        let by_time_of_day = !matches!(
+            selection,
+            ProfileSession::Regular | ProfileSession::Extended
+        );
+        if (intraday || !by_time_of_day)
+            && let Some(divided) = selection.session_clock(&clock, &zone, hours)
+        {
+            // Daily and longer bars keep every bar of their trading dates.
+            let kept = if intraday {
+                selection
+            } else {
+                &ProfileSession::Chart
+            };
+            return (divided, kept);
+        }
+        // Without instrument hours there is nothing to select among, so the chart's calendar stays.
+        if let Some(zone) = instrument
+            .filter(|i| i.session.is_none())
+            .and_then(|i| i.time_zone.as_ref())
+        {
+            clock = clock.with_timezone(zone.clone());
+        }
+        (clock, &ProfileSession::Chart)
+    }
 }
 
 /// The sessions of `clock` that the bars `shown` of `bars` belong to, each from the open of its
