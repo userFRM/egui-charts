@@ -2835,7 +2835,7 @@ impl Chart {
             let line = chart_line(
                 &self.config.prev_close_line,
                 previous_close,
-                ui.active_theme().ui.text_secondary,
+                crate::config::ChartConfig::prev_close_fallback(&ui.active_theme()),
                 self.config.show_prev_close_line,
             );
             rendering::render_price_line(
@@ -3776,7 +3776,9 @@ impl Chart {
                     continue;
                 }
                 let mut labels = Vec::new();
-                if let Some(poc) = profile.volume.poc() {
+                if self.trade_profile_settings().poc
+                    && let Some(poc) = profile.volume.poc()
+                {
                     labels.push(("POC", poc as f64 * step));
                 }
                 if let Some((low, high)) = self

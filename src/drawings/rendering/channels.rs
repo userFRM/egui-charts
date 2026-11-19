@@ -437,7 +437,7 @@ pub(super) fn offset_onto(p1: Pos2, p2: Pos2, p3: Pos2) -> egui::Vec2 {
 }
 
 /// Draws `line` with `stroke` in `style`.
-fn patterned_segment(
+pub(super) fn patterned_segment(
     painter: &egui::Painter,
     line: [Pos2; 2],
     stroke: Stroke,
