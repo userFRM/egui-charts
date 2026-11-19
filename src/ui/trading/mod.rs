@@ -95,6 +95,8 @@ pub struct Trading {
     pending: Option<TradingLineAction>,
     /// The position to protect, with the take profit and stop loss entered so far.
     protecting: Option<(Position, Option<f64>, Option<f64>)>,
+    /// The quantity in a pending Close dialog; each new confirmation resets it.
+    close_quantity: Option<f64>,
     /// An order the user asked the broker to preview, until it is placed or discarded.
     preview: Option<Preview>,
     /// Decimals of the chart's prices at the last [`show`](Self::show), in which
@@ -149,6 +151,7 @@ impl std::fmt::Debug for Trading {
             .field("rules_failed", &self.rules_failed)
             .field("placing", &self.placing)
             .field("pending", &self.pending)
+            .field("close_quantity", &self.close_quantity)
             .field("decimals", &self.decimals)
             .field("instruments", &self.instruments)
             .field("chart_logo", &self.chart_logo)
@@ -206,6 +209,7 @@ impl Default for Trading {
             ticket: OrderTicket::default(),
             pending: None,
             protecting: None,
+            close_quantity: None,
             preview: None,
             decimals: 2,
             instruments: HashMap::new(),
@@ -539,6 +543,7 @@ mod tests {
     pub(super) struct Recorder {
         pub(super) state: Vec<AccountEvent>,
         pub(super) brackets: bool,
+        pub(super) partial_close: bool,
         pub(super) placed: Mutex<Vec<OrderRequest>>,
         pub(super) cancelled: Mutex<Vec<OrderId>>,
         pub(super) modified: Mutex<Vec<(OrderId, OrderRequest)>>,
@@ -558,6 +563,7 @@ mod tests {
                 reverse: true,
                 preview: true,
                 brackets: self.brackets,
+                partial_close: self.partial_close,
                 take_profit_level_stops: self.brackets,
                 ..Capabilities::default()
             };
