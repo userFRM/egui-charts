@@ -1299,6 +1299,14 @@ mod tests {
             assert_eq!(chart.chart_type_params(), &ChartTypeParams::default());
             assert!(chart.redo());
             assert_eq!(chart.chart_type_params(), &params);
+            let layout = crate::widget::SavedLayout::new(
+                crate::widget::ChartLayoutMode::Single,
+                vec![chart.snapshot().unwrap()],
+            );
+            let saved = crate::widget::SavedLayout::from_json(&layout.to_json().unwrap()).unwrap();
+            let mut restored = crate::widget::Chart::new(crate::model::BarData::new());
+            restored.restore(&saved.charts[0]).unwrap();
+            assert_eq!(restored.chart_type_params(), &params);
         }
         let legacy: ChartTypeParams = serde_json::from_str(r#"{"tpo_row_ticks":2}"#).unwrap();
         let legacy = serde_json::to_value(legacy).unwrap();
