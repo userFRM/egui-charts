@@ -28,6 +28,7 @@ enum Action {
     BidAsk,
     BidAskLines,
     HighLow,
+    HighLowLines,
     Timezone(TimezoneMode),
     ExtendedHours,
     OvernightHours,
@@ -59,6 +60,7 @@ impl Action {
             Self::BidAsk => MenuRowId::BidAndAsk,
             Self::BidAskLines => MenuRowId::BidAndAskLines,
             Self::HighLow => MenuRowId::HighAndLow,
+            Self::HighLowLines => MenuRowId::HighAndLowLines,
             Self::Timezone(zone) => match zone {
                 TimezoneMode::Utc => MenuRowId::Utc,
                 TimezoneMode::Local => MenuRowId::LocalTime,
@@ -285,7 +287,12 @@ impl AxisMenus {
                     Action::BidAskLines,
                     config.show_bid_ask_lines.unwrap_or(config.show_bid_ask),
                 ),
-                row("High and low", Action::HighLow, config.show_high_low),
+                row("High and low labels", Action::HighLow, config.show_high_low),
+                row(
+                    "High and low lines",
+                    Action::HighLowLines,
+                    config.show_high_low_lines.unwrap_or(config.show_high_low),
+                ),
                 MenuEntry::Separator,
                 row("Scale settings…", Action::Settings, false),
                 MenuEntry::Separator,
@@ -303,6 +310,7 @@ impl AxisMenus {
                             | Action::BidAsk
                             | Action::BidAskLines
                             | Action::HighLow
+                            | Action::HighLowLines
                     ),
                     MenuEntry::Submenu { .. } | MenuEntry::Separator => true,
                 });
@@ -473,9 +481,20 @@ impl AxisMenus {
                 Action::Countdown => {
                     chart.config_mut().show_countdown = !chart.config().show_countdown
                 }
-                Action::BidAsk => toggle_bid_ask(chart.config_mut(), false),
-                Action::BidAskLines => toggle_bid_ask(chart.config_mut(), true),
-                Action::HighLow => chart.config_mut().show_high_low = !chart.config().show_high_low,
+                Action::BidAsk | Action::BidAskLines | Action::HighLow | Action::HighLowLines => {
+                    let config = chart.config_mut();
+                    let (tags, lines) = match action {
+                        Action::BidAsk | Action::BidAskLines => {
+                            (&mut config.show_bid_ask, &mut config.show_bid_ask_lines)
+                        }
+                        _ => (&mut config.show_high_low, &mut config.show_high_low_lines),
+                    };
+                    toggle_tags_or_lines(
+                        tags,
+                        lines,
+                        matches!(action, Action::BidAskLines | Action::HighLowLines),
+                    );
+                }
                 Action::Timezone(zone) => chart.chart_options.time_scale.timezone = zone,
                 Action::ExtendedHours => chart.set_extended_hours(!chart.extended_hours()),
                 Action::OvernightHours => chart.set_overnight_hours(!chart.overnight_hours()),
@@ -491,15 +510,15 @@ impl AxisMenus {
     }
 }
 
-/// Switches the bid and ask lines, with `lines`, or else their tags, keeping the other as it is
-/// drawn: lines that follow the tags get a switch of their own first.
-fn toggle_bid_ask(config: &mut crate::config::ChartConfig, lines: bool) {
-    let drawn = config.show_bid_ask_lines.unwrap_or(config.show_bid_ask);
+/// Switches the lines, with `lines`, or else the tags, keeping the other as it is drawn:
+/// lines that follow the tags get a switch of their own first.
+fn toggle_tags_or_lines(tags: &mut bool, drawn_lines: &mut Option<bool>, lines: bool) {
+    let drawn = drawn_lines.unwrap_or(*tags);
     if lines {
-        config.show_bid_ask_lines = Some(!drawn);
+        *drawn_lines = Some(!drawn);
     } else {
-        config.show_bid_ask_lines = Some(drawn);
-        config.show_bid_ask = !config.show_bid_ask;
+        *drawn_lines = Some(drawn);
+        *tags = !*tags;
     }
 }
 
@@ -644,50 +663,58 @@ mod tests {
         assert!(rows.contains(&("Overnight hours".into(), true)));
     }
 
-    /// The price axis switches the bid and ask tags and lines apart, each keeping the other as
-    /// it is drawn; lines that follow their tags, as saved charts do, stay drawn when the tags
-    /// go.
+    /// Price axis rows switch tags and lines apart, preserving the other as it is drawn,
+    /// including lines that followed tags in saved charts.
     #[test]
-    fn bid_ask_rows_switch_tags_and_lines_apart() {
-        let checks = |chart: &Chart| -> Vec<(String, bool)> {
-            AxisMenus::entries(false, chart, None)
-                .into_iter()
-                .filter_map(|entry| match entry {
-                    MenuEntry::Item(item) if item.label.starts_with("Bid and ask") => {
-                        Some((item.label, item.icon.is_some()))
-                    }
-                    _ => None,
-                })
-                .collect()
-        };
-        // Tags, the lines' switch, which row, and the tags and lines drawn afterwards.
-        for (tags, lines, lines_row, expected) in [
-            (true, None, false, (false, true)),
-            (true, None, true, (true, false)),
-            (false, None, true, (false, true)),
-            (false, Some(true), false, (true, true)),
-            (true, Some(false), true, (true, true)),
-        ] {
-            let mut chart = crate::widget::test_frames::chart(&[100.0], &[101.0]);
-            chart.config_mut().show_bid_ask = tags;
-            chart.config_mut().show_bid_ask_lines = lines;
-            assert_eq!(
-                checks(&chart),
-                vec![
-                    ("Bid and ask labels".to_owned(), tags),
-                    ("Bid and ask lines".to_owned(), lines.unwrap_or(tags)),
-                ]
-            );
-            toggle_bid_ask(chart.config_mut(), lines_row);
-            let config = chart.config();
-            assert_eq!(
-                (
-                    config.show_bid_ask,
-                    config.show_bid_ask_lines.unwrap_or(config.show_bid_ask)
-                ),
-                expected,
-                "{tags} {lines:?} {lines_row}"
-            );
+    fn price_axis_rows_switch_tags_and_lines_apart() {
+        for pair in ["Bid and ask", "High and low"] {
+            let checks = |chart: &Chart| -> Vec<(String, bool)> {
+                AxisMenus::entries(false, chart, None)
+                    .into_iter()
+                    .filter_map(|entry| match entry {
+                        MenuEntry::Item(item) if item.label.starts_with(pair) => {
+                            Some((item.label, item.icon.is_some()))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            };
+            // Tags, the lines' switch, which row, and the tags and lines drawn afterwards.
+            for (tags, lines, lines_row, expected) in [
+                (true, None, false, (false, true)),
+                (true, None, true, (true, false)),
+                (false, None, true, (false, true)),
+                (false, Some(true), false, (true, true)),
+                (true, Some(false), true, (true, true)),
+            ] {
+                let mut chart = crate::widget::test_frames::chart(&[100.0], &[101.0]);
+                let config = chart.config_mut();
+                let (label, line) = if pair == "Bid and ask" {
+                    (&mut config.show_bid_ask, &mut config.show_bid_ask_lines)
+                } else {
+                    (&mut config.show_high_low, &mut config.show_high_low_lines)
+                };
+                (*label, *line) = (tags, lines);
+                assert_eq!(
+                    checks(&chart),
+                    vec![
+                        (format!("{pair} labels"), tags),
+                        (format!("{pair} lines"), lines.unwrap_or(tags)),
+                    ]
+                );
+                let config = chart.config_mut();
+                let (tags, lines) = if pair == "Bid and ask" {
+                    (&mut config.show_bid_ask, &mut config.show_bid_ask_lines)
+                } else {
+                    (&mut config.show_high_low, &mut config.show_high_low_lines)
+                };
+                toggle_tags_or_lines(tags, lines, lines_row);
+                assert_eq!(
+                    (*tags, lines.unwrap_or(*tags)),
+                    expected,
+                    "{pair}: {tags} {lines:?} {lines_row}"
+                );
+            }
         }
     }
 
