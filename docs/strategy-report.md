@@ -215,10 +215,12 @@ An open trade has no exit boundary. The host owns navigation, highlighting, repo
 placement, data loading and CSV storage. Chart entry/exit markers use the signals service.
 The assembled terminal and its demo mounting remain separate integration work.
 
-The Summary tab shows all performance metrics, equity, drawdown and, for reports with margin
-data, margin used in account units, and an optional fee-free buy-and-hold comparison on the
-same equity scale. Engine margin points use the equity timestamps; host margin points use their
-own time span. Without usable margin points the margin chart takes no space. Curve positions
+The Summary tab shows trade figures in All, Long and Short columns, followed by the drawdown,
+ratio, growth, buy-and-hold and margin figures for the whole run, equity, drawdown and, for
+reports with margin data, margin used in account units, and an optional fee-free buy-and-hold
+comparison on the same equity scale. Engine margin points use the equity timestamps; host
+margin points use their own time span. Without usable margin points the margin chart takes
+no space. Curve positions
 and hover values retain submillisecond timestamps. Hover a curve
 for timestamped values. The virtualized trade list uses entry-time order, keeps equal-time
 trades in input order, and shows fill prices, net profit, fees, labels and excursions.
@@ -236,7 +238,10 @@ separator, no thousands separator, and an empty cell for an unavailable value. P
 values keep 15 significant decimal digits, so a rate of `0.07` reads `7`, and a zero is
 always `0`. Both exports prefix a text cell that starts with `=`, `+`, `-`, `@`, a tab or a
 carriage return with an apostrophe, so a spreadsheet shows it as text; numeric cells,
-including negative numbers, are unchanged.
+including negative numbers, are unchanged. The summary CSV ends with a `side` column:
+`all`, `long` or `short` on trade figures, with one row per side in that order, and empty
+on whole-run figures and properties. Largest position uses the unit `quantity` and holding
+times use `bars`.
 
 ## Metric definitions
 
@@ -255,6 +260,50 @@ runs; invalid and open trades do not participate. For profits `5, 3, -1, -7, -2,
 net profit is 8, gross profit 18, gross loss 10, largest winner 5, largest loser -7, and the
 longest winning and losing runs are 2 and 3.
 
+### Figures by side
+
+Read the trade figures through `performance.all`, `performance.long` and `performance.short`,
+each a `StrategyTradeStats`. Migration: replace `performance.net_profit` with
+`performance.all.net_profit`, and likewise for the other trade fields. Summary CSV readers
+that select by figure name should also select `side = all` for the former aggregate value.
+
+Each side applies the same validity rules. A positive closed-trade net profit wins, a
+negative one loses, and zero is even. Even trades count as closed and enter the win rate's
+denominator and average trade, without entering either winning or losing figures. Open
+trades enter only the open count and largest position. Average winning trade is gross
+profit divided by winners; average losing trade is gross loss divided by losers, a positive
+amount. Their ratio needs both. The largest winner's fraction uses gross profit; the largest
+loser's fraction uses gross loss and a positive loss magnitude. Net profit over the largest
+loss is a multiple, negative for a net loss. With closed trades long +50, long -20, short +30
+and short 0, there are 2 winners, 1 loser and 1 even trade. The average winner is 40, average
+loser 20 and their ratio 2. Longs and shorts each net 30; long profit factor is 2.5 and short
+profit factor is unavailable because there is no short loss.
+
+Largest position is the greatest summed quantity held at once, including open trades.
+Holdings include entry and exclude exit, so reversing in one fill never adds the closing
+and opening positions. A trade closed at its entry time still counts at that instant.
+Long and short quantities add in the aggregate, allowing host reports with both held.
+Two overlapping longs of 2 and 3 units therefore give 5.
+
+Holding times come from the source bars passed to
+[`StrategyReport::comparison`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.comparison).
+Bars held are the exit bar's position minus the entry bar's: entry on bar 3 and exit on bar 7
+holds 4 bars, and entry and exit within one bar holds 0. A fill belongs to the last source
+bar opening at or before it, including in a session gap. Bars with invalid prices still
+count. Averages cover closed trades, winners and losers of each side; open trades and
+entries before the first source bar are excluded. A reversal ends one trade's count at its
+bar and starts the new trade's count there.
+
+Return over maximum drawdown divides net profit by the maximum drawdown in money; it needs
+a positive drawdown, without an annualisation minimum. Compound annual growth uses
+`(last / first)^(1 / years) - 1` over the usable equity curve, with 365.25 days per year.
+It requires at least 13 weeks, a positive first value and a nonnegative final value; a zero
+final value gives -100%. Equity 1,000, 900, 1,210 across two years grows 10% per year;
+net profit 60 divided by drawdown 100 gives 0.6. Buy-and-hold profit multiplies its fractional
+return by positive finite initial capital. Outperformance subtracts that profit from the
+strategy's closed-trade net profit, excluding open trades. A 25% return on 1,000 makes 250,
+so net profit 60 outperforms it by -190.
+
 Margin figures need margin data: when `margin` is empty, as in a host report without it or
 one saved before it existed, all eight figures show N/A. Margin calls count finite positive
 quantities in `margin_calls`; liquidated quantity is their sum and largest liquidation their
@@ -262,9 +311,10 @@ largest value. These are instrument units. Average margin used is the mean of fi
 values, including flat marks and the initial zero. Largest margin used is the largest finite
 `peak_margin` value. Account size required adds maximum drawdown between equity marks to the
 largest margin used; it does not yet include intrabar drawdown. Return on account size is net
-profit divided by that required size; margin efficiency divides net profit by average margin
-used. Each quotient is unavailable unless its divisor is positive. Non-finite results are
-unavailable. Summary CSV includes these same eight figures, with `quantity` for instrument units.
+profit of all trades divided by that required size; margin efficiency divides it by average
+margin used. Each quotient is unavailable unless its divisor is positive. Non-finite results
+are unavailable. Summary CSV writes these eight figures after the buy-and-hold figures, with
+an empty `side` and `quantity` for instrument units.
 
 For the whole-position example, marks 0, 0, 750 and 0 give one call of 15 units, average margin
 187.5, largest margin 750, account size 750 + 500 = 1,250, return -40%, and margin efficiency
