@@ -2086,7 +2086,11 @@ mod tests {
             ("TPO", &["Time Price Opportunity"], &[]),
             ("Variable Index Dynamic Average", &["VIDYA"], &[]),
             ("Price Channel", &["Price Channel"], &["Donchian"]),
-            ("Multi-Time Period Charts", &["Higher Interval Candles"], &[]),
+            (
+                "Multi-Time Period Charts",
+                &["Higher Interval Candles"],
+                &[],
+            ),
             (
                 "Auto trendlines",
                 &["Auto Trend Line"],
