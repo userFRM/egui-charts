@@ -453,6 +453,14 @@ impl StudyTemplate {
                     })
                     .collect();
             }
+            // `period` also set the ADX smoothing before the smoothing had an input of its
+            // own. The last `period` saved is the one the study applied.
+            "ADX" | "DMI" if has("period") && !has("adx_smoothing") => {
+                let period = self.inputs.iter().rev().find(|(id, _)| id == "period");
+                template
+                    .inputs
+                    .extend(period.map(|(_, value)| ("adx_smoothing".to_owned(), value.clone())));
+            }
             // Before it averaged highs and lows, MA Channel drew the close average with percentage
             // bands, which Envelopes draws with a simple average.
             "MA Channel" if has("offset_percent") && !declares("offset_percent") => {
@@ -1194,6 +1202,27 @@ mod tests {
                 vec![("period", Length(20))],
                 vec![("period", Length(20)), ("adx_smoothing", Length(20))],
             ),
+            // Saved with both lengths, in either order.
+            (
+                "ADX",
+                vec![("adx_smoothing", Length(20)), ("period", Length(10))],
+                vec![("period", Length(10)), ("adx_smoothing", Length(20))],
+            ),
+            (
+                "ADX",
+                vec![("period", Length(10)), ("adx_smoothing", Length(20))],
+                vec![("period", Length(10)), ("adx_smoothing", Length(20))],
+            ),
+            (
+                "DMI",
+                vec![("adx_smoothing", Length(20)), ("period", Length(10))],
+                vec![("period", Length(10)), ("adx_smoothing", Length(20))],
+            ),
+            (
+                "DMI",
+                vec![("period", Length(10)), ("adx_smoothing", Length(20))],
+                vec![("period", Length(10)), ("adx_smoothing", Length(20))],
+            ),
             (
                 "Chandelier",
                 vec![("period", Length(10)), ("multiplier", Number(2.0))],
@@ -1406,6 +1435,29 @@ mod tests {
                 (0..study.line_count()).all(|line| study.plot_style(line).visible),
                 "{name}"
             );
+        }
+
+        // Literal single-period saves retain their lengths, plot visibility and styles.
+        for text in [
+            r#"{"name":"ADX","inputs":[["period",{"Length":20}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ADX.html","plots":[{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[15,3,4,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+            r#"{"name":"DMI","inputs":[["period",{"Length":20}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.DirectionalMovement.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[245,0,87,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+        ] {
+            let saved: StudyTemplate = serde_json::from_str(text).unwrap();
+            let study = saved.create().unwrap();
+            assert_eq!(study.settings(), saved.settings, "{}", saved.name);
+            assert_eq!(Some(study.scale()), saved.scale, "{}", saved.name);
+            let inputs = study.inputs();
+            for id in ["period", "adx_smoothing"] {
+                assert_eq!(
+                    inputs
+                        .iter()
+                        .find(|input| input.id == id)
+                        .map(|input| &input.value),
+                    Some(&Length(20)),
+                    "{} {id}",
+                    saved.name
+                );
+            }
         }
 
         // A chart save of an anchored profile from before tick heights and width were inputs
