@@ -147,6 +147,17 @@ impl SourceItem {
     /// * `id` - Unique identifier
     /// * `tool_type` - Type of drawing tool
     /// * `color` - Primary color
+    ///
+    /// ```
+    /// use egui_charts::drawings::DrawingToolType;
+    /// use egui_charts::ui::widget_bar::panels::object_tree::SourceItem;
+    ///
+    /// let mut item = SourceItem::drawing(7, DrawingToolType::TrendLine, egui::Color32::GOLD);
+    /// item.locked = true;
+    /// item.user_edit_enabled = false;
+    /// assert!(item.locked);
+    /// assert!(!item.user_edit_enabled);
+    /// ```
     pub fn drawing(id: usize, tool_type: DrawingToolType, color: Color32) -> Self {
         Self {
             id,
