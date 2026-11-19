@@ -162,6 +162,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(VolProfileVisible::new(l(0))),
         Box::new(VolProfileFixed::new(l(0))),
         Box::new(VolProfileSession::new(l(0))),
+        Box::new(VolProfileSessionHd::default()),
         Box::new(VolProfilePeriodic::new(l(0))),
         Box::new(VolProfileAnchored::new(l(0))),
         Box::new(VolProfileAutoAnchored::new(l(0))),
@@ -195,6 +196,15 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(OrderFlowStudy::execution_delta(false)),
         Box::new(OrderFlowStudy::execution_delta(true)),
         Box::new(OrderFlowStudy::new(OrderFlowKind::LevelsTradedThrough {
+            seconds: l(0),
+        })),
+        Box::new(OrderFlowStudy::new(OrderFlowKind::BookBalance {
+            near_levels: l(0),
+            far_levels: l(1),
+            near_distance: x(0.0),
+            far_distance: x(0.0),
+        })),
+        Box::new(OrderFlowStudy::new(OrderFlowKind::PriceRange {
             seconds: l(0),
         })),
         Box::new(NetVolume::new()),
@@ -287,7 +297,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(Ratio::default()),
         Box::new(Spread::default()),
         Box::new(Correlation::new(l(0))),
-        Box::new(Correlation::new(l(0)).with_log_returns(true)),
+        Box::new(CorrelationLog::new(l(0))),
         Box::new(RciRibbon::new(l(0), l(1), l(2))),
         Box::new(MajorityRule::new(l(0))),
         Box::new(MajorityRule::new(l(0)).with_mode(MajorityMode::Direction)),
@@ -757,12 +767,11 @@ fn degenerate_lengths_and_hostile_bars_are_survivable() {
         IndicatorValue::Multiple(xs) => xs.iter().filter(|x| x.is_finite()).count(),
         IndicatorValue::None => 0,
     };
-    // A Zig Zag deviation of 0 filters nothing, so it has no values by design.
+    // Automatic drawings hold values only on their anchors, which a smaller deviation moves.
     for (study, conventional) in bottom.iter().zip(&conventional).filter(|(study, _)| {
         !matches!(
             study.name(),
-            "ZigZag"
-                | "Auto Parallel Channel"
+            "Auto Parallel Channel"
                 | "Auto Fibonacci Retracement"
                 | "Auto Fibonacci Extension"
                 | "Auto Pitchfork"

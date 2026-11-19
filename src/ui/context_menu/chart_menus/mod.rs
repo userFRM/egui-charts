@@ -1,3 +1,4 @@
+use super::OrderFormatter;
 use super::drawing::DrawingContextMenuAction;
 use super::series::SeriesContextMenuAction;
 use super::{
@@ -15,8 +16,10 @@ use crate::ui::context_menu::study::{self as study_context_menu, StudyContextMen
 use crate::ui::context_menu::tpo::TpoMenu;
 use crate::ui::context_menu::trade_profile::TradeProfileMenu;
 use crate::ui::dialogs::{DrawingContextMenu, SeriesContextMenu};
+use crate::ui::trading::TradingFormatter;
 use crate::widget::{Chart, RightClickTarget};
 use egui::{Context, Id};
+use std::sync::Arc;
 
 /// The chart menu a [`HostMenuContext`] belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,6 +256,14 @@ impl ChartMenus {
     pub fn set_order_entries(&mut self, quantity: f64, capabilities: Capabilities) {
         self.chart.order_quantity = quantity;
         self.chart.order_types = capabilities;
+    }
+
+    /// Writes the chart menu's order quantities with the host's text where it returns one.
+    /// Give this and [`Trading::set_formatter`](crate::ui::trading::Trading::set_formatter)
+    /// the same formatter. With `None`, the default, quantities use their own decimals, up to
+    /// eight, with thousands separators, as the account tables write them.
+    pub fn set_order_formatter(&mut self, formatter: Option<Arc<dyn TradingFormatter>>) {
+        self.chart.order_formatter = formatter.map(OrderFormatter);
     }
 
     /// Offers copying a study, or the chart's whole study set, to the other charts of the layout,
@@ -498,7 +509,9 @@ impl ChartMenus {
                     && let RightClickTarget::Drawing { drawing_id, .. } = context.target
                 {
                     if *action == crate::ui::dialogs::DrawingContextMenuAction::ReversePosition {
-                        let _ = chart.reverse_position_drawing(drawing_id);
+                        if chart.drawings().user_can_edit(drawing_id) {
+                            let _ = chart.reverse_position_drawing(drawing_id);
+                        }
                     } else {
                         action.apply_interval_visibility(chart, drawing_id);
                     }
@@ -612,6 +625,7 @@ impl ChartMenus {
                             | MenuRowId::DrawHorizontalLine
                             | MenuRowId::LimitOrder
                             | MenuRowId::StopOrder
+                            | MenuRowId::StopLimitOrder
                     )
                 )
             });

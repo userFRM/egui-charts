@@ -80,6 +80,8 @@ pub struct StatusLineOptions {
     pub show_market_status: bool,
     /// Display current bid and ask controls.
     pub show_quote_boxes: bool,
+    /// Show Buy and Sell as a movable panel over the price pane instead of in the legend.
+    pub quote_panel: bool,
     /// Display study names.
     pub show_indicator_titles: bool,
     /// Display host-supplied study inputs.
@@ -108,6 +110,7 @@ impl Default for StatusLineOptions {
             title_as_description: true,
             show_market_status: true,
             show_quote_boxes: true,
+            quote_panel: false,
             show_indicator_titles: true,
             show_indicator_inputs: true,
             show_indicator_values: true,
@@ -503,6 +506,9 @@ pub struct TradingSettings {
     /// Buy and Sell place a market order of the order quantity at once instead of opening the
     /// order ticket.
     pub instant_orders: bool,
+    /// Show only side, order type, prices and quantity above the send button, with the order's
+    /// exits listed one per line. The ticket's More menu switches it.
+    pub compact_ticket: bool,
     /// Show current Bid and Ask tags supplied by the quote source.
     pub bid_ask_labels: bool,
     /// Ask the host to play [`execution_sound`](Self::execution_sound) for every fill, through
@@ -547,6 +553,7 @@ impl Default for TradingSettings {
     fn default() -> Self {
         Self {
             instant_orders: false,
+            compact_ticket: false,
             bid_ask_labels: false,
             play_execution_sound: false,
             execution_sound: String::new(),
@@ -717,11 +724,37 @@ pub struct ChartSettingsState {
     /// Show analyst estimates answered by the host feed.
     #[serde(default)]
     pub show_price_targets: bool,
+    /// Colour of the analyst targets above their publication close, as
+    /// [`ChartConfig::price_target_positive_color`](crate::config::ChartConfig::price_target_positive_color).
+    /// `None`, as in settings saved before it existed, keeps the chart's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_target_positive_color: Option<Color32>,
+    /// Colour of the analyst targets below their publication close, as
+    /// [`ChartConfig::price_target_negative_color`](crate::config::ChartConfig::price_target_negative_color).
+    /// `None`, as in settings saved before it existed, keeps the chart's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_target_negative_color: Option<Color32>,
     /// Ask the host for history adjusted for dividends. The host owns the data, so
     /// [`apply_to_chart`](Self::apply_to_chart) leaves it to the host, which reloads the
     /// adjusted history; [`from_chart`](Self::from_chart) leaves it off.
     #[serde(default)]
     pub adjust_for_dividends: bool,
+    /// Regular hours (`false`) or regular and extended hours (`true`), as
+    /// [`Chart::set_extended_hours`](crate::widget::Chart::set_extended_hours) requests them.
+    /// `None` keeps the chart's choice, as do settings saved without this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extended_hours: Option<bool>,
+    /// Ask the host for continuous futures history back-adjusted at each roll. The host owns
+    /// the data, so [`apply_to_chart`](Self::apply_to_chart) leaves reloading to the host;
+    /// [`from_chart`](Self::from_chart) leaves this off.
+    #[serde(default)]
+    pub back_adjust_futures: bool,
+    /// Ask the host to use settlement prices as the close of daily and longer futures bars.
+    /// The host owns the data, so [`apply_to_chart`](Self::apply_to_chart) leaves reloading to
+    /// the host. New settings enable this; older saves without it keep last-trade closes.
+    /// Intraday history is unchanged. Hosts preserve their choice when refreshing settings.
+    #[serde(default)]
+    pub settlement_as_close: bool,
 
     // Order flow tab
     /// Independent heatmap, live book and trade bubble settings; older documents keep them off.
@@ -809,7 +842,12 @@ impl Default for ChartSettingsState {
             precision: PrecisionMode::Default,
             timezone: "UTC".to_string(),
             show_price_targets: false,
+            price_target_positive_color: None,
+            price_target_negative_color: None,
             adjust_for_dividends: false,
+            extended_hours: None,
+            back_adjust_futures: false,
+            settlement_as_close: true,
 
             order_flow: OrderFlowSettings::default(),
 

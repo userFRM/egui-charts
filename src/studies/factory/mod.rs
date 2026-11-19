@@ -300,6 +300,7 @@ impl IndicatorFactory {
                 VolProfileVisible,
                 VolProfileFixed,
                 VolProfileSession,
+                VolProfileSessionHd,
                 VolProfilePeriodic,
                 VolProfileAnchored,
                 VolProfileAutoAnchored,
@@ -331,6 +332,7 @@ impl IndicatorFactory {
                 Ratio,
                 Spread,
                 Correlation,
+                CorrelationLog,
                 RciRibbon,
                 MajorityRule,
                 AccumulationSwingIndex,
@@ -400,6 +402,13 @@ impl IndicatorFactory {
                 max: f64::MAX,
             },
             OrderFlowKind::LevelsTradedThrough { seconds: 0 },
+            OrderFlowKind::BookBalance {
+                near_levels: 5,
+                far_levels: 10,
+                near_distance: 0.0,
+                far_distance: 0.0,
+            },
+            OrderFlowKind::PriceRange { seconds: 60 },
         ] {
             let name = OrderFlowStudy::new(kind).name().to_owned();
             self.constructors.insert(
@@ -410,7 +419,7 @@ impl IndicatorFactory {
                 ),
             );
         }
-        register_builtins!(@help self, "type", SMIErgodicIndicator, SMIErgodicOscillator, RisingWedge, FallingWedge, Ratio, Spread, Correlation, AdvanceDeclineRatio, AdvanceDeclineLine, CumulativeVolumeIndex);
+        register_builtins!(@help self, "type", SMIErgodicIndicator, SMIErgodicOscillator, RisingWedge, FallingWedge, Ratio, Spread, Correlation, CorrelationLog, AdvanceDeclineRatio, AdvanceDeclineLine, CumulativeVolumeIndex);
         for cumulative in [false, true] {
             let name = OrderFlowStudy::execution_delta(cumulative)
                 .name()

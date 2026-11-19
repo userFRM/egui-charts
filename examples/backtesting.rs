@@ -51,8 +51,8 @@ fn main() {
         "{} on {} (generated sample data)",
         report.name, report.symbol
     );
-    println!("Closed trades: {}", metrics.closed_trades);
-    println!("Net profit after fees: {:.2} USD", metrics.net_profit);
+    println!("Closed trades: {}", metrics.all.closed_trades);
+    println!("Net profit after fees: {:.2} USD", metrics.all.net_profit);
     println!(
         "Maximum drawdown: {:.2} USD",
         metrics
@@ -154,8 +154,8 @@ mod tests {
                 .collect();
             let report = buy_and_hold(&bars);
             let metrics = report.performance();
-            assert_eq!(metrics.closed_trades, usize::from(!bars.is_empty()));
-            assert_eq!(metrics.net_profit, expected_profit);
+            assert_eq!(metrics.all.closed_trades, usize::from(!bars.is_empty()));
+            assert_eq!(metrics.all.net_profit, expected_profit);
             assert_eq!(metrics.max_drawdown, expected_drawdown);
             assert_eq!(
                 report

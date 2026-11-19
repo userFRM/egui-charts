@@ -102,7 +102,11 @@ pub(super) fn render_folders(
             .filter(|s| s.is_drawing() && s.folder.starts_with(&path))
             .collect();
         let visible = members.iter().any(|s| s.visible);
-        let locked = !members.is_empty() && members.iter().all(|s| s.locked);
+        // The lock button and Delete folder act on the drawings the user can edit.
+        let lockable: Vec<_> = members.iter().filter(|s| s.user_edit_enabled).collect();
+        let locked = !lockable.is_empty() && lockable.iter().all(|s| s.locked);
+        let deletable =
+            members.is_empty() || members.iter().any(|s| !s.locked && s.user_edit_enabled);
         let selected = !members.is_empty() && members.iter().all(|s| state.is_selected(s.id));
         let sync = members.first().and_then(|s| s.folder_sync);
         let can_group = sources
@@ -236,12 +240,16 @@ pub(super) fn render_folders(
                         ui.separator();
                         if ui
                             .add_enabled(
-                                !locked,
+                                deletable,
                                 egui::Button::new(l10n::text(ui.ctx(), "Delete folder")),
                             )
                             .on_disabled_hover_text(l10n::text(
                                 ui.ctx(),
-                                "Unlock the drawings in this folder to delete them",
+                                if lockable.is_empty() {
+                                    "The drawings in this folder cannot be edited"
+                                } else {
+                                    "Unlock the drawings in this folder to delete them"
+                                },
                             ))
                             .clicked()
                         {
@@ -259,7 +267,7 @@ pub(super) fn render_folders(
                             } else {
                                 "Lock folder"
                             })
-                            .enabled(!members.is_empty())
+                            .enabled(!lockable.is_empty())
                             .show(ui)
                             .clicked()
                     {

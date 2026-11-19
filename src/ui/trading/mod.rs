@@ -29,6 +29,7 @@ use crate::model::{
     OrderType, Position, Quote, TradingRules,
 };
 use crate::services::{Broker, HistoryKind, Listener};
+use crate::ui::drawing_toolbar::{DrawingToolbarAction, ToolbarState};
 use crate::ui::model::ConnectionState;
 use crate::widget::settings::TradingSettings;
 use format::Numbers;
@@ -41,6 +42,7 @@ use ticket::{OrderTicket, order_quantity};
 /// chart. Open the order ticket with [`open_ticket`](Self::open_ticket), for example from the
 /// chart menu's [`Order`](crate::ui::context_menu::ContextMenuAction::Order) entries, and route
 /// the chart's Buy and Sell buttons ([`Chart::take_quote_action`](crate::widget::Chart::take_quote_action)) to [`trade`](Self::trade).
+/// Without a two-sided quote the buttons show the last price while a broker is set.
 /// Orders reach the broker only from the ticket's submit button, or once the user confirms them
 /// in the depth ladder, or at once from Buy and Sell and the ladder when the user turned on
 /// [`TradingSettings::instant_orders`].
@@ -93,6 +95,8 @@ pub struct Trading {
     ticket: OrderTicket,
     /// A change the user asked for on a line, waiting for confirmation.
     pending: Option<TradingLineAction>,
+    /// The position to protect, with the take profit and stop loss entered so far.
+    protecting: Option<(Position, Option<f64>, Option<f64>)>,
     /// The quantity in a pending Close dialog; each new confirmation resets it.
     close_quantity: Option<f64>,
     /// An order the user asked the broker to preview, until it is placed or discarded.
@@ -119,7 +123,8 @@ pub struct Trading {
     /// The chart settings' trading options: what [`show`](Self::show) draws, whether Buy and
     /// Sell trade at once, which events raise notifications and whether fills ask for a sound.
     /// Copy the chart settings' [`trading`](crate::widget::settings::ChartSettingsState::trading)
-    /// options here when the user applies them.
+    /// options here when the user applies them, and read them back when opening the dialog or
+    /// saving: [`apply_hide_action`](Self::apply_hide_action) changes them from the Hide menu.
     pub display: TradingSettings,
     /// The sound asked for by fills since the host last took it.
     sound: Option<String>,
@@ -206,6 +211,7 @@ impl Default for Trading {
             placing: Vec::new(),
             ticket: OrderTicket::default(),
             pending: None,
+            protecting: None,
             close_quantity: None,
             preview: None,
             decimals: 2,
@@ -224,6 +230,21 @@ impl Default for Trading {
             connection_lost: false,
         }
     }
+}
+
+/// `quantity` of `symbol` in the host's text, else at its own decimals, up to eight,
+/// with thousands separators, as the account tables write it.
+pub(crate) fn quantity_text(
+    formatter: Option<&dyn TradingFormatter>,
+    symbol: &str,
+    quantity: f64,
+) -> String {
+    Numbers {
+        symbol,
+        decimals: 2,
+        formatter,
+    }
+    .quantity(quantity, account_panel::quantity_decimals(quantity))
 }
 
 impl Trading {
@@ -356,6 +377,7 @@ impl Trading {
             self.refuse(Sent::Place(order), NOT_LIVE);
         }
         self.pending = None;
+        self.protecting = None;
         self.account = None;
         self.connection = None;
         self.orders.clear();
@@ -379,6 +401,37 @@ impl Trading {
             .as_ref()
             .map(|account| account.capabilities)
             .unwrap_or_default()
+    }
+
+    /// Refresh the Hide menu's position, order and execution checks from [`display`](Self::display).
+    /// Call this before each
+    /// [`DrawingToolbar::show_with_action`](crate::ui::drawing_toolbar::DrawingToolbar::show_with_action),
+    /// then pass its returned action to [`apply_hide_action`](Self::apply_hide_action).
+    pub fn sync_hide_menu(&self, state: &mut ToolbarState) {
+        state.hide_positions = !self.display.show_positions;
+        state.hide_orders = !self.display.show_orders;
+        state.hide_executions = !self.display.show_executions;
+    }
+
+    /// Apply the visibility requested by the toolbar after a Hide menu click to
+    /// [`display`](Self::display): [`HideAllPoss`](DrawingToolbarAction::HideAllPoss) changes
+    /// positions, [`HideAllOrders`](DrawingToolbarAction::HideAllOrders) orders,
+    /// [`HideAllExecutions`](DrawingToolbarAction::HideAllExecutions) execution marks, and
+    /// [`HideAll`](DrawingToolbarAction::HideAll) all three. Other actions leave it unchanged.
+    /// Refresh `state` with [`sync_hide_menu`](Self::sync_hide_menu) before showing the toolbar
+    /// so its flags hold the requested visibility after the click.
+    pub fn apply_hide_action(&mut self, action: &DrawingToolbarAction, state: &ToolbarState) {
+        use DrawingToolbarAction as A;
+        let all = matches!(action, A::HideAll);
+        if all || matches!(action, A::HideAllPoss) {
+            self.display.show_positions = !state.hide_positions;
+        }
+        if all || matches!(action, A::HideAllOrders) {
+            self.display.show_orders = !state.hide_orders;
+        }
+        if all || matches!(action, A::HideAllExecutions) {
+            self.display.show_executions = !state.hide_executions;
+        }
     }
 
     /// Opens the order ticket filled from `request`, for the user to check and submit.

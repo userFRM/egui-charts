@@ -36,10 +36,13 @@ pub struct DrawingPropertiesDialog {
     pub coordinates: CoordinatesState,
     /// Named templates, kept in memory unless the host attaches its storage service.
     pub templates: TemplateStore<DrawingTemplate>,
+    /// Estimated and total bars of the edited anchored VWAP, last read by `show_and_apply`.
+    vwap_estimated: Option<(usize, usize)>,
     preview: Option<(String, DrawingId, Vec<PreviewDrawing>)>,
     template_name: String,
     saving_template: bool,
     default_template: Option<DrawingTemplate>,
+    custom_tool: Option<crate::drawings::RegisteredDrawingTool>,
     /// Validation error from the most recent edit.
     pub error: Option<String>,
 }
@@ -63,15 +66,18 @@ impl DrawingPropertiesDialog {
             coordinates: CoordinatesState::default(),
             error: None,
             templates: TemplateStore::new(StoreKind::DrawingTemplates),
+            vwap_estimated: None,
             preview: None,
             template_name: String::new(),
             saving_template: false,
             default_template: None,
+            custom_tool: None,
         }
     }
 
     /// Open the dialog for a specific drawing
     pub fn open(&mut self, id: DrawingId, name: String, props: DrawingProps) {
+        self.custom_tool = None;
         self.is_open = true;
         self.drawing_id = Some(id);
         self.drawing_name = name;
@@ -93,18 +99,22 @@ impl DrawingPropertiesDialog {
         };
         self.open(
             id,
-            drawing.tool_type.as_str().into(),
+            chart.drawings().registry.tool_name(drawing).into(),
             DrawingProps::from_drawing(drawing, chart),
         );
-        self.default_template = Some(DrawingTemplate::from_drawing(
-            &chart.drawings().new_drawing(0, drawing.tool_type),
-        ));
-        // The built-in factory cannot apply a template carrying a custom tool's identity.
-        if drawing.custom_tool.is_some()
-            && let Some(defaults) = chart.drawings().tool_defaults.get(&drawing.tool_type)
+        self.custom_tool = drawing
+            .custom_tool
+            .as_deref()
+            .and_then(|id| chart.drawings().registry.get(id))
+            .cloned();
+        let manager = chart.drawings();
+        self.default_template = Some(DrawingTemplate::from_drawing(&match drawing
+            .custom_tool
+            .as_deref()
         {
-            self.default_template = Some(defaults.clone());
-        }
+            Some(tool) => manager.new_custom_drawing(0, tool),
+            None => manager.new_drawing(0, drawing.tool_type),
+        }));
         true
     }
 
@@ -116,6 +126,10 @@ impl DrawingPropertiesDialog {
         ctx: &Context,
         chart: &mut crate::widget::Chart,
     ) -> DrawingPropertiesAction {
+        self.vwap_estimated = self
+            .drawing_id
+            .filter(|_| self.is_open)
+            .and_then(|id| chart.vwap_estimated_bars(id.0));
         let action = self.show(ctx);
         // Each frame edits the drawings as they were before the preview, as Ok does.
         self.restore_preview(chart);
@@ -134,13 +148,9 @@ impl DrawingPropertiesDialog {
                 Ok(edits) => {
                     if self.props.save_as_default
                         && let Some(mut template) = self.current_template()
-                        && template.settings.custom_tool.is_none()
                     {
                         template.settings.visible = true;
-                        chart
-                            .drawings_mut()
-                            .tool_defaults
-                            .insert(template.settings.tool_type, template.clone());
+                        chart.drawings_mut().save_tool_default(template.clone());
                         self.default_template = Some(template);
                         self.props.save_as_default = false;
                     }
@@ -379,14 +389,12 @@ impl DrawingPropertiesDialog {
                 ui.close();
             }
             let tool = self.props.tool_settings.as_ref().map(|t| &t.settings);
-            // A host-registered tool has no default of its own.
-            let built_in = tool.is_some_and(|tool| tool.custom_tool.is_none());
             // The check `load_template` makes: another tool's default would not load.
             let defaults = self.default_template.as_ref().map(|t| &t.settings);
             let resets = tool.zip(defaults).is_some_and(|(tool, defaults)| {
                 tool.tool_type == defaults.tool_type && tool.custom_tool == defaults.custom_tool
             });
-            if built_in
+            if tool.is_some()
                 && ui
                     .button(l10n::text(ui.ctx(), "Save as default for this tool"))
                     .clicked()
@@ -527,6 +535,7 @@ impl DrawingPropertiesDialog {
                         &mut self.props,
                         &mut state.pickers,
                         &mut state.text_pickers,
+                        self.custom_tool.as_ref(),
                     );
                 }
                 PropertiesTab::Inputs => {
@@ -539,6 +548,7 @@ impl DrawingPropertiesDialog {
                             &mut state.level_pickers,
                             &mut self.coordinates,
                             self.props.tick_size,
+                            self.vwap_estimated,
                         );
                     }
                 }
@@ -647,6 +657,60 @@ mod tests {
     use crate::model::BarData;
     use crate::widget::Chart;
     use egui::{Color32, Pos2, Rect, Shape};
+
+    /// The registered settings editor is reachable, and Ok records its edit as one undo step.
+    #[test]
+    fn registered_tool_settings_show_in_the_style_tab() {
+        for common in [true, false] {
+            let ctx = Context::default();
+            let mut chart = Chart::new(BarData::new());
+            let mut tool = crate::drawings::registry::tests::midpoint();
+            tool.style.color = common;
+            tool.style.line_width = common;
+            tool.style.line_style = common;
+            tool.style.fill = false;
+            tool.style.line_ends = false;
+            chart
+                .drawings_mut()
+                .registry
+                .register("midpoint", tool)
+                .unwrap();
+            let mut drawing = Drawing::custom("midpoint");
+            drawing.id = 7;
+            drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+            chart.drawings_mut().drawings.push(drawing);
+            let mut dialog = DrawingPropertiesDialog::new();
+            assert!(dialog.open_for_chart(&chart, DrawingId(7)));
+            frame(&mut dialog, &mut chart, &ctx, vec![]);
+            let labels = frame(&mut dialog, &mut chart, &ctx, vec![]);
+            for (label, present) in [
+                ("Radius", true),
+                ("Color", common),
+                ("Line width", common),
+                ("Line style", common),
+                ("Fill", false),
+                ("Line start", false),
+                ("Line end", false),
+            ] {
+                assert_eq!(
+                    labels.iter().any(|(text, _)| text == label),
+                    present,
+                    "{label}"
+                );
+            }
+            click(&mut dialog, &mut chart, &ctx, "Ok");
+            assert_eq!(
+                chart.drawings().drawings[0].custom_settings,
+                serde_json::json!({"radius": 10})
+            );
+            assert!(chart.undo());
+            assert_eq!(
+                chart.drawings().drawings[0].custom_settings,
+                serde_json::Value::Null
+            );
+            assert!(!chart.can_undo());
+        }
+    }
 
     fn frame(
         dialog: &mut DrawingPropertiesDialog,
@@ -1081,14 +1145,13 @@ mod tests {
                     defaults.custom_tool = Some("host-path".into());
                 }
                 defaults.stroke_width = 3.0;
-                manager
-                    .tool_defaults
-                    .insert(tool, DrawingTemplate::from_drawing(&defaults));
+                manager.save_tool_default(DrawingTemplate::from_drawing(&defaults));
             }
-            let mut drawing = manager.new_drawing(7, tool);
-            if custom {
-                drawing.custom_tool = Some("host-path".into());
-            }
+            let mut drawing = if custom {
+                manager.new_custom_drawing(7, "host-path")
+            } else {
+                manager.new_drawing(7, tool)
+            };
             drawing.stroke_width = 5.0;
             drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
             let anchors = drawing.chart_points.clone();
@@ -1179,7 +1242,7 @@ mod tests {
         );
         assert!(chart.undo());
         assert_eq!(chart.drawings().drawings[0].stroke_width, 2.0);
-        // A host tool has no default of its own: saving one keeps the built-in polyline's.
+        // A host tool saves its default under its id and leaves the polyline's alone.
         let polyline =
             DrawingTemplate::from_drawing(&chart.drawings().new_drawing(0, Tool::Polyline));
         chart
@@ -1199,6 +1262,12 @@ mod tests {
             serde_json::to_value(&polyline).unwrap()
         );
         assert_eq!(chart.drawings().drawings[1].stroke_width, 5.0);
+        assert_eq!(
+            chart.drawings().custom_tool_defaults["host-path"]
+                .settings
+                .stroke_width,
+            5.0
+        );
     }
 
     /// Several tools keep a template of one name apart in the host's storage, and each lists and

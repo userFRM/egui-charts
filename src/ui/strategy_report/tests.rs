@@ -211,3 +211,60 @@ fn summary_lists_open_profit_and_charts_switch_to_percent() {
     assert!(!h.state().percent);
     assert!(money.iter().all(|l| has(&texts(&h), l)));
 }
+
+#[test]
+fn summary_shows_trade_figures_for_all_long_and_short() {
+    let start = DateTime::UNIX_EPOCH;
+    let mut report = StrategyReport::new("Sides", "SIDES", Timeframe::Hour1, 1000.0);
+    for (side, profit) in [(OrderSide::Buy, 50.25), (OrderSide::Sell, -30.5)] {
+        let mut trade = StrategyTrade::new(side, 1.0, start, 100.0);
+        trade.exit = Some(StrategyExit::new(
+            start + chrono::TimeDelta::hours(1),
+            100.0,
+            profit,
+        ));
+        report.trades.push(trade);
+    }
+    let mut panel = StrategyReportPanel::default();
+    panel.set_report(Some(report), &[]);
+    let mut h = Harness::builder()
+        .with_size(Vec2::new(1440.0, 1200.0))
+        .with_context_setup(|ctx| crate::theme::apply_to_egui(ctx, &crate::theme::Theme::light()))
+        .build_ui_state(
+            |ui, (panel, actions): &mut (StrategyReportPanel, Vec<StrategyReportAction>)| {
+                let action = panel.show(ui);
+                if action != StrategyReportAction::None {
+                    actions.push(action);
+                }
+            },
+            (panel, Vec::new()),
+        );
+    h.run();
+    let labels = std::cell::RefCell::new(Vec::new());
+    h.query_all_by(|n: &egui_kittest::kittest::AccessKitNode<'_>| {
+        if n.role() == Role::Label
+            && let Some(label) = n.value()
+        {
+            labels.borrow_mut().push(label);
+        }
+        false
+    })
+    .count();
+    let labels = labels.into_inner();
+    let header = labels.iter().position(|l| l == "All").unwrap();
+    assert_eq!(&labels[header..header + 3], ["All", "Long", "Short"]);
+    let row = |name| {
+        let i = labels.iter().position(|l| l == name).unwrap();
+        labels[i + 1..i + 4].to_vec()
+    };
+    assert_eq!(row("Net profit"), ["19.75", "50.25", "-30.50"]);
+    assert_eq!(row("Average losing trade"), ["30.50", "N/A", "30.50"]);
+    h.get_by_role_and_label(Role::Button, "Export summary CSV")
+        .click();
+    h.run();
+    let Some(StrategyReportAction::ExportSummaryCsv { content, .. }) = h.state().1.last() else {
+        panic!("summary export action");
+    };
+    assert!(content.contains("summary,Net profit,50.25,money,,long\n"));
+    assert!(content.contains("summary,Net profit,-30.5,money,,short\n"));
+}

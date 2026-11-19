@@ -759,6 +759,7 @@ impl Chart {
                 next.0.registry = self.drawings.registry.clone();
                 next.0.options = self.drawings.options.clone();
                 next.0.tool_defaults = self.drawings.tool_defaults.clone();
+                next.0.custom_tool_defaults = self.drawings.custom_tool_defaults.clone();
                 next.0.set_active_tool(self.drawings.active_tool);
                 if let Some(id) = self.drawings.active_custom_tool() {
                     let _ = next.0.set_custom_tool(id);
@@ -1009,6 +1010,16 @@ impl Chart {
     pub fn trades(&self, series: SeriesId) -> impl Iterator<Item = &Tick> {
         let link = self.feed_link.as_ref().filter(|_| series == SeriesId::MAIN);
         link.into_iter().flat_map(|link| link.trades.iter())
+    }
+
+    /// Identifies the retained tape behind [`Self::trades`], or `None` without a feed or for
+    /// another series than [`SeriesId::MAIN`]. Compare for equality: replacing the tape,
+    /// including on a feed reset, changes the value; adding or evicting trades does not.
+    pub fn trade_generation(&self, series: SeriesId) -> Option<u64> {
+        self.feed_link
+            .as_ref()
+            .filter(|_| series == SeriesId::MAIN)
+            .map(|link| link.trades.generation)
     }
 
     /// Combines the retained fills with explicit aggressor ids, in first-fill order. At most
