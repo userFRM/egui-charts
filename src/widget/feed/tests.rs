@@ -8468,13 +8468,9 @@ fn profile_drawings_read_shared_prepared_rows() {
     }
 }
 
-/// Profile drawings use held executions on time-based charts and release them when hidden.
+/// Minute bars with held trades in the last historical and the forming bar.
 #[cfg(feature = "drawings")]
-#[test]
-fn profile_drawings_read_executions_on_every_time_based_chart_type() {
-    use crate::data::ProfileSource;
-    use crate::drawings::rendering::ChartView;
-    use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+fn traded_minute_bars() -> (Arc<Script>, Chart, Frames, DateTime<Utc>) {
     use crate::model::OrderSide::{Buy, Sell};
     let feed = Arc::new(Script::default());
     let mut chart = fed(&feed, Some("A"));
@@ -8506,6 +8502,17 @@ fn profile_drawings_read_executions_on_every_time_based_chart_type() {
             Some(side),
         ));
     }
+    (feed, chart, frames, start)
+}
+
+/// Profile drawings use held executions on time-based charts and release them when hidden.
+#[cfg(feature = "drawings")]
+#[test]
+fn profile_drawings_read_executions_on_every_time_based_chart_type() {
+    use crate::data::ProfileSource;
+    use crate::drawings::rendering::ChartView;
+    use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+    let (_, mut chart, mut frames, start) = traded_minute_bars();
     let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
     drawing.chart_points = vec![ChartPoint::new(4.0, 100.0), ChartPoint::new(5.0, 100.0)];
     chart.drawings_mut().drawings.push(drawing.clone());
@@ -8657,6 +8664,58 @@ fn profile_drawings_read_executions_on_every_time_based_chart_type() {
     chart.drawings_mut().drawings.clear();
     frames.run(&mut chart);
     assert!(chart.feed_link.as_ref().unwrap().footprint.is_none());
+}
+
+/// The execution store follows the drawing's setting, and alerts follow forming executions.
+#[cfg(feature = "drawings")]
+#[test]
+fn anchored_vwap_reads_executions_while_it_counts_them() {
+    use crate::drawings::{ChartPoint, Drawing, DrawingToolType, VwapConfig};
+    let (feed, mut chart, mut frames, start) = traded_minute_bars();
+    let mut drawing = Drawing::new(2, DrawingToolType::AnchoredVWAP);
+    drawing.completed = true;
+    drawing.chart_points = vec![ChartPoint::new(4.0, 100.0)];
+    let source = drawing.alert_source(0);
+    chart.drawings_mut().drawings.push(drawing);
+    frames.run(&mut chart);
+    assert!(
+        chart.feed_link.as_ref().unwrap().footprint.is_none(),
+        "bar source"
+    );
+    let counted = |chart: &mut Chart, executions| {
+        chart.drawings_mut().drawings[0].vwap = Some(VwapConfig {
+            executions,
+            ..VwapConfig::default()
+        });
+    };
+    counted(&mut chart, true);
+    frames.run(&mut chart);
+    assert!(
+        chart.feed_link.as_ref().unwrap().footprint.is_some(),
+        "executions"
+    );
+    for (bar, expected) in [(4, 100.6), (5, 1309.0 / 13.0)] {
+        let got = chart.alert_value(&source, bar).unwrap();
+        assert!(
+            (got - expected).abs() < 1e-9,
+            "bar {bar}: {got}, want {expected}"
+        );
+    }
+    feed.sink().push_tick(Tick::new(
+        start + TimeDelta::seconds(80),
+        104.0,
+        7.0,
+        Some(crate::model::OrderSide::Buy),
+    ));
+    frames.run(&mut chart);
+    let got = chart.alert_value(&source, 5).unwrap();
+    assert!((got - 101.85).abs() < 1e-9, "forming bar: {got}");
+    counted(&mut chart, false);
+    frames.run(&mut chart);
+    assert!(
+        chart.feed_link.as_ref().unwrap().footprint.is_none(),
+        "released"
+    );
 }
 
 /// A market replay's profile sums what the driver delivered, whether it played there or sought.
