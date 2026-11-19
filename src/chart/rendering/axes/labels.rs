@@ -1060,6 +1060,125 @@ mod tests {
         }
     }
 
+    /// Host unit choices share the header menu with currencies, also without a currency, and
+    /// each choice emits only its own intent. Hidden units offer no choices or current unit.
+    #[test]
+    fn unit_choices_join_the_header_menu() {
+        use crate::model::Instrument;
+        // Currency, unit, unit visibility, unit choices, header, menu counts, pick and intents.
+        for (currency, unit, show_unit, units, header, counts, pick, expected) in [
+            (
+                Some("USD"),
+                Some("barrel"),
+                true,
+                vec!["barrel", "tonne"],
+                "USD · barrel",
+                [1, 1, 1, 1],
+                Some("tonne"),
+                (None, Some("tonne")),
+            ),
+            (
+                Some("USD"),
+                Some("barrel"),
+                true,
+                vec!["barrel", "tonne"],
+                "USD · barrel",
+                [1, 1, 1, 1],
+                Some("EUR"),
+                (Some("EUR"), None),
+            ),
+            (
+                None,
+                Some("barrel"),
+                true,
+                vec!["tonne"],
+                "barrel",
+                [0, 0, 2, 1],
+                Some("tonne"),
+                (None, Some("tonne")),
+            ),
+            (
+                Some("USD"),
+                Some("barrel"),
+                false,
+                vec!["tonne"],
+                "USD",
+                [2, 1, 0, 0],
+                None,
+                (None, None),
+            ),
+            (
+                Some("USD"),
+                None,
+                true,
+                vec!["tonne"],
+                "USD",
+                [2, 1, 0, 1],
+                Some("tonne"),
+                (None, Some("tonne")),
+            ),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[1.0], &[2.0]);
+            chart.config_mut().show_volume = false;
+            chart.config_mut().currency_unit_on_hover = false;
+            chart.config_mut().show_unit = show_unit;
+            let mut instrument = Instrument::new("SAMPLE").with_price_decimals(0);
+            instrument.currency = currency.map(str::to_owned);
+            instrument.unit = unit.map(str::to_owned);
+            chart.set_instrument(Some(instrument));
+            chart.set_currency_choices(vec!["USD".into(), "EUR".into()]);
+            chart.set_unit_choices(units.into_iter().map(str::to_owned).collect());
+            let click = |pos| {
+                vec![
+                    Event::PointerMoved(pos),
+                    Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                    Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            };
+            let text_center = |shapes: &[Shape], label: &str| {
+                shapes.iter().find_map(|shape| match shape {
+                    Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.pos + text.galley.size() / 2.0)
+                    }
+                    _ => None,
+                })
+            };
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let pos = text_center(&painted, header).expect("currency and unit header");
+            frame(&ctx, &mut chart, 0.2, click(pos));
+            let popup = shapes(&ctx, &mut chart, 0.3, vec![]);
+            for (label, count) in ["USD", "EUR", "barrel", "tonne"].into_iter().zip(counts) {
+                assert_eq!(
+                    popup.iter().filter(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == label)).count(),
+                    count,
+                    "{header}, show unit {show_unit}, pick {pick:?}: {label}"
+                );
+            }
+            if let Some(pick) = pick {
+                let pos = text_center(&popup, pick).expect("conversion choice");
+                frame(&ctx, &mut chart, 0.4, click(pos));
+                frame(&ctx, &mut chart, 0.5, vec![]);
+            }
+            assert_eq!(
+                (chart.take_currency_choice(), chart.take_unit_choice()),
+                (expected.0.map(str::to_owned), expected.1.map(str::to_owned)),
+                "{header}, show unit {show_unit}, pick {pick:?}"
+            );
+        }
+    }
+
     /// Each price axis option draws its part: the border, a tick beside each label, labels at the
     /// top and bottom of the pane, and labels the pane edges cut.
     #[test]
