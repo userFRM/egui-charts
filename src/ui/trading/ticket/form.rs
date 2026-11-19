@@ -4,13 +4,13 @@
 use super::{Bracket, BracketMode, Kind, Market, OrderTicket, Sizing, reward};
 use crate::icons::icons;
 use crate::localization as l10n;
-use crate::model::{OrderRequest, OrderSide};
+use crate::model::{OrderRequest, OrderSide, TimeInForce};
 use crate::scales::{decimals, to_step};
 use crate::theme::ThemeExt;
 use crate::ui::top_toolbar::buttons::rule_color;
 use crate::ui::trading::widgets::{
-    FIELD_HEIGHT, SECTION_TITLE_SIZE, chevron, dropdown, field, grouped, hit, info, muted, number,
-    side_color, swap, text, time_in_force_menu, title, toggle, track,
+    FIELD_HEIGHT, SECTION_TITLE_SIZE, chevron, date_time, dropdown, field, grouped, hit, info,
+    muted, number, side_color, swap, text, time_in_force_menu, title, toggle, track,
 };
 use crate::ui_kit::IconButton;
 use crate::ui_kit::buttons::{Button, ButtonSize};
@@ -232,6 +232,17 @@ impl OrderTicket {
         title(ui, "Extra settings");
         muted(ui, "Time in force");
         time_in_force_menu(ui, "order_ticket_tif", &mut self.time_in_force, rules);
+        if self.time_in_force == TimeInForce::GoodTillDate {
+            muted(ui, "Expiry");
+            field(ui, |ui| {
+                date_time(
+                    ui,
+                    "order_ticket_expiry",
+                    &mut self.expires,
+                    &market.timezone,
+                );
+            });
+        }
 
         ui.add_space(8.0);
         title(ui, "Order info");
@@ -393,15 +404,6 @@ impl OrderTicket {
             ui.painter()
                 .galley(chip.center() - galley.size() / 2.0, galley, theme.ui.text);
         }
-    }
-
-    /// Selects a type as its tab does, seeding an unentered price from the quote.
-    fn select_kind(&mut self, kind: Kind, market: &Market<'_>) {
-        if self.kind == Kind::Market && kind != Kind::Market && self.price == 0.0 {
-            self.price = self.touch(market).or(market.last).unwrap_or_default();
-            self.limit = self.price;
-        }
-        self.kind = kind;
     }
 
     /// The order types the account accepts, as tabs with an underline.

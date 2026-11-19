@@ -1473,10 +1473,13 @@ mod tests {
             TimeInForce::Day,
             TimeInForce::Week,
             TimeInForce::Month,
+            TimeInForce::GoodTillDate,
             TimeInForce::ImmediateOrCancel,
             TimeInForce::FillOrKill,
         ] {
             request.time_in_force = time_in_force;
+            request.expires = (time_in_force == TimeInForce::GoodTillDate)
+                .then(|| "2026-12-01T21:00:00Z".parse().unwrap());
             paper.place(request.clone(), inbox.reply(0));
             let result = *inbox
                 .drain()

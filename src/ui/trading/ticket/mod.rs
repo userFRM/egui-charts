@@ -309,6 +309,8 @@ pub(crate) struct Market<'a> {
     pub logo: Option<&'a str>,
     /// The broker account whose presets the ticket offers.
     pub account: &'a str,
+    /// The chart display zone, in which the expiry is entered.
+    pub timezone: crate::scales::TimezoneMode,
 }
 
 impl<'a> Market<'a> {
@@ -358,6 +360,7 @@ pub(crate) struct OrderTicket {
     levels: Vec<(Bracket, f64)>,
     stop_loss: (bool, Bracket),
     time_in_force: TimeInForce,
+    expires: Option<chrono::DateTime<chrono::Utc>>,
     preset_name: String,
     preset_fields: PresetFields,
     replacing: Option<OrderPreset>,
@@ -393,6 +396,7 @@ impl Default for OrderTicket {
             levels: Vec::new(),
             stop_loss: (false, bracket),
             time_in_force: TimeInForce::Day,
+            expires: None,
             preset_name: String::new(),
             preset_fields: PresetFields::default(),
             replacing: None,
@@ -436,6 +440,7 @@ impl OrderTicket {
             _ => (Kind::Market, 0.0, 0.0),
         };
         self.time_in_force = request.time_in_force;
+        self.expires = request.expires;
         let at_price = |value| Bracket {
             mode: BracketMode::Price,
             value,
@@ -597,6 +602,12 @@ impl OrderTicket {
         order.stop_loss = self.exit(market, order.side, entry, Some(order.quantity), false)?;
         (order.take_profit, order.take_profit_levels) =
             self.take_profits(ctx, market, order.side, entry, order.quantity)?;
+        if order.time_in_force == TimeInForce::GoodTillDate {
+            order.expires = Some(
+                self.expires
+                    .ok_or("Enter the order's expiry on the Order tab")?,
+            );
+        }
         Ok(order)
     }
 
@@ -670,7 +681,19 @@ impl OrderTicket {
         } else {
             rules.time_in_force[0]
         };
+        if request.time_in_force == TimeInForce::GoodTillDate {
+            request.expires = Some(self.expires.ok_or("Enter the expiry as YYYY-MM-DD HH:MM")?);
+        }
         Ok(request)
+    }
+
+    /// Selects a type as its tab does, seeding an unentered price from the quote.
+    fn select_kind(&mut self, kind: Kind, market: &Market<'_>) {
+        if self.kind == Kind::Market && kind != Kind::Market && self.price == 0.0 {
+            self.price = self.touch(market).or(market.last).unwrap_or_default();
+            self.limit = self.price;
+        }
+        self.kind = kind;
     }
 
     fn apply(&mut self, preset: &OrderPreset, market: &Market<'_>) {
@@ -975,6 +998,7 @@ mod tests {
             last_fill: None,
             logo: None,
             account: "",
+            timezone: crate::scales::TimezoneMode::Utc,
         }
     }
 
@@ -1151,6 +1175,83 @@ mod tests {
         );
     }
 
+    /// GTD needs an offered validity and an expiry; other validities never carry a stale expiry.
+    /// Reopening a request and orders from the ladder keep the same UTC instant.
+    #[test]
+    fn good_till_date_needs_the_rules_and_an_expiry() {
+        let ctx = egui::Context::default();
+        let time = "2026-12-01T21:00:00Z".parse().unwrap();
+        for (offered, tif, expires, expected) in [
+            (
+                false,
+                TimeInForce::GoodTillDate,
+                Some(time),
+                Ok((TimeInForce::Day, None)),
+            ),
+            (
+                true,
+                TimeInForce::GoodTillDate,
+                Some(time),
+                Ok((TimeInForce::GoodTillDate, Some(time))),
+            ),
+            (
+                true,
+                TimeInForce::GoodTillDate,
+                None,
+                Err("Enter the expiry as YYYY-MM-DD HH:MM"),
+            ),
+            (
+                true,
+                TimeInForce::Day,
+                Some(time),
+                Ok((TimeInForce::Day, None)),
+            ),
+        ] {
+            let mut rules = TradingRules::new("ES");
+            if offered {
+                rules.time_in_force.push(TimeInForce::GoodTillDate);
+            }
+            let market = market(&rules);
+            let mut ticket = OrderTicket {
+                symbol: "ES".into(),
+                time_in_force: tif,
+                expires,
+                ..OrderTicket::default()
+            };
+            let request = ticket.request(&ctx, &market);
+            assert_eq!(
+                request
+                    .as_ref()
+                    .map(|r| (r.time_in_force, r.expires))
+                    .map_err(String::as_str),
+                expected
+            );
+            if let Ok(request) = request {
+                ticket.open(&request);
+                assert_eq!(ticket.request(&ctx, &market), Ok(request));
+            }
+        }
+        let mut rules = TradingRules::new("ES");
+        rules.time_in_force.push(TimeInForce::GoodTillDate);
+        let market = market(&rules);
+        let mut order = OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Limit(99.0));
+        order.time_in_force = TimeInForce::GoodTillDate;
+        for expires in [Some(time), None] {
+            let ticket = OrderTicket {
+                expires,
+                ..OrderTicket::default()
+            };
+            let got = ticket.with_brackets(&ctx, order.clone(), &market);
+            let expected = expires.ok_or("Enter the order's expiry on the Order tab");
+            assert_eq!(
+                got.as_ref()
+                    .map(|r| r.expires.unwrap())
+                    .map_err(String::as_str),
+                expected
+            );
+        }
+    }
+
     #[test]
     fn opening_a_ticket_replaces_brackets_and_prices() {
         let mut ticket = OrderTicket::default();
@@ -1221,6 +1322,7 @@ mod tests {
             last_fill: None,
             logo: None,
             account: "",
+            timezone: crate::scales::TimezoneMode::Utc,
         };
         for quantity in [0.0, f64::NAN, -1.0] {
             for profit in [true, false] {
@@ -1361,6 +1463,7 @@ mod tests {
             last_fill: None,
             logo: None,
             account: "",
+            timezone: crate::scales::TimezoneMode::Utc,
         };
         let ticks = |value| {
             (
@@ -1485,6 +1588,7 @@ mod tests {
             last_fill: None,
             logo: None,
             account: "",
+            timezone: crate::scales::TimezoneMode::Utc,
         };
         let ticks = |value| Bracket {
             mode: BracketMode::Ticks,
@@ -1899,6 +2003,7 @@ mod tests {
                 last_fill: None,
                 logo: None,
                 account: "",
+                timezone: crate::scales::TimezoneMode::Utc,
             };
             let ticket = OrderTicket {
                 symbol: "EURUSD".into(),

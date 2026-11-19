@@ -12,8 +12,9 @@ use crate::chart::rendering::{draw_dashed_polyline, render_price_line};
 use crate::localization as l10n;
 use crate::model::{
     LineStyle, Order, OrderRequest, OrderSide, OrderType, Position, PositionBracket, PriceLine,
+    TimeInForce,
 };
-use crate::scales::{decimals, to_step};
+use crate::scales::{TimezoneMode, decimals, to_step};
 use crate::theme::{Theme, ThemeExt};
 
 /// What the user asked for on a trading line. Confirm it with the user, then send it to the
@@ -151,6 +152,8 @@ pub struct TradingLineOptions<'a> {
     pub currency: &'a str,
     /// The positive tick size used to round dragged prices.
     pub tick_size: f64,
+    /// The zone in which good-till-date order labels write their expiry.
+    pub timezone: TimezoneMode,
 }
 
 impl<'a> TradingLineOptions<'a> {
@@ -184,6 +187,7 @@ impl<'a> TradingLineOptions<'a> {
             point_value: 1.0,
             currency,
             tick_size,
+            timezone: TimezoneMode::Utc,
         }
     }
 }
@@ -303,7 +307,30 @@ pub fn render_trading_lines<'a>(
                 level
             };
             let (name, color) = match appearance {
-                Level::Entry => (l10n::text(ui.ctx(), kind), side_color(request.side)),
+                Level::Entry => {
+                    let name = match request
+                        .expires
+                        .filter(|_| request.time_in_force == TimeInForce::GoodTillDate)
+                    {
+                        Some(expires) => l10n::format_text(
+                            ui.ctx(),
+                            "{kind} until {expiry}",
+                            &[
+                                ("kind", l10n::text(ui.ctx(), kind)),
+                                (
+                                    "expiry",
+                                    options
+                                        .timezone
+                                        .wall_time(expires)
+                                        .format("%Y-%m-%d %H:%M")
+                                        .to_string(),
+                                ),
+                            ],
+                        ),
+                        None => l10n::text(ui.ctx(), kind),
+                    };
+                    (name, side_color(request.side))
+                }
                 Level::TakeProfit => (l10n::text(ui.ctx(), "TP"), theme.ui.take_profit),
                 Level::StopLoss => (l10n::text(ui.ctx(), "SL"), theme.ui.stop_loss),
             };
@@ -1036,6 +1063,7 @@ mod tests {
             let position = Position::new("SYM", 1.0, 95.0);
             for (submit, is_position) in [(false, false), (true, false), (false, true)] {
                 let options = TradingLineOptions {
+                    timezone: TimezoneMode::Utc,
                     show_orders: true,
                     show_positions: true,
                     extend_lines: true,

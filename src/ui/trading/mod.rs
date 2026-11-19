@@ -486,6 +486,7 @@ fn valid(rules: &TradingRules) -> bool {
         && rules.leverage.is_none_or(positive)
         && rules.pip_value.is_none_or(positive)
         && !rules.time_in_force.is_empty()
+        && rules.time_in_force[0] != crate::model::TimeInForce::GoodTillDate
 }
 
 #[cfg(test)]
@@ -634,6 +635,7 @@ mod tests {
                 "fallback",
                 "failure",
                 "invalid",
+                "expiry first",
                 "changed",
                 "withdrawn",
             ] {
@@ -690,6 +692,9 @@ mod tests {
                 if response == "invalid" {
                     rules.time_in_force.clear();
                 }
+                if response == "expiry first" {
+                    rules.time_in_force = vec![TimeInForce::GoodTillDate, TimeInForce::Day];
+                }
                 reply.send(match response {
                     "fallback" => Err(FeedError::NotSupported),
                     "failure" => Err(FeedError::Network("offline".into())),
@@ -702,7 +707,7 @@ mod tests {
                     .collect();
                 let expected_messages: &[&str] = match response {
                     "failure" => &["Trading rules unavailable: network error: offline"],
-                    "invalid" => &["The broker returned invalid trading rules"],
+                    "invalid" | "expiry first" => &["The broker returned invalid trading rules"],
                     "changed" => &["Order refused: the position changed before the order was sent"],
                     "withdrawn" => {
                         &["Order refused: the account no longer accepts this order type"]

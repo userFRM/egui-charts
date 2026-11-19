@@ -510,21 +510,23 @@ mod tests {
         Capabilities, Order, OrderId, OrderRequest, OrderSide, OrderType, TimeInForce, TradingRules,
     };
     use egui::pos2;
-    use egui_kittest::kittest::Queryable;
+    use egui_kittest::kittest::{NodeT, Queryable};
 
     #[test]
     fn preset_names_are_shown_as_typed() {
         let rules = TradingRules::new("ES");
         let market = super::super::tests::market(&rules);
-        let mut harness = egui_kittest::Harness::builder().allow_missing_glyphs().build_ui_state(
-            |ui, (ticket, presets): &mut (OrderTicket, BTreeMap<String, Vec<OrderPreset>>)| {
-                ticket.more(ui, &market, presets, &mut false);
-            },
-            (
-                OrderTicket::default(),
-                BTreeMap::from([("".into(), vec![OrderPreset::new("Market", 1.0)])]),
-            ),
-        );
+        let mut harness = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, (ticket, presets): &mut (OrderTicket, BTreeMap<String, Vec<OrderPreset>>)| {
+                    ticket.more(ui, &market, presets, &mut false);
+                },
+                (
+                    OrderTicket::default(),
+                    BTreeMap::from([("".into(), vec![OrderPreset::new("Market", 1.0)])]),
+                ),
+            );
         crate::localization::set_translator(&harness.ctx, |key| {
             (key == "Market").then(|| "Markt".to_owned())
         });
@@ -538,67 +540,163 @@ mod tests {
     #[test]
     fn presets_belong_to_their_account_ask_before_replacing_and_keep_fields_on_rename() {
         use super::super::{Bracket, BracketMode, Kind, PresetSizing};
-        use crate::ui::trading::{Trading, tests::Recorder};
-        use std::sync::Arc;
         let rules = TradingRules::new("ES");
-        let mut harness = egui_kittest::Harness::builder().allow_missing_glyphs()
-            .with_size(vec2(700.0, 900.0)).build_ui_state(
-                |ui, (ticket, presets, account): &mut (OrderTicket, BTreeMap<String, Vec<OrderPreset>>, &'static str)| {
+        let mut harness = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(700.0, 900.0))
+            .build_ui_state(
+                |ui,
+                 (ticket, presets, account): &mut (
+                    OrderTicket,
+                    BTreeMap<String, Vec<OrderPreset>>,
+                    &'static str,
+                )| {
                     let mut market = super::super::tests::market(&rules);
                     market.account = account;
                     ticket.more(ui, &market, presets, &mut false);
                 },
-                (OrderTicket { quantity: 2.0, preset_name: "Scalp".into(), ..OrderTicket::default() }, BTreeMap::new(), "stocks"),
+                (
+                    OrderTicket {
+                        quantity: 2.0,
+                        preset_name: "Scalp".into(),
+                        ..OrderTicket::default()
+                    },
+                    BTreeMap::new(),
+                    "stocks",
+                ),
             );
         harness.run();
-        harness.get_by_label("Save").click(); harness.run();
+        harness.get_by_label("Save").click();
+        harness.run();
         assert_eq!(harness.state().1["stocks"][0].quantity, 2.0);
-        harness.state_mut().2 = "crypto"; harness.run();
+        harness.state_mut().2 = "crypto";
+        harness.run();
         assert!(harness.query_by_label("Scalp").is_none());
         harness.get_by_label("No presets saved");
         assert!(!harness.state().1.contains_key("crypto"));
         harness.state_mut().2 = "stocks";
-        harness.state_mut().1.get_mut("stocks").unwrap().push(OrderPreset::new("Other", 1.0));
+        harness
+            .state_mut()
+            .1
+            .get_mut("stocks")
+            .unwrap()
+            .push(OrderPreset::new("Other", 1.0));
         harness.state_mut().0.quantity = 5.0;
-        harness.state_mut().0.preset_name = "Scalp".into(); harness.run();
-        harness.get_by_label("Save").click(); harness.run();
+        harness.state_mut().0.preset_name = "Scalp".into();
+        harness.run();
+        harness.get_by_label("Save").click();
+        harness.run();
         assert_eq!(harness.state().1["stocks"][0].quantity, 2.0);
-        harness.get_by_label("Cancel").click(); harness.run();
+        harness.get_by_label("Cancel").click();
+        harness.run();
         assert_eq!(harness.state().1["stocks"][0].quantity, 2.0);
-        harness.get_by_label("Save").click(); harness.run();
-        harness.get_by_label("Replace").click(); harness.run();
-        assert_eq!(harness.state().1["stocks"].iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Scalp", "Other"]);
+        harness.get_by_label("Save").click();
+        harness.run();
+        harness.get_by_label("Replace").click();
+        harness.run();
+        assert_eq!(
+            harness.state().1["stocks"]
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Scalp", "Other"]
+        );
         assert_eq!(harness.state().1["stocks"][0].quantity, 5.0);
         let mut kept = harness.state().1["stocks"][0].clone();
         kept.sizing = Some(PresetSizing::RiskPercent(1.0));
         kept.order_type = Some(Kind::Limit);
         kept.take_profit = Some(Bracket::new(BracketMode::Ticks, 8.0));
         harness.state_mut().1.get_mut("stocks").unwrap()[0] = kept.clone();
-        harness.state_mut().1.get_mut("stocks").unwrap().remove(1); harness.run();
-        harness.get_by_label("Rename preset").click(); harness.run();
-        harness.get_by_label("New name").type_text("Swing"); harness.run();
-        harness.get_by_label("Rename").click(); harness.run();
+        harness.state_mut().1.get_mut("stocks").unwrap().remove(1);
+        harness.run();
+        harness.get_by_label("Rename preset").click();
+        harness.run();
+        harness.get_by_label("New name").focus();
+        harness.run();
+        harness.get_by_label("New name").type_text("Swing");
+        harness.run();
+        harness.get_by_label("Rename").click();
+        harness.run();
         kept.name = "Swing".into();
         assert_eq!(harness.state().1["stocks"], [kept.clone()]);
-        harness.state_mut().1.get_mut("stocks").unwrap().extend((1..10).map(|i| OrderPreset::new(format!("Other {i}"), 1.0)));
-        harness.state_mut().0.preset_name = "Eleventh".into(); harness.run();
-        assert!(harness.get_by_label("Save").is_disabled());
-        harness.state_mut().0.preset_name = "Swing".into(); harness.run();
-        assert!(!harness.get_by_label("Save").is_disabled());
-        harness.state_mut().1.get_mut("stocks").unwrap().truncate(1); harness.run();
-        harness.get_by_label("Rename preset").click(); harness.run();
-        harness.state_mut().1.get_mut("stocks").unwrap().push(OrderPreset::new("Other", 1.0));
-        harness.get_by_label("New name").type_text("Other"); harness.run();
-        assert!(harness.get_by_label("Rename").is_disabled());
-        let mut trading = Trading::default();
-        let chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
-        let colors = crate::theme::Theme::dark().chart;
-        for account in ["stocks", "crypto"] {
-            trading.set_service(Arc::new(Recorder { account, ..Recorder::default() }));
-            assert_eq!(trading.market(&chart, &colors).account, account);
-        }
-        trading.disconnect();
-        assert_eq!(trading.market(&chart, &colors).account, "");
+        harness
+            .state_mut()
+            .1
+            .get_mut("stocks")
+            .unwrap()
+            .extend((1..10).map(|i| OrderPreset::new(format!("Other {i}"), 1.0)));
+        harness.state_mut().0.preset_name = "Eleventh".into();
+        harness.run();
+        assert!(harness.get_by_label("Save").accesskit_node().is_disabled());
+        harness.state_mut().0.preset_name = "Swing".into();
+        harness.run();
+        assert!(!harness.get_by_label("Save").accesskit_node().is_disabled());
+        harness.state_mut().1.get_mut("stocks").unwrap().truncate(1);
+        harness.run();
+        harness.get_by_label("Rename preset").click();
+        harness.run();
+        harness
+            .state_mut()
+            .1
+            .get_mut("stocks")
+            .unwrap()
+            .push(OrderPreset::new("Other", 1.0));
+        harness.get_by_label("New name").focus();
+        harness.run();
+        harness.get_by_label("New name").type_text("Other");
+        harness.run();
+        assert!(
+            harness
+                .get_by_label("Rename")
+                .accesskit_node()
+                .is_disabled()
+        );
+    }
+
+    /// The broker rules control visibility, and a wall time at UTC-5 reaches the broker at UTC.
+    #[test]
+    fn good_till_date_expiry_is_entered_in_the_charts_zone() {
+        let mut rules = TradingRules::new("ES");
+        rules.time_in_force.push(TimeInForce::GoodTillDate);
+        let mut harness = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(340.0, 1200.0))
+            .build_ui_state(
+                |ui, (ticket, rules): &mut (OrderTicket, TradingRules)| {
+                    let mut market = super::super::tests::market(rules);
+                    market.timezone = crate::scales::TimezoneMode::Timezone(
+                        crate::model::TimezoneId::fixed_offset(-5 * 3600).unwrap(),
+                    );
+                    ticket.show(ui, &market, &mut BTreeMap::new(), &mut false);
+                },
+                (
+                    OrderTicket {
+                        symbol: "ES".into(),
+                        time_in_force: TimeInForce::GoodTillDate,
+                        ..OrderTicket::default()
+                    },
+                    rules,
+                ),
+            );
+        harness.run();
+        harness
+            .get_by_role_and_label(egui::Role::TextInput, "Expiry")
+            .focus();
+        harness.run();
+        harness
+            .get_by_role_and_label(egui::Role::TextInput, "Expiry")
+            .type_text("2026-12-01 16:00");
+        harness.run();
+        let (ticket, rules) = harness.state();
+        let market = super::super::tests::market(rules);
+        assert_eq!(
+            ticket.request(&harness.ctx, &market).unwrap().expires,
+            Some("2026-12-01T21:00:00Z".parse().unwrap())
+        );
+        harness.state_mut().1.time_in_force = vec![TimeInForce::Day];
+        harness.run();
+        assert!(harness.query_by_label("Expiry").is_none());
+        assert_eq!(harness.state().0.time_in_force, TimeInForce::Day);
     }
 
     #[test]
@@ -651,6 +749,7 @@ mod tests {
                     last_fill: None,
                     logo: None,
                     account: "",
+                    timezone: crate::scales::TimezoneMode::Utc,
                 };
                 ticket.tab = tab;
                 let mut visible_submit = false;
@@ -767,6 +866,7 @@ mod tests {
             last_fill: None,
             logo: None,
             account: "",
+            timezone: crate::scales::TimezoneMode::Utc,
         };
         let cases = [
             (

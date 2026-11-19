@@ -263,6 +263,7 @@ impl DepthPanel {
             last_fill: None,
             logo: None,
             account: "",
+            timezone: crate::scales::TimezoneMode::Utc,
         };
         ui.push_id("depth_panel", |ui| {
             self.ladder.draw(ui, chart.symbol(), &market, None);
@@ -1574,6 +1575,7 @@ mod tests {
                     last_fill: None,
                     logo: None,
                     account: "",
+                    timezone: crate::scales::TimezoneMode::Utc,
                 };
                 let mut ladder = Ladder {
                     centre: last.is_none().then_some(initial),
@@ -1681,6 +1683,7 @@ mod tests {
             last_fill: None,
             logo: None,
             account: "",
+            timezone: crate::scales::TimezoneMode::Utc,
         };
         let ctx = egui::Context::default();
         let frame = |ladder: &mut Ladder, market: &Market<'_>, events: Vec<egui::Event>| {
@@ -2021,6 +2024,7 @@ mod tests {
                         last_fill: None,
                         logo: None,
                         account: "",
+                        timezone: crate::scales::TimezoneMode::Utc,
                     };
                     let mut output = ctx.run_ui(
                         egui::RawInput {
@@ -2305,6 +2309,7 @@ mod tests {
                 last_fill: None,
                 logo: None,
                 account: "",
+                timezone: crate::scales::TimezoneMode::Utc,
             };
             let output = ctx.run_ui(
                 egui::RawInput {
@@ -2461,6 +2466,7 @@ mod tests {
                             last_fill: None,
                             logo: None,
                             account: "",
+                            timezone: crate::scales::TimezoneMode::Utc,
                         };
                         let mut action = None;
                         let output = ctx.run_ui(
@@ -2674,6 +2680,7 @@ mod tests {
                     last_fill: None,
                     logo: None,
                     account: "",
+                    timezone: crate::scales::TimezoneMode::Utc,
                 };
                 let output = ctx.run_ui(egui::RawInput::default(), |ui| {
                     ladder.show(ui, "ES", &market, &mut 1.0, &mut TimeInForce::Day);
@@ -2841,6 +2848,7 @@ mod tests {
             last_fill: None,
             logo: None,
             account: "",
+            timezone: crate::scales::TimezoneMode::Utc,
         };
         let ctx = egui::Context::default();
         let mut ladder = Ladder {
