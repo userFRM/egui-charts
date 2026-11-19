@@ -489,10 +489,12 @@ mod tests {
                     ExecutionMark::new(&b),
                 ];
                 marks.extend(invalid.iter().map(ExecutionMark::new));
-                let mut display = TradingSettings::default();
-                display.show_executions = visible;
-                display.show_execution_labels = labels;
-                display.show_execution_prices = prices;
+                let display = TradingSettings {
+                    show_executions: visible,
+                    show_execution_labels: labels,
+                    show_execution_prices: prices,
+                    ..TradingSettings::default()
+                };
                 let (mut triangles, mut hovered, mut labelled) = (Vec::new(), false, false);
                 for frame in 0..4 {
                     let mapping = chart.get_chart_mapping();
