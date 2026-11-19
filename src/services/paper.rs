@@ -273,6 +273,22 @@ impl PaperAccount {
     /// rules, when `rules` are not valid: a step, minimum or point value that is not positive and
     /// finite, a maximum below the minimum, a leverage or pip value that is not positive and
     /// finite, or no time in force.
+    ///
+    /// ```
+    /// use egui_charts::model::TradingRules;
+    /// use egui_charts::services::PaperAccount;
+    ///
+    /// let paper = PaperAccount::new("USD", 100_000.0)
+    ///     .commission_per_order(1.0)
+    ///     .commission_per_unit(0.25);
+    /// let mut rules = TradingRules::new("BTCUSD");
+    /// rules.quantity_step = 0.001;
+    /// rules.min_quantity = 0.001;
+    /// rules.leverage = Some(2.0);
+    /// assert!(paper.set_rules(rules));
+    /// paper.set_price("BTCUSD", 50_000.0);
+    /// paper.set_bid_ask("BTCUSD", Some(49_999.0), Some(50_001.0));
+    /// ```
     pub fn set_rules(&self, mut rules: TradingRules) -> bool {
         if !rules.is_valid() {
             return false;
