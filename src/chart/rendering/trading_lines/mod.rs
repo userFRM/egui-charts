@@ -509,10 +509,12 @@ fn pnl_text(
                 l10n::format_text(ctx, "{0} ticks", &[("0", value.abs().to_string())]),
             )
         }
-        PnlUnit::Percent => {
-            let value = round(gain / entry * 100.0, 2);
+        PnlUnit::Percent if entry != 0.0 && entry.is_finite() => {
+            let value = round(gain / entry.abs() * 100.0, 2);
             (value, format!("{:.2}%", value.abs()))
         }
+        // A percentage needs a finite, nonzero entry.
+        PnlUnit::Percent => (0.0, "-".to_owned()),
     };
     let sign = if value > 0.0 {
         "+"
@@ -1018,6 +1020,29 @@ fn connector(ui: &Ui, mapping: &ChartMapping, entry: f64, exit: f64, color: Colo
 mod tests {
     use super::*;
     use crate::model::{OrderId, OrderStatus};
+
+    /// Percentage labels keep the sign of a gain at negative entries and omit undefined ratios.
+    #[test]
+    fn percent_profit_uses_the_entry_size_and_needs_a_nonzero_entry() {
+        let ctx = egui::Context::default();
+        let options = TradingLineOptions::new("USD", 0.25);
+        for (entry, gain, expected, value) in [
+            (-10.0, 1.0, "+10.00%", 10.0),
+            (-10.0, -1.0, "-10.00%", -10.0),
+            (0.0, 1.0, "-", 0.0),
+            (0.0, 0.0, "-", 0.0),
+            (-0.0, -1.0, "-", 0.0),
+            (99.0, 1.0, "+1.01%", 1.01),
+            (99.0, -1.0, "-1.01%", -1.01),
+            (f64::INFINITY, 1.0, "-", 0.0),
+            (f64::NAN, 1.0, "-", 0.0),
+        ] {
+            assert_eq!(
+                pnl_text(&ctx, PnlUnit::Percent, gain, gain, entry, &options),
+                (expected.to_owned(), value)
+            );
+        }
+    }
 
     /// Only a projected order's line is dashed, a label's body is an opaque tint, and the submit
     /// button has no outline.
