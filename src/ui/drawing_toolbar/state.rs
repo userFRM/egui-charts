@@ -98,8 +98,12 @@ pub struct ToolbarState {
     /// Whether the Hide menu has hidden indicators.
     pub hide_indicators: bool,
     /// Whether the Hide menu has hidden positions.
+    /// [`Trading::sync_hide_menu`](crate::ui::trading::Trading::sync_hide_menu) refreshes it
+    /// from the trading display settings.
     pub hide_positions: bool,
     /// Whether the Hide menu has hidden orders.
+    /// [`Trading::sync_hide_menu`](crate::ui::trading::Trading::sync_hide_menu) refreshes it
+    /// from the trading display settings.
     pub hide_orders: bool,
     /// Whether zoom history exists (for showing/hiding Zoom Out button)
     pub has_zoom_history: bool,
@@ -171,7 +175,9 @@ impl Default for ToolbarState {
 
 impl ToolbarState {
     /// Whether every supported visibility group is hidden. Hosts refresh the group flags
-    /// from their active chart before drawing the menu.
+    /// from their active chart, and the trading flags with
+    /// [`Trading::sync_hide_menu`](crate::ui::trading::Trading::sync_hide_menu), before drawing
+    /// the menu.
     pub fn all_hidden(&self, trading: bool) -> bool {
         self.hide_drawings
             && self.hide_indicators

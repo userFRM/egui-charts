@@ -1630,6 +1630,81 @@ mod tests {
         assert!(label(&shapes, "Got it").is_none());
     }
 
+    /// The host loop keeps trading checks and rendered visibility in agreement, including a
+    /// settings change before opening the menu and both directions of Hide all.
+    #[test]
+    fn hide_menu_trading_rows_follow_and_change_the_trading_display() {
+        use crate::ui::trading::Trading;
+        use egui::accesskit::{Role, Toggled};
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+
+        let theme = crate::theme::Theme::light();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(640.0, 1200.0))
+            .with_context_setup(move |ctx| {
+                egui_extras::install_image_loaders(ctx);
+                crate::theme::apply_to_egui(ctx, &theme);
+            })
+            .build_ui_state(
+                |ui, (toolbar, trading): &mut (DrawingToolbar, Trading)| {
+                    trading.sync_hide_menu(&mut toolbar.state);
+                    let action = toolbar.show_with_action(ui);
+                    trading.apply_hide_action(&action, &toolbar.state);
+                },
+                (DrawingToolbar::new(), Trading::default()),
+            );
+        harness.state_mut().1.display.show_positions = false;
+        harness.run();
+
+        let labels = [
+            "Hide drawings",
+            "Hide indicators",
+            "Hide positions",
+            "Hide orders",
+            "Hide all",
+        ];
+        let rows = [
+            (
+                [false, false, true, false, false],
+                [false, true],
+                Some("Hide positions"),
+            ),
+            ([false; 5], [true; 2], Some("Hide all")),
+            ([true; 5], [false; 2], Some("Hide all")),
+            ([false; 5], [true; 2], None),
+        ];
+        for (checks, display, pick) in rows {
+            harness
+                .get_by_role_and_label(Role::Button, "Hide objects")
+                .click();
+            harness.run();
+            for (label, checked) in labels.into_iter().zip(checks) {
+                assert_eq!(
+                    harness
+                        .get_by_role_and_label(Role::MenuItem, label)
+                        .accesskit_node()
+                        .toggled()
+                        == Some(Toggled::True),
+                    checked,
+                    "{label} before {pick:?}"
+                );
+            }
+            let settings = &harness.state().1.display;
+            assert_eq!(
+                [settings.show_positions, settings.show_orders],
+                display,
+                "before {pick:?}"
+            );
+            if let Some(pick) = pick {
+                harness.get_by_role_and_label(Role::MenuItem, pick).click();
+                harness.run();
+            }
+        }
+    }
+
     /// Group rules use the same palette blend as the top toolbar, including custom colours.
     #[test]
     fn drawing_bar_rules_follow_the_palette() {
