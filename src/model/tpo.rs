@@ -237,8 +237,8 @@ pub enum TPOColorMode {
 /// Week and month profiles combine sessions by the trading date of each session's first bar.
 /// Their letters, point of control, value area and statistics cover all those sessions; the open
 /// and initial balance remain those of the first session. They hold whole sessions, ignoring
-/// [`TPOConfig::split_sessions`]. Explicit [`TPOConfig::splits`] still divide them, and subsequent
-/// sessions of the period join the last part. [`TPOConfig::composites`] still join profiles whose
+/// [`TPOConfig::split_sessions`]. Explicit [`TPOConfig::splits`] still divide them, also at a
+/// session's open, and subsequent sessions of the period join the last part. [`TPOConfig::composites`] still join profiles whose
 /// first sessions open in a range. On daily and longer bars, a period no longer than the session
 /// changes nothing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -446,6 +446,16 @@ fn key_to_price(key: i64, tick_size: f64) -> f64 {
     key as f64 * tick_size
 }
 
+/// Whether an explicit split falls after `previous` and at or before `time`, keeping the new
+/// profile from joining its predecessor by week or month.
+pub(crate) fn split_between(
+    splits: &[DateTime<Utc>],
+    previous: Option<DateTime<Utc>>,
+    time: DateTime<Utc>,
+) -> bool {
+    previous.is_some_and(|previous| splits.iter().any(|s| previous < *s && *s <= time))
+}
+
 /// First usable bars of profiles before composites, including starts from `splits`, shared by
 /// the model, cache and menus.
 pub(crate) fn session_starts(
@@ -582,6 +592,7 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
     let mut row_changes = vec![0isize; last_key.abs_diff(first_key) as usize + 2];
 
     let mut touched = RangeInclusive::new(usize::MAX, 0);
+    let mut previous = None;
 
     for (i, bar) in bars.iter().enumerate() {
         let Some((low_key, high_key)) = bar_level_keys(bar, tick, row_ticks) else {
@@ -632,7 +643,7 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
         if is_new_session {
             // Save the current profile
             profiles.extend(current_profile.take());
-            opened.push(opens_session);
+            opened.push(opens_session && !split_between(&config.splits, previous, bar.time));
 
             // Start new profile
             current_profile = Some(TPOProfile {
@@ -662,6 +673,7 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
                 profile.initial_balance_low = profile.initial_balance_low.min(bar.low);
             }
         }
+        previous = Some(bar.time);
     }
 
     // Don't forget the last profile
@@ -1254,7 +1266,7 @@ mod tests {
             TPOProfilePeriod,
             &'a [(i64, &'a str)],
         );
-        let cases: [Case; 17] = [
+        let cases: [Case; 19] = [
             (
                 "exchange day across UTC midnight",
                 overnight,
@@ -1432,6 +1444,26 @@ mod tests {
                 vec![30],
                 TPOProfilePeriod::Week,
                 &[(0, "A"), (30, "BCA")],
+            ),
+            (
+                "a week profile splits at a session open",
+                Timeframe::Min30.into(),
+                vec![0, 30, 1440, 1470, 2880],
+                false,
+                vec![],
+                vec![1440],
+                TPOProfilePeriod::Week,
+                &[(0, "AB"), (1440, "ABA")],
+            ),
+            (
+                "a month profile splits at a session open",
+                Timeframe::Min30.into(),
+                vec![0, 30, 1440, 1470, 2880],
+                false,
+                vec![],
+                vec![1440],
+                TPOProfilePeriod::Month,
+                &[(0, "AB"), (1440, "ABA")],
             ),
             (
                 "a composite joins week profiles",

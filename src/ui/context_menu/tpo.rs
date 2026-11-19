@@ -58,11 +58,20 @@ impl TpoMenu {
             &params.tpo_splits,
         ) {
             let time = bars[i].time;
+            let previous = bars[..i]
+                .iter()
+                .rposition(|bar| bar.high.is_finite() && bar.low.is_finite() && bar.high >= bar.low)
+                .map(|j| bars[j].time);
             match groups.last_mut() {
                 Some(last)
                     if (composite(*last.start()).is_some()
                         && composite(*last.start()) == composite(time))
                         || (opens.binary_search(&time).is_ok()
+                            && !crate::model::tpo::split_between(
+                                &params.tpo_splits,
+                                previous,
+                                time,
+                            )
                             && config
                                 .profile_period
                                 .key(&sessions, *last.start())

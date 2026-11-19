@@ -1480,6 +1480,38 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
         assert_eq!(weekly.chart_type_params().tpo_composites, [day(0)..=day(6)]);
         assert!(weekly.undo());
         assert_eq!(counts(&weekly), [8, 6]);
+        let (_, shapes) = frame(&mut weekly, &mut weekly_menus, vec![]);
+        let map = weekly.get_chart_mapping();
+        let b = letter(
+            &shapes,
+            "B",
+            map.rect.left()..map.rect.right(),
+            map.price_to_y(101.0),
+        )
+        .unwrap();
+        // The second period of the weekly profile is day zero's B; split the next session's A.
+        let a = Pos2::new(
+            b.x + (b.x
+                - letter(
+                    &shapes,
+                    "A",
+                    map.rect.left()..map.rect.right(),
+                    map.price_to_y(101.0),
+                )
+                .unwrap()
+                .x),
+            b.y,
+        );
+        pick_at(
+            &mut weekly,
+            &mut weekly_menus,
+            a,
+            "Split profile at selected period",
+        );
+        assert_eq!(counts(&weekly), [2, 6, 6]);
+        assert_eq!(weekly.chart_type_params().tpo_splits, [day(1)]);
+        assert!(weekly.undo());
+        assert_eq!(counts(&weekly), [8, 6]);
     }
 }
 
