@@ -505,6 +505,27 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             ],
             expected: vec![],
         },
+        // Simple basis(3), ATR(1), multiplier 1/4: close 10 crosses the upper band
+        // 26/3 + 0.5 at bar 3. Bar 4 misses the stop with high 9.15 and closes at 9.1,
+        // above its basis 27.1/3; bar 5 reaches the original stop.
+        Case {
+            name: "Keltner Channels",
+            prices: vec![
+                [8.; 4],
+                [8.; 4],
+                [8.; 4],
+                [10.; 4],
+                [9.1, 9.15, 9.05, 9.1],
+                [9.1, 9.3, 9.1, 9.2],
+            ],
+            inputs: vec![
+                ("ema_period", Length(3)),
+                ("atr_period", Length(1)),
+                ("multiplier", Number(0.25)),
+                ("average", Choice(1)),
+            ],
+            expected: vec![(5, Buy, 26. / 3. + 0.5)],
+        },
         // SMA(1)-SMA(2), SMA signal(2): histogram[2..=7] = -0.5,1,0,-1,0,1.
         Case {
             name: "MACD",
