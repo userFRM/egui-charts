@@ -66,6 +66,9 @@ impl Chart {
 
     /// Returns a drawing's UTC anchors and prices, or `None` for an unknown id or an index
     /// without a time mapping. Retains exact supplied times between bars and in whitespace.
+    /// An anchored text reports the time and price under the point it was last drawn at, which
+    /// change as the chart scrolls and zooms; while a text moved outside the view waits to be
+    /// drawn inside its pane, the point it was given.
     pub fn drawing_points(&self, id: usize) -> Option<Vec<(DateTime<Utc>, f64)>> {
         self.drawings()
             .drawings
@@ -79,6 +82,8 @@ impl Chart {
 
     /// Replaces a drawing's anchors as one undoable edit. Invalid points and locked drawings
     /// leave the original untouched. Screen positions are rebuilt on the next frame.
+    /// An anchored text moves to the new point and keeps its place in the pane from the first
+    /// frame that draws that point inside the pane.
     pub fn set_drawing_points(
         &mut self,
         id: usize,
@@ -101,6 +106,9 @@ impl Chart {
         self.drawings_mut()
             .edit_drawing(id, |target| {
                 target.chart_points = drawing.chart_points;
+                // A pane position would keep the text where it was; the first frame that draws
+                // the new point inside the pane takes one there.
+                target.screen_anchor = None;
             })
             .map_err(DrawingError::Invalid)
     }
@@ -502,6 +510,26 @@ impl Chart {
             .iter()
             .map(|pane| pane.id)
             .find(|pane| pane.0 == owner || self.pane_series_iter(*pane).any(|id| id.0 == owner))
+    }
+
+    /// The pane that draws the drawing being placed, once it has an anchor. `None` without one,
+    /// or when no pane draws its owner.
+    pub(super) fn placement_pane(&self) -> Option<PaneId> {
+        let drawing = (self.drawings.curr_drawing.as_ref())
+            .filter(|drawing| !drawing.chart_points.is_empty())?;
+        match drawing.pane {
+            Some(_) => self.owner_pane(drawing),
+            None => Some(self.main_series_pane()).filter(|pane| self.panes().contains(pane)),
+        }
+    }
+
+    /// Cancels the drawing being placed when `pane`, the pane that drew it before a removal or a
+    /// history step, no longer draws it, so its anchors never land in another pane. The tool
+    /// stays selected.
+    pub(super) fn keep_placement_in(&mut self, pane: Option<PaneId>) {
+        if pane.is_some() && self.placement_pane() != pane {
+            self.drawings.cancel_curr_drawing();
+        }
     }
 
     /// Moves drawing `id` into `pane` as one undoable edit, keeping its anchors and style; the

@@ -83,6 +83,55 @@ impl Drop for Listener {
     }
 }
 
+/// An [`Events`] stream outside the terminal and what is pushed through it, to call a
+/// service's `watch` method, such as in a test. Dropping the reader ends the stream:
+/// [`Events::is_active`] turns false and later pushes are ignored.
+pub struct EventsReader<T: Send + 'static> {
+    inbox: Arc<Inbox>,
+    _listener: Listener,
+    event: PhantomData<fn() -> T>,
+}
+
+impl<T: Send + 'static> std::fmt::Debug for EventsReader<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EventsReader").finish_non_exhaustive()
+    }
+}
+
+impl<T: Send + 'static> EventsReader<T> {
+    /// A stream and the reader of its pushes.
+    ///
+    /// ```
+    /// use egui_charts::services::EventsReader;
+    ///
+    /// let (reader, events) = EventsReader::<u32>::new();
+    /// events.push(1);
+    /// events.push(2);
+    /// assert_eq!(reader.take(), [1, 2]);
+    /// drop(reader);
+    /// assert!(!events.is_active());
+    /// ```
+    pub fn new() -> (Self, Events<T>) {
+        let inbox = Arc::new(Inbox::default());
+        let (listener, events) = Listener::new(&inbox, 0);
+        let reader = Self {
+            inbox,
+            _listener: listener,
+            event: PhantomData,
+        };
+        (reader, events)
+    }
+
+    /// The events pushed since the last call, in push order. As in the terminal, a stream takes
+    /// at most 10,000 pushes between two calls: the push past that bound ends the stream.
+    pub fn take(&self) -> Vec<T> {
+        let answers = self.inbox.drain().answers.into_iter();
+        answers
+            .filter_map(|(_, event)| event.downcast::<T>().ok().map(|event| *event))
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

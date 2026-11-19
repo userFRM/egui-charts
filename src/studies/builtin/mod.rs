@@ -23,7 +23,8 @@
 //! [`ChandeMomentumOscillator`], [`TrueStrengthIndex`],
 //! [`StochasticMomentumIndex`], [`SchaffTrendCycle`], [`PriceOscillator`],
 //! [`PercentageVolumeOscillator`], [`AcceleratorOscillator`], [`AroonOscillator`],
-//! [`BullBearPower`], [`AdvanceDeclineRatioBars`], [`PriceMomentumOscillator`], [`PringsSpecialK`],
+//! [`BullBearPower`], [`AdvanceDecline`], [`AdvanceDeclineRatioBars`],
+//! [`PriceMomentumOscillator`], [`PringsSpecialK`],
 //! [`SMIErgodicIndicator`], [`SMIErgodicOscillator`], [`WoodiesCCI`]
 //!
 //! ## Trend
@@ -290,6 +291,7 @@ mod bbw;
 
 // Eleventh batch - Oscillators
 mod accelerator_oscillator;
+mod advance_decline;
 mod advance_decline_ratio_bars;
 mod aroon_oscillator;
 mod average_daily_range;
@@ -511,6 +513,7 @@ pub use bbw::BollingerBandsWidth;
 
 // Re-exports - Eleventh batch (Oscillators)
 pub use accelerator_oscillator::AcceleratorOscillator;
+pub use advance_decline::AdvanceDecline;
 pub use advance_decline_ratio_bars::AdvanceDeclineRatioBars;
 pub use aroon_oscillator::AroonOscillator;
 pub use average_daily_range::AverageDailyRange;
