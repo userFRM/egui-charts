@@ -260,11 +260,12 @@ mod tests {
             "2024-03-11T23:59:00Z",
             "2024-03-12T00:00:00Z",
         ];
-        for (shade, custom, metadata, expected) in [
-            (true, false, false, vec![2]),
-            (false, false, false, vec![2]),
-            (true, true, false, vec![1, 6]),
-            (true, false, true, vec![3]),
+        for (shade, custom, metadata, overnight, expected) in [
+            (true, false, false, false, vec![2]),
+            (false, false, false, false, vec![2]),
+            (true, true, false, false, vec![1, 6]),
+            (true, false, true, false, vec![3]),
+            (true, false, true, true, vec![1, 7]),
         ] {
             let ctx = egui::Context::default();
             let bars = times
@@ -291,7 +292,12 @@ mod tests {
                             .with_extended_windows([
                                 SessionWindow::new(weekdays, clock(5, 0), clock(9, 30)),
                                 SessionWindow::new(weekdays, clock(16, 0), clock(20, 0)),
-                            ]),
+                            ])
+                            .with_overnight_windows(if overnight {
+                                vec![SessionWindow::new(weekdays, clock(20, 0), clock(5, 0))]
+                            } else {
+                                vec![]
+                            }),
                         ),
                 ));
                 chart.chart_options.time_scale.timezone =
@@ -308,6 +314,8 @@ mod tests {
             chart.config.session_break_color = egui::Color32::from_rgb(201, 37, 180);
             chart.config.extended_hours_color =
                 egui::Color32::from_rgba_unmultiplied(90, 40, 170, 30);
+            chart.config.overnight_hours_color =
+                egui::Color32::from_rgba_unmultiplied(170, 90, 40, 30);
             chart.config.show_extended_hours = shade;
             if custom {
                 chart.set_session_provider(Some(std::sync::Arc::new(
@@ -361,6 +369,33 @@ mod tests {
                 vec![]
             };
             assert_eq!(fills, expected);
+            let overnight_fills: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Rect(rect) if rect.fill == chart.config.overnight_hours_color => {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .collect();
+            let expected: Vec<_> = if shade && overnight {
+                [(1, 3), (7, 8)]
+                    .into_iter()
+                    .map(|(first, end)| {
+                        Rect::from_min_max(
+                            Pos2::new(map.idx_to_x(first) - map.bar_spacing / 2.0, map.rect.top()),
+                            Pos2::new(
+                                map.idx_to_x(end - 1) + map.bar_spacing / 2.0,
+                                map.rect.bottom(),
+                            ),
+                        )
+                        .intersect(map.rect)
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
+            assert_eq!(overnight_fills, expected);
         }
     }
 

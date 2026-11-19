@@ -125,8 +125,8 @@ pub struct TPOConfig {
     pub show_statistics: bool,
     /// Highlight opening range
     pub show_opening_range: bool,
-    /// Split each session where it moves between extended and regular hours, giving separate
-    /// pre-market, regular and post-market profiles
+    /// Split each session where it moves between regular, extended and overnight hours, giving
+    /// separate overnight, pre-market, regular and post-market profiles
     pub split_sessions: bool,
     /// Which bars of each trading day of the clock the profiles keep: every bar for
     /// `ProfileSession::Chart`, otherwise those of the hours the choice picks, read from a clock
@@ -386,11 +386,16 @@ pub(crate) fn session_starts(
         .chain(sessions.session_breaks(bars).into_iter().map(|(i, _)| i))
         .collect();
     if split_sessions {
-        let extended: Vec<_> = bars
+        use crate::model::session::WindowKind;
+        let kinds: Vec<_> = bars
             .iter()
-            .map(|bar| sessions.is_extended(bar.time))
+            .map(|bar| {
+                sessions
+                    .window_kind(bar.time)
+                    .filter(|kind| *kind != WindowKind::Regular)
+            })
             .collect();
-        starts.extend((1..bars.len()).filter(|&i| extended[i] != extended[i - 1]));
+        starts.extend((1..bars.len()).filter(|&i| kinds[i] != kinds[i - 1]));
     }
     starts.extend(
         splits
@@ -469,12 +474,12 @@ fn profile_parts(
 ///
 /// Sessions are the trading days of `clock`: the exchange sessions it carries,
 /// or calendar days in its time zone, split further at the moves between
-/// extended and regular hours with `config.split_sessions` and combined over
+/// regular, extended and overnight hours with `config.split_sessions` and combined over
 /// `config.composites`. `config.splits` divides a session into further profiles that keep its
 /// periods. A session's periods are whole multiples of
 /// `config.period_minutes`, or of the clock's interval when longer, since its
 /// open: that of its trading day with intraday bars and trading hours, or of
-/// its stretch of extended or regular hours when split, whatever time its
+/// its stretch of regular, extended or overnight hours when split, whatever time its
 /// first bar has. Calendar days, daily and longer bars and bars split off
 /// outside the hours count from their first bar, since their open is not
 /// known. A gap leaves empty periods, and each period places one letter on
@@ -1092,7 +1097,7 @@ mod tests {
             Vec<i64>,
             &'a [(i64, &'a str)],
         );
-        let cases: [Case; 11] = [
+        let cases: [Case; 12] = [
             (
                 "exchange day across UTC midnight",
                 overnight,
@@ -1120,6 +1125,28 @@ mod tests {
                 vec![],
                 vec![],
                 &[(0, "IJK"), (90, "ABCDEFGHIJKLM"), (480, "ABC")],
+            ),
+            (
+                "split at overnight hours",
+                BarClock::new(Timeframe::Min30).with_session(
+                    new_york.clone(),
+                    Session::new([SessionWindow::new(weekdays, at(9, 30), at(16, 0))])
+                        .with_extended_windows([
+                            SessionWindow::new(weekdays, at(4, 0), at(9, 30)),
+                            SessionWindow::new(weekdays, at(16, 0), at(20, 0)),
+                        ])
+                        .with_overnight_windows([SessionWindow::new(
+                            weekdays,
+                            at(20, 0),
+                            at(4, 0),
+                        )]),
+                    true,
+                ),
+                vec![720, 750, 1200, 1230, 1530],
+                true,
+                vec![],
+                vec![],
+                &[(720, "AB"), (1200, "AB"), (1530, "A")],
             ),
             // Post-market opens where regular hours close, inside its all-day extended window
             (

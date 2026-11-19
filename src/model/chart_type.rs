@@ -476,14 +476,14 @@ impl CustomProfileSession {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum ProfileSession {
-    /// The chart's own calendar: its instrument's hours, with extended hours as the chart shows
-    /// them, or calendar days in the instrument's zone without hours.
+    /// The chart's own calendar: its instrument's hours, with extended and overnight hours as
+    /// the chart shows them, or calendar days in the instrument's zone without hours.
     #[default]
     Chart,
     /// The instrument's regular windows only. The chart's calendar without instrument hours.
     Regular,
-    /// The instrument's regular and extended windows. The chart's calendar without instrument
-    /// hours.
+    /// The instrument's regular, extended and overnight windows. The chart's calendar without
+    /// instrument hours.
     Extended,
     /// The same hours every day, whatever the instrument trades.
     Custom(CustomProfileSession),
@@ -493,8 +493,8 @@ pub enum ProfileSession {
     /// The instrument's post-market hours alone, one profile per trading date: its extended hours
     /// after the date's regular hours. The chart's calendar without extended hours.
     PostMarket,
-    /// One profile for each of the pre-market, regular and post-market hours of every trading
-    /// date. The chart's calendar without extended hours.
+    /// One profile for each of the overnight, pre-market, regular and post-market hours of every
+    /// trading date. The chart's calendar without extended or overnight hours.
     Segments,
 }
 
@@ -502,8 +502,8 @@ impl ProfileSession {
     /// `clock` dividing intraday bars at the opens of the hours this choice selects, for an
     /// instrument trading `hours` in `zone`: a window opening every day, in its own zone or else
     /// `zone`, or `hours` with or without their extended windows. `None` for [`Self::Chart`],
-    /// for regular or extended hours without `hours`, and for the pre-market, post-market and
-    /// segment choices without extended windows in `hours`.
+    /// for regular or extended hours without `hours`, for pre-market or post-market without
+    /// extended windows, and for segments without extended or overnight windows.
     #[cfg(any(feature = "widget", feature = "studies"))]
     pub(crate) fn session_clock(
         &self,
@@ -521,8 +521,14 @@ impl ProfileSession {
                 (zone, super::Session::new([window]), false)
             }
             Self::Regular | Self::Extended => (zone, hours?.clone(), *self == Self::Extended),
-            Self::PreMarket | Self::PostMarket | Self::Segments => {
+            Self::PreMarket | Self::PostMarket => {
                 let hours = hours.filter(|hours| !hours.extended_windows.is_empty())?;
+                (zone, hours.clone(), true)
+            }
+            Self::Segments => {
+                let hours = hours.filter(|hours| {
+                    !hours.extended_windows.is_empty() || !hours.overnight_windows.is_empty()
+                })?;
                 (zone, hours.clone(), true)
             }
         };

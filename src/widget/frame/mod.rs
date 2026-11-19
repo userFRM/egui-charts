@@ -1680,22 +1680,27 @@ impl Chart {
             && session_tf.duration_ms() < crate::model::Timeframe::Day1.duration_ms()
             && self.config.show_extended_hours
         {
-            let color = if self.config.extended_hours_color == egui::Color32::PLACEHOLDER {
-                ui.active_theme().ui.accent.linear_multiply(0.08)
-            } else {
-                self.config.extended_hours_color
+            let accent = ui.active_theme().ui.accent;
+            let shade = |color: egui::Color32, opacity| {
+                if color == egui::Color32::PLACEHOLDER {
+                    accent.linear_multiply(opacity)
+                } else {
+                    color
+                }
             };
-            let shaded = rendering::render_extended_hours(
+            rendering::render_extended_hours(
                 &session_ctx,
                 time_data,
                 &exchange_session,
                 &time_coords,
                 time_coords.start_idx,
-                color,
-            );
-            (shaded, color)
+                (
+                    shade(self.config.extended_hours_color, 0.08),
+                    shade(self.config.overnight_hours_color, 0.16),
+                ),
+            )
         } else {
-            (Vec::new(), egui::Color32::TRANSPARENT)
+            Vec::new()
         };
 
         // Render chart type with clipping to prevent bars from overlapping axes
@@ -3538,7 +3543,7 @@ impl Chart {
                 legend.day_change =
                     session_closes.filter(|_| values && self.config.show_last_day_change);
                 legend.study_backdrop = self.config.indicator_backdrop_opacity;
-                legend.extended_hours = (&extended_hours.0, extended_hours.1);
+                legend.extended_hours = &extended_hours;
                 let background = |pos: Pos2| self.background_at(rect, pos);
                 legend.background = Some(&background);
                 let inputs: Vec<_> = self.study_inputs.iter().map(String::as_str).collect();

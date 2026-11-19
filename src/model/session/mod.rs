@@ -19,6 +19,7 @@ mod exchange;
 
 pub use exchange::ExchangeSessionProvider;
 pub(crate) use exchange::MarketSession;
+pub(crate) use exchange::WindowKind;
 
 use crate::model::{Bar, TimezoneId, local_instant, local_time};
 use chrono::{DateTime, Datelike, Duration, NaiveTime, Utc, Weekday};
