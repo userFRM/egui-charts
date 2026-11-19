@@ -153,10 +153,10 @@ pub enum AccountPanelAction {
 /// The account panel of [`Trading`], shown with [`Trading::show_account_panel`].
 ///
 /// A tab named after the broker sits above the account selectors and the account's summary:
-/// balance, equity, realised and unrealised profit and loss, margin, available funds and the
-/// margin of working orders, each shown when the broker reports it. The tab marks a broker that
-/// reports that it is connecting or disconnected, until it reports that it is live. Below are the
-/// positions, working orders, finished orders, balance changes and trading journal the broker
+/// balance, equity, realised and unrealised profit and loss, margin, margin buffer, available
+/// funds and the margin of working orders, each shown when the broker reports it. The tab marks
+/// a broker that reports that it is connecting or disconnected, until it reports that it is live.
+/// Below are the positions, working orders, finished orders, balance changes and trading journal the broker
 /// pushes, each with a column chooser and an export. Order History also lists individual
 /// executions. A position offers close, and an order offers edit and cancel on hover; each waits
 /// for the user's confirmation like the chart's lines. Clicking
@@ -507,6 +507,55 @@ mod tests {
     use crate::model::OrderSide;
     use crate::ui::trading::tests::Recorder;
     use crate::ui_kit::notifications::Toasts;
+
+    /// A reported buffer, including a deficit, is shown beside the account margin; an absent
+    /// buffer has neither a label nor a value. The summary paints text rather than labels.
+    #[test]
+    fn the_summary_shows_the_margin_buffer_only_when_reported() {
+        use crate::model::{Account, Capabilities};
+        use std::sync::Mutex;
+
+        for (buffer, shown) in [(None, false), (Some(-250.5), true)] {
+            let mut trading = Trading::default();
+            let mut account = Account::new("USD", 1_000.0, Capabilities::default());
+            account.margin = Some(200.0);
+            account.margin_buffer = buffer;
+            trading.apply(
+                &egui::Context::default(),
+                AccountEvent::Account(account),
+                &mut Toasts::new(),
+            );
+            let keys = Arc::new(Mutex::new(Vec::new()));
+            let translated = keys.clone();
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(1440.0, 400.0))
+                .with_context_setup(move |ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::localization::set_translator(ctx, move |english| {
+                        translated.lock().unwrap().push(english.to_owned());
+                        None
+                    });
+                })
+                .build_ui_state(
+                    |ui, trading: &mut Trading| {
+                        trading.show_account_panel(ui, "SYM");
+                    },
+                    trading,
+                );
+            harness.run();
+            let keys = keys.lock().unwrap();
+            for key in ["Account margin", "200.00"] {
+                assert!(keys.iter().any(|text| text == key));
+            }
+            for key in ["Margin buffer", "-250.50"] {
+                assert_eq!(
+                    keys.iter().any(|text| text == key),
+                    shown,
+                    "{buffer:?}: {key}"
+                );
+            }
+        }
+    }
 
     /// A position's close button can be found by scanning the rows, without the pointer on one.
     #[test]

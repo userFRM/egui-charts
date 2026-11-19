@@ -374,6 +374,9 @@ pub struct Account {
     pub realized_pnl: Option<f64>,
     /// The margin the open positions hold, when the broker reports it.
     pub margin: Option<f64>,
+    /// The equity left above the [`margin`](Self::margin) the open positions hold, in
+    /// `currency`, when the broker reports it; negative once equity no longer covers that margin.
+    pub margin_buffer: Option<f64>,
     /// The margin the working orders would hold once filled, when the broker reports it.
     pub orders_margin: Option<f64>,
     /// The equity less the margin of the positions and the working orders, when the broker
@@ -392,6 +395,7 @@ impl Account {
             equity: None,
             realized_pnl: None,
             margin: None,
+            margin_buffer: None,
             orders_margin: None,
             available_funds: None,
             capabilities,

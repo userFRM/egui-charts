@@ -205,6 +205,12 @@ impl Trading {
                             Some("The margin the open positions hold"),
                         ),
                         (
+                            "Margin buffer",
+                            account.margin_buffer,
+                            false,
+                            Some("The equity left above the margin the open positions hold"),
+                        ),
+                        (
                             "Available funds",
                             account.available_funds,
                             false,

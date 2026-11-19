@@ -252,6 +252,7 @@ impl State {
         account.equity = Some(equity);
         account.realized_pnl = Some(self.balance - terms.initial);
         account.margin = Some(margin);
+        account.margin_buffer = Some(equity - margin);
         account.orders_margin = Some(orders_margin);
         account.available_funds = Some(equity - margin - orders_margin - commissions);
         AccountEvent::Account(account)
@@ -896,6 +897,7 @@ mod tests {
                 near(position.margin.unwrap(), margin);
                 near(account.margin.unwrap(), margin);
                 near(account.equity.unwrap(), balance + open);
+                near(account.margin_buffer.unwrap(), balance + open - margin);
                 near(account.available_funds.unwrap(), balance + open - margin);
             }
             // Close the remaining unit, then 0.1 + 0.2 with 0.3 on either side.
@@ -944,6 +946,10 @@ mod tests {
                 })
                 .unwrap();
             assert_eq!(account.orders_margin, Some(9.0));
+            assert_eq!(
+                account.margin_buffer,
+                Some(account.equity.unwrap() - account.margin.unwrap())
+            );
             assert_eq!(
                 account.available_funds,
                 Some(account.equity.unwrap() - account.margin.unwrap() - 9.0 - 0.09)

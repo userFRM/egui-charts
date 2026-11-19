@@ -414,6 +414,7 @@ fn valid_event(event: &AccountEvent) -> bool {
                     account.equity,
                     account.realized_pnl,
                     account.margin,
+                    account.margin_buffer,
                     account.orders_margin,
                     account.available_funds,
                 ]
@@ -1171,6 +1172,11 @@ mod tests {
                 vec![crate::model::TakeProfitLevel::new(bad, 2.0)];
             for event in [
                 AccountEvent::Account(Account::new("USD", bad, Capabilities::default())),
+                AccountEvent::Account({
+                    let mut invalid = account.clone();
+                    invalid.margin_buffer = Some(bad);
+                    invalid
+                }),
                 AccountEvent::Order(invalid_order),
                 AccountEvent::Order(invalid_level),
                 AccountEvent::Position(Position::new("SYM", bad, 100.0)),
