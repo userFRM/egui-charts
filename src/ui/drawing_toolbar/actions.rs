@@ -70,19 +70,26 @@ pub enum DrawingToolbarAction {
     /// `ToolbarState::hide_indicators` with
     /// [`Chart::set_indicators_hidden`](crate::widget::Chart::set_indicators_hidden).
     HideAllIndicators,
-    /// Hide all positions
+    /// Hide or show positions. Apply the requested `ToolbarState::hide_positions` with
+    /// [`Trading::apply_hide_action`](crate::ui::trading::Trading::apply_hide_action).
     HideAllPoss,
-    /// Hide all orders
+    /// Hide or show working orders. Apply the requested `ToolbarState::hide_orders` with
+    /// [`Trading::apply_hide_action`](crate::ui::trading::Trading::apply_hide_action).
     HideAllOrders,
+    /// Hide or show execution marks. Apply the requested `ToolbarState::hide_executions` with
+    /// [`Trading::apply_hide_action`](crate::ui::trading::Trading::apply_hide_action).
+    HideAllExecutions,
     /// Remove all drawings
     RemoveAllDrawings,
     /// Remove all indicators
     RemoveAllIndicators,
     /// Remove all studies (indicators + overlays)
     RemoveAllStudies,
-    /// Hide drawings, indicators, positions and orders at once. A host applies it as it
-    /// applies `HideAllDrawings`, `HideAllIndicators`, `HideAllPoss` and `HideAllOrders` with
-    /// the visibility selected in `ToolbarState`, in one undo step.
+    /// Hide drawings, indicators, positions, orders and executions at once. A host applies it
+    /// as it applies `HideAllDrawings` and `HideAllIndicators` with the visibility selected in
+    /// `ToolbarState`, and passes it to
+    /// [`Trading::apply_hide_action`](crate::ui::trading::Trading::apply_hide_action) for the
+    /// trading groups, in one undo step.
     HideAll,
     /// Remove all drawings and all indicators at once. A host applies it as it applies
     /// `RemoveAllDrawings` and `RemoveAllIndicators`, in one undo step.

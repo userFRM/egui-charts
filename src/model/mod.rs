@@ -118,8 +118,8 @@ pub use replay::ReplaySession;
 pub(crate) use revision::next_revision;
 pub use series_scale::{AxisSide, PaneAxisOptions, SeriesScale};
 pub use series_style::{
-    AutoscaleInfo, AutoscaleMargins, AutoscaleProvider, PriceLineSource, SeriesAlerts,
-    SeriesDisplayFormat, SeriesFormat, SeriesStyle,
+    AutoscaleInfo, AutoscaleMargins, AutoscaleProvider, PriceFraction, PriceLineSource,
+    SeriesAlerts, SeriesDisplayFormat, SeriesFormat, SeriesStyle,
 };
 pub use session::{
     CompositeSessionProvider, DailySessionProvider, ExchangeSessionProvider,
@@ -128,9 +128,11 @@ pub use session::{
 };
 pub use signal::{Direction, Signal, SignalId, SignalShape};
 pub use strategy::{
-    StrategyComparison, StrategyExcursion, StrategyExit, StrategyPerformance, StrategyReport,
-    StrategyTrade,
+    StrategyComparison, StrategyExcursion, StrategyExit, StrategyHolding, StrategyPerformance,
+    StrategyReport, StrategyTrade, StrategyTradeStats,
 };
+#[cfg(feature = "ui")]
+pub(crate) use strategy::{SummaryUnit, run_figures, trade_figures};
 pub use study::{InputValue, StudySource};
 pub use time_scale_event::{EventKind, EventVisibility, TimeScaleEvent};
 pub use timeframe::{Timeframe, TimeframeUnit};
