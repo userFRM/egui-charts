@@ -480,7 +480,7 @@ pub struct TradingSettings {
     pub show_positions: bool,
     /// Give each position's profit or loss on its label.
     pub position_pnl: bool,
-    /// The unit of the positions' profit or loss.
+    /// The unit of the positions' profit or loss, on their labels and in the depth ladder.
     pub position_pnl_unit: PnlUnit,
     /// Show a position's reverse button while its label is hovered.
     pub reverse_button: bool,
