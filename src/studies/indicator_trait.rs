@@ -410,6 +410,7 @@ pub trait Indicator: Send {
             levels,
             fill_between_levels,
             level_fill_color,
+            mfi_auto_range: false,
             untagged_plots: (0..self.line_count())
                 .filter(|&line| !self.plot_tagged(line))
                 .collect(),
