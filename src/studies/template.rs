@@ -834,6 +834,32 @@ impl StudyTemplate {
                     plot.visible = false;
                 }
             }
+            // The former Zig Zag construction's inputs and single plot give way to the
+            // defaults and separate support/resistance styles of the breakout study.
+            #[cfg(feature = "drawings")]
+            "Auto Trend Line" if has("deviation_percent") && !declares("deviation_percent") => {
+                const REMOVED: [&str; 5] = [
+                    "swing_size",
+                    "atr_multiple",
+                    "atr_period",
+                    "deviation_percent",
+                    "depth",
+                ];
+                template
+                    .inputs
+                    .retain(|(id, _)| !REMOVED.contains(&id.as_str()));
+                let declared = crate::studies::AutoTrendLines::new().settings();
+                template.settings.plots = declared.plots;
+                template.settings.plot_variants = declared.plot_variants;
+                if self
+                    .settings
+                    .help_url
+                    .as_deref()
+                    .is_some_and(|url| url.ends_with("/struct.AutoDrawing.html"))
+                {
+                    template.settings.help_url = declared.help_url;
+                }
+            }
             _ => changed = false,
         }
         // Profile inputs added since a save, set to draw what it drew.
@@ -1144,7 +1170,7 @@ mod tests {
                 // A literal save from before drawings could keep their own style restores its
                 // settings and the input ids that identify its study pane unchanged.
                 (
-                    serde_json::from_str(r#"{"name":"Auto Trend Line","inputs":[["swing_size",{"Choice":1}],["atr_multiple",{"Number":3.0}],["atr_period",{"Length":10}],["deviation_percent",{"Number":5.0}],["depth",{"Length":3}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.AutoDrawing.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap(),
+                    serde_json::from_str(r#"{"name":"Auto Parallel Channel","inputs":[["swing_size",{"Choice":1}],["atr_multiple",{"Number":3.0}],["atr_period",{"Length":10}],["deviation_percent",{"Number":5.0}],["depth",{"Length":3}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.AutoDrawing.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap(),
                     &[
                         ("swing_size", InputValue::Choice(1)),
                         ("deviation_percent", InputValue::Number(5.0)),
@@ -1173,6 +1199,35 @@ mod tests {
                     let restored = inputs.iter().find(|input| input.id == *id).unwrap();
                     assert_eq!(&restored.value, value, "{id}");
                 }
+            }
+        }
+        #[cfg(feature = "drawings")]
+        {
+            // The literal single-line save on origin/main upgrades to the breakout study.
+            let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Auto Trend Line","inputs":[["swing_size",{"Choice":1}],["atr_multiple",{"Number":3.0}],["atr_period",{"Length":10}],["deviation_percent",{"Number":5.0}],["depth",{"Length":3}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.AutoDrawing.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+            let restored = saved.create().unwrap();
+            let defaults = crate::studies::AutoTrendLines::new().settings();
+            assert_eq!(restored.settings().plots, defaults.plots);
+            assert_eq!(restored.settings().help_url, defaults.help_url);
+            let inputs = restored.inputs();
+            for (id, expected) in [
+                ("bars_to_breakout", InputValue::Length(3)),
+                ("line_size", InputValue::Choice(2)),
+                ("show_pivots", InputValue::Toggle(false)),
+            ] {
+                assert_eq!(
+                    inputs.iter().find(|input| input.id == id).unwrap().value,
+                    expected
+                );
+            }
+            for id in [
+                "swing_size",
+                "atr_multiple",
+                "atr_period",
+                "deviation_percent",
+                "depth",
+            ] {
+                assert!(inputs.iter().all(|input| input.id != id));
             }
         }
         // Literal two-plot saves from before developing boundaries had their own style keep

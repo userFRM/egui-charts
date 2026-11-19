@@ -42,10 +42,10 @@ pub use domain::{
     LineMeasurements, LineTextHorizontalAlign, LineTextOrientation, LineTextVerticalAlign,
     MiddleLineStyle, NoteTextStyle, ParseToolTypeError, PitchforkConfig, PitchforkLevel,
     PositionReadout, PositionSize, PositionSizing, PositionStyle, ProjectionConfig,
-    ProjectionLevel, RegressionBandLine, RegressionTrendConfig, TimeframeVisibility, VwapBand,
-    VwapBandLine, VwapBandMode, VwapConfig, VwapFill, VwapPlotType,
+    ProjectionLevel, RangeSettings, RegressionBandLine, RegressionTrendConfig, TimeframeVisibility,
+    VwapBand, VwapBandLine, VwapBandMode, VwapConfig, VwapFill, VwapPlotType,
 };
 
 // Re-export manager types
-pub use manager::{DrawingManager, DrawingManagerOptions, DrawingState};
+pub use manager::{DrawingEventKind, DrawingManager, DrawingManagerOptions, DrawingState};
 pub use registry::{DrawingRenderer, DrawingToolRegistry, RegisteredDrawingTool, ToolAvailability};
