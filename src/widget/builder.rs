@@ -188,6 +188,7 @@ impl Chart {
             legend_statuses: Vec::new(),
             quote: None,
             quote_action: None,
+            quote_panel_at: None,
             server_time_offset: None,
             bar_close_time: None,
             indicator_settings_request: None,
@@ -276,6 +277,8 @@ impl Chart {
             trading_bid_ask: false,
             #[cfg(feature = "ui")]
             order_quantity: None,
+            #[cfg(feature = "ui")]
+            order_quantity_text: None,
             #[cfg(feature = "ui")]
             quantity_clicked: None,
             // Selection (Widget API)

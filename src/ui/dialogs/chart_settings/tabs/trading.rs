@@ -44,6 +44,16 @@ impl SettingsDialog {
             "Buy/sell buttons",
             text,
         );
+        ui.add_enabled_ui(self.settings.status_line.show_quote_boxes, |ui| {
+            trading_option(
+                ui,
+                TRADING_INDENT,
+                &mut self.settings.status_line.quote_panel,
+                "Movable panel",
+                text,
+                |_| {},
+            );
+        });
         let trading = &mut self.settings.trading;
         styled_checkbox(
             ui,
