@@ -1922,6 +1922,83 @@ mod tests {
         }
     }
 
+    /// Axes show their drag direction when both scale permissions allow it, otherwise the
+    /// plot's cursor for the crosshair style. The plot keeps its style cursor.
+    #[test]
+    fn axis_cursors_follow_axis_drag_permissions() {
+        use crate::config::CrosshairStyle;
+        use egui::CursorIcon;
+
+        let key = crate::model::SeriesScale::Separate(1);
+        for (style, plot) in [
+            (CrosshairStyle::Full, CursorIcon::Crosshair),
+            (CrosshairStyle::Dot, CursorIcon::Default),
+        ] {
+            for (enabled, drag) in [(true, true), (false, true), (true, false)] {
+                for (target, resize) in [
+                    ("plot", plot),
+                    ("time", CursorIcon::ResizeHorizontal),
+                    ("price", CursorIcon::ResizeVertical),
+                    ("pane", CursorIcon::ResizeVertical),
+                    ("series", CursorIcon::ResizeVertical),
+                ] {
+                    let ctx = egui::Context::default();
+                    let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                    if target == "pane" {
+                        chart.add_indicator(Box::new(
+                            crate::studies::CustomIndicator::new("Pane", |bars| {
+                                vec![crate::studies::IndicatorValue::Single(50.0); bars.len()]
+                            })
+                            .with_overlay(false),
+                        ));
+                    }
+                    if target == "series" {
+                        let series = chart.add_series(crate::widget::SeriesOptions {
+                            scale: key,
+                            ..Default::default()
+                        });
+                        chart.set_data(series, chart.state.data().bars.clone());
+                    }
+                    chart.chart_options.crosshair.style = style;
+                    chart.chart_options.handle_scale.enabled = enabled;
+                    chart
+                        .chart_options
+                        .handle_scale
+                        .axis_pressed_mouse_move
+                        .time = drag;
+                    chart
+                        .chart_options
+                        .handle_scale
+                        .axis_pressed_mouse_move
+                        .price = drag;
+                    frame(&ctx, &mut chart, 0.0, vec![]);
+                    let rect = chart.last_rendered_price_rect;
+                    let pos = match target {
+                        "plot" => rect.center(),
+                        "time" => Pos2::new(
+                            rect.center().x,
+                            rect.bottom().max(chart.last_rendered_volume_rect.bottom()) + 5.0,
+                        ),
+                        "price" => Pos2::new(rect.right() + 10.0, rect.center().y),
+                        "series" => Pos2::new(rect.left() - 10.0, rect.center().y),
+                        _ => {
+                            let pane = &chart.get_rendered_indicator_panes()[0];
+                            Pos2::new(pane.chart_rect.right() + 10.0, pane.panel_rect.center().y)
+                        }
+                    };
+                    // Hover is hit-tested against the widgets of the previous frame.
+                    frame(&ctx, &mut chart, 1.0, vec![Event::PointerMoved(pos)]);
+                    let cursor = frame(&ctx, &mut chart, 1.1, vec![Event::PointerMoved(pos)]);
+                    let expected = if enabled && drag { resize } else { plot };
+                    assert_eq!(
+                        cursor, expected,
+                        "{style:?}, enabled={enabled}, drag={drag}, {target}"
+                    );
+                }
+            }
+        }
+    }
+
     /// Study-pane and secondary price-axis drags obey the same scale group as the main axis.
     #[test]
     fn scale_group_controls_other_price_axis_drags() {
@@ -2773,6 +2850,131 @@ mod tests {
                             assert_eq!(chart.state.time_scale().right_offset(), offset);
                         }
                     }
+                }
+            }
+        }
+    }
+
+    /// A selected drawing tool leaves a drag that begins on the main price axis, on either side,
+    /// or on the time axis to that axis: it zooms as without a tool, under the axis's resize
+    /// cursor, and places nothing. A placement that begins in the plot keeps the drag over an
+    /// axis, also when its second anchor is dragged from the axis.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn main_axes_zoom_while_a_drawing_tool_is_selected() {
+        use crate::config::DrawingToolType;
+        use egui::CursorIcon;
+
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let tools = [
+            None,
+            Some(DrawingToolType::TrendLine),
+            Some(DrawingToolType::Rect),
+        ];
+        for tool in tools {
+            for (case, left) in [
+                ("price", false),
+                ("price", true),
+                ("time", false),
+                ("plot", false),
+                ("second anchor", false),
+            ] {
+                if tool.is_none() && matches!(case, "plot" | "second anchor")
+                    || tool == Some(DrawingToolType::Rect) && case == "second anchor"
+                {
+                    continue;
+                }
+                let label = format!("{tool:?}, {case}, left={left}");
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
+                chart.config.show_left_axis = left;
+                chart.config.show_right_axis = !left;
+                chart.drawings_mut().set_active_tool(tool);
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let rect = chart.last_rendered_price_rect;
+                let price_x = if left {
+                    rect.left() - 10.0
+                } else {
+                    rect.right() + 10.0
+                };
+                let on_price_axis = Pos2::new(price_x, rect.center().y);
+                let on_time_axis = Pos2::new(
+                    rect.center().x,
+                    rect.bottom().max(chart.last_rendered_volume_rect.bottom()) + 5.0,
+                );
+                let (start, end) = match case {
+                    "price" | "second anchor" => {
+                        (on_price_axis, on_price_axis + egui::vec2(0.0, 100.0))
+                    }
+                    "time" => (on_time_axis, on_time_axis + egui::vec2(100.0, 0.0)),
+                    _ => (rect.center(), on_price_axis + egui::vec2(0.0, 100.0)),
+                };
+                let mut t = 1.0;
+                let mut step = |chart: &mut Chart, events| {
+                    t += 0.02;
+                    frame(&ctx, chart, t, events)
+                };
+                if case == "second anchor" {
+                    let first = rect.center() - egui::vec2(100.0, 0.0);
+                    step(&mut chart, vec![Event::PointerMoved(first)]);
+                    step(&mut chart, vec![button(first, true)]);
+                    step(&mut chart, vec![button(first, false)]);
+                    assert!(chart.drawings.curr_drawing.is_some(), "{label}");
+                }
+                let span = |chart: &Chart| {
+                    let range = chart.state.price_scale().range();
+                    range.max - range.min
+                };
+                let (span_before, (spacing_before, offset_before)) =
+                    (span(&chart), chart.get_time_scale_state());
+                // Hover is hit-tested against the widgets of the previous frame.
+                step(&mut chart, vec![Event::PointerMoved(start)]);
+                let cursor = step(&mut chart, vec![Event::PointerMoved(start)]);
+                step(&mut chart, vec![button(start, true)]);
+                step(&mut chart, vec![Event::PointerMoved(start.lerp(end, 0.5))]);
+                step(&mut chart, vec![Event::PointerMoved(end)]);
+                step(&mut chart, vec![button(end, false)]);
+                // 100 points widen the price range by e^(100 / height) and the bar spacing by
+                // e^0.1.
+                let (span_after, spacing_after) = match case {
+                    "price" => (
+                        span_before * (100.0 / f64::from(rect.height())).exp(),
+                        spacing_before,
+                    ),
+                    "time" => (span_before, spacing_before * 1.105_171),
+                    _ => (span_before, spacing_before),
+                };
+                assert!(
+                    (span(&chart) - span_after).abs() < 1e-5,
+                    "{label}: span {} for {span_after}",
+                    span(&chart)
+                );
+                assert!(
+                    (chart.state.time_scale().bar_spacing() - spacing_after).abs() < 1e-5,
+                    "{label}: spacing {} for {spacing_after}",
+                    chart.state.time_scale().bar_spacing()
+                );
+                if matches!(case, "price" | "time") {
+                    assert_eq!(chart.drawings.active_tool, tool, "{label}");
+                    let resize = if case == "price" {
+                        CursorIcon::ResizeVertical
+                    } else {
+                        CursorIcon::ResizeHorizontal
+                    };
+                    assert_eq!(cursor, resize, "{label}");
+                    assert!(chart.drawings.curr_drawing.is_none(), "{label}");
+                    assert!(chart.drawings.drawings.is_empty(), "{label}");
+                    if case == "price" {
+                        assert_eq!(chart.get_time_scale_state().1, offset_before, "{label}");
+                    }
+                } else {
+                    assert_eq!(chart.get_time_scale_state().1, offset_before, "{label}");
+                    assert_eq!(chart.drawings.drawings.len(), 1, "{label}");
                 }
             }
         }

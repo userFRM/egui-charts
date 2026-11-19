@@ -1101,6 +1101,62 @@ pub(super) fn take_shapes(
     })
 }
 
+/// Where the next shape `painter` paints goes in its layer.
+#[cfg(feature = "drawings")]
+pub(super) fn next_shape(painter: &Painter) -> egui::layers::ShapeIdx {
+    painter
+        .ctx()
+        .graphics_mut(|graphics| graphics.entry(painter.layer_id()).next_idx())
+}
+
+/// Moves each range of shapes in `layer` to just before its index, keeping the order of every
+/// other shape and of ranges that go to the same index, and each shape's clip rectangle.
+/// Each range lies after its index; ranges do not overlap.
+#[cfg(feature = "drawings")]
+pub(super) fn move_shapes_before(
+    ctx: &egui::Context,
+    layer: egui::LayerId,
+    moves: &[(egui::layers::ShapeIdx, std::ops::Range<usize>)],
+) {
+    ctx.graphics_mut(|graphics| {
+        let list = graphics.entry(layer);
+        let mut moves: Vec<_> = moves
+            .iter()
+            .filter(|(before, range)| {
+                debug_assert!(range.start >= before.0);
+                !range.is_empty() && range.start >= before.0 && range.end <= list.next_idx().0
+            })
+            .collect();
+        let Some(lo) = moves.iter().map(|(before, _)| before.0).min() else {
+            return;
+        };
+        let hi = moves.iter().map(|(_, range)| range.end).max().unwrap();
+        let mut taken = Vec::with_capacity(hi - lo);
+        for i in lo..hi {
+            list.mutate_shape(egui::layers::ShapeIdx(i), |shape| {
+                let empty = egui::epaint::ClippedShape::new(shape.clip_rect, egui::Shape::Noop);
+                taken.push(Some(std::mem::replace(shape, empty)));
+            });
+        }
+        moves.sort_by_key(|(before, range)| (before.0, range.start));
+        let mut moves = moves.into_iter().peekable();
+        let mut out = Vec::with_capacity(hi - lo);
+        for i in lo..hi {
+            while moves.peek().is_some_and(|(before, _)| before.0 == i) {
+                let (_, range) = moves.next().unwrap();
+                for index in range.clone() {
+                    out.extend(taken[index - lo].take());
+                }
+            }
+            out.extend(taken[i - lo].take());
+        }
+        debug_assert_eq!(out.len(), hi - lo);
+        for (i, shape) in out.into_iter().enumerate() {
+            list.mutate_shape(egui::layers::ShapeIdx(lo + i), |entry| *entry = shape);
+        }
+    });
+}
+
 /// Inserts deferred shapes without applying the painter's opacity a second time.
 pub(super) fn paint_backgrounds(painter: &Painter, shapes: Vec<egui::epaint::ClippedShape>) {
     painter.ctx().graphics_mut(|graphics| {
