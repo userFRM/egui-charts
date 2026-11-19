@@ -944,8 +944,15 @@ pub struct ChartTypeParams {
     pub tpo_period_minutes: u32,
     /// TPO: minutes from the session open included in the initial balance, 60 by default.
     pub tpo_initial_balance_minutes: u32,
-    /// TPO: mark the highest and lowest rows when they hold more than one TPO.
+    /// TPO: saved by earlier releases for poor highs and lows together; when on, both are marked.
+    /// The settings write `tpo_poor_high` and `tpo_poor_low` and turn it off.
     pub tpo_poor_highs_lows: bool,
+    /// TPO: mark poor highs. Off by default.
+    pub tpo_poor_high: bool,
+    /// TPO: mark poor lows. Off by default.
+    pub tpo_poor_low: bool,
+    /// TPO: extend poor highs and lows until a later bar trades through them. Off by default.
+    pub tpo_extend_poor: bool,
     /// TPO: draw one and two initial balance ranges above its high and below its low.
     pub tpo_initial_balance_extensions: bool,
     /// TPO: instrument ticks per price row. Zero, or an instrument without a tick size, fits
@@ -983,6 +990,16 @@ pub struct ChartTypeParams {
     pub tpo_split_periods: bool,
     /// TPO: draw the initial balance marker. On by default; its period and extensions apply either way.
     pub tpo_initial_balance: bool,
+    /// TPO: colour, underline and caption the point of control. On by default.
+    pub tpo_poc: bool,
+    /// TPO: draw and caption the value area high and low and dim blocks outside it. On by default.
+    pub tpo_value_area_levels: bool,
+    /// TPO: mark each profile's opening price. On by default.
+    pub tpo_open_price: bool,
+    /// TPO: mark each profile's closing price. Off by default.
+    pub tpo_close_price: bool,
+    /// TPO: draw a volume profile beside each profile. Off by default.
+    pub tpo_volume_profile: bool,
     /// TPO: sessions combined into one profile, as in
     /// [`TPOConfig::composites`](super::TPOConfig::composites).
     pub tpo_composites: Vec<std::ops::RangeInclusive<chrono::DateTime<chrono::Utc>>>,
@@ -1074,6 +1091,9 @@ impl Default for ChartTypeParams {
             tpo_period_minutes: 30,
             tpo_initial_balance_minutes: 60,
             tpo_poor_highs_lows: false,
+            tpo_poor_high: false,
+            tpo_poor_low: false,
+            tpo_extend_poor: false,
             tpo_initial_balance_extensions: false,
             tpo_row_ticks: 0,
             tpo_value_area: 70.0,
@@ -1094,6 +1114,11 @@ impl Default for ChartTypeParams {
             tpo_profile_period: super::TPOProfilePeriod::Session,
             tpo_split_periods: false,
             tpo_initial_balance: true,
+            tpo_poc: true,
+            tpo_value_area_levels: true,
+            tpo_open_price: true,
+            tpo_close_price: false,
+            tpo_volume_profile: false,
             tpo_composites: Vec::new(),
             tpo_splits: Vec::new(),
         }
@@ -1110,7 +1135,14 @@ impl ChartTypeParams {
             period_minutes: self.tpo_period_minutes,
             initial_balance_minutes: self.tpo_initial_balance_minutes,
             show_initial_balance: self.tpo_initial_balance,
-            show_poor_highs_lows: self.tpo_poor_highs_lows,
+            show_poc: self.tpo_poc,
+            show_value_area: self.tpo_value_area_levels,
+            show_opening_range: self.tpo_open_price,
+            show_closing_price: self.tpo_close_price,
+            show_volume_profile: self.tpo_volume_profile,
+            show_poor_high: self.tpo_poor_high || self.tpo_poor_highs_lows,
+            show_poor_low: self.tpo_poor_low || self.tpo_poor_highs_lows,
+            extend_poor_extremes: self.tpo_extend_poor,
             show_initial_balance_extensions: self.tpo_initial_balance_extensions,
             value_area_pct: self.tpo_value_area / 100.0,
             split_sessions: self.tpo_split_sessions,
@@ -1295,6 +1327,15 @@ mod tests {
 
     #[test]
     fn saved_execution_settings_keep_choices_and_legacy_defaults() {
+        let profile = serde_json::json!({"mode": "Volume", "value_area": 0.5, "developing_poc": true,
+                "developing_value_area": true, "extend_poc": true, "extend_vah": true,
+                "extend_val": true, "value_area_guides": true, "poc": false,
+                "poc_color": [12, 34, 56, 255], "value_area_high": false,
+                "value_area_high_color": [0, 200, 0, 255], "value_area_low": false,
+                "value_area_low_color": [0, 0, 100, 128], "up_volume_color": [60, 0, 0, 60],
+                "down_volume_color": [0, 60, 0, 60], "value_area_up_color": [0, 0, 120, 120],
+                "value_area_down_color": [120, 120, 0, 120],
+                "nodes": {"smoothing": 2, "prominence": 0.1}});
         let settings = serde_json::json!({
             "footprint_modes": ["Delta", "BidAskTrades", "Trades", "AverageSize"], "footprint_row_ticks": 2,
             "footprint_row_atr": true, "footprint_row_atr_length": 30,
@@ -1312,15 +1353,15 @@ mod tests {
             "tpo_profile_period": "Week",
             "tpo_split_periods": true,
             "tpo_initial_balance": false,
-            "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
-                "developing_value_area": true, "extend_poc": true, "extend_vah": true,
-                "extend_val": true, "value_area_guides": true, "poc": false,
-                "poc_color": [12, 34, 56, 255], "value_area_high": false,
-                "value_area_high_color": [0, 200, 0, 255], "value_area_low": false,
-                "value_area_low_color": [0, 0, 100, 128], "up_volume_color": [60, 0, 0, 60],
-                "down_volume_color": [0, 60, 0, 60], "value_area_up_color": [0, 0, 120, 120],
-                "value_area_down_color": [120, 120, 0, 120],
-                "nodes": {"smoothing": 2, "prominence": 0.1}}
+            "tpo_poc": false,
+            "tpo_value_area_levels": false,
+            "tpo_open_price": false,
+            "tpo_close_price": true,
+            "tpo_poor_high": true,
+            "tpo_poor_low": false,
+            "tpo_extend_poor": true,
+            "tpo_volume_profile": true,
+            "profile": profile
         });
         let params: ChartTypeParams = serde_json::from_value(settings.clone()).unwrap();
         let saved = serde_json::to_value(&params).unwrap();
@@ -1426,6 +1467,14 @@ mod tests {
             assert_eq!(legacy["tpo_profile_period"], "Session");
             assert_eq!(legacy["tpo_split_periods"], false);
             assert_eq!(legacy["tpo_initial_balance"], true);
+            assert_eq!(legacy["tpo_poc"], true);
+            assert_eq!(legacy["tpo_value_area_levels"], true);
+            assert_eq!(legacy["tpo_open_price"], true);
+            assert_eq!(legacy["tpo_close_price"], false);
+            assert_eq!(legacy["tpo_poor_high"], false);
+            assert_eq!(legacy["tpo_poor_low"], false);
+            assert_eq!(legacy["tpo_extend_poor"], false);
+            assert_eq!(legacy["tpo_volume_profile"], false);
             assert_eq!(
                 legacy["footprint_colors"],
                 serde_json::json!([null, null, null, null])
@@ -1620,6 +1669,8 @@ mod tests {
             let config = params.tpo_config(Some(1.0));
             assert!(config.splits.is_empty());
             assert_eq!(config.initial_balance_minutes, minutes);
+            assert_eq!(config.show_poor_high, enabled);
+            assert_eq!(config.show_poor_low, enabled);
             assert_eq!(config.show_single_prints, single_prints);
             assert_eq!(config.show_midpoint, midpoint);
             let profiles = to_tpo_profiles(&bars, &config, &Timeframe::Min30.into());
