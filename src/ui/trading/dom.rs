@@ -74,6 +74,9 @@ pub(super) struct Ladder {
     /// The order chosen from a price with more than one working order on the same side.
     #[serde(skip)]
     selected: Option<OrderId>,
+    /// The row prices retained while its order menu is open and the market moves.
+    #[serde(skip)]
+    level_menu: Option<[f64; 2]>,
     /// Which of the [`EXTRAS`] are shown.
     columns: [bool; 3],
     profile: Profile,
@@ -356,6 +359,29 @@ impl Ladder {
             request.time_in_force = tif;
             Ok(request)
         };
+        // Stops must trigger beyond the touch, or the last price without a quote.
+        let checked = |side: OrderSide, order_type: OrderType| -> Result<OrderRequest, String> {
+            let request = order(side, order_type)?;
+            if let OrderType::Stop(at) | OrderType::StopLimit { stop: at, .. } = order_type {
+                let touch = match side {
+                    OrderSide::Buy => market.ask,
+                    OrderSide::Sell => market.bid,
+                }
+                .filter(|price| price.is_finite())
+                .or(market.last.filter(|price| price.is_finite()));
+                match (side, touch) {
+                    (_, None) => return Err("Waiting for the market's price".into()),
+                    (OrderSide::Buy, Some(touch)) if at <= touch => {
+                        return Err("A buy stop must lie above the market".into());
+                    }
+                    (OrderSide::Sell, Some(touch)) if at >= touch => {
+                        return Err("A sell stop must lie below the market".into());
+                    }
+                    _ => {}
+                }
+            }
+            Ok(request)
+        };
         let mut action = None;
 
         let footer = if read_only {
@@ -429,9 +455,7 @@ impl Ladder {
         let top = top(centre);
         // The row index from the top of a visible row key.
         let row_of = |key: i64| (visible(centre, key)).then(|| (top - key) as usize);
-        // A buy takes a row's highest price and a sell its lowest. The ladder then offers a limit
-        // only for a row that lies wholly at or inside the touch, priced nearest the market, and a
-        // stop only beyond it.
+        // A buy takes a row's highest price and a sell its lowest.
         let row_price = |row: usize, side: OrderSide| {
             let lowest = top.saturating_sub(row as i64).saturating_mul(step);
             price(match side {
@@ -941,14 +965,13 @@ impl Ladder {
                         }
                     }
 
-                    // Clicking a size cell places a limit order on the passive side of the market and a stop
-                    // order beyond it.
+                    // A size cell places a limit, or a stop with Ctrl (Cmd on macOS).
                     let pointer_row = |pos: egui::Pos2| {
                         ((pos.y - rect.top()) / ROW)
                             .floor()
                             .clamp(0.0, (rows - 1) as f32) as usize
                     };
-                    let cell_order = |pos: egui::Pos2| {
+                    let cell_order = |pos: egui::Pos2, stop: bool| {
                         if read_only {
                             return None;
                         }
@@ -961,26 +984,14 @@ impl Ladder {
                         };
                         let row = pointer_row(pos);
                         let at = row_price(row, side);
-                        let touch = match side {
-                            OrderSide::Buy => market.ask,
-                            OrderSide::Sell => market.bid,
-                        }
-                        .or(market.last);
-                        let limit = touch.is_none_or(|touch| match side {
-                            OrderSide::Buy => at <= touch,
-                            OrderSide::Sell => at >= touch,
-                        });
-                        let order_type = if limit {
-                            market.capabilities.limit.then_some(OrderType::Limit(at))
-                        } else {
-                            market.capabilities.stop.then_some(OrderType::Stop(at))
-                        }?;
+                        let order_type = if stop { OrderType::Stop(at) } else { OrderType::Limit(at) };
                         Some((side, order_type, row_rect(row, column)))
                     };
+                    let stop = ui.input(|input| input.modifiers.command);
                     if let Some(pos) = response.hover_pos()
-                        && let Some((side, order_type, cell)) = cell_order(pos)
+                        && let Some((side, order_type, cell)) = cell_order(pos, stop)
                     {
-                        match order(side, order_type) {
+                        match checked(side, order_type) {
                             Ok(request) => {
                                 let color = side_color(&theme, side);
                                 let outline = cell.shrink(1.0);
@@ -1019,6 +1030,51 @@ impl Ladder {
                             Err(reason) => {
                                 response.clone().on_hover_text(l10n::text(ui.ctx(), reason));
                             }
+                        }
+                    }
+
+                    if !read_only {
+                        if response.secondary_clicked() {
+                            self.level_menu = response.interact_pointer_pos()
+                                .filter(|pos| rect.contains(*pos))
+                                .map(|pos| {
+                                    let row = pointer_row(pos);
+                                    [row_price(row, OrderSide::Buy), row_price(row, OrderSide::Sell)]
+                                });
+                        }
+                        if let Some([buy_at, sell_at]) = self.level_menu {
+                            egui::Popup::context_menu(&response)
+                                .id(ui.make_persistent_id("dom_level_menu"))
+                                .show(|ui| {
+                                    let entries = [
+                                        (OrderSide::Buy, OrderType::Limit(buy_at), "Buy limit {price}"),
+                                        (OrderSide::Sell, OrderType::Limit(sell_at), "Sell limit {price}"),
+                                        (OrderSide::Buy, OrderType::Stop(buy_at), "Buy stop {price}"),
+                                        (OrderSide::Sell, OrderType::Stop(sell_at), "Sell stop {price}"),
+                                        (OrderSide::Buy, OrderType::StopLimit { stop: buy_at, limit: buy_at }, "Buy stop limit {price}"),
+                                        (OrderSide::Sell, OrderType::StopLimit { stop: sell_at, limit: sell_at }, "Sell stop limit {price}"),
+                                    ];
+                                    let mut offered = false;
+                                    for (side, order_type, key) in entries {
+                                        if !market.capabilities.accepts(&order_type) {
+                                            continue;
+                                        }
+                                        offered = true;
+                                        let at = entry_price(&order_type).expect("a priced order");
+                                        let label = l10n::format_text(ui.ctx(), key, &[("price", numbers.price(at))]);
+                                        let request = checked(side, order_type);
+                                        let mut button = ui.add_enabled(request.is_ok(), egui::Button::new(label));
+                                        if let Err(reason) = &request {
+                                            button = button.on_disabled_hover_text(l10n::text(ui.ctx(), reason));
+                                        }
+                                        if button.clicked() && let Ok(request) = request {
+                                            action = Some(Action::Place(request));
+                                        }
+                                    }
+                                    if !offered {
+                                        muted(ui, "The account does not accept orders at a price");
+                                    }
+                                });
                         }
                     }
 
@@ -1790,6 +1846,12 @@ mod tests {
                 );
             }
         }
+        let after_clicks = frame(&mut ladder, &market, vec![]);
+        assert!(
+            !after_clicks
+                .iter()
+                .any(|(text, _)| text.starts_with("Buy limit"))
+        );
         frame(
             &mut ladder,
             &market,
@@ -2862,32 +2924,60 @@ mod tests {
             pressed,
             modifiers: Default::default(),
         };
-        // A buy takes the row's highest price and a sell its lowest: a limit inside the touch, and
-        // a stop for the buy in the row that holds the ask.
-        for (column, row, side, order_type) in [
-            ("Bid size", "99.00", OrderSide::Buy, OrderType::Limit(99.75)),
+        // Grouped limits and stops use the same edge of the row for each side.
+        for (column, row, stop, side, order_type) in [
+            (
+                "Bid size",
+                "99.00",
+                false,
+                OrderSide::Buy,
+                OrderType::Limit(99.75),
+            ),
             (
                 "Ask size",
                 "101.00",
+                false,
                 OrderSide::Sell,
                 OrderType::Limit(101.0),
             ),
             (
                 "Bid size",
                 "100.00",
+                false,
+                OrderSide::Buy,
+                OrderType::Limit(100.75),
+            ),
+            (
+                "Bid size",
+                "100.00",
+                true,
                 OrderSide::Buy,
                 OrderType::Stop(100.75),
             ),
         ] {
             let pos = cell(column, row);
+            let modifiers = if stop {
+                egui::Modifiers::COMMAND
+            } else {
+                egui::Modifiers::NONE
+            };
             frame(
                 &ctx,
                 &mut ladder,
                 &market,
-                vec![egui::Event::PointerMoved(pos)],
+                vec![
+                    egui::Event::ModifiersChanged(modifiers),
+                    egui::Event::PointerMoved(pos),
+                ],
             );
-            frame(&ctx, &mut ladder, &market, vec![click(pos, true)]);
-            let (action, _, _) = frame(&ctx, &mut ladder, &market, vec![click(pos, false)]);
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers,
+            };
+            frame(&ctx, &mut ladder, &market, vec![button(true)]);
+            let (action, _, _) = frame(&ctx, &mut ladder, &market, vec![button(false)]);
             let expected = Action::Place(OrderRequest::new("ES", side, 1.0, order_type));
             assert_eq!(action, Some(expected), "{column} at {row}");
         }

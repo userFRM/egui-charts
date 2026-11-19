@@ -527,7 +527,7 @@ mod tests {
             formatter: None,
             pip_value: None,
             last: Some(100.0),
-            bid: Some(99.75),
+            bid: Some(100.0),
             ask: Some(100.25),
             tick: 0.25,
             decimals: 2,
@@ -548,66 +548,110 @@ mod tests {
             logo: None,
         };
         let cases = [
+            ("Bid size", "99.50", "ctrl", false, true, None),
             (
                 "Bid size",
                 "99.50",
+                "click",
+                false,
                 true,
-                OrderSide::Buy,
-                OrderType::Limit(99.5),
-            ),
-            (
-                "Bid size",
-                "100.25",
-                true,
-                OrderSide::Buy,
-                OrderType::Limit(100.25),
+                Some((OrderSide::Buy, OrderType::Limit(99.5))),
             ),
             (
                 "Bid size",
                 "100.50",
+                "click",
+                false,
                 true,
-                OrderSide::Buy,
-                OrderType::Stop(100.5),
+                Some((OrderSide::Buy, OrderType::Limit(100.5))),
             ),
+            (
+                "Bid size",
+                "100.50",
+                "ctrl",
+                false,
+                true,
+                Some((OrderSide::Buy, OrderType::Stop(100.5))),
+            ),
+            ("Bid size", "100.25", "ctrl", false, true, None),
             (
                 "Ask size",
-                "100.50",
+                "99.50",
+                "ctrl",
+                false,
                 true,
-                OrderSide::Sell,
-                OrderType::Limit(100.5),
+                Some((OrderSide::Sell, OrderType::Stop(99.5))),
             ),
+            ("Ask size", "100.00", "ctrl", false, true, None),
             (
                 "Ask size",
                 "99.75",
+                "click",
+                false,
                 true,
-                OrderSide::Sell,
-                OrderType::Limit(99.75),
-            ),
-            (
-                "Ask size",
-                "99.50",
-                true,
-                OrderSide::Sell,
-                OrderType::Stop(99.5),
+                Some((OrderSide::Sell, OrderType::Limit(99.75))),
             ),
             (
                 "Bid size",
                 "99.50",
+                "Buy limit 99.50",
                 false,
-                OrderSide::Buy,
-                OrderType::Limit(99.5),
+                true,
+                Some((OrderSide::Buy, OrderType::Limit(99.5))),
             ),
-            ("CXL All", "", true, OrderSide::Buy, OrderType::Market),
+            (
+                "Bid size",
+                "99.50",
+                "Sell stop 99.50",
+                false,
+                true,
+                Some((OrderSide::Sell, OrderType::Stop(99.5))),
+            ),
+            ("Bid size", "99.50", "Buy stop 99.50", false, true, None),
+            (
+                "View",
+                "99.50",
+                "Sell stop limit 99.50",
+                true,
+                true,
+                Some((
+                    OrderSide::Sell,
+                    OrderType::StopLimit {
+                        stop: 99.5,
+                        limit: 99.5,
+                    },
+                )),
+            ),
+            (
+                "Bid size",
+                "99.50",
+                "click",
+                false,
+                false,
+                Some((OrderSide::Buy, OrderType::Limit(99.5))),
+            ),
+            ("CXL All", "", "click", false, true, None),
         ];
-        for (column, row, one_click, side, order_type) in cases {
+        for (column, row, gesture, stop_limit, instant, expected) in cases {
             let ctx = egui::Context::default();
+            ctx.all_styles_mut(|style| {
+                style.interaction.tooltip_delay = 0.0;
+                style.interaction.show_tooltips_only_when_still = false;
+            });
+            let market = Market {
+                capabilities: Capabilities {
+                    stop_limit,
+                    ..capabilities
+                },
+                ..market
+            };
             let mut ticket = OrderTicket {
                 open: true,
                 symbol: "ES".into(),
                 tab: Tab::Dom,
                 ..OrderTicket::default()
             };
-            let mut one_click = one_click;
+            let mut one_click = instant;
             let mut frame = |events| {
                 let mut action = None;
                 let output = ctx.run_ui(
@@ -621,45 +665,101 @@ mod tests {
                     },
                     |ui| action = ticket.show(ui, &market, &mut vec![], &mut one_click),
                 );
-                let centre = |label: &str| {
-                    output.shapes.iter().find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text() == label => {
-                            Some(text.galley.rect.translate(text.pos.to_vec2()).center())
-                        }
+                let labels: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some((
+                            text.galley.text().to_owned(),
+                            text.galley.rect.translate(text.pos.to_vec2()).center(),
+                        )),
                         _ => None,
                     })
-                };
-                let cell = if row.is_empty() {
-                    centre(column)
-                } else {
-                    centre(column).zip(centre(row)).map(|(x, y)| pos2(x.x, y.y))
-                };
+                    .collect();
                 output.drop_without_applying_deltas();
-                (action, cell)
+                (action, labels)
             };
-            let cell = frame(vec![]).1.expect(row);
-            frame(vec![egui::Event::PointerMoved(cell)]);
-            let click = |pressed| egui::Event::PointerButton {
-                pos: cell,
-                button: egui::PointerButton::Primary,
-                pressed,
-                modifiers: Default::default(),
+            let find = |labels: &[(String, egui::Pos2)], label: &str| {
+                labels
+                    .iter()
+                    .find(|(text, _)| text == label)
+                    .unwrap_or_else(|| panic!("missing {label}: {labels:?}"))
+                    .1
             };
-            frame(vec![click(true)]);
-            let (action, _) = frame(vec![click(false)]);
-            let mut expected = OrderRequest::new("ES", side, 1.0, order_type);
-            expected.time_in_force = TimeInForce::Day;
-            if row.is_empty() {
-                assert_eq!(
-                    action, None,
-                    "bulk cancellation always waits for confirmation"
-                );
-                assert_eq!(ticket.cancel, Some(vec![OrderId::new("bid")]));
-            } else if one_click {
-                assert_eq!(action, Some(Action::Place(expected)), "{column} at {row}");
+            frame(vec![]);
+            let labels = frame(vec![]).1;
+            let cell = if row.is_empty() {
+                find(&labels, column)
             } else {
-                assert_eq!(action, None, "{column} at {row} waits for confirmation");
-                assert_eq!(ticket.confirm, Some(expected));
+                pos2(find(&labels, column).x, find(&labels, row).y)
+            };
+            let modifiers = if gesture == "ctrl" {
+                egui::Modifiers::COMMAND
+            } else {
+                egui::Modifiers::NONE
+            };
+            frame(vec![
+                egui::Event::ModifiersChanged(modifiers),
+                egui::Event::PointerMoved(cell),
+            ]);
+            let button = |pos, button, pressed| egui::Event::PointerButton {
+                pos,
+                button,
+                pressed,
+                modifiers,
+            };
+            let menu = !matches!(gesture, "click" | "ctrl");
+            let kind = if menu {
+                egui::PointerButton::Secondary
+            } else {
+                egui::PointerButton::Primary
+            };
+            frame(vec![button(cell, kind, true)]);
+            let (mut action, _) = frame(vec![button(cell, kind, false)]);
+            if menu {
+                let labels = frame(vec![]).1;
+                for label in [
+                    "Buy limit 99.50",
+                    "Sell limit 99.50",
+                    "Buy stop 99.50",
+                    "Sell stop 99.50",
+                ] {
+                    find(&labels, label);
+                }
+                assert_eq!(
+                    labels
+                        .iter()
+                        .any(|(text, _)| text == "Sell stop limit 99.50"),
+                    stop_limit
+                );
+                let choice = find(&labels, gesture);
+                frame(vec![egui::Event::PointerMoved(choice)]);
+                frame(vec![button(choice, egui::PointerButton::Primary, true)]);
+                action = frame(vec![button(choice, egui::PointerButton::Primary, false)]).0;
+            } else if expected.is_none() && !row.is_empty() {
+                let labels = frame(vec![]).1;
+                let reason = if column == "Bid size" {
+                    "A buy stop must lie above the market"
+                } else {
+                    "A sell stop must lie below the market"
+                };
+                assert!(labels.iter().any(|(text, _)| text == reason), "{labels:?}");
+            }
+            let expected =
+                expected.map(|(side, order_type)| OrderRequest::new("ES", side, 1.0, order_type));
+            if row.is_empty() {
+                assert_eq!(action, None, "bulk cancellation waits for confirmation");
+                assert_eq!(ticket.cancel, Some(vec![OrderId::new("bid")]));
+            } else if instant {
+                assert_eq!(
+                    action,
+                    expected.map(Action::Place),
+                    "{gesture}: {column} at {row}"
+                );
+                assert_eq!(ticket.confirm, None);
+            } else {
+                assert_eq!(action, None);
+                assert_eq!(ticket.confirm, expected);
             }
         }
     }
