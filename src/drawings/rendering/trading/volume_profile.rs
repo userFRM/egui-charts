@@ -1,6 +1,6 @@
 //! Volume tools: anchored VWAP and the fixed range and anchored volume profiles
 
-use crate::data::{StudyDataRequest, VolumeProfile};
+use crate::data::{FootprintBarView, FootprintView, StudyDataRequest, VolumeProfile};
 use crate::drawings::domain::Drawing;
 use crate::drawings::domain::DrawingToolType;
 use crate::drawings::domain::{VwapBandLine, VwapBandMode, VwapConfig, VwapPlotType};
@@ -47,7 +47,7 @@ impl Drawing {
             self.draw_vwap(painter, view, first, bars);
         }
         // Drawn whatever bars are in view, at the values the price axis tags.
-        for (price, line) in self.anchored_vwap_tracked(view.bars, view.revision) {
+        for (price, line) in self.anchored_vwap_tracked(view.bars, view.revision, view.executions) {
             let clip = painter.clip_rect();
             let y = (view.price_to_y)(price);
             if clip.y_range().contains(y) {
@@ -88,7 +88,13 @@ impl Drawing {
             band_lines.extend([band.upper, band.lower]);
         }
         let mut lines = vec![Vec::with_capacity(to - from); offsets.len()];
-        for (i, value) in (from..to).zip(anchored_vwap(bars, &checkpoints, &config, from..to)) {
+        for (i, value) in (from..to).zip(anchored_vwap(
+            bars,
+            &checkpoints,
+            &config,
+            view.executions,
+            from..to,
+        )) {
             let Some((vwap, unit)) = value else { continue };
             let x = (view.bar_to_x)((first + i) as f32);
             for (line, k) in lines.iter_mut().zip(&offsets) {
@@ -154,14 +160,15 @@ impl Drawing {
         );
     }
 
-    /// The values at the last of `bars`, the pane's bars at `revision`, of the anchored VWAP's
-    /// tracked lines, each with its style: the VWAP while its line shows, in the drawing's
-    /// colour, then the shown band lines of the enabled bands. Empty for other drawings or before
-    /// volume trades.
+    /// The values at the last of `bars`, the pane's bars at `revision`, with the chart's
+    /// `executions`, of the anchored VWAP's tracked lines, each with its style: the VWAP while
+    /// its line shows, in the drawing's colour, then the shown band lines of the enabled bands.
+    /// Empty for other drawings, before volume trades and while the last bar has no value.
     pub(crate) fn anchored_vwap_tracked(
         &self,
         bars: &[Bar],
         revision: u64,
+        executions: Option<FootprintView<'_>>,
     ) -> Vec<(f64, VwapBandLine)> {
         if self.tool_type != DrawingToolType::AnchoredVWAP {
             return Vec::new();
@@ -193,7 +200,7 @@ impl Drawing {
             let (first, bars) = bars_between(bars, anchor, f32::INFINITY)?;
             let checkpoints = cached_checkpoints(config.source, first, bars, revision);
             let last = bars.len() - 1;
-            anchored_vwap(bars, &checkpoints, &config, last..bars.len()).next()?
+            anchored_vwap(bars, &checkpoints, &config, executions, last..bars.len()).next()?
         };
         let Some((vwap, unit)) = latest() else {
             return Vec::new();
@@ -202,6 +209,42 @@ impl Drawing {
             .into_iter()
             .map(|(k, line)| (vwap + k * unit, line))
             .collect()
+    }
+
+    /// Bars from this anchored VWAP's anchor that trade but use their source price because
+    /// their executions are not held in full, and all bars from the anchor. `None` for other
+    /// drawings, one that does not count executions, or without bars from its anchor.
+    #[cfg(any(feature = "ui", test))]
+    pub(crate) fn anchored_vwap_estimated(
+        &self,
+        bars: &[Bar],
+        executions: Option<FootprintView<'_>>,
+    ) -> Option<(usize, usize)> {
+        if self.tool_type != DrawingToolType::AnchoredVWAP
+            || !self.vwap.unwrap_or_default().executions
+        {
+            return None;
+        }
+        let (_, span) = bars_between(bars, self.chart_points.first()?.bar_idx, f32::INFINITY)?;
+        let estimated = span
+            .iter()
+            .filter(|bar| {
+                bar.volume > 0.0
+                    && executions
+                        .and_then(|flow| executed_bar(flow, bar))
+                        .is_none()
+            })
+            .count();
+        Some((estimated, span.len()))
+    }
+
+    /// Whether a visible drawing reads executions: a profile, or an anchored VWAP set to count
+    /// them.
+    pub(crate) fn reads_executions(&self) -> bool {
+        self.reads_profile()
+            || (self.visible
+                && self.tool_type == DrawingToolType::AnchoredVWAP
+                && self.vwap.is_some_and(|config| config.executions))
     }
 
     /// Whether a visible profile drawing reads the chart's executions and finer bars.
@@ -302,11 +345,14 @@ impl Drawing {
         if self.tool_type == DrawingToolType::AnchoredVWAP {
             let anchor = self.chart_points.first()?.bar_idx;
             let (first, bars) = bars_between(view.bars, anchor, f32::INFINITY)?;
-            let source = self.vwap.unwrap_or_default().source;
+            let config = self.vwap.unwrap_or_default();
+            let executions = view.executions.filter(|_| config.executions);
             let mut sums = VwapSums::default();
             let (i, (vwap, _)) = bars.iter().enumerate().find_map(|(i, bar)| {
-                sums.add(bar, source);
-                sums.value(VwapBandMode::Deviation).map(|value| (i, value))
+                sums.add_bar(bar, config.source, executions)
+                    .then(|| sums.value(VwapBandMode::Deviation))
+                    .flatten()
+                    .map(|value| (i, value))
             })?;
             let x = (view.bar_to_x)((first + i) as f32);
             return Some(vec![Pos2::new(x, (view.price_to_y)(vwap))]);
@@ -411,11 +457,44 @@ struct VwapSums {
 }
 
 impl VwapSums {
-    fn add(&mut self, bar: &Bar, source: PriceSource) {
+    /// Adds the bar at its source price; non-finite price or volume adds nothing and has no value.
+    fn add(&mut self, bar: &Bar, source: PriceSource) -> bool {
         let price = source.compute(bar.open, bar.high, bar.low, bar.close);
+        if !price.is_finite() || !bar.volume.is_finite() {
+            return false;
+        }
         self.volume += bar.volume;
         self.price_volume += price * bar.volume;
         self.square_volume += price * price * bar.volume;
+        true
+    }
+
+    /// Adds a bar's executions at each row's middle tick price.
+    fn add_executions(&mut self, rows: FootprintBarView<'_>, step: f64, tick_size: f64) {
+        let offset = (step - tick_size) / 2.0;
+        for (&level, row) in rows.levels.iter() {
+            let (price, volume) = (level as f64 * step + offset, row.volume());
+            self.volume += volume;
+            self.price_volume += price * volume;
+            self.square_volume += price * price * volume;
+        }
+    }
+
+    /// Adds complete executions of the bar when held, else its source price and volume.
+    /// Returns whether the bar has a value.
+    fn add_bar(
+        &mut self,
+        bar: &Bar,
+        source: PriceSource,
+        executions: Option<FootprintView<'_>>,
+    ) -> bool {
+        match executions.and_then(|flow| Some((flow, executed_bar(flow, bar)?))) {
+            Some((flow, rows)) => {
+                self.add_executions(rows, flow.price_step(), flow.tick_size());
+                true
+            }
+            None => self.add(bar, source),
+        }
     }
 
     /// VWAP and the unit of its bands in `mode`; `None` until volume trades.
@@ -431,12 +510,41 @@ impl VwapSums {
     }
 }
 
+/// The executions of `bar` when all are held and finite positive volume traded there.
+fn executed_bar<'a>(flow: FootprintView<'a>, bar: &Bar) -> Option<FootprintBarView<'a>> {
+    if !flow.span_is_complete(bar.time, bar.time) {
+        return None;
+    }
+    flow.complete_bar_at(bar.time)
+        .filter(|rows| rows.volume() > 0.0 && rows.volume().is_finite())
+}
+
+/// First bar that can open inside the held executions; earlier bars always use their source.
+fn first_held(bars: &[Bar], flow: FootprintView<'_>) -> usize {
+    flow.covered_from().map_or(bars.len(), |held| {
+        bars.partition_point(|bar| bar.time < held)
+    })
+}
+
 /// VWAP of `config`'s source over all of `bars`, from the anchor bar, with its band unit, as
-/// the painted line has it at the last of `bars`; `None` until volume trades.
-pub(crate) fn anchored_vwap_through(bars: &[Bar], config: &VwapConfig) -> Option<(f64, f64)> {
+/// the painted line has it at the last of `bars`; `None` until volume trades and at a bar whose
+/// source price or volume is not finite.
+pub(crate) fn anchored_vwap_through(
+    bars: &[Bar],
+    config: &VwapConfig,
+    executions: Option<FootprintView<'_>>,
+) -> Option<(f64, f64)> {
+    let executions = executions.filter(|_| config.executions);
     let mut sums = VwapSums::default();
-    bars.iter().for_each(|bar| sums.add(bar, config.source));
-    sums.value(config.band_mode)
+    let mut counted = false;
+    for bar in bars {
+        counted = sums.add_bar(bar, config.source, executions);
+    }
+    if counted {
+        sums.value(config.band_mode)
+    } else {
+        None
+    }
 }
 
 /// The running sums at the start of the span and after every block of
@@ -446,7 +554,9 @@ fn vwap_checkpoints(prefix: &[Bar], source: PriceSource) -> Vec<VwapSums> {
     let mut sums = VwapSums::default();
     let mut checkpoints = vec![sums];
     for block in prefix.chunks(VWAP_CHECKPOINT) {
-        block.iter().for_each(|bar| sums.add(bar, source));
+        block.iter().for_each(|bar| {
+            sums.add(bar, source);
+        });
         checkpoints.push(sums);
     }
     checkpoints
@@ -474,17 +584,31 @@ fn anchored_vwap<'a>(
     bars: &'a [Bar],
     checkpoints: &[VwapSums],
     config: &VwapConfig,
+    executions: Option<FootprintView<'a>>,
     range: Range<usize>,
 ) -> impl Iterator<Item = Option<(f64, f64)>> + 'a {
     let (source, mode) = (config.source, config.band_mode);
-    let checkpoint = range.start / VWAP_CHECKPOINT;
+    let executions = executions.filter(|_| config.executions);
+    // Bar checkpoints serve the prefix before held executions; later bars are summed each frame.
+    // shortcut: one pass over held bars each frame; cache mixed checkpoints by footprint revision
+    // if held histories grow past tens of thousands of bars.
+    let split = range
+        .start
+        .min(executions.map_or(bars.len(), |flow| first_held(bars, flow)));
+    let checkpoint = split / VWAP_CHECKPOINT;
     let mut sums = checkpoints[checkpoint];
-    bars[checkpoint * VWAP_CHECKPOINT..range.start]
+    bars[checkpoint * VWAP_CHECKPOINT..split]
         .iter()
-        .for_each(|bar| sums.add(bar, source));
+        .for_each(|bar| {
+            sums.add(bar, source);
+        });
+    bars[split..range.start].iter().for_each(|bar| {
+        sums.add_bar(bar, source, executions);
+    });
     bars[range].iter().map(move |bar| {
-        sums.add(bar, source);
-        sums.value(mode)
+        sums.add_bar(bar, source, executions)
+            .then(|| sums.value(mode))
+            .flatten()
     })
 }
 
@@ -1013,7 +1137,7 @@ mod tests {
         drawing.vwap = Some(config);
         drawing.chart_points = vec![crate::drawings::ChartPoint::new(80.0, 50.0)];
         // The price axis tags this value.
-        let tracked = drawing.anchored_vwap_tracked(&bars, 0);
+        let tracked = drawing.anchored_vwap_tracked(&bars, 0, None);
         assert_eq!(
             tracked.iter().map(|(price, _)| *price).collect::<Vec<_>>(),
             [10.0]
@@ -1093,6 +1217,7 @@ mod tests {
             bars,
             &vwap_checkpoints(&[], typical.source),
             &typical,
+            None,
             0..bars.len(),
         )
         .collect();
@@ -1146,7 +1271,7 @@ mod tests {
                     2 * VWAP_CHECKPOINT..2 * VWAP_CHECKPOINT + 4,
                     long.len() - 1..long.len(),
                 ] {
-                    let got = anchored_vwap(&long, &checkpoints, &config, window.clone());
+                    let got = anchored_vwap(&long, &checkpoints, &config, None, window.clone());
                     for (i, got) in window.zip(got) {
                         let prefix = &long[..=i];
                         let volume: f64 = prefix.iter().map(|b| b.volume).sum();
@@ -1175,6 +1300,218 @@ mod tests {
             assert!(
                 finals[i + 1..].iter().all(|b| (a - b).abs() > 1e-3),
                 "{finals:?}"
+            );
+        }
+        // Non-finite inputs have no value and do not poison later bars.
+        let flat = |minute: i64, price: f64, volume: f64| {
+            let time = chrono::DateTime::from_timestamp(minute * 60, 0).unwrap();
+            Bar::new(time, price, price, price, price, volume)
+        };
+        for gap in [
+            flat(1, f64::NAN, 1.0),
+            flat(1, 11.0, f64::NAN),
+            flat(1, f64::INFINITY, 1.0),
+        ] {
+            let bars = [flat(0, 10.0, 1.0), gap, flat(2, 12.0, 1.0)];
+            let checkpoints = vwap_checkpoints(&[], typical.source);
+            let got: Vec<_> = anchored_vwap(&bars, &checkpoints, &typical, None, 0..3).collect();
+            assert_eq!(
+                got,
+                [Some((10.0, 0.0)), None, Some((11.0, 1.0))],
+                "{:?}",
+                bars[1]
+            );
+            assert_eq!(anchored_vwap_through(&bars[..2], &typical, None), None);
+            assert_eq!(
+                anchored_vwap_through(&bars, &typical, None),
+                Some((11.0, 1.0))
+            );
+        }
+    }
+
+    /// Complete bars count executions at their prices, gaps count only that bar's source,
+    /// and tracking, alerts and the estimated count agree, with the setting off by default.
+    #[test]
+    fn anchored_vwap_counts_held_executions() {
+        use crate::data::Footprint;
+        use crate::drawings::ChartPoint;
+        use crate::model::{
+            BarClock,
+            OrderSide::{Buy, Sell},
+            Tick,
+        };
+        use crate::scales::PriceScaleMode;
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let bars = [
+            Bar::new(start, 100.0, 104.0, 100.0, 104.0, 1000.0),
+            Bar::new(
+                start + chrono::TimeDelta::minutes(1),
+                104.0,
+                106.0,
+                103.0,
+                105.0,
+                500.0,
+            ),
+            Bar::new(
+                start + chrono::TimeDelta::minutes(2),
+                105.0,
+                105.0,
+                101.0,
+                102.0,
+                400.0,
+            ),
+        ];
+        let trades = [
+            (10, 100.0, 900.0, Sell),
+            (20, 104.0, 100.0, Buy),
+            (70, 104.0, 200.0, Buy),
+            (80, 105.0, 300.0, Buy),
+            (130, 102.0, 400.0, Sell),
+        ]
+        .map(|(second, price, volume, side)| {
+            Tick::new(
+                start + chrono::TimeDelta::seconds(second),
+                price,
+                volume,
+                Some(side),
+            )
+        });
+        let footprint = |trades: &[Tick], ticks| {
+            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.01, ticks).unwrap();
+            for trade in trades {
+                flow.push(trade).unwrap();
+            }
+            flow
+        };
+        let full = footprint(&trades, 1);
+        let mut gap = full.clone();
+        gap.add_missing(bars[1].time, bars[2].time);
+        let late = footprint(&trades[2..], 1);
+        let grouped = footprint(&trades, 5);
+        let mut invalid = bars[0].clone();
+        invalid.close = f64::NAN;
+        let mut absent = bars[0].clone();
+        absent.time = start + chrono::TimeDelta::minutes(3);
+        type Row<'a> = (
+            &'a str,
+            &'a [Bar],
+            Option<FootprintView<'a>>,
+            bool,
+            f64,
+            f64,
+            Option<(usize, usize)>,
+        );
+        let rows: [Row<'_>; 8] = [
+            (
+                "issue example",
+                &bars[..1],
+                Some((&full).into()),
+                true,
+                502.0 / 5.0,
+                1.2,
+                Some((0, 1)),
+            ),
+            (
+                "middle gap",
+                &bars,
+                Some((&gap).into()),
+                true,
+                5806.0 / 57.0,
+                (12856.0_f64 / 3249.0).sqrt(),
+                Some((1, 3)),
+            ),
+            (
+                "before coverage",
+                &bars,
+                Some((&late).into()),
+                true,
+                5873.0 / 57.0,
+                (1088.0_f64 / 1083.0).sqrt(),
+                Some((1, 3)),
+            ),
+            (
+                "off",
+                &bars[..1],
+                Some((&full).into()),
+                false,
+                308.0 / 3.0,
+                0.0,
+                None,
+            ),
+            (
+                "no executions",
+                &bars[..1],
+                None,
+                true,
+                308.0 / 3.0,
+                0.0,
+                Some((1, 1)),
+            ),
+            (
+                "grouped row midpoint",
+                &bars[..1],
+                Some((&grouped).into()),
+                true,
+                100.42,
+                1.2,
+                Some((0, 1)),
+            ),
+            (
+                "non-finite bar with executions",
+                std::slice::from_ref(&invalid),
+                Some((&full).into()),
+                true,
+                100.4,
+                1.2,
+                Some((0, 1)),
+            ),
+            (
+                "empty complete slot",
+                std::slice::from_ref(&absent),
+                Some((&full).into()),
+                true,
+                308.0 / 3.0,
+                0.0,
+                Some((1, 1)),
+            ),
+        ];
+        for (name, bars, flow, executions, mean, sigma, estimated) in rows {
+            let mut drawing = Drawing::new(1, DrawingToolType::AnchoredVWAP);
+            drawing.chart_points = vec![ChartPoint::new(0.0, 100.0)];
+            let mut config = VwapConfig {
+                executions,
+                track_price: true,
+                ..VwapConfig::default()
+            };
+            config.bands[0].upper.track_price = true;
+            config.bands[0].lower.track_price = true;
+            drawing.vwap = Some(config);
+            let expected = [mean, mean + sigma, mean - sigma];
+            let tracked = drawing.anchored_vwap_tracked(bars, 0, flow);
+            let alerts = drawing.alert_levels_with_executions(
+                (bars.len() - 1) as f64,
+                PriceScaleMode::Normal,
+                bars,
+                flow,
+            );
+            assert_eq!((tracked.len(), alerts.len()), (3, 3), "{name}");
+            for (i, ((tracked, _), (level, _, alert))) in tracked.iter().zip(&alerts).enumerate() {
+                assert_eq!(*level, i, "{name}");
+                assert!(
+                    (tracked - expected[i]).abs() < 1e-6,
+                    "{name}: {tracked}, want {}",
+                    expected[i]
+                );
+                assert!(
+                    (alert - expected[i]).abs() < 1e-6,
+                    "{name}: {alert}, want {}",
+                    expected[i]
+                );
+            }
+            assert_eq!(
+                drawing.anchored_vwap_estimated(bars, flow),
+                estimated,
+                "{name}"
             );
         }
     }
