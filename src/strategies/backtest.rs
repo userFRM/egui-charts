@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 #[path = "live.rs"]
 mod live;
 pub use live::StrategyFill;
+#[cfg(feature = "ui")]
+pub(crate) use live::same_bars;
 
 use crate::data::StudyDataRequest;
 use crate::model::range_bar::price_path;

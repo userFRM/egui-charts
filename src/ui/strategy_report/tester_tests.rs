@@ -23,6 +23,122 @@ fn bars() -> Vec<Bar> {
         .collect()
 }
 
+/// Rising closes buy at 103, then falling closes reverse at minute 100's open of 99.
+fn trend() -> Vec<Bar> {
+    (0..102)
+        .map(|index| {
+            let price = match index {
+                0..=3 => 100.0 + index as f64,
+                4..=96 => 103.0,
+                _ => 199.0 - index as f64,
+            };
+            Bar::new(
+                DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(index),
+                price,
+                price,
+                price,
+                price,
+                1.0,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_run_continues_on_new_bars_and_rebuilds_after_corrections() {
+    let source = trend();
+    let mut corrected = source[..101].to_vec();
+    corrected[50] = Bar::new(source[50].time, 103.0, 110.0, 103.0, 110.0, 1.0);
+    let mut failures = Vec::new();
+    for (name, initial, next, host) in [
+        (
+            "append",
+            source[..100].to_vec(),
+            source[..101].to_vec(),
+            false,
+        ),
+        (
+            "correction",
+            source[..101].to_vec(),
+            corrected.clone(),
+            false,
+        ),
+        (
+            "shorter",
+            source[..101].to_vec(),
+            source[..99].to_vec(),
+            false,
+        ),
+        ("host correction", source[..101].to_vec(), corrected, true),
+    ] {
+        let mut tester = StrategyTester::default();
+        tester.select_strategy("Consecutive Up/Down").unwrap();
+        if host {
+            let mut settings = tester.settings().clone();
+            settings.start_time = Some(source[2].time);
+            tester.set_settings(settings).unwrap();
+        }
+        let mut h = Harness::builder()
+            .with_size(Vec2::new(1440.0, 900.0))
+            .build_ui_state(
+                |ui,
+                 (tester, bars, actions): &mut (
+                    StrategyTester,
+                    Vec<Bar>,
+                    Vec<StrategyTesterAction>,
+                )| {
+                    actions.extend(tester.show(ui, "TEST", Timeframe::Min1, bars));
+                },
+                (tester, initial.clone(), Vec::new()),
+            );
+        if host {
+            let Some(StrategyTesterAction::RequestHistory(request)) = h
+                .state_mut()
+                .0
+                .request_run("TEST", Timeframe::Min1, &initial, false)
+                .unwrap()
+            else {
+                panic!("missing history request");
+            };
+            h.state_mut()
+                .0
+                .set_history(&request, initial, Vec::new())
+                .unwrap();
+        } else {
+            h.get_by_role_and_label(Role::Button, "Run").click();
+        }
+        h.run();
+        assert!(!h.state().0.is_stale(), "{name}");
+        assert_eq!(
+            h.state().0.report().unwrap().trades[0].entry_time,
+            source[4].time
+        );
+        assert_eq!(h.state().0.report().unwrap().trades[0].entry_price, 103.0);
+        h.run();
+        assert!(!h.state().0.is_stale(), "identical {name}");
+        if name == "append" {
+            let bars = h.state().1.clone();
+            h.state_mut()
+                .0
+                .request_run("TEST", Timeframe::Min1, &bars, true)
+                .unwrap();
+            h.run();
+            assert!(!h.state().0.is_stale());
+        }
+        let before = h.state().0.report().unwrap().clone();
+        h.state_mut().1 = next;
+        h.run();
+        assert_eq!(h.state().0.report(), Some(&before));
+        if !h.state().0.is_stale() {
+            failures.push(name);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "bar changes left current: {failures:?}"
+    );
+}
+
 #[test]
 fn built_in_run_edits_costs_and_inputs_and_replaces_fill_signals() {
     for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
@@ -637,12 +753,12 @@ fn runs_report_the_instrument_currency_and_convert_into_another_at_requested_rat
     h.state_mut().ranges[0].to = InputValue::Length(2);
     h.state_mut()
         .start_job(
-            "TEST",
-            Timeframe::Min1,
+            ("TEST", Timeframe::Min1),
             bars(),
             Vec::new(),
             Vec::new(),
             true,
+            false,
         )
         .unwrap();
     h.run();
@@ -728,12 +844,12 @@ fn optimisation_counts_decimal_grid_yields_sorts_and_applies_inputs() {
     assert_eq!(optimisation::grid(&tester.ranges).unwrap().0, 3);
     tester
         .start_job(
-            "TEST",
-            Timeframe::Min1,
+            ("TEST", Timeframe::Min1),
             bars(),
             Vec::new(),
             Vec::new(),
             true,
+            false,
         )
         .unwrap();
     assert!(

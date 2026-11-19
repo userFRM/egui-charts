@@ -134,11 +134,38 @@ struct Trial {
 }
 
 enum JobOutput {
-    Report(StrategyReport, Vec<Bar>),
+    Report(StrategyReport, Box<Continuation>),
     Trials(Vec<Trial>, Vec<(&'static str, usize)>),
 }
 
 type Job = Pin<Box<dyn Future<Output = Result<JobOutput, &'static str>>>>;
+
+/// The completed single run's bars, retained to compare against later chart frames.
+struct Continuation {
+    /// Host history first, then chart bars, oldest first.
+    bars: Vec<Bar>,
+    /// Leading bars supplied through `set_history`.
+    host: usize,
+    /// Chart bars at or before the last host bar when the run completed.
+    chart: Vec<Bar>,
+}
+
+impl Continuation {
+    /// Chart bars after host history, and whether the chart's part of that history is unchanged.
+    fn tail<'a>(&self, bars: &'a [Bar]) -> (&'a [Bar], bool) {
+        let split = self.host.checked_sub(1).map(|last| self.bars[last].time);
+        let cut = bars.partition_point(|bar| split.is_some_and(|time| bar.time <= time));
+        (
+            &bars[cut..],
+            crate::strategies::same_bars(&bars[..cut], &self.chart),
+        )
+    }
+
+    fn matches(&self, bars: &[Bar]) -> bool {
+        let (tail, kept) = self.tail(bars);
+        kept && crate::strategies::same_bars(tail, &self.bars[self.host..])
+    }
+}
 
 /// Counts one trial skipped for `reason`, keeping reasons in first-seen order.
 fn skip(skipped: &mut Vec<(&'static str, usize)>, reason: &'static str) {
@@ -179,6 +206,7 @@ pub struct StrategyTester {
     revision: u64,
     pending: Option<(StrategyHistoryRequest, bool)>,
     job: Option<Job>,
+    follow: Option<Box<Continuation>>,
     completed: Rc<Cell<usize>>,
     total: usize,
     ranges: Vec<Range>,
@@ -210,6 +238,10 @@ impl std::fmt::Debug for StrategyTester {
             .field("scope", &self.scope)
             .field("revision", &self.revision)
             .field("pending", &self.pending)
+            .field(
+                "follow",
+                &self.follow.as_ref().map(|follow| follow.bars.len()),
+            )
             .field("completed", &self.completed)
             .field("total", &self.total)
             .field("ranges", &self.ranges)
@@ -264,6 +296,7 @@ impl StrategyTester {
             revision: 0,
             pending: None,
             job: None,
+            follow: None,
             completed: Rc::new(Cell::new(0)),
             total: 0,
             trials: Vec::new(),
@@ -376,7 +409,7 @@ impl StrategyTester {
         self.changed();
     }
 
-    /// Whether the report no longer describes the current form or chart scope.
+    /// Whether the report no longer describes the current form, chart scope or chart bars.
     pub fn is_stale(&self) -> bool {
         self.stale
     }
@@ -433,12 +466,12 @@ impl StrategyTester {
         let optimise = *optimise;
         self.pending = None;
         self.start_job(
-            &request.symbol,
-            request.timeframe,
+            (&request.symbol, request.timeframe),
             bars,
             lower,
             rates,
             optimise,
+            true,
         )
     }
 
@@ -460,8 +493,15 @@ impl StrategyTester {
         true
     }
 
+    /// An edit or scope change stops following and retains the report as stale.
     fn changed(&mut self) {
         self.stale = true;
+        self.follow = None;
+        self.cancel();
+    }
+
+    /// Cancel pending runs and optimisations, keeping the report and what it follows.
+    fn cancel(&mut self) {
         self.revision = self.revision.wrapping_add(1);
         self.pending = None;
         self.job = None;
@@ -500,13 +540,14 @@ impl StrategyTester {
 
     fn start_job(
         &mut self,
-        symbol: &str,
-        timeframe: Timeframe,
+        scope: (&str, Timeframe),
         bars: Vec<Bar>,
         lower: Vec<Bar>,
         rates: Vec<Bar>,
         optimise: bool,
+        host: bool,
     ) -> Result<(), &'static str> {
+        let (symbol, timeframe) = scope;
         super::properties::validate(&self.settings)?;
         self.check_run(optimise)?;
         let (count, axes) = if optimise {
@@ -560,7 +601,14 @@ impl StrategyTester {
                 let report = engine.run_async(strategy.as_mut(), &bars, &lower).await;
                 completed.set(ordinal + 1);
                 if !optimise {
-                    return Ok(JobOutput::Report(report, bars));
+                    return Ok(JobOutput::Report(
+                        report,
+                        Box::new(Continuation {
+                            host: if host { bars.len() } else { 0 },
+                            bars,
+                            chart: Vec::new(),
+                        }),
+                    ));
                 }
                 if report.unavailable.is_some() {
                     skip(&mut skipped, "Exchange rates unavailable");
@@ -602,10 +650,10 @@ impl StrategyTester {
         if optimise {
             optimisation::grid(&self.ranges)?;
         }
-        let stale = self.stale;
-        self.changed();
         if optimise {
-            self.stale = stale;
+            self.cancel();
+        } else {
+            self.changed();
         }
         let exchange_rate = self.engine(symbol, timeframe).exchange_rate_request();
         if self.settings.start_time.is_some() || self.lower || exchange_rate.is_some() {
@@ -625,12 +673,12 @@ impl StrategyTester {
             Ok(Some(StrategyTesterAction::RequestHistory(request)))
         } else {
             self.start_job(
-                symbol,
-                timeframe,
+                (symbol, timeframe),
                 bars.to_vec(),
                 Vec::new(),
                 Vec::new(),
                 optimise,
+                false,
             )?;
             Ok(None)
         }
@@ -787,9 +835,7 @@ impl StrategyTester {
                         }
                         Tab::Optimisation => {
                             if optimisation::show(ui, &mut self.ranges) {
-                                let stale = self.stale;
-                                self.changed();
-                                self.stale = stale;
+                                self.cancel();
                             }
                             match optimisation::grid(&self.ranges) {
                                 Ok((count, _)) => {
@@ -873,28 +919,43 @@ impl StrategyTester {
             self.undo_settings.push(before);
             self.redo_settings.clear();
         }
+        if self
+            .follow
+            .as_ref()
+            .is_some_and(|follow| !follow.matches(bars))
+        {
+            self.stale = true;
+            self.follow = None;
+        }
         if let Some(job) = &mut self.job {
             match job.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
                 Poll::Pending => ui.ctx().request_repaint(),
                 Poll::Ready(result) => {
                     self.job = None;
                     match result {
-                        Ok(JobOutput::Report(report, bars)) => {
+                        Ok(JobOutput::Report(report, mut follow)) => {
                             actions.push(StrategyTesterAction::Signals {
                                 symbol: report.symbol.clone(),
                                 timeframe: report.timeframe,
                                 signals: report.signals(),
                             });
-                            let from = bars.partition_point(|bar| {
+                            let from = follow.bars.partition_point(|bar| {
                                 self.settings
                                     .start_time
                                     .is_some_and(|start| bar.time < start)
                             });
                             let to = self
                                 .settings
-                                .bars_before_end(report.timeframe, &bars)
+                                .bars_before_end(report.timeframe, &follow.bars)
                                 .max(from);
-                            self.report.set_report(Some(report), &bars[from..to]);
+                            self.report.set_report(Some(report), &follow.bars[from..to]);
+                            if follow.host > 0 {
+                                follow.chart = bars[..bars.partition_point(|bar| {
+                                    bar.time <= follow.bars[follow.host - 1].time
+                                })]
+                                    .to_vec();
+                            }
+                            self.follow = Some(follow);
                             self.stale = false;
                             self.tab = Tab::Report;
                         }

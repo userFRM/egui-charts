@@ -52,7 +52,7 @@ fn same_bar(a: &Bar, b: &Bar) -> bool {
             == [b.open, b.high, b.low, b.close, b.volume].map(f64::to_bits)
 }
 
-fn same_bars(a: &[Bar], b: &[Bar]) -> bool {
+pub(crate) fn same_bars(a: &[Bar], b: &[Bar]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_bar(a, b))
 }
 
