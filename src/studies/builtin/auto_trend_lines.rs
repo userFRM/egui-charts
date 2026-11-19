@@ -508,6 +508,20 @@ mod tests {
         (153, 129.6),
         (177, 106.0),
     ];
+    /// The low at 64 replaces the flat low at 40, whose close of 92 at bar 41 lies below the
+    /// support from 20 to 64 (93.27 there).
+    const CROSSED: &[(usize, f64)] = &[
+        (0, 110.0),
+        (10, 110.0),
+        (20, 100.0),
+        (26, 106.0),
+        (40, 92.0),
+        (60, 92.0),
+        (64, 88.0),
+        (80, 104.0),
+        (92, 92.0),
+        (104, 100.0),
+    ];
 
     /// Linear closes move at most 1 per bar, with high/low 1 away: every true range is 2,
     /// ATR14 is 2 from bar 13, the small/large swing thresholds are 4/10 and touch bands are 1.
@@ -569,6 +583,7 @@ mod tests {
         let f1 = path(F1);
         let a = path(A);
         let b = path(B);
+        let crossed = path(CROSSED);
         let mut turns = F1.to_vec();
         turns.push((5050, 106.0));
         let window = path(&turns);
@@ -661,6 +676,16 @@ mod tests {
                 &b,
                 vec![("line_size", Choice(1))],
                 vec![(0, (40, 99.0), (120, 98.6), true)],
+            ),
+            (
+                false,
+                "crossed base",
+                &crossed,
+                vec![],
+                vec![
+                    (1, (26, 107.0), (80, 105.0), true),
+                    (0, (64, 87.0), (92, 91.0), true),
+                ],
             ),
             (
                 false,
