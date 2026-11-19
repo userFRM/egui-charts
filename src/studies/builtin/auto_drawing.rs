@@ -38,8 +38,6 @@ fn level_slot(id: &str) -> Option<usize> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AutoDrawingKind {
-    /// Last two pivots of the same kind, including the moving last extreme.
-    TrendLine,
     /// Last three pivots, with the base through the first and third and the parallel through the second.
     ParallelChannel,
     /// Last two confirmed pivots; the current, unfinished swing is excluded.
@@ -51,8 +49,7 @@ pub enum AutoDrawingKind {
 }
 
 impl AutoDrawingKind {
-    pub(crate) const ALL: [Self; 5] = [
-        Self::TrendLine,
+    pub(crate) const ALL: [Self; 4] = [
         Self::ParallelChannel,
         Self::FibonacciRetracement,
         Self::FibonacciExtension,
@@ -74,7 +71,6 @@ impl AutoDrawingKind {
 
     fn tool(self) -> DrawingToolType {
         match self {
-            Self::TrendLine => DrawingToolType::TrendLine,
             Self::ParallelChannel => DrawingToolType::ParallelChannel,
             Self::FibonacciRetracement => DrawingToolType::FibonacciRetracement,
             Self::FibonacciExtension => DrawingToolType::FibonacciExtension,
@@ -88,7 +84,7 @@ impl AutoDrawingKind {
 /// range.
 ///
 /// Add through the normal study API or calculate directly and read [`Indicator::drawings`].
-/// No drawing is emitted until enough pivots exist. A trend line and channel include the moving
+/// No drawing is emitted until enough pivots exist. A channel includes the moving
 /// last extreme; a retracement uses the latest completed swing, an extension projects that
 /// swing from the current leg's extreme. A pitchfork follows the latest three pivots. Updating or replacing bars
 /// rebuilds the anchors; generated drawings belong to the study, not the editable drawing list.
@@ -194,7 +190,6 @@ impl AutoDrawing {
 impl Indicator for AutoDrawing {
     fn name(&self) -> &str {
         match self.kind {
-            AutoDrawingKind::TrendLine => "Auto Trend Line",
             AutoDrawingKind::ParallelChannel => "Auto Parallel Channel",
             AutoDrawingKind::FibonacciRetracement => "Auto Fibonacci Retracement",
             AutoDrawingKind::FibonacciExtension => "Auto Fibonacci Extension",
@@ -517,7 +512,6 @@ impl Indicator for AutoDrawing {
         };
         let recent = &pivots[start..];
         let order: &[usize] = match self.kind {
-            AutoDrawingKind::TrendLine => &[0, 2],
             AutoDrawingKind::ParallelChannel => &[0, 2, 1],
             AutoDrawingKind::FibonacciRetracement => &[0, 1],
             AutoDrawingKind::FibonacciExtension | AutoDrawingKind::Pitchfork => &[0, 1, 2],
@@ -634,12 +628,6 @@ mod tests {
     #[test]
     fn automatic_drawings_follow_shared_swings() {
         for (kind, tool, initial, updated) in [
-            (
-                AutoDrawingKind::TrendLine,
-                DrawingToolType::TrendLine,
-                vec![(3, 113.0), (9, 118.0)],
-                vec![(5, 100.0), (12, 93.0)],
-            ),
             (
                 AutoDrawingKind::ParallelChannel,
                 DrawingToolType::ParallelChannel,
@@ -802,7 +790,6 @@ mod tests {
                 minute,
                 25,
                 [
-                    vec![(20, low), (40, low)],
                     vec![(20, low), (40, low), (30, high)],
                     vec![(20, low), (30, high)],
                     vec![(20, low), (30, high), (40, low)],
@@ -814,7 +801,6 @@ mod tests {
                 daily,
                 45,
                 [
-                    vec![(11, 112.0), (40, 111.0)],
                     vec![(11, 112.0), (40, 111.0), (26, 95.0)],
                     vec![(11, 112.0), (26, 95.0)],
                     vec![(11, 112.0), (26, 95.0), (40, 111.0)],
@@ -859,8 +845,11 @@ mod tests {
         );
         let coords = ChartMapping::new(rect, 30.0, 0, 9, 0.0, price);
         let data = bars();
-        let mut automatic = AutoDrawing::new(AutoDrawingKind::TrendLine, 5.0, 3);
-        automatic.calculate(&data);
+        let mut automatic = AutoDrawing::new(AutoDrawingKind::ParallelChannel, 5.0, 3);
+        let mut line = Drawing::new(0, DrawingToolType::TrendLine);
+        line.completed = true;
+        line.chart_points = vec![ChartPoint::new(3.0, 113.0), ChartPoint::new(9.0, 118.0)];
+        automatic.drawings = vec![line];
         let a = Pos2::new(coords.idx_to_x(3), price.price_to_y(113.0));
         let b = Pos2::new(coords.idx_to_x(9), price.price_to_y(118.0));
         let midpoint = a.lerp(b, 0.5);
@@ -1021,7 +1010,7 @@ mod tests {
                     .collect();
                 (drawing.extend_left, drawing.extend_right) = flags;
                 drawing.completed = true;
-                let mut study = AutoDrawing::new(AutoDrawingKind::TrendLine, 5.0, 3);
+                let mut study = AutoDrawing::new(AutoDrawingKind::ParallelChannel, 5.0, 3);
                 study.drawings = vec![drawing];
                 let (before, after) = if tool == T::Rect { sides } else { lines };
                 for (bars, visible) in [(0..2, before), (4..6, true), (20..30, after)] {
