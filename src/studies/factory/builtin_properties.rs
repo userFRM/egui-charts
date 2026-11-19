@@ -484,6 +484,7 @@ fn every_update_equals_a_fresh_calculate() {
                             study.table(),
                             study.projections(),
                             study.labels(),
+                            study.price_segments(),
                             (0..study.line_count())
                                 .map(|line| study.provisional_after(line))
                                 .collect::<Vec<_>>()
@@ -497,6 +498,7 @@ fn every_update_equals_a_fresh_calculate() {
                             fresh.table(),
                             fresh.projections(),
                             fresh.labels(),
+                            fresh.price_segments(),
                             (0..fresh.line_count())
                                 .map(|line| fresh.provisional_after(line))
                                 .collect::<Vec<_>>()
