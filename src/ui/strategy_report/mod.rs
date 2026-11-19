@@ -277,6 +277,12 @@ fn number(value: Option<f64>) -> String {
         .map_or_else(|| "N/A".into(), |v| format!("{v:.2}"))
 }
 
+fn quantity(value: Option<f64>) -> String {
+    value
+        .filter(|v| v.is_finite())
+        .map_or_else(|| "N/A".into(), |v| v.to_string())
+}
+
 fn percent(value: Option<f64>) -> String {
     value
         .map(|v| v * 100.0)
@@ -327,6 +333,13 @@ fn summary(ui: &mut Ui, data: &ReportData, compare: &mut bool) {
             "Largest losing trade",
             money(p.largest_losing_trade, report),
         ),
+        (
+            "Margin calls",
+            p.margin_calls
+                .map_or_else(|| "N/A".into(), |n| n.to_string()),
+        ),
+        ("Liquidated quantity", quantity(p.liquidated_quantity)),
+        ("Largest liquidation", quantity(p.largest_liquidation)),
         ("Consecutive wins", p.max_consecutive_wins.to_string()),
         ("Consecutive losses", p.max_consecutive_losses.to_string()),
         (

@@ -103,6 +103,15 @@ pub struct StrategyReport {
     /// strictly increasing time order.
     #[serde(default, deserialize_with = "curve_null_as_nan")]
     pub equity: Vec<(DateTime<Utc>, f64)>,
+    /// Margin the open position used at each equity mark, at the times of [`Self::equity`]: its
+    /// absolute market value times its side's funding fraction, zero while flat or unfunded.
+    /// Empty when no margin was recorded, including older saved reports; margin metrics are then
+    /// unavailable.
+    #[serde(default, deserialize_with = "curve_null_as_nan")]
+    pub margin: Vec<(DateTime<Utc>, f64)>,
+    /// Time and quantity closed of each margin call, in fill order.
+    #[serde(default, deserialize_with = "curve_null_as_nan")]
+    pub margin_calls: Vec<(DateTime<Utc>, f64)>,
 }
 
 /// One round trip. A host that scales out reports each partial exit as its own trade with its share
@@ -161,7 +170,8 @@ pub struct StrategyExit {
 /// Trade metrics use the closed valid trades, with `p` the net profit of each. Curve metrics use the
 /// usable equity curve: the points with a finite value, provided they are in strictly increasing time
 /// order. A curve out of order is unusable as a whole, so the curve metrics are `None` rather than
-/// computed on part of it.
+/// computed on part of it. Margin metrics use [`StrategyReport::margin`] and
+/// [`StrategyReport::margin_calls`], and are all `None` when `margin` is empty.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct StrategyPerformance {
@@ -235,6 +245,12 @@ pub struct StrategyPerformance {
     /// Equity points with a non-finite value, or every point when the curve is not in strictly
     /// increasing time order.
     pub skipped_equity_points: usize,
+    /// Margin calls that closed a finite positive quantity. `None` without margin data.
+    pub margin_calls: Option<usize>,
+    /// Sum of quantities those calls closed, zero without one. `None` without margin data.
+    pub liquidated_quantity: Option<f64>,
+    /// Largest quantity one margin call closed. `None` without a margin call.
+    pub largest_liquidation: Option<f64>,
 }
 
 /// Source-bar comparison of a run, from [`StrategyReport::comparison`].
@@ -329,7 +345,7 @@ impl StrategyReport {
         signals
     }
 
-    /// A report with no trades, no equity, no properties, no currency and a risk-free rate of 0.
+    /// A report with no trades, equity, margin data, properties or currency, and a risk-free rate of 0.
     pub fn new(
         name: impl Into<String>,
         symbol: impl Into<String>,
@@ -346,6 +362,8 @@ impl StrategyReport {
             properties: Vec::new(),
             trades: Vec::new(),
             equity: Vec::new(),
+            margin: Vec::new(),
+            margin_calls: Vec::new(),
         }
     }
 
@@ -400,6 +418,18 @@ impl StrategyReport {
         p.profit_factor = finite(p.gross_profit / p.gross_loss);
         p.win_rate = finite(p.winning_trades as f64 / closed);
         p.average_trade = finite(p.net_profit / closed);
+
+        if !self.margin.is_empty() {
+            let calls: Vec<_> = self
+                .margin_calls
+                .iter()
+                .map(|&(_, quantity)| quantity)
+                .filter(|q| q.is_finite() && *q > 0.0)
+                .collect();
+            p.margin_calls = Some(calls.len());
+            p.liquidated_quantity = finite(calls.iter().sum());
+            p.largest_liquidation = calls.iter().copied().reduce(f64::max);
+        }
 
         let curve = self.equity_curve();
         p.skipped_equity_points = self.equity.len() - curve.len();
@@ -655,8 +685,8 @@ impl StrategyReport {
     ///
     /// Columns: `section` (`summary` or `properties`), `name` (as the panel labels it), `value`,
     /// `unit` and `currency`. The unit is `money` (in `currency`, empty when the report has none),
-    /// `percent` (100 is 100%), `ratio`, `count` or `text`. Percent values round to 15 significant
-    /// decimal digits to suppress binary multiplication noise; if rounding would overflow `f64`,
+    /// `percent` (100 is 100%), `ratio`, `count`, `quantity` (instrument units) or `text`.
+    /// Percent values round to 15 significant decimal digits to suppress binary multiplication noise; if rounding would overflow `f64`,
     /// the unrounded finite value is kept. Numbers use the shortest form that reads back to the
     /// resulting value, with a dot as the decimal separator and no thousands separator. Every
     /// numeric zero is `0`, and an unavailable value is an empty cell, so numeric columns stay
@@ -725,6 +755,9 @@ impl StrategyReport {
             ),
             ("Largest winning trade", p.largest_winning_trade, "money"),
             ("Largest losing trade", p.largest_losing_trade, "money"),
+            ("Margin calls", p.margin_calls.map(|n| n as f64), "count"),
+            ("Liquidated quantity", p.liquidated_quantity, "quantity"),
+            ("Largest liquidation", p.largest_liquidation, "quantity"),
         ] {
             row("summary", name, number(value, unit == "percent"), unit);
         }
@@ -990,9 +1023,12 @@ mod tests {
                 p.periods_per_year,
                 p.largest_winning_trade,
                 p.largest_losing_trade,
+                p.liquidated_quantity,
+                p.largest_liquidation,
             ]
         };
         let same = counts(actual) == counts(expected)
+            && actual.margin_calls == expected.margin_calls
             && sums(actual)
                 .iter()
                 .zip(sums(expected))
@@ -1090,7 +1126,30 @@ mod tests {
             max_drawdown_fraction: None,
             ..expected_a()
         };
+        // Only finite positive calls count: 3 + 1.5 = 4.5 units, largest 3.
+        let mut margin = fixture_a();
+        margin.margin = curve(&[0.0, 400.0, f64::NAN, 200.0], TimeDelta::hours(1));
+        let at = |h| t0() + TimeDelta::hours(h);
+        margin.margin_calls = vec![
+            (at(2), 3.0),
+            (at(3), 1.5),
+            (at(3), f64::NAN),
+            (at(3), f64::INFINITY),
+            (at(3), 0.0),
+            (at(3), -1.0),
+        ];
+        let saved_margin = margin.clone();
         let rows = [
+            (
+                "margin data",
+                margin,
+                StrategyPerformance {
+                    margin_calls: Some(2),
+                    liquidated_quantity: Some(4.5),
+                    largest_liquidation: Some(3.0),
+                    ..expected_a()
+                },
+            ),
             (
                 "streaks ordered by exit, with breakevens, open and invalid trades",
                 streaks,
@@ -1254,6 +1313,17 @@ mod tests {
                 &expected,
             );
         }
+        // Reports saved before margin fields existed retain unavailable margin metrics.
+        let mut saved = serde_json::to_value(&saved_margin).unwrap();
+        for key in ["margin", "margin_calls"] {
+            saved.as_object_mut().unwrap().remove(key);
+        }
+        let old: StrategyReport = serde_json::from_value(saved).unwrap();
+        assert_matches(
+            "saved before margin data",
+            &old.performance(),
+            &expected_a(),
+        );
     }
 
     #[test]
@@ -1542,6 +1612,9 @@ mod tests {
              summary,Buy-and-hold return,,percent,\n\
              summary,Largest winning trade,48,money,USD\n\
              summary,Largest losing trade,-21,money,USD\n\
+             summary,Margin calls,,count,\n\
+             summary,Liquidated quantity,,quantity,\n\
+             summary,Largest liquidation,,quantity,\n\
              summary,Consecutive wins,1,count,\n\
              summary,Consecutive losses,1,count,\n\
              summary,Closed trades,5,count,\n\

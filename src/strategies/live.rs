@@ -39,6 +39,7 @@ pub(super) struct LiveState {
     realized: f64,
     rejected: usize,
     tick: u64,
+    margin_calls: Vec<(DateTime<Utc>, f64)>,
 }
 
 // Compare bits so unchanged invalid feed values do not cause an endless rebuild.
@@ -148,6 +149,7 @@ impl Backtest {
                 realized: 0.0,
                 rejected: 0,
                 tick: 0,
+                margin_calls: Vec::new(),
             })
         } else {
             previous.expect("an existing live run")
@@ -203,6 +205,7 @@ impl Backtest {
             open_tick: 0,
             fills: Some(&mut fills),
             forming: false,
+            margin_calls: std::mem::take(&mut live.margin_calls),
         };
         let mut finer: Vec<_> = lower.iter().filter(|bar| valid_bar(bar)).collect();
         finer.sort_by_key(|bar| bar.time);
@@ -215,6 +218,9 @@ impl Backtest {
             && let Some(mark) = live.report.equity.last_mut()
         {
             mark.0 = bars[live.processed].time;
+            if let Some(mark) = live.report.margin.last_mut() {
+                mark.0 = bars[live.processed].time;
+            }
         }
         if live.report.equity.is_empty() {
             run.start_equity(self.timeframe, &bars[..closed], &mut live.report);
@@ -287,6 +293,7 @@ impl Backtest {
         live.realized = run.realized;
         live.rejected = run.rejected;
         live.tick = run.tick;
+        live.margin_calls = run.margin_calls;
         for fill in &mut fills {
             live.sequence += 1;
             fill.sequence = live.sequence;

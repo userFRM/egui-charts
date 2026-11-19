@@ -92,6 +92,12 @@ at its open. For example, capital 1,000 and 15 long units entered at 100 with le
 equity `15p - 500` and margin `7.5p` at positive price `p`; a decline crosses at `p = 200/3`,
 leaving equity 500 before exit costs, even if the bar later recovers.
 
+The report records each filled margin call's time and closed quantity in
+[`StrategyReport::margin_calls`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#structfield.margin_calls), independently of trade labels and FIFO lot splits.
+The summary and summary CSV show the number of calls, total liquidated quantity and largest
+quantity closed by one call. These figures are unavailable when the report has no margin data,
+including reports saved before margin recording was available.
+
 The report properties *Long margin calls* and *Short margin calls* name each side's rule:
 `Four times the shortfall at price points`, `Whole position at the margin crossing`, or `Off`
 when that side requires no funding. The tester shows the rule below each funding field.
