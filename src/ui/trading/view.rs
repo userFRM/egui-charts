@@ -1317,7 +1317,10 @@ mod tests {
             "settings saved before labels were on by default keep them off"
         );
         assert!(TradingSettings::default().show_execution_labels);
-        assert!(!defaults.compact_ticket, "older settings keep the full ticket");
+        assert!(
+            !defaults.compact_ticket,
+            "older settings keep the full ticket"
+        );
         assert!(defaults.extend_lines);
         assert_eq!(defaults.label_alignment, Right);
         assert!(!defaults.include_in_image);
