@@ -461,6 +461,13 @@ impl StudyTemplate {
                     .inputs
                     .extend(period.map(|(_, value)| ("adx_smoothing".to_owned(), value.clone())));
             }
+            // `period` also set the ATR period before that had an input of its own.
+            "Chandelier" if has("period") && !has("atr_period") => {
+                let period = self.inputs.iter().rev().find(|(id, _)| id == "period");
+                template
+                    .inputs
+                    .extend(period.map(|(_, value)| ("atr_period".to_owned(), value.clone())));
+            }
             // Before it averaged highs and lows, MA Channel drew the close average with percentage
             // bands, which Envelopes draws with a simple average.
             "MA Channel" if has("offset_percent") && !declares("offset_percent") => {
@@ -1233,6 +1240,11 @@ mod tests {
                 ],
             ),
             (
+                "Chandelier",
+                vec![("atr_period", Length(5)), ("period", Length(10))],
+                vec![("period", Length(10)), ("atr_period", Length(5))],
+            ),
+            (
                 "MA Cross",
                 vec![("period_0", Length(5))],
                 vec![
@@ -1441,19 +1453,25 @@ mod tests {
         for text in [
             r#"{"name":"ADX","inputs":[["period",{"Length":20}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ADX.html","plots":[{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[15,3,4,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
             r#"{"name":"DMI","inputs":[["period",{"Length":20}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.DirectionalMovement.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[245,0,87,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+            r#"{"name":"Chandelier","inputs":[["period",{"Length":10}],["multiplier",{"Number":3.0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ChandelierExit.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
         ] {
             let saved: StudyTemplate = serde_json::from_str(text).unwrap();
             let study = saved.create().unwrap();
             assert_eq!(study.settings(), saved.settings, "{}", saved.name);
             assert_eq!(Some(study.scale()), saved.scale, "{}", saved.name);
             let inputs = study.inputs();
-            for id in ["period", "adx_smoothing"] {
+            let (other, period) = if saved.name == "Chandelier" {
+                ("atr_period", 10)
+            } else {
+                ("adx_smoothing", 20)
+            };
+            for id in ["period", other] {
                 assert_eq!(
                     inputs
                         .iter()
                         .find(|input| input.id == id)
                         .map(|input| &input.value),
-                    Some(&Length(20)),
+                    Some(&Length(period)),
                     "{} {id}",
                     saved.name
                 );
