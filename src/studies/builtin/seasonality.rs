@@ -10,7 +10,8 @@
 //! from the starting year to `y - 1`:
 //!
 //! - Average = mean of the changes
-//! - Standard deviation = population standard deviation of the changes
+//! - Standard deviation = sample standard deviation of the changes, dividing by one less than
+//!   their number; a single change has none
 //! - Months = number of changes
 //! - Expected = previous month's close * (1 + Average / 100)
 //!
@@ -20,7 +21,7 @@
 //! without a previous close or without a change in an earlier year has no value. Months are
 //! calendar months of the bar's UTC date, the date a feed gives a daily or longer bar.
 //!
-//! The heatmap includes each loaded year and monthly average, population standard deviation
+//! The heatmap includes each loaded year and monthly average, sample standard deviation
 //! and percentage positive. Its current month uses the latest close; projections use only
 //! earlier years. The final projection extends through the remaining calendar-month slots
 //! of the time axis, without adding bars to the source history.
@@ -241,13 +242,17 @@ impl Indicator for Seasonality {
                         if !past.is_empty() {
                             let n = past.len() as f64;
                             let average = past.iter().sum::<f64>() / n;
-                            let variance =
-                                past.iter().map(|c| (c - average).powi(2)).sum::<f64>() / n;
+                            let deviation = if past.len() > 1 {
+                                (past.iter().map(|c| (c - average).powi(2)).sum::<f64>() / (n - 1.0))
+                                    .sqrt()
+                            } else {
+                                f64::NAN
+                            };
                             state.row = [
                                 base * (1.0 + average / 100.0),
                                 base,
                                 average,
-                                variance.sqrt(),
+                                deviation,
                                 n,
                             ];
                         }
@@ -285,11 +290,15 @@ impl Indicator for Seasonality {
             }
             let n = changes().count() as f64;
             let mean = changes().map(|(_, change)| change).sum::<f64>() / n;
-            let deviation = (changes()
-                .map(|(_, change)| (change - mean).powi(2))
-                .sum::<f64>()
-                / n)
-                .sqrt();
+            let deviation = if n > 1.0 {
+                (changes()
+                    .map(|(_, change)| (change - mean).powi(2))
+                    .sum::<f64>()
+                    / (n - 1.0))
+                    .sqrt()
+            } else {
+                f64::NAN
+            };
             let positive = changes().filter(|(_, change)| *change > 0.0).count() as f64 / n * 100.0;
             for (row, value) in summaries.iter_mut().zip([mean, deviation, positive]) {
                 row.push(StudyCell::Percent(value.is_finite().then_some(value)));
@@ -493,20 +502,24 @@ mod tests {
             value
         };
         for (label, month, expected) in [
-            ("2023", 1, 10.0),
-            ("2023", 2, -10.0),
-            ("2024", 1, 5.0),
-            ("Average", 1, 7.5),
-            ("Standard deviation", 1, 2.5),
-            ("Positive", 1, 100.0),
+            ("2023", 1, Some(10.0)),
+            ("2023", 2, Some(-10.0)),
+            ("2024", 1, Some(5.0)),
+            ("Average", 1, Some(7.5)),
+            ("Standard deviation", 1, Some(3.5355339059327378)),
+            ("Standard deviation", 2, None),
+            ("Positive", 1, Some(100.0)),
+            ("2022", 12, None),
+            ("2024", 2, None),
         ] {
-            assert!(
-                (percent(label, month).unwrap() - expected).abs() < 1e-9,
-                "{label}"
-            );
+            match expected {
+                Some(expected) => assert!(
+                    (percent(label, month).unwrap() - expected).abs() < 1e-9,
+                    "{label}"
+                ),
+                None => assert_eq!(percent(label, month), None, "{label}"),
+            }
         }
-        assert_eq!(percent("2022", 12), None);
-        assert_eq!(percent("2024", 2), None);
         let zone = study
             .projections()
             .last()
