@@ -735,6 +735,11 @@ pub struct ChartSettingsState {
     pub chart_basic_styles: ChartBasicStylesSettings,
     /// Grid directions and colors.
     pub grid_lines: GridLinesSettings,
+    /// Colour of the separators between panes, applied to
+    /// [`PaneOptions::separator_color`](crate::widget::PaneOptions::separator_color). `None`
+    /// follows the theme's grid line colour, as do settings saved without this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_separator_color: Option<Color32>,
     /// Crosshair line appearance.
     pub crosshair: CrosshairSettings,
     /// Watermark appearance.
@@ -808,6 +813,7 @@ impl Default for ChartSettingsState {
 
             chart_basic_styles: chart_basic_styles.clone(),
             grid_lines: grid_lines.clone(),
+            pane_separator_color: None,
             crosshair: CrosshairSettings::default(),
             watermark: WatermarkSettings::default(),
             scales_appearance: ScalesAppearanceSettings::default(),
