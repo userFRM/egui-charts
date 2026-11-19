@@ -125,8 +125,8 @@ pub use session::{
 };
 pub use signal::{Direction, Signal, SignalId, SignalShape};
 pub use strategy::{
-    StrategyComparison, StrategyExcursion, StrategyExit, StrategyPerformance, StrategyReport,
-    StrategyTrade,
+    StrategyAnalysis, StrategyComparison, StrategyExcursion, StrategyExit, StrategyPerformance,
+    StrategyPeriod, StrategyReport, StrategyResultBin, StrategyTrade, StrategyTradeGroup,
 };
 pub use study::{InputValue, StudySource};
 pub use time_scale_event::{EventKind, EventVisibility, TimeScaleEvent};

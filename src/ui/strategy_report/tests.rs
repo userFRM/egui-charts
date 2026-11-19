@@ -95,6 +95,9 @@ fn report_replacement_selection_export_and_clear() {
         assert!(
             matches!(h.state().1.last(), Some(StrategyReportAction::SelectTrade(s)) if s.trade_index == 0 && s.exit_time.is_none())
         );
+        h.get_by_role_and_label(Role::Tab, "Properties")
+            .scroll_to_me();
+        h.run();
         h.get_by_role_and_label(Role::Tab, "Properties").click();
         h.run();
         assert!(h.query_by_label("inf%").is_none());
@@ -142,5 +145,158 @@ fn equity_curve_uses_the_full_width_at_every_time_resolution() {
             })
             .unwrap();
         assert!(points[1].x - points[0].x > 200.0, "{step}");
+    }
+}
+
+#[test]
+fn range_limits_summary_charts_and_trades() {
+    use chrono::TimeZone;
+    let day = |m, d| Utc.with_ymd_and_hms(2024, m, d, 0, 0, 0).unwrap();
+    let mut report = StrategyReport::new("Range", "SAMPLE", Timeframe::Min1, 1000.0);
+    report.equity = vec![
+        (day(1, 1), 1000.0),
+        (day(2, 1), 1200.0),
+        (day(3, 1), 900.0),
+        (day(4, 1), 1000.0),
+    ];
+    for (entry, exit, profit) in [
+        (day(1, 10), day(1, 20), 200.0),
+        (day(2, 10), day(2, 20), -300.0),
+    ] {
+        let mut t = StrategyTrade::new(OrderSide::Buy, 1.0, entry, 100.0);
+        t.exit = Some(StrategyExit::new(exit, 100.0, profit));
+        report.trades.push(t);
+    }
+    for (theme, width) in [crate::theme::Theme::light(), crate::theme::Theme::dark()]
+        .into_iter()
+        .flat_map(|theme| [320.0, 1440.0].map(|width| (theme.clone(), width)))
+    {
+        let accent = theme.ui.accent;
+        let mut panel = StrategyReportPanel::default();
+        panel.set_report(Some(report.clone()), &[]);
+        let mut h = Harness::builder()
+            .with_size(Vec2::new(width, 900.0))
+            .with_context_setup(move |ctx| crate::theme::apply_to_egui(ctx, &theme))
+            .build_ui_state(
+                |ui, (panel, actions): &mut (StrategyReportPanel, Vec<StrategyReportAction>)| {
+                    let right = ui.available_rect_before_wrap().right();
+                    let action = panel.show(ui);
+                    assert!(
+                        ui.min_rect().right() <= right + 1.0,
+                        "report exceeds viewport"
+                    );
+                    if action != StrategyReportAction::None {
+                        actions.push(action);
+                    }
+                },
+                (panel, Vec::new()),
+            );
+        h.run();
+        h.get_by_label("-10.00%");
+        h.get_by_label("25.00%");
+        assert_eq!(
+            h.get_by_role_and_label(Role::TextInput, "From (UTC)")
+                .value()
+                .as_deref(),
+            Some("2024-01-01")
+        );
+        assert_eq!(
+            h.get_by_role_and_label(Role::TextInput, "To (UTC)")
+                .value()
+                .as_deref(),
+            Some("2024-04-01")
+        );
+        h.get_by_role_and_label(Role::TextInput, "From (UTC)")
+            .click();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_role_and_label(Role::TextInput, "From (UTC)")
+            .type_text("2024-02-15");
+        h.run();
+        h.get_by_label("-33.33%");
+        assert!(h.query_by_label("-10.00%").is_none());
+        assert!(h.query_by_label("25.00%").is_none());
+        let points = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Path(path)
+                    if path.stroke.color == egui::epaint::ColorMode::Solid(accent) =>
+                {
+                    Some(&path.points)
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(points.len(), 2);
+        assert!(points[1].x - points[0].x > 200.0);
+        h.get_by_role_and_label(Role::Tab, "List of trades").click();
+        h.run();
+        h.get_by_role_and_label(Role::Button, "1").click();
+        h.run();
+        assert!(h.query_by_role_and_label(Role::Button, "2").is_none());
+        assert!(
+            matches!(h.state().1.last(), Some(StrategyReportAction::SelectTrade(s)) if s.trade_index == 1)
+        );
+        h.get_by_role_and_label(Role::Tab, "Summary").click();
+        h.run();
+        h.get_by_role_and_label(Role::TextInput, "From (UTC)")
+            .click();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_role_and_label(Role::TextInput, "From (UTC)")
+            .type_text("2024-04-02");
+        h.run();
+        h.get_by_label("Enter dates as YYYY-MM-DD, the start not after the end");
+        h.get_by_label("-33.33%");
+        for label in ["Export trades CSV", "Export summary CSV"] {
+            h.get_by_role_and_label(Role::Button, label).click();
+            h.run();
+        }
+        assert_eq!(
+            &h.state().1[1..],
+            &[
+                StrategyReportAction::ExportCsv(report.trades_csv()),
+                StrategyReportAction::ExportSummaryCsv {
+                    filename: "Range-SAMPLE-summary.csv".into(),
+                    content: report.summary_csv(&report.performance(), &report.comparison(&[])),
+                },
+            ]
+        );
+        h.get_by_role_and_label(Role::Button, "Whole run").click();
+        h.run();
+        h.get_by_label("-10.00%");
+        assert_eq!(
+            h.get_by_role_and_label(Role::TextInput, "From (UTC)")
+                .value()
+                .as_deref(),
+            Some("2024-01-01")
+        );
+        for (run, messages) in [
+            (
+                report.clone(),
+                ["Months", "Winning and losing runs", "Monday"],
+            ),
+            (
+                StrategyReport::new("Empty", "EMPTY", Timeframe::Day1, 1000.0),
+                [
+                    "No equity or closed trades",
+                    "No closed trades",
+                    "No closed trades",
+                ],
+            ),
+        ] {
+            h.state_mut().0.set_report(Some(run), &[]);
+            h.run();
+            for (label, message) in ["Periods", "Distribution", "Trade times"]
+                .into_iter()
+                .zip(messages)
+            {
+                h.get_by_role_and_label(Role::Tab, label).scroll_to_me();
+                h.run();
+                h.get_by_role_and_label(Role::Tab, label).click();
+                h.run();
+                h.get_by_label(message);
+            }
+        }
     }
 }
