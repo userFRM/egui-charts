@@ -468,7 +468,8 @@ impl StrategyReport {
                 .filter(|q| q.is_finite() && *q > 0.0)
                 .collect();
             p.margin_calls = Some(calls.len());
-            p.liquidated_quantity = finite(calls.iter().fold(0.0, |total, quantity| total + quantity));
+            p.liquidated_quantity =
+                finite(calls.iter().fold(0.0, |total, quantity| total + quantity));
             p.largest_liquidation = calls.iter().copied().reduce(f64::max);
             let margins: Vec<_> = self
                 .margin
