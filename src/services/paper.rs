@@ -578,6 +578,7 @@ impl State {
                 take_profit_level_stops: true,
                 max_take_profit_levels: Some(MAX_TAKE_PROFIT_LEVELS),
                 close: true,
+                partial_close: true,
                 reverse: true,
                 preview: false,
                 modify: true,
