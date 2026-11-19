@@ -949,8 +949,9 @@ mod tests {
             Box::new(CVD::default()),
             Box::new(HL2::default()),
             Box::new(HLC3::default()),
-            Box::new(PriceChannel::default()),
             Box::new(EhlersFisher::default()),
+            // A catalogue study whose saved copies were written while it was outside the catalogue.
+            Box::new(PriceChannel::default()),
             // A catalogue study with the bars per year it is annualized over.
             Box::new(CloseToCloseVol::default().with_trading_days(365.0)),
             // Fewer averages than the ribbon that the name creates, with a crossing pair.

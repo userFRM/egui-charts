@@ -249,9 +249,10 @@ fn every_study_styles_a_line_past_its_last() {
 }
 
 /// Catalogue studies have distinct values except ADX and DMI, which expose the same Wilder
-/// components in a different order. Fixed profiles use a saved end.
+/// components in a different order, and Donchian and Price Channel, which draw the same highest
+/// high, lowest low and midpoint with their own colours and fill. Fixed profiles use a saved end.
 #[test]
-fn catalogue_studies_are_distinct_except_for_adx_and_dmi_components() {
+fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
     use crate::model::Bar;
     use chrono::{TimeZone, Utc};
 
@@ -327,7 +328,7 @@ fn catalogue_studies_are_distinct_except_for_adx_and_dmi_components() {
             duplicates.push(format!("{first} and {name}"));
         }
     }
-    assert_eq!(duplicates, ["ADX and DMI"]);
+    assert_eq!(duplicates, ["ADX and DMI", "Donchian and Price Channel"]);
 }
 
 /// The study browser opens these studies with the lengths most often used for them.
