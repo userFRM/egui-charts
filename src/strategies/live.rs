@@ -627,42 +627,66 @@ mod tests {
         assert!(engine.update(&mut strategy, &bars, &[]).is_empty());
     }
 
-    /// A fill carries no study output, so a plot placeholder in a fill message is missing.
+    /// Fill fields belong to the execution, stay unknown on price alerts and expand only once.
     #[test]
     #[cfg(feature = "alert-engine")]
-    fn strategy_fill_message_reads_no_study_value() {
+    fn fill_fields_fill_fill_messages_and_stay_as_written_elsewhere() {
         use crate::model::{Alert, AlertCondition};
         use crate::services::{AlertEngine, AlertEvent};
         use std::sync::{Arc, Mutex};
-        let mut alert = Alert::new("SYM", AlertCondition::StrategyFills("run-1".into()));
-        alert.message = "{{value}} rsi {{plot_3_0}}".into();
-        let delivered = Arc::new(Mutex::new(Vec::new()));
-        let sink = delivered.clone();
-        let engine = AlertEngine::new()
-            .with_alerts(vec![alert])
-            .on_trigger(move |_, event| sink.lock().unwrap().push(event.clone()));
         let fill = StrategyFill {
             sequence: 1,
             time: DateTime::UNIX_EPOCH,
-            order_id: "Long".into(),
-            side: OrderSide::Buy,
-            price: 187.5,
-            quantity: 2.0,
-            position: 2.0,
+            order_id: "Reverse".into(),
+            side: OrderSide::Sell,
+            price: 180.0,
+            quantity: 7.0,
+            position: -3.0,
         };
-        engine.strategy_fills(
-            "run-1",
-            "SYM",
-            None,
-            Timeframe::Min1,
-            &[fill],
-            DateTime::UNIX_EPOCH,
-        );
-        let events = delivered.lock().unwrap();
-        let [AlertEvent::TriggeredForSymbol { message, .. }] = events.as_slice() else {
-            panic!("one fill");
-        };
-        assert_eq!(message, "187.5 rsi NaN");
+        for (template, order, expected, price_expected) in [
+            ("{{order_id}}", "Reverse", "Reverse", "{{order_id}}"),
+            ("{{side}}", "Reverse", "Sell", "{{side}}"),
+            ("{{quantity}}", "Reverse", "7", "{{quantity}}"),
+            ("{{position}}", "Reverse", "-3", "{{position}}"),
+            (
+                "{{value}} rsi {{plot_3_0}}",
+                "Reverse",
+                "180 rsi NaN",
+                "101.5 rsi NaN",
+            ),
+            ("{{order_id}}", "{{close}}", "{{close}}", "{{order_id}}"),
+        ] {
+            let mut alert = Alert::new("SYM", AlertCondition::StrategyFills("run-1".into()));
+            alert.message = template.into();
+            let delivered = Arc::new(Mutex::new(Vec::new()));
+            let sink = delivered.clone();
+            let engine = AlertEngine::new()
+                .with_alerts(vec![alert.clone()])
+                .on_trigger(move |_, event| sink.lock().unwrap().push(event.clone()));
+            let mut fill = fill.clone();
+            fill.order_id = order.into();
+            engine.strategy_fills(
+                "run-1",
+                "SYM",
+                None,
+                Timeframe::Min1,
+                &[fill],
+                DateTime::UNIX_EPOCH,
+            );
+            let events = delivered.lock().unwrap();
+            let [AlertEvent::TriggeredForSymbol { message, .. }] = events.as_slice() else {
+                panic!("one fill");
+            };
+            assert_eq!(message, expected, "{template}");
+            let bar = Bar::new(DateTime::UNIX_EPOCH, 99.0, 102.0, 98.0, 101.5, 1000.0);
+            alert.condition = AlertCondition::Above(100.0);
+            assert_eq!(
+                alert.expand_message("SYM", None, Timeframe::Min1, &bar, bar.time, |source| {
+                    (*source == crate::model::AlertSource::Price).then_some(bar.close)
+                }),
+                price_expected
+            );
+        }
     }
 
     #[test]

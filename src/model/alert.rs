@@ -417,8 +417,9 @@ impl Alert {
     /// joined by `, `, for a position the level reached last (the entry until its exit),
     /// and empty if it tests no drawing. `value` gives the value of a source at
     /// the bar. A value that is missing or not finite becomes `NaN`, a number is written in the
-    /// shortest form that reads back the same, and a placeholder the alert does not know stays as
-    /// written.
+    /// shortest form that reads back the same. A strategy fill alert also fills `{{order_id}}`,
+    /// `{{side}}`, `{{quantity}}` and `{{position}}`, as `AlertEngine::strategy_fills` describes.
+    /// A placeholder the alert does not know stays as written.
     ///
     /// ```
     /// use egui_charts::model::{Alert, AlertCondition, Bar, Timeframe};
@@ -440,6 +441,20 @@ impl Alert {
         bar: &Bar,
         trigger: DateTime<Utc>,
         value: impl Fn(&AlertSource) -> Option<f64>,
+    ) -> String {
+        self.expand_message_with(symbol, exchange, timeframe, bar, trigger, value, &[])
+    }
+
+    /// [`expand_message`](Self::expand_message) with occurrence fields; ordinary fields take precedence.
+    pub(crate) fn expand_message_with(
+        &self,
+        symbol: &str,
+        exchange: Option<&str>,
+        timeframe: Timeframe,
+        bar: &Bar,
+        trigger: DateTime<Utc>,
+        value: impl Fn(&AlertSource) -> Option<f64>,
+        extra: &[(&str, String)],
     ) -> String {
         let number = |number: Option<f64>| {
             number
@@ -493,6 +508,9 @@ impl Alert {
                     labels.join(", ")
                 }
                 _ => {
+                    if let Some((_, text)) = extra.iter().find(|(key, _)| *key == name) {
+                        return Some(text.clone());
+                    }
                     if let Some((id, output)) = plot_placeholder(name) {
                         return Some(study(id, output));
                     }

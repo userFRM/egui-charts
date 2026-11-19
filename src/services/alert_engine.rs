@@ -165,6 +165,8 @@ struct Occurrence {
     time: DateTime<Utc>,
     price: Option<f64>,
     message: String,
+    /// Placeholders only this occurrence fills, as a fill's `{{order_id}}`.
+    fields: Vec<(&'static str, String)>,
 }
 
 /// The latest observation for conditions sharing one calculation interval.
@@ -503,7 +505,9 @@ impl AlertEngine {
     /// Custom messages expand the usual placeholders using a flat bar at the fill price, with
     /// its source time and zero volume, and `exchange` as [`Alert::expand_message`] takes it. A
     /// fill carries no study values, so `{{plot_ID_N}}` reads `NaN`. Strategy-fill alerts need no
-    /// price-reader subscription.
+    /// price-reader subscription. `{{order_id}}`, `{{side}}` (`Buy` or `Sell`), `{{quantity}}`
+    /// and `{{position}}`, the signed position after the fill, read the fill; other alerts leave
+    /// them as written.
     /// Delivery callbacks run after unlocking, as they do for price alerts.
     #[cfg(feature = "strategies")]
     pub fn strategy_fills(
@@ -542,6 +546,12 @@ impl AlertEngine {
                     Some(Occurrence {
                         time: fill.time,
                         price: Some(fill.price),
+                        fields: vec![
+                            ("order_id", fill.order_id.clone()),
+                            ("side", side.into()),
+                            ("quantity", fill.quantity.to_string()),
+                            ("position", fill.position.to_string()),
+                        ],
                         message: format!(
                             "{side} {} at {price}, position {}",
                             fill.quantity, fill.position
@@ -618,6 +628,7 @@ impl AlertEngine {
                         Some(Occurrence {
                             time,
                             price: price.filter(|price| price.is_finite()),
+                            fields: Vec::new(),
                             message: text.map_or_else(
                                 || detector.clone(),
                                 |text| format!("{detector}: {text}"),
@@ -665,6 +676,7 @@ impl AlertEngine {
                         time: event.time,
                         price: event.price.filter(|price| price.is_finite()),
                         message: event.message.clone(),
+                        fields: Vec::new(),
                     })
                 })
                 .collect()
@@ -717,15 +729,26 @@ impl AlertEngine {
                 if seen.done {
                     continue;
                 }
-                let Occurrence { time, price, .. } = occurrence;
+                let Occurrence {
+                    time,
+                    price,
+                    message,
+                    fields,
+                } = occurrence;
                 let message = if alert.message.is_empty() {
-                    occurrence.message
+                    message
                 } else {
                     let flat = price.unwrap_or(f64::NAN);
                     let bar = Bar::new(time, flat, flat, flat, flat, 0.0);
-                    alert.expand_message(symbol, exchange, timeframe, &bar, time, |source| {
-                        price.filter(|_| *source == AlertSource::Price)
-                    })
+                    alert.expand_message_with(
+                        symbol,
+                        exchange,
+                        timeframe,
+                        &bar,
+                        time,
+                        |source| price.filter(|_| *source == AlertSource::Price),
+                        &fields,
+                    )
                 };
                 if alert
                     .schedule
