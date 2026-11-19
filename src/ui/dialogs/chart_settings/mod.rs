@@ -347,7 +347,7 @@ impl SettingsDialog {
                     .prev_close_line
                     .and_then(|line| line.color)
                     .unwrap_or(Color32::PLACEHOLDER),
-                theme.ui.text_secondary,
+                crate::config::ChartConfig::prev_close_fallback(theme),
             ),
         ] {
             picker.sel_color = if color == Color32::PLACEHOLDER {
@@ -980,21 +980,44 @@ mod tests {
 
     #[test]
     fn reset_colours_match_a_new_chart_under_each_theme() {
-        // The dialog is shown with `theme` while the application theme is `app`.
-        for (preset, theme, app) in [
-            ("light", Theme::light(), Theme::light()),
-            ("dark", Theme::dark(), Theme::dark()),
+        // The dialog is shown with `theme` while the application theme is `app`; `prev_close`
+        // is the previous close well's colour without a colour of its own, which follows `theme`.
+        for (preset, theme, app, prev_close) in [
+            (
+                "light",
+                Theme::light(),
+                Theme::light(),
+                Color32::from_rgb(85, 85, 85),
+            ),
+            (
+                "dark",
+                Theme::dark(),
+                Theme::dark(),
+                Color32::from_rgb(184, 184, 184),
+            ),
             (
                 "high contrast",
                 Theme::high_contrast(),
                 Theme::high_contrast(),
+                Color32::from_rgb(235, 235, 235),
             ),
-            ("light dialog in a dark app", Theme::light(), Theme::dark()),
-            ("dark dialog in a light app", Theme::dark(), Theme::light()),
+            (
+                "light dialog in a dark app",
+                Theme::light(),
+                Theme::dark(),
+                Color32::from_rgb(85, 85, 85),
+            ),
+            (
+                "dark dialog in a light app",
+                Theme::dark(),
+                Theme::light(),
+                Color32::from_rgb(184, 184, 184),
+            ),
             (
                 "high contrast dialog in a light app",
                 Theme::high_contrast(),
                 Theme::light(),
+                Color32::from_rgb(235, 235, 235),
             ),
         ] {
             for (templates_visible, size) in [
@@ -1018,6 +1041,9 @@ mod tests {
                     style.price_line_width = 3.0;
                     style.price_line_style = crate::model::LineStyle::Solid;
                 }
+                // A chosen previous close colour, which Reset clears, so the well shows the
+                // theme's again.
+                chart.config_mut().prev_close_line.color = Some(Color32::GOLD);
                 chart.config_mut().prev_close_line.width = 3.0;
                 chart.config_mut().show_bid_ask_lines = Some(true);
                 chart.config_mut().show_high_low_lines = Some(true);
@@ -1206,6 +1232,11 @@ mod tests {
                         "watermark",
                         actual.watermark.color,
                         expected.watermark.color,
+                    ),
+                    (
+                        "previous close swatch",
+                        dialog.color_picker_states.prev_close_line.sel_color,
+                        prev_close,
                     ),
                 ]
                 .into_iter()
