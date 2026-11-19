@@ -1051,6 +1051,47 @@ fn explicit_reload_replaces_prepared_history_and_requests_the_latest_page() {
     }
 }
 
+/// Losing an undrained bar replaces the subscription and requests the latest page in the same
+/// frame, without retaining the incomplete series or reporting a validation failure.
+#[test]
+fn a_pending_bar_overflow_reloads_the_history() {
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve().send(Ok(Instrument::new("A")));
+    feed.page().send(page(bars(3), true));
+    frames.run(&mut chart);
+    let old = feed.sink();
+    feed.calls();
+    let start = bars(1)[0].time;
+    // 100,001 separate minute slots exceed the 100,000-slot pending limit by one.
+    for minute in 0..=100_000 {
+        let time = start + TimeDelta::minutes(minute);
+        old.push_bar(Bar::new(time, 200.0, 200.0, 200.0, 200.0, 1.0));
+    }
+    frames.run(&mut chart);
+    assert_eq!(
+        feed.calls(),
+        [
+            Call::Unsubscribe(old.id),
+            Call::Resolve("A".into()),
+            history("A", Timeframe::Min1, None),
+        ]
+    );
+    assert!(!old.is_active());
+    assert!(chart.bars(SeriesId::MAIN).is_empty());
+    let state = chart.feed_state(SeriesId::MAIN).unwrap();
+    assert_eq!(state.last_error, None);
+    assert_eq!(state.rejected_bars, 0);
+    assert!(state.loading_history);
+    feed.resolve().send(Ok(Instrument::new("A")));
+    feed.page().send(page(bars(3), true));
+    frames.run(&mut chart);
+    assert_eq!(chart.bars(SeriesId::MAIN), bars(3));
+    assert!(feed.sink().is_active());
+}
+
 #[test]
 fn confirmed_empty_internal_history_invalidates_coverage_without_fabricating_rows() {
     for shared in [false, true] {

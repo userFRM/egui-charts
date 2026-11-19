@@ -2013,6 +2013,50 @@ mod tests {
         worker.join().unwrap();
     }
 
+    /// A reload replaces the alert subscription and its history without an error, backoff or
+    /// permanent stop, and drops bars received in the same drain.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn an_alert_feed_reloads_when_its_feed_asks() {
+        use crate::services::AlertFeed;
+        #[derive(Default)]
+        struct Feed(Mutex<Vec<crate::data::Sink>>);
+        impl crate::data::Datafeed for Feed {
+            fn history(
+                &self,
+                _: crate::data::HistoryRequest,
+                reply: Reply<crate::data::HistoryPage>,
+            ) {
+                let bars = vec![bar(0, 10.0, 1.0), bar(1, 20.0, 1.0)];
+                reply.send(Ok(crate::data::HistoryPage::new(bars, true)));
+            }
+            fn subscribe(&self, subscription: crate::data::Subscription) {
+                self.0.lock().unwrap().push(subscription.sink);
+            }
+        }
+        let ctx = egui::Context::default();
+        let host = Arc::new(Feed::default());
+        let mut feed = AlertFeed::new(
+            host.clone(),
+            AlertFeed::history_request("SYM", Timeframe::Min1),
+            None,
+        );
+        for _ in 0..2 {
+            assert!(feed.poll(&ctx, time(1000)).is_empty());
+        }
+        let loaded = [bar(0, 10.0, 1.0), bar(1, 20.0, 1.0)];
+        assert_eq!(feed.bars(), loaded);
+        let old = host.0.lock().unwrap()[0].clone();
+        old.push_bar(bar(5, 50.0, 1.0));
+        old.reload_history();
+        assert!(feed.poll(&ctx, time(1000)).is_empty());
+        assert!(!old.is_active());
+        assert_eq!(host.0.lock().unwrap().len(), 2);
+        assert!(feed.bars().is_empty());
+        assert!(feed.poll(&ctx, time(1000)).is_empty());
+        assert_eq!(feed.bars(), loaded);
+    }
+
     #[test]
     fn expired_paused_and_watchlist_alerts() {
         let bars = [bar(0, 99.0, 1.0), bar(1, 101.0, 1.0)];

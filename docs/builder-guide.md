@@ -138,7 +138,8 @@ with the latest 500 bars and then including the newest received timestamp so the
 forming bar can change. Each response replaces full bars, including volume;
 no trades are synthesized. The server must return the complete requested window
 within 500 bars between refreshes. If a full response no longer overlaps the
-previous refresh, the adapter reports invalid data and stops; reload history.
+previous refresh, the adapter stops and asks the chart to reload its history,
+which subscribes again.
 Recoverable live failures back off to 60 seconds and respect a longer
 `Retry-After`; permanent failures stop the subscription. Unsubscribe and chart
 drop cancel further requests and discard any pending response.

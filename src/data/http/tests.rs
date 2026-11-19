@@ -622,8 +622,10 @@ fn old_subscription_cannot_publish_or_schedule_after_cancellation() {
             .received(Ok(HistoryPage::new(bars, false)))
             .is_none()
     );
-    assert!(inbox.drain().updates.iter().any(|(_, update)| matches!(&update.error,
-        Some(FeedError::InvalidData(message)) if message == "live history window exceeded; reload history")));
+    assert!(inbox.drain().updates.iter().any(|(_, update)| update.reload
+        && update.error.is_none()
+        && update.status.is_none()
+        && update.bars.is_empty()));
     // A long Retry-After must not keep an unsubscribed native worker alive.
     struct Released(std::sync::mpsc::Sender<bool>);
     impl Drop for Released {

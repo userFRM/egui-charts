@@ -306,15 +306,14 @@ impl Poll {
             return None;
         }
         let sink = &self.subscription.sink;
-        let result = result.and_then(|page| {
-            if page.bars.len() == 500 && self.since.is_some_and(|since| page.bars[0].time > since) {
-                Err(FeedError::InvalidData(
-                    "live history window exceeded; reload history".into(),
-                ))
-            } else {
-                Ok(page)
-            }
-        });
+        // A full window starting after the newest held bar leaves missing bars between them.
+        if let Ok(page) = &result
+            && page.bars.len() == 500
+            && self.since.is_some_and(|since| page.bars[0].time > since)
+        {
+            sink.reload_history();
+            return None;
+        }
         let delay = match result {
             Ok(page) => {
                 for bar in page.bars {

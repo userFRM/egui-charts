@@ -945,6 +945,8 @@ impl Chart {
 
     /// Reloads the current feed key on the next frame, retaining drawings and chart history.
     /// Use after changing host-side feed settings or to retry a permanent request failure.
+    /// A feed asks for the same reload of the chart's series through
+    /// [`Sink::reload_history`](crate::data::Sink::reload_history).
     pub fn reload_feed(&mut self) {
         self.study_data.clear_feed();
         if let Some(link) = &mut self.feed_link {
