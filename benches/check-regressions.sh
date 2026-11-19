@@ -85,8 +85,8 @@ for scenario in "${scenarios[@]}"; do
     limit=$base
     tolerance='+5%'
     if [[ $scenario == profiles-* ]]; then
-        # This workload adds developing plots that the base library did not calculate.
-        # Keep an explicit accepted budget for them, as well as the scaling checks below.
+        # Profiles use recorded absolute budgets from profiles.baseline, remeasured with
+        # the pinned bench compiler, alongside the history-length scaling checks below.
         limit=$(awk -v s="$scenario" '$1 == s { print $2 }' "$(dirname "$0")/profiles.baseline")
         [[ $limit =~ ^[0-9]+$ ]] || { echo "::error::Missing profile budget for $scenario" >&2; exit 1; }
         limit=$(( limit * samples ))
