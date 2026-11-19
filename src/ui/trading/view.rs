@@ -236,6 +236,7 @@ impl Trading {
                     .executions
                     .iter()
                     .filter(|fill| fills.symbol(fill) == Some(symbol))
+                    .map(super::ExecutionMark::new)
                     .collect();
                 // `Trading::numbers` takes the ticket's decimals; prices here keep the market's.
                 let numbers = Numbers {
@@ -243,7 +244,7 @@ impl Trading {
                     decimals,
                     formatter: self.formatter.as_deref(),
                 };
-                executions::show(ui, chart, &fills, display.show_execution_labels, numbers);
+                executions::show(ui, chart, &fills, display, numbers);
             }
             render_trading_lines(
                 ui,
@@ -301,6 +302,8 @@ impl Trading {
 
     /// Draws the chart symbol's working orders, brackets, positions and execution marks,
     /// respecting [`display`](Self::display). Hovering a mark lists the fills of its bar.
+    /// [`render_executions`](super::render_executions) draws other fills, such as imported trades,
+    /// with the same marks.
     /// Asks the user to confirm a change made on a line or in the depth ladder before sending it.
     pub fn show(&mut self, ui: &mut egui::Ui, chart: &mut Chart) {
         chart.trading_bid_ask = self.display.bid_ask_labels;
