@@ -95,7 +95,7 @@ impl Chart {
                     ui.scope_id().with((pane_id, key, "price_axis")),
                     Sense::click_and_drag(),
                 )
-                .on_hover_cursor(egui::CursorIcon::ResizeVertical);
+                .on_hover_cursor(self.price_axis_cursor());
             let gestures = self.price_axis_gestures(ui, &response, Rect::EVERYTHING);
             if gestures.reset {
                 self.user_action(|chart| chart.pane_price_scale_mut(pane_id, key).reset());

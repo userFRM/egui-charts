@@ -14,6 +14,20 @@ pub(super) struct ScrollAnimation {
     progress: Option<(f64, f64, f64)>,
 }
 
+/// A visible range set before the first layout, fitted again once the plot has its width.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum PendingRange {
+    Logical(LogicalRange),
+    Time(super::VisibleTimeRange),
+    /// A range from another chart, with the interval and slots of its source.
+    Synced(
+        super::VisibleTimeRange,
+        Option<(crate::model::Timeframe, f64)>,
+    ),
+    /// Every loaded series, as [`Chart::fit_content`] fits them.
+    Content,
+}
+
 impl Chart {
     /// Fits all loaded bar series across every pane, including hidden series and whitespace.
     ///
@@ -21,10 +35,21 @@ impl Chart {
     /// Spacing and fixed-edge limits still apply. Without a main horizontal domain, the union
     /// of added-series timestamps supplies whitespace slots for the shared mapping;
     /// values remain in their added series. With no loaded points the view is unchanged.
+    /// Before the first frame the content is fitted again once the plot has its size, as a
+    /// range set with [`Chart::set_visible_logical_range`] is.
     pub fn fit_content(&mut self) {
         self.cancel_view_motion();
+        if self.fit_loaded_content() {
+            self.defer_visible_range(PendingRange::Content);
+        }
+    }
+
+    /// Fits every loaded series across the time scale's width, or returns `false` without
+    /// changing the view when nothing is loaded.
+    fn fit_loaded_content(&mut self) -> bool {
         self.refresh_time_scale_content();
         self.state.time_scale_mut().fit_content();
+        !self.state.shown().is_empty()
     }
 
     /// Keep fitting and edge limits on the same mapping used to paint added series.
@@ -127,12 +152,30 @@ impl Chart {
         (!self.state.shown().is_empty()).then(|| self.state.time_scale().visible_logical_range())
     }
 
-    /// Shows the logical range across the plot width of the last frame, setting both the bar
-    /// spacing and the scroll position, so [`Chart::visible_logical_range`] returns it.
+    /// Shows the logical range across the plot width, setting both the bar spacing and the
+    /// scroll position, so [`Chart::visible_logical_range`] returns it.
+    ///
+    /// The width is the plot's at the last frame. Before the first frame the range is fitted
+    /// again once the plot has its size, unless the view is changed or a visible-bar count is
+    /// requested before then, so a range set right after building the chart is the first one
+    /// shown. Bars merged in between keep it on the same bars, at their new indices when older
+    /// bars arrive or a bar limit evicts some.
     ///
     /// Returns `false` without changing the view for empty data, non-finite bounds or a
     /// `right` below `left`. The bar spacing and edge limits still apply.
     pub fn set_visible_logical_range(&mut self, range: LogicalRange) -> bool {
+        if !self.fit_visible_logical_range(range) {
+            return false;
+        }
+        self.cancel_view_motion();
+        self.tracking_mode_active = false;
+        self.defer_visible_range(PendingRange::Logical(range));
+        true
+    }
+
+    /// Fits `range` across the time scale's width, or returns `false` without changing the view
+    /// for empty data, non-finite bounds or a `right` below `left`.
+    fn fit_visible_logical_range(&mut self, range: LogicalRange) -> bool {
         let ts = self.state.time_scale();
         let left = ts.position(f64::from(range.left));
         let right = ts.position(f64::from(range.right));
@@ -140,12 +183,52 @@ impl Chart {
         if self.state.shown().is_empty() || !bars.is_finite() || range.right < range.left {
             return false;
         }
-        self.cancel_view_motion();
-        self.tracking_mode_active = false;
         let scale = self.state.time_scale_mut();
         scale.set_bar_spacing((scale.width() - 1.0) / bars);
         scale.set_right_offset(right - scale.base_idx() as f64);
         true
+    }
+
+    /// Keeps a range fitted before the first layout, across the placeholder width of the time
+    /// scale, so the frames that size the plot fit it again. It replaces a visible-bar count
+    /// requested before it.
+    pub(super) fn defer_visible_range(&mut self, range: PendingRange) {
+        if self.prev_width.is_none() {
+            self.apply_visible_bars_once = false;
+            self.pending_visible_range = Some((range, self.time_scale_view()));
+        }
+    }
+
+    /// The bar spacing, the right offset and whether tracking mode keeps the view at the live
+    /// edge, to tell whether anything changed the view.
+    pub(super) fn time_scale_view(&self) -> (f32, f64, bool) {
+        let scale = self.state.time_scale();
+        (
+            scale.bar_spacing(),
+            scale.right_offset_precise(),
+            self.tracking_mode_active,
+        )
+    }
+
+    /// The range deferred before the first layout, unless a later call or frame changed the
+    /// view its last fit or the last merge of bars left, or requested a visible-bar count.
+    /// Read before the width changes.
+    pub(super) fn take_pending_range(&mut self) -> Option<PendingRange> {
+        let (range, view) = self.pending_visible_range.take()?;
+        (!self.apply_visible_bars_once && view == self.time_scale_view()).then_some(range)
+    }
+
+    /// Fits a deferred range at the current width and keeps it for the next pass while it fits.
+    pub(super) fn refit_pending_range(&mut self, range: PendingRange) {
+        let fitted = match range {
+            PendingRange::Logical(range) => self.fit_visible_logical_range(range),
+            PendingRange::Time(range) => self.fit_time_range(range, f64::INFINITY),
+            PendingRange::Synced(range, source) => self.apply_synced_time_range_from(range, source),
+            PendingRange::Content => self.fit_loaded_content(),
+        };
+        if fitted {
+            self.pending_visible_range = Some((range, self.time_scale_view()));
+        }
     }
 
     /// The interval for calendar arithmetic; numeric and custom keys keep their own slots.
@@ -840,6 +923,146 @@ mod tests {
             99.0 + 60.0 / chart.get_time_scale_state().0,
             "fit with pixels",
         );
+    }
+
+    /// Each range setter and the fit to the content, called before the first frame, show their
+    /// range on the sized plot, as after a frame, and a later scroll or tracking mode before
+    /// that frame replaces it. Daily bar `i` opens `i` days after bar 0, so days 40 to 60 span
+    /// the plot from the open of bar 40 to the open of bar 60, and the fit spans the 100 bars
+    /// and the right offset of 2.5 bars. The scroll keeps the spacing of 20 slots across the
+    /// placeholder width of 800 points the time scale has before its first layout: 799 / 20.
+    /// Days 80 to 102 end 2.5 slots past the last bar, at the live edge, where tracking mode
+    /// keeps the view. Prices of nine digits widen the price axis on the first frame, which
+    /// reruns at a narrower plot. A bar merged in between keeps the range on its bars: a newer
+    /// bar leaves bars 40 to 59 and days 40 to 60 in view, an older one moves the bars to 41 to
+    /// 60, and a bar limit of 100, keeping 88 of 101 bars, to 27 to 46. A range at the live edge
+    /// stays as set when a bar is appended, although a shown view would follow it.
+    #[test]
+    fn ranges_set_before_the_first_frame_are_shown() {
+        use crate::widget::VisibleTimeRange;
+        type Row = (&'static str, fn(&mut Chart) -> bool, fn(&Chart, &str));
+        fn days(chart: &Chart) -> VisibleTimeRange {
+            let first = chart.bars(SeriesId::MAIN)[0].time;
+            VisibleTimeRange::new(first + Duration::days(40), first + Duration::days(60))
+        }
+        fn shows_days(chart: &Chart, what: &str) {
+            let (shown, expected) = (chart.visible_time_range().unwrap(), days(chart));
+            for (actual, expected) in [(shown.from, expected.from), (shown.to, expected.to)] {
+                assert!(
+                    (actual - expected).num_milliseconds().abs() < 1,
+                    "{what}: {shown:?}"
+                );
+            }
+        }
+        /// Merges a copy of bar 0 opened `days` days after it.
+        fn merge(chart: &mut Chart, days: i64) -> bool {
+            let mut bar = chart.bars(SeriesId::MAIN)[0].clone();
+            bar.time += Duration::days(days);
+            chart.update(SeriesId::MAIN, bar)
+        }
+        let rows: [Row; 12] = [
+            (
+                "logical",
+                |chart| chart.set_visible_logical_range(LogicalRange::new(40.0, 59.0)),
+                |chart, what| assert_range(chart, 40.0, 59.0, what),
+            ),
+            (
+                "time",
+                |chart| chart.set_visible_time_range(days(chart)),
+                shows_days,
+            ),
+            (
+                "synced",
+                |chart| chart.apply_synced_time_range(days(chart)),
+                shows_days,
+            ),
+            (
+                "content",
+                |chart| {
+                    chart.fit_content();
+                    true
+                },
+                |chart, what| assert_range(chart, 0.0, 101.5, what),
+            ),
+            (
+                "scrolled after",
+                |chart| {
+                    let set = chart.set_visible_logical_range(LogicalRange::new(40.0, 59.0));
+                    chart.scroll_to_position(-20.0, false);
+                    set
+                },
+                |chart, what| {
+                    let (spacing, offset) = chart.get_time_scale_state();
+                    assert_close(spacing.into(), 799.0 / 20.0, what);
+                    assert_close(offset.into(), -20.0, what);
+                },
+            ),
+            (
+                "tracked after",
+                |chart| {
+                    let first = chart.bars(SeriesId::MAIN)[0].time;
+                    let set = chart.set_visible_time_range(VisibleTimeRange::new(
+                        first + Duration::days(80),
+                        first + Duration::days(102),
+                    ));
+                    chart.enable_tracking_mode();
+                    set
+                },
+                |chart, what| assert!(chart.is_tracking_mode_active(), "{what}"),
+            ),
+            (
+                "logical, newer bar merged",
+                |chart| {
+                    chart.set_visible_logical_range(LogicalRange::new(40.0, 59.0))
+                        && merge(chart, 100)
+                },
+                |chart, what| assert_range(chart, 40.0, 59.0, what),
+            ),
+            (
+                "time, newer bar merged",
+                |chart| chart.set_visible_time_range(days(chart)) && merge(chart, 100),
+                shows_days,
+            ),
+            (
+                "synced, newer bar merged",
+                |chart| chart.apply_synced_time_range(days(chart)) && merge(chart, 100),
+                shows_days,
+            ),
+            (
+                "logical, older bar merged",
+                |chart| {
+                    chart.set_visible_logical_range(LogicalRange::new(40.0, 59.0))
+                        && merge(chart, -1)
+                },
+                |chart, what| assert_range(chart, 41.0, 60.0, what),
+            ),
+            (
+                "logical, newer bar merged at the bar limit",
+                |chart| {
+                    chart.set_bar_limit(SeriesId::MAIN, std::num::NonZeroUsize::new(100));
+                    chart.set_visible_logical_range(LogicalRange::new(40.0, 59.0))
+                        && merge(chart, 100)
+                },
+                |chart, what| assert_range(chart, 27.0, 46.0, what),
+            ),
+            (
+                "logical at the live edge, newer bar merged",
+                |chart| {
+                    chart.set_visible_logical_range(LogicalRange::new(80.0, 100.0))
+                        && merge(chart, 100)
+                },
+                |chart, what| assert_range(chart, 80.0, 100.0, what),
+            ),
+        ];
+        for (name, set, check) in rows {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[95_000_000.0], &[105_000_000.0]);
+            assert!(set(&mut chart), "{name}");
+            for t in [0.0, 0.1] {
+                frame(&ctx, &mut chart, t, vec![]);
+                check(&chart, &format!("{name} after the frame at {t}"));
+            }
+        }
     }
 
     /// An affine axis preserves differences: strikes have gaps 10:30 and maturities 9:24.

@@ -134,6 +134,7 @@ impl SettingsDialog {
                         BubbleGrouping::TimeWindow(_) => 2,
                         BubbleGrouping::PriceStep(_) => 3,
                         BubbleGrouping::Executions(_) => 4,
+                        BubbleGrouping::AggressiveOrder => 5,
                     };
                     let choices = [
                         (BubbleGrouping::Automatic, "Automatic"),
@@ -144,6 +145,7 @@ impl SettingsDialog {
                         ),
                         (BubbleGrouping::PriceStep(1.0), "Price step"),
                         (BubbleGrouping::Executions(10), "Executions"),
+                        (BubbleGrouping::AggressiveOrder, "Aggressive order"),
                     ];
                     styled_dropdown(
                         ui,

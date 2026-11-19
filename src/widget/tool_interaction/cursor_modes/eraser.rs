@@ -7,6 +7,7 @@
 //! - Cursor changes to indicate eraser mode
 //! - Hovering over a drawing highlights it (shows what will be deleted)
 //! - Click to delete the highlighted drawing
+//! - Ctrl/Command-drag to erase parts of unlocked brush and highlighter strokes
 //! - Exit eraser mode when selecting a drawing tool
 
 use crate::tokens::DESIGN_TOKENS;
@@ -41,7 +42,8 @@ impl Default for EraserConfig {
 ///
 /// Hovering over a drawing highlights it with a colored outline.
 /// Clicking deletes the hovered drawing. The eraser does not affect non-drawing
-/// chart elements (series, indicators, overlays).
+/// chart elements (series, indicators, overlays). Ctrl/Command-drag erases parts of unlocked
+/// brush and highlighter strokes, keeping the rest in the same style as one undo step.
 #[derive(Clone, Debug, Default)]
 pub struct EraserMode {
     /// Drawing ID currently hovered (for highlight preview)

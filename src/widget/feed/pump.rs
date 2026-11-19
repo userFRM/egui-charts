@@ -167,7 +167,7 @@ impl Chart {
             link.retries
                 .retain(|(_, request, _)| !matches!(request, Request::Footprints(_)));
         }
-        let mut paged_tick_rates = false;
+        let mut paged_rates = false;
         for (key, answer) in drained.answers {
             let Some(at) = link
                 .pending
@@ -202,7 +202,7 @@ impl Chart {
                     scroll_back,
                 } => match result::<HistoryPage>(answer) {
                     Ok(page) => {
-                        paged_tick_rates |= !page.bars.is_empty();
+                        paged_rates |= !page.bars.is_empty();
                         self.apply_page(&mut link, &asked, page, scroll_back);
                     }
                     Err(error) => self.request_failed(&mut link, request, failures, error, now),
@@ -252,7 +252,7 @@ impl Chart {
                 },
                 Request::Trades(asked) => match result::<TradePage>(answer) {
                     Ok(page) => {
-                        paged_tick_rates = true;
+                        paged_rates = true;
                         self.apply_trades(&mut link, &asked, page, reset);
                     }
                     Err(error) if error.is_recoverable() => {
@@ -265,9 +265,9 @@ impl Chart {
                 },
             }
         }
-        if paged_tick_rates && !reset {
+        if paged_rates && !reset {
             for (input, _) in &link.study_inputs {
-                link.rebuild_paged_tick_rate(input, &self.state.data().bars);
+                link.rebuild_paged_trade_rate(input, &self.state.data().bars);
             }
         }
 
@@ -572,6 +572,7 @@ impl Chart {
         let mut retain_prepared = resumed
             && link.clock == clock
             && link.extended_hours == self.extended_hours
+            && link.overnight_hours == self.overnight_hours
             && link.conversion == self.conversion
             && link
                 .footprint
@@ -579,6 +580,7 @@ impl Chart {
                 .is_some_and(|flow| flow.live.prepared_before().is_some());
         let mut retain_trades = (resumed || link.clock != clock)
             && link.extended_hours == self.extended_hours
+            && link.overnight_hours == self.overnight_hours
             && link.conversion == self.conversion
             && link.clock.sessions().with_timeframe(Timeframe::Min1)
                 == clock.sessions().with_timeframe(Timeframe::Min1)
@@ -616,6 +618,7 @@ impl Chart {
             link.trades = Trades::new(TRADE_CAPACITY);
         }
         link.extended_hours = self.extended_hours;
+        link.overnight_hours = self.overnight_hours;
         link.conversion = self.conversion.clone();
         for study in self.studies.indicators() {
             for input in study.order_flow_inputs() {
@@ -690,6 +693,7 @@ impl Chart {
             since: None,
             count: link.initial_bars,
             extended_hours: self.extended_hours,
+            overnight_hours: self.overnight_hours,
             adjusted: link.adjusted,
             conversion: self.conversion.clone(),
         };
@@ -775,6 +779,7 @@ impl Chart {
             timeframe,
             clock: link.clock.clone(),
             extended_hours: self.extended_hours,
+            overnight_hours: self.overnight_hours,
             conversion: self.conversion.clone(),
             sink,
         };
@@ -1217,6 +1222,7 @@ impl Chart {
             since: self.range_start(before),
             count: link.initial_bars.max(MIN_SCROLL_BACK_PAGE),
             extended_hours: self.extended_hours,
+            overnight_hours: self.overnight_hours,
             adjusted: link.adjusted,
             conversion: self.conversion.clone(),
         };
