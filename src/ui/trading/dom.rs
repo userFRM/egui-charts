@@ -145,9 +145,9 @@ fn format_size(value: f64) -> String {
 }
 
 /// A read-only depth ladder using the chart's book, executions and instrument metadata.
-/// No broker is required and no order actions are emitted. Prices stay fixed until Center
-/// (Shift+Alt+C) is pressed. Keep one panel per chart; serialize it with the workspace to retain
-/// the view and profile choices.
+/// No broker is required and no order actions are emitted. Prices stay fixed until Center,
+/// or Shift+Alt+C while the pointer or focus is on the panel, is pressed. Keep one panel per
+/// chart; serialize it with the workspace to retain the view and profile choices.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct DepthPanel {
@@ -273,6 +273,21 @@ impl DepthPanel {
 }
 
 impl Ladder {
+    /// Re-centre only the ladder under the pointer or holding focus, outside text editing.
+    fn shortcut(ui: &mut Ui) -> bool {
+        let area = ui.min_rect();
+        let ctx = ui.ctx().clone();
+        let focused = ctx
+            .memory(|memory| memory.focused())
+            .and_then(|id| ctx.read_response(id))
+            .is_some_and(|response| area.intersects(response.rect));
+        (ui.rect_contains_pointer(area) || focused)
+            && !ctx.text_edit_focused()
+            && ui.input_mut(|input| {
+                input.consume_key(egui::Modifiers::SHIFT | egui::Modifiers::ALT, egui::Key::C)
+            })
+    }
+
     /// The retained trades the profile sums, oldest first.
     fn accumulated<'a>(
         &self,
@@ -645,6 +660,7 @@ impl Ladder {
         for (width, share) in widths.iter_mut().zip(shares) {
             *width += spare * share;
         }
+        let mut center = false;
         ui.scope(|ui| {
             // Vertical wheel movement changes price rows; shift-wheel and the bar scroll columns.
             ui.style_mut().always_scroll_the_only_direction = false;
@@ -1305,7 +1321,7 @@ impl Ladder {
                     if read_only {
                         return;
                     }
-                    let lock = Rect::from_center_size(price_column.center(), vec2(24.0, 24.0));
+                    let lock = Rect::from_center_size(price_column.center() - vec2(13.0, 0.0), vec2(24.0, 24.0));
                     let lock_response = ui
                         .interact(lock, ui.make_persistent_id("dom_lock"), Sense::click())
                         .on_hover_text(l10n::text(
@@ -1338,6 +1354,15 @@ impl Ladder {
                     };
                     icon.as_image_tinted(vec2(16.0, 16.0), ink)
                         .paint_at(ui, Rect::from_center_size(lock.center(), vec2(16.0, 16.0)));
+                    let centre_rect = Rect::from_center_size(price_column.center() + vec2(13.0, 0.0), vec2(24.0, 24.0));
+                    let centre_response = ui.interact(centre_rect, ui.make_persistent_id("dom_center"), Sense::click())
+                        .on_hover_text(l10n::text(ui.ctx(), "Center the ladder on the market (Shift+Alt+C)"));
+                    let translated_label = l10n::text(ui.ctx(), "Center");
+                    centre_response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label));
+                    let ink = if centre_response.hovered() { theme.ui.text } else { theme.ui.text_muted };
+                    icons::MOVE_VERTICAL.as_image_tinted(vec2(16.0, 16.0), ink)
+                        .paint_at(ui, Rect::from_center_size(centre_rect.center(), vec2(16.0, 16.0)));
+                    center = centre_response.clicked();
 
                 });
         });
@@ -1378,10 +1403,7 @@ impl Ladder {
                 "Spread: {spread}",
                 &[("spread", spread)],
             ));
-            let shortcut = !ui.ctx().text_edit_focused()
-                && ui.input_mut(|input| {
-                    input.consume_key(egui::Modifiers::SHIFT | egui::Modifiers::ALT, egui::Key::C)
-                });
+            let shortcut = Self::shortcut(ui);
             if ui.button(l10n::text(ui.ctx(), "Center")).clicked() || shortcut {
                 self.centre = middle;
                 self.scroll = 0.0;
@@ -1570,6 +1592,12 @@ impl Ladder {
         if self.details {
             muted(ui, "Time in force");
             time_in_force_menu(ui, "dom_tif", time_in_force, market.rules);
+        }
+        if (center || Self::shortcut(ui))
+            && let Some(middle) = middle
+        {
+            self.centre = Some(middle);
+            self.scroll = 0.0;
         }
         action
     }
@@ -3057,5 +3085,130 @@ mod tests {
             .filter(|color| [large, notable].contains(color))
             .collect();
         assert_eq!(tiers, [large]);
+    }
+    /// Center keeps the lock and neither steals another area's shortcut nor typed text.
+    #[test]
+    fn ticket_ladder_centres_on_the_market_and_keeps_its_lock() {
+        use crate::model::{Capabilities, TradingRules};
+        let rules = TradingRules::new("ES");
+        let market = Market {
+            symbol: "ES",
+            formatter: None,
+            pip_value: None,
+            last: Some(100.0),
+            bid: Some(99.75),
+            ask: Some(100.25),
+            tick: 0.25,
+            decimals: 2,
+            currency: "USD",
+            balance: None,
+            capabilities: Capabilities::default(),
+            rules: &rules,
+            rules_ready: true,
+            offline: None,
+            ladder: None,
+            ladder_unavailable: None,
+            highlights: Vec::new(),
+            orders: &[],
+            positions: &[],
+            trades: &[],
+            session_open: None,
+            last_fill: None,
+            logo: None,
+        };
+        for (over_ladder, focus_text, expected) in
+            [(true, false, 400), (false, false, 398), (true, true, 398)]
+        {
+            let ctx = egui::Context::default();
+            let mut ladder = Ladder {
+                locked: true,
+                ..Default::default()
+            };
+            let frame = |ladder: &mut Ladder, focus_text, events| {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(600.0, 700.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.scope_builder(
+                            egui::UiBuilder::new()
+                                .max_rect(Rect::from_min_size(pos2(8.0, 8.0), vec2(180.0, 680.0))),
+                            |ui| {
+                                let response = ui.text_edit_singleline(&mut String::new());
+                                if focus_text {
+                                    response.request_focus();
+                                }
+                            },
+                        );
+                        ui.scope_builder(
+                            egui::UiBuilder::new().max_rect(Rect::from_min_size(
+                                pos2(208.0, 8.0),
+                                vec2(384.0, 680.0),
+                            )),
+                            |ui| {
+                                ladder.draw(
+                                    ui,
+                                    "ES",
+                                    &market,
+                                    Some((&mut 1.0, &mut TimeInForce::Day)),
+                                );
+                            },
+                        );
+                    },
+                )
+                .drop_without_applying_deltas();
+            };
+            frame(&mut ladder, false, vec![]);
+            frame(
+                &mut ladder,
+                false,
+                vec![
+                    egui::Event::PointerMoved(pos2(400.0, 300.0)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: vec2(0.0, -40.0),
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            for _ in 0..60 {
+                frame(&mut ladder, false, vec![]);
+            }
+            assert_eq!(ladder.centre, Some(398));
+            let pointer = if over_ladder {
+                pos2(400.0, 300.0)
+            } else {
+                pos2(50.0, 300.0)
+            };
+            frame(
+                &mut ladder,
+                focus_text,
+                vec![egui::Event::PointerMoved(pointer)],
+            );
+            frame(
+                &mut ladder,
+                false,
+                vec![egui::Event::Key {
+                    key: egui::Key::C,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::SHIFT | egui::Modifiers::ALT,
+                }],
+            );
+            assert_eq!(
+                ladder.centre,
+                Some(expected),
+                "pointer on ladder {over_ladder}, text focused {focus_text}"
+            );
+            assert!(ladder.locked);
+        }
     }
 }
