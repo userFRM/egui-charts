@@ -121,10 +121,10 @@ impl PivotTimeframe {
             Self::Monthly => "Monthly",
             Self::Quarterly => "Quarterly",
             Self::Yearly => "Yearly",
-            Self::TwoYears => "2 years",
-            Self::ThreeYears => "3 years",
-            Self::FiveYears => "5 years",
-            Self::TenYears => "10 years",
+            Self::TwoYears => "Biyearly",
+            Self::ThreeYears => "Triyearly",
+            Self::FiveYears => "Quinquennially",
+            Self::TenYears => "Decennially",
         }
     }
 }

@@ -10886,7 +10886,7 @@ mod tests {
             ("Trend Strength Index", "14 close"),
             ("Higher Interval Candles", "1D"),
             ("Accelerator Oscillator", "hl2"),
-            ("Keltner", "20 close 2 Average true range 10"),
+            ("Keltner", "20 close 2 Average True Range 10"),
         ] {
             assert_eq!(caption(name), expected);
         }

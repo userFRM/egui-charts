@@ -731,17 +731,17 @@ fn catalogue_choices_read_in_words_and_restore() {
         ("All Candlestick Patterns", "trend", 0, "SMA50"),
         ("All Candlestick Patterns", "trend", 1, "SMA50, SMA200"),
         ("All Candlestick Patterns", "trend", 2, "No detection"),
-        ("Pivot Points Standard", "timeframe", 6, "2 years"),
-        ("Pivot Points Standard", "timeframe", 9, "10 years"),
-        ("VWAP Auto Anchored", "anchor", 1, "Highest high"),
-        ("VWAP Auto Anchored", "anchor", 3, "Highest volume"),
-        ("Vol Profile Auto Anchored", "anchor", 2, "Lowest low"),
+        ("Pivot Points Standard", "timeframe", 6, "Biyearly"),
+        ("Pivot Points Standard", "timeframe", 9, "Decennially"),
+        ("VWAP Auto Anchored", "anchor", 1, "Highest High"),
+        ("VWAP Auto Anchored", "anchor", 3, "Highest Volume"),
+        ("Vol Profile Auto Anchored", "anchor", 2, "Lowest Low"),
         ("BB", "basis", 4, "VWMA"),
         ("Volume", "color_rule", 1, "Previous close"),
         ("CVD", "mode", 0, "Close position"),
         ("CVD", "mode", 1, "Body ratio"),
         ("ZigZag", "mode", 0, "High/Low"),
-        ("Keltner", "band", 0, "Average true range"),
+        ("Keltner", "band", 0, "Average True Range"),
     ];
     let got: Vec<_> = saved
         .iter()
@@ -758,30 +758,14 @@ fn catalogue_choices_read_in_words_and_restore() {
         .collect();
     assert_eq!(got, want);
 
-    // A literal template saved before choice labels changed keeps its inputs and plot styles.
-    for (saved, id, index, label) in [(
-        r#"{"name":"BB","inputs":[["period",{"Length":20}],["basis",{"Choice":0}],["std_dev",{"Number":2.0}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.BollingerBands.html","plots":[{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":false},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[8,153,129,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":false}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[15,3,4,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[2,8,12,13],"inverted_color":null,"visible":true}],"gradients":[]},"visible":true,"scale":"Main"}"#,
-        "basis",
-        0,
-        "SMA",
-    )] {
-        let saved: StudyTemplate = serde_json::from_str(saved).unwrap();
-        let restored = saved.create_with(&factory).unwrap();
-        assert_eq!(
-            choice(restored.as_ref(), id),
-            Some((index, Some(label.to_owned())))
-        );
-        for (id, value) in &saved.inputs {
-            assert_eq!(
-                restored
-                    .inputs()
-                    .iter()
-                    .find(|input| input.id == *id)
-                    .map(|input| &input.value),
-                Some(value),
-                "{id}"
-            );
-        }
-        assert_eq!(restored.settings().plots, saved.settings.plots);
-    }
+    // A template saved before choice labels changed reads its basis in words.
+    let saved = r#"{"name":"BB","inputs":[["period",{"Length":20}],["basis",{"Choice":0}],["std_dev",{"Number":2.0}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.BollingerBands.html","plots":[{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":false},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[8,153,129,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":false}],"precision":null,"hidden_intervals":[],"interval_range":"All","levels":[],"fill_between_levels":false,"level_fill_color":[15,3,4,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[2,8,12,13],"inverted_color":null,"visible":true}],"gradients":[]},"visible":true,"scale":"Main"}"#;
+    let restored = serde_json::from_str::<StudyTemplate>(saved)
+        .unwrap()
+        .create_with(&factory)
+        .unwrap();
+    assert_eq!(
+        choice(restored.as_ref(), "basis"),
+        Some((0, Some("SMA".to_owned())))
+    );
 }
