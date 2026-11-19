@@ -23,15 +23,7 @@ pub(super) enum SmoothingType {
 
 impl std::fmt::Debug for SmoothingType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::None => "None",
-            Self::Sma => "SMA",
-            Self::SmaWithBands => "SMA + Bollinger Bands",
-            Self::Ema => "EMA",
-            Self::Smma => "SMMA (RMA)",
-            Self::Wma => "WMA",
-            Self::Vwma => "VWMA",
-        })
+        f.write_str(self.label())
     }
 }
 
@@ -80,6 +72,19 @@ impl SmoothingType {
             color: palette::GREEN.gamma_multiply_u8(26),
             inverted_color: None,
         }]
+    }
+
+    /// The label study inputs show for this choice.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Sma => "SMA",
+            Self::SmaWithBands => "SMA + Bollinger Bands",
+            Self::Ema => "EMA",
+            Self::Smma => "SMMA (RMA)",
+            Self::Wma => "WMA",
+            Self::Vwma => "VWMA",
+        }
     }
 }
 
