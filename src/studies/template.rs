@@ -1029,6 +1029,85 @@ mod tests {
                     .with_fibonacci_config(fibonacci),
             )
         }));
+        let mut tpo = crate::studies::TimePriceOpportunity::default();
+        // A literal save from before these controls keeps its palette, levels and boundaries.
+        let legacy: StudyTemplate = serde_json::from_str(r#"{"name":"Time Price Opportunity","inputs":[["period",{"Length":30}],["row_ticks",{"Length":0}],["value_area",{"Number":70.0}],["split_sessions",{"Toggle":false}],["single_prints",{"Toggle":false}],["midpoint",{"Toggle":false}],["statistics",{"Toggle":false}],["display",{"Choice":0}],["sessions",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TimePriceOpportunity.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[16,16,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        let restored = legacy.create().unwrap();
+        assert_eq!(restored.settings(), legacy.settings);
+        let before = crate::model::TPOConfig {
+            tick_size: 0.0,
+            period_minutes: 30,
+            initial_balance_minutes: 60,
+            value_area_pct: 0.70,
+            display_mode: crate::model::TPODisplayMode::Letters,
+            split_periods: false,
+            color_mode: crate::model::TPOColorMode::ByPeriod,
+            period_colors: [
+                Color32::from_rgb(214, 56, 100),
+                Color32::from_rgb(90, 197, 97),
+                Color32::from_rgb(84, 185, 209),
+                Color32::from_rgb(93, 36, 245),
+            ],
+            solid_color: Color32::from_rgb(189, 189, 189),
+            outside_value_area_opacity: 0.45,
+            show_poc: true,
+            show_value_area: true,
+            show_midpoint: false,
+            show_initial_balance: true,
+            show_initial_balance_extensions: false,
+            show_poor_high: false,
+            show_poor_low: false,
+            extend_poor_extremes: false,
+            show_single_prints: false,
+            show_statistics: false,
+            show_opening_range: true,
+            show_closing_price: false,
+            show_volume_profile: false,
+            split_sessions: false,
+            profile_period: crate::model::TPOProfilePeriod::Session,
+            custom_letters: None,
+            composites: Vec::new(),
+            splits: Vec::new(),
+            latest_session_only: false,
+            instrument_tick: None,
+        };
+        assert_eq!(
+            format!("{:?}", restored.tpo()),
+            format!("{:?}", Some(&before))
+        );
+        for (id, value) in [
+            ("split_periods", InputValue::Toggle(true)),
+            ("coloring", InputValue::Choice(1)),
+            ("period_color_1", InputValue::Color(Color32::RED)),
+            ("period_color_2", InputValue::Color(Color32::GREEN)),
+            ("period_color_3", InputValue::Color(Color32::BLUE)),
+            ("period_color_4", InputValue::Color(Color32::YELLOW)),
+            ("block_color", InputValue::Color(Color32::GOLD)),
+            ("outside_value_area_opacity", InputValue::Length(80)),
+            ("poc", InputValue::Toggle(false)),
+            ("value_area_levels", InputValue::Toggle(false)),
+            ("initial_balance", InputValue::Toggle(false)),
+            ("initial_balance_minutes", InputValue::Length(30)),
+            ("initial_balance_extensions", InputValue::Toggle(true)),
+            ("open_price", InputValue::Toggle(false)),
+            ("close_price", InputValue::Toggle(true)),
+            ("poor_high", InputValue::Toggle(true)),
+            ("poor_low", InputValue::Toggle(true)),
+            ("extend_poor", InputValue::Toggle(true)),
+            ("volume_profile", InputValue::Toggle(true)),
+        ] {
+            tpo.set_input(id, value.clone()).unwrap();
+            assert_eq!(
+                tpo.inputs()
+                    .iter()
+                    .find(|input| input.id == id)
+                    .unwrap()
+                    .value,
+                value,
+                "{id}"
+            );
+        }
+        studies.push(ConfiguredStudy::new(Box::new(tpo)));
         let mut scaled = ConfiguredStudy::new(Box::new(RSI::new(14)));
         scaled.set_scale(crate::studies::StudyScale::Shared(SeriesScale::Left));
         studies.push(scaled);
@@ -1041,6 +1120,12 @@ mod tests {
                 Ok(mut restored) => {
                     study.calculate(&bars);
                     restored.calculate(&bars);
+                    if study.tpo().is_some() {
+                        assert_eq!(
+                            format!("{:?}", restored.tpo()),
+                            format!("{:?}", study.tpo())
+                        );
+                    }
                     if shown(restored.as_ref()) != shown(&study) {
                         differing.push(format!("{row} {}", study.name()));
                     }

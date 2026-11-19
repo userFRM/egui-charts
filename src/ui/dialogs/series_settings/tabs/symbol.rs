@@ -826,10 +826,15 @@ impl SymbolTab {
                     }
                     ui.end_row();
                 }
-                let label = ui.label(l10n::text(
-                    ui.ctx(),
-                    "Extend poor highs and lows until repaired",
-                ));
+                let label = ui.add_sized(
+                    [160.0, 0.0],
+                    egui::Label::new(l10n::text(
+                        ui.ctx(),
+                        "Extend poor highs and lows until repaired",
+                    ))
+                    .wrap()
+                    .halign(egui::Align::Min),
+                );
                 ui.add_enabled(
                     poor[0] || poor[1],
                     egui::Checkbox::without_text(&mut params.tpo_extend_poor),

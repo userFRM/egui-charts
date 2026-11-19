@@ -1775,6 +1775,44 @@ mod tests {
                 display_mode: TPODisplayMode::Blocks,
                 ..params.tpo_config(Some(1.0))
             };
+            #[cfg(feature = "studies")]
+            let config = {
+                use crate::studies::{Indicator, InputValue, TimePriceOpportunity};
+                let mut study = TimePriceOpportunity::default();
+                study.set_instrument(Some(
+                    &crate::model::Instrument::new("X").with_tick_size(1.0),
+                ));
+                for (id, value) in [
+                    ("row_ticks", InputValue::Length(1)),
+                    ("display", InputValue::Choice(1)),
+                    ("poc", InputValue::Toggle(false)),
+                    ("initial_balance", InputValue::Toggle(false)),
+                    ("open_price", InputValue::Toggle(false)),
+                    (
+                        "coloring",
+                        InputValue::Choice(usize::from(!params.tpo_colored_blocks)),
+                    ),
+                    ("block_color", InputValue::Color(params.tpo_block_color)),
+                    (
+                        "outside_value_area_opacity",
+                        InputValue::Length(params.tpo_outside_value_area_opacity as usize),
+                    ),
+                ] {
+                    study.set_input(id, value).unwrap();
+                }
+                for (i, color) in params.tpo_block_colors.iter().enumerate() {
+                    study
+                        .set_input(
+                            &format!("period_color_{}", i + 1),
+                            InputValue::Color(*color),
+                        )
+                        .unwrap();
+                }
+                let mut study_config = study.tpo().unwrap().clone();
+                study_config.composites = params.tpo_composites.clone();
+                assert_eq!(format!("{:?}", study_config), format!("{:?}", config));
+                study_config
+            };
             let profile = to_tpo_profiles(&bars, &config, &Timeframe::Min30.into()).remove(0);
             // Counts 4,2,1,1 give POC 100 and a six-TPO value area covering 100 and 101.
             assert_eq!(
