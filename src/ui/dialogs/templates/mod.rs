@@ -48,6 +48,7 @@ mod tests {
         drawing.folder = vec!["Analysis".into()];
         let mut template = DrawingTemplate::from_drawing(&drawing);
         template.settings.stroke_width = 4.0;
+        template.settings.glyph_angle = 30.0;
         let template: DrawingTemplate =
             serde_json::from_str(&serde_json::to_string(&template).unwrap()).unwrap();
         assert!(template.settings.chart_points.is_empty());
@@ -60,6 +61,7 @@ mod tests {
         drawing.folder.push("Levels".into());
         template.apply_to(&mut drawing).unwrap();
         assert_eq!(drawing.stroke_width, 4.0);
+        assert_eq!(drawing.glyph_angle, 30.0);
         assert_eq!(drawing.id, 17);
         assert_eq!(drawing.stored_id.as_deref(), Some("host-id"));
         assert_eq!(drawing.notes.as_deref(), Some("note"));

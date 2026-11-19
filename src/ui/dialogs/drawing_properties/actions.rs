@@ -315,6 +315,7 @@ impl DrawingProps {
                 edited!(
                     font_weight,
                     italic,
+                    glyph_angle,
                     text_color,
                     background,
                     border,

@@ -192,6 +192,9 @@ impl StoredDrawing {
         if !FONT_SIZES.contains(&d.font_size) {
             return Some("font_size".into());
         }
+        if !d.glyph_angle.is_finite() {
+            return Some("glyph_angle".into());
+        }
         if !(1.0..=MAX_TEXT_WRAP_WIDTH).contains(&d.text_wrap_width) {
             return Some("text_wrap_width".into());
         }
@@ -1484,6 +1487,7 @@ mod tests {
             .chain((1..=3).map(|anchors| (DrawingToolType::Polyline, Some(anchors))))
         {
             let mut drawing = non_default_drawing(tool);
+            drawing.glyph_angle = 30.5;
             if let Some(anchors) = custom_anchors {
                 drawing.custom_tool = Some("host-shape".into());
                 drawing.custom_settings = serde_json::json!({"radius": 10});
@@ -1786,6 +1790,16 @@ mod tests {
             ),
             (DrawingToolType::ElliottImpulse, ElliottDegree::Cycle, true)
         );
+
+        // A version 10 sticker saved before glyph angles still loads upright.
+        let mut value: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/storage_v10_channels.json")).unwrap();
+        let records = value["drawings"].as_array_mut().unwrap();
+        records.truncate(1);
+        records[0]["drawing"]["tool_type"] = "Sticker".into();
+        let (loaded, skipped) = DrawingStorage::from_json(&value.to_string()).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert_eq!(loaded.drawings[0].drawing.glyph_angle, 0.0);
 
         let (v2, skipped) =
             DrawingStorage::from_json(include_str!("fixtures/storage_v2.json")).unwrap();
@@ -2930,7 +2944,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 41] = [
+        let cases: [(Spoil, &str); 42] = [
             (
                 |s| {
                     first(s)
@@ -3009,6 +3023,10 @@ mod tests {
             (
                 |s| first(s).drawing.font_size = f32::INFINITY,
                 "invalid font_size",
+            ),
+            (
+                |s| first(s).drawing.glyph_angle = f32::NAN,
+                "invalid glyph_angle",
             ),
             (
                 |s| first(s).drawing.stroke_width = 3e38,

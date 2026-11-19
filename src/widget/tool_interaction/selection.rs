@@ -156,11 +156,12 @@ pub fn handle_selection<F1, F2, F3>(
                 .any(|d| d.id == id && d.accepts_user_edits())
         });
         if let Some((id, handle)) = handle {
-            ui.ctx().set_cursor_icon(if handle == HandlePos::Middle {
-                egui::CursorIcon::Grab
-            } else {
-                handle_cursor(drawing_manager, id, handle)
-            });
+            ui.ctx()
+                .set_cursor_icon(if matches!(handle, HandlePos::Middle | HandlePos::Rotate) {
+                    egui::CursorIcon::Grab
+                } else {
+                    handle_cursor(drawing_manager, id, handle)
+                });
         } else if hit.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
@@ -288,10 +289,47 @@ fn handle_cursor(manager: &DrawingManager, id: usize, handle: HandlePos) -> egui
             && d.points.len() >= 2
             && (d.points[1].x - d.points[0].x) * (d.points[1].y - d.points[0].y) < 0.0
     });
+    // Resize along the rotated corner's diagonal, rounded to the nearest eighth turn.
+    let glyph_corner = manager
+        .drawings
+        .iter()
+        .find(|d| {
+            d.id == id
+                && matches!(
+                    d.tool_type,
+                    DrawingToolType::FontIcon | DrawingToolType::Sticker
+                )
+        })
+        .filter(|_| {
+            matches!(
+                handle,
+                HandlePos::TopLeft
+                    | HandlePos::TopRight
+                    | HandlePos::BottomLeft
+                    | HandlePos::BottomRight
+            )
+        })
+        .and_then(|d| {
+            let center = *d.points.first()?;
+            let (_, point) = manager
+                .get_handles(d)
+                .into_iter()
+                .find(|(h, _)| *h == handle)?;
+            Some(point - center)
+        });
+    if let Some(to) = glyph_corner {
+        let eighth = (to.y.atan2(to.x) / std::f32::consts::FRAC_PI_4).round() as i32;
+        return [
+            CursorIcon::ResizeHorizontal,
+            CursorIcon::ResizeNwSe,
+            CursorIcon::ResizeVertical,
+            CursorIcon::ResizeNeSw,
+        ][eighth.rem_euclid(4) as usize];
+    }
     match handle {
         HandlePos::TopLeft | HandlePos::BottomRight if reversed => CursorIcon::ResizeNeSw,
         HandlePos::TopRight | HandlePos::BottomLeft if reversed => CursorIcon::ResizeNwSe,
-        HandlePos::Middle => CursorIcon::Grabbing,
+        HandlePos::Middle | HandlePos::Rotate => CursorIcon::Grabbing,
         HandlePos::TopLeft | HandlePos::BottomRight => CursorIcon::ResizeNwSe,
         HandlePos::TopRight | HandlePos::BottomLeft => CursorIcon::ResizeNeSw,
         HandlePos::Top | HandlePos::Bottom => CursorIcon::ResizeVertical,
