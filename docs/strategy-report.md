@@ -67,8 +67,8 @@ Commission is an absolute fill-value fraction, an amount per unit, or an amount 
 Each fill pays once, even when reversing or closing several FIFO lots; trade fees and net
 profits include their quantity shares of entry and exit commission. Open trades retain
 their unallocated entry fees, already deducted from equity. Market and stop orders slip
-against their side once per fill, by ticks times tick size or an absolute-price fraction.
-Limits, including the limit execution of a stop-limit order, never slip.
+against their side once per fill, by ticks times tick size, ticks of the price increment or an
+absolute-price fraction. Limits, including the limit execution of a stop-limit order, never slip.
 
 Long and short exposure fund separately. [`long_funding`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.long_funding) and [`short_funding`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.short_funding)
 are the fractions of absolute position market value that equity must cover, one over leverage

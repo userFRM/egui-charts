@@ -825,7 +825,8 @@ impl State {
 /// Developing, holds no values. Boundaries are also generated as drawings, each in the colour,
 /// width and pattern of its plot and hidden with it: Bullish or Bearish once its formation is
 /// confirmed, Developing, grey and dashed by default, until then. A reversal formation draws
-/// only its neckline or breakout level.
+/// only its neckline or breakout level. Hovering a mark or a boundary shows the formation's
+/// name, such as "Bear Flag".
 #[derive(Clone, Debug)]
 pub struct ChartPatterns {
     family: PatternFamily,
@@ -938,6 +939,22 @@ impl ChartPatterns {
                 .map(|c| c.formation(c.kind.expected(), false, end)),
         );
         formations
+    }
+
+    /// The formations one line marks at a source bar, in the family's order.
+    fn marked(&self, line: usize, bar: usize) -> impl Iterator<Item = FormationKind> + '_ {
+        let bits = self
+            .found
+            .get(bar)
+            .and_then(|marks| marks.get(line))
+            .copied()
+            .unwrap_or(0);
+        self.family
+            .kinds()
+            .iter()
+            .enumerate()
+            .filter(move |(k, _)| bits >> k & 1 == 1)
+            .map(|(_, &kind)| kind)
     }
 }
 
@@ -1054,16 +1071,16 @@ impl Indicator for ChartPatterns {
     }
 
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
-        let bits = self.found.get(bar)?.get(line).copied()?;
         let text: Vec<&str> = self
-            .family
-            .kinds()
-            .iter()
-            .enumerate()
-            .filter(|(k, _)| bits >> k & 1 == 1)
-            .map(|(_, kind)| kind.abbreviation())
+            .marked(line, bar)
+            .map(FormationKind::abbreviation)
             .collect();
         (!text.is_empty()).then(|| text.join("\n"))
+    }
+
+    fn plot_tooltip(&self, line: usize, bar: usize) -> Option<String> {
+        let names: Vec<&str> = self.marked(line, bar).map(FormationKind::label).collect();
+        (!names.is_empty()).then(|| names.join("\n"))
     }
 
     fn name(&self) -> &str {
@@ -1113,6 +1130,7 @@ impl Indicator for ChartPatterns {
                         _ => 2,
                     };
                     let color = self.colors[plot];
+                    let name = formation.kind.label();
                     formation.boundaries.iter().map(move |segment| {
                         let mut drawing = crate::drawings::Drawing::new(
                             0,
@@ -1120,6 +1138,7 @@ impl Indicator for ChartPatterns {
                         );
                         drawing.completed = true;
                         drawing.stroke_width = 1.0;
+                        drawing.label = Some(name.to_owned());
                         drawing.color = color.to_srgba_unmultiplied();
                         if !confirmed {
                             drawing.line_style = crate::model::LineStyle::Dashed;
