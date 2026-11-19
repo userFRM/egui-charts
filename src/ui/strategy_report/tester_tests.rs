@@ -350,7 +350,7 @@ fn built_in_run_edits_costs_and_inputs_and_replaces_fill_signals() {
             let report = h.state().0.report().unwrap();
             // Three rising closes place the long at bar 3, filled at bar 4's open of 100.
             // Three falling closes reverse it at bar 7's open of 101: one unit earns 1.
-            assert_eq!(report.performance().net_profit, 1.0);
+            assert_eq!(report.performance().all.net_profit, 1.0);
             assert_eq!(report.trades[0].entry_time, bars()[4].time);
             assert_eq!(report.trades[0].exit.as_ref().unwrap().time, bars()[7].time);
             assert!(!h.state().0.is_stale());
@@ -374,7 +374,10 @@ fn built_in_run_edits_costs_and_inputs_and_replaces_fill_signals() {
             h.run();
             h.get_by_role_and_label(Role::Button, "Run").click();
             h.run();
-            assert_eq!(h.state().0.report().unwrap().performance().net_profit, -1.0);
+            assert_eq!(
+                h.state().0.report().unwrap().performance().all.net_profit,
+                -1.0
+            );
             assert!(!h.state().0.is_stale());
             h.state_mut()
                 .0
@@ -388,7 +391,7 @@ fn built_in_run_edits_costs_and_inputs_and_replaces_fill_signals() {
             assert_eq!(report.trades[0].side, OrderSide::Buy);
             assert_eq!(report.trades[0].entry_time, bars()[2].time);
             assert_eq!(
-                report.performance().net_profit,
+                report.performance().all.net_profit,
                 -5.0,
                 "102 to 99, less two unit fees"
             );
@@ -929,7 +932,7 @@ fn runs_report_the_instrument_currency_and_convert_into_another_at_requested_rat
     let report = h.state().report().unwrap();
     assert_eq!(report.currency.as_deref(), Some("EUR"));
     // The long from 100 to 101 earns 1 USD, 0.5 EUR.
-    assert_eq!(report.performance().net_profit, 0.5);
+    assert_eq!(report.performance().all.net_profit, 0.5);
     // An optimisation without the rates skips each trial instead of listing zero results.
     h.state_mut().ranges[0].enabled = true;
     h.state_mut().ranges[0].from = InputValue::Length(1);

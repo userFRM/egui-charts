@@ -719,9 +719,9 @@ impl StrategyTester {
                 trials.push(Trial {
                     inputs,
                     label,
-                    profit: performance.net_profit,
+                    profit: performance.all.net_profit,
                     drawdown: performance.max_drawdown,
-                    trades: performance.closed_trades,
+                    trades: performance.all.closed_trades,
                 });
             }
             Ok(JobOutput::Trials(trials, skipped))
