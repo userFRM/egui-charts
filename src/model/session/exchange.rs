@@ -83,6 +83,12 @@ impl ExchangeSessionProvider {
         }
     }
 
+    /// The trading hours, `None` for calendar days.
+    #[cfg(feature = "studies")]
+    pub(crate) fn session(&self) -> Option<&Session> {
+        self.session.as_ref()
+    }
+
     /// The calendar that aligned daily and longer bars; `None` uses the system's local zone.
     pub(crate) fn with_calendar_zone(mut self, zone: Option<TimezoneId>) -> Self {
         self.calendar_zone = zone;

@@ -161,7 +161,8 @@ impl DrawingInteraction {
     }
 
     /// Hit-tests a screen point against all visible drawings, from the top layer down
-    /// (descending z-order, and the later drawing first where the z-order is the same).
+    /// (descending `series_layer`, `None` first, then descending z-order, and the later drawing
+    /// first where both are the same).
     ///
     /// Returns the ID of the topmost drawing at `point`, or `None` if no drawing
     /// was hit. Respects visibility and per-timeframe visibility filtering.
