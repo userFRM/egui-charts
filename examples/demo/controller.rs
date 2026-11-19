@@ -1035,7 +1035,11 @@ impl DemoApp {
             .state
             .set_display_timezone(&self.chart.display_timezone());
         let clock_changed = self.timeframe_toolbar.state.timezone != clock;
+        // A bar reload must keep the session restored by history.
+        let extended = self.chart.extended_hours();
         self.follow_chart_symbol(clock_changed);
+        self.chart.set_extended_hours(extended);
+        self.follow_chart_session(false);
     }
 
     /// Loads the bars of the symbol and interval the chart shows after it changed them itself.
@@ -1162,6 +1166,26 @@ impl DemoApp {
             params.range_size = size;
             params.range_size_method = BoxSizeMethod::Fixed;
             self.chart.set_chart_type_params(params);
+        }
+    }
+
+    /// Follows a session chosen by the chart settings or undo with the toolbar and demo feed,
+    /// reloading the bars when it changed or `reload` asks for it.
+    fn follow_chart_session(&mut self, reload: bool) {
+        let extended = self.chart.extended_hours();
+        let changed = self.own_data.is_none()
+            && DemoSymbol::has_hours(&self.state.symbol)
+            && extended != (self.timeframe_toolbar.state.session_type != SessionType::RTH);
+        if changed {
+            self.timeframe_toolbar.set_session(if extended {
+                SessionType::ETH
+            } else {
+                SessionType::RTH
+            });
+        }
+        if changed || reload {
+            self.stop_replay();
+            self.apply_session();
         }
     }
 
@@ -1490,11 +1514,10 @@ impl DemoApp {
         if news_changed {
             self.annotate();
         }
-        if state.adjust_for_dividends != self.timeframe_toolbar.state.adjust_for_dividends {
-            self.timeframe_toolbar.state.adjust_for_dividends = state.adjust_for_dividends;
-            self.stop_replay();
-            self.apply_session();
-        }
+        let dividends_changed =
+            state.adjust_for_dividends != self.timeframe_toolbar.state.adjust_for_dividends;
+        self.timeframe_toolbar.state.adjust_for_dividends = state.adjust_for_dividends;
+        self.follow_chart_session(dividends_changed);
     }
 
     /// Whether the current preset shows other charts to copy to.
@@ -2434,6 +2457,7 @@ impl DemoApp {
         self.drawing_toolbar
             .sync_from_domain_state(&DrawingToolbarDomainState {
                 sel_tool: dm.active_tool(),
+                sel_custom_tool: dm.active_custom_tool().map(str::to_owned),
                 magnet_mode: dm.options.magnet_mode,
                 snap_to_indicators: dm.options.snap_to_indicators,
                 magnet_type,
@@ -2458,8 +2482,11 @@ impl DemoApp {
         self.drawing_toolbar.state.hide_indicators = self.chart.indicators_hidden();
         self.drawing_toolbar.state.hide_drawings = self.chart.drawings().is_hidden();
         let drawings = &self.chart.drawings().drawings;
-        self.drawing_toolbar.state.lock_all =
-            !drawings.is_empty() && drawings.iter().all(|d| d.locked);
+        self.drawing_toolbar.state.lock_all = drawings.iter().any(|d| d.user_edit_enabled)
+            && drawings
+                .iter()
+                .filter(|d| d.user_edit_enabled)
+                .all(|d| d.locked);
         if self.drawing_toolbar.state.preferences.hidden {
             let action = self.drawing_toolbar.show_with_action(ui);
             self.handle_drawing_toolbar(action);
@@ -2496,7 +2523,7 @@ impl DemoApp {
                 .drawings()
                 .drawings
                 .iter()
-                .any(|drawing| drawing.locked),
+                .any(|drawing| drawing.locked && drawing.user_edit_enabled),
             &mut self.drawing_toolbar.state,
         );
         match action {
@@ -2949,6 +2976,7 @@ impl DemoApp {
                 SourceItem::drawing(d.id, d.tool_type, d.color32()).with_panes(&self.chart);
             item.visible = d.visible;
             item.locked = d.locked;
+            item.user_edit_enabled = d.user_edit_enabled;
             item.z_index = d.z_order;
             item.label = d.label.clone();
             item.folder = d.folder.clone();
@@ -2997,7 +3025,12 @@ impl DemoApp {
                             chart.set_series_options(study, options);
                         }
                     }
-                } else {
+                } else if chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .any(|d| d.id == id && d.accepts_user_edits())
+                {
                     let _ = chart
                         .drawings_mut()
                         .drag_edit_drawing(id, |d| d.color = color.to_srgba_unmultiplied());
@@ -3780,12 +3813,9 @@ impl DemoApp {
         }
         if let Some(id) = drawing_settings
             && !self.replay_selecting
-            && self
-                .chart
-                .drawings()
-                .drawings
-                .iter()
-                .any(|d| d.id == id && (d.locked || !d.tool_type.edits_text_inline()))
+            && self.chart.drawings().drawings.iter().any(|d| {
+                d.id == id && (!d.accepts_user_edits() || !d.tool_type.edits_text_inline())
+            })
         {
             self.open_drawing_props_for(id);
         }
@@ -4013,7 +4043,13 @@ impl DemoApp {
             DrawingContextMenuAction::BringToFront => dm.bring_to_front(id),
             DrawingContextMenuAction::SendToBack => dm.send_to_back(id),
             DrawingContextMenuAction::MoveTo(pane) => {
-                self.chart.move_drawing_to_pane(id, pane);
+                if dm
+                    .drawings
+                    .iter()
+                    .any(|d| d.id == id && d.accepts_user_edits())
+                {
+                    self.chart.move_drawing_to_pane(id, pane);
+                }
             }
             DrawingContextMenuAction::AddAlert(mut alert) => {
                 self.list_alert_sources();
@@ -7680,6 +7716,78 @@ mod tests {
         }
     }
 
+    /// Settings and their undo keep the session in the chart, toolbar and demo feed together,
+    /// including when a restored clock change or a dividend choice also reloads the bars.
+    #[test]
+    fn settings_session_follows_undo_with_a_clock_change() {
+        for zone in [None, Some("Europe/Zurich")] {
+            let ctx = egui::Context::default();
+            let now = "2026-11-18T15:30:00Z".parse().unwrap();
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                now,
+                true,
+            );
+            settle(&mut app, &ctx);
+            app.timeframe_toolbar.set_session(SessionType::RTH);
+            app.apply_session();
+            let mut settings = app.chart_settings_state();
+            settings.extended_hours = Some(true);
+            if let Some(zone) = zone {
+                settings.timezone = zone.into();
+            }
+            app.apply_chart_settings(settings);
+            let session = |app: &DemoApp| {
+                (
+                    app.chart.extended_hours(),
+                    app.timeframe_toolbar.state.session_type,
+                    app.live.view(app.chart.extended_hours()).0,
+                )
+            };
+            assert_eq!(
+                session(&app),
+                (true, SessionType::ETH, SessionType::ETH),
+                "{zone:?}: apply"
+            );
+            assert!(app.chart.undo());
+            app.sync_chart_history();
+            assert_eq!(
+                session(&app),
+                (false, SessionType::RTH, SessionType::RTH),
+                "{zone:?}: undo"
+            );
+            assert!(app.chart.redo());
+            app.sync_chart_history();
+            assert_eq!(
+                session(&app),
+                (true, SessionType::ETH, SessionType::ETH),
+                "{zone:?}: redo"
+            );
+        }
+
+        // A dividend reload keeps a 24/7 view, which the chart holds as extended hours.
+        let ctx = egui::Context::default();
+        let now = "2026-11-18T15:30:00Z".parse().unwrap();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        settle(&mut app, &ctx);
+        app.timeframe_toolbar.set_session(SessionType::Full24x7);
+        app.apply_session();
+        let mut settings = app.chart_settings_state();
+        settings.adjust_for_dividends = !settings.adjust_for_dividends;
+        app.apply_chart_settings(settings);
+        assert_eq!(
+            (
+                app.timeframe_toolbar.state.session_type,
+                app.live.view(app.chart.extended_hours()).0,
+            ),
+            (SessionType::Full24x7, SessionType::Full24x7)
+        );
+    }
+
     /// Bars outside regular hours are shaded only in the extended session, and a saved layout
     /// returns in the session it was saved in. A layout saved before the session was recorded
     /// returns its extended hours choice as the 24/7 session.
@@ -9251,6 +9359,10 @@ mod tests {
         );
         assert_eq!(app.chart.drawings().drawings[0].color, [51, 102, 153, 85]);
         app.chart.drawings_mut().end_drag_handle();
+        app.chart.drawings_mut().drawings[0].user_edit_enabled = false;
+        app.handle_object_tree(ObjectTreeAction::ChangeColor(7, egui::Color32::RED), &[]);
+        assert_eq!(app.chart.drawings().drawings[0].color, [51, 102, 153, 85]);
+        app.chart.drawings_mut().drawings[0].user_edit_enabled = true;
         app.chart
             .drawings_mut()
             .edit_drawing(7, |d| d.locked = true)

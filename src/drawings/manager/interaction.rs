@@ -239,7 +239,7 @@ impl DrawingManager {
                     d.tool_type,
                     DrawingToolType::Brush | DrawingToolType::Highlighter
                 ) && d.custom_tool.is_none()
-                    && !d.locked
+                    && d.accepts_user_edits()
                     && d.selectable
                     && self.shows(d)
                     && self.owns_pane(d)
@@ -339,7 +339,7 @@ impl DrawingManager {
     /// Returns the [`HandlePos`] if a handle was hit, `None` otherwise.
     pub fn hit_test_handle(&self, drawing: &Drawing, point: Pos2) -> Option<HandlePos> {
         if !drawing.selectable
-            || drawing.locked
+            || !drawing.accepts_user_edits()
             || !self.shows(drawing)
             || (!self.pane_clips.is_empty()
                 && !self
@@ -357,12 +357,12 @@ impl DrawingManager {
     }
 
     /// Begins a handle drag operation, saving the drawing's current state for undo. A locked
-    /// drawing is not dragged.
+    /// drawing, or one whose user edits are off, is not dragged.
     pub fn start_drag_handle(&mut self, drawing_id: usize, handle: HandlePos) {
         if let Some(drawing) = self
             .drawings
             .iter()
-            .find(|d| d.id == drawing_id && d.selectable && !d.locked && self.shows(d))
+            .find(|d| d.id == drawing_id && d.selectable && d.accepts_user_edits() && self.shows(d))
         {
             self.dragging_handle = Some((drawing_id, handle));
             self.drag_old_state = Some(drawing.clone());
@@ -379,7 +379,8 @@ impl DrawingManager {
 
     /// Begins moving the anchors that move with the body (all but a bars pattern's source)
     /// from a grab at `origin`, retaining the grab offset.
-    /// Locked drawings ignore the grab. The move shares the handle drag's undo and sync lifecycle.
+    /// Locked drawings and those whose user edits are off ignore the grab. The move shares the
+    /// handle drag's undo and sync lifecycle.
     pub fn start_drag_body(&mut self, drawing_id: usize, origin: Pos2) {
         self.start_drag_handle(drawing_id, HandlePos::Middle);
         if self.dragging_handle == Some((drawing_id, HandlePos::Middle)) {
@@ -392,7 +393,7 @@ impl DrawingManager {
                         && self.pane_members.contains(&d.pane)
                         && d.selectable
                         && self.selection.is_selected(d.id)
-                        && !d.locked
+                        && d.accepts_user_edits()
                         && self.shows(d)
                 })
                 .cloned()
@@ -700,7 +701,7 @@ impl DrawingManager {
                     if let Some(drawing) = self
                         .drawings
                         .iter_mut()
-                        .find(|d| d.id == old.id && !d.locked)
+                        .find(|d| d.id == old.id && d.accepts_user_edits())
                     {
                         let first = old.first_moved_anchor();
                         for (point, before) in drawing
@@ -728,7 +729,11 @@ impl DrawingManager {
                     }
                 }
             }
-            if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id && !d.locked) {
+            if let Some(drawing) = self
+                .drawings
+                .iter_mut()
+                .find(|d| d.id == id && d.accepts_user_edits())
+            {
                 if let (Some(origin), Some(old)) = (self.drag_origin, &self.drag_old_state) {
                     let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
                     // Dragging a label leaves the point it annotates; a selection, a copy or a
@@ -1010,9 +1015,13 @@ impl DrawingManager {
 
     /// Starts a registered tool's multi-click construction. One-anchor tools complete on the
     /// first click. The host picker uses `registry.custom_tools()` for its ids and names.
+    /// An unknown or disabled tool returns an error and leaves the state unchanged.
     pub fn set_custom_tool(&mut self, id: &str) -> Result<(), &'static str> {
         if self.registry.get(id).is_none() {
             return Err("Unknown drawing tool");
+        }
+        if !self.registry.custom_availability(id).enabled {
+            return Err("Drawing tool is disabled");
         }
         self.cancel_curr_drawing();
         self.eraser_mode = false;
@@ -1022,9 +1031,14 @@ impl DrawingManager {
     }
 
     /// Shows a registered tool's settings and records a changed draft as one undoable edit.
-    /// Unknown tools and locked drawings show no editor and return false.
+    /// Unknown tools, locked drawings and drawings whose user edits are off show no editor and
+    /// return false.
     pub fn show_custom_settings(&mut self, ui: &mut egui::Ui, id: usize) -> bool {
-        let Some(drawing) = self.drawings.iter().find(|d| d.id == id && !d.locked) else {
+        let Some(drawing) = self
+            .drawings
+            .iter()
+            .find(|d| d.id == id && d.accepts_user_edits())
+        else {
             return false;
         };
         let Some(tool) = drawing
@@ -1142,7 +1156,9 @@ impl DrawingManager {
         G: Fn(f32) -> f64,
     {
         if tool_type.is_cursor()
-            || (self.active_custom_tool.is_none() && !self.registry.availability(tool_type).enabled)
+            || !self
+                .registry
+                .creates(self.active_custom_tool.as_deref(), tool_type)
         {
             return;
         }
@@ -1154,7 +1170,10 @@ impl DrawingManager {
             }
             _ => {
                 let id = self.take_id();
-                self.new_drawing(id, tool_type)
+                match self.active_custom_tool.clone() {
+                    Some(tool) => self.new_custom_drawing(id, &tool),
+                    None => self.new_drawing(id, tool_type),
+                }
             }
         };
         if let Some(id) = &self.active_custom_tool {
