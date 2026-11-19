@@ -10,7 +10,7 @@ mod sink;
 
 pub(crate) use sink::TradeBars;
 
-pub use reader::{SinkReader, SinkUpdates};
+pub use reader::{ReplyReader, SinkReader, SinkUpdates};
 pub use sink::{Sink, aggregate_trades, aggregate_trades_with_tick_size};
 
 use super::depth::Book;

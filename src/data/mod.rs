@@ -91,7 +91,9 @@ pub use option_chain::{
 };
 #[cfg(feature = "studies")]
 pub(crate) use options_volume::OptionsVolumeSource;
-pub use options_volume::{OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink};
+pub use options_volume::{
+    OptionsVolume, OptionsVolumeQuery, OptionsVolumeReader, OptionsVolumeSink,
+};
 #[cfg(feature = "studies")]
 pub(crate) use volume_profile::{ExposureProfile, StrikeExposure, grid_row};
 #[cfg_attr(
@@ -101,7 +103,8 @@ pub(crate) use volume_profile::{ExposureProfile, StrikeExposure, grid_row};
 pub(crate) mod trades;
 
 pub use inbox::{
-    Reply, Sink, SinkReader, SinkUpdates, aggregate_trades, aggregate_trades_with_tick_size,
+    Reply, ReplyReader, Sink, SinkReader, SinkUpdates, aggregate_trades,
+    aggregate_trades_with_tick_size,
 };
 pub use order_flow::{BarBook, OrderFlowBars, OrderFlowFootprints, OrderFlowInput, OrderFlowKind};
 pub use orders::{

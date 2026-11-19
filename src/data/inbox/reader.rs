@@ -1,8 +1,9 @@
-//! The reading end of a sink outside a chart, for hosts that test or forward a feed.
+//! The reading end of a sink or reply outside a chart, for hosts that test or forward a feed.
 
-use super::{Inbox, Sink};
+use super::{Inbox, Reply, Sink};
 use crate::data::{FeedError, FeedStatus, SubscriptionId};
 use crate::model::{Bar, BarClock, Level1Quote, OrderBook};
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 /// A [`Sink`] outside a chart and what is pushed into it, folded by the rules a chart's sink
@@ -79,4 +80,51 @@ pub struct SinkUpdates {
     /// The latest stream error: one the feed reported, a rejected quote, or bars dropped over
     /// the limit of 100,000 pending slots.
     pub error: Option<FeedError>,
+}
+
+/// A [`Reply`] outside a chart and its answer, to call a service's request method, such as in
+/// a test.
+pub struct ReplyReader<T: Send + 'static> {
+    inbox: Arc<Inbox>,
+    answer: PhantomData<fn() -> T>,
+}
+
+impl<T: Send + 'static> std::fmt::Debug for ReplyReader<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReplyReader").finish_non_exhaustive()
+    }
+}
+
+impl<T: Send + 'static> ReplyReader<T> {
+    /// A reply and the reader of its answer.
+    ///
+    /// ```
+    /// use egui_charts::data::{FeedError, ReplyReader};
+    ///
+    /// let (answer, reply) = ReplyReader::<u32>::new();
+    /// assert_eq!(answer.take(), None);
+    /// drop(reply);
+    /// assert_eq!(answer.take(), Some(Err(FeedError::Unanswered)));
+    /// assert_eq!(answer.take(), None);
+    /// ```
+    pub fn new() -> (Self, Reply<T>) {
+        let inbox = Arc::new(Inbox::default());
+        let reply = inbox.reply(0);
+        let reader = Self {
+            inbox,
+            answer: PhantomData,
+        };
+        (reader, reply)
+    }
+
+    /// The answer once the reply was sent, or [`FeedError::Unanswered`] once it was dropped
+    /// unanswered. `None` before that, and after the answer was taken.
+    pub fn take(&self) -> Option<Result<T, FeedError>> {
+        // A reply answers at most once, so the inbox holds at most one answer of this type.
+        let (_, answer) = self.inbox.drain().answers.pop()?;
+        answer
+            .downcast::<Result<T, FeedError>>()
+            .ok()
+            .map(|answer| *answer)
+    }
 }
