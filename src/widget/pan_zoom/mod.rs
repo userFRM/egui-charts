@@ -773,6 +773,7 @@ impl Chart {
         if !chart_width.is_finite() || chart_width < 2.0 {
             return;
         }
+        let pending_range = self.take_pending_range();
         if self.apply_visible_bars_once {
             self.state.time_scale_mut().set_width(chart_width);
             if let Some(desired) = self.desired_visible_bars
@@ -801,6 +802,9 @@ impl Chart {
             self.state.time_scale_mut().set_width(chart_width);
         }
         self.prev_width = Some(chart_width);
+        if let Some(range) = pending_range {
+            self.refit_pending_range(range);
+        }
 
         if let Some(time) = self.pending_scroll_time
             && let Some(first) = self.state.data().bars.first()

@@ -1381,6 +1381,27 @@ mod tests {
                 "{name}"
             );
         }
+
+        // A chart save of an anchored profile from before tick heights and width were inputs
+        // keeps its settings and inputs and takes the defaults of both.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"Vol Profile Anchored","inputs":[["row_count",{"Length":30}],["value_area",{"Number":70.0}],["row_size",{"Number":0.0}],["display",{"Choice":1}],["source_interval",{"Timeframe":null}],["feed_source",{"Toggle":true}],["start_time",{"Text":""}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolProfileAnchored.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[4,16,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+        )
+        .unwrap();
+        let study = saved.create().unwrap();
+        assert_eq!(study.settings(), saved.settings);
+        let inputs = study.inputs();
+        let value = |id: &str| {
+            inputs
+                .iter()
+                .find(|input| input.id == id)
+                .map(|input| &input.value)
+        };
+        for (id, kept) in &saved.inputs {
+            assert_eq!(value(id), Some(kept), "{id}");
+        }
+        assert_eq!(value("row_ticks"), Some(&Length(0)));
+        assert_eq!(value("width"), Some(&Number(30.0)));
     }
 
     /// A Correlation Coefficient as a chart saved it before it opened as an area: a line with its

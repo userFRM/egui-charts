@@ -369,6 +369,14 @@ pub trait Indicator: Send {
         None
     }
 
+    /// Optional text shown while the pointer is over the shape a circle, cross or triangle plot
+    /// draws at a source bar, or over that shape's [`plot_text`](Self::plot_text). `None`, the
+    /// default, shows nothing.
+    fn plot_tooltip(&self, line: usize, bar: usize) -> Option<String> {
+        let _ = (line, bar);
+        None
+    }
+
     /// Filled bands, painted beneath this study's plots. Missing endpoints break a band.
     fn fills(&self) -> Vec<super::StudyFill> {
         Vec::new()
@@ -789,6 +797,8 @@ pub trait Indicator: Send {
     /// [`drawings_use_plot_style`](Self::drawings_use_plot_style) says. Empty by default.
     /// Calculations belong in `calculate`; use tools whose renderer needs only their anchors
     /// and settings, such as trend lines, parallel channels, Fibonacci levels and pitchforks.
+    /// A drawing with a [`label`](crate::drawings::Drawing::label) shows it while the pointer is
+    /// over the drawing.
     #[cfg(feature = "drawings")]
     fn drawings(&self) -> &[crate::drawings::Drawing] {
         &[]
