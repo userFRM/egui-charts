@@ -3446,13 +3446,18 @@ mod tests {
             ..zero
         };
         expected.levels = vec![hidden, expected.levels[0], hidden];
+        expected.fills = vec![FillStyle {
+            inverted_color: Some(palette::HISTOGRAM_RED.gamma_multiply_u8(26)),
+            visible: false,
+            ..FillStyle::new(palette::GREEN.gamma_multiply_u8(26))
+        }];
         assert_eq!(older.settings(), expected);
         assert_eq!(
             older.pane().levels,
             [
-                (90.0, Color32::TRANSPARENT, "Upper guide"),
-                (0.0, palette::GRAY, "Zero"),
-                (-90.0, Color32::TRANSPARENT, "Lower guide"),
+                (90.0, Color32::TRANSPARENT, "Upper level"),
+                (0.0, palette::GRAY, "Center"),
+                (-90.0, Color32::TRANSPARENT, "Lower level"),
             ]
         );
         // An older MFI retains automatic fitting, including after saving its upgraded guides.
@@ -3477,79 +3482,168 @@ mod tests {
     }
 
     /// The Aroon Oscillator, Bollinger Bands %b, CCI and Money Flow Index open with their usual
-    /// guides and band. Settings saved before they had them restore as they were drawn, with the
-    /// new guides hidden and no band; shown since, a guide keeps its style through a template.
-    /// Older Awesome Oscillator columns and Balance of Power smoothing restore as saved.
+    /// guides and bands. Older saves keep their guide styles and leave new guides and fills hidden;
+    /// a guide shown since keeps its style through a template. Awesome Oscillator opens as
+    /// columns and keeps a saved histogram; Balance of Power keeps its saved smoothing.
     #[test]
     fn oscillator_guides_open_declared_and_older_saves_restore_as_drawn() {
         use crate::studies::{IndicatorFactory, PlotType, StudyTemplate, palette};
         type Row = (
             &'static str,
-            Vec<(f64, Color32)>,
+            Vec<(f64, Color32, &'static str, LineStyle)>,
             bool,
             Option<[usize; 2]>,
             Option<(f64, f64)>,
             Color32,
+            Vec<(Color32, Option<Color32>)>,
         );
         let factory = IndicatorFactory::new();
         let (gray, faint) = (palette::MUTED, palette::MUTED.gamma_multiply_u8(128));
         let blue = Color32::from_rgba_unmultiplied(41, 98, 255, 26);
+        let (dashed, solid) = (LineStyle::Dashed, LineStyle::Solid);
         let rows: [Row; 4] = [
             (
                 "Aroon Oscillator",
-                vec![(90.0, gray), (0.0, gray), (-90.0, gray)],
+                vec![
+                    (90.0, gray, "Upper level", dashed),
+                    (0.0, gray, "Center", dashed),
+                    (-90.0, gray, "Lower level", dashed),
+                ],
                 false,
                 None,
                 Some((-100.0, 100.0)),
                 Color32::TRANSPARENT,
+                vec![(
+                    palette::GREEN.gamma_multiply_u8(26),
+                    Some(palette::HISTOGRAM_RED.gamma_multiply_u8(26)),
+                )],
             ),
             (
                 "%B",
-                vec![(1.0, gray), (0.0, gray), (0.5, faint)],
+                vec![
+                    (
+                        1.0,
+                        palette::RED.gamma_multiply_u8(128),
+                        "Overbought",
+                        dashed,
+                    ),
+                    (
+                        0.0,
+                        palette::TEAL.gamma_multiply_u8(128),
+                        "Oversold",
+                        dashed,
+                    ),
+                    (
+                        0.5,
+                        palette::BLUE.gamma_multiply_u8(128),
+                        "Middle Band",
+                        solid,
+                    ),
+                ],
                 true,
                 Some([0, 1]),
                 None,
                 blue,
+                vec![
+                    (
+                        palette::RED.gamma_multiply_u8(26),
+                        Some(Color32::TRANSPARENT),
+                    ),
+                    (
+                        Color32::TRANSPARENT,
+                        Some(palette::TEAL.gamma_multiply_u8(26)),
+                    ),
+                ],
             ),
             (
                 "CCI",
-                vec![(100.0, gray), (-100.0, gray), (0.0, faint)],
+                vec![
+                    (100.0, gray, "Upper Band", dashed),
+                    (-100.0, gray, "Lower Band", dashed),
+                    (0.0, faint, "Middle Band", dashed),
+                ],
                 true,
                 Some([0, 1]),
                 None,
                 blue,
+                vec![],
             ),
             (
                 "MFI",
-                vec![(80.0, gray), (20.0, gray), (50.0, faint)],
+                vec![
+                    (80.0, gray, "Overbought", dashed),
+                    (20.0, gray, "Oversold", dashed),
+                    (50.0, faint, "Middle Band", dashed),
+                ],
                 true,
                 Some([0, 1]),
                 Some((0.0, 100.0)),
                 Color32::from_rgba_unmultiplied(126, 87, 194, 26),
+                vec![],
             ),
         ];
         let hidden = |level: LevelStyle| LevelStyle {
             visible: false,
             ..level
         };
-        for (name, guides, fill, indices, range, band) in rows {
+        for (name, guides, fill, indices, range, band, fills) in rows {
             let mut study = ConfiguredStudy::new(factory.create(name).unwrap());
             let pane = study.pane();
-            let drawn: Vec<_> = pane.levels.iter().map(|level| (level.0, level.1)).collect();
+            let drawn: Vec<_> = pane
+                .levels
+                .iter()
+                .enumerate()
+                .map(|(i, level)| {
+                    (
+                        level.0,
+                        level.1,
+                        level.2,
+                        study.settings().levels[i].pattern,
+                    )
+                })
+                .collect();
             assert_eq!(drawn, guides, "{name}");
             assert_eq!(pane.range, range, "{name}");
             let defaults = study.settings();
             assert!(
-                defaults.levels.iter().all(|level| level.value.is_none()
-                    && level.visible
-                    && level.pattern == LineStyle::Dashed
-                    && level.width == 1.0),
+                defaults
+                    .levels
+                    .iter()
+                    .all(|level| level.value.is_none() && level.visible && level.width == 1.0),
                 "{name}"
             );
             assert_eq!(defaults.fill_between_levels, fill, "{name}");
             assert_eq!(study.level_fill_indices(), indices, "{name}");
             if fill {
                 assert_eq!(defaults.level_fill_color, band, "{name}");
+            }
+            assert_eq!(
+                study
+                    .fills()
+                    .iter()
+                    .map(|fill| (fill.color, fill.inverted_color))
+                    .collect::<Vec<_>>(),
+                fills,
+                "{name}"
+            );
+            if !fills.is_empty() {
+                let mut saved = StudyTemplate::from_study(&study);
+                saved.settings.fills.clear();
+                let older = saved.create().unwrap();
+                assert!(older.fills().is_empty(), "{name}");
+                assert_eq!(
+                    older
+                        .settings()
+                        .fills
+                        .iter()
+                        .map(|fill| (fill.color, fill.inverted_color, fill.visible))
+                        .collect::<Vec<_>>(),
+                    fills
+                        .iter()
+                        .map(|&(color, inverted)| (color, inverted, false))
+                        .collect::<Vec<_>>(),
+                    "{name}"
+                );
             }
             // The Aroon Oscillator drew its zero guide before; the others drew none.
             let declared = defaults.levels.clone();
@@ -3597,7 +3691,7 @@ mod tests {
                 let expected: Vec<_> = restored
                     .iter()
                     .zip(&guides)
-                    .map(|(level, &(_, color))| {
+                    .map(|(level, &(_, color, _, _))| {
                         if level.visible {
                             color
                         } else {
@@ -3616,14 +3710,15 @@ mod tests {
             assert_eq!(again.settings().levels, edited.levels, "{name}");
             assert_eq!(again.pane().range, study.pane().range, "{name}");
         }
-        // Saved as columns, an Awesome Oscillator stays columns; saved smoothed over 14 bars,
+        // Saved as a histogram, an Awesome Oscillator stays a histogram; saved smoothed over 14 bars,
         // a Balance of Power keeps its smoothing.
         let mut ao = ConfiguredStudy::new(factory.create("AO").unwrap());
-        let mut columns = ao.settings();
-        columns.plots[0].plot_type = PlotType::Columns;
-        ao.apply_settings(&[], columns).unwrap();
+        assert_eq!(ao.plot_style(0).plot_type, PlotType::Columns);
+        let mut histogram = ao.settings();
+        histogram.plots[0].plot_type = PlotType::Histogram;
+        ao.apply_settings(&[], histogram).unwrap();
         let again = StudyTemplate::from_study(&ao).create().unwrap();
-        assert_eq!(again.plot_style(0).plot_type, PlotType::Columns);
+        assert_eq!(again.plot_style(0).plot_type, PlotType::Histogram);
         let mut bop = ConfiguredStudy::new(factory.create("BoP").unwrap());
         let settings = bop.settings();
         bop.apply_settings(
