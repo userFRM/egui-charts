@@ -748,7 +748,10 @@ impl ChartSettingsState {
         options.mode = mode;
         options.invert_scale = self.scales_and_lines.invert_scale;
         let scale = chart.state.price_scale_mut();
-        scale.set_price_precision(self.precision.decimals().map(|value| value as u8));
+        // A fraction shows over decimals a host chose, which it leaves for when it is cleared.
+        if self.precision.fraction().is_none() {
+            scale.set_price_precision(self.precision.decimals().map(|value| value as u8));
+        }
         scale.set_price_fraction(self.precision.fraction());
         if let Some(style) = chart.series_style_mut(crate::widget::SeriesId::MAIN) {
             style.price_line_color = self.scales_and_lines.symbol_price_color;
@@ -1414,11 +1417,13 @@ mod tests {
             assert!(!chart.can_undo(), "precision {decimals}");
         }
 
-        // A chosen fraction and extended hours also apply back without recording an edit.
+        // A chosen fraction over host decimals and extended hours also apply back without
+        // recording an edit.
         let mut chart = Chart::new(bars());
         chart.set_instrument(Some(
             crate::model::Instrument::new("SAMPLE").with_price_decimals(2),
         ));
+        chart.price_scale_mut().set_price_precision(Some(3));
         chart
             .price_scale_mut()
             .set_price_fraction(Some(crate::model::PriceFraction::Eighths));
@@ -1428,9 +1433,10 @@ mod tests {
                 .apply_to_chart(chart)
                 .unwrap();
         });
+        let scale = chart.state().price_scale();
         assert_eq!(
-            chart.state().price_scale().chosen_fraction(),
-            Some(crate::model::PriceFraction::Eighths)
+            (scale.chosen_fraction(), scale.chosen_precision()),
+            (Some(crate::model::PriceFraction::Eighths), Some(3))
         );
         assert!(chart.extended_hours());
         assert!(!chart.can_undo());

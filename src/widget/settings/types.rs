@@ -188,8 +188,11 @@ impl PrecisionMode {
             PrecisionMode::Fraction(crate::model::PriceFraction::Sixteenths),
             PrecisionMode::Fraction(crate::model::PriceFraction::ThirtySeconds),
             PrecisionMode::Fraction(crate::model::PriceFraction::HalfThirtySeconds),
+            PrecisionMode::Fraction(crate::model::PriceFraction::QuarterThirtySeconds),
+            PrecisionMode::Fraction(crate::model::PriceFraction::EighthThirtySeconds),
             PrecisionMode::Fraction(crate::model::PriceFraction::SixtyFourths),
             PrecisionMode::Fraction(crate::model::PriceFraction::OneTwentyEighths),
+            PrecisionMode::Fraction(crate::model::PriceFraction::TwoFiftySixths),
         ]
     }
 
@@ -214,10 +217,17 @@ impl PrecisionMode {
             PrecisionMode::Fraction(crate::model::PriceFraction::HalfThirtySeconds) => {
                 "1/32 with halves".into()
             }
+            PrecisionMode::Fraction(crate::model::PriceFraction::QuarterThirtySeconds) => {
+                "1/32 with quarters".into()
+            }
+            PrecisionMode::Fraction(crate::model::PriceFraction::EighthThirtySeconds) => {
+                "1/32 with eighths".into()
+            }
             PrecisionMode::Fraction(crate::model::PriceFraction::SixtyFourths) => "1/64".into(),
             PrecisionMode::Fraction(crate::model::PriceFraction::OneTwentyEighths) => {
                 "1/128".into()
             }
+            PrecisionMode::Fraction(crate::model::PriceFraction::TwoFiftySixths) => "1/256".into(),
             PrecisionMode::Other(decimals) => format!("{decimals} decimals").into(),
         }
     }

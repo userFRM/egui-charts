@@ -45,8 +45,12 @@ fn format_fraction(value: f64, fraction: crate::model::PriceFraction) -> String 
     let part = match fraction {
         F::Halves | F::Quarters | F::Eighths => count.to_string(),
         F::Sixteenths | F::ThirtySeconds | F::SixtyFourths => format!("{count:02}"),
-        F::HalfThirtySeconds => format!("{:02}{}", count / 2, if count % 2 == 1 { 5 } else { 0 }),
-        F::OneTwentyEighths => format!("{count:03}"),
+        F::HalfThirtySeconds | F::QuarterThirtySeconds | F::EighthThirtySeconds => {
+            // Steps per thirty-second, written as the first decimal of the part: 2/8 is 2.
+            let parts = u32::from(fraction.steps_per_unit()) / 32;
+            format!("{:02}{}", count / parts, count % parts * 10 / parts)
+        }
+        F::OneTwentyEighths | F::TwoFiftySixths => format!("{count:03}"),
     };
     format!("{sign}{whole:.0}'{part}")
 }
@@ -625,7 +629,9 @@ mod tests {
     #[test]
     fn fractions_write_whole_part_and_padded_count() {
         use crate::model::PriceFraction::*;
-        // Counts by hand: .4375 * 16 = 7; .515625 * 64 = 33; .5078125 * 128 = 65.
+        // Counts by hand: .4375 * 16 = 7; .515625 * 64 = 33; .5078125 * 128 = 65 (16 1/4
+        // thirty-seconds); .5234375 * 128 = 67 (16 3/4); .51171875 * 256 = 131 (16 3/8);
+        // .52734375 * 256 = 135 (16 7/8).
         // 99.984375 * 32 = 3199.5 carries to 3200; 100.0154 * 32 = 3200.4928 stays 3200.
         for (fraction, value, expected) in [
             (Halves, 101.5, "101'1"),
@@ -640,8 +646,13 @@ mod tests {
             (ThirtySeconds, -0.001, "0'00"),
             (HalfThirtySeconds, 112.515625, "112'165"),
             (HalfThirtySeconds, 112.5, "112'160"),
+            (QuarterThirtySeconds, 112.5078125, "112'162"),
+            (QuarterThirtySeconds, 112.5234375, "112'167"),
+            (EighthThirtySeconds, 112.51171875, "112'163"),
+            (EighthThirtySeconds, 112.52734375, "112'168"),
             (SixtyFourths, 112.515625, "112'33"),
             (OneTwentyEighths, 112.5078125, "112'065"),
+            (TwoFiftySixths, 112.51171875, "112'131"),
             (ThirtySeconds, f64::NAN, "NaN"),
             (ThirtySeconds, f64::INFINITY, "inf"),
             (ThirtySeconds, f64::NEG_INFINITY, "-inf"),
