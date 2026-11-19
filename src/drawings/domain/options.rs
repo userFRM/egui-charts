@@ -1226,6 +1226,19 @@ impl Default for MiddleLineStyle {
 /// of a horizontal line, a horizontal ray, an arrow mark and the parallel, flat top/bottom and
 /// disjoint channels. Other tools ignore these settings. A new drawing shows its text and
 /// leaves a signpost's glyph off.
+///
+/// ```
+/// use egui_charts::drawings::{AnnotationMarker, Drawing, DrawingToolType};
+///
+/// let mut marker = AnnotationMarker::default();
+/// marker.glyph = "🚀".into();
+/// marker.show_glyph = true;
+/// assert!(marker.is_valid());
+///
+/// let mut level = Drawing::new(1, DrawingToolType::HorizontalLine);
+/// level.text = Some("Weekly support".into());
+/// level.marker.show_text = false;
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
