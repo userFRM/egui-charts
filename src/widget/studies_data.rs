@@ -1434,6 +1434,7 @@ pub(super) mod tests {
     /// Metric streams give each bar the last point before its close, update the live bar,
     /// hold points until the next, refresh dependent studies, and use
     /// the normal subscription lifetime when the chart's instrument changes.
+    #[cfg(feature = "ui")]
     #[test]
     fn metric_history_and_live_points_refresh_the_pane_and_its_consumers() {
         use crate::data::MetricPoint;
@@ -1548,6 +1549,7 @@ pub(super) mod tests {
     }
 
     /// Declarations paint per bar, held values keep their colour, and Style edits survive saves.
+    #[cfg(feature = "ui")]
     #[test]
     fn declared_metric_styles_paint_per_bar_until_a_style_edit() {
         use crate::data::{MetricColors, MetricPlot, MetricSeries};
