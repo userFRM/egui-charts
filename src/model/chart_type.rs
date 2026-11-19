@@ -920,6 +920,18 @@ pub struct ChartTypeParams {
     pub tpo_composites: Vec<std::ops::RangeInclusive<chrono::DateTime<chrono::Utc>>>,
     /// TPO: instants that divide a session's profile, as in
     /// [`TPOConfig::splits`](super::TPOConfig::splits).
+    ///
+    /// ```
+    /// use chrono::{TimeZone, Utc};
+    /// use egui_charts::model::ChartTypeParams;
+    ///
+    /// let split = Utc.with_ymd_and_hms(2024, 3, 5, 15, 0, 0).unwrap();
+    /// let params = ChartTypeParams {
+    ///     tpo_splits: vec![split],
+    ///     ..Default::default()
+    /// };
+    /// assert_eq!(params.tpo_config(None).splits, [split]);
+    /// ```
     pub tpo_splits: Vec<chrono::DateTime<chrono::Utc>>,
 }
 
