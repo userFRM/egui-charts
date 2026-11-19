@@ -20,7 +20,7 @@ use crate::{
     data::StudyDataRequest,
     localization as l10n,
     model::{Bar, Signal, StrategyReport, Timeframe},
-    strategies::{Backtest, BacktestSettings, Strategy, StrategyFactory},
+    strategies::{Backtest, BacktestSettings, OrderSize, Strategy, StrategyFactory},
     studies::{InputValue, StudyInput},
     theme::ThemeExt,
     ui_kit::tab_bar::{TabBar, TabLabel},
@@ -40,6 +40,8 @@ pub struct StrategyHistoryRequest {
     pub timeframe: Timeframe,
     /// Requested beginning. Include earlier bars when needed to warm the strategy.
     pub start: DateTime<Utc>,
+    /// Requested end, or `None` for the newest bars. Bars closing after it are not used.
+    pub end: Option<DateTime<Utc>>,
     /// Finer fill interval, or `None` for chart-bar fills.
     pub lower_timeframe: Option<Timeframe>,
     /// Exchange rates from the instrument's currency into the account currency, when they
@@ -51,7 +53,8 @@ pub struct StrategyHistoryRequest {
 impl StrategyHistoryRequest {
     /// The request `id` for `symbol`'s `timeframe` bars from `start`, filled on chart bars in
     /// the instrument's currency. Assign [`lower_timeframe`](Self::lower_timeframe) for finer
-    /// fills and [`exchange_rate`](Self::exchange_rate) for another account currency.
+    /// fills, [`end`](Self::end) to bound the run and [`exchange_rate`](Self::exchange_rate)
+    /// for another account currency.
     ///
     /// ```
     /// use egui_charts::model::Timeframe;
@@ -59,6 +62,7 @@ impl StrategyHistoryRequest {
     ///
     /// let start = "2026-01-05T00:00:00Z".parse()?;
     /// let mut request = StrategyHistoryRequest::new(1, "AAPL", Timeframe::Day1, start);
+    /// request.end = Some("2026-02-02T00:00:00Z".parse()?);
     /// request.lower_timeframe = Some(Timeframe::Hour1);
     /// assert_eq!(request.exchange_rate, None);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -74,6 +78,7 @@ impl StrategyHistoryRequest {
             symbol: symbol.into(),
             timeframe,
             start,
+            end: None,
             lower_timeframe: None,
             exchange_rate: None,
         }
@@ -163,6 +168,7 @@ pub struct StrategyTester {
     redo_settings: Vec<BacktestSettings>,
     settings_edit: Option<BacktestSettings>,
     start: String,
+    end: String,
     lower: bool,
     lower_timeframe: Timeframe,
     tab: Tab,
@@ -194,6 +200,7 @@ impl std::fmt::Debug for StrategyTester {
             .field("redo_settings", &self.redo_settings)
             .field("settings_edit", &self.settings_edit)
             .field("start", &self.start)
+            .field("end", &self.end)
             .field("lower", &self.lower)
             .field("lower_timeframe", &self.lower_timeframe)
             .field("tab", &self.tab)
@@ -224,21 +231,29 @@ impl StrategyTester {
     /// Use the built-in catalogue and any constructors the host registered in `factory`.
     pub fn new(factory: StrategyFactory) -> Self {
         let name = factory.list().first().map_or("", |name| *name).to_owned();
-        let inputs = factory
-            .create(&name)
+        let strategy = factory.create(&name);
+        let inputs = strategy
+            .as_ref()
             .map_or_else(Vec::new, |strategy| strategy.study_inputs());
+        let settings = BacktestSettings {
+            order_size: strategy
+                .as_deref()
+                .map_or(BacktestSettings::default().order_size, strategy_order_size),
+            ..Default::default()
+        };
         let ranges = inputs.iter().filter_map(Range::new).collect();
         Self {
             factory: Arc::new(factory),
             name,
             inputs,
             ranges,
-            settings: BacktestSettings::default(),
+            settings,
             instrument_currency: None,
             undo_settings: Vec::new(),
             redo_settings: Vec::new(),
             settings_edit: None,
             start: String::new(),
+            end: String::new(),
             lower: false,
             lower_timeframe: Timeframe::Sec1,
             tab: Tab::Report,
@@ -263,9 +278,19 @@ impl StrategyTester {
         &self.name
     }
 
-    /// Select a strategy and restore its declared defaults. Unknown names leave the form intact.
+    /// Select a strategy and restore its declared defaults: its inputs and its
+    /// [order size](Strategy::default_order_size), or the default size when none is declared
+    /// or the declaration is invalid. The size changes as one settings step, which
+    /// [`Self::undo_settings`] reverts; other settings are kept. Unknown names leave the form
+    /// intact. A host restoring saved settings selects the strategy first.
     pub fn select_strategy(&mut self, name: &str) -> Result<(), &'static str> {
         let strategy = self.factory.create(name).ok_or("Unknown strategy")?;
+        let order_size = strategy_order_size(strategy.as_ref());
+        if self.settings.order_size != order_size {
+            self.undo_settings.push(self.settings.clone());
+            self.redo_settings.clear();
+            self.settings.order_size = order_size;
+        }
         self.name = name.into();
         self.inputs = strategy.study_inputs();
         self.ranges = self.inputs.iter().filter_map(Range::new).collect();
@@ -296,6 +321,9 @@ impl StrategyTester {
             self.redo_settings.clear();
             self.start = settings
                 .start_time
+                .map_or_else(String::new, |time| time.to_rfc3339());
+            self.end = settings
+                .end_time
                 .map_or_else(String::new, |time| time.to_rfc3339());
             self.settings = settings;
             self.changed();
@@ -337,6 +365,10 @@ impl StrategyTester {
     }
 
     fn restore_settings(&mut self) {
+        self.end = self
+            .settings
+            .end_time
+            .map_or_else(String::new, |time| time.to_rfc3339());
         self.start = self
             .settings
             .start_time
@@ -586,6 +618,7 @@ impl StrategyTester {
                     .or_else(|| bars.first().map(|bar| bar.time))
                     .ok_or("Supply a start date")?,
             );
+            request.end = self.settings.end_time;
             request.lower_timeframe = self.lower.then_some(self.lower_timeframe);
             request.exchange_rate = exchange_rate;
             self.pending = Some((request.clone(), optimise));
@@ -743,6 +776,7 @@ impl StrategyTester {
                                 ui,
                                 &mut self.settings,
                                 &mut self.start,
+                                &mut self.end,
                                 &mut self.lower,
                                 &mut self.lower_timeframe,
                             );
@@ -800,20 +834,22 @@ impl StrategyTester {
         if edited {
             self.changed();
         }
-        let valid_start = if self.start.trim().is_empty() {
-            Ok(None)
-        } else {
-            DateTime::parse_from_rfc3339(&self.start)
+        let parse = |text: &str| -> Result<Option<DateTime<Utc>>, &'static str> {
+            if text.trim().is_empty() {
+                return Ok(None);
+            }
+            DateTime::parse_from_rfc3339(text)
                 .map(|time| Some(time.with_timezone(&Utc)))
                 .or_else(|_| {
-                    NaiveDate::parse_from_str(&self.start, "%Y-%m-%d")
+                    NaiveDate::parse_from_str(text, "%Y-%m-%d")
                         .map(|date| Some(date.and_hms_opt(0, 0, 0).unwrap().and_utc()))
                 })
                 .map_err(|_| "Enter a UTC date (YYYY-MM-DD) or an RFC 3339 timestamp")
         };
-        match valid_start {
-            Ok(start) => {
+        match parse(&self.start).and_then(|start| parse(&self.end).map(|end| (start, end))) {
+            Ok((start, end)) => {
                 self.settings.start_time = start;
+                self.settings.end_time = end;
                 if run || optimise {
                     match self.request_run(symbol, timeframe, bars, optimise) {
                         Ok(Some(action)) => actions.push(action),
@@ -854,7 +890,11 @@ impl StrategyTester {
                                     .start_time
                                     .is_some_and(|start| bar.time < start)
                             });
-                            self.report.set_report(Some(report), &bars[from..]);
+                            let to = self
+                                .settings
+                                .bars_before_end(report.timeframe, &bars)
+                                .max(from);
+                            self.report.set_report(Some(report), &bars[from..to]);
                             self.stale = false;
                             self.tab = Tab::Report;
                         }
@@ -953,6 +993,22 @@ impl StrategyTester {
         }
         false
     }
+}
+
+/// The order size `strategy` declares, or the default one when it declares none or one the
+/// settings refuse.
+fn strategy_order_size(strategy: &dyn Strategy) -> OrderSize {
+    let default = BacktestSettings::default();
+    strategy
+        .default_order_size()
+        .filter(|&order_size| {
+            super::properties::validate(&BacktestSettings {
+                order_size,
+                ..default.clone()
+            })
+            .is_ok()
+        })
+        .unwrap_or(default.order_size)
 }
 
 #[cfg(test)]

@@ -53,7 +53,8 @@ pub enum StrategyReportAction {
     None,
     /// Reveal this trade on the chart.
     SelectTrade(StrategyTradeSelection),
-    /// Save these valid trades as CSV.
+    /// Save these valid trades as CSV, written by [`StrategyReport::trades_csv_with_excursions`]
+    /// with the excursions the list of trades shows.
     ExportCsv(String),
     /// Save the summary metrics and run properties shown, as [`StrategyReport::summary_csv`]
     /// writes them, under the suggested file name.
@@ -172,7 +173,9 @@ impl StrategyReportPanel {
             ));
             if unavailable.is_none() {
                 if Button::new("Export trades CSV").show(ui).clicked() {
-                    action = StrategyReportAction::ExportCsv(data.report.trades_csv());
+                    action = StrategyReportAction::ExportCsv(
+                        data.report.trades_csv_with_excursions(&data.comparison),
+                    );
                 }
                 if Button::new("Export summary CSV").show(ui).clicked() {
                     action = StrategyReportAction::ExportSummaryCsv {

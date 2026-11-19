@@ -62,6 +62,8 @@ a fraction of current marked equity, or cash divided by the absolute execution p
 Cash and equity sizing reject a zero execution price. The default pyramiding limit is one
 open entry; zero disables entries. A partial exit retains its entry slot until that lot is
 fully closed. An opposite entry reverses the position and starts a new entry count.
+[`Strategy::default_order_size`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/trait.Strategy.html#method.default_order_size) suggests the strategy's usual size; the tester applies it on selection,
+while [`Backtest::run`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.run) uses its settings alone. Select the strategy before restoring saved settings.
 
 Commission is an absolute fill-value fraction, an amount per unit, or an amount per order.
 Each fill pays once, even when reversing or closing several FIFO lots; trade fees and net
@@ -99,6 +101,10 @@ at the crossing. An order at the boundary can avert the deficit; a gap already b
 at its open. For example, capital 1,000 and 15 long units entered at 100 with leverage 2 give
 equity `15p - 500` and margin `7.5p` at positive price `p`; a decline crosses at `p = 200/3`,
 leaving equity 500 before exit costs, even if the bar later recovers.
+
+The report properties *Long margin calls* and *Short margin calls* name each side's rule:
+`Four times the shortfall at price points`, `Whole position at the margin crossing`, or `Off`
+when that side requires no funding. The tester shows the rule below each funding field.
 
 [`require_limit_cross`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.require_limit_cross) makes limit entries, triggered stop-limits and profit-taking exits wait until
 the price trades through the limit by one [`price_increment`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.price_increment). They then fill at the limit, or at
@@ -142,8 +148,12 @@ data service is required by the engine. With a start time, equity starts at that
 subsequent values are stamped at chart-bar closes, preserving the starting capital point.
 The final execution bar has no known closing time; its equity mark is provisionally labelled
 one nanosecond after its last supplied price timestamp so the curve stays ordered.
-Without a start time, the existing equity timestamps are retained. When comparing a
-bounded run in the panel, supply only its eligible chart bars as the comparison source.
+Without a start time, the existing equity timestamps are retained.
+[`settings.end_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.end_time) ends the run: chart bars that have not closed by then are not decided on,
+filled or marked and do not reach [`Strategy::prepare`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/trait.Strategy.html#method.prepare). Trades still open remain open.
+An execution bar closes when the next one opens, so the newest one does not count as closed.
+[`Backtest::update`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.update) ignores the end. When comparing a bounded run in the panel, supply only its eligible
+chart bars: those opening at or after the start and closing by the end.
 
 Migration: [`Backtest::initial_capital`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.initial_capital) and [`Backtest::fill_on_close`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.fill_on_close) move to
 [`Backtest::settings`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#structfield.settings). [`Backtest::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.new) keeps its starting-capital argument. Add `&[]` as the
@@ -199,8 +209,10 @@ Fill prices retain their precision and fill times retain fractional seconds.
 Properties includes run metadata and the host's ordered settings. Invalid inputs are
 counted visibly. An undefined or non-finite metric displays as `N/A`, including when
 converting a fraction to a displayed percentage overflows.
-CSV exports only valid trades using [`StrategyReport::trades_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.trades_csv), retaining its existing
-columns, quoting and UTC timestamps. Export summary CSV returns
+Export trades CSV writes valid trades using
+[`StrategyReport::trades_csv_with_excursions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.trades_csv_with_excursions): the columns of
+[`StrategyReport::trades_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.trades_csv) with the displayed excursions in the final `mae` and `mfe` cells,
+empty when unavailable, and the same quoting and UTC timestamps. Export summary CSV returns
 [`StrategyReportAction::ExportSummaryCsv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyReportAction.html#variant.ExportSummaryCsv) with a suggested file name and the metrics and
 properties shown, as [`StrategyReport::summary_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.summary_csv) writes them: a dot as the decimal
 separator, no thousands separator, and an empty cell for an unavailable value. Percent

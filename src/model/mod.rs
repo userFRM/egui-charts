@@ -58,8 +58,9 @@ mod watchlist;
 
 pub use alert::{
     Alert, AlertCalendar, AlertChannelComparison, AlertComparison, AlertCondition, AlertDelivery,
-    AlertFrequency, AlertId, AlertInputs, AlertRule, AlertSource, AlertSourceName, AlertStatus,
-    AlertStudy, CustomAlertEvent, NotificationSchedule, NotificationWindow,
+    AlertFrequency, AlertId, AlertInputs, AlertPositionProgress, AlertRule, AlertSource,
+    AlertSourceName, AlertStatus, AlertStudy, CustomAlertEvent, NotificationSchedule,
+    NotificationWindow,
 };
 pub use bar::{Bar, BarColors, BarData};
 #[cfg(feature = "widget")]

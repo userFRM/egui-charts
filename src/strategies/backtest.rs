@@ -132,6 +132,11 @@ pub struct BacktestSettings {
     pub original_price_fills: bool,
     /// First eligible chart-bar open. Earlier bars warm studies and strategy state without trading.
     pub start_time: Option<DateTime<Utc>>,
+    /// End of the run. Chart bars that have not closed by then are left out: they are not decided
+    /// on, filled or marked, and [`Strategy::prepare`] does not receive them; trades still open
+    /// stay open. An execution bar closes when the next bar opens, so the newest one is left out.
+    /// `None` runs to the newest supplied bar. [`Backtest::update`] ignores it.
+    pub end_time: Option<DateTime<Utc>>,
 }
 
 impl Default for BacktestSettings {
@@ -158,6 +163,7 @@ impl Default for BacktestSettings {
             chart_type: ChartType::Candles,
             original_price_fills: false,
             start_time: None,
+            end_time: None,
         }
     }
 }
@@ -187,6 +193,36 @@ impl BacktestSettings {
     pub(crate) fn funding(&self, side: OrderSide) -> f64 {
         self.side_funding(side)
             .unwrap_or_else(|| 1.0 / self.leverage())
+    }
+
+    /// Whether a deficit on `side` closes the whole position where equity crosses margin: the
+    /// liquidation rule kept for runs with leverage above one and no funding fraction for that
+    /// side. A funding fraction closes four times the shortfall instead.
+    fn whole_position_margin(&self, side: OrderSide) -> bool {
+        self.side_funding(side).is_none() && self.leverage() != 1.0
+    }
+
+    /// The margin-call rule on `side`, as the report properties and the tester name it.
+    pub(crate) fn margin_calls(&self, side: OrderSide) -> &'static str {
+        if self.funding(side) == 0.0 {
+            "Off"
+        } else if self.whole_position_margin(side) {
+            "Whole position at the margin crossing"
+        } else {
+            "Four times the shortfall at price points"
+        }
+    }
+
+    /// How many of `bars`, oldest first, close by [`Self::end_time`]; all of them without one.
+    pub(crate) fn bars_before_end(&self, timeframe: Timeframe, bars: &[Bar]) -> usize {
+        self.end_time.map_or(bars.len(), |end| {
+            (0..bars.len())
+                .take_while(|&index| {
+                    bar_end(timeframe, &bars[index], bars.get(index + 1))
+                        .is_some_and(|close| close <= end)
+                })
+                .count()
+        })
     }
 
     fn fee(&self, quantity: f64, price: f64) -> f64 {
@@ -301,6 +337,14 @@ pub trait Strategy {
     /// not call it. Accepts every combination by default.
     fn validate_inputs(&self) -> Result<(), &'static str> {
         Ok(())
+    }
+
+    /// The order size this strategy is usually tested with, such as a fraction of equity, or
+    /// `None` for the default [`BacktestSettings::order_size`]. The strategy tester applies it
+    /// when the strategy is selected, and the user can still change it; [`Backtest::run`] reads
+    /// only its settings. Returns `None` by default.
+    fn default_order_size(&self) -> Option<OrderSize> {
+        None
     }
 
     /// Computes what the strategy needs from the whole run once, before the first bar, such as
@@ -654,11 +698,13 @@ impl Backtest {
     /// apply to regular candles and original-price execution; derived-price fills use their own
     /// candle path. Pass `&[]` to use chart bars alone.
     ///
-    /// With a start time, `prepare` still receives all bars, or none with historical tick
-    /// decisions, whose calculations refresh through `prepare_update`, but chart bars opening
-    /// before it cannot trade. Equity starts at the requested time and subsequent points use chart-bar
-    /// closes, so the starting value and first close have distinct timestamps. A final execution
-    /// bar without a known end labels its equity mark one nanosecond after its last source time.
+    /// With a start time, `prepare` still receives every bar that closes by the end time, or none
+    /// with historical tick decisions, whose calculations refresh through `prepare_update`.
+    /// Chart bars opening before the start cannot trade. Equity starts at the requested time and
+    /// subsequent points use chart-bar closes, so the starting value and first close have
+    /// distinct timestamps. A final execution bar without a known end labels its equity mark one
+    /// nanosecond after its last source time. With an end time, chart bars that close after it are
+    /// left out, as [`BacktestSettings::end_time`] describes.
     ///
     /// # Panics
     ///
@@ -696,6 +742,7 @@ impl Backtest {
         let candles = (settings.chart_type == ChartType::Heikin)
             .then(|| crate::model::BarData::from_bars(bars.to_vec()).to_heikin_ashi());
         let bars = candles.as_ref().map_or(bars, |data| data.bars.as_slice());
+        let last = settings.bars_before_end(self.timeframe, bars);
         let mut report = self.new_report(strategy, lower.len());
         let mut lower: Vec<_> = lower.iter().filter(|bar| valid_bar(bar)).collect();
         lower.sort_by_key(|bar| bar.time);
@@ -704,7 +751,7 @@ impl Backtest {
             if settings.recalculate_on_history && !settings.chart_type.transforms_data() {
                 &[]
             } else {
-                bars
+                &bars[..last]
             },
         );
         let rates = self.rates();
@@ -727,9 +774,9 @@ impl Backtest {
             rates,
             unconverted: Cell::new(false),
         };
-        run.start_equity(self.timeframe, bars, &mut report);
+        run.start_equity(self.timeframe, &bars[..last], &mut report);
         let mut processed = cooperative.then_some(0);
-        for index in 0..bars.len() {
+        for index in 0..last {
             run.closed_bar_inner(bars, index, &lower, &mut report, true, &mut processed)
                 .await;
         }
@@ -788,6 +835,14 @@ impl Backtest {
                 settings.funding(OrderSide::Sell).to_string(),
             ),
             (
+                "Long margin calls".into(),
+                settings.margin_calls(OrderSide::Buy).into(),
+            ),
+            (
+                "Short margin calls".into(),
+                settings.margin_calls(OrderSide::Sell).into(),
+            ),
+            (
                 "Verify limit crossing".into(),
                 settings.require_limit_cross.to_string(),
             ),
@@ -830,6 +885,12 @@ impl Backtest {
             settings
                 .start_time
                 .map_or_else(|| "All supplied history".into(), |time| time.to_rfc3339()),
+        ));
+        report.properties.push((
+            "End time".into(),
+            settings
+                .end_time
+                .map_or_else(|| "Newest supplied bar".into(), |time| time.to_rfc3339()),
         ));
         report
             .properties
@@ -1461,9 +1522,8 @@ impl<'a> Run<'a> {
         None
     }
 
-    // Keep the original shared-leverage API's liquidation rule for existing leveraged runs.
     fn legacy_margin(&self) -> bool {
-        self.settings.side_funding(self.lots[0].side).is_none() && self.settings.leverage() != 1.0
+        self.settings.whole_position_margin(self.lots[0].side)
     }
 
     fn liquidation_size(&self, price: f64) -> f64 {
@@ -3001,7 +3061,60 @@ mod tests {
         // a 1% fee costs 2 + 2.2, and two ticks of 0.5 reduce that gross profit to 16.
         // At 2x leverage, 15 long from 100 have equity 15p-500 and margin 7.5p:
         // the call is at p=200/3, equity=500, even if the bar later recovers to 100.
+        let mut run_properties = Vec::new();
         for (name, script, settings, prices, expected, equity, rejected) in [
+            (
+                "leverage alone closes the whole position at the margin crossing",
+                hold as fn(usize, &mut StrategyContext<'_>),
+                BacktestSettings {
+                    order_size: OrderSize::Fixed(15.0),
+                    leverage: 2.0,
+                    ..terms.clone()
+                },
+                vec![
+                    (100.0, 100.0, 100.0, 100.0),
+                    (100.0, 100.0, 100.0, 100.0),
+                    (100.0, 100.0, 60.0, 70.0),
+                ],
+                vec![trade(
+                    Buy,
+                    15.0,
+                    1,
+                    100.0,
+                    Some((2, 200.0 / 3.0, -500.0)),
+                    "A / Margin call",
+                )],
+                vec![1000.0, 1000.0, 1000.0, 500.0],
+                0,
+            ),
+            (
+                "funding at that leverage closes four times the shortfall at a price point",
+                hold,
+                BacktestSettings {
+                    order_size: OrderSize::Fixed(15.0),
+                    leverage: 2.0,
+                    long_funding: Some(0.5),
+                    ..terms.clone()
+                },
+                vec![
+                    (100.0, 100.0, 100.0, 100.0),
+                    (100.0, 100.0, 100.0, 100.0),
+                    (100.0, 100.0, 60.0, 70.0),
+                ],
+                vec![
+                    trade(
+                        Buy,
+                        4.0,
+                        1,
+                        100.0,
+                        Some((2, 60.0, -160.0)),
+                        "A / Margin call",
+                    ),
+                    trade(Buy, 11.0, 1, 100.0, None, "A"),
+                ],
+                vec![1000.0, 1000.0, 1000.0, 510.0],
+                0,
+            ),
             (
                 "long funding is independent of short funding",
                 hold as fn(usize, &mut StrategyContext<'_>),
@@ -4165,6 +4278,7 @@ mod tests {
             engine.instrument_currency = Some("USD".into());
             engine.exchange_rates = vec![rate(0, 0.9), rate(2, 0.8)];
             let report = engine.run(&mut Script(script), &source, &[]);
+            run_properties.push((name, report.properties.clone()));
             let mut asynchronous_strategy = Script(script);
             let mut future =
                 std::pin::pin!(engine.run_async(&mut asynchronous_strategy, &source, &[]));
@@ -4259,6 +4373,31 @@ mod tests {
             }
         }
 
+        let [whole, partial] = [
+            "leverage alone closes the whole position at the margin crossing",
+            "funding at that leverage closes four times the shortfall at a price point",
+        ]
+        .map(|run| {
+            run_properties
+                .iter()
+                .find(|(name, _)| *name == run)
+                .unwrap()
+                .1
+                .clone()
+        });
+        assert_ne!(
+            whole, partial,
+            "runs that liquidate differently list different properties"
+        );
+        assert!(whole.contains(&(
+            "Long margin calls".into(),
+            "Whole position at the margin crossing".into()
+        )));
+        assert!(partial.contains(&(
+            "Long margin calls".into(),
+            "Four times the shortfall at price points".into()
+        )));
+
         struct History {
             prepared: usize,
             averages: Vec<f64>,
@@ -4307,10 +4446,12 @@ mod tests {
         // Chart path: 100 -> 94 -> 111 -> 108 stops at 95, losing 2*(100-95)=10.
         // Finer path: 100 -> 99 -> 111 reaches the 110 target first, earning 2*10=20.
         // A start at 01:00 warms on 00:00, decides at 01:00, and buys at 02:00 for 108.
-        for (name, lower, start, entry_bar, expected, times, decisions) in [
+        // An end at 02:00 excludes bar 2, closing at 03:00, so that entry never fills.
+        for (name, lower, start, end, entry_bar, expected, times, decisions) in [
             (
                 "chart path",
                 vec![],
+                None,
                 None,
                 0,
                 vec![trade(Buy, 2.0, 1, 100.0, Some((1, 95.0, -10.0)), "A / X")],
@@ -4320,6 +4461,7 @@ mod tests {
             (
                 "finer path",
                 vec![first.clone(), second.clone()],
+                None,
                 None,
                 0,
                 vec![trade(Buy, 2.0, 1, 100.0, Some((1, 110.0, 20.0)), "A / X")],
@@ -4340,6 +4482,7 @@ mod tests {
                     ),
                 ],
                 None,
+                None,
                 0,
                 vec![later_target],
                 vec![hour(-1), hour(0), hour(1), hour(2)],
@@ -4348,6 +4491,7 @@ mod tests {
             (
                 "finer bars are ordered",
                 vec![second.clone(), first.clone()],
+                None,
                 None,
                 0,
                 vec![trade(Buy, 2.0, 1, 100.0, Some((1, 110.0, 20.0)), "A / X")],
@@ -4358,6 +4502,7 @@ mod tests {
                 "uncovered bar falls back",
                 vec![Bar::new(hour(2), 108.0, 108.0, 108.0, 108.0, 0.0)],
                 None,
+                None,
                 0,
                 vec![trade(Buy, 2.0, 1, 100.0, Some((1, 95.0, -10.0)), "A / X")],
                 vec![hour(-1), hour(0), hour(1), hour(2)],
@@ -4366,6 +4511,7 @@ mod tests {
             (
                 "invalid finer bar falls back",
                 vec![Bar::new(hour(1), 100.0, f64::NAN, 99.0, 100.0, 0.0)],
+                None,
                 None,
                 0,
                 vec![trade(Buy, 2.0, 1, 100.0, Some((1, 95.0, -10.0)), "A / X")],
@@ -4376,6 +4522,7 @@ mod tests {
                 "start warms studies",
                 vec![],
                 Some(hour(1)),
+                None,
                 1,
                 vec![trade(Buy, 2.0, 2, 108.0, None, "A")],
                 vec![hour(1), hour(2), hour(3)],
@@ -4385,6 +4532,7 @@ mod tests {
                 "start between chart bars",
                 vec![first.clone(), second.clone()],
                 Some(hour(0) + TimeDelta::minutes(30)),
+                None,
                 1,
                 vec![trade(Buy, 2.0, 2, 108.0, None, "A")],
                 vec![hour(0) + TimeDelta::minutes(30), hour(2), hour(3)],
@@ -4394,10 +4542,21 @@ mod tests {
                 "start after history",
                 vec![first, second],
                 Some(hour(3)),
+                None,
                 3,
                 vec![],
                 vec![],
                 vec![0, 1, 2],
+            ),
+            (
+                "end keeps later bars out of the run",
+                vec![],
+                Some(hour(1)),
+                Some(hour(2)),
+                1,
+                vec![],
+                vec![hour(1), hour(2)],
+                vec![0, 1],
             ),
         ] {
             let mut strategy = History {
@@ -4408,8 +4567,9 @@ mod tests {
             };
             let mut engine = Backtest::new("History", "TEST", Timeframe::Hour1, 1000.0);
             engine.settings.start_time = start;
+            engine.settings.end_time = end;
             let report = engine.run(&mut strategy, &source, &lower);
-            assert_eq!(strategy.prepared, source.len(), "{name}");
+            assert_eq!(strategy.prepared, decisions.len(), "{name}");
             assert_eq!(strategy.decisions, decisions, "{name}");
             strategy.decisions.clear();
             let mut future = std::pin::pin!(engine.run_async(&mut strategy, &source, &lower));
@@ -4465,6 +4625,7 @@ mod tests {
                 "Fill on close",
                 "Recalculate after fills",
                 "Start time",
+                "End time",
                 "Lower-interval bars",
                 "Rejected orders",
             ] {
