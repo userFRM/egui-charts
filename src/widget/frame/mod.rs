@@ -3443,6 +3443,7 @@ impl Chart {
                 ui.active_theme().chart.axis_text_secondary,
                 self.state.shown(),
                 self.state.revision(),
+                self.drawing_executions(),
             ) {
                 match tag {
                     crate::drawings::manager::DrawingAxisTag::Price {

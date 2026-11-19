@@ -458,8 +458,9 @@ impl DrawingManager {
     /// The axis tags of visible drawings of the pane last handled, in drawing order: enabled
     /// price and time labels of horizontal, vertical and cross lines reaching `plot`, position
     /// levels, whose entry takes `entry_color`, the latest values of an anchored VWAP's tracked
-    /// line and band lines over the pane's `bars` at `revision`, and the time of a vertical line
-    /// reaching that pane from another. Call after the pane handles input so tags follow a drag
+    /// line and band lines over the pane's `bars` at `revision` with the chart's `executions`, and
+    /// the time of a vertical line reaching that pane from another. Call after the pane handles
+    /// input so tags follow a drag
     /// in the same frame. Line tags use opaque RGB so their text stays legible.
     pub(crate) fn axis_tags<'a>(
         &'a self,
@@ -467,6 +468,7 @@ impl DrawingManager {
         entry_color: Color32,
         bars: &'a [crate::model::Bar],
         revision: u64,
+        executions: Option<crate::data::FootprintView<'a>>,
     ) -> impl Iterator<Item = DrawingAxisTag> + 'a {
         self.drawings
             .iter()
@@ -501,7 +503,7 @@ impl DrawingManager {
                     });
                 let decimals = drawing.vwap.and_then(|config| config.precision);
                 let vwap = drawing
-                    .anchored_vwap_tracked(bars, revision)
+                    .anchored_vwap_tracked(bars, revision, executions)
                     .into_iter()
                     .map(move |(price, line)| {
                         let [r, g, b, _] = line.color;

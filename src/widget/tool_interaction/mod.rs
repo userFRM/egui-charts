@@ -141,6 +141,16 @@ impl Chart {
         })
     }
 
+    /// Estimated and total bars of drawing `id` over the shown bars and executions drawings read.
+    #[cfg(feature = "ui")]
+    pub(crate) fn vwap_estimated_bars(&self, id: usize) -> Option<(usize, usize)> {
+        self.drawings
+            .drawings
+            .iter()
+            .find(|drawing| drawing.id == id)?
+            .anchored_vwap_estimated(self.state.shown(), self.drawing_executions())
+    }
+
     /// Suggested finer histories and first opens of the visible profile drawings' spans.
     pub(super) fn profile_histories(
         &self,
@@ -2271,7 +2281,7 @@ mod tests {
             assert!(
                 chart
                     .drawings()
-                    .axis_tags(main, Color32::WHITE, &[], 0)
+                    .axis_tags(main, Color32::WHITE, &[], 0, None)
                     .any(|tag| matches!(
                         tag,
                         crate::drawings::manager::DrawingAxisTag::Time { x: tag_x, .. } if tag_x == x
