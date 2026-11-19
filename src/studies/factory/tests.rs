@@ -261,8 +261,12 @@ fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
     let bars: Vec<Bar> = (0..800)
         .map(|i: i64| {
             let x = i as f64;
-            let close =
-                100.0 + (x * 0.13).sin() * 8.0 + (x * 0.029).cos() * 5.0 + (i / 160) as f64 * 6.0;
+            // The slower swing also gives extreme-filtered reversal studies signals.
+            let close = 100.0
+                + (x * 0.13).sin() * 8.0
+                + (x * 0.03).sin() * 10.0
+                + (x * 0.029).cos() * 5.0
+                + (i / 160) as f64 * 6.0;
             let open = close - (x * 0.7).sin() * 1.5;
             Bar {
                 time: Utc.timestamp_opt((i / 2 * 48 + i % 2) * 3_600, 0).unwrap(),
@@ -359,6 +363,12 @@ fn catalogue_studies_open_with_their_usual_lengths() {
         ("Knoxville Divergence", "rsi_period", 21),
         ("Knoxville Divergence", "lookback", 150),
         ("Advance/Decline", "period", 10),
+        ("Booker Reversal", "fast_period", 12),
+        ("Booker Reversal", "slow_period", 26),
+        ("Booker Reversal", "k_period", 70),
+        ("Booker Reversal", "slowing", 10),
+        ("Booker Reversal", "stoch_upper", 70),
+        ("Booker Reversal", "stoch_lower", 30),
     ];
     let factory = IndicatorFactory::new();
     for (name, id, length) in rows {

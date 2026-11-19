@@ -308,6 +308,7 @@ impl IndicatorFactory {
                 PivotPoints,
                 PivotPointsHighLow,
                 Reversal,
+                BookerReversal,
                 ElliottWave,
                 RisingWedge,
                 FallingWedge,

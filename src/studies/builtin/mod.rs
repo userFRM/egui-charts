@@ -52,7 +52,7 @@
 //!
 //! ## Support / resistance
 //! [`PivotPoints`], [`IntradayPivotPoints`], [`ProjectedPivotPoints`], [`PivotPointsHighLow`],
-//! [`MissedPivots`], [`KeyLevels`], [`AutoKeyLevels`], [`ElliottWave`], [`Reversal`],
+//! [`MissedPivots`], [`KeyLevels`], [`AutoKeyLevels`], [`ElliottWave`], [`Reversal`], [`BookerReversal`],
 //! [`RisingWedge`], [`FallingWedge`], [`WilliamsFractals`], [`Gaps`], [`ZigZag`], [`PriceChannel`]
 //!
 //! ## Patterns
@@ -168,6 +168,7 @@ mod std_dev;
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod auto_drawing;
 mod auto_key_levels;
+mod booker_reversal;
 mod elliott_wave;
 mod gaps;
 mod intraday_pivot_points;
@@ -392,6 +393,7 @@ pub use std_dev::StandardDeviation;
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 pub use auto_drawing::{AutoDrawing, AutoDrawingKind};
 pub use auto_key_levels::AutoKeyLevels;
+pub use booker_reversal::BookerReversal;
 pub use elliott_wave::ElliottWave;
 pub use gaps::Gaps;
 pub use intraday_pivot_points::IntradayPivotPoints;
