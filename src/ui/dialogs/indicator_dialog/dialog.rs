@@ -1529,6 +1529,7 @@ mod tests {
                 &[
                     "Vol Profile VR",
                     "All Candlestick Patterns",
+                    "Engulfing - Bearish",
                     "Execution Delta",
                     "Cumulative Execution Delta",
                     "Host flow",
@@ -1547,7 +1548,7 @@ mod tests {
                 Patterns,
                 BuiltIns,
                 "",
-                &["All Candlestick Patterns"],
+                &["All Candlestick Patterns", "Engulfing - Bearish"],
                 &["RSI", "Vol Profile VR"],
             ),
             (
@@ -2085,6 +2086,19 @@ mod tests {
             ("PMO", &["Price Momentum Oscillator"], &[]),
             ("TPO", &["Time Price Opportunity"], &[]),
             ("Variable Index Dynamic Average", &["VIDYA"], &[]),
+            (
+                "Engulfing - Bearish",
+                &["Engulfing - Bearish"],
+                &["Engulfing - Bullish", "All Candlestick Patterns"],
+            ),
+            (
+                "Tasuki",
+                &[
+                    "Downside Tasuki Gap - Bearish",
+                    "Upside Tasuki Gap - Bullish",
+                ],
+                &["All Candlestick Patterns"],
+            ),
         ];
         let ctx = egui::Context::default();
         let mut dialog = IndicatorDialog::new();
