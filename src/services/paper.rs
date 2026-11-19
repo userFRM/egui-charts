@@ -14,7 +14,11 @@ use crate::model::{
 };
 
 /// The times in force the account supports, the default first.
-const TIMES_IN_FORCE: [TimeInForce; 1] = [TimeInForce::GoodTillCancelled];
+const TIMES_IN_FORCE: [TimeInForce; 3] = [
+    TimeInForce::GoodTillCancelled,
+    TimeInForce::ImmediateOrCancel,
+    TimeInForce::FillOrKill,
+];
 
 /// A paper account: a [`Broker`] that fills orders against the prices the host feeds it, so the
 /// order ticket, the chart's order and position lines and the account panel work as they do with
@@ -22,8 +26,11 @@ const TIMES_IN_FORCE: [TimeInForce; 1] = [TimeInForce::GoodTillCancelled];
 ///
 /// Feed it the last price of every symbol it trades with [`set_price`](Self::set_price), live or
 /// replayed. During replay, call [`set_replay_time`](Self::set_replay_time) before each price so
-/// fills and history use the source bar's time. Only good-till-cancelled orders are supported;
-/// the account has no trading-session calendar. Market orders fill at the bid or ask of a usable
+/// fills and history use the source bar's time. Good-till-cancelled orders work until they fill or
+/// are cancelled. Immediate-or-cancel and fill-or-kill orders fill at placement where a marketable
+/// order would, and are cancelled at once otherwise; since every fill is complete, the two behave
+/// alike. Day, week and month orders are refused, since the account has no trading-session calendar,
+/// and a working order cannot change its time in force. Market orders fill at the bid or ask of a usable
 /// [quote](Self::set_bid_ask), otherwise at the last price; limit and
 /// stop orders fill at the first price that reaches them, a limit at that price or better;
 /// a triggered stop-limit works on as a limit order. An order's take profits and stop loss become
@@ -855,9 +862,24 @@ impl Broker for PaperAccount {
             state.finish(order, OrderStatus::Rejected(error.to_string()));
             return;
         }
-        if order.request.order_type == OrderType::Market {
-            let price = state.fills_at(&order.request, last).unwrap_or(last);
-            state.fill(self, order, price);
+        let immediate = matches!(
+            order.request.time_in_force,
+            TimeInForce::ImmediateOrCancel | TimeInForce::FillOrKill
+        );
+        if order.request.order_type == OrderType::Market || immediate {
+            match state.fills_at(&order.request, last) {
+                Some(price) => state.fill(self, order, price),
+                None => {
+                    // Immediate orders that cannot fill now are cancelled, never left working.
+                    state.log(format!(
+                        "Order {} cancelled: {}",
+                        order.id,
+                        describe(&order.request)
+                    ));
+                    state.finish(order, OrderStatus::Cancelled);
+                    state.push(state.account(self));
+                }
+            }
         } else {
             let symbol = order.request.symbol.clone();
             state.push(AccountEvent::Order(order.clone()));
@@ -1004,7 +1026,7 @@ mod tests {
     fn symbol_rules_set_the_answer_point_value_and_leverage() {
         let paper = PaperAccount::new("USD", 100_000.0).leverage(10.0);
         let mut expected = TradingRules::new("SYM");
-        expected.time_in_force = vec![TimeInForce::GoodTillCancelled];
+        expected.time_in_force = TIMES_IN_FORCE.to_vec();
         expected.leverage = Some(10.0);
         let mut invalid = expected.clone();
         invalid.quantity_step = 0.0;
@@ -1016,9 +1038,16 @@ mod tests {
         rules.max_quantity = Some(100.0);
         rules.point_value = 50.0;
         rules.leverage = Some(20.0);
-        rules.time_in_force = vec![TimeInForce::Day, TimeInForce::GoodTillCancelled];
+        rules.time_in_force = vec![
+            TimeInForce::Day,
+            TimeInForce::ImmediateOrCancel,
+            TimeInForce::GoodTillCancelled,
+        ];
         assert!(paper.set_rules(rules.clone()));
-        rules.time_in_force = vec![TimeInForce::GoodTillCancelled];
+        rules.time_in_force = vec![
+            TimeInForce::ImmediateOrCancel,
+            TimeInForce::GoodTillCancelled,
+        ];
         assert_eq!(rules_of(&paper, "SYM"), rules);
         for field in [
             "step",
@@ -1850,46 +1879,25 @@ mod tests {
         }
     }
 
+    /// With no partial fills, IOC and FOK either fill in full at placement or cancel without
+    /// ever working. Session durations and duration changes to a working order stay unsupported.
     #[test]
-    fn only_gtc_orders_are_offered_and_accepted_without_session_boundaries() {
+    fn immediate_orders_fill_at_once_or_are_cancelled_and_session_orders_are_refused() {
+        use OrderSide::{Buy, Sell};
+        use TimeInForce::{Day, FillOrKill, GoodTillCancelled, ImmediateOrCancel, Month, Week};
         let paper = PaperAccount::new("USD", 1_000.0);
         paper.set_price("SYM", 100.0);
-        let inbox = Arc::new(Inbox::default());
-        paper.rules("SYM", inbox.reply(0));
-        let rules = *inbox
-            .drain()
-            .answers
-            .pop()
-            .unwrap()
-            .1
-            .downcast::<Result<TradingRules, FeedError>>()
-            .unwrap();
         assert_eq!(
-            rules.unwrap().time_in_force,
-            vec![TimeInForce::GoodTillCancelled]
+            rules_of(&paper, "SYM").time_in_force,
+            [GoodTillCancelled, ImmediateOrCancel, FillOrKill]
         );
-        let mut request = OrderRequest::new("SYM", OrderSide::Buy, 1.0, OrderType::Limit(90.0));
-        request.time_in_force = TimeInForce::GoodTillCancelled;
+        let mut request = OrderRequest::new("SYM", Buy, 1.0, OrderType::Limit(90.0));
+        request.time_in_force = GoodTillCancelled;
         let id = place(&paper, request.clone()).unwrap();
         let before = snapshot(&paper);
-        for time_in_force in [
-            TimeInForce::Day,
-            TimeInForce::Week,
-            TimeInForce::Month,
-            TimeInForce::ImmediateOrCancel,
-            TimeInForce::FillOrKill,
-        ] {
-            request.time_in_force = time_in_force;
-            paper.place(request.clone(), inbox.reply(0));
-            let result = *inbox
-                .drain()
-                .answers
-                .pop()
-                .unwrap()
-                .1
-                .downcast::<Result<OrderId, FeedError>>()
-                .unwrap();
-            assert_eq!(result, Err(FeedError::NotSupported));
+        let inbox = Arc::new(Inbox::default());
+        for tif in [Day, Week, Month, ImmediateOrCancel, FillOrKill] {
+            request.time_in_force = tif;
             paper.modify(id.clone(), request.clone(), inbox.reply(0));
             let result = *inbox
                 .drain()
@@ -1901,6 +1909,99 @@ mod tests {
                 .unwrap();
             assert_eq!(result, Err(FeedError::NotSupported));
             assert_eq!(snapshot(&paper), before);
+        }
+        for (tif, kind, side, status) in [
+            (
+                ImmediateOrCancel,
+                OrderType::Limit(101.0),
+                Buy,
+                Some(OrderStatus::Filled),
+            ),
+            (
+                FillOrKill,
+                OrderType::Limit(99.0),
+                Sell,
+                Some(OrderStatus::Filled),
+            ),
+            (
+                ImmediateOrCancel,
+                OrderType::Limit(99.0),
+                Buy,
+                Some(OrderStatus::Cancelled),
+            ),
+            (
+                FillOrKill,
+                OrderType::Limit(101.0),
+                Sell,
+                Some(OrderStatus::Cancelled),
+            ),
+            (
+                ImmediateOrCancel,
+                OrderType::Market,
+                Buy,
+                Some(OrderStatus::Filled),
+            ),
+            (
+                FillOrKill,
+                OrderType::Stop(99.0),
+                Buy,
+                Some(OrderStatus::Filled),
+            ),
+            (
+                ImmediateOrCancel,
+                OrderType::StopLimit {
+                    stop: 99.0,
+                    limit: 99.5,
+                },
+                Buy,
+                Some(OrderStatus::Cancelled),
+            ),
+            (
+                FillOrKill,
+                OrderType::StopLimit {
+                    stop: 99.0,
+                    limit: 101.0,
+                },
+                Buy,
+                Some(OrderStatus::Filled),
+            ),
+            (Day, OrderType::Market, Buy, None),
+            (Week, OrderType::Market, Buy, None),
+            (Month, OrderType::Market, Buy, None),
+        ] {
+            let paper = PaperAccount::new("USD", 1_000.0);
+            paper.set_price("SYM", 100.0);
+            let mut request = OrderRequest::new("SYM", side, 1.0, kind);
+            request.time_in_force = tif;
+            paper.place(request, inbox.reply(0));
+            let result = *inbox
+                .drain()
+                .answers
+                .pop()
+                .unwrap()
+                .1
+                .downcast::<Result<OrderId, FeedError>>()
+                .unwrap();
+            let events = snapshot(&paper);
+            if let Some(status) = status {
+                let id = result.unwrap();
+                let state = paper.lock();
+                assert!(state.working.is_empty(), "{tif:?} {kind:?}");
+                assert_eq!(state.finished.len(), 1);
+                let order = &state.finished[0];
+                assert_eq!((&order.id, &order.status), (&id, &status));
+                if status == OrderStatus::Filled {
+                    assert_eq!((order.filled, order.fill_price), (1.0, Some(100.0)));
+                    assert_eq!(state.executions.len(), 1);
+                } else {
+                    assert_eq!((order.filled, order.fill_price), (0.0, None));
+                    assert!(state.positions.is_empty() && state.executions.is_empty());
+                }
+            } else {
+                assert_eq!(result, Err(FeedError::NotSupported));
+                assert_eq!(events.len(), 1);
+                assert!(matches!(events[0], AccountEvent::Account(_)));
+            }
         }
     }
 
