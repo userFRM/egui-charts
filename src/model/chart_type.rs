@@ -1504,6 +1504,15 @@ mod tests {
             // Omitted style switches keep the defaults of documents saved before they existed.
             older_expected.styles.heikin.real_price_only = true;
             older_expected.styles.high_low.labels_visible = false;
+            let placeholder = [egui::Color32::PLACEHOLDER; 2];
+            [
+                older_expected.styles.kagi.up_color,
+                older_expected.styles.kagi.down_color,
+            ] = placeholder;
+            [
+                older_expected.styles.point_figure.up_color,
+                older_expected.styles.point_figure.down_color,
+            ] = placeholder;
             for (json, expected) in [
                 (legacy.to_string(), expected),
                 (older.to_owned(), older_expected),
