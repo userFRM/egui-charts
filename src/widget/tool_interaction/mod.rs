@@ -450,6 +450,13 @@ impl Chart {
             );
         }
 
+        // A card placed this frame stands at the time its content was published.
+        if drawing_manager.drawings.len() > count_before
+            && drawing_manager.dragging_handle.is_none()
+            && let Some(id) = drawing_manager.drawings.last().map(|d| d.id)
+        {
+            self.place_new_post(drawing_manager, id);
+        }
         let edit_id = if drawing_manager.text_editor.is_some() {
             None
         } else if drawing_manager.drawings.len() > count_before
