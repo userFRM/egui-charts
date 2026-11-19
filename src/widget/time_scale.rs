@@ -156,9 +156,10 @@ impl Chart {
     /// scroll position, so [`Chart::visible_logical_range`] returns it.
     ///
     /// The width is the plot's at the last frame. Before the first frame the range is fitted
-    /// again once the plot has its size, unless the view or a requested visible-bar count
-    /// changes before then, so a range set right after building the chart is the first one
-    /// shown.
+    /// again once the plot has its size, unless the view is changed or a visible-bar count is
+    /// requested before then, so a range set right after building the chart is the first one
+    /// shown. Bars merged in between keep it on the same bars, at their new indices when older
+    /// bars arrive or a bar limit evicts some.
     ///
     /// Returns `false` without changing the view for empty data, non-finite bounds or a
     /// `right` below `left`. The bar spacing and edge limits still apply.
@@ -200,7 +201,7 @@ impl Chart {
 
     /// The bar spacing, the right offset and whether tracking mode keeps the view at the live
     /// edge, to tell whether anything changed the view.
-    fn time_scale_view(&self) -> (f32, f64, bool) {
+    pub(super) fn time_scale_view(&self) -> (f32, f64, bool) {
         let scale = self.state.time_scale();
         (
             scale.bar_spacing(),
@@ -210,7 +211,8 @@ impl Chart {
     }
 
     /// The range deferred before the first layout, unless a later call or frame changed the
-    /// view its last fit left or requested a visible-bar count. Read before the width changes.
+    /// view its last fit or the last merge of bars left, or requested a visible-bar count.
+    /// Read before the width changes.
     pub(super) fn take_pending_range(&mut self) -> Option<PendingRange> {
         let (range, view) = self.pending_visible_range.take()?;
         (!self.apply_visible_bars_once && view == self.time_scale_view()).then_some(range)
@@ -931,7 +933,10 @@ mod tests {
     /// placeholder width of 800 points the time scale has before its first layout: 799 / 20.
     /// Days 80 to 102 end 2.5 slots past the last bar, at the live edge, where tracking mode
     /// keeps the view. Prices of nine digits widen the price axis on the first frame, which
-    /// reruns at a narrower plot.
+    /// reruns at a narrower plot. A bar merged in between keeps the range on its bars: a newer
+    /// bar leaves bars 40 to 59 and days 40 to 60 in view, an older one moves the bars to 41 to
+    /// 60, and a bar limit of 100, keeping 88 of 101 bars, to 27 to 46. A range at the live edge
+    /// stays as set when a bar is appended, although a shown view would follow it.
     #[test]
     fn ranges_set_before_the_first_frame_are_shown() {
         use crate::widget::VisibleTimeRange;
@@ -949,7 +954,13 @@ mod tests {
                 );
             }
         }
-        let rows: [Row; 6] = [
+        /// Merges a copy of bar 0 opened `days` days after it.
+        fn merge(chart: &mut Chart, days: i64) -> bool {
+            let mut bar = chart.bars(SeriesId::MAIN)[0].clone();
+            bar.time += Duration::days(days);
+            chart.update(SeriesId::MAIN, bar)
+        }
+        let rows: [Row; 12] = [
             (
                 "logical",
                 |chart| chart.set_visible_logical_range(LogicalRange::new(40.0, 59.0)),
@@ -998,6 +1009,49 @@ mod tests {
                     set
                 },
                 |chart, what| assert!(chart.is_tracking_mode_active(), "{what}"),
+            ),
+            (
+                "logical, newer bar merged",
+                |chart| {
+                    chart.set_visible_logical_range(LogicalRange::new(40.0, 59.0))
+                        && merge(chart, 100)
+                },
+                |chart, what| assert_range(chart, 40.0, 59.0, what),
+            ),
+            (
+                "time, newer bar merged",
+                |chart| chart.set_visible_time_range(days(chart)) && merge(chart, 100),
+                shows_days,
+            ),
+            (
+                "synced, newer bar merged",
+                |chart| chart.apply_synced_time_range(days(chart)) && merge(chart, 100),
+                shows_days,
+            ),
+            (
+                "logical, older bar merged",
+                |chart| {
+                    chart.set_visible_logical_range(LogicalRange::new(40.0, 59.0))
+                        && merge(chart, -1)
+                },
+                |chart, what| assert_range(chart, 41.0, 60.0, what),
+            ),
+            (
+                "logical, newer bar merged at the bar limit",
+                |chart| {
+                    chart.set_bar_limit(SeriesId::MAIN, std::num::NonZeroUsize::new(100));
+                    chart.set_visible_logical_range(LogicalRange::new(40.0, 59.0))
+                        && merge(chart, 100)
+                },
+                |chart, what| assert_range(chart, 27.0, 46.0, what),
+            ),
+            (
+                "logical at the live edge, newer bar merged",
+                |chart| {
+                    chart.set_visible_logical_range(LogicalRange::new(80.0, 100.0))
+                        && merge(chart, 100)
+                },
+                |chart, what| assert_range(chart, 80.0, 100.0, what),
             ),
         ];
         for (name, set, check) in rows {
