@@ -6,7 +6,7 @@ use super::{ChartView, bars_between};
 use crate::drawings::LineTextVerticalAlign;
 use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::localization as l10n;
-use crate::model::{Bar, percent_change};
+use crate::model::{Bar, LineStyle, percent_change};
 use crate::scales::price_decimals;
 use crate::scales::{DefaultPriceFormatter, PriceFormatter, VolumeFormatter, group_thousands};
 use crate::styles::typography;
@@ -38,21 +38,52 @@ impl Drawing {
                 Pos2::new(center.x, start.y),
                 Pos2::new(center.x, end.y),
                 line_stroke,
+                LineStyle::Solid,
             );
             arrow(
                 painter,
                 Pos2::new(start.x, center.y),
                 Pos2::new(end.x, center.y),
                 line_stroke,
+                LineStyle::Solid,
             );
             self.range_card(painter, rect, view);
         }
     }
 
-    /// Renders the price range, date range and date and price range: a box between the anchors
-    /// with edges at the measured prices, bars or both, arrows from the first anchor towards the
-    /// second, and the measurement on a card. The price edges reach the pane's side when the
-    /// drawing extends that way.
+    /// Settings used by this range. Price ranges and the measure retain their fixed readouts
+    /// at the drawing's font size.
+    pub(super) fn drawn_range_settings(&self) -> crate::drawings::RangeSettings {
+        if matches!(
+            self.tool_type,
+            DrawingToolType::DateRange | DrawingToolType::DateAndPriceRange
+        ) {
+            self.range_settings
+        } else {
+            crate::drawings::RangeSettings {
+                font_size: self.font_size,
+                ..Default::default()
+            }
+        }
+    }
+
+    /// Screen span shared by a date range's painted time edges and its hit area.
+    pub(super) fn time_edge_span(&self, pane: Rect, bounds: Rect) -> egui::Rangef {
+        let mut span = bounds.y_range();
+        if self.tool_type == DrawingToolType::DateRange {
+            if self.range_settings.extend_top {
+                span.min = span.min.min(pane.min.y);
+            }
+            if self.range_settings.extend_bottom {
+                span.max = span.max.max(pane.max.y);
+            }
+        }
+        span
+    }
+
+    /// Paints a range after the common style pass: fill, independently styled box edges, arrows
+    /// in the drawing's line style, centred custom text and the readout card. Date ranges can
+    /// extend their time edges to either pane edge; price edges follow the side extensions.
     pub(crate) fn render_range(
         &self,
         painter: &egui::Painter,
@@ -71,29 +102,72 @@ impl Drawing {
         if let Some(fill) = self.fill_color32() {
             painter.rect_filled(rect, 0.0, fill);
         }
+        let settings = self.drawn_range_settings();
+        let rgba = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+        let border = settings.border.then(|| {
+            (
+                Stroke::new(
+                    settings.border_width.unwrap_or(stroke.width),
+                    settings.border_color.map_or(stroke.color, rgba),
+                ),
+                settings.border_style.unwrap_or(self.line_style),
+            )
+        });
         if self.tool_type != DrawingToolType::DateRange
             && let Some(edges) = self.rectangle_bounds(pane)
         {
-            for y in [p1.y, p2.y] {
-                painter.hline(edges.x_range(), y, stroke);
+            if let Some((edge, style)) = border {
+                for y in [p1.y, p2.y] {
+                    super::channels::patterned_segment(
+                        painter,
+                        [Pos2::new(edges.min.x, y), Pos2::new(edges.max.x, y)],
+                        edge,
+                        style,
+                    );
+                }
             }
             arrow(
                 painter,
                 Pos2::new(center.x, p1.y),
                 Pos2::new(center.x, p2.y),
                 stroke,
+                self.line_style,
             );
         }
         if self.tool_type != DrawingToolType::PriceRange {
-            for x in [p1.x, p2.x] {
-                painter.vline(x, rect.y_range(), stroke);
+            if let Some((edge, style)) = border {
+                let span = self.time_edge_span(pane, rect);
+                for x in [p1.x, p2.x] {
+                    super::channels::patterned_segment(
+                        painter,
+                        [Pos2::new(x, span.min), Pos2::new(x, span.max)],
+                        edge,
+                        style,
+                    );
+                }
             }
             arrow(
                 painter,
                 Pos2::new(p1.x, center.y),
                 Pos2::new(p2.x, center.y),
                 stroke,
+                self.line_style,
             );
+        }
+        if self.tool_type.supports_text()
+            && center.is_finite()
+            && let Some(galley) = self.text_galley(painter)
+        {
+            let min = Align2::CENTER_CENTER.anchor_size(center, galley.size()).min;
+            // Ranges paint after the common text weight pass.
+            if self.font_weight == crate::drawings::FontWeight::Bold {
+                painter.galley(
+                    min + egui::vec2(super::style::BOLD_OFFSET, 0.0),
+                    galley.clone(),
+                    self.color32(),
+                );
+            }
+            painter.galley(min, galley, self.color32());
         }
         self.range_card(painter, rect, view);
     }
@@ -123,7 +197,14 @@ impl Drawing {
         if (settings.persistent || selected || !self.completed)
             && let Some((galley, align, pos, size)) = self.line_measurement_card(painter, view)
         {
-            let card = paint_stats_card(painter, align, pos, galley.clone(), size);
+            let card = paint_stats_card(
+                painter,
+                align,
+                pos,
+                galley.clone(),
+                size,
+                Some(painter.ctx().active_theme().chart.bg_tooltip),
+            );
             if self.tool_type == DrawingToolType::InfoLine
                 && self.font_weight == crate::drawings::FontWeight::Bold
             {
@@ -379,6 +460,8 @@ impl Drawing {
     /// Volume takes the instrument's volume decimals, or else two decimals without trailing
     /// zeros. Each anchor counts at its nearest bar: anchors N bars apart
     /// span N bars of time and the volume of the N + 1 bars from one to the other, both included.
+    /// Each date range readout follows its [`RangeSettings`](crate::drawings::RangeSettings)
+    /// switch. A percentage alone has no parentheses; no enabled readouts returns `None`.
     pub(crate) fn measurement_label(
         &self,
         ctx: &egui::Context,
@@ -391,47 +474,71 @@ impl Drawing {
         let [a, b, ..] = &self.chart_points[..] else {
             return None;
         };
+        let shown = self.drawn_range_settings();
         let change = b.price - a.price;
         let pct = percent_change(a.price, b.price);
-        let mut change = format!(
-            "{} ({pct:+.2}%)",
-            change_text(a.price, change, instrument, price_formatter, thousands_sep)
-        );
-        if let Some(text) = unit_change_text(ctx, b.price - a.price, instrument, true) {
-            change.push_str(&format!("  {text}"));
+        let price = || change_text(a.price, change, instrument, price_formatter, thousands_sep);
+        let mut prices = Vec::new();
+        match (shown.price_change, shown.percent_change) {
+            (true, true) => prices.push(format!("{} ({pct:+.2}%)", price())),
+            (true, false) => prices.push(price()),
+            (false, true) => prices.push(format!("{pct:+.2}%")),
+            (false, false) => {}
         }
+        if shown.pip_change
+            && let Some(text) = unit_change_text(ctx, change, instrument, true)
+        {
+            prices.push(text);
+        }
+        let change = prices.join("  ");
         if self.tool_type == DrawingToolType::PriceRange {
-            return Some(change);
+            return (!change.is_empty()).then_some(change);
         }
         let (from, to) = (a.bar_idx.round(), b.bar_idx.round());
-        let count = (to - from).abs() as i64;
-        let mut span = l10n::format_text(ctx, "{count} bars", &[("count", count.to_string())]);
-        if let Some(ms) = elapsed_ms(bars, from, to).filter(|_| time_axis) {
-            span = format!("{span}, {}", format_duration(ms));
+        let mut span = Vec::new();
+        if shown.bar_count {
+            let count = (to - from).abs() as i64;
+            span.push(l10n::format_text(
+                ctx,
+                "{count} bars",
+                &[("count", count.to_string())],
+            ));
         }
-        let volume = bars_between(bars, from, to)
+        if shown.elapsed_time
+            && let Some(ms) = elapsed_ms(bars, from, to).filter(|_| time_axis)
+        {
+            span.push(format_duration(ms));
+        }
+        let volume = shown
+            .volume
+            .then(|| bars_between(bars, from, to))
+            .flatten()
             .map(|(_, bars)| {
                 let volume = bars
                     .iter()
                     .map(|bar| bar.volume)
                     .filter(|v| v.is_finite())
                     .sum();
-                let mut text = String::from("\n");
-                text.push_str(&l10n::format_text(
+                l10n::format_text(
                     ctx,
                     "Vol {volume}",
                     &[("volume", volume_text(volume, instrument))],
-                ));
-                text
+                )
             })
             .unwrap_or_default();
-        Some(match self.tool_type {
+        let lines = match self.tool_type {
             DrawingToolType::Measure | DrawingToolType::DateAndPriceRange => {
-                format!("{change}\n{span}{volume}")
+                vec![change, span.join(", "), volume]
             }
-            DrawingToolType::DateRange => format!("{span}{volume}"),
+            DrawingToolType::DateRange => vec![span.join(", "), volume],
             _ => return None,
-        })
+        };
+        let text = lines
+            .into_iter()
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        (!text.is_empty()).then_some(text)
     }
 
     /// The rectangle's width in bars and height in price, from its stored anchors.
@@ -602,13 +709,21 @@ impl Drawing {
                 rect.center_bottom() + egui::vec2(0.0, 6.0),
             )
         };
+        let settings = self.drawn_range_settings();
+        let theme = painter.ctx().active_theme();
+        let rgba = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
         let galley = painter.layout_no_wrap(
             text,
-            self.annotation_font(),
-            painter.ctx().active_theme().chart.axis_text,
+            egui::FontId::proportional(typography::font_size(settings.font_size)),
+            settings.text_color.map_or(theme.chart.axis_text, rgba),
         );
         let size = galley.size() + CARD_PADDING * 2.0;
-        paint_stats_card(painter, align, pos, galley, size);
+        let fill = settings.background.then(|| {
+            settings
+                .background_color
+                .map_or(theme.chart.bg_tooltip, rgba)
+        });
+        paint_stats_card(painter, align, pos, galley, size, fill);
     }
 }
 
@@ -623,24 +738,28 @@ fn stats_galley(painter: &egui::Painter, text: String) -> std::sync::Arc<egui::G
     )
 }
 
+/// Paints `galley` at `pos` by `align`, optionally on a card in `fill`, and returns its bounds.
 fn paint_stats_card(
     painter: &egui::Painter,
     align: Align2,
     pos: Pos2,
     galley: std::sync::Arc<egui::Galley>,
     size: egui::Vec2,
+    fill: Option<Color32>,
 ) -> Rect {
     let theme = painter.ctx().active_theme();
     let chart = theme.chart;
     let card = card_rect(painter.clip_rect(), align, pos, size);
     // The border keeps the white light-theme card visible on the white chart.
-    painter.rect(
-        card,
-        DESIGN_TOKENS.rounding.md,
-        chart.bg_tooltip,
-        Stroke::new(1.0, theme.ui.border),
-        egui::StrokeKind::Inside,
-    );
+    if let Some(fill) = fill {
+        painter.rect(
+            card,
+            DESIGN_TOKENS.rounding.md,
+            fill,
+            Stroke::new(1.0, theme.ui.border),
+            egui::StrokeKind::Inside,
+        );
+    }
     painter.galley(card.min + CARD_PADDING, galley, chart.axis_text);
     card
 }
@@ -654,13 +773,13 @@ fn card_rect(clip: Rect, align: Align2, pos: Pos2, size: egui::Vec2) -> Rect {
     Rect::from_min_size(min, size)
 }
 
-/// Paints a shaft from `from` to `to` and a filled head at `to`; nothing when they meet.
-fn arrow(painter: &egui::Painter, from: Pos2, to: Pos2, stroke: Stroke) {
+/// Paints a shaft in `style` and a filled head at `to`; nothing when the endpoints meet.
+fn arrow(painter: &egui::Painter, from: Pos2, to: Pos2, stroke: Stroke, style: LineStyle) {
     let direction = to - from;
     if direction.length() < 1e-3 {
         return;
     }
-    painter.line_segment([from, to], stroke);
+    super::channels::patterned_segment(painter, [from, to], stroke, style);
     let along = direction.normalized() * (3.0 * stroke.width).max(8.0);
     let across = egui::vec2(-along.y, along.x) * 0.4;
     let base = to - along;
@@ -756,6 +875,345 @@ mod tests {
     use super::*;
     use crate::drawings::ChartPoint;
     use crate::drawings::rendering::sample_bars;
+
+    /// Every range readout and style reaches the painted shapes; extensions share their hit area.
+    #[test]
+    fn range_settings_reach_the_card_text_colours_and_edges() {
+        use crate::drawings::services::DrawingInteraction;
+        use crate::drawings::{FontWeight, RangeSettings};
+        use crate::theme::{Theme, apply_to_egui};
+        use egui::Shape;
+        type Edit = fn(&mut RangeSettings);
+        let rows: &[(Edit, Option<&str>, Option<&str>)] = &[
+            (
+                |_| {},
+                Some("-50.0 (-16.67%)  -100 ticks\n3 bars, 3m\nVol 900"),
+                Some("3 bars, 3m\nVol 900"),
+            ),
+            (
+                |s| s.price_change = false,
+                Some("-16.67%  -100 ticks\n3 bars, 3m\nVol 900"),
+                Some("3 bars, 3m\nVol 900"),
+            ),
+            (
+                |s| s.percent_change = false,
+                Some("-50.0  -100 ticks\n3 bars, 3m\nVol 900"),
+                Some("3 bars, 3m\nVol 900"),
+            ),
+            (
+                |s| s.pip_change = false,
+                Some("-50.0 (-16.67%)\n3 bars, 3m\nVol 900"),
+                Some("3 bars, 3m\nVol 900"),
+            ),
+            (
+                |s| s.bar_count = false,
+                Some("-50.0 (-16.67%)  -100 ticks\n3m\nVol 900"),
+                Some("3m\nVol 900"),
+            ),
+            (
+                |s| s.elapsed_time = false,
+                Some("-50.0 (-16.67%)  -100 ticks\n3 bars\nVol 900"),
+                Some("3 bars\nVol 900"),
+            ),
+            (
+                |s| s.volume = false,
+                Some("-50.0 (-16.67%)  -100 ticks\n3 bars, 3m"),
+                Some("3 bars, 3m"),
+            ),
+            (
+                |s| {
+                    s.bar_count = false;
+                    s.elapsed_time = false;
+                    s.volume = false;
+                },
+                Some("-50.0 (-16.67%)  -100 ticks"),
+                None,
+            ),
+            (
+                |s| {
+                    s.price_change = false;
+                    s.percent_change = false;
+                    s.pip_change = false;
+                    s.bar_count = false;
+                    s.elapsed_time = false;
+                    s.volume = false;
+                },
+                None,
+                None,
+            ),
+        ];
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
+        let bars = sample_bars();
+        let mut instrument = crate::model::Instrument::new("TEST");
+        instrument.tick_size = Some(0.5);
+        let paint = |drawing: &Drawing, theme: &Theme| {
+            fn flatten(shape: Shape, out: &mut Vec<Shape>) {
+                match shape {
+                    Shape::Vec(shapes) => {
+                        for s in shapes {
+                            flatten(s, out);
+                        }
+                    }
+                    s => out.push(s),
+                }
+            }
+            let ctx = egui::Context::default();
+            apply_to_egui(&ctx, theme);
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(pane),
+                    ..Default::default()
+                },
+                |ui| {
+                    let view = ChartView {
+                        instrument: Some(&instrument),
+                        price_formatter: None,
+                        thousands_sep: None,
+                        time_formatter: None,
+                        bar_seconds: 60,
+                        bars: &bars,
+                        revision: 0,
+                        bar_to_x: &|b| b * 10.0,
+                        bar_spacing: 10.0,
+                        price_to_y: &|p| 500.0 - p as f32,
+                        y_to_price: &|y| 500.0 - f64::from(y),
+                        time_axis: true,
+                        executions: None,
+                        timeframe: None,
+                        finer: &[],
+                    };
+                    drawing.render_with_selection(ui.painter(), pane, &view, false);
+                },
+            );
+            let mut shapes = Vec::new();
+            for s in std::mem::take(&mut output.shapes) {
+                flatten(s.shape, &mut shapes);
+            }
+            output.drop_without_applying_deltas();
+            shapes
+        };
+        let mut failures = Vec::new();
+        for tool in [
+            DrawingToolType::DateAndPriceRange,
+            DrawingToolType::DateRange,
+        ] {
+            let mut drawing = Drawing::new(1, tool);
+            drawing.chart_points = vec![ChartPoint::new(1.0, 300.0), ChartPoint::new(4.0, 250.0)];
+            drawing.update_screen_coords(|b| b * 10.0, |p| 500.0 - p as f32);
+            drawing.color = [10, 20, 30, 255];
+            drawing.stroke_width = 2.0;
+            drawing.fill_color = None;
+            drawing.theme_shade = false;
+            // -50 / 300 = -16.666...%; -50 / 0.5 = -100 ticks. Bars 1..=4 sum to 900.
+            for (i, &(edit, price, date)) in rows.iter().enumerate() {
+                drawing.range_settings = RangeSettings::default();
+                edit(&mut drawing.range_settings);
+                let shapes = paint(&drawing, &Theme::dark());
+                let texts: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|s| match s {
+                        Shape::Text(t) => Some(t.galley.text()),
+                        _ => None,
+                    })
+                    .collect();
+                let want = if tool == DrawingToolType::DateRange {
+                    date
+                } else {
+                    price
+                };
+                if texts != want.into_iter().collect::<Vec<_>>()
+                    || shapes.iter().any(|s| matches!(s, Shape::Rect(_))) != want.is_some()
+                {
+                    failures.push(format!("{tool:?} row {i}: {texts:?}, expected {want:?}"));
+                }
+            }
+            drawing.range_settings = RangeSettings::default();
+            for theme in [Theme::light(), Theme::dark()] {
+                for (i, edit) in [
+                    |_: &mut RangeSettings| {},
+                    |s: &mut RangeSettings| s.text_color = Some([200, 0, 0, 128]),
+                    |s: &mut RangeSettings| s.font_size = 20.0,
+                    |s: &mut RangeSettings| s.background_color = Some([0, 0, 200, 64]),
+                    |s: &mut RangeSettings| s.background = false,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    drawing.range_settings = RangeSettings::default();
+                    edit(&mut drawing.range_settings);
+                    let settings = drawing.range_settings;
+                    let shapes = paint(&drawing, &theme);
+                    let text = shapes
+                        .iter()
+                        .find_map(|s| match s {
+                            Shape::Text(t) => Some(t),
+                            _ => None,
+                        })
+                        .unwrap();
+                    let rgba = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+                    for section in &text.galley.job.sections {
+                        assert_eq!(
+                            section.format.color,
+                            settings.text_color.map_or(theme.chart.axis_text, rgba),
+                            "{tool:?} style {i}"
+                        );
+                        assert_eq!(
+                            section.format.font_id.size, settings.font_size,
+                            "{tool:?} style {i}"
+                        );
+                    }
+                    let fills: Vec<_> = shapes
+                        .iter()
+                        .filter_map(|s| match s {
+                            Shape::Rect(r) => Some(r.fill),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(
+                        fills,
+                        if settings.background {
+                            vec![
+                                settings
+                                    .background_color
+                                    .map_or(theme.chart.bg_tooltip, rgba),
+                            ]
+                        } else {
+                            vec![]
+                        },
+                        "{tool:?} style {i}"
+                    );
+                }
+            }
+            for (top, bottom) in [(false, false), (true, false), (false, true), (true, true)] {
+                for border in [true, false] {
+                    drawing.range_settings = RangeSettings {
+                        extend_top: top,
+                        extend_bottom: bottom,
+                        border,
+                        ..Default::default()
+                    };
+                    let shapes = paint(&drawing, &Theme::dark());
+                    let extended = tool == DrawingToolType::DateRange;
+                    let ymin = if extended && top { 0.0 } else { 200.0 };
+                    let ymax = if extended && bottom { 400.0 } else { 250.0 };
+                    for x in [10.0, 40.0] {
+                        let found=shapes.iter().any(|s|matches!(s,Shape::LineSegment {points,stroke} if *points==[Pos2::new(x,ymin),Pos2::new(x,ymax)] && *stroke==drawing.stroke()));
+                        assert_eq!(found, border, "{tool:?} {top}/{bottom}/{border}");
+                    }
+                    for (y, on) in [(50.0, top), (350.0, bottom)] {
+                        assert_eq!(
+                            DrawingInteraction::new().hit_test(
+                                Pos2::new(10.0, y),
+                                std::slice::from_ref(&drawing),
+                                "1D"
+                            ),
+                            (extended && on && border).then_some(1),
+                            "{tool:?} hit {top}/{bottom}/{border}/{y}"
+                        );
+                    }
+                }
+            }
+            for (border, style) in [
+                (true, LineStyle::Solid),
+                (true, LineStyle::Dashed),
+                (false, LineStyle::Solid),
+            ] {
+                drawing.range_settings = RangeSettings {
+                    border,
+                    border_color: Some([200, 0, 0, 255]),
+                    border_width: Some(3.0),
+                    border_style: Some(style),
+                    ..Default::default()
+                };
+                let shapes = paint(&drawing, &Theme::dark());
+                let edges: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|s| match s {
+                        Shape::LineSegment { points, stroke }
+                            if stroke.color == Color32::from_rgb(200, 0, 0) =>
+                        {
+                            Some((*points, *stroke))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let count = if tool == DrawingToolType::DateRange {
+                    2
+                } else {
+                    4
+                };
+                if !border {
+                    assert!(edges.is_empty());
+                } else {
+                    assert!(edges.len() >= count);
+                    for (points, stroke) in edges {
+                        assert_eq!(stroke.width, 3.0);
+                        assert!(
+                            (points[0].x == points[1].x && [10.0, 40.0].contains(&points[0].x))
+                                || (points[0].y == points[1].y
+                                    && [200.0, 250.0].contains(&points[0].y))
+                        );
+                        if style == LineStyle::Dashed {
+                            assert!(points[0].distance(points[1]) <= 8.001);
+                        }
+                    }
+                }
+                assert!(shapes.iter().any(|s|matches!(s,Shape::LineSegment {points,stroke} if *points==[Pos2::new(10.0,225.0),Pos2::new(40.0,225.0)] && *stroke==drawing.stroke())));
+                if tool == DrawingToolType::DateAndPriceRange {
+                    assert!(shapes.iter().any(|s|matches!(s,Shape::LineSegment {points,stroke} if *points==[Pos2::new(25.0,200.0),Pos2::new(25.0,250.0)] && *stroke==drawing.stroke())));
+                }
+            }
+            drawing.range_settings = RangeSettings::default();
+            drawing.text = Some("Note".into());
+            drawing.text_color = Some([0, 128, 0, 255]);
+            drawing.font_size = 16.0;
+            drawing.italic = true;
+            for weight in [FontWeight::Normal, FontWeight::Bold] {
+                drawing.font_weight = weight;
+                let shapes = paint(&drawing, &Theme::dark());
+                let notes: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|s| match s {
+                        Shape::Text(t) if t.galley.text() == "Note" => Some(t),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(notes.len(), if weight == FontWeight::Bold { 2 } else { 1 });
+                let note = notes.last().unwrap();
+                assert!(
+                    Rect::from_min_size(note.pos, note.galley.size())
+                        .center()
+                        .distance(Pos2::new(25.0, 225.0))
+                        < 0.5
+                );
+                for section in &note.galley.job.sections {
+                    assert_eq!(section.format.color, Color32::from_rgb(0, 128, 0));
+                    assert_eq!(section.format.font_id.size, 16.0);
+                    assert!(section.format.italics);
+                }
+                if notes.len() == 2 {
+                    assert!(
+                        (notes[0].pos.x - notes[1].pos.x - super::super::style::BOLD_OFFSET).abs()
+                            < 0.001
+                    );
+                }
+                let cards: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|s| match s {
+                        Shape::Text(t) if t.galley.text() != "Note" => Some(t),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(cards.len(), 1);
+                assert_eq!(cards[0].galley.job.sections[0].format.font_id.size, 12.0);
+                assert_eq!(
+                    cards[0].galley.job.sections[0].format.color,
+                    Theme::dark().chart.axis_text
+                );
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
 
     /// Hourly bars with volumes 100, 200, 150, 300, 250, 400 and 50, the last one 49 h after the
     /// one before it, at 54 h, as across a weekend. Prices change from the first anchor to the
