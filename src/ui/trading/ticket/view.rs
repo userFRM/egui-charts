@@ -1068,6 +1068,7 @@ mod tests {
                 offline: market.offline.clone(),
                 ladder: market.ladder.clone(),
                 highlights: market.highlights.clone(),
+                timezone: market.timezone.clone(),
                 ..market
             };
             let mut ticket = OrderTicket {
