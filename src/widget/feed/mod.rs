@@ -1011,6 +1011,16 @@ impl Chart {
         link.into_iter().flat_map(|link| link.trades.iter())
     }
 
+    /// Identifies the retained tape behind [`Self::trades`], or `None` without a feed or for
+    /// another series than [`SeriesId::MAIN`]. Compare for equality: replacing the tape,
+    /// including on a feed reset, changes the value; adding or evicting trades does not.
+    pub fn trade_generation(&self, series: SeriesId) -> Option<u64> {
+        self.feed_link
+            .as_ref()
+            .filter(|_| series == SeriesId::MAIN)
+            .map(|link| link.trades.generation)
+    }
+
     /// Combines the retained fills with explicit aggressor ids, in first-fill order. At most
     /// 100,000 entries; fills without an id stay separate. Rebuilds the view on request, including
     /// fills arriving in separate pages or frames. Per-price consumers keep using `trades`.
