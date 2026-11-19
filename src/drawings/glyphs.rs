@@ -33,13 +33,23 @@ glyphs! {
 
 /// Draws original vector glyphs on a 24-unit grid, with no font or image-loader dependency.
 /// Emoji and legacy host strings return false so the caller can use the host font fallback.
-pub(crate) fn paint(painter: &Painter, id: &str, rect: Rect, color: Color32) -> bool {
+/// `angle` rotates the glyph clockwise in radians about the centre of `rect`.
+pub(crate) fn paint(painter: &Painter, id: &str, rect: Rect, color: Color32, angle: f32) -> bool {
     let color = if id.starts_with("sticker:") {
         Color32::from_rgb(35, 39, 47)
     } else {
         color
     };
-    let p = |x: f32, y: f32| rect.min + egui::vec2(x, y) * (rect.width() / 24.0);
+    let turn = egui::emath::Rot2::from_angle(angle);
+    let p = |x: f32, y: f32| {
+        let upright = rect.min + egui::vec2(x, y) * (rect.width() / 24.0);
+        // Keep upright coordinates exact, including at large screen offsets.
+        if angle == 0.0 {
+            upright
+        } else {
+            rect.center() + turn * (upright - rect.center())
+        }
+    };
     let stroke = Stroke::new(rect.width() / 16.0, color);
     let line = |coords: &[(f32, f32)], closed| {
         let points = coords.iter().map(|&(x, y)| p(x, y)).collect();
