@@ -93,6 +93,8 @@ pub struct Trading {
     ticket: OrderTicket,
     /// A change the user asked for on a line, waiting for confirmation.
     pending: Option<TradingLineAction>,
+    /// The position to protect, with the take profit and stop loss entered so far.
+    protecting: Option<(Position, Option<f64>, Option<f64>)>,
     /// The quantity in a pending Close dialog; each new confirmation resets it.
     close_quantity: Option<f64>,
     /// An order the user asked the broker to preview, until it is placed or discarded.
@@ -206,6 +208,7 @@ impl Default for Trading {
             placing: Vec::new(),
             ticket: OrderTicket::default(),
             pending: None,
+            protecting: None,
             close_quantity: None,
             preview: None,
             decimals: 2,
@@ -356,6 +359,7 @@ impl Trading {
             self.refuse(Sent::Place(order), NOT_LIVE);
         }
         self.pending = None;
+        self.protecting = None;
         self.account = None;
         self.connection = None;
         self.orders.clear();
