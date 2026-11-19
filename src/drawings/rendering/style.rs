@@ -46,21 +46,31 @@ struct ThemeShades;
 impl egui::cache::ComputerMut<(DrawingToolType, [Color32; 3]), Shades> for ThemeShades {
     fn compute(&mut self, (tool, [text, chart, panel]): (DrawingToolType, [Color32; 3])) -> Shades {
         let mut shades = Vec::new();
-        Drawing::new(0, tool).visit_theme_colors(|slot, &mut color| {
-            let [r, g, b, a] = color;
-            if a == u8::MAX {
-                let shade = crate::theme::readable_color(
-                    Color32::from_rgb(r, g, b),
-                    text,
-                    &[chart, panel],
-                    4.0,
-                )
-                .to_srgba_unmultiplied();
-                if shade != color {
-                    shades.push((slot, color, shade));
+        let mut drawings = vec![Drawing::new(0, tool)];
+        // Drawings saved before the current default keep their former colour's shade.
+        if let Some(former) = Drawing::former_default_color(tool) {
+            let mut old = Drawing::new(0, tool);
+            old.color = former;
+            old.text_color = old.text_color.map(|_| former);
+            drawings.push(old);
+        }
+        for mut drawing in drawings {
+            drawing.visit_theme_colors(|slot, &mut color| {
+                let [r, g, b, a] = color;
+                if a == u8::MAX {
+                    let shade = crate::theme::readable_color(
+                        Color32::from_rgb(r, g, b),
+                        text,
+                        &[chart, panel],
+                        4.0,
+                    )
+                    .to_srgba_unmultiplied();
+                    if shade != color && !shades.contains(&(slot, color, shade)) {
+                        shades.push((slot, color, shade));
+                    }
                 }
-            }
-        });
+            });
+        }
         shades
     }
 }
@@ -1158,6 +1168,43 @@ mod tests {
             drawing.color = [200, 200, 200, 255];
             assert_eq!(border(&drawing), Color32::from_gray(200));
             assert_eq!(border(&Drawing::new(1, DrawingToolType::Note)), blue);
+        }
+    }
+
+    /// A circle, sine line, Elliott wave or regression trend saved in its tool's former default
+    /// colour keeps the shade it was drawn in on the light theme: that of the tool that still
+    /// starts in the colour.
+    #[test]
+    fn former_default_colours_keep_their_theme_shade() {
+        use DrawingToolType as T;
+        let ctx = egui::Context::default();
+        crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::light());
+        for (tool, former, peer) in [
+            (T::Circle, [242, 54, 69, 255], T::Ellipse),
+            (T::RegressionTrend, [242, 54, 69, 255], T::Ellipse),
+            (T::SineLine, [8, 153, 129, 255], T::Triangle),
+            (T::ElliottTriangle, [61, 133, 198, 255], T::ElliottImpulse),
+            (
+                T::ElliottDoubleCombo,
+                [61, 133, 198, 255],
+                T::ElliottImpulse,
+            ),
+            (
+                T::ElliottTripleCombo,
+                [61, 133, 198, 255],
+                T::ElliottImpulse,
+            ),
+        ] {
+            let mut saved = Drawing::new(1, tool);
+            saved.color = former;
+            saved.text_color = saved.text_color.map(|_| former);
+            let shade = Drawing::new(1, peer).theme_shaded(&ctx).unwrap().color;
+            assert_ne!(shade, former, "{peer:?} is drawn in another shade on white");
+            let shaded = saved.theme_shaded(&ctx).expect("a shaded drawing");
+            assert_eq!(shaded.color, shade, "{tool:?}");
+            if tool == T::Circle {
+                assert_eq!(shaded.text_color, Some(shade), "{tool:?}");
+            }
         }
     }
 
