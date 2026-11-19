@@ -198,6 +198,7 @@ impl Backtest {
         } else {
             &decision_bars[..closed]
         };
+        strategy.set_timeframe(self.timeframe);
         if rebuild {
             strategy.prepare(calculation_bars);
         } else {

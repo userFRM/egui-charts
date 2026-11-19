@@ -543,6 +543,7 @@ impl StrategyTester {
                 for input in &inputs {
                     strategy.set_input(&input.id, input.value.clone())?;
                 }
+                strategy.set_timeframe(timeframe);
                 if let Err(reason) = strategy.validate_inputs() {
                     if !optimise {
                         return Err(reason);

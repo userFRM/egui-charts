@@ -306,6 +306,9 @@ pub trait Strategy {
                         _ => index.to_string(),
                     },
                     InputValue::Text(value) | InputValue::Symbol(value) => value,
+                    InputValue::Timeframe(value) => {
+                        value.map_or_else(|| "Chart interval".into(), |tf| tf.to_string())
+                    }
                     value => format!("{value:?}"),
                 };
                 (input.label, value)
@@ -345,6 +348,14 @@ pub trait Strategy {
     /// only its settings. Returns `None` by default.
     fn default_order_size(&self) -> Option<OrderSize> {
         None
+    }
+
+    /// Receives the interval of the bars this strategy will see. [`Backtest::run`],
+    /// [`Backtest::run_async`] and [`Backtest::update`] pass it before preparing;
+    /// [`optimise`](crate::strategies::optimise) and the strategy tester pass it before
+    /// [`validate_inputs`](Self::validate_inputs). Does nothing by default.
+    fn set_timeframe(&mut self, timeframe: Timeframe) {
+        let _ = timeframe;
     }
 
     /// Computes what the strategy needs from the whole run once, before the first bar, such as
@@ -805,6 +816,7 @@ impl Backtest {
         let mut lower: Vec<_> = lower.iter().filter(|bar| valid_bar(bar)).collect();
         lower.sort_by_key(|bar| bar.time);
         lower.dedup_by_key(|bar| bar.time);
+        strategy.set_timeframe(self.timeframe);
         strategy.prepare(
             if settings.recalculate_on_history && !settings.chart_type.transforms_data() {
                 &[]
