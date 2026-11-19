@@ -2656,7 +2656,11 @@ mod tests {
             assert_eq!(study.name(), "PVT");
             assert_eq!(study.registered_name(), "PVT");
             assert_eq!(
-                study.inputs().iter().find(|input| input.id == "source").map(|input| &input.value),
+                study
+                    .inputs()
+                    .iter()
+                    .find(|input| input.id == "source")
+                    .map(|input| &input.value),
                 Some(&InputValue::Source(StudySource::Price(PriceSource::Open)))
             );
             assert_eq!(study.plot_style(0).color, egui::Color32::from_rgb(1, 2, 3));
@@ -2670,8 +2674,15 @@ mod tests {
         let clipboard = r#"egui-charts-study
 {"name":"VPT","inputs":[["source",{"Source":{"Price":"Open"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolumePriceTrend.html","plots":[{"color":[1,2,3,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"overlay":false,"scale":"Independent"}"#;
         let mut pasted = crate::widget::test_frames::chart(&[100.0], &[101.0]);
-        let id = pasted.paste_indicator(clipboard, &IndicatorFactory::new()).unwrap();
-        check(pasted.indicators().find(|(study, _)| *study == id).unwrap().1);
+        let id = pasted
+            .paste_indicator(clipboard, &IndicatorFactory::new())
+            .unwrap();
+        check(
+            pasted
+                .indicators()
+                .find(|(study, _)| *study == id)
+                .unwrap()
+                .1,
+        );
     }
-
 }
