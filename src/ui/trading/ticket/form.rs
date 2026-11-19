@@ -344,6 +344,7 @@ impl OrderTicket {
                 Some(selected),
             )
             .clicked()
+                && self.editing.is_none()
             {
                 self.side = side;
             }
@@ -401,6 +402,7 @@ impl OrderTicket {
         let kinds: Vec<_> = Kind::ALL
             .into_iter()
             .filter(|(kind, _)| kind.accepted(&market.capabilities))
+            .filter(|(kind, _)| self.editing.is_none() || *kind == self.kind)
             .collect();
         if kinds.is_empty() {
             return;
