@@ -113,9 +113,9 @@ impl Default for PaneLayout {
     }
 }
 
-/// A change of a study's place in the draw order of its pane, where each item is drawn over the
-/// ones before it. In the main pane the price series is one of the items. The set is closed: an
-/// item moves one step or all the way, to the front or to the back.
+/// A change of a study's or drawing's place in the draw order of its pane. Each item is drawn
+/// over the ones before it. In the main pane the price series is one of the items. The set is
+/// closed: an item moves one step or all the way, to the front or to the back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VisualOrder {
     /// Draw over every other item of the pane.
@@ -1000,6 +1000,7 @@ impl Chart {
 
     /// Moves study `id` in the draw order of its pane, among the pane's studies and, in the main
     /// pane, the price series. Returns `false` for an id that is not a study of the chart.
+    /// Drawings keep their place, counted from the back of the pane.
     pub fn reorder_indicator(&mut self, id: SeriesId, order: VisualOrder) -> bool {
         if !self.study_ids.contains(&id) {
             return false;
@@ -1022,6 +1023,79 @@ impl Chart {
         };
         let item = items.remove(at);
         items.insert(to, item);
+        true
+    }
+
+    /// Moves drawing `id` in the draw order of its pane, which holds the pane's series and studies
+    /// as well as its drawings: one step over the drawing, series or study drawn just over or
+    /// under it, or all the way to the front or the back. Records one undo step and queues the
+    /// changed drawings for saving. Returns `false` for an unknown drawing.
+    #[cfg(feature = "drawings")]
+    pub fn reorder_drawing(&mut self, id: usize, order: VisualOrder) -> bool {
+        if !self.drawings.drawings.iter().any(|d| d.id == id) {
+            return false;
+        }
+        match order {
+            VisualOrder::BringToFront => {
+                self.drawings.bring_to_front(id);
+                return true;
+            }
+            VisualOrder::SendToBack => {
+                self.drawings.send_to_back(id);
+                return true;
+            }
+            _ => {}
+        }
+        self.sync_panes();
+        let pane_of = |drawing: &crate::drawings::Drawing| {
+            self.owner_pane(drawing)
+                .unwrap_or_else(|| self.main_series_pane())
+        };
+        let pane = pane_of(self.drawings.drawings.iter().find(|d| d.id == id).unwrap());
+        let n = if pane == self.main_series_pane() {
+            self.main_series_order().len()
+        } else {
+            self.pane_series(pane).len()
+        };
+        let mut mates = crate::drawings::services::in_z_order(&self.drawings.drawings)
+            .into_iter()
+            .filter(|d| pane_of(d) == pane)
+            .peekable();
+        let mut sequence = Vec::new();
+        for k in 0..n {
+            while mates
+                .peek()
+                .is_some_and(|d| d.series_layer.is_some_and(|s| s <= k))
+            {
+                sequence.push(Some(mates.next().unwrap().id));
+            }
+            sequence.push(None);
+        }
+        sequence.extend(mates.map(|d| Some(d.id)));
+        let p = sequence.iter().position(|d| *d == Some(id)).unwrap();
+        let q = match order {
+            VisualOrder::BringForward => p.checked_add(1).filter(|q| *q < sequence.len()),
+            _ => p.checked_sub(1),
+        };
+        let Some(q) = q else {
+            return true;
+        };
+        sequence.swap(p, q);
+        let mut count = 0;
+        let layers: Vec<_> = sequence
+            .into_iter()
+            .filter_map(|drawing| {
+                if let Some(id) = drawing {
+                    Some((id, (count < n).then_some(count)))
+                } else {
+                    count += 1;
+                    None
+                }
+            })
+            .enumerate()
+            .filter_map(|(rank, (id, layer))| i32::try_from(rank).ok().map(|z| (id, layer, z)))
+            .collect();
+        self.drawings.reorder_layers(id, &layers);
         true
     }
 }

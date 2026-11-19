@@ -350,8 +350,8 @@ impl Ladder {
             if entry_price(&order_type).is_some_and(|price| !price.is_finite() || price <= 0.0) {
                 return Err("Enter a positive price".into());
             }
-            let quantity =
-                order_quantity(wanted, market.rules).map_err(|limit| limit.message(&ctx))?;
+            let quantity = order_quantity(wanted, market.rules)
+                .map_err(|limit| limit.message(&ctx, &numbers, quantity_decimals))?;
             let mut request = OrderRequest::new(symbol, side, quantity, order_type);
             request.time_in_force = tif;
             Ok(request)
