@@ -16,9 +16,8 @@ pub(super) struct TpoMenu {
     /// only removes their split.
     previous: Option<(RangeInclusive<DateTime<Utc>>, bool)>,
     next: Option<(RangeInclusive<DateTime<Utc>>, bool)>,
-    split: Option<RangeInclusive<DateTime<Utc>>>,
-    split_at: Option<DateTime<Utc>>,
-    composite: bool,
+    /// Merges and splits after dividing at a selected period after the profile's first.
+    split: Option<(Vec<RangeInclusive<DateTime<Utc>>>, Vec<DateTime<Utc>>)>,
 }
 
 impl TpoMenu {
@@ -90,22 +89,49 @@ impl TpoMenu {
             composite(*group.start())
                 .map_or_else(|| group.clone(), |i| params.tpo_composites[i].clone())
         };
-        let current = range(at);
         let merge = |first: usize, second: usize| {
             let composite_kept = composite(*groups[first].start()).is_some()
                 || composite(*groups[second].start()).is_some()
                 || opens.binary_search(groups[second].start()).is_ok();
             (*range(first).start()..=*range(second).end(), composite_kept)
         };
-        let in_composite = composite(open).is_some();
+        let split = period.filter(|time| *time > open).map(|time| {
+            let mut splits = params.tpo_splits.clone();
+            if opens.binary_search(&time).is_err()
+                || config.profile_period != crate::model::TPOProfilePeriod::Session
+            {
+                splits.push(time);
+                splits.sort_unstable();
+                splits.dedup();
+            }
+            let mut composites = params.tpo_composites.clone();
+            if let Some(i) = composite(open) {
+                let range = composites.remove(i);
+                let previous = crate::model::tpo::session_starts(
+                    bars,
+                    &sessions,
+                    config.split_hours(),
+                    &splits,
+                )
+                .into_iter()
+                .map(|j| bars[j].time)
+                .rfind(|t| *t < time && range.contains(t))
+                .unwrap();
+                let mut parts = Vec::new();
+                if *range.start() < previous {
+                    parts.push(*range.start()..=previous);
+                }
+                if time < *range.end() {
+                    parts.push(time..=*range.end());
+                }
+                composites.splice(i..i, parts);
+            }
+            (composites, splits)
+        });
         Some(Self {
             previous: at.checked_sub(1).map(|i| merge(i, at)),
             next: (at + 1 < groups.len()).then(|| merge(at, at + 1)),
-            split: (composite(*groups[at].start()).is_some()
-                && groups[at].start() != groups[at].end())
-            .then_some(current),
-            split_at: period.filter(|time| !in_composite && *time > open),
-            composite: in_composite,
+            split,
             params,
             clock,
             symbol: chart.symbol().to_owned(),
@@ -125,13 +151,9 @@ impl TpoMenu {
                 self.next.is_some(),
             ),
             (
-                if self.composite {
-                    "Split profile"
-                } else {
-                    "Split profile at selected period"
-                },
+                "Split profile at selected period",
                 ContextMenuAction::SplitTpoProfile,
-                self.split.is_some() || self.split_at.is_some(),
+                self.split.is_some(),
             ),
             (
                 "Reset merges and splits",
@@ -179,15 +201,11 @@ impl TpoMenu {
                 }
             }
             ContextMenuAction::SplitTpoProfile => {
-                if let Some(range) = &self.split {
-                    params.tpo_composites.retain(|r| r != range);
-                } else if let Some(time) = self.split_at {
-                    params.tpo_splits.push(time);
-                    params.tpo_splits.sort_unstable();
-                    params.tpo_splits.dedup();
-                } else {
+                let Some((composites, splits)) = &self.split else {
                     return;
-                }
+                };
+                params.tpo_composites = composites.clone();
+                params.tpo_splits = splits.clone();
             }
             ContextMenuAction::ResetProfileEdits => {
                 params.tpo_composites.clear();
