@@ -3,7 +3,7 @@
 mod quotes;
 mod study_controls;
 
-pub(crate) use study_controls::{controls_width, study_controls};
+pub(crate) use study_controls::{controls_width, held_study_controls, study_controls};
 
 use quotes::paint_quotes;
 pub(crate) use quotes::quote_prices;
@@ -761,7 +761,22 @@ impl<'a> Legend<'a> {
                 if study.is_volume() && !self.show_volume {
                     continue;
                 }
-                let (row_start, row_end) = (layout.pos, layout.row_end);
+                let (row_start, row_end, row_height) = (layout.pos, layout.row_end, layout.height);
+                let controls_id = id.with(("study", index));
+                let held = held_study_controls(ui, controls_id, Some(row_start.y)).map(|held| {
+                    let width = controls_width(study.as_ref(), self.show_settings);
+                    let end = if held.top() >= row_start.y + row_height {
+                        bounds.right()
+                    } else {
+                        row_end
+                    };
+                    Rect::from_min_size(
+                        Pos2::new(held.left().min(end - width).max(bounds.left()), held.top()),
+                        Vec2::new(width, 20.0),
+                    )
+                    .intersect(bounds)
+                });
+                layout.held_controls = held;
                 if self.show_indicator_titles {
                     layout.text(
                         l10n::text(
@@ -861,6 +876,17 @@ impl<'a> Legend<'a> {
                 // shortened first row when nothing comes before it. Controls past that end take
                 // a row of their own.
                 layout.row_end = layout.row_end.min(row_end);
+                if let Some(held) = held {
+                    // Keep the controls on their drawn flow row even when its text wraps differently.
+                    while layout.pos.y + layout.height <= held.top() {
+                        layout.new_row();
+                    }
+                    if layout.pos.y > row_start.y {
+                        layout.row_end = bounds.right();
+                    }
+                    layout.pos = held.min - Vec2::new(0.0, (layout.height - 20.0) / 2.0);
+                }
+                layout.held_controls = None;
                 let controls = layout
                     .reserve(Vec2::new(
                         controls_width(study.as_ref(), self.show_settings),
@@ -881,7 +907,7 @@ impl<'a> Legend<'a> {
                     row,
                     controls,
                     None,
-                    id.with(("study", index)),
+                    controls_id,
                     study.as_ref(),
                     self.show_settings,
                 );
@@ -1087,6 +1113,8 @@ struct Layout<'a> {
     /// Where the current row ends: `bounds` less what the first row leaves to another control.
     row_end: f32,
     height: f32,
+    /// The held controls end the study's last flow row and clip its live value text.
+    held_controls: Option<Rect>,
     background: egui::layers::ShapeIdx,
     /// The colour of the chart background at a point.
     chart_background: &'a dyn Fn(Pos2) -> Color32,
@@ -1112,6 +1140,7 @@ impl<'a> Layout<'a> {
             pos: bounds.min,
             row_end: first_row_end,
             height: 24.0,
+            held_controls: None,
             background: painter.add(egui::Shape::Noop),
             chart_background,
             backdrop: 1.0,
@@ -1174,6 +1203,9 @@ impl<'a> Layout<'a> {
         // A shortened first row gives way even to its first item; a full row has nowhere better.
         if (self.pos.x > self.bounds.left() || self.row_end < self.bounds.right())
             && self.pos.x + size.x > self.row_end
+            && self
+                .held_controls
+                .is_none_or(|controls| self.pos.y + self.height <= controls.top())
         {
             self.new_row();
         }
@@ -1202,15 +1234,29 @@ impl<'a> Layout<'a> {
         let background = (self.chart_background)(rect.center());
         if background.gamma_multiply(self.backdrop) != background {
             // Profiles can be opaque or contain letters; protect the full content bounds.
-            self.painter
+            self.content_painter(rect)
                 .add(self.fill(rect.expand(2.0).intersect(self.bounds.expand(2.0)), 1.0));
         }
         rect
     }
 
+    fn content_painter(&self, rect: Rect) -> egui::Painter {
+        let mut painter = self.painter.clone();
+        if let Some(controls) = self.held_controls
+            && rect.bottom() > controls.top()
+        {
+            painter.set_clip_rect(painter.clip_rect().intersect(Rect::from_min_max(
+                self.bounds.min,
+                Pos2::new(controls.left(), controls.bottom()),
+            )));
+        }
+        painter
+    }
+
     fn galley(&mut self, galley: Arc<egui::Galley>) {
         let rect = self.reserve(galley.size());
-        self.painter.galley(rect.min, galley, self.colors.text);
+        self.content_painter(rect)
+            .galley(rect.min, galley, self.colors.text);
     }
 
     fn text(&mut self, text: String, size: f32, color: Color32, max_width: f32) {
