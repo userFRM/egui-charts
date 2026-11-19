@@ -379,6 +379,66 @@ impl Execution {
     }
 }
 
+/// A completed position, from the fill that opened it on a flat symbol or reversed the previous
+/// position to the fill that flattened or reversed it. Includes partial closes along the way.
+/// Prices use the symbol's price units and may be negative; quantity is positive.
+///
+/// ```
+/// use chrono::DateTime;
+/// use egui_charts::model::{ClosedPosition, OrderSide};
+///
+/// let opened = DateTime::from_timestamp(1_704_207_600, 0).unwrap();
+/// let closed = DateTime::from_timestamp(1_704_209_400, 0).unwrap();
+/// let mut position = ClosedPosition::new("AAPL", OrderSide::Buy, 3.0, 110.0, 125.0, 45.0, closed);
+/// position.opened = Some(opened);
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ClosedPosition {
+    /// The symbol as the feed knows it.
+    pub symbol: String,
+    /// [`Buy`](OrderSide::Buy) for long, [`Sell`](OrderSide::Sell) for short.
+    pub side: OrderSide,
+    /// Total quantity closed over the position's lifetime, positive, in its symbol's trading units.
+    pub quantity: f64,
+    /// The quantity-weighted average entry price.
+    pub average_price: f64,
+    /// The quantity-weighted average exit price.
+    pub exit_price: f64,
+    /// Realised profit or loss in the account's currency, as reported by the broker. The
+    /// [paper account](crate::services::PaperAccount) excludes commissions, booked separately.
+    pub realized_pnl: f64,
+    /// The opening fill's time, when the broker reports it.
+    pub opened: Option<DateTime<Utc>>,
+    /// The time of the fill that flattened or reversed the position.
+    pub closed: DateTime<Utc>,
+}
+
+impl ClosedPosition {
+    /// A completed position with its side, total quantity, average entry and exit prices,
+    /// realised profit or loss and closing time, without a reported opening time.
+    pub fn new(
+        symbol: impl Into<String>,
+        side: OrderSide,
+        quantity: f64,
+        average_price: f64,
+        exit_price: f64,
+        realized_pnl: f64,
+        closed: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            symbol: symbol.into(),
+            side,
+            quantity,
+            average_price,
+            exit_price,
+            realized_pnl,
+            opened: None,
+            closed,
+        }
+    }
+}
+
 /// The account behind one [`Broker`](crate::services::Broker) value.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -393,6 +453,9 @@ pub struct Account {
     pub realized_pnl: Option<f64>,
     /// The margin the open positions hold, when the broker reports it.
     pub margin: Option<f64>,
+    /// The equity left above the [`margin`](Self::margin) the open positions hold, in
+    /// `currency`, when the broker reports it; negative once equity no longer covers that margin.
+    pub margin_buffer: Option<f64>,
     /// The margin the working orders would hold once filled, when the broker reports it.
     pub orders_margin: Option<f64>,
     /// The equity less the margin of the positions and the working orders, when the broker
@@ -411,6 +474,7 @@ impl Account {
             equity: None,
             realized_pnl: None,
             margin: None,
+            margin_buffer: None,
             orders_margin: None,
             available_funds: None,
             capabilities,
