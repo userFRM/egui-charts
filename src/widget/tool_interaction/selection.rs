@@ -3,7 +3,7 @@
 //! Handles:
 //! - Drawing selection via click or Ctrl/Command-dragged area
 //! - Handle dragging for drawing manipulation
-//! - Eraser mode (click to delete)
+//! - Eraser mode (click to delete, Ctrl/Command-drag to erase part of a stroke)
 //! - Keyboard shortcuts (Delete, Escape)
 
 use crate::drawings::{DrawingManager, DrawingToolType, HandlePos};
@@ -16,7 +16,9 @@ use egui::{Painter, Rect, Response, Stroke, Ui, epaint::StrokeKind};
 /// An unlocked drawing can be selected and moved in one drag. A press on a handle of any
 /// selected drawing drags that handle alone; the move handle of one of several selected
 /// drawings moves them all, as their bodies do. In eraser mode,
-/// clicking on a drawing deletes it instead, whatever is selected, unless it is locked.
+/// clicking on a drawing deletes it instead, whatever is selected, unless it is locked. With
+/// Ctrl or Command held at the press, a drag erases parts of unlocked brush and highlighter
+/// strokes, keeping the rest in the same style as one undo step.
 /// Ctrl/Command-drag on empty space adds drawings intersecting the visible area. Releasing
 /// the modifier continues the gesture; Escape cancels it. Locked drawings can be selected,
 /// but subsequent editing retains the existing lock rules. Shift+click on empty space measures.
@@ -66,6 +68,27 @@ pub fn handle_selection<F1, F2, F3>(
         return;
     }
 
+    // A partial erase follows its pane's pointer through modifier release until button release.
+    if let Some(erase) = &drawing_manager.partial_erase {
+        cursor_modes.eraser.set_hover(None);
+        if erase.pane != pane {
+            return;
+        }
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        if drawing_manager.eraser_mode
+            && (response.is_pointer_button_down_on()
+                || response.drag_stopped()
+                || response.clicked())
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            drawing_manager.erase_strokes_to(pos, pos, pane);
+        }
+        if response.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
+            drawing_manager.end_drag_handle();
+        }
+        return;
+    }
+
     if let Some(pos) = pointer_pos {
         let origin = if response.drag_started() {
             ui.input(|i| i.pointer.press_origin()).unwrap_or(pos)
@@ -77,8 +100,21 @@ pub fn handle_selection<F1, F2, F3>(
             return;
         }
 
-        // Eraser mode: a click deletes the drawing under the pointer, selected or not.
+        // An ordinary eraser click deletes a whole drawing; a modified press cuts strokes.
         if drawing_manager.eraser_mode {
+            if ui.input(|i| i.modifiers.ctrl || i.modifiers.command) {
+                cursor_modes.eraser.set_hover(None);
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                if ui.input(|i| i.pointer.primary_pressed())
+                    && (response.is_pointer_button_down_on() || response.clicked())
+                {
+                    drawing_manager.erase_strokes_to(origin, pos, pane);
+                }
+                if response.clicked() {
+                    drawing_manager.end_drag_handle();
+                }
+                return;
+            }
             // A locked drawing cannot be erased, so it is not offered.
             let hit = drawing_manager.hit_test(pos).filter(|&id| {
                 drawing_manager

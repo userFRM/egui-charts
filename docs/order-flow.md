@@ -444,6 +444,18 @@ Stop sweeps use closed bars of the latest subscribed time interval: directional 
 retains the latest 100,000 sided executions and rebuilds this category on interval changes;
 the first retained bar is excluded because it may be partial. Trade-based intervals have no
 stop sweeps. Another feed event at or after the next boundary closes a bar; no wall clock runs.
+A bar opened before the bar of the first live event since tracking or reset is still marked
+without an alert, even when that live event closes it; a bar receiving live executions can alert.
+
+Footprint conditions read the same bars. [`FootprintRule`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.FootprintRule.html) marks a closed bar with a buy or sell
+imbalance, or a stack of the rule's number of adjacent ones, using the rule's ratio, comparison
+and minimum volume on rows of one tick whatever grouping the chart displays;
+[`FootprintRule::follow_chart`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.FootprintRule.html#method.follow_chart) copies these from the chart's settings, as the demo does for its
+active chart. A buy volume, sell volume or delta level fires on the execution that takes the
+forming bar's value past it, from zero at the bar's open: a sell volume level of 100 fires on the
+101st unit sold. Each condition alerts at most once per bar and rebuilds with the stop sweeps on
+interval changes. Bars that opened before the bar of the first live event since tracking, such
+as loaded history, are marked without an alert.
 
 Icebergs count exact order refills at the same price and side within 100 ms of depletion, or
 an increase within 100 ms of execution without keeping priority. Unrelated adds and cancels
