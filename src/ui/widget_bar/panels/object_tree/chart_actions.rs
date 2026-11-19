@@ -17,6 +17,8 @@ impl ObjectTreePanel {
     /// series; bar-series ordering stays within its pane. Deleting keeps locked drawings, which
     /// stay selected, and reports them with
     /// [`ChartEvent::LockedDrawingsKept`](crate::widget::ChartEvent::LockedDrawingsKept).
+    /// Duplicate and Duplicate selected add the study copies the
+    /// [study caps](Chart::set_study_limit) allow, in the order of `sources`, and leave out the others.
     pub fn apply_to_chart(
         &mut self,
         chart: &mut Chart,
@@ -376,8 +378,10 @@ fn duplicate(chart: &mut Chart, source: &SourceItem) {
                     chart.indicator_inputs(id).unwrap_or_default().to_owned(),
                 )
             });
-        if let Some((copy, inputs)) = copy {
-            let id = chart.add_indicator(copy);
+        if let Some((copy, inputs)) = copy
+            // The copy counts against the study caps, as the interface's other additions do.
+            && let Ok(id) = chart.try_add_indicator(copy)
+        {
             chart.set_indicator_inputs(id, inputs);
         }
     } else if source.is_drawing() {
@@ -669,5 +673,41 @@ mod tests {
             ],
             "folders after creating Sub under A, then under A/B: {observed:?}"
         );
+    }
+
+    #[test]
+    fn duplicates_stop_at_the_study_cap() {
+        for (cap, selected, expected) in [
+            (Some(2), false, vec!["SMA(2)", "SMA(5)"]),
+            (Some(2), true, vec!["SMA(2)", "SMA(5)"]),
+            (Some(3), true, vec!["SMA(2)", "SMA(5)", "SMA(2)"]),
+            (None, true, vec!["SMA(2)", "SMA(5)", "SMA(2)", "SMA(5)"]),
+        ] {
+            let mut chart = chart(&[100.0], &[200.0]);
+            let a = chart.add_indicator(Box::new(crate::studies::SMA::new(2)));
+            let b = chart.add_indicator(Box::new(crate::studies::SMA::new(5)));
+            chart.set_study_limit(cap);
+            let undoable = chart.can_undo();
+            let mut tree = ObjectTreePanel::new();
+            let action = if selected {
+                tree.state_mut().select(usize::MAX / 2 + a.0);
+                tree.state_mut().toggle_selection(usize::MAX / 2 + b.0);
+                ObjectTreeAction::DuplicateSelected
+            } else {
+                ObjectTreeAction::Duplicate(usize::MAX / 2 + a.0)
+            };
+            apply(&mut tree, &mut chart, action);
+            assert_eq!(
+                chart
+                    .indicators()
+                    .flat_map(|(_, s)| s.line_names())
+                    .collect::<Vec<_>>(),
+                expected,
+                "cap {cap:?}, selected {selected}"
+            );
+            if cap == Some(2) {
+                assert_eq!(chart.can_undo(), undoable);
+            }
+        }
     }
 }
