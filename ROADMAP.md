@@ -227,7 +227,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] `StrategyFactory` lists and creates built-in and host strategies with editable study inputs, defaults and bounds. Strategies can declare a default order size, applied by the tester on selection and changeable by the user; SuperTrend uses 15% of equity and Technical Ratings 5%.
 - [x] `strategies::optimise` lazily runs every input combination on a fresh strategy with the same bars and settings, yielding its inputs and report performance; a combination `Strategy::validate_inputs` refuses yields its error without a run and the next one follows; dropping the iterator stops further trials.
 - [x] Ten price-action strategies trade gaps, consecutive closes, inside/outside bars, channels, confirmed pivots and ATR expansion, with fill-relative tick brackets where needed.
-- [x] Twelve study strategies use public indicator values for bands, momentum, averages, oscillators, trend flips and technical ratings; every built-in preserves its trades on historical prefixes.
+- [x] Twelve study strategies use public indicator values for bands, momentum, averages, oscillators, trend flips and technical ratings; every built-in preserves its trades on historical prefixes. Bollinger Bands entries expire at the close of the bar after their crossing; Keltner Channels entries expire when the close returns through the basis. Forming-bar decisions keep these entries working until the bar closes.
 - [x] Export strategy report performance summaries and run properties as CSV.
 
 ## Alerts
