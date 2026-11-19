@@ -36,6 +36,8 @@ pub struct DrawingPropertiesDialog {
     pub coordinates: CoordinatesState,
     /// Named templates, kept in memory unless the host attaches its storage service.
     pub templates: TemplateStore<DrawingTemplate>,
+    /// Estimated and total bars of the edited anchored VWAP, last read by `show_and_apply`.
+    vwap_estimated: Option<(usize, usize)>,
     preview: Option<(String, DrawingId, Vec<PreviewDrawing>)>,
     template_name: String,
     saving_template: bool,
@@ -63,6 +65,7 @@ impl DrawingPropertiesDialog {
             coordinates: CoordinatesState::default(),
             error: None,
             templates: TemplateStore::new(StoreKind::DrawingTemplates),
+            vwap_estimated: None,
             preview: None,
             template_name: String::new(),
             saving_template: false,
@@ -116,6 +119,10 @@ impl DrawingPropertiesDialog {
         ctx: &Context,
         chart: &mut crate::widget::Chart,
     ) -> DrawingPropertiesAction {
+        self.vwap_estimated = self
+            .drawing_id
+            .filter(|_| self.is_open)
+            .and_then(|id| chart.vwap_estimated_bars(id.0));
         let action = self.show(ctx);
         // Each frame edits the drawings as they were before the preview, as Ok does.
         self.restore_preview(chart);
@@ -539,6 +546,7 @@ impl DrawingPropertiesDialog {
                             &mut state.level_pickers,
                             &mut self.coordinates,
                             self.props.tick_size,
+                            self.vwap_estimated,
                         );
                     }
                 }
