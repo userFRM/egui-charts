@@ -182,6 +182,7 @@ pub(super) struct Symbol {
     pricescale: Option<f64>,
     volume_precision: Option<u8>,
     currency_code: Option<String>,
+    unit: Option<String>,
     timezone: Option<TimezoneId>,
     session: Option<String>,
     supported_resolutions: Option<Vec<String>>,
@@ -213,6 +214,7 @@ impl Symbol {
         }
         instrument.volume_decimals = self.volume_precision;
         instrument.currency = self.currency_code;
+        instrument.unit = self.unit;
         instrument.time_zone = self.timezone;
         instrument.session = self.session.as_deref().map(session).transpose()?;
         instrument.supported_timeframes = self
