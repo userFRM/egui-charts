@@ -189,7 +189,8 @@ pub struct Drawing {
     /// Position as fractions of the pane width and height for anchored text, which keeps its
     /// place in the pane while the chart scrolls and zooms. The chart keeps
     /// [`chart_points`](Self::chart_points) on the bar and price under it.
-    /// `None` adopts the first displayed position, including for older saved drawings.
+    /// `None` takes the first position the text is drawn at inside its pane, including for older
+    /// saved drawings; until then the text stays on its bar and price.
     /// A pin saved with one takes the bar and price under it the first time a chart draws it,
     /// and the chart then clears it.
     #[serde(default)]
@@ -943,8 +944,10 @@ impl Drawing {
     }
 
     /// Rebuilds anchored text coordinates relative to the pane. Call after
-    /// `update_screen_coords`; other tools retain their chart coordinates. Older drawings
-    /// adopt their first displayed position. Resizing preserves the width and height fractions.
+    /// `update_screen_coords`; other tools retain their chart coordinates. A text without a pane
+    /// position, such as an older drawing or one just moved, takes one the first time its point
+    /// is drawn inside `pane`, and stays on its bar and price until then. Resizing preserves the
+    /// width and height fractions.
     pub fn update_pane_coords(&mut self, pane: egui::Rect) {
         if self.tool_type != DrawingToolType::AnchoredText
             || !pane.is_finite()
@@ -953,7 +956,11 @@ impl Drawing {
         {
             return;
         }
-        if let Some(pos) = self.points.first_mut() {
+        // A position taken outside the pane would keep the text out of view whatever the
+        // chart scrolls to; until it is drawn inside, the text stays on its bar and price.
+        if let Some(pos) = self.points.first_mut()
+            && (self.screen_anchor.is_some() || pane.contains(*pos))
+        {
             let anchor = self.screen_anchor.get_or_insert_with(|| {
                 [
                     (pos.x - pane.left()) / pane.width(),
