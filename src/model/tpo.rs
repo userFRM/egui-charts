@@ -83,6 +83,8 @@ pub struct TPOProfile {
     pub profile_low: f64,
     /// Opening price
     pub opening_price: f64,
+    /// Closing price: the close of the profile's last bar.
+    pub closing_price: f64,
     /// Single prints: the prices of the rows with exactly one TPO, in ascending order
     pub single_prints: Vec<f64>,
     /// Poor highs (multiple TPOs at high)
@@ -123,9 +125,9 @@ pub struct TPOConfig {
     /// Opacity of blocks outside the value area over the chart background, clamped to 0..=1.
     /// Zero paints the background colour; one leaves blocks undimmed. NaN reads 0.45.
     pub outside_value_area_opacity: f32,
-    /// Show POC line
+    /// Colour the point of control row, underline it under letters and caption it.
     pub show_poc: bool,
-    /// Show Value Area
+    /// Draw and caption the value area high and low and dim blocks outside the value area.
     pub show_value_area: bool,
     /// Show the caption and marker at the middle of the profile's range
     pub show_midpoint: bool,
@@ -139,8 +141,11 @@ pub struct TPOConfig {
     pub show_single_prints: bool,
     /// Show the session statistics table below the profile
     pub show_statistics: bool,
-    /// Highlight opening range
+    /// Mark each profile's opening price with a triangle left of the profile.
     pub show_opening_range: bool,
+    /// Mark the closing price right of its row, in the bullish colour when it closes at or above
+    /// its open, otherwise in the bearish colour.
+    pub show_closing_price: bool,
     /// Split each session where it moves between regular, extended and overnight hours, giving
     /// separate overnight, pre-market, regular and post-market profiles.
     /// Session profiles only; see [`TPOProfilePeriod`].
@@ -197,6 +202,7 @@ impl Default for TPOConfig {
             show_single_prints: false,
             show_statistics: false,
             show_opening_range: true,
+            show_closing_price: false,
             split_sessions: false,
             profile_period: TPOProfilePeriod::Session,
             custom_letters: None,
@@ -310,6 +316,7 @@ impl TPOProfile {
             profile_high: f64::MIN,
             profile_low: f64::MAX,
             opening_price: 0.0,
+            closing_price: 0.0,
             single_prints: Vec::new(),
             has_poor_high: false,
             has_poor_low: false,
@@ -372,6 +379,7 @@ impl TPOProfile {
             *self.price_tpo_count.entry(key).or_insert(0) += count;
         }
         self.letters.extend(later.letters);
+        self.closing_price = later.closing_price;
         self.profile_high = self.profile_high.max(later.profile_high);
         self.profile_low = self.profile_low.min(later.profile_low);
     }
@@ -663,6 +671,7 @@ pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Ve
         touched = (*touched.start()).min(lo)..=(*touched.end()).max(hi);
 
         if let Some(ref mut profile) = current_profile {
+            profile.closing_price = bar.close;
             // Update profile high/low
             profile.profile_high = profile.profile_high.max(bar.high);
             profile.profile_low = profile.profile_low.min(bar.low);

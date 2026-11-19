@@ -199,6 +199,94 @@ mod tests {
         }
     }
 
+    #[test]
+    fn tpo_settings_change_the_painted_profile_in_the_chart_type_and_the_study() {
+        use crate::model::{Bar, BarData, ChartType, Instrument, Timeframe};
+        use crate::theme::ThemeExt;
+        let start: chrono::DateTime<chrono::Utc> = "2024-01-02T02:00:00Z".parse().unwrap();
+        for setting in [
+            "default",
+            "poc",
+            "value_area_levels",
+            "initial_balance",
+            "open_price",
+            "close_price",
+        ] {
+            let bars = (0..40)
+                .map(|i| {
+                    let (low, high) = match i {
+                        0 => (100.0, 101.0),
+                        1 => (101.0, 103.0),
+                        _ => (99.0, 103.0),
+                    };
+                    Bar::new(
+                        start + chrono::Duration::minutes(30 * i),
+                        100.0,
+                        high,
+                        low,
+                        102.0,
+                        1.0,
+                    )
+                })
+                .collect();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.set_timeframe(Timeframe::Min30);
+            chart.set_instrument(Some(Instrument::new("X").with_tick_size(1.0)));
+            chart.set_chart_type(ChartType::TimePriceOpportunity);
+            let mut saved = serde_json::json!({"tpo_row_ticks":1, "tpo_letters":true});
+            if setting != "default" {
+                saved[format!("tpo_{setting}")] = (setting == "close_price").into();
+            }
+            chart.set_chart_type_params(serde_json::from_value(saved).unwrap());
+            let ctx = egui::Context::default();
+            shapes(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let caption = |name| {
+                painted
+                    .iter()
+                    .any(|s| matches!(s, Shape::Text(t) if t.galley.text() == name))
+            };
+            assert_eq!(caption("POC"), setting != "poc", "{setting}");
+            assert_eq!(
+                (caption("VAH"), caption("VAL")),
+                (
+                    setting != "value_area_levels",
+                    setting != "value_area_levels"
+                ),
+                "{setting}"
+            );
+            let balance = painted.iter().filter(|s| matches!(s, Shape::Rect(r) if r.rect.width() == 2.0 && r.fill == crate::tokens::DESIGN_TOKENS.semantic.tpo.initial_balance)).count();
+            assert_eq!(
+                balance,
+                usize::from(setting != "initial_balance"),
+                "{setting}"
+            );
+            let markers: Vec<_> = painted
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::Path(p) if p.points.len() == 3 && p.points[1].x == p.points[2].x => {
+                        Some(p)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                markers.len(),
+                usize::from(setting != "open_price") + usize::from(setting == "close_price"),
+                "{setting}"
+            );
+            if setting == "close_price" {
+                let close = markers.last().unwrap();
+                assert_eq!(
+                    close.points[0].y,
+                    chart.get_chart_mapping().price_to_y(102.0)
+                );
+                assert!(close.points[0].x > markers[0].points[2].x);
+                assert_eq!(close.fill, ctx.active_theme().chart.candle_up);
+            }
+        }
+    }
+
     #[cfg(feature = "timezones")]
     #[test]
     fn configured_sessions_reach_breaks_and_extended_shading() {

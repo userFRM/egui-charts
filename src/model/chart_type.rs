@@ -935,6 +935,14 @@ pub struct ChartTypeParams {
     pub tpo_split_periods: bool,
     /// TPO: draw the initial balance marker. On by default; its period and extensions apply either way.
     pub tpo_initial_balance: bool,
+    /// TPO: colour, underline and caption the point of control. On by default.
+    pub tpo_poc: bool,
+    /// TPO: draw and caption the value area high and low and dim blocks outside it. On by default.
+    pub tpo_value_area_levels: bool,
+    /// TPO: mark each profile's opening price. On by default.
+    pub tpo_open_price: bool,
+    /// TPO: mark each profile's closing price. Off by default.
+    pub tpo_close_price: bool,
     /// TPO: sessions combined into one profile, as in
     /// [`TPOConfig::composites`](super::TPOConfig::composites).
     pub tpo_composites: Vec<std::ops::RangeInclusive<chrono::DateTime<chrono::Utc>>>,
@@ -1041,6 +1049,10 @@ impl Default for ChartTypeParams {
             tpo_profile_period: super::TPOProfilePeriod::Session,
             tpo_split_periods: false,
             tpo_initial_balance: true,
+            tpo_poc: true,
+            tpo_value_area_levels: true,
+            tpo_open_price: true,
+            tpo_close_price: false,
             tpo_composites: Vec::new(),
             tpo_splits: Vec::new(),
         }
@@ -1057,6 +1069,10 @@ impl ChartTypeParams {
             period_minutes: self.tpo_period_minutes,
             initial_balance_minutes: self.tpo_initial_balance_minutes,
             show_initial_balance: self.tpo_initial_balance,
+            show_poc: self.tpo_poc,
+            show_value_area: self.tpo_value_area_levels,
+            show_opening_range: self.tpo_open_price,
+            show_closing_price: self.tpo_close_price,
             show_poor_highs_lows: self.tpo_poor_highs_lows,
             show_initial_balance_extensions: self.tpo_initial_balance_extensions,
             value_area_pct: self.tpo_value_area / 100.0,
@@ -1245,6 +1261,10 @@ mod tests {
             "tpo_profile_period": "Week",
             "tpo_split_periods": true,
             "tpo_initial_balance": false,
+            "tpo_poc": false,
+            "tpo_value_area_levels": false,
+            "tpo_open_price": false,
+            "tpo_close_price": true,
             "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
                 "developing_value_area": true, "extend_poc": true, "extend_vah": true,
                 "extend_val": true,
@@ -1339,6 +1359,10 @@ mod tests {
         assert_eq!(legacy["tpo_profile_period"], "Session");
         assert_eq!(legacy["tpo_split_periods"], false);
         assert_eq!(legacy["tpo_initial_balance"], true);
+        assert_eq!(legacy["tpo_poc"], true);
+        assert_eq!(legacy["tpo_value_area_levels"], true);
+        assert_eq!(legacy["tpo_open_price"], true);
+        assert_eq!(legacy["tpo_close_price"], false);
         assert_eq!(
             legacy["footprint_colors"],
             serde_json::json!([null, null, null, null])

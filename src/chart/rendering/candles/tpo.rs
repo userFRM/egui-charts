@@ -685,6 +685,25 @@ pub(crate) fn profile_at(
     hit
 }
 
+/// Columns from the anchor to the right end of the row holding `price`, in packed or split display.
+fn row_reach(
+    profile: &TPOProfile,
+    starts: Option<&[chrono::DateTime<chrono::Utc>]>,
+    price: f64,
+) -> usize {
+    starts.map_or_else(
+        || profile.tpo_count_at(price),
+        |starts| {
+            profile
+                .letters_at(price)
+                .iter()
+                .map(|letter| starts.partition_point(|ts| *ts < letter.ts) + 1)
+                .max()
+                .unwrap_or(0)
+        },
+    )
+}
+
 /// Draw one session's profile anchored at pixel x `anchor_x`, growing rightward in columns of
 /// `column_width` pixels, with its level labels to the left when `labels` is set and its
 /// statistics below when they fit the `room` of its session.
@@ -898,18 +917,8 @@ fn draw_session_profile(
         ] {
             let y = row_y(price);
             if poor && price_rect.y_range().contains(y) {
-                let reach = starts.as_ref().map_or_else(
-                    || profile.tpo_count_at(price),
-                    |starts| {
-                        profile
-                            .letters_at(price)
-                            .iter()
-                            .map(|letter| starts.partition_point(|ts| *ts < letter.ts) + 1)
-                            .max()
-                            .unwrap_or(0)
-                    },
-                );
-                let right = anchor_x + reach as f32 * column_width;
+                let right =
+                    anchor_x + row_reach(profile, starts.as_deref(), price) as f32 * column_width;
                 painter.line_segment(
                     [Pos2::new(right + 4.0, y), Pos2::new(right + 12.0, y)],
                     Stroke::new(DESIGN_TOKENS.stroke.medium, chart.axis_text),
@@ -1110,6 +1119,30 @@ fn draw_session_profile(
                     Pos2::new(anchor_x, open_y + s * 0.5),
                 ],
                 dir_color,
+                Stroke::NONE,
+            ));
+        }
+    }
+
+    if config.show_closing_price && profile.closing_price.is_finite() {
+        let y = coords.price_to_y(profile.closing_price);
+        if price_rect.y_range().contains(y) {
+            let right = anchor_x
+                + row_reach(profile, starts.as_deref(), profile.closing_price) as f32
+                    * column_width;
+            let color = if profile.closing_price >= profile.opening_price {
+                bullish_color
+            } else {
+                bearish_color
+            };
+            let s = 3.0;
+            painter.add(Shape::convex_polygon(
+                vec![
+                    Pos2::new(right + 1.0, y),
+                    Pos2::new(right + 1.0 + s, y - s * 0.5),
+                    Pos2::new(right + 1.0 + s, y + s * 0.5),
+                ],
+                color,
                 Stroke::NONE,
             ));
         }

@@ -796,6 +796,10 @@ impl SymbolTab {
                 });
                 ui.end_row();
                 for (name, enabled) in [
+                    ("Point of control", &mut params.tpo_poc),
+                    ("Value area high and low", &mut params.tpo_value_area_levels),
+                    ("Open price", &mut params.tpo_open_price),
+                    ("Closing price", &mut params.tpo_close_price),
                     ("Poor highs and lows", &mut params.tpo_poor_highs_lows),
                     (
                         "Initial balance extensions",
