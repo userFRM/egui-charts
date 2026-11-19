@@ -101,6 +101,7 @@ fn automatic_price_precision_reaches_every_axis_tag() {
     }
 }
 
+/// Last price, previous close, bid/ask and high/low lines switch apart from their tags.
 #[test]
 fn price_labels_and_lines_are_independent_on_either_axis() {
     use crate::model::{Level1Quote, Timeframe};
@@ -130,6 +131,10 @@ fn price_labels_and_lines_are_independent_on_either_axis() {
             chart.config.show_prev_close_line = line;
             chart.config.show_countdown = countdown;
             chart.config.show_bid_ask = label;
+            chart.config.show_bid_ask_lines = (label != line).then_some(line);
+            chart.config.show_high_low = false;
+            chart.config.show_high_low_lines = Some(line);
+            chart.config.high_line.width = 0.0;
             chart.main_series_style.last_value_visible = series;
             chart.main_series_style.price_line_visible = series;
             let bar = chart.state.data().bars.last().unwrap();
@@ -224,6 +229,21 @@ fn price_labels_and_lines_are_independent_on_either_axis() {
                 });
             }
             for (y, color, shown) in [
+                (
+                    chart.last_price_map.price_to_y(100.0),
+                    chart.config.bearish_color,
+                    line,
+                ),
+                (
+                    chart.last_price_map.price_to_y(119.0),
+                    crate::theme::ThemeExt::active_theme(&ctx).ui.accent,
+                    line,
+                ),
+                (
+                    chart.last_price_map.price_to_y(121.0),
+                    crate::theme::ThemeExt::active_theme(&ctx).chart.candle_down,
+                    line,
+                ),
                 (close_y, chart.config.bullish_color, line && series),
                 (
                     prev_y,
@@ -1320,6 +1340,211 @@ fn study_value_tags_read_the_last_bar_in_view() {
                 labels.contains(&expected),
                 "offset {offset}: missing {expected}: {labels:?}"
             );
+        }
+    }
+}
+
+/// The high and low, bid and ask and previous close lines paint the colour, width and pattern
+/// of their styles, also without a price axis. Bars run from 100 to 120 and close at 110 and
+/// 120 by turns, so the high is 120, the low 100, and bar 98, the session before the last bar,
+/// closed at 110.
+#[test]
+fn price_lines_paint_their_configured_styles() {
+    use crate::model::{Level1Quote, LineStyle};
+    use egui::Color32;
+    for (style, width, axis) in [
+        (LineStyle::Solid, 2.0, true),
+        (LineStyle::Dashed, 3.0, true),
+        (LineStyle::Solid, 2.0, false),
+    ] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0, 120.0]);
+        chart.config.show_volume = false;
+        chart.config.show_quote_boxes = false;
+        chart.config.show_right_axis = axis;
+        chart.config.show_left_axis = false;
+        chart.config.show_high_low = true;
+        chart.config.show_bid_ask = true;
+        chart.config.show_prev_close_line = true;
+        let lines = [
+            (120.0, Color32::from_rgb(201, 11, 11)),
+            (100.0, Color32::from_rgb(11, 201, 11)),
+            (112.0, Color32::from_rgb(11, 11, 201)),
+            (114.0, Color32::from_rgb(201, 201, 11)),
+            (110.0, Color32::from_rgb(11, 201, 201)),
+        ];
+        let config = &mut chart.config;
+        for (target, (_, color)) in [
+            &mut config.high_line,
+            &mut config.low_line,
+            &mut config.bid_line,
+            &mut config.ask_line,
+            &mut config.prev_close_line,
+        ]
+        .into_iter()
+        .zip(lines)
+        {
+            target.color = Some(color);
+            target.width = width;
+            target.style = style;
+        }
+        let bar = chart.state.data().bars.last().unwrap();
+        chart.set_quote(Some(Level1Quote {
+            symbol: "TEST".into(),
+            ts: bar.time + chrono::Duration::seconds(30),
+            bid: 112.0,
+            ask: 114.0,
+            bid_size: 1.0,
+            ask_size: 1.0,
+        }));
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+        let plot = chart.last_rendered_price_rect;
+        for (price, color) in lines {
+            let y = chart.last_price_map.price_to_y(price);
+            let strokes: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::LineSegment { points, stroke }
+                        if stroke.color == color
+                            && (points[0].y - y).abs() < 0.001
+                            && (points[1].y - y).abs() < 0.001 =>
+                    {
+                        Some((stroke.width, (points[1].x - points[0].x).abs()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                !strokes.is_empty() && strokes.iter().all(|s| s.0 == width),
+                "{price} {style:?} axis={axis}: {strokes:?}"
+            );
+            match style {
+                // One segment across the plot.
+                LineStyle::Solid => assert!(
+                    strokes.len() == 1 && strokes[0].1 > plot.width() - 1.0,
+                    "{price}: {strokes:?}"
+                ),
+                // Dashes 4 points long.
+                _ => assert!(
+                    strokes.len() > 1 && strokes.iter().all(|s| s.1 <= 4.001),
+                    "{price}: {strokes:?}"
+                ),
+            }
+        }
+    }
+}
+
+/// The average close line and tag sit at the mean close of the bars in view and move with the
+/// view; bars without a value are left out. Bar i closes at 100 + i, so bars 10 to 19 average
+/// 114.5 and bars 50 to 59 154.5; without bar 15 bars 10 to 19 average (1145 - 115) / 9.
+#[test]
+fn average_close_line_follows_the_bars_in_view() {
+    use crate::model::{Bar, BarData, LineStyle, LogicalRange, Timeframe};
+    use egui::{Color32, Stroke};
+    for (closes, expected) in [
+        (vec![], None),
+        (vec![f64::NAN, f64::INFINITY], None),
+        (vec![42.0], Some(42.0)),
+        (vec![f64::MAX, f64::MAX], Some(f64::MAX)),
+        (vec![-f64::MAX, f64::MAX], Some(0.0)),
+    ] {
+        let bars: Vec<_> = closes
+            .into_iter()
+            .map(|close| {
+                Bar::new(
+                    chrono::DateTime::UNIX_EPOCH,
+                    close,
+                    close,
+                    close,
+                    close,
+                    1.0,
+                )
+            })
+            .collect();
+        assert_eq!(super::super::average_close(&bars), expected);
+    }
+    const AVERAGE: Color32 = Color32::from_rgb(12, 34, 56);
+    let start = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    for (blank, views) in [
+        (
+            None,
+            vec![
+                ((10.0, 19.0), 114.5, "114.50"),
+                ((50.0, 59.0), 154.5, "154.50"),
+            ],
+        ),
+        (Some(15), vec![((10.0, 19.0), 1030.0 / 9.0, "114.44")]),
+    ] {
+        let bars = (0..100)
+            .map(|i| {
+                let time = start + chrono::Duration::days(i);
+                let close = 100.0 + i as f64;
+                if blank == Some(i) {
+                    Bar::whitespace(time)
+                } else {
+                    Bar::new(time, close, close + 1.0, close - 1.0, close, 1.0)
+                }
+            })
+            .collect();
+        let ctx = egui::Context::default();
+        let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+        chart.set_timeframe(Timeframe::Day1);
+        chart.config.show_volume = false;
+        chart.config.show_average_close_line = true;
+        chart.config.show_average_close_label = true;
+        chart.config.average_close_line.color = Some(AVERAGE);
+        chart.config.average_close_line.width = 2.0;
+        chart.config.average_close_line.style = LineStyle::Solid;
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        for (time, ((left, right), price, tag)) in views.into_iter().enumerate() {
+            assert!(chart.set_visible_logical_range(LogicalRange::new(left, right)));
+            frame(&ctx, &mut chart, 1.0 + time as f64, vec![]);
+            let painted = shapes(&ctx, &mut chart, 1.5 + time as f64, vec![]);
+            let y = chart.last_price_map.price_to_y(price);
+            let lines: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::LineSegment { points, stroke }
+                        if *stroke == Stroke::new(2.0, AVERAGE) =>
+                    {
+                        Some(*points)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                lines.len() == 1 && lines[0].iter().all(|point| (point.y - y).abs() < 0.01),
+                "{left}-{right}: {lines:?} at {y}"
+            );
+            let plot = chart.last_rendered_price_rect;
+            let labels: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text) if text.pos.x >= plot.right() => Some(text.galley.text()),
+                    _ => None,
+                })
+                .collect();
+            assert!(labels.contains(&tag), "{tag}: {labels:?}");
+            for (line, label, width) in [
+                (true, false, 2.0),
+                (false, true, 2.0),
+                (false, false, 2.0),
+                (true, true, 0.0),
+                (true, true, -1.0),
+                (true, true, f32::NAN),
+                (true, true, f32::INFINITY),
+            ] {
+                chart.config.show_average_close_line = line;
+                chart.config.show_average_close_label = label;
+                chart.config.average_close_line.width = width;
+                let painted = shapes(&ctx, &mut chart, 2.0 + time as f64, vec![]);
+                assert_eq!(painted.iter().any(|shape| matches!(shape, Shape::LineSegment {stroke, ..} if stroke.color == AVERAGE)), line && width.is_finite() && width > 0.0);
+                assert_eq!(painted.iter().any(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == AVERAGE && rect.rect.left() >= plot.right())), label);
+            }
+            chart.config.show_average_close_line = true;
+            chart.config.show_average_close_label = true;
+            chart.config.average_close_line.width = 2.0;
         }
     }
 }

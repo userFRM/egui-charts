@@ -23,6 +23,7 @@ enum Action {
     Studies,
     Countdown,
     BidAsk,
+    BidAskLines,
     HighLow,
     Timezone(TimezoneMode),
     ExtendedHours,
@@ -228,7 +229,12 @@ impl AxisMenus {
                     Action::Countdown,
                     config.show_countdown,
                 ),
-                row("Bid and ask", Action::BidAsk, config.show_bid_ask),
+                row("Bid and ask labels", Action::BidAsk, config.show_bid_ask),
+                row(
+                    "Bid and ask lines",
+                    Action::BidAskLines,
+                    config.show_bid_ask_lines.unwrap_or(config.show_bid_ask),
+                ),
                 row("High and low", Action::HighLow, config.show_high_low),
                 MenuEntry::Separator,
                 row("Scale settings…", Action::Settings, false),
@@ -245,6 +251,7 @@ impl AxisMenus {
                             | Action::PreviousClose
                             | Action::Countdown
                             | Action::BidAsk
+                            | Action::BidAskLines
                             | Action::HighLow
                     ),
                     MenuEntry::Submenu { .. } | MenuEntry::Separator => true,
@@ -395,7 +402,8 @@ impl AxisMenus {
                 Action::Countdown => {
                     chart.config_mut().show_countdown = !chart.config().show_countdown
                 }
-                Action::BidAsk => chart.config_mut().show_bid_ask = !chart.config().show_bid_ask,
+                Action::BidAsk => toggle_bid_ask(chart.config_mut(), false),
+                Action::BidAskLines => toggle_bid_ask(chart.config_mut(), true),
                 Action::HighLow => chart.config_mut().show_high_low = !chart.config().show_high_low,
                 Action::Timezone(zone) => chart.chart_options.time_scale.timezone = zone,
                 Action::ExtendedHours => chart.set_extended_hours(!chart.extended_hours()),
@@ -407,6 +415,18 @@ impl AxisMenus {
             }
         }
         None
+    }
+}
+
+/// Switches the bid and ask lines, with `lines`, or else their tags, keeping the other as it is
+/// drawn: lines that follow the tags get a switch of their own first.
+fn toggle_bid_ask(config: &mut crate::config::ChartConfig, lines: bool) {
+    let drawn = config.show_bid_ask_lines.unwrap_or(config.show_bid_ask);
+    if lines {
+        config.show_bid_ask_lines = Some(!drawn);
+    } else {
+        config.show_bid_ask_lines = Some(drawn);
+        config.show_bid_ask = !config.show_bid_ask;
     }
 }
 
@@ -497,6 +517,53 @@ mod tests {
         let rows = rows(&chart);
         assert!(rows.contains(&("Extended hours".into(), true)));
         assert!(rows.contains(&("Overnight hours".into(), true)));
+    }
+
+    /// The price axis switches the bid and ask tags and lines apart, each keeping the other as
+    /// it is drawn; lines that follow their tags, as saved charts do, stay drawn when the tags
+    /// go.
+    #[test]
+    fn bid_ask_rows_switch_tags_and_lines_apart() {
+        let checks = |chart: &Chart| -> Vec<(String, bool)> {
+            AxisMenus::entries(false, chart, None)
+                .into_iter()
+                .filter_map(|entry| match entry {
+                    MenuEntry::Item(item) if item.label.starts_with("Bid and ask") => {
+                        Some((item.label, item.icon.is_some()))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        // Tags, the lines' switch, which row, and the tags and lines drawn afterwards.
+        for (tags, lines, lines_row, expected) in [
+            (true, None, false, (false, true)),
+            (true, None, true, (true, false)),
+            (false, None, true, (false, true)),
+            (false, Some(true), false, (true, true)),
+            (true, Some(false), true, (true, true)),
+        ] {
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[101.0]);
+            chart.config_mut().show_bid_ask = tags;
+            chart.config_mut().show_bid_ask_lines = lines;
+            assert_eq!(
+                checks(&chart),
+                vec![
+                    ("Bid and ask labels".to_owned(), tags),
+                    ("Bid and ask lines".to_owned(), lines.unwrap_or(tags)),
+                ]
+            );
+            toggle_bid_ask(chart.config_mut(), lines_row);
+            let config = chart.config();
+            assert_eq!(
+                (
+                    config.show_bid_ask,
+                    config.show_bid_ask_lines.unwrap_or(config.show_bid_ask)
+                ),
+                expected,
+                "{tags} {lines:?} {lines_row}"
+            );
+        }
     }
 
     /// The selected pane owns the menu, which closes if that pane or its last source leaves.

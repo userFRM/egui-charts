@@ -84,7 +84,8 @@ impl Backtest {
     /// again with that forming bar included in the context. Its fills and orders are retained
     /// when the bar closes; unseen intrabar extremes are never replayed over observed ticks.
     /// Identical snapshots do nothing. Live fill callbacks exclude the unfinished bar;
-    /// historical tick callbacks see their developing candle.
+    /// historical tick callbacks see their developing candle. `settings.end_time` does not apply
+    /// to a live run.
     ///
     /// A correction before the previous forming bar, removed history, changed settings or inputs
     /// rebuilds from the start using `Strategy::prepare` to reset decision state. Replayed fills

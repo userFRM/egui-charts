@@ -102,6 +102,7 @@ struct ColorPickerStates {
     extended_value: ColorPickerState,
     price_target_positive: ColorPickerState,
     price_target_negative: ColorPickerState,
+    prev_close_line: ColorPickerState,
 }
 
 impl Default for SettingsDialog {
@@ -138,6 +139,7 @@ impl SettingsDialog {
                 scales_text: ColorPickerState::new(settings.scales_appearance.text_color),
                 scales_lines: ColorPickerState::new(settings.scales_appearance.lines_color),
                 alert: ColorPickerState::new(settings.alerts.alert_color),
+                prev_close_line: ColorPickerState::new(Color32::PLACEHOLDER),
                 symbol_value: ColorPickerState::new(
                     settings
                         .scales_and_lines
@@ -361,6 +363,15 @@ impl SettingsDialog {
                     theme.chart.candle_down,
                 )
                 .1,
+            ),
+            (
+                &mut self.color_picker_states.prev_close_line,
+                self.settings
+                    .scales_and_lines
+                    .prev_close_line
+                    .and_then(|line| line.color)
+                    .unwrap_or(Color32::PLACEHOLDER),
+                theme.ui.text_secondary,
             ),
         ] {
             picker.sel_color = if color == Color32::PLACEHOLDER {
@@ -796,6 +807,14 @@ impl SettingsDialog {
                     .scales_and_lines
                     .price_line_style
                     .or(scales.price_line_style);
+                let bid_ask_lines = template
+                    .scales_and_lines
+                    .show_bid_ask_lines
+                    .or(scales.show_bid_ask_lines);
+                let prev_close_line = template
+                    .scales_and_lines
+                    .prev_close_line
+                    .or(scales.prev_close_line);
                 let separator = template
                     .scales_and_lines
                     .thousands_sep
@@ -828,6 +847,8 @@ impl SettingsDialog {
                 self.settings.scales_and_lines.price_line_source = line_source;
                 self.settings.scales_and_lines.price_line_width = line_width;
                 self.settings.scales_and_lines.price_line_style = line_style;
+                self.settings.scales_and_lines.show_bid_ask_lines = bid_ask_lines;
+                self.settings.scales_and_lines.prev_close_line = prev_close_line;
                 self.settings.scales_and_lines.thousands_sep = separator;
                 self.settings.show_session_breaks = session_breaks;
                 self.settings.price_target_positive_color = positive;
@@ -912,6 +933,8 @@ impl SettingsDialog {
             let style = crate::model::SeriesStyle::default();
             self.settings.scales_and_lines.price_line_width = Some(style.price_line_width);
             self.settings.scales_and_lines.price_line_style = Some(style.price_line_style);
+            self.settings.scales_and_lines.show_bid_ask_lines = Some(false);
+            self.settings.scales_and_lines.prev_close_line = Some(Default::default());
             self.settings.scales_and_lines.thousands_sep =
                 Some(crate::widget::settings::ThousandsSeparator::Comma);
             let palette = crate::config::ChartConfig::default().with_theme(theme);
@@ -996,6 +1019,8 @@ mod tests {
                     style.price_line_width = 3.0;
                     style.price_line_style = crate::model::LineStyle::Solid;
                 }
+                chart.config_mut().prev_close_line.width = 3.0;
+                chart.config_mut().show_bid_ask_lines = Some(true);
                 let mut settings = ChartSettingsState::from_chart(&chart);
                 settings.scales_appearance.text_color = Color32::RED;
                 settings.grid_lines.horizontal_color = Color32::GREEN;
@@ -1066,9 +1091,19 @@ mod tests {
                 assert_eq!(
                     (
                         actual.scales_and_lines.price_line_width,
-                        actual.scales_and_lines.price_line_style
+                        actual.scales_and_lines.price_line_style,
+                        actual.scales_and_lines.prev_close_line,
+                        chart
+                            .config()
+                            .show_bid_ask_lines
+                            .unwrap_or(chart.config().show_bid_ask),
                     ),
-                    (Some(1.0), Some(crate::model::LineStyle::Dashed)),
+                    (
+                        Some(1.0),
+                        Some(crate::model::LineStyle::Dashed),
+                        Some(crate::config::ChartLineStyle::default()),
+                        false
+                    ),
                     "{preset}"
                 );
                 let mismatches: Vec<_> = [
@@ -2433,6 +2468,8 @@ mod tests {
                 ("", "price_target_positive_color"),
                 ("", "price_target_negative_color"),
                 ("/scales_and_lines", "price_line_source"),
+                ("/scales_and_lines", "prev_close_line"),
+                ("/scales_and_lines", "show_bid_ask_lines"),
                 ("/scales_and_lines", "thousands_sep"),
                 ("/scales_appearance", "font_family"),
             ] {
@@ -2450,6 +2487,8 @@ mod tests {
             chart.config_mut().show_session_breaks = true;
             chart.config_mut().price_target_positive_color = Color32::BLUE;
             chart.config_mut().price_target_negative_color = Color32::YELLOW;
+            chart.config_mut().prev_close_line.width = 3.0;
+            chart.config_mut().show_bid_ask_lines = Some(true);
             let style = chart.series_style_mut(SeriesId::MAIN).unwrap();
             style.price_line_source = PriceLineSource::LastVisible;
             let margin = chart.chart_options().time_scale.clone();
@@ -2465,6 +2504,11 @@ mod tests {
             assert_eq!(dialog.margin_right_str, row.to_string(), "{pixels:?}");
             assert_eq!(
                 (
+                    shown
+                        .scales_and_lines
+                        .prev_close_line
+                        .map(|line| line.width),
+                    shown.scales_and_lines.show_bid_ask_lines,
                     shown.show_session_breaks,
                     shown.price_target_positive_color,
                     shown.price_target_negative_color,
@@ -2472,6 +2516,8 @@ mod tests {
                     shown.scales_and_lines.thousands_sep,
                 ),
                 (
+                    Some(3.0),
+                    Some(true),
                     Some(true),
                     Some(Color32::BLUE),
                     Some(Color32::YELLOW),
@@ -2493,6 +2539,8 @@ mod tests {
                 ),
                 (Color32::BLUE, Color32::YELLOW)
             );
+            assert_eq!(config.prev_close_line.width, 3.0);
+            assert_eq!(config.show_bid_ask_lines, Some(true));
             let style = chart.series_style(SeriesId::MAIN).unwrap();
             assert_eq!(style.price_line_source, PriceLineSource::LastVisible);
         }

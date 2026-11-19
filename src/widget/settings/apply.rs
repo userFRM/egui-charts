@@ -326,6 +326,8 @@ impl ChartSettingsState {
         settings.scales_and_lines.show_prev_close = config.show_prev_close_line;
         settings.scales_and_lines.show_countdown = config.show_countdown;
         settings.scales_and_lines.show_bid_ask = config.show_bid_ask;
+        settings.scales_and_lines.show_bid_ask_lines = config.show_bid_ask_lines;
+        settings.scales_and_lines.prev_close_line = Some(config.prev_close_line);
         settings.scales_and_lines.show_high_low = config.show_high_low;
         settings.margins.top_percent =
             (chart.state().price_scale().options().scale_margins.top * 100.0) as f32;
@@ -632,6 +634,12 @@ impl ChartSettingsState {
         config.show_prev_close_line = self.scales_and_lines.show_prev_close;
         config.show_countdown = self.scales_and_lines.show_countdown;
         config.show_bid_ask = self.scales_and_lines.show_bid_ask;
+        if let Some(lines) = self.scales_and_lines.show_bid_ask_lines {
+            config.show_bid_ask_lines = Some(lines);
+        }
+        if let Some(line) = self.scales_and_lines.prev_close_line {
+            config.prev_close_line = line;
+        }
         config.show_high_low = self.scales_and_lines.show_high_low;
         if let Some(separator) = self.scales_and_lines.thousands_sep {
             config.thousands_sep = thousands_sep(separator);
@@ -3020,36 +3028,53 @@ mod tests {
         assert!(range.max - range.min < 0.0875, "{range:?}");
     }
 
-    /// The session breaks switch and the bar the last price line follows reach the chart, read
-    /// back and are undone. Settings saved before these, the axis font family and the thousands
-    /// separator could be chosen hold none of them and keep the chart's.
+    /// Session breaks, last price source, previous close style and bid/ask line visibility
+    /// apply, read back and undo together. Older settings lack these choices, the axis font
+    /// family and the thousands separator, and keep the chart's.
     #[test]
     fn session_breaks_and_last_price_bar_apply_and_read_back() {
         use crate::model::PriceLineSource::{LastBar, LastVisible};
         use crate::widget::{SeriesId, test_frames::chart};
         let read = |chart: &Chart| {
             let style = chart.series_style(SeriesId::MAIN).unwrap();
-            (chart.config().show_session_breaks, style.price_line_source)
+            (
+                chart.config().show_session_breaks,
+                style.price_line_source,
+                chart.config().prev_close_line,
+                chart.config().show_bid_ask_lines,
+            )
         };
         let mut chart = chart(&[100.0], &[110.0]);
         let new_chart = ChartSettingsState::from_chart(&chart);
-        for (breaks, source) in [(true, LastVisible), (false, LastBar)] {
+        let solid = crate::config::ChartLineStyle {
+            color: Some(Color32::GOLD),
+            width: 2.0,
+            style: crate::model::LineStyle::Solid,
+        };
+        for (breaks, source, line, lines) in [
+            (true, LastVisible, solid, true),
+            (false, LastBar, Default::default(), false),
+        ] {
             let mut settings = ChartSettingsState::from_chart(&chart);
             settings.show_session_breaks = Some(breaks);
+            settings.scales_and_lines.prev_close_line = Some(line);
+            settings.scales_and_lines.show_bid_ask_lines = Some(lines);
             settings.scales_and_lines.price_line_source = Some(source);
             chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
-            assert_eq!(read(&chart), (breaks, source));
+            assert_eq!(read(&chart), (breaks, source, line, Some(lines)));
             let settings = ChartSettingsState::from_chart(&chart);
             assert_eq!(
                 (
                     settings.show_session_breaks,
-                    settings.scales_and_lines.price_line_source
+                    settings.scales_and_lines.price_line_source,
+                    settings.scales_and_lines.prev_close_line,
+                    settings.scales_and_lines.show_bid_ask_lines
                 ),
-                (Some(breaks), Some(source))
+                (Some(breaks), Some(source), Some(line), Some(lines))
             );
         }
         assert!(chart.undo());
-        assert_eq!(read(&chart), (true, LastVisible));
+        assert_eq!(read(&chart), (true, LastVisible, solid, Some(true)));
 
         chart.config_mut().axis_font_family = egui::FontFamily::Monospace;
         chart.config_mut().thousands_sep = Some('_');
@@ -3057,6 +3082,7 @@ mod tests {
         for (group, choice) in [
             ("", "show_session_breaks"),
             ("/scales_and_lines", "price_line_source"),
+            ("/scales_and_lines", "prev_close_line"),
             ("/scales_and_lines", "thousands_sep"),
             ("/scales_appearance", "font_family"),
         ] {
@@ -3065,7 +3091,7 @@ mod tests {
         }
         let saved: ChartSettingsState = serde_json::from_value(saved).unwrap();
         saved.apply_to_chart(&mut chart).unwrap();
-        assert_eq!(read(&chart), (true, LastVisible));
+        assert_eq!(read(&chart), (true, LastVisible, solid, Some(true)));
         assert_eq!(chart.config().axis_font_family, egui::FontFamily::Monospace);
         assert_eq!(chart.config().thousands_sep, Some('_'));
     }

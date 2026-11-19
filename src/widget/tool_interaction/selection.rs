@@ -155,11 +155,12 @@ pub fn handle_selection<F1, F2, F3>(
                 .any(|d| d.id == id && !d.locked)
         });
         if let Some((id, handle)) = handle {
-            ui.ctx().set_cursor_icon(if handle == HandlePos::Middle {
-                egui::CursorIcon::Grab
-            } else {
-                handle_cursor(drawing_manager, id, handle)
-            });
+            ui.ctx()
+                .set_cursor_icon(if matches!(handle, HandlePos::Middle | HandlePos::Rotate) {
+                    egui::CursorIcon::Grab
+                } else {
+                    handle_cursor(drawing_manager, id, handle)
+                });
         } else if hit.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
@@ -287,10 +288,47 @@ fn handle_cursor(manager: &DrawingManager, id: usize, handle: HandlePos) -> egui
             && d.points.len() >= 2
             && (d.points[1].x - d.points[0].x) * (d.points[1].y - d.points[0].y) < 0.0
     });
+    // Resize along the rotated corner's diagonal, rounded to the nearest eighth turn.
+    let glyph_corner = manager
+        .drawings
+        .iter()
+        .find(|d| {
+            d.id == id
+                && matches!(
+                    d.tool_type,
+                    DrawingToolType::FontIcon | DrawingToolType::Sticker
+                )
+        })
+        .filter(|_| {
+            matches!(
+                handle,
+                HandlePos::TopLeft
+                    | HandlePos::TopRight
+                    | HandlePos::BottomLeft
+                    | HandlePos::BottomRight
+            )
+        })
+        .and_then(|d| {
+            let center = *d.points.first()?;
+            let (_, point) = manager
+                .get_handles(d)
+                .into_iter()
+                .find(|(h, _)| *h == handle)?;
+            Some(point - center)
+        });
+    if let Some(to) = glyph_corner {
+        let eighth = (to.y.atan2(to.x) / std::f32::consts::FRAC_PI_4).round() as i32;
+        return [
+            CursorIcon::ResizeHorizontal,
+            CursorIcon::ResizeNwSe,
+            CursorIcon::ResizeVertical,
+            CursorIcon::ResizeNeSw,
+        ][eighth.rem_euclid(4) as usize];
+    }
     match handle {
         HandlePos::TopLeft | HandlePos::BottomRight if reversed => CursorIcon::ResizeNeSw,
         HandlePos::TopRight | HandlePos::BottomLeft if reversed => CursorIcon::ResizeNwSe,
-        HandlePos::Middle => CursorIcon::Grabbing,
+        HandlePos::Middle | HandlePos::Rotate => CursorIcon::Grabbing,
         HandlePos::TopLeft | HandlePos::BottomRight => CursorIcon::ResizeNwSe,
         HandlePos::TopRight | HandlePos::BottomLeft => CursorIcon::ResizeNeSw,
         HandlePos::Top | HandlePos::Bottom => CursorIcon::ResizeVertical,
@@ -585,6 +623,128 @@ mod tests {
                 .drop_without_applying_deltas();
             }
             assert_eq!(manager.is_selected(7), expected, "{tool:?}, {area:?}");
+        }
+    }
+
+    /// Shift keeps the box of a box tool square on screen while either anchor or a corner is
+    /// dragged, in precise bars, cut to the pane; releasing it during the drag frees the corner.
+    #[test]
+    fn shift_drags_keep_the_anchor_box_square() {
+        use DrawingToolType as T;
+        use egui::{Modifiers, pos2, vec2};
+        let base = [pos2(80.0, 80.0), pos2(180.0, 140.0)];
+        let far = [pos2(80.0, 80.0), pos2(240.5, 240.5)];
+        let near = [pos2(60.5, 20.5), pos2(180.0, 140.0)];
+        for (tool, grab, to, held, expected) in [
+            (T::FibonacciCircles, base[1], pos2(240.5, 200.0), true, far),
+            (T::GannSquare, base[1], pos2(240.5, 200.0), true, far),
+            (T::GannFixed, base[1], pos2(240.5, 200.0), true, far),
+            (T::GannFan, base[1], pos2(240.5, 200.0), true, far),
+            (T::GannBox, base[1], pos2(240.5, 200.0), true, far),
+            (T::Rect, base[1], pos2(240.5, 200.0), true, far),
+            (T::Ellipse, base[1], pos2(240.5, 200.0), true, far),
+            (T::FibonacciCircles, base[0], pos2(60.5, 100.0), true, near),
+            (T::GannFan, base[0], pos2(60.5, 100.0), true, near),
+            (T::GannBox, base[0], pos2(60.5, 100.0), true, near),
+            (T::GannSquare, base[0], pos2(60.5, 100.0), true, near),
+            (T::GannFixed, base[0], pos2(60.5, 100.0), true, near),
+            (
+                T::GannBox,
+                pos2(80.0, 140.0),
+                pos2(60.5, 180.0),
+                true,
+                [pos2(60.5, 80.0), pos2(180.0, 199.5)],
+            ),
+            (
+                T::GannBox,
+                pos2(180.0, 80.0),
+                pos2(200.0, 60.0),
+                true,
+                [pos2(80.0, 20.0), pos2(200.0, 140.0)],
+            ),
+            (
+                T::GannSquare,
+                base[1],
+                pos2(470.0, 200.0),
+                true,
+                [pos2(80.0, 80.0), pos2(400.0, 400.0)],
+            ),
+            (
+                T::GannBox,
+                base[1],
+                pos2(240.5, 200.0),
+                false,
+                [base[0], pos2(240.5, 200.0)],
+            ),
+        ] {
+            let ctx = Context::default();
+            let pane = Rect::from_min_size(Pos2::ZERO, vec2(500.0, 400.0));
+            let mut manager = DrawingManager::new();
+            manager.options.snap_to_time = true;
+            manager.update_pane_anchors(pane);
+            let mut cursors = CursorModeState::default();
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = base.to_vec();
+            drawing.chart_points = base
+                .iter()
+                .map(|p| ChartPoint::new(p.x, f64::from(p.y)))
+                .collect();
+            drawing.completed = true;
+            manager.drawings.push(drawing);
+            manager.select(7);
+            let button = |pos, pressed, modifiers| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers,
+            };
+            let released = if held {
+                Modifiers::SHIFT
+            } else {
+                Modifiers::NONE
+            };
+            for (modifiers, events) in [
+                (Modifiers::SHIFT, vec![Event::PointerMoved(grab)]),
+                (Modifiers::SHIFT, vec![button(grab, true, Modifiers::SHIFT)]),
+                (released, vec![Event::PointerMoved(to)]),
+                (released, vec![button(to, false, released)]),
+            ] {
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(pane),
+                        events: std::iter::once(Event::ModifiersChanged(modifiers))
+                            .chain(events)
+                            .collect(),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let response =
+                            ui.interact(pane, Id::NULL.with("chart"), Sense::click_and_drag());
+                        handle_selection(
+                            ui,
+                            &mut manager,
+                            &mut cursors,
+                            &response,
+                            pane,
+                            None,
+                            &|x| x,
+                            &|y: f32| f64::from(y.clamp(pane.top(), pane.bottom())),
+                            &|price, from, to| price + f64::from(to - from),
+                        );
+                    },
+                )
+                .drop_without_applying_deltas();
+            }
+            let drawing = &manager.drawings[0];
+            assert_eq!(drawing.points, expected, "{tool:?}, {grab:?}, held {held}");
+            assert_eq!(
+                drawing.chart_points,
+                expected
+                    .iter()
+                    .map(|p| ChartPoint::new(p.x, f64::from(p.y)))
+                    .collect::<Vec<_>>(),
+                "{tool:?}, {grab:?}, held {held}"
+            );
         }
     }
 

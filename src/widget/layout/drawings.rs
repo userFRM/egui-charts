@@ -1244,6 +1244,7 @@ fn copy_key(drawing: &Drawing, points: impl IntoIterator<Item = (i64, u32, f64)>
         settings.pane,
         settings.z_order,
     ) = (true, false, None, 0);
+    settings.series_layer = None;
     let style = serde_json::to_string(&settings).unwrap_or_default();
     let points: Vec<_> = points
         .into_iter()
