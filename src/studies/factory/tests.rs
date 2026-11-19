@@ -300,13 +300,20 @@ fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
                 .unwrap();
         }
         study.calculate(&bars);
-        // Studies that draw only shapes differ by their zones, projections, table or profile.
+        // Studies that draw only shapes differ by their zones, projections, table or profile, and
+        // studies of constant columns by their colours.
         let shapes = vec![
             format!("{:?}", study.zones()),
             format!("{:?}", study.projections()),
             format!("{:?}", study.table()),
             study.tpo().is_some().to_string(),
             format!("{:?}", study.volume_profiles(200..400)),
+            format!(
+                "{:?}",
+                (0..bars.len())
+                    .map(|bar| study.plot_color(0, bar))
+                    .collect::<Vec<_>>()
+            ),
         ];
         #[cfg(feature = "drawings")]
         let shapes = shapes
