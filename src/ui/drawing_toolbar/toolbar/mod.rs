@@ -118,8 +118,8 @@ impl DrawingToolbar {
         self
     }
 
-    /// Shows or hides `control`: Trading (the hide positions and orders rows) and Templates
-    /// (the standalone template name dialog). The toolbar ignores the other controls.
+    /// Shows or hides `control`: Trading (the hide positions, orders and executions rows) and
+    /// Templates (the standalone template name dialog). The toolbar ignores the other controls.
     pub fn set_control_visible(&mut self, control: Control, visible: bool) {
         crate::ui::app_state::set_control_visible(&mut self.hidden, control, visible);
         if control == Control::Templates && !visible {
@@ -748,6 +748,7 @@ impl DrawingToolbar {
             A::HideAllIndicators => self.state.hide_indicators = !self.state.hide_indicators,
             A::HideAllPoss => self.state.hide_positions = !self.state.hide_positions,
             A::HideAllOrders => self.state.hide_orders = !self.state.hide_orders,
+            A::HideAllExecutions => self.state.hide_executions = !self.state.hide_executions,
             A::HideAll => {
                 let state = &mut self.state;
                 let trading = !self.hidden.contains(&Control::Trading);
@@ -757,6 +758,7 @@ impl DrawingToolbar {
                 if trading {
                     state.hide_positions = hidden;
                     state.hide_orders = hidden;
+                    state.hide_executions = hidden;
                 }
             }
             A::InsertEmoji { .. } => self.select_tool(DrawingToolType::FontIcon),
@@ -1664,17 +1666,35 @@ mod tests {
             "Hide indicators",
             "Hide positions",
             "Hide orders",
+            "Hide executions",
             "Hide all",
         ];
         let rows = [
             (
-                [false, false, true, false, false],
-                [false, true],
+                [false, false, true, false, false, false],
+                [false, true, true],
                 Some("Hide positions"),
             ),
-            ([false; 5], [true; 2], Some("Hide all")),
-            ([true; 5], [false; 2], Some("Hide all")),
-            ([false; 5], [true; 2], None),
+            ([false; 6], [true; 3], Some("Hide orders")),
+            (
+                [false, false, false, true, false, false],
+                [true, false, true],
+                Some("Hide orders"),
+            ),
+            ([false; 6], [true; 3], Some("Hide executions")),
+            (
+                [false, false, false, false, true, false],
+                [true, true, false],
+                Some("Hide all"),
+            ),
+            ([true; 6], [false; 3], Some("Hide executions")),
+            (
+                [true, true, true, true, false, false],
+                [false, false, true],
+                Some("Hide all"),
+            ),
+            ([true; 6], [false; 3], Some("Hide all")),
+            ([false; 6], [true; 3], None),
         ];
         for (checks, display, pick) in rows {
             harness
@@ -1694,7 +1714,11 @@ mod tests {
             }
             let settings = &harness.state().1.display;
             assert_eq!(
-                [settings.show_positions, settings.show_orders],
+                [
+                    settings.show_positions,
+                    settings.show_orders,
+                    settings.show_executions
+                ],
                 display,
                 "before {pick:?}"
             );

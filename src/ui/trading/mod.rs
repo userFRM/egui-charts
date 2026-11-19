@@ -354,19 +354,21 @@ impl Trading {
             .unwrap_or_default()
     }
 
-    /// Refresh the Hide menu's position and order checks from [`display`](Self::display).
+    /// Refresh the Hide menu's position, order and execution checks from [`display`](Self::display).
     /// Call this before each
     /// [`DrawingToolbar::show_with_action`](crate::ui::drawing_toolbar::DrawingToolbar::show_with_action),
     /// then pass its returned action to [`apply_hide_action`](Self::apply_hide_action).
     pub fn sync_hide_menu(&self, state: &mut ToolbarState) {
         state.hide_positions = !self.display.show_positions;
         state.hide_orders = !self.display.show_orders;
+        state.hide_executions = !self.display.show_executions;
     }
 
     /// Apply the visibility requested by the toolbar after a Hide menu click to
     /// [`display`](Self::display): [`HideAllPoss`](DrawingToolbarAction::HideAllPoss) changes
-    /// positions, [`HideAllOrders`](DrawingToolbarAction::HideAllOrders) orders, and
-    /// [`HideAll`](DrawingToolbarAction::HideAll) both. Other actions leave it unchanged.
+    /// positions, [`HideAllOrders`](DrawingToolbarAction::HideAllOrders) orders,
+    /// [`HideAllExecutions`](DrawingToolbarAction::HideAllExecutions) execution marks, and
+    /// [`HideAll`](DrawingToolbarAction::HideAll) all three. Other actions leave it unchanged.
     /// Refresh `state` with [`sync_hide_menu`](Self::sync_hide_menu) before showing the toolbar
     /// so its flags hold the requested visibility after the click.
     pub fn apply_hide_action(&mut self, action: &DrawingToolbarAction, state: &ToolbarState) {
@@ -377,6 +379,9 @@ impl Trading {
         }
         if all || matches!(action, A::HideAllOrders) {
             self.display.show_orders = !state.hide_orders;
+        }
+        if all || matches!(action, A::HideAllExecutions) {
+            self.display.show_executions = !state.hide_executions;
         }
     }
 

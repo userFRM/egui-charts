@@ -105,6 +105,10 @@ pub struct ToolbarState {
     /// [`Trading::sync_hide_menu`](crate::ui::trading::Trading::sync_hide_menu) refreshes it
     /// from the trading display settings.
     pub hide_orders: bool,
+    /// Whether the Hide menu has hidden executions.
+    /// [`Trading::sync_hide_menu`](crate::ui::trading::Trading::sync_hide_menu) refreshes it
+    /// from the trading display settings.
+    pub hide_executions: bool,
     /// Whether zoom history exists (for showing/hiding Zoom Out button)
     pub has_zoom_history: bool,
     /// Whether zoom-in mode is currently active (for button highlighting)
@@ -163,6 +167,7 @@ impl Default for ToolbarState {
             hide_indicators: false,
             hide_positions: false,
             hide_orders: false,
+            hide_executions: false,
             has_zoom_history: false,
             zoom_mode_active: false,
             current_cursor_type: CursorType::Arrow, // Default: Arrow
@@ -181,7 +186,7 @@ impl ToolbarState {
     pub fn all_hidden(&self, trading: bool) -> bool {
         self.hide_drawings
             && self.hide_indicators
-            && (!trading || self.hide_positions && self.hide_orders)
+            && (!trading || self.hide_positions && self.hide_orders && self.hide_executions)
     }
 
     /// Create new toolbar state with defaults
