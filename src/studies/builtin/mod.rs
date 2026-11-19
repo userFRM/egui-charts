@@ -71,7 +71,7 @@ mod footprint_studies;
 pub(crate) use footprint_studies::footprint_studies_on_rows;
 pub use footprint_studies::{
     FootprintStudy, FootprintStudyConfig, FootprintStudyKind, FootprintStudyState,
-    footprint_studies,
+    footprint_studies, footprint_studies_with_closes,
 };
 mod options_volume_profile;
 pub use options_volume_profile::OptionsVolumeProfile;
