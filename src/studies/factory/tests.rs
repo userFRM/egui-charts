@@ -366,6 +366,7 @@ fn catalogue_studies_open_with_their_usual_lengths() {
         ("TEMA", "period", 9),
         ("LSMA", "period", 25),
         ("SMMA", "period", 7),
+        ("Hamming MA", "period", 10),
         ("EMA Cross", "period_0", 9),
         ("EMA Cross", "period_1", 26),
         ("ROC", "period", 9),
@@ -394,6 +395,16 @@ fn catalogue_studies_open_with_their_usual_lengths() {
             "{name} {id}"
         );
     }
+    // A Hamming MA saved at the former default keeps its period.
+    let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Hamming MA","inputs":[["period",{"Length":20}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.HammingMA.html","plots":[{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[5,11,5,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+    let inputs = saved.create().unwrap().inputs();
+    assert_eq!(
+        inputs
+            .iter()
+            .find(|input| input.id == "period")
+            .map(|input| &input.value),
+        Some(&crate::studies::InputValue::Length(20))
+    );
 }
 
 /// The study browser opens the channel studies with their usual inputs, and every band they
