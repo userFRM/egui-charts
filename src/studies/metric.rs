@@ -1,6 +1,6 @@
 //! Pane study for a metric published by the host's data source.
 
-use super::{Indicator, IndicatorValue, IndicatorValues, StudyData, StudyDataRequest};
+use super::{Indicator, IndicatorValue, IndicatorValues, StudyCandle, StudyData, StudyDataRequest};
 
 use crate::data::{MetricColors, MetricPlot, MetricSeries};
 use crate::model::Bar;
@@ -20,6 +20,7 @@ use egui::Color32;
 pub struct MetricStudy {
     metric: MetricSeries,
     values: IndicatorValues,
+    candles: Vec<StudyCandle>,
     color: Color32,
     /// Bars drawn in the alternate colour of [`MetricSeries::colors`].
     alternate: Vec<bool>,
@@ -41,6 +42,7 @@ impl MetricStudy {
         Self {
             metric,
             values: IndicatorValues::new(),
+            candles: Vec::new(),
             color,
             alternate: Vec::new(),
             alternate_color,
@@ -106,13 +108,15 @@ impl Indicator for MetricStudy {
             .map_or(&[][..], |source| source.bars);
         let mut values = IndicatorValues::new();
         self.alternate.clear();
+        self.candles.clear();
         let mut previous = None;
         let mut falling = false;
         for (at, bar) in data.iter().enumerate() {
             // The clock bounds the live bar too; a point at its close waits for the next bar.
+            let open = self.clock.bar_open(bar.time);
             let close = self
                 .clock
-                .next_open(self.clock.bar_open(bar.time))
+                .next_open(open)
                 .or_else(|| data.get(at + 1).map(|next| next.time));
             let end = close.map_or(points.len(), |close| {
                 points.partition_point(|point| point.time < close)
@@ -121,9 +125,45 @@ impl Indicator for MetricStudy {
                 .checked_sub(1)
                 .map(|last| points[last].close)
                 .filter(|v| v.is_finite());
+            let mut reference = previous;
+            if self.metric.plot == MetricPlot::Candles
+                && let Some(value) = value
+            {
+                let start = points.partition_point(|point| point.time < open).min(end);
+                let inside = &points[start..end];
+                let candle = if let Some(first) = inside.first() {
+                    Bar::new(
+                        bar.time,
+                        first.open,
+                        inside
+                            .iter()
+                            .map(|point| point.high)
+                            .fold(f64::NEG_INFINITY, f64::max),
+                        inside
+                            .iter()
+                            .map(|point| point.low)
+                            .fold(f64::INFINITY, f64::min),
+                        value,
+                        0.0,
+                    )
+                } else {
+                    Bar::new(bar.time, value, value, value, value, 0.0)
+                };
+                reference = Some(candle.open);
+                if [candle.open, candle.high, candle.low]
+                    .iter()
+                    .all(|v| v.is_finite())
+                {
+                    self.candles.push(StudyCandle {
+                        bars: at..at + 1,
+                        bar: candle,
+                        plot: 0,
+                    });
+                }
+            }
             let alternate = value.is_some_and(|value| match self.metric.colors {
                 Some(MetricColors::Change { .. }) => {
-                    if let Some(reference) = previous {
+                    if let Some(reference) = reference {
                         if value < reference {
                             falling = true;
                         } else if value > reference {
@@ -152,6 +192,9 @@ impl Indicator for MetricStudy {
 
     fn values(&self) -> &IndicatorValues {
         &self.values
+    }
+    fn candles(&self) -> &[StudyCandle] {
+        &self.candles
     }
     fn colors(&self) -> Vec<Color32> {
         std::iter::once(self.color)
@@ -206,7 +249,7 @@ mod tests {
     #[test]
     fn irregular_metric_points_hold_until_the_next_publication() {
         let time = |seconds| DateTime::from_timestamp(seconds, 0).unwrap();
-        let day = |d| 1_704_067_200 + d * 86_400;
+        let day = |d: i64| 1_704_067_200 + d * 86_400;
         type Row = (
             &'static str,
             Option<Timeframe>,
@@ -311,5 +354,94 @@ mod tests {
                 "missing histories stay unavailable"
             );
         }
+    }
+
+    /// Points in a day aggregate as OHLC; held days stay flat and retain the falling colour.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn candle_metrics_paint_the_points_of_each_bar() {
+        use crate::widget::{ChartBuilder, SeriesId, test_frames::shapes};
+        use egui::{Shape, epaint::ColorMode};
+        let hours = |h| DateTime::from_timestamp(1_704_067_200 + 3_600 * h, 0).unwrap();
+        let rising = Color32::from_rgb(20, 120, 240);
+        let falling = Color32::from_rgb(250, 150, 10);
+        let line = Color32::from_rgb(140, 40, 200);
+        let mut chart = ChartBuilder::new().with_timeframe(Timeframe::Day1).build();
+        chart.set_data(
+            SeriesId::MAIN,
+            (0..3)
+                .map(|d| Bar::new(hours(d * 24), 1.0, 1.0, 1.0, 1.0, 1.0))
+                .collect(),
+        );
+        assert!(chart.set_series_visible(SeriesId::MAIN, false));
+        let mut metric = MetricSeries::new("oi", "Open interest", StudyFormat::Volume);
+        metric.plot = MetricPlot::Candles;
+        metric.colors = Some(MetricColors::Change { rising, falling });
+        let id = chart.add_indicator(Box::new(MetricStudy::new(metric)));
+        chart.set_study_data(
+            StudyDataRequest {
+                symbol: String::new(),
+                timeframe: None,
+                metric: Some("oi".into()),
+            },
+            vec![
+                MetricPoint::ohlc(hours(0), 10.0, 12.0, 9.0, 11.0).into(),
+                MetricPoint::ohlc(hours(12), 11.0, 15.0, 11.0, 14.0).into(),
+                MetricPoint::ohlc(hours(30), 14.0, 14.0, 8.0, 9.0).into(),
+            ],
+            None,
+        );
+        let mut metric = MetricSeries::new("funding", "Funding rate", StudyFormat::Percent);
+        metric.plot = MetricPlot::Line;
+        metric.colors = Some(MetricColors::Single(line));
+        chart.add_indicator(Box::new(MetricStudy::new(metric)));
+        chart.set_study_data(
+            StudyDataRequest {
+                symbol: String::new(),
+                timeframe: None,
+                metric: Some("funding".into()),
+            },
+            (0..3)
+                .map(|d| MetricPoint::new(hours(d * 24), (d + 1) as f64).into())
+                .collect(),
+            None,
+        );
+        let ctx = egui::Context::default();
+        let mut painted = Vec::new();
+        for frame in 0..12 {
+            painted = shapes(&ctx, &mut chart, frame as f64, Vec::new());
+        }
+        let study = chart.indicators().find(|(key, _)| *key == id).unwrap().1;
+        assert_eq!(
+            study
+                .candles()
+                .iter()
+                .map(|c| (
+                    c.bars.clone(),
+                    [c.bar.open, c.bar.high, c.bar.low, c.bar.close]
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (0..1, [10.0, 15.0, 9.0, 14.0]),
+                (1..2, [14.0, 14.0, 8.0, 9.0]),
+                (2..3, [9.0, 9.0, 9.0, 9.0]),
+            ]
+        );
+        assert_eq!(
+            (0..3)
+                .map(|bar| study.values().value(0, bar))
+                .collect::<Vec<_>>(),
+            [Some(14.0), Some(9.0), Some(9.0)]
+        );
+        assert_eq!(
+            (0..3)
+                .map(|bar| study.plot_color(0, bar))
+                .collect::<Vec<_>>(),
+            [None, Some(falling), Some(falling)]
+        );
+        for color in [rising, falling] {
+            assert!(painted.iter().any(|shape| matches!(shape, Shape::LineSegment { stroke, .. } if stroke.color == color)), "wick in {color:?}");
+        }
+        assert!(painted.iter().any(|shape| matches!(shape, Shape::Path(path) if matches!(path.stroke.color, ColorMode::Solid(color) if color == line))), "scalar metric line");
     }
 }

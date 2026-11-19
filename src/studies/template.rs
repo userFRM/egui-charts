@@ -25,7 +25,7 @@ pub struct StudyTemplate {
     /// was kept do.
     #[serde(default)]
     pub scale: Option<StudyScale>,
-    /// A scalar metric's host key, display name, unit and format. Restored without requiring a
+    /// A metric's host key, display name, unit, format and declared plot and colours. Restored without requiring a
     /// catalogue entry; its history is requested again from the host. Absent in older saves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metric: Option<crate::data::MetricSeries>,

@@ -813,9 +813,11 @@ pub(super) mod tests {
             reply.send(Ok(MetricPage {
                 points: [(15, 10.0), (75, 20.0)]
                     .into_iter()
-                    .map(|(minute, value)| crate::data::MetricPoint {
-                        time: DateTime::UNIX_EPOCH + Duration::minutes(minute),
-                        value,
+                    .map(|(minute, value)| {
+                        crate::data::MetricPoint::new(
+                            DateTime::UNIX_EPOCH + Duration::minutes(minute),
+                            value,
+                        )
                     })
                     .collect(),
                 end_of_history: true,
@@ -1081,10 +1083,7 @@ pub(super) mod tests {
                         points: page
                             .bars
                             .into_iter()
-                            .map(|bar| crate::data::MetricPoint {
-                                time: bar.time,
-                                value: bar.close,
-                            })
+                            .map(|bar| crate::data::MetricPoint::new(bar.time, bar.close))
                             .collect(),
                         end_of_history: page.end_of_history,
                     }
@@ -1481,10 +1480,10 @@ pub(super) mod tests {
         );
         let sink = feed.metrics.lock().unwrap()[0].sink.clone();
         for (minutes, value) in [(15, 14.0), (110, 30.0), (125, 40.0)] {
-            sink.push_metric(MetricPoint {
-                time: DateTime::UNIX_EPOCH + Duration::minutes(minutes),
+            sink.push_metric(MetricPoint::new(
+                DateTime::UNIX_EPOCH + Duration::minutes(minutes),
                 value,
-            });
+            ));
         }
         for frame in 0..60 {
             let mut last = bars(&[1.0; 5], 30).pop().unwrap();

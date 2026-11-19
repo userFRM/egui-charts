@@ -74,7 +74,8 @@ pub enum MetricPlot {
     Histogram,
     /// A line over a fill down to zero.
     Area,
-    /// A candle on each bar from the open, high, low and close of the points published in it.
+    /// A candle on each bar from the open, high, low and close of the points published in it
+    /// (see [`MetricPoint::ohlc`]).
     /// A bar without such a point draws a flat candle at the value it holds.
     Candles,
 }
@@ -103,21 +104,56 @@ pub enum MetricColors {
     },
 }
 
-/// A metric's value from this instant until the next published point.
-/// Non-finite values are rejected, like invalid price bars.
+/// A metric's value from this instant until the next published point, with the open,
+/// high and low of the period it closes for a metric drawn as candles. Non-finite values
+/// are rejected, like invalid price bars, as are highs below the open or close and lows above them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct MetricPoint {
     /// UTC instant at which this observation takes effect.
     pub time: DateTime<Utc>,
-    /// Metric value in the units declared by `MetricSeries`.
+    /// Metric value in the units declared by `MetricSeries`, the close of a candle.
     pub value: f64,
+    /// Value at the start of the period this point closes; [`new`](Self::new) sets it to `value`.
+    pub open: f64,
+    /// Highest value in that period; [`new`](Self::new) sets it to `value`.
+    pub high: f64,
+    /// Lowest value in that period; [`new`](Self::new) sets it to `value`.
+    pub low: f64,
 }
 
 impl MetricPoint {
     /// `value` from `time` until the next published point.
     pub fn new(time: DateTime<Utc>, value: f64) -> Self {
-        Self { time, value }
+        Self {
+            time,
+            value,
+            open: value,
+            high: value,
+            low: value,
+        }
+    }
+
+    /// `close` from `time` until the next published point, with the `open`, `high` and `low`
+    /// of the period it closes.
+    ///
+    /// ```
+    /// use egui_charts::data::MetricPoint;
+    ///
+    /// let at = "2026-01-05T00:00:00Z".parse().expect("a valid time");
+    /// let day = MetricPoint::ohlc(at, 41_000.0, 41_900.0, 40_800.0, 41_250.0);
+    /// assert_eq!((day.open, day.high, day.low, day.value), (41_000.0, 41_900.0, 40_800.0, 41_250.0));
+    /// let point = MetricPoint::new(at, 41_250.0);
+    /// assert_eq!((point.open, point.high, point.low), (41_250.0, 41_250.0, 41_250.0));
+    /// ```
+    pub fn ohlc(time: DateTime<Utc>, open: f64, high: f64, low: f64, close: f64) -> Self {
+        Self {
+            time,
+            value: close,
+            open,
+            high,
+            low,
+        }
     }
 }
 
@@ -125,9 +161,9 @@ impl From<MetricPoint> for Bar {
     fn from(point: MetricPoint) -> Self {
         Self::new(
             point.time,
-            point.value,
-            point.value,
-            point.value,
+            point.open,
+            point.high,
+            point.low,
             point.value,
             0.0,
         )
