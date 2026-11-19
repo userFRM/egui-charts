@@ -114,8 +114,7 @@ impl DrawingToolType {
         )
     }
 
-    /// Whether the drawing is a text annotation: its text is its content and its colour is the
-    /// text's.
+    /// Whether the drawing is a text annotation, whose text is its content.
     pub(crate) fn is_text_annotation(&self) -> bool {
         matches!(
             self,

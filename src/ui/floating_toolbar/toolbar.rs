@@ -267,7 +267,16 @@ impl FloatingSelectionToolbar {
         let fill_slot = usize::from(drawing.tool_type.supports_color());
         self.set_colors(if drawing.tool_type.supports_color() {
             vec![ColorSlot {
-                label: if drawing.tool_type.is_text_annotation() {
+                // A pin, a table and text with a colour of its own paint their text separately.
+                label: if drawing.text_color.is_none()
+                    && matches!(
+                        drawing.tool_type,
+                        DrawingToolType::TextLabel
+                            | DrawingToolType::AnchoredText
+                            | DrawingToolType::Note
+                            | DrawingToolType::Callout
+                            | DrawingToolType::FlagNote
+                    ) {
                     "Text color"
                 } else {
                     "Line color"
@@ -792,15 +801,20 @@ mod tests {
         }
     }
 
-    /// The colour of a text annotation is its text's; a label on a line does not make the line's
-    /// colour a text colour, although the colour paints both. A sticker and a ghost feed keep
-    /// their own colours. Width and style are offered apart, each where the tool draws it.
+    /// The colour of a text annotation is its text's where it paints the text; a note's own
+    /// white text, a pin's text and a table's cells do not take it. A label on a line does not
+    /// make the line's colour a text colour, although the colour paints both. A sticker, a ghost
+    /// feed and a pitchfork keep their own colours, and a post card's first slot is its fill.
+    /// Width and style are offered apart, each where the tool draws it.
     #[test]
     fn colour_slot_names_what_the_colour_paints() {
         use crate::drawings::{Drawing, DrawingToolType as Tool};
         for (tool, label, offers) in [
             (Tool::TrendLine, Some("Line color"), (true, true)),
             (Tool::TextLabel, Some("Text color"), (false, false)),
+            (Tool::Note, Some("Line color"), (false, false)),
+            (Tool::AnchoredNote, Some("Line color"), (false, false)),
+            (Tool::Table, Some("Line color"), (false, false)),
             (Tool::ArrowMarkUp, Some("Line color"), (false, false)),
             (Tool::ArrowMarker, Some("Line color"), (false, false)),
             (Tool::Pitchfork, None, (true, false)),
