@@ -236,6 +236,7 @@ impl DrawingPropertiesDialog {
                 drawing.extend_right = old.extend_right;
                 drawing.text = old.text;
                 drawing.font_size = old.font_size;
+                drawing.glyph_angle = old.glyph_angle;
                 drawing.timeframe_visibility = old.timeframe_visibility;
                 drawing.fib_config = old.fib_config;
                 drawing.pitchfork = old.pitchfork;
@@ -720,6 +721,7 @@ mod tests {
                 (Tool::Pitchfork, false, true, false, (true, false)),
                 (Tool::Tweet, true, false, true, (false, true)),
                 (Tool::Sticker, false, false, false, (false, false)),
+                (Tool::FontIcon, false, false, false, (false, false)),
                 (Tool::GhostFeed, false, false, false, (false, false)),
             ] {
                 let mut drawing = Drawing::new(7, tool);
@@ -748,6 +750,7 @@ mod tests {
                     ("Line width", width),
                     ("Line style", style),
                     ("Wick", tool == Tool::GhostFeed),
+                    ("Angle", matches!(tool, Tool::FontIcon | Tool::Sticker)),
                     ("Coordinates", !freehand),
                     ("Template", true),
                     ("Ok", true),
@@ -879,6 +882,7 @@ mod tests {
                 settings.price_axis_label = false;
                 settings.time_axis_label = false;
                 settings.italic = true;
+                settings.glyph_angle = 30.0;
                 settings.text_wrap = true;
                 settings.text_wrap_width = 120.0;
                 settings.text_follows_zoom = true;
@@ -910,6 +914,7 @@ mod tests {
                 assert!(!preview.marker.show_text);
                 assert!(!preview.price_axis_label && !preview.time_axis_label);
                 assert!(preview.italic);
+                assert_eq!(preview.glyph_angle, 30.0);
                 assert_eq!((preview.text_wrap, preview.text_wrap_width), (true, 120.0));
                 assert!(preview.text_follows_zoom);
                 assert_eq!(preview.note_text_style, Some(note_text));
@@ -967,6 +972,7 @@ mod tests {
                 "{finish}"
             );
             assert!(!restored.italic, "{finish}");
+            assert_eq!(restored.glyph_angle, 0.0, "{finish}");
             assert!(!restored.text_follows_zoom, "{finish}");
             assert_eq!(restored.note_text_style, None, "{finish}");
             assert_eq!(

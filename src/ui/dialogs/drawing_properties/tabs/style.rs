@@ -246,6 +246,28 @@ impl StyleTab {
                     });
                     ui.end_row();
                 }
+                if matches!(
+                    settings.tool_type,
+                    DrawingToolType::FontIcon | DrawingToolType::Sticker
+                ) {
+                    let label = ui.label(l10n::text(ui.ctx(), "Angle"));
+                    let mut degrees = settings.glyph_angle.rem_euclid(360.0);
+                    ui.label_inputs_by(label.id, |ui| {
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut degrees)
+                                    .range(0.0..=360.0)
+                                    .speed(1.0)
+                                    .max_decimals(1)
+                                    .suffix("°"),
+                            )
+                            .changed()
+                        {
+                            settings.set_glyph_angle(degrees);
+                        }
+                    });
+                    ui.end_row();
+                }
                 if position {
                     let style = &mut settings.position_style;
                     let rgba = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
