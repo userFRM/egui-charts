@@ -97,6 +97,32 @@ impl StudyStrategy {
             signals: Vec::new(),
         }
     }
+
+    /// Whether the setup of each working entry, long then short, is gone at this decision.
+    /// Forming-bar decisions keep entries working until their bar closes.
+    fn expired(
+        &self,
+        signals: [Option<OrderType>; 2],
+        context: &StrategyContext<'_>,
+        at: usize,
+    ) -> [bool; 2] {
+        if context.is_forming_bar() {
+            return [false; 2];
+        }
+        match self.rule {
+            // A band crossing holds for one bar: its stop works through the next bar only.
+            Rule::Bollinger | Rule::DirectedBollinger => signals.map(|signal| signal.is_none()),
+            // A Keltner stop works until the close falls back through the basis.
+            Rule::Keltner => {
+                let close = context.bars()[at].close;
+                self.studies[0]
+                    .values()
+                    .value(0, at)
+                    .map_or([false; 2], |basis| [close < basis, close > basis])
+            }
+            _ => [false; 2],
+        }
+    }
 }
 
 fn crosses(a: &[f64], b: &[f64], at: usize) -> bool {
@@ -290,6 +316,7 @@ impl Strategy for StudyStrategy {
         let Some(&signals) = self.signals.get(at) else {
             return;
         };
+        let expired = self.expired(signals, context, at);
         if matches!(self.rule, Rule::DirectedBollinger) {
             let InputValue::Choice(direction) = self.inputs[0].value else {
                 unreachable!()
@@ -312,6 +339,8 @@ impl Strategy for StudyStrategy {
                     None,
                     order,
                 );
+            } else if expired[direction] {
+                context.cancel(if direction == 0 { "Long" } else { "Short" });
             }
             return;
         }
@@ -319,6 +348,8 @@ impl Strategy for StudyStrategy {
             if let Some(order) = signals[index] {
                 context.cancel(if index == 0 { "Short" } else { "Long" });
                 context.entry(if index == 0 { "Long" } else { "Short" }, side, None, order);
+            } else if expired[index] {
+                context.cancel(if index == 0 { "Long" } else { "Short" });
             }
         }
     }
