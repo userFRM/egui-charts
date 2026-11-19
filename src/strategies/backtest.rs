@@ -941,6 +941,7 @@ impl Backtest {
         }
         report.trades.clear();
         report.equity.clear();
+        report.equity_ranges.clear();
     }
 }
 
@@ -4529,7 +4530,9 @@ mod tests {
                     "{rates:?}"
                 );
                 assert!(
-                    report.trades.is_empty() && report.equity.is_empty(),
+                    report.trades.is_empty()
+                        && report.equity.is_empty()
+                        && report.equity_ranges.is_empty(),
                     "{rates:?}"
                 );
             }
