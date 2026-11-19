@@ -72,7 +72,7 @@ These main renderers share the parameter workflow above:
 | --- | --- | --- |
 | `Kagi` | Close by default, or `kagi_source` high/low; `kagi_reversal` in price units and `kagi_size_method` | `styles.kagi` thick and thin line widths and colours, `up_color` for thick lines and `down_color` for thin ones; [`KagiConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/kagi/struct.KagiConfig.html) |
 | `LineBreak` | Close by default, or `line_break_source` high/low; `line_break_count` reversal lookback, 1 to 10 | Chart up/down colours; [`LineBreakConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/line_break/struct.LineBreakConfig.html) |
-| `Range` | Retained executions in order, after the OHLC path approximation of the bars before the one holding the first retained trade, or that approximation alone when no trades are held; `range_size` and `range_size_method` | Chart up/down colours; [`RangeBarSource`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/range_bar/enum.RangeBarSource.html), [`RangeBarConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/range_bar/struct.RangeBarConfig.html) |
+| `Range` | Retained executions in order, after the OHLC path approximation of the bars before the one holding the first retained trade, or that approximation alone when no trades are held; `range_size` and `range_size_method` | Chart up/down colours; `styles.range` thin bars, and phantom bars that outline the bars a move across a price gap closed without a trade; [`RangeBarSource`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/range_bar/enum.RangeBarSource.html), [`RangeBarConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/range_bar/struct.RangeBarConfig.html) |
 
 [`ChartTypeParams`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeParams.html)
 holds all these fields. For high/low input, intrabar order is unknown: continuation
@@ -80,6 +80,11 @@ takes priority over reversal and at most one direction is processed per source
 bar. OHLC range bars are an approximation; original executions give their actual path.
 When trades start after OHLC history, the approximated range bars stay in front of the
 bars built from the trades, and the range in progress at the first trade gives way to them.
+In the approximation, the move from one bar's close to the next bar's open is the
+gap no trade filled. Phantom bars stay elements of the chart: studies, the legend
+and the data window read them as they read the bars that traded.
+Bars built from trades are marked the same way: a trade beyond a price gap closes
+a bar at each boundary on the way, and only the first of them holds a trade.
 See the [order-flow guide](../../../../../order-flow.md) for supplying executions.
 
 The price scale of Renko, Kagi, Line Break and Point and Figure labels the last

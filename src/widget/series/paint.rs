@@ -182,6 +182,7 @@ impl Chart {
                 full_data: &item.bars,
                 revision: item.revision,
                 shows_elements: false,
+                range_phantoms: &[],
                 heikin_ashi: &item.heikin_ashi,
                 start_idx: start,
                 clock: &clock,

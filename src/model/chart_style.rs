@@ -655,14 +655,29 @@ impl PointFigureStyle {
     }
 }
 
+/// The Range chart's bars.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct RangeStyle {
+    /// Draw each bar as a stroke from its low to its high with open and close ticks, at the
+    /// chart's wick width at every zoom level as thin OHLC bars are, instead of a filled block.
+    pub thin_bars: bool,
+    /// Draw a bar that closed without a trade in its range, as one of the bars a single trade
+    /// across a price gap closes, as an outline in its direction's colour without a fill. These
+    /// bars stay elements of the chart: studies, the legend and the data window read them as
+    /// they read the bars that traded.
+    pub phantom_bars: bool,
+}
+
 /// Styles of the candle, hollow candle, volume candle, Heikin-Ashi, bar, column, high-low, line,
-/// step, marker, area, HLC area, baseline, Kagi and Point and Figure chart types.
+/// step, marker, area, HLC area, baseline, Kagi, Point and Figure and Range chart types.
 /// Defaults use the design-token palette and remain independent of candle colours.
 ///
 /// ```
 /// use egui_charts::model::{
 ///     CandlesStyle, ChartTypeStyles, ColumnsStyle, HeikinStyle, HighLowStyle, HlcAreaStyle,
-///     HollowStyle, KagiStyle, PointFigureStyle, PriceSource, VolumeCandlesStyle,
+///     HollowStyle, KagiStyle, PointFigureStyle, PriceSource, RangeStyle, VolumeCandlesStyle,
 /// };
 ///
 /// let mut styles = ChartTypeStyles::default();
@@ -691,6 +706,9 @@ impl PointFigureStyle {
 /// let mut point_figure = PointFigureStyle::default();
 /// point_figure.up_color = egui::Color32::BLUE;
 /// styles.point_figure = point_figure;
+/// let mut range = RangeStyle::default();
+/// range.thin_bars = true;
+/// styles.range = range;
 /// styles.columns = ColumnsStyle::default();
 /// styles.step_line_price_source = Some(PriceSource::High);
 /// styles.line_gradient = true;
@@ -767,6 +785,8 @@ pub struct ChartTypeStyles {
     /// colours, as they were drawn.
     #[serde(default = "PointFigureStyle::saved_without_style")]
     pub point_figure: PointFigureStyle,
+    /// Range chart.
+    pub range: RangeStyle,
     /// Radius in logical points of the marker drawn on the line at the crosshair's bar in the
     /// Line, Step line, Line with markers, Area and Baseline charts. Non-positive or non-finite
     /// radii hide it, the default.
@@ -809,6 +829,7 @@ impl Default for ChartTypeStyles {
             high_low: HighLowStyle::default(),
             kagi: KagiStyle::default(),
             point_figure: PointFigureStyle::default(),
+            range: RangeStyle::default(),
             crosshair_marker_radius: 0.0,
             crosshair_marker_fill: None,
             crosshair_marker_border_color: None,

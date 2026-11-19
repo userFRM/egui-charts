@@ -564,6 +564,8 @@ mod tests {
         [styles.kagi.up_color, styles.kagi.down_color] = [color(10), color(11)].map(Option::unwrap);
         let point_figure = [color(12), color(13)].map(Option::unwrap);
         [styles.point_figure.up_color, styles.point_figure.down_color] = point_figure;
+        styles.range.thin_bars = true;
+        styles.range.phantom_bars = true;
         chart.apply_series_settings(&settings);
         let json = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
         let mut restored = price_based_chart(ChartType::Candles, [egui::Color32::RED; 2]);

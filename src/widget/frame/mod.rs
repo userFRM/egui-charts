@@ -1728,6 +1728,21 @@ impl Chart {
         {
             bar_clock = bar_clock.with_timezone(zone.clone());
         }
+        let range_phantoms = if self.chart_type == ChartType::Range
+            && self.chart_type_params.styles.range.phantom_bars
+            && self.state.shows_elements()
+        {
+            rendering::candles::price_based::range_phantoms(
+                &self.execution_ranges,
+                &self.state.data().bars,
+                self.state.revision(),
+                &self.chart_type_params,
+                start_idx,
+                visible_data.len(),
+            )
+        } else {
+            Vec::new()
+        };
         let render_ctx = rendering::CandleDataContext {
             price_ctx: &clipped_price_ctx,
             volume_ctx: &clipped_volume_ctx,
@@ -1738,6 +1753,7 @@ impl Chart {
             // computed over the complete series, not just the visible slice.
             full_data: &self.state.data().bars,
             shows_elements: self.state.shows_elements(),
+            range_phantoms: &range_phantoms,
             revision: self.state.revision(),
             heikin_ashi: &self.heikin_ashi,
             start_idx,
