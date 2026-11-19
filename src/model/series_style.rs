@@ -17,6 +17,69 @@ pub enum SeriesFormat {
     Volume,
     /// Raw percentage units: 12.5 is written as 12.50%, without a base calculation.
     Percentage,
+    /// Whole units and a fractional count, such as `112'16`. Ignores `precision` and
+    /// `min_move`, rounding to the fraction's step with halfway values away from zero.
+    Fraction(PriceFraction),
+}
+
+/// The fractions of a whole unit used to quote a price: its whole part, an apostrophe and
+/// the fractional count, such as `112'16` for 112 16/32.
+///
+/// ```
+/// use egui_charts::model::{PriceFraction, SeriesDisplayFormat, SeriesFormat};
+/// use egui_charts::scales::PriceFormatter;
+///
+/// let mut format = SeriesDisplayFormat::default();
+/// format.kind = SeriesFormat::Fraction(PriceFraction::QuarterThirtySeconds);
+/// assert_eq!(format.format(112.5078125), "112'162");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum PriceFraction {
+    /// Halves: `101'1` is 101 1/2.
+    Halves,
+    /// Quarters: `101'3` is 101 3/4.
+    Quarters,
+    /// Eighths: `101'5` is 101 5/8.
+    Eighths,
+    /// Sixteenths, padded to two digits: `101'07` is 101 7/16.
+    Sixteenths,
+    /// Thirty-seconds, padded to two digits: `112'16` is 112 16/32.
+    ThirtySeconds,
+    /// Thirty-seconds with half steps, ending in 0 or 5: `112'165` is 112 16.5/32.
+    HalfThirtySeconds,
+    /// Thirty-seconds with quarter steps, ending in 0, 2, 5 or 7: `112'162` is 112 16.25/32.
+    QuarterThirtySeconds,
+    /// Thirty-seconds with eighth steps, ending in the eighth's first decimal: `112'163` is
+    /// 112 16.375/32.
+    EighthThirtySeconds,
+    /// Sixty-fourths, padded to two digits: `112'33` is 112 33/64.
+    SixtyFourths,
+    /// 128ths, padded to three digits: `112'065` is 112 65/128.
+    OneTwentyEighths,
+    /// 256ths, padded to three digits: `112'131` is 112 131/256.
+    TwoFiftySixths,
+}
+
+impl PriceFraction {
+    /// The smallest displayed movement, such as 1/32 or 1/64 for thirty-seconds with halves.
+    pub fn step(self) -> f64 {
+        1.0 / f64::from(self.steps_per_unit())
+    }
+
+    /// The number of smallest steps in one whole unit.
+    pub(crate) fn steps_per_unit(self) -> u16 {
+        match self {
+            Self::Halves => 2,
+            Self::Quarters => 4,
+            Self::Eighths => 8,
+            Self::Sixteenths => 16,
+            Self::ThirtySeconds => 32,
+            Self::HalfThirtySeconds | Self::SixtyFourths => 64,
+            Self::QuarterThirtySeconds | Self::OneTwentyEighths => 128,
+            Self::EighthThirtySeconds | Self::TwoFiftySixths => 256,
+        }
+    }
 }
 
 /// Saved numeric display settings for a bar series. Values and scale modes stay unchanged.
