@@ -2772,7 +2772,10 @@ fn scale_font_reaches_the_crosshair_time_label_and_nothing_else() {
         // The button keeps the default theme's label size.
         assert_eq!(
             (font(&label), font("Latest")),
-            (FontId::new(size, family.clone()), FontId::proportional(12.0))
+            (
+                FontId::new(size, family.clone()),
+                FontId::proportional(12.0)
+            )
         );
         let tag = painted
             .iter()
@@ -2782,6 +2785,9 @@ fn scale_font_reaches_the_crosshair_time_label_and_nothing_else() {
             })
             .unwrap();
         let axis = chart.time_axis_rect;
-        assert!(axis.contains_rect(tag), "{tag:?} in {axis:?} at {size} {family:?}");
+        assert!(
+            axis.contains_rect(tag),
+            "{tag:?} in {axis:?} at {size} {family:?}"
+        );
     }
 }
