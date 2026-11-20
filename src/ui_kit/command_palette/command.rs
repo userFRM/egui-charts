@@ -20,6 +20,10 @@ pub struct Command {
     pub category: Option<String>,
     /// Keywords for better search matching
     pub keywords: Vec<String>,
+    /// A star button at the row's right edge, filled while `Some(true)`; `None` shows no star.
+    /// Pressing it flips the value, keeps the palette open and reports the id through
+    /// [`CommandPalette::take_star_toggles`](super::CommandPalette::take_star_toggles).
+    pub starred: Option<bool>,
 }
 
 impl Command {
@@ -33,6 +37,7 @@ impl Command {
             icon: None,
             category: None,
             keywords: Vec::new(),
+            starred: None,
         }
     }
 
@@ -63,6 +68,12 @@ impl Command {
     /// Add keywords for better search matching
     pub fn keywords(mut self, keywords: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.keywords = keywords.into_iter().map(|k| k.into()).collect();
+        self
+    }
+
+    /// Give the row a star button, filled while `starred`.
+    pub fn starred(mut self, starred: bool) -> Self {
+        self.starred = Some(starred);
         self
     }
 

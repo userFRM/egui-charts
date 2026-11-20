@@ -24,6 +24,8 @@ pub struct CommandPalette {
     selected_index: Option<usize>,
     /// Ids of the commands run from the palette, most recent first, at most [`RECENT_LIMIT`].
     recent: Vec<String>,
+    /// Command ids whose star was pressed, in order, until the host drains them.
+    star_toggles: Vec<String>,
     /// Cached filtered results (command index, match)
     filtered: Vec<(usize, FuzzyMatch)>,
     /// The query `filtered` was built for; a different query puts the highlight back on row 0.
@@ -40,6 +42,7 @@ impl CommandPalette {
             search_query: String::new(),
             selected_index: None,
             recent: Vec::new(),
+            star_toggles: Vec::new(),
             filtered: Vec::new(),
             filtered_query: String::new(),
             focus_search: true,
@@ -82,6 +85,12 @@ impl CommandPalette {
                 self.recent.push(id);
             }
         }
+    }
+
+    /// The ids of the commands whose star was pressed since the last call, in order. The palette
+    /// has already flipped their [`Command::starred`]; apply each change to what the star marks.
+    pub fn take_star_toggles(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.star_toggles)
     }
 
     /// Puts `id` first among the recent entries.
@@ -193,6 +202,8 @@ impl CommandPalette {
         self.update_filter();
 
         let mut executed_command = None;
+        let mut toggled_star = None;
+        let star_slot = self.commands.iter().any(|cmd| cmd.starred.is_some());
 
         let search_id = egui::Id::unique("command_palette_search");
         let focus_search = std::mem::take(&mut self.focus_search);
@@ -311,11 +322,16 @@ impl CommandPalette {
                             for (list_idx, (cmd_idx, _)) in self.filtered.iter().enumerate() {
                                 let cmd = &self.commands[*cmd_idx];
                                 let selected = Some(list_idx) == self.selected_index;
-                                let row = command_row(ui, cmd, selected);
+                                let (row, star) = command_row(ui, cmd, selected, star_slot);
                                 if selected && reveal_selected {
                                     row.scroll_to_me(None);
                                 }
-                                if row.clicked() {
+                                if let Some(star) = star.filter(egui::Response::clicked) {
+                                    toggled_star = Some((
+                                        *cmd_idx,
+                                        star.clicked_by(egui::PointerButton::Primary),
+                                    ));
+                                } else if row.clicked() {
                                     executed_command = Some(cmd.id.clone());
                                 }
                             }
@@ -323,6 +339,17 @@ impl CommandPalette {
                 }
             });
 
+        if let Some((idx, by_pointer)) = toggled_star {
+            let command = &mut self.commands[idx];
+            command.starred = command.starred.map(|starred| !starred);
+            self.star_toggles.push(command.id.clone());
+            // A pointer press leaves the field, so typing and Enter would reach nothing.
+            self.focus_search |= by_pointer;
+            ctx.input_mut(|i| {
+                i.consume_key(i.modifiers, Key::Enter);
+                i.consume_key(i.modifiers, Key::Space);
+            });
+        }
         if let Some(id) = &executed_command {
             self.record_recent(id);
         }
@@ -344,7 +371,12 @@ const ROW_HEIGHT_WITH_DESCRIPTION: f32 = 40.0;
 
 /// Paint one result row: icon slot, label with optional description, then category and
 /// shortcut at the right.
-fn command_row(ui: &mut egui::Ui, cmd: &Command, is_selected: bool) -> egui::Response {
+fn command_row(
+    ui: &mut egui::Ui,
+    cmd: &Command,
+    is_selected: bool,
+    star_slot: bool,
+) -> (egui::Response, Option<egui::Response>) {
     let theme = ui.active_theme();
     let height = if cmd.description.is_some() {
         ROW_HEIGHT_WITH_DESCRIPTION
@@ -362,8 +394,27 @@ fn command_row(ui: &mut egui::Ui, cmd: &Command, is_selected: bool) -> egui::Res
             &translated_label,
         )
     });
+    let slot = star_slot.then(|| {
+        Rect::from_min_max(
+            egui::pos2(
+                rect.max.x - theme.spacing.md - DESIGN_TOKENS.sizing.button_sm,
+                rect.min.y,
+            ),
+            egui::pos2(rect.max.x - theme.spacing.md, rect.max.y),
+        )
+    });
+    // The star answers its own clicks, so a click on it never runs the command.
+    let star = cmd.starred.zip(slot).map(|(starred, slot)| {
+        let star = ui.interact(slot, response.id.with("star"), Sense::click());
+        let name = l10n::format_text(ui.ctx(), "Favourite {0}", &[("0", &translated_label)]);
+        star.widget_info(|| {
+            egui::WidgetInfo::selected(egui::Role::Button, star.enabled(), starred, &name)
+        });
+        star
+    });
+    let hovered = response.hovered() || star.as_ref().is_some_and(egui::Response::hovered);
     if !ui.is_rect_visible(rect) {
-        return response;
+        return (response, star);
     }
 
     let visuals = ui.visuals();
@@ -371,7 +422,7 @@ fn command_row(ui: &mut egui::Ui, cmd: &Command, is_selected: bool) -> egui::Res
         let fg = visuals.selection.stroke.color;
         (visuals.selection.bg_fill, fg, fg, fg)
     } else {
-        let fill = if response.hovered() {
+        let fill = if hovered {
             visuals.widgets.hovered.bg_fill
         } else {
             Color32::TRANSPARENT
@@ -402,7 +453,9 @@ fn command_row(ui: &mut egui::Ui, cmd: &Command, is_selected: bool) -> egui::Res
     let text_x = icon_x + icon_size + theme.spacing.lg;
     let small = egui::FontId::proportional(theme.text.small);
     // Shortcut at the right edge, the category to its left.
-    let mut right = rect.max.x - theme.spacing.md;
+    let mut right = slot.map_or(rect.max.x - theme.spacing.md, |slot| {
+        slot.min.x - theme.spacing.sm
+    });
     // Leave at least half the text space for the command and its description.
     let metadata_left = (text_x + right) / 2.0;
     let shortcut = cmd
@@ -450,7 +503,22 @@ fn command_row(ui: &mut egui::Ui, cmd: &Command, is_selected: bool) -> egui::Res
         }
     }
 
-    response
+    if let (Some(starred), Some(star)) = (cmd.starred, &star) {
+        let active = hovered || is_selected || response.has_focus() || star.has_focus();
+        if starred || active {
+            let (icon, tint) = match (starred, is_selected) {
+                (true, false) => (&icons::STAR_FILLED, theme.ui.warning),
+                (true, true) => (&icons::STAR_FILLED, secondary),
+                (false, _) => (&icons::STAR_EMPTY, secondary),
+            };
+            let size = Vec2::splat(DESIGN_TOKENS.sizing.icon_sm);
+            icon.as_image_tinted(size, tint)
+                .paint_at(ui, Rect::from_center_size(star.rect.center(), size));
+        }
+        crate::styles::focus::draw_focus_ring(ui, star, theme.radius.sm);
+    }
+
+    (response, star)
 }
 
 /// Handler for managing command palette state
@@ -504,6 +572,11 @@ impl CommandPaletteHandler {
     /// Restores ids read from [`Self::recent`]; see [`CommandPalette::set_recent`].
     pub fn set_recent(&mut self, ids: impl IntoIterator<Item = impl Into<String>>) {
         self.palette.set_recent(ids);
+    }
+
+    /// The ids whose star was pressed; see [`CommandPalette::take_star_toggles`].
+    pub fn take_star_toggles(&mut self) -> Vec<String> {
+        self.palette.take_star_toggles()
     }
 
     /// Update the command palette each frame
@@ -646,6 +719,147 @@ mod tests {
     }
 
     #[test]
+    fn stars_toggle_by_pointer_and_keyboard_without_closing() {
+        fn run(
+            ctx: &Context,
+            palette: &mut CommandPalette,
+            events: Vec<Event>,
+        ) -> (Option<String>, egui::FullOutput) {
+            let (mut open, mut executed) = (true, None);
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| executed = palette.show(ui.ctx(), &mut open),
+            );
+            assert_eq!(open, executed.is_none());
+            (executed, output)
+        }
+        let palette = || {
+            let mut p = CommandPalette::new(vec![
+                Command::new("t", "Trend Line").starred(false),
+                Command::new("p", "Pitchfork"),
+            ]);
+            p.search_query = "trend".into();
+            p
+        };
+        let key = |key| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        for (_, theme) in crate::theme::presets() {
+            let ctx = Context::default();
+            ctx.enable_accesskit();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut p = palette();
+            run(&ctx, &mut p, vec![]).1.drop_without_applying_deltas();
+            let (_, output) = run(&ctx, &mut p, vec![]);
+            let node = &output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .find(|(_, node)| node.label() == Some("Favourite Trend Line"))
+                .unwrap()
+                .1;
+            assert_eq!(node.role(), egui::accesskit::Role::Button);
+            assert_eq!(node.toggled(), Some(egui::accesskit::Toggled::False));
+            let bounds = node.bounds().unwrap();
+            let pos = egui::pos2(
+                (bounds.x0 + bounds.x1) as f32 * 0.5,
+                (bounds.y0 + bounds.y1) as f32 * 0.5,
+            );
+            output.drop_without_applying_deltas();
+            for pressed in [true, false] {
+                let (id, output) = run(
+                    &ctx,
+                    &mut p,
+                    vec![
+                        Event::PointerMoved(pos),
+                        Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        },
+                    ],
+                );
+                assert_eq!(id, None);
+                output.drop_without_applying_deltas();
+            }
+            assert_eq!(p.query(), "trend");
+            assert_eq!(p.take_star_toggles(), ["t"]);
+            assert!(p.take_star_toggles().is_empty());
+            assert_eq!(p.commands[0].starred, Some(true));
+            assert!(
+                p.recent().is_empty(),
+                "starring alone does not run the command"
+            );
+            run(&ctx, &mut p, vec![]).1.drop_without_applying_deltas();
+            let (id, output) = run(&ctx, &mut p, vec![key(Key::Enter)]);
+            assert_eq!(
+                id.as_deref(),
+                Some("t"),
+                "a pointer star press returns focus to search"
+            );
+            assert_eq!(p.recent(), ["t"]);
+            output.drop_without_applying_deltas();
+
+            for activation in [Key::Space, Key::Enter] {
+                let ctx = Context::default();
+                ctx.enable_accesskit();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut p = palette();
+                for events in [vec![], vec![], vec![key(Key::Tab)], vec![key(Key::Tab)]] {
+                    run(&ctx, &mut p, events).1.drop_without_applying_deltas();
+                }
+                let focused = ctx.memory(|m| m.focused());
+                for starred in [true, false] {
+                    let (id, output) = run(&ctx, &mut p, vec![key(activation)]);
+                    assert_eq!(id, None);
+                    assert!(!ctx.input(|i| i.key_pressed(activation)));
+                    assert_eq!(p.commands[0].starred, Some(starred));
+                    assert_eq!(p.query(), "trend");
+                    assert_eq!(ctx.memory(|m| m.focused()), focused);
+                    output.drop_without_applying_deltas();
+                    let (_, output) = run(&ctx, &mut p, vec![]);
+                    let node = &output
+                        .platform_output
+                        .accesskit_update
+                        .as_ref()
+                        .unwrap()
+                        .nodes
+                        .iter()
+                        .find(|(_, node)| node.label() == Some("Favourite Trend Line"))
+                        .unwrap()
+                        .1;
+                    assert_eq!(
+                        node.toggled(),
+                        Some(if starred {
+                            egui::accesskit::Toggled::True
+                        } else {
+                            egui::accesskit::Toggled::False
+                        })
+                    );
+                    output.drop_without_applying_deltas();
+                }
+                assert_eq!(p.take_star_toggles(), ["t", "t"]);
+                assert!(p.recent().is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn empty_palette_has_an_undimmed_backdrop_and_a_spacious_search_row() {
         for (_, theme) in crate::theme::presets() {
             let ctx = Context::default();
@@ -746,7 +960,8 @@ mod tests {
                     .description("Add this study to the current chart in a separate pane")
                     .icon(&icons::RAY)
                     .category("Studies")
-                    .shortcut(egui::KeyboardShortcut::new(Modifiers::CTRL, Key::I)),
+                    .shortcut(egui::KeyboardShortcut::new(Modifiers::CTRL, Key::I))
+                    .starred(true),
                 Command::new("settings", "Open settings")
                     .category("Chart appearance and scale settings"),
             ];
@@ -754,6 +969,7 @@ mod tests {
                 for selected in [false, true] {
                     for command in &commands {
                         let mut row = Rect::NOTHING;
+                        let mut star = None;
                         let output = ctx.run_ui(
                             RawInput {
                                 screen_rect: Some(Rect::from_min_size(
@@ -762,7 +978,12 @@ mod tests {
                                 )),
                                 ..Default::default()
                             },
-                            |ui| row = command_row(ui, command, selected).rect,
+                            |ui| {
+                                let (response, star_response) =
+                                    command_row(ui, command, selected, true);
+                                row = response.rect;
+                                star = star_response.map(|response| response.rect);
+                            },
                         );
                         let text: Vec<_> = output
                             .shapes
@@ -780,7 +1001,16 @@ mod tests {
                             text.len(),
                             if command.description.is_some() { 4 } else { 2 }
                         );
+                        if let Some(star) = star {
+                            assert!(row.contains_rect(star));
+                        }
                         for (i, rect) in text.iter().enumerate() {
+                            if let Some(star) = star {
+                                assert!(
+                                    !rect.intersects(star),
+                                    "text overlaps star at width {width}: {rect:?} {star:?}"
+                                );
+                            }
                             assert!(
                                 row.contains_rect(*rect),
                                 "text outside row: {rect:?} {row:?}"
