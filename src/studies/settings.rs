@@ -675,10 +675,10 @@ impl StudySettingsSnapshot {
 /// Hosts composing their own chart can wrap built-in or custom studies the same way.
 ///
 /// Calculated on another interval or symbol, a study's volume profiles, zones and candles span
-/// the chart bars that share time with their bars, its markers sit on the last such chart bar
-/// once the values on the chart reach their bar, and its labels, price segments, drawings and
-/// projections are hidden. Its visible range is the range of its own bars that share time with
-/// the chart bars in view.
+/// the chart bars that share time with their bars. Each candle keeps the colour of its first
+/// source bar. Its markers sit on the last such chart bar once the values on the chart reach
+/// their bar, and its labels, price segments, drawings and projections are hidden. Its visible
+/// range is the range of its own bars that share time with the chart bars in view.
 pub struct ConfiguredStudy {
     study: Box<dyn Indicator>,
     /// The stable factory key, independent of the wrapped study's display name.
@@ -709,6 +709,8 @@ pub struct ConfiguredStudy {
     aligned_markers: Vec<super::IndicatorMarker>,
     aligned_zones: Vec<super::StudyZone>,
     aligned_candles: Vec<super::StudyCandle>,
+    /// The original candle for each mapped candle, retaining its first source bar.
+    aligned_candle_sources: Vec<usize>,
     /// The values kept on the bars that remain after the chart evicted the oldest bars, until
     /// the study is calculated again.
     kept: Option<Kept>,
@@ -766,6 +768,7 @@ impl ConfiguredStudy {
             aligned_markers: self.aligned_markers.clone(),
             aligned_zones: self.aligned_zones.clone(),
             aligned_candles: self.aligned_candles.clone(),
+            aligned_candle_sources: self.aligned_candle_sources.clone(),
             kept: self.kept.clone(),
             input_defaults: self.input_defaults.clone(),
         }
@@ -822,6 +825,7 @@ impl ConfiguredStudy {
             aligned_markers: Vec::new(),
             aligned_zones: Vec::new(),
             aligned_candles: Vec::new(),
+            aligned_candle_sources: Vec::new(),
             kept: None,
             input_defaults: Vec::new(),
         }
@@ -1253,6 +1257,7 @@ impl Indicator for ConfiguredStudy {
             self.aligned_markers.clear();
             self.aligned_zones.clear();
             self.aligned_candles.clear();
+            self.aligned_candle_sources.clear();
             return;
         };
         self.instrument_precision = source
@@ -1347,17 +1352,21 @@ impl Indicator for ConfiguredStudy {
                 })
             })
             .collect();
-        self.aligned_candles = self
+        (self.aligned_candles, self.aligned_candle_sources) = self
             .study
             .candles()
             .iter()
-            .filter_map(|candle| {
-                Some(super::StudyCandle {
-                    bars: chart_bars(&self.spans, &candle.bars)?,
-                    ..candle.clone()
-                })
+            .enumerate()
+            .filter_map(|(index, candle)| {
+                Some((
+                    super::StudyCandle {
+                        bars: chart_bars(&self.spans, &candle.bars)?,
+                        ..candle.clone()
+                    },
+                    index,
+                ))
             })
-            .collect();
+            .unzip();
     }
     fn order_flow_inputs(&self) -> &[crate::data::OrderFlowInput] {
         self.study.order_flow_inputs()
@@ -1488,6 +1497,19 @@ impl Indicator for ConfiguredStudy {
         } else {
             self.study.candles()
         }
+    }
+    fn candle_color(&self, index: usize) -> Option<Color32> {
+        if self.aligned.is_none() {
+            let candle = self.candles().get(index)?;
+            return self.plot_color(candle.plot, candle.bars.start);
+        }
+        let index = *self.aligned_candle_sources.get(index)?;
+        let candle = self.study.candles().get(index)?;
+        self.study
+            .plot_variant(candle.plot, candle.bars.start)
+            .and_then(|variant| self.settings.plot_variants.get(candle.plot)?.get(variant))
+            .map(|variant| variant.color)
+            .or_else(|| self.study.candle_color(index))
     }
     fn solid_candles(&self) -> bool {
         self.study.solid_candles()
@@ -3070,6 +3092,7 @@ mod tests {
             zones: Vec<StudyZone>,
             candles: Vec<StudyCandle>,
             projections: Vec<StudyProjection>,
+            variants: bool,
         }
         impl Indicator for Marks {
             fn name(&self) -> &str {
@@ -3118,6 +3141,21 @@ mod tests {
             }
             fn set_colors(&mut self, _: Vec<Color32>) {}
             fn set_visible(&mut self, _: bool) {}
+            fn plot_color(&self, _: usize, bar: usize) -> Option<Color32> {
+                Some(Color32::from_gray((bar + 1) as u8))
+            }
+            fn plot_variants(&self, _: usize) -> Vec<PlotVariant> {
+                ["Even", "Odd"]
+                    .map(|name| PlotVariant {
+                        name: name.into(),
+                        color: Color32::WHITE,
+                        width: 1.0,
+                    })
+                    .to_vec()
+            }
+            fn plot_variant(&self, _: usize, bar: usize) -> Option<usize> {
+                self.variants.then_some(bar % 2)
+            }
             fn markers(&self) -> &[IndicatorMarker] {
                 &self.markers
             }
@@ -3186,11 +3224,14 @@ mod tests {
         ] {
             let (interval, source_interval) = (chart.1, other.1);
             let (chart, source) = (bars(chart.0, interval), bars(other.0, source_interval));
-            let calculated = |inner: Box<dyn Indicator>| {
+            let calculated = |inner: Box<dyn Indicator>, wait| {
                 let mut study = ConfiguredStudy::new(inner);
                 study.set_timeframe(interval);
                 let other = InputValue::Timeframe(Some(source_interval));
                 study.set_input("calculation_timeframe", other).unwrap();
+                study
+                    .set_input("wait_for_close", InputValue::Toggle(wait))
+                    .unwrap();
                 let data = StudyData {
                     request: study.data_requests().remove(0),
                     bars: &source,
@@ -3206,9 +3247,9 @@ mod tests {
                 .set_input("extend_poc", InputValue::Toggle(true))
                 .unwrap();
             let mut studies = [
-                calculated(Box::new(session)),
-                calculated(Box::new(VolProfileVisible::new(1))),
-                calculated(Box::<Marks>::default()),
+                calculated(Box::new(session), true),
+                calculated(Box::new(VolProfileVisible::new(1)), true),
+                calculated(Box::<Marks>::default(), true),
             ];
             assert_eq!(profiles(&studies[0], 0..chart.len()), sessions, "{name}");
             let extended: Vec<_> = studies[0]
@@ -3241,6 +3282,79 @@ mod tests {
                 "{name}"
             );
             assert!(studies[2].projections().is_empty(), "{name}");
+            // The renderer must read each candle's own source bar, even when several share
+            // a chart bar or its aligned line still holds the preceding source bar's value.
+            #[cfg(feature = "widget")]
+            for wait in [true, false] {
+                for variants in [false, true] {
+                    use crate::chart::{coords::ChartMapping, rendering::RenderContext};
+                    use crate::scales::{PriceMap, PriceRange, PriceTransform};
+                    let mut study = calculated(
+                        Box::new(Marks {
+                            variants,
+                            ..Marks::default()
+                        }),
+                        wait,
+                    );
+                    let colors = [Color32::RED, Color32::BLUE];
+                    let mut settings = study.settings();
+                    for (variant, color) in settings.plot_variants[0].iter_mut().zip(colors) {
+                        variant.color = color;
+                    }
+                    study.apply_settings(&[], settings).unwrap();
+                    study.update_data(
+                        &chart,
+                        0,
+                        &[StudyData {
+                            request: study.data_requests().remove(0),
+                            bars: &source,
+                            clock: crate::model::BarClock::new(source_interval),
+                            instrument: None,
+                            timeframe: source_interval,
+                        }],
+                    );
+                    let rect =
+                        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(440.0, 300.0));
+                    let price = PriceMap::new(
+                        PriceTransform::default(),
+                        PriceRange::new(90.0, 130.0),
+                        rect.top(),
+                        rect.bottom(),
+                        false,
+                    );
+                    let coords = ChartMapping::new(rect, 20.0, 0, chart.len() - 1, 0.0, price);
+                    let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                        crate::chart::indicators::plots::paint_candles(
+                            &RenderContext::new(ui.painter(), rect),
+                            &study,
+                            &price,
+                            &coords,
+                        );
+                    });
+                    let painted: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Rect(body) => Some(body.stroke.color),
+                            _ => None,
+                        })
+                        .collect();
+                    output.drop_without_applying_deltas();
+                    let expected: Vec<_> = (0..source.len())
+                        .map(|bar| {
+                            if variants {
+                                colors[bar % 2]
+                            } else {
+                                Color32::from_gray((bar + 1) as u8)
+                            }
+                        })
+                        .collect();
+                    assert_eq!(
+                        painted, expected,
+                        "{name}, wait={wait}, variants={variants}"
+                    );
+                }
+            }
             for study in &mut studies {
                 study.update_data(&chart, 0, &[]);
             }
