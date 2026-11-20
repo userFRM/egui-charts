@@ -375,6 +375,15 @@ impl StudyTemplate {
     pub(crate) fn upgraded(&self, study: &str, own: &[StudyInput]) -> Option<Self> {
         let has = |id: &str| self.inputs.iter().any(|(input, _)| input == id);
         let declares = |id: &str| own.iter().any(|input| input.id == id);
+        let out_of_range = |id: &str| {
+            self.inputs.iter().any(|(saved, value)| {
+                saved == id
+                    && matches!(value, InputValue::Number(_))
+                    && own
+                        .iter()
+                        .any(|input| input.id == id && !input.accepts(value))
+            })
+        };
         // Profile endpoints saved in Unix milliseconds that the study does not take as numbers.
         let millis = |id: &str, value: &InputValue| match (id, value) {
             ("start_time" | "end_time", InputValue::Number(ms))
@@ -407,6 +416,17 @@ impl StudyTemplate {
                 .collect();
             settings.fill_between_levels = false;
             settings.level_fill_color = color;
+        };
+        let hidden_fills = |declared: &dyn Indicator| {
+            declared
+                .fills()
+                .iter()
+                .map(|fill| crate::studies::FillStyle {
+                    inverted_color: fill.inverted_color,
+                    visible: false,
+                    ..crate::studies::FillStyle::new(fill.color)
+                })
+                .collect()
         };
         let value = |id: &str| {
             self.inputs
@@ -650,6 +670,22 @@ impl StudyTemplate {
                     })
                     .collect();
             }
+            // Older oscillators keep their unshaded appearance until their new fills are shown.
+            "Aroon Oscillator" if self.settings.fills.is_empty() => {
+                template.settings.fills = hidden_fills(&crate::studies::AroonOscillator::default());
+            }
+            "%B" if self.settings.fills.is_empty() || out_of_range("multiplier") => {
+                if self.settings.fills.is_empty() {
+                    template.settings.fills = hidden_fills(&crate::studies::PercentB::default());
+                }
+                if out_of_range("multiplier") {
+                    for (id, value) in &mut template.inputs {
+                        if let ("multiplier", InputValue::Number(v)) = (id.as_str(), value) {
+                            *v = v.clamp(0.001, 50.0);
+                        }
+                    }
+                }
+            }
             // A VWAP opened without bands, and no band was filled, before it opened with a filled
             // one.
             "VWAP" if !has("band_count") || (self.settings.fills.is_empty() && bands > 0) => {
@@ -673,6 +709,12 @@ impl StudyTemplate {
                         )
                     })
                     .collect();
+            }
+            // A CCI drew no average before it opened with one.
+            "CCI" if !has("smoothing") => {
+                template
+                    .inputs
+                    .push(("smoothing".to_owned(), InputValue::Choice(0)));
             }
             // A Rank Correlation had no average, and drew no levels, before it opened with an
             // average, three levels and the band between them filled.
@@ -1430,11 +1472,26 @@ mod tests {
 
     /// A template restores the inputs it holds whatever the study's default has become, with every
     /// line it showed, and an input it lacks takes the value the saved inputs had before the
-    /// study offered it.
+    /// study offered it. Values outside a narrowed input range load clamped to that range.
     #[test]
     fn templates_saved_before_split_lengths_restore_their_values() {
         use InputValue::{Choice, Length, Number, Text, Toggle};
         let rows = [
+            (
+                "CCI",
+                vec![("period", Length(20))],
+                vec![("period", Length(20)), ("smoothing", Choice(0))],
+            ),
+            (
+                "%B",
+                vec![("multiplier", Number(0.0))],
+                vec![("multiplier", Number(0.001))],
+            ),
+            (
+                "%B",
+                vec![("multiplier", Number(80.0))],
+                vec![("multiplier", Number(50.0))],
+            ),
             (
                 "Vol Profile Session",
                 vec![

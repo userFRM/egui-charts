@@ -4,20 +4,24 @@ use crate::chart::rendering::axes::axis_font;
 use crate::theme::ThemeExt;
 use egui::{Align2, Pos2, Rect, Response, Sense, Stroke, Ui};
 
-/// Paints a currency button at the top of an axis column and returns its response and
-/// the host currency choice, if any. The host supplies available conversions and replaces
-/// the prices and instrument metadata after a choice; the renderer never converts prices.
-/// `unit` appends the host's price unit without converting prices. An empty currency shows only
-/// the unit and offers no conversion menu. Pass the response rectangle to price tick occlusion.
+/// Paints the currency and unit button at the top of an axis column and returns its response
+/// with the host's currency choice and unit choice, if any. The host supplies available
+/// conversions and replaces the prices and instrument metadata after a choice; the renderer
+/// never converts prices. `unit` follows the currency in the button. The button opens a menu
+/// while it shows a currency or `unit_choices` is not empty: the current currency and the
+/// other `choices` while a currency shows, then the current unit and the other
+/// `unit_choices`. Pass the response rectangle to price tick occlusion.
 pub fn render_axis_currency(
     ui: &mut Ui,
     axis: Rect,
     currency: &str,
     unit: Option<&str>,
     choices: &[String],
-) -> (Response, Option<String>) {
+    unit_choices: &[String],
+) -> (Response, Option<String>, Option<String>) {
+    let unit = unit.filter(|unit| !unit.is_empty());
     let theme = ui.active_theme();
-    let header = match (currency.is_empty(), unit.filter(|unit| !unit.is_empty())) {
+    let header = match (currency.is_empty(), unit) {
         (false, Some(unit)) => format!("{currency} · {unit}"),
         (true, Some(unit)) => unit.to_owned(),
         _ => currency.to_owned(),
@@ -26,7 +30,8 @@ pub fn render_axis_currency(
     let galley = ui
         .painter()
         .layout_no_wrap(header.clone(), font.clone(), theme.chart.axis_text);
-    let width = galley.size().x + 16.0 + if currency.is_empty() { 0.0 } else { 10.0 };
+    let menu = opens_menu(currency, unit_choices);
+    let width = galley.size().x + 16.0 + if menu { 10.0 } else { 0.0 };
     let rect = Rect::from_min_max(
         Pos2::new((axis.right() - width).max(axis.left()), axis.top()),
         Pos2::new(axis.right(), (axis.top() + 24.0).min(axis.bottom())),
@@ -54,7 +59,7 @@ pub fn render_axis_currency(
         font,
         theme.chart.axis_text,
     );
-    if !currency.is_empty() {
+    if menu {
         let x = rect.left() + 8.0 + galley.size().x + 4.0;
         painter.add(egui::Shape::line(
             vec![
@@ -65,21 +70,45 @@ pub fn render_axis_currency(
             Stroke::new(1.0, theme.chart.axis_text),
         ));
     }
-    let mut chosen = None;
-    if !currency.is_empty() {
+    let (mut chosen, mut chosen_unit) = (None, None);
+    if menu {
         egui::Popup::menu(&response)
             .id(currency_menu_id(ui, axis))
             .show(|ui| {
-                let _ = ui.selectable_label(true, currency);
-                for choice in choices.iter().filter(|choice| choice.as_str() != currency) {
-                    if ui.selectable_label(false, choice).clicked() {
-                        chosen = Some(choice.clone());
-                        ui.close();
+                if !currency.is_empty() {
+                    let _ = ui.selectable_label(true, currency);
+                    for choice in choices.iter().filter(|choice| choice.as_str() != currency) {
+                        if ui.selectable_label(false, choice).clicked() {
+                            chosen = Some(choice.clone());
+                            ui.close();
+                        }
+                    }
+                }
+                if !unit_choices.is_empty() {
+                    if !currency.is_empty() {
+                        ui.separator();
+                    }
+                    if let Some(unit) = unit {
+                        let _ = ui.selectable_label(true, unit);
+                    }
+                    for choice in unit_choices
+                        .iter()
+                        .filter(|choice| Some(choice.as_str()) != unit)
+                    {
+                        if ui.selectable_label(false, choice).clicked() {
+                            chosen_unit = Some(choice.clone());
+                            ui.close();
+                        }
                     }
                 }
             });
     }
-    (response, chosen)
+    (response, chosen, chosen_unit)
+}
+
+/// Whether the header button showing `currency` opens a menu: it lists the currency or units.
+pub(crate) fn opens_menu(currency: &str, unit_choices: &[String]) -> bool {
+    !currency.is_empty() || !unit_choices.is_empty()
 }
 
 /// The memory id of the currency menu of the price axis `axis`, to keep a label that shows on

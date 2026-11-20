@@ -25,7 +25,10 @@
 //! take the colour, width and visibility of their period's plot.
 //! Monthly levels are drawn over weekly ones and weekly over daily ones. A bar without a finite
 //! open, high, low and close takes no part. The defaults show POC, VAL and VAH of the current
-//! day and week from the start of each period. Overlay indicator without per-bar values.
+//! day and week from the start of each period. Overlay indicator without per-bar values;
+//! alerts read each drawn level by its tag, such as `Auto Key Levels: dPOC`, at the level's
+//! price on the bars it covers. Enabled periods without enough history or an event anchor
+//! show a notice while the available periods keep drawing.
 //!
 //! # Example
 //!
@@ -65,6 +68,18 @@ const PERIODS: [(AnchorPeriod, &str); 3] = [
 
 /// The levels of a period, in the order [`levels_of`] returns them.
 const LEVELS: [&str; 7] = ["POC", "VAL", "VAH", "O", "H", "L", "C"];
+
+/// Plots style periods. Alerts read level `k` of plot `p` at
+/// `PLOTS.len() + p * LEVELS.len() + k`, past the plots, which hold no values.
+const PLOTS: [&str; 7] = [
+    "Day",
+    "Week",
+    "Month",
+    "Prev Day",
+    "Prev Week",
+    "Prev Month",
+    "Custom",
+];
 
 /// Projection used by direct callers until a visible range is supplied.
 const RIGHT_BARS: usize = 20;
@@ -181,6 +196,8 @@ pub struct AutoKeyLevels {
     values: IndicatorValues,
     stepper: Stepper<State>,
     zones: Vec<StudyZone>,
+    /// The alert output and name of each zone, in zone order.
+    outputs: Vec<(usize, String)>,
     labels: Vec<StudyLabel>,
     /// Current day, week, month; previous day, week, month; custom.
     colors: [Color32; 7],
@@ -229,6 +246,7 @@ impl AutoKeyLevels {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             zones: Vec::new(),
+            outputs: Vec::new(),
             labels: Vec::new(),
             colors: [
                 palette::ORANGE,
@@ -482,13 +500,16 @@ impl Indicator for AutoKeyLevels {
         }
 
         self.notice = None;
+        let mut missing = Vec::new();
         let source = self.stepper.state().source;
         // Each group: its plot, label prefix, bar range and levels shown.
         let mut groups = Vec::new();
-        if self.custom
-            && let Some(start) = self.custom_start(data)
-        {
-            groups.push((6, "Custom ".to_owned(), start..source, self.custom_levels));
+        if self.custom {
+            if let Some(start) = self.custom_start(data) {
+                groups.push((6, "Custom ".to_owned(), start..source, self.custom_levels));
+            } else {
+                missing.push(format!("Custom ({})", self.anchor.label()));
+            }
         }
         for (t, ((_, prefix), [current, previous], shown)) in PERIODS
             .iter()
@@ -497,24 +518,23 @@ impl Indicator for AutoKeyLevels {
             .map(|((period, starts), shown)| (period, starts, shown))
             .enumerate()
         {
-            let Some((_, start)) = *current else { continue };
             let max_interval = [Timeframe::Day1, Timeframe::Week1, Timeframe::Month1][t];
-            if (shown.0 || shown.1)
-                && self
-                    .clock
-                    .timeframe()
-                    .is_some_and(|tf| tf.duration_ms() > max_interval.duration_ms())
-            {
-                self.notice = Some(StudyTable {
-                    title: "Insufficient period data".to_owned(),
-                    rows: vec![vec![StudyCell::Text(format!(
-                        "Use shorter bars or turn off {} levels",
-                        ["day", "week", "month"][t]
-                    ))]],
-                    ..StudyTable::default()
-                });
+            let too_coarse = self
+                .clock
+                .timeframe()
+                .is_some_and(|tf| tf.duration_ms() > max_interval.duration_ms());
+            for (plot, on, available) in [
+                (t, shown.0, current.is_some()),
+                (3 + t, shown.1, previous.is_some()),
+            ] {
+                if on && (too_coarse || !available) {
+                    missing.push(PLOTS[plot].to_owned());
+                }
+            }
+            if too_coarse {
                 continue;
             }
+            let Some((_, start)) = *current else { continue };
             if shown.0 {
                 groups.push((
                     t,
@@ -532,11 +552,27 @@ impl Indicator for AutoKeyLevels {
                 ));
             }
         }
+        if !missing.is_empty() {
+            self.notice = Some(StudyTable {
+                title: "Insufficient period data".to_owned(),
+                columns: vec!["Period".to_owned()],
+                rows: missing
+                    .into_iter()
+                    .map(|period| {
+                        vec![StudyCell::Text(format!(
+                            "{period}: load more data, use shorter bars or turn off this period"
+                        ))]
+                    })
+                    .collect(),
+                ..StudyTable::default()
+            });
+        }
 
         // Ranges that end before `from` hold the same bars as in the last run.
         let mut cache = std::mem::take(&mut self.cache);
         cache.retain(|(bars, _)| bars.end <= from);
         self.zones.clear();
+        self.outputs.clear();
         self.labels.clear();
         for (plot, prefix, bars, shown) in groups {
             let levels = match cache.iter().find(|(cached, _)| *cached == bars) {
@@ -576,16 +612,19 @@ impl Indicator for AutoKeyLevels {
                 let Some(price) = price.filter(|_| shown[k.min(3)]) else {
                     continue;
                 };
+                let text = format!("{prefix}{}", LEVELS[k]);
                 self.zones.push(StudyZone {
                     bars: span.clone(),
                     top: price,
                     bottom: price,
                     plot,
                 });
+                self.outputs
+                    .push((PLOTS.len() + plot * LEVELS.len() + k, text.clone()));
                 self.labels.push(StudyLabel {
                     bar: span.start,
                     price,
-                    text: format!("{prefix}{}", LEVELS[k]),
+                    text,
                     placement: LabelPlacement::AboveLeft,
                     plot,
                 });
@@ -727,17 +766,22 @@ impl Indicator for AutoKeyLevels {
     }
 
     fn line_names(&self) -> Vec<String> {
-        [
-            "Day",
-            "Week",
-            "Month",
-            "Prev Day",
-            "Prev Week",
-            "Prev Month",
-            "Custom",
-        ]
-        .map(String::from)
-        .to_vec()
+        PLOTS.map(String::from).to_vec()
+    }
+
+    fn alert_outputs(&self) -> Vec<(usize, String)> {
+        let mut outputs = self.outputs.clone();
+        outputs.sort_by_key(|(output, _)| *output);
+        outputs
+    }
+
+    fn plot_value(&self, line: usize, bar: usize) -> Option<f64> {
+        let at = self
+            .outputs
+            .iter()
+            .position(|(output, _)| *output == line)?;
+        let zone = &self.zones[at];
+        zone.bars.contains(&bar).then_some(zone.top)
     }
 }
 
@@ -1106,6 +1150,30 @@ mod tests {
                 "{name} restored"
             );
         }
+        // A literal template saved on origin/main keeps its seven styling plots and inputs.
+        let saved = r#"{"name":"Auto Key Levels","inputs":[["current [0]",{"Toggle":true}],["current [1]",{"Toggle":true}],["current [2]",{"Toggle":false}],["current_levels [0]",{"Toggle":true}],["current_levels [1]",{"Toggle":true}],["current_levels [2]",{"Toggle":true}],["current_levels [3]",{"Toggle":false}],["current_levels [4]",{"Toggle":true}],["current_levels [5]",{"Toggle":true}],["current_levels [6]",{"Toggle":true}],["current_levels [7]",{"Toggle":false}],["current_levels [8]",{"Toggle":false}],["current_levels [9]",{"Toggle":false}],["current_levels [10]",{"Toggle":false}],["current_levels [11]",{"Toggle":false}],["previous [0]",{"Toggle":false}],["previous [1]",{"Toggle":false}],["previous [2]",{"Toggle":false}],["previous_levels [0]",{"Toggle":false}],["previous_levels [1]",{"Toggle":false}],["previous_levels [2]",{"Toggle":false}],["previous_levels [3]",{"Toggle":false}],["previous_levels [4]",{"Toggle":false}],["previous_levels [5]",{"Toggle":false}],["previous_levels [6]",{"Toggle":false}],["previous_levels [7]",{"Toggle":false}],["previous_levels [8]",{"Toggle":false}],["previous_levels [9]",{"Toggle":false}],["previous_levels [10]",{"Toggle":false}],["previous_levels [11]",{"Toggle":false}],["custom",{"Toggle":false}],["custom_levels [0]",{"Toggle":false}],["custom_levels [1]",{"Toggle":false}],["custom_levels [2]",{"Toggle":false}],["custom_levels [3]",{"Toggle":false}],["anchor",{"Choice":0}],["length",{"Length":1}],["unit",{"Choice":0}],["start",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.AutoKeyLevels.html","plots":[{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[126,87,194,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[153,65,0,153],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[25,59,153,153],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[76,52,116,153],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[253,216,53,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[16,7,0,16],"untagged_plots":[0,1,2,3,4,5,6],"price_line_plots":[],"plot_variants":[[],[],[],[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#;
+        let template: StudyTemplate = serde_json::from_str(saved).unwrap();
+        let mut restored = template.create().unwrap();
+        assert_eq!(restored.settings(), template.settings);
+        assert_eq!(restored.line_count(), template.settings.plots.len());
+        assert_eq!(Some(restored.scale()), template.scale);
+        assert_eq!(restored.is_visible(), template.visible);
+        for (id, value) in &template.inputs {
+            assert_eq!(
+                restored
+                    .inputs()
+                    .iter()
+                    .find(|input| input.id == *id)
+                    .unwrap()
+                    .value,
+                *value,
+                "{id}"
+            );
+        }
+        assert_eq!(
+            run(restored.as_mut(), 6, false),
+            run(&mut AutoKeyLevels::new(), 6, false)
+        );
         let mut study = AutoKeyLevels::new();
         for start in [0, 1] {
             study.set_input("start", Choice(start)).unwrap();
@@ -1204,11 +1272,143 @@ mod tests {
                 );
             }
         }
-        // A smaller period cannot be reconstructed from a larger chart candle.
-        let mut study = AutoKeyLevels::new();
-        study.set_timeframe(Timeframe::Week1);
-        study.calculate(&data);
-        assert!(study.table().is_some());
-        assert!(study.labels().iter().all(|label| label.plot != 0));
+    }
+
+    /// Enabled periods missing history or an anchor name what is unavailable, keep usable
+    /// levels drawn, and clear their notice after data arrives or the period is turned off.
+    #[test]
+    fn unavailable_periods_report_and_clear_their_notices() {
+        use InputValue::{Choice, Toggle};
+        let data = bars();
+        type Row = (
+            Timeframe,
+            usize,
+            Vec<(&'static str, InputValue)>,
+            Vec<TimeScaleEvent>,
+            Vec<&'static str>,
+        );
+        let mut rows: Vec<Row> = vec![
+            (
+                Timeframe::Min1,
+                4,
+                vec![("previous [0]", Toggle(true))],
+                vec![],
+                vec!["Prev Day"],
+            ),
+            (
+                Timeframe::Day1,
+                2,
+                vec![("previous [2]", Toggle(true))],
+                vec![],
+                vec!["Prev Month"],
+            ),
+            (
+                Timeframe::Min1,
+                4,
+                vec![
+                    ("previous [0]", Toggle(true)),
+                    ("previous [1]", Toggle(true)),
+                    ("previous [2]", Toggle(true)),
+                ],
+                vec![],
+                vec!["Prev Day", "Prev Week", "Prev Month"],
+            ),
+            (Timeframe::Week1, 2, vec![], vec![], vec!["Day"]),
+        ];
+        for (anchor, kind, name) in [
+            (1, EventKind::Earnings, "Custom (Earnings)"),
+            (2, EventKind::Split, "Custom (Split)"),
+            (3, EventKind::Dividend, "Custom (Dividends)"),
+        ] {
+            rows.push((
+                Timeframe::Min1,
+                2,
+                vec![("custom", Toggle(true)), ("anchor", Choice(anchor))],
+                vec![TimeScaleEvent::new("anchor", data[4].time, kind, "")],
+                vec![name],
+            ));
+        }
+        for (interval, first, edits, events, missing) in rows {
+            let mut study = AutoKeyLevels::new();
+            study.set_timeframe(interval);
+            for (id, value) in &edits {
+                study.set_input(id, value.clone()).unwrap();
+            }
+            // A future event cannot anchor the loaded history.
+            let future: Vec<_> = events
+                .iter()
+                .cloned()
+                .map(|mut event| {
+                    event.time = data[5].time + chrono::TimeDelta::days(1);
+                    event
+                })
+                .collect();
+            study.set_time_scale_events(&future);
+            study.calculate(&data[first..]);
+            let notice = study.table().unwrap();
+            assert_eq!(notice.title, "Insufficient period data");
+            let rows: Vec<_> = notice
+                .rows
+                .iter()
+                .map(|row| match &row[0] {
+                    StudyCell::Text(text) => text.as_str(),
+                    _ => panic!("expected a period notice"),
+                })
+                .collect();
+            let expected: Vec<_> = missing
+                .iter()
+                .map(|period| {
+                    format!("{period}: load more data, use shorter bars or turn off this period")
+                })
+                .collect();
+            assert_eq!(rows, expected, "{interval:?} {edits:?}");
+            #[cfg(feature = "widget")]
+            {
+                let mut chart =
+                    crate::Chart::new(crate::model::BarData::from_bars(data[first..].to_vec()));
+                chart.set_timeframe(interval);
+                chart.add_indicator(study.clone_box());
+                let shapes = crate::widget::test_frames::shapes(
+                    &egui::Context::default(),
+                    &mut chart,
+                    0.0,
+                    vec![],
+                );
+                for period in &missing {
+                    assert!(shapes.iter().any(|shape| matches!(shape,
+                        egui::Shape::Text(text) if text.galley.text().starts_with(&format!("{period}:"))
+                            && text.galley.text().contains("shorter bars")
+                    )), "painted notice for {period}");
+                }
+            }
+            assert!(!study.zones().is_empty(), "usable periods keep drawing");
+            if interval == Timeframe::Week1 {
+                assert!(study.zones().iter().all(|zone| zone.plot != 0));
+                study.set_timeframe(Timeframe::Min1);
+            }
+            study.set_time_scale_events(&events);
+            study.calculate(&data);
+            assert!(
+                study.table().is_none(),
+                "history or events clear {missing:?}"
+            );
+            study.set_timeframe(interval);
+            study.set_time_scale_events(&[]);
+            study.calculate(&data[first..]);
+            for id in [
+                "current [0]",
+                "previous [0]",
+                "previous [1]",
+                "previous [2]",
+                "custom",
+            ] {
+                study.set_input(id, Toggle(false)).unwrap();
+            }
+            study.calculate(&data[first..]);
+            assert!(
+                study.table().is_none(),
+                "turning periods off clears {missing:?}"
+            );
+        }
     }
 }
