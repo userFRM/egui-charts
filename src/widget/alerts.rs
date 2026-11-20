@@ -163,19 +163,21 @@ impl Chart {
         value.is_finite().then_some(value)
     }
 
-    /// Every output of every study and every level of every completed drawing whose pane marks
+    /// Each study's alert outputs and every level of every completed drawing whose pane marks
     /// the price or a study, as [`Self::alert_value`] resolves it, with the name the alert dialog
     /// shows, for `AlertDialog::sources`. Drawing levels are those at the newest bar. A name keeps
-    /// the study's name, the drawing's number and a fork level's value as given and translates the
-    /// study output, the drawing tool and the level when shown. A level in a study pane is named
-    /// after the study first in its pane, as in `RSI: Horizontal Line 7`.
+    /// the study's name, the drawing's number and a fork or fan level's value as given and
+    /// translates the study output, the drawing tool and the level when shown. A level in a study
+    /// pane is named after the study first in its pane, as in `RSI: Horizontal Line 7`.
+    /// A study offers the outputs [`Indicator::alert_outputs`] lists.
+    ///
+    /// [`Indicator::alert_outputs`]: crate::studies::Indicator::alert_outputs
     pub fn alert_sources(&self) -> Vec<(AlertSource, AlertSourceName)> {
         let bar = self.bars(SeriesId::MAIN).len().saturating_sub(1) as f64;
         let studies = self.indicators().flat_map(|(id, study)| {
             study
-                .line_names()
+                .alert_outputs()
                 .into_iter()
-                .enumerate()
                 .map(move |(output, name)| {
                     (
                         AlertSource::Study {
@@ -220,7 +222,7 @@ impl Chart {
                         };
                     let name = if single {
                         named("{tool} {id}", &[("id", id.as_str())], &[tool])
-                    } else if let Some((line, value)) = d.fork_line(level) {
+                    } else if let Some((line, value)) = d.level_line(level) {
                         named(
                             line,
                             &[("id", id.as_str()), ("value", value.as_str())],
@@ -242,9 +244,9 @@ impl Chart {
     /// The scale mode the levels of drawing `id` resolve with, what they mark and the study that
     /// names them, as the pane painting the drawing shows them. In the pane holding the main
     /// series they mark the price on that series' scale. In another pane they mark the first
-    /// output of the pane's first member, or the volume for a volume study, on the scale that
-    /// pane paints the drawing with, and are named after that study. They mark nothing an alert
-    /// can name when that member is a bar series, the pane is empty or the study has no output.
+    /// alert output of the pane's first member, or the volume for a volume study, on the scale
+    /// that pane paints the drawing with, and are named after that study. They mark nothing an alert
+    /// can name when that member is a bar series, the pane is empty or the study offers none.
     pub(crate) fn drawing_subject(
         &self,
         id: usize,
@@ -268,21 +270,25 @@ impl Chart {
                 _ => None,
             })
             .unwrap_or(crate::model::SeriesScale::Right);
-        let study = study.filter(|(_, study)| study.line_count() > 0);
-        let source = study.map(|(id, study)| {
+        // A study that offers no alert output marks nothing an alert can test.
+        let study = study.and_then(|(id, study)| {
+            let (output, _) = study.alert_outputs().into_iter().next()?;
+            Some((id, study, output))
+        });
+        let source = study.map(|(id, study, output)| {
             if study.is_volume() {
                 AlertSource::Volume
             } else {
                 AlertSource::Study {
                     id: id.0.to_string(),
-                    output: 0,
+                    output,
                 }
             }
         });
         (
             self.pane_price_scale(pane, key).options().mode,
             source,
-            study.map(|(_, study)| study.name()),
+            study.map(|(_, study, _)| study.name()),
         )
     }
 }
@@ -292,7 +298,10 @@ mod tests {
     use super::*;
     use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
     use crate::model::{Bar, BarData};
-    use chrono::DateTime;
+    use crate::studies::{
+        AutoKeyLevels, ChartPatterns, Gaps, Indicator, InputValue, KeyLevels, MissedPivots,
+    };
+    use chrono::{DateTime, TimeZone, Utc};
 
     /// A moving average and a trend line resolve at a bar to the values drawn there.
     #[test]
@@ -321,6 +330,17 @@ mod tests {
         fork.pitchfork = None;
         fork.completed = true;
         chart.drawings_mut().drawings.push(fork);
+        let mut fan = Drawing::new(11, DrawingToolType::FibonacciSpeedFan);
+        fan.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(2.0, 120.0)];
+        fan.completed = true;
+        let level = crate::drawings::FibonacciLevel::new(0.5, "", [0; 4]);
+        fan.fib_config = Some(crate::drawings::FibonacciConfig {
+            levels: vec![level.clone()],
+            time_levels: Some(vec![level]),
+            levels_as_percent: true,
+            ..crate::drawings::FibonacciConfig::legacy()
+        });
+        chart.drawings_mut().drawings.push(fan);
         let average = AlertSource::Study {
             id: study.0.to_string(),
             output: 0,
@@ -375,12 +395,25 @@ mod tests {
                 (fork("#5"), "Pitchfork 9: 1: second line".into()),
                 (fork("#6"), "Pitchfork 9: 1.5: first line".into()),
                 (fork("#7"), "Pitchfork 9: 1.5: second line".into()),
+                (
+                    AlertSource::Drawing("11".into()),
+                    "Fib Speed Resistance Fan 11: 50%: price level".into()
+                ),
+                (
+                    AlertSource::Drawing("11#1".into()),
+                    "Fib Speed Resistance Fan 11: 50%: time level".into()
+                ),
             ]
+        );
+        let (_, name) = chart.alert_sources().pop().unwrap();
+        assert_eq!(
+            serde_json::to_value(name).unwrap()["template"],
+            "{tool} {id}: {value}: time level"
         );
     }
 
-    /// A drawing in a study pane marks the study first in that pane, on that pane's scale, and a
-    /// drawing in the price pane marks the price.
+    /// A drawing in a study pane marks the leading study's first alert output, on
+    /// that pane's scale, and nothing when it offers none; price-pane drawings mark the price.
     #[test]
     fn study_pane_drawings_alert_on_their_study() {
         let bars = [10.0, 20.0, 30.0, 40.0]
@@ -400,6 +433,10 @@ mod tests {
             })
             .with_overlay(false),
         ));
+        let gaps = chart.add_indicator(Box::new(Gaps::default()));
+        let levels = chart.add_indicator(Box::new(AutoKeyLevels::new()));
+        assert!(chart.move_indicator_to_pane(gaps, gaps));
+        assert!(chart.move_indicator_to_pane(levels, levels));
         let drawing = |id, tool, points: &[(f32, f64)], pane| {
             let mut drawing = Drawing::new(id, tool);
             drawing.chart_points = points
@@ -424,6 +461,18 @@ mod tests {
                 Some(rsi.0),
             ),
             drawing(9, DrawingToolType::HorizontalLine, &[(0.0, 25.0)], None),
+            drawing(
+                10,
+                DrawingToolType::HorizontalLine,
+                &[(0.0, 25.0)],
+                Some(gaps.0),
+            ),
+            drawing(
+                11,
+                DrawingToolType::HorizontalLine,
+                &[(0.0, 25.0)],
+                Some(levels.0),
+            ),
         ];
         // The study pane's own scale is linear: the line through (0, 40) and (2, 60) is 50 at
         // bar 1, where the main pane's logarithmic scale would give sqrt(40 * 60).
@@ -438,6 +487,15 @@ mod tests {
                 "{names:?}"
             );
         }
+        assert!(
+            !names
+                .iter()
+                .any(|(source, _)| *source == AlertSource::Drawing("10".into()))
+        );
+        assert!(names.contains(&(
+            AlertSource::Drawing("11".into()),
+            "Auto Key Levels: Horizontal Line 11".into()
+        )));
         // Drawing 7 of another symbol is not this chart's: that alert keeps the price scale.
         let mut other = crate::model::Alert::new(
             "OTHER",
@@ -477,8 +535,266 @@ mod tests {
                 chart.prepare_alert(&mut alert);
                 assert_eq!(alert.inputs.unwrap().logarithmic, logarithmic, "{id}");
             }
+            let mut menu = crate::ui::context_menu::drawing::DrawingContextMenu::new();
+            menu.open_on(&egui::Context::default(), &chart, egui::Pos2::ZERO, 10);
+            assert!(menu.alert.is_none());
+            menu.open_on(&egui::Context::default(), &chart, egui::Pos2::ZERO, 11);
+            assert_eq!(
+                menu.alert.unwrap().source,
+                AlertSource::Study {
+                    id: levels.0.to_string(),
+                    output: 7,
+                }
+            );
         }
     }
+    fn level_bars() -> Vec<Bar> {
+        [
+            ((1, 30, 12), 10.0, 3.0),
+            ((1, 30, 18), 34.0, 1.0),
+            ((2, 2, 0), 54.0, 3.0),
+            ((2, 2, 6), 30.0, 1.0),
+            ((2, 3, 0), 30.0, 3.0),
+            ((2, 3, 6), 54.0, 1.0),
+        ]
+        .into_iter()
+        .map(|((month, day, hour), price, volume)| {
+            let time = Utc.with_ymd_and_hms(2026, month, day, hour, 0, 0).unwrap();
+            Bar::new(time, price, price, price, price, volume)
+        })
+        .collect()
+    }
+
+    /// Guards #3658: studies offer alerts only on outputs that can hold values, each read at
+    /// the bars it covers, and zone studies list no empty values in the legend.
+    #[test]
+    fn studies_offer_only_outputs_that_hold_values() {
+        // Feb 3: 3/4 volume at 30 in [30, 31), so POC=30.5, VAL=30, VAH=31.
+        // The week ties endpoint rows at 4 each: lower POC=30.5, area [30, 53], since
+        // adding the top row would exceed 70% of 8. Both periods have 24 rows of width 1.
+        // An output's value at each of the six bars.
+        type Output = (usize, String, Vec<Option<f64>>);
+        type Row = (Box<dyn Indicator>, Vec<Output>, usize);
+        let from = |price: f64, first: usize| -> Vec<Option<f64>> {
+            (0..6).map(|bar| (bar >= first).then_some(price)).collect()
+        };
+        let levels: Vec<Output> = [
+            (7, "dPOC", 30.5, 4),
+            (8, "dVAL", 30.0, 4),
+            (9, "dVAH", 31.0, 4),
+            (14, "wPOC", 30.5, 2),
+            (15, "wVAL", 30.0, 2),
+            (16, "wVAH", 53.0, 2),
+        ]
+        .into_iter()
+        .map(|(output, name, price, first)| (output, name.to_owned(), from(price, first)))
+        .collect();
+        let mut hidden = AutoKeyLevels::new();
+        hidden
+            .set_input("current_levels [0]", InputValue::Toggle(false))
+            .unwrap();
+        let mut all = AutoKeyLevels::new();
+        for input in all.inputs() {
+            if matches!(input.value, InputValue::Toggle(_)) {
+                all.set_input(&input.id, InputValue::Toggle(true)).unwrap();
+            }
+        }
+        all.set_input("length", InputValue::Length(2)).unwrap();
+        // Previous week/month are Jan 30; previous day is Feb 2. Custom spans Feb 2 and 3.
+        let all_outputs = [
+            (7, "d", 4, [30.5, 30.0, 31.0, 30.0, 54.0, 30.0, 54.0]),
+            (14, "w", 2, [30.5, 30.0, 53.0, 54.0, 54.0, 30.0, 54.0]),
+            (21, "m", 2, [30.5, 30.0, 53.0, 54.0, 54.0, 30.0, 54.0]),
+            (28, "pd", 2, [53.5, 53.0, 54.0, 54.0, 54.0, 30.0, 30.0]),
+            (35, "pw", 0, [10.5, 10.0, 11.0, 10.0, 34.0, 10.0, 34.0]),
+            (42, "pm", 0, [10.5, 10.0, 11.0, 10.0, 34.0, 10.0, 34.0]),
+            (49, "Custom ", 2, [30.5, 30.0, 53.0, 54.0, 54.0, 30.0, 54.0]),
+        ]
+        .into_iter()
+        .flat_map(|(output, prefix, first, prices)| {
+            ["POC", "VAL", "VAH", "O", "H", "L", "C"]
+                .into_iter()
+                .zip(prices)
+                .enumerate()
+                .map(move |(k, (tag, price))| {
+                    (output + k, format!("{prefix}{tag}"), from(price, first))
+                })
+        })
+        .collect();
+        let factory = crate::studies::IndicatorFactory::new();
+        let create = |name: &str| factory.create(name).unwrap();
+        // An offered output that holds no value on these bars.
+        let offered = |output: usize, name: &str| -> Output { (output, name.to_owned(), vec![]) };
+        // Each bar closes at its open, which counts as up.
+        let closes: Vec<_> = level_bars().iter().map(|bar| Some(bar.close)).collect();
+        let volumes: Vec<_> = level_bars().iter().map(|bar| Some(bar.volume)).collect();
+        let rows: Vec<Row> = vec![
+            (Box::new(AutoKeyLevels::new()), levels.clone(), 0),
+            (Box::new(all), all_outputs, 0),
+            (
+                Box::new(hidden),
+                levels
+                    .into_iter()
+                    .filter(|(output, ..)| *output != 7)
+                    .collect(),
+                0,
+            ),
+            (Box::new(Gaps::default()), vec![], 0),
+            (Box::new(KeyLevels::default()), vec![], 0),
+            (Box::new(MissedPivots::default()), vec![], 0),
+            (
+                Box::new(ChartPatterns::all()),
+                vec![offered(0, "Bullish"), offered(1, "Bearish")],
+                2,
+            ),
+            // A one-sided formation fails on a break the other way.
+            (create("Double Top"), vec![offered(1, "Bearish")], 2),
+            (create("Double Bottom"), vec![offered(0, "Bullish")], 2),
+            (
+                create("Rectangle"),
+                vec![offered(0, "Bullish"), offered(1, "Bearish")],
+                2,
+            ),
+            // A single candlestick pattern marks only its own side.
+            (
+                create("Engulfing - Bullish"),
+                vec![offered(0, "Bullish")],
+                3,
+            ),
+            (
+                create("All Candlestick Patterns"),
+                vec![
+                    offered(0, "Bullish"),
+                    offered(1, "Bearish"),
+                    offered(2, "Neutral"),
+                ],
+                3,
+            ),
+            // Wicks only colours the candle blocks.
+            (
+                create("Bollinger Bars"),
+                vec![(1, "Up".into(), closes), offered(2, "Down")],
+                2,
+            ),
+            // The moving average is off by default.
+            (
+                create("Volume"),
+                vec![(0, "Up volume".into(), volumes), offered(1, "Down volume")],
+                0,
+            ),
+        ];
+        for (study, outputs, empty_values) in rows {
+            let name = study.name().to_owned();
+            let mut chart = Chart::new(BarData::from_bars(level_bars()));
+            let id = chart.add_indicator(study);
+            let expected: Vec<_> = outputs
+                .iter()
+                .map(|(output, tag, _)| {
+                    (
+                        AlertSource::Study {
+                            id: id.0.to_string(),
+                            output: *output,
+                        },
+                        AlertSourceName::from(format!("{name}: {tag}")),
+                    )
+                })
+                .collect();
+            assert_eq!(chart.alert_sources(), expected, "{name}");
+            for output in 0..57 {
+                let source = AlertSource::Study {
+                    id: id.0.to_string(),
+                    output,
+                };
+                for bar in 0..=6 {
+                    let expected = outputs
+                        .iter()
+                        .find(|(at, ..)| *at == output)
+                        .and_then(|(_, _, values)| values.get(bar).copied().flatten());
+                    assert_eq!(
+                        chart.alert_value(&source, bar),
+                        expected,
+                        "{name} output {output} bar {bar}"
+                    );
+                }
+            }
+            let shapes = crate::widget::test_frames::shapes(
+                &egui::Context::default(),
+                &mut chart,
+                0.0,
+                vec![],
+            );
+            let empty = shapes
+                .iter()
+                .filter(
+                    |shape| matches!(shape, egui::Shape::Text(text) if text.galley.text() == "∅"),
+                )
+                .count();
+            assert_eq!(empty, empty_values, "{name} legend");
+        }
+    }
+
+    /// A live downward crossing of the day POC fires; an undrawn previous-day POC cannot fire
+    /// even though its price (53.5) is crossed by the same 54-to-30 move.
+    #[cfg(feature = "alert-engine")]
+    #[test]
+    fn level_crossing_alerts_fire_and_hidden_levels_never_do() {
+        use crate::model::{Alert, AlertComparison, AlertCondition, Timeframe};
+        use crate::services::AlertEngine;
+        use std::sync::{Arc, Mutex};
+        let mut chart = Chart::new(BarData::from_bars(level_bars()));
+        chart.set_symbol("SAMPLE");
+        let id = chart.add_indicator(Box::new(AutoKeyLevels::new()));
+        let alerts = [(7, "dPOC"), (28, "pdPOC")]
+            .into_iter()
+            .map(|(output, name)| {
+                let mut alert = Alert::new(
+                    "SAMPLE",
+                    AlertCondition::Compare {
+                        other: AlertSource::Study {
+                            id: id.0.to_string(),
+                            output,
+                        },
+                        comparison: AlertComparison::CrossingDown,
+                    },
+                );
+                alert.timeframe = Some(Timeframe::Min1);
+                alert.name = name.to_owned();
+                alert
+            })
+            .collect();
+        let fired = Arc::new(Mutex::new(Vec::new()));
+        let log = fired.clone();
+        let engine = AlertEngine::new()
+            .with_alerts(alerts)
+            .on_trigger(move |alert, _| {
+                log.lock().unwrap().push(alert.name.clone());
+            });
+        let at = |hour| Utc.with_ymd_and_hms(2026, 2, 3, hour, 0, 0).unwrap();
+        engine.update(
+            "SAMPLE",
+            None,
+            Timeframe::Min1,
+            chart.bars(SeriesId::MAIN),
+            at(6),
+            |source, bar| chart.alert_value(source, bar),
+        );
+        assert!(fired.lock().unwrap().is_empty());
+        chart.update(
+            SeriesId::MAIN,
+            Bar::new(at(12), 30.0, 30.0, 30.0, 30.0, 1.0),
+        );
+        chart.refresh_studies(0.0);
+        engine.update(
+            "SAMPLE",
+            None,
+            Timeframe::Min1,
+            chart.bars(SeriesId::MAIN),
+            at(12),
+            |source, bar| chart.alert_value(source, bar),
+        );
+        assert_eq!(*fired.lock().unwrap(), ["dPOC"]);
+    }
+
     /// Fork medians and tines use anchor construction, and regression fits the source prices of
     /// the supplied bars.
     #[test]
