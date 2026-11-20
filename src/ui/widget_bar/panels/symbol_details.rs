@@ -254,8 +254,10 @@ impl SymbolDetailsPanel {
     }
 
     /// Ask `feed` for the details, financials, upcoming events and headlines of each symbol from
-    /// now on, starting with the shown one.
+    /// now on, starting with the shown one. Replies from the previous feed are ignored.
     pub fn set_feed(&mut self, feed: Arc<dyn Datafeed>) {
+        self.requests
+            .retain(|_, request| matches!(request, Request::Load(_) | Request::Save(..)));
         self.feed = Some(feed);
         if let Some(symbol) = self.symbol().map(str::to_owned) {
             self.request_details(symbol);
@@ -588,6 +590,7 @@ impl SymbolDetailsPanel {
                         if !current(&symbol) {
                             continue;
                         }
+                        self.events[usize::from(kind == CalendarKind::Dividends)] = None;
                         match result {
                             // A feed that ignores the query's symbols still shows only this one.
                             Ok(events) => {
@@ -619,6 +622,7 @@ impl SymbolDetailsPanel {
                         if !current(&symbol) {
                             continue;
                         }
+                        self.headlines.clear();
                         match result {
                             Ok(mut stories) => {
                                 stories.sort_by_key(|story| std::cmp::Reverse(story.time));
@@ -2029,12 +2033,30 @@ mod tests {
         );
         assert_eq!(h.state_mut().take_news_action(), NewsAction::None);
 
-        // A feed without calendar and news shows neither section and reports nothing.
-        let mut panel = SymbolDetailsPanel::new();
+        // Replacing a supported feed with one without calendar and news hides its old answers.
+        let panel = h.state_mut();
+        panel.set_feed(market.clone());
+        let pending_calendar = std::mem::take(&mut *market.calendar.lock().unwrap());
+        let pending_news = std::mem::take(&mut *market.news.lock().unwrap());
         panel.set_feed(Arc::new(Feed::default()));
-        panel.set_instrument(&Instrument::new("AAA"));
+        // Answers from the previous feed arrive after the replacement's unsupported answers.
+        for (query, reply) in pending_calendar {
+            reply.send(Ok(vec![event(
+                query.kind,
+                "2027-01-28T21:00:00Z",
+                Some("AAA"),
+            )]));
+        }
+        for (_, reply) in pending_news {
+            reply.send(Ok(vec![story(
+                "2027-01-07T00:00:00Z",
+                "Previous feed headline",
+                "",
+                None,
+            )]));
+        }
         panel.poll(&ctx);
-        let shown = texts(&ctx, &mut panel);
+        let shown = texts(&ctx, panel);
         assert!(!shown.contains(&"Upcoming events".into()), "{shown:?}");
         assert!(!shown.contains(&"News".into()), "{shown:?}");
         assert_eq!(panel.error, None);
