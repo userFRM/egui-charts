@@ -314,7 +314,8 @@ impl FloatingSelectionToolbar {
             self.menu.open_on(ui.ctx(), chart, self.position, id);
             self.menu.close();
         }
-        let action = self.show_with_shortcuts(ui, chart.shortcuts())?;
+        let multiple = chart.drawings().selected_ids().nth(1).is_some();
+        let action = self.show_with_shortcuts(ui, chart.shortcuts(), multiple)?;
         // Only editable selected drawings that draw the property take its edit.
         let targets = |chart: &Chart, draws: fn(&DrawingToolType) -> bool| -> Vec<usize> {
             let drawings = chart.drawings();
@@ -425,13 +426,14 @@ impl FloatingSelectionToolbar {
 
     /// Render the toolbar.
     pub fn show(&mut self, ui: &mut Ui) -> Option<FloatingToolbarAction> {
-        self.show_with_shortcuts(ui, &crate::widget::ShortcutMap::default())
+        self.show_with_shortcuts(ui, &crate::widget::ShortcutMap::default(), false)
     }
 
     fn show_with_shortcuts(
         &mut self,
         ui: &mut Ui,
         shortcuts: &crate::widget::ShortcutMap,
+        multiple: bool,
     ) -> Option<FloatingToolbarAction> {
         if !self.visible {
             return None;
@@ -493,7 +495,8 @@ impl FloatingSelectionToolbar {
                                                 slot.color,
                                                 custom || picker.custom_mode,
                                             );
-                                            if color != slot.color {
+                                            // The followed colour can already be the pick while others differ.
+                                            if color != slot.color || multiple {
                                                 slot.color = color;
                                                 action = Some(FloatingToolbarAction::ChangeColor(
                                                     idx, color,
@@ -1026,7 +1029,6 @@ mod tests {
                 .map(|d| (d.color, d.stroke_width, d.line_style))
                 .collect::<Vec<_>>()
         };
-        let original = styles(&chart);
         let mut toolbar = FloatingSelectionToolbar::new();
         let frame = |chart: &mut Chart, toolbar: &mut FloatingSelectionToolbar, events| {
             ctx.run_ui(
@@ -1052,13 +1054,17 @@ mod tests {
                 })
                 .unwrap_or_else(|| panic!("missing control: {label}"))
         };
-        for property in ["colour", "width", "style"] {
+        for property in ["colour", "same colour", "width", "style"] {
+            if property == "same colour" {
+                chart.drawings_mut().drawings[0].color = [76, 175, 80, 51];
+            }
+            let original = styles(&chart);
             chart.drawings_mut().select_drawings([1, 2, 3]);
             for _ in 0..2 {
                 frame(&mut chart, &mut toolbar, vec![]).drop_without_applying_deltas();
             }
             assert_eq!(toolbar.width, Some(Some(2.0)));
-            if property == "colour" {
+            if property.ends_with("colour") {
                 toolbar.pickers[0].is_open = true;
                 frame(&mut chart, &mut toolbar, vec![]).drop_without_applying_deltas();
                 let output = frame(&mut chart, &mut toolbar, vec![]);
