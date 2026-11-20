@@ -300,7 +300,10 @@ impl DatePicker {
                 }
             }
             let ordered = self.range_start != self.range_end
-                || !matches!((time, end_time), (Ok(Some(start)), Ok(Some(end))) if end <= start);
+                || !matches!(
+                    (time, end_time),
+                    (Ok(start), Ok(Some(end))) if end <= start.unwrap_or_default()
+                );
 
             // Always one line, so the dialog keeps its height while a range is picked.
             let (status, color) = if !field_valid {
@@ -422,7 +425,10 @@ impl DatePicker {
         let range = self.range_start.zip(self.range_end);
         let ordered = range.is_none_or(|(start, end)| {
             start != end
-                || !matches!((time, end_time), (Ok(Some(start)), Ok(Some(end))) if end <= start)
+                || !matches!(
+                    (time, end_time),
+                    (Ok(start), Ok(Some(end))) if end <= start.unwrap_or_default()
+                )
         });
         let can_go = field_valid
             && time.is_ok()
@@ -685,6 +691,8 @@ mod tests {
                     "09:30",
                     None,
                 ),
+                // Without a start time the first day starts at 00:00.
+                (Some(Timeframe::Min1), Some((17, 17)), "", "00:00", None),
                 (
                     Some(Timeframe::Min1),
                     Some((10, 17)),
