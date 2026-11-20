@@ -8,6 +8,28 @@ use crate::model::Bar;
 use crate::studies::IndicatorValues;
 use egui::Color32;
 
+// All existing Indicator implementations (including borrowed and unsized ones) receive
+// this private supertrait. Only chart-owned 'static instances are inspected. Erasing the
+// *conversion function*, rather than coercing an arbitrary ?Sized self into dyn Any, keeps
+// that blanket implementation unconstrained. No study can override its concrete identity.
+pub(crate) trait ConcreteStudy {
+    #[cfg(all(feature = "widget", feature = "studies"))]
+    fn concrete_study(&self, cast: &dyn std::any::Any) -> Option<&dyn std::any::Any>
+    where
+        Self: 'static;
+}
+
+impl<T: ?Sized> ConcreteStudy for T {
+    #[cfg(all(feature = "widget", feature = "studies"))]
+    fn concrete_study(&self, cast: &dyn std::any::Any) -> Option<&dyn std::any::Any>
+    where
+        Self: 'static,
+    {
+        cast.downcast_ref::<fn(&T) -> &dyn std::any::Any>()
+            .map(|cast| cast(self))
+    }
+}
+
 /// The output value of an indicator at a single bar position.
 ///
 /// An owned row for constructing or exporting [`IndicatorValues`](super::IndicatorValues).
@@ -177,7 +199,11 @@ pub struct StudyPane {
 ///     inverted_color: None,
 /// };
 /// ```
-pub trait Indicator: Send {
+#[expect(
+    private_bounds,
+    reason = "blanket-implemented for every type; not a host extension point"
+)]
+pub trait Indicator: Send + ConcreteStudy {
     /// Sparse projected price bands, with fractional endpoints in future whitespace.
     fn projections(&self) -> &[super::StudyProjection] {
         &[]
@@ -348,6 +374,15 @@ pub trait Indicator: Send {
         0
     }
 
+    /// Whether everything drawn under the current inputs is plots, their shapes, bands and
+    /// fills, all of which an offset moves bar for bar. A study without a
+    /// [`source`](Self::source) offers Offset while this holds. Return true only when it reads
+    /// the chart's bars alone and draws no markers, labels, zones, projections, tables,
+    /// candles, profiles or drawings. False by default.
+    fn draws_only_plots(&self) -> bool {
+        false
+    }
+
     /// Optional per-bar colour, overriding the plot colour at a source bar.
     fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
         let _ = (line, bar);
@@ -449,50 +484,7 @@ pub trait Indicator: Send {
 
     /// Current applied presentation, initialized from the study's own defaults.
     fn settings(&self) -> super::StudySettings {
-        let (levels, fill_between_levels, level_fill_color) =
-            super::settings::declared_levels(self);
-        super::StudySettings {
-            show_legend_values: true,
-            user_edit_enabled: Some(self.user_edit_enabled()),
-            help_url: self.help_url().map(str::to_owned),
-            plots: (0..self.line_count())
-                .map(|line| self.plot_style(line))
-                .collect(),
-            precision: self.precision(),
-            hidden_intervals: Vec::new(),
-            timeframe_visibility: crate::model::TimeframeVisibility::all(),
-            levels,
-            fill_between_levels,
-            level_fill_color,
-            mfi_auto_range: false,
-            untagged_plots: (0..self.line_count())
-                .filter(|&line| !self.plot_tagged(line))
-                .collect(),
-            price_line_plots: (0..self.line_count())
-                .filter(|&line| self.plot_price_line(line))
-                .collect(),
-            plot_variants: (0..self.line_count())
-                .map(|line| self.plot_variants(line))
-                .collect(),
-            gradients: self
-                .gradients()
-                .iter()
-                .map(|fill| super::GradientStyle {
-                    colors: fill.colors,
-                    visible: true,
-                })
-                .collect(),
-            background: self.background(),
-            background_visible: true,
-            fills: self
-                .fills()
-                .iter()
-                .map(|fill| super::FillStyle {
-                    inverted_color: fill.inverted_color,
-                    ..super::FillStyle::new(fill.color)
-                })
-                .collect(),
-        }
+        super::settings::declared_settings(self)
     }
 
     /// Capture editable inputs and presentation without copying calculated values.
@@ -649,7 +641,9 @@ pub trait Indicator: Send {
     /// Interval and Wait for interval close inputs, otherwise offered to source-aware studies,
     /// studies that request nothing, and studies without an interval input of their own that
     /// request only price bars of other symbols or of the chart's interval, which they read on the
-    /// Interval as on a chart of it. On another interval it passes every request on with the
+    /// Interval as on a chart of it, but never to a study with an
+    /// [`InputKind::AutoTimeframe`](super::InputKind::AutoTimeframe) input, whose interval
+    /// follows the chart. On another interval it passes every request on with the
     /// start [`data_start`](Indicator::data_start) states. The default, `false`, keeps a study
     /// that requests other histories, such as the chart symbol's bars of a stated interval or
     /// metrics, on the chart's interval.
@@ -1108,6 +1102,14 @@ pub trait Indicator: Send {
     /// continue to use `clone_box`.
     fn clone_for_export(&self) -> Box<dyn Indicator> {
         self.clone_box()
+    }
+}
+
+#[cfg(all(feature = "widget", feature = "studies"))]
+impl dyn Indicator {
+    pub(crate) fn concrete<T: 'static>(&self) -> Option<&T> {
+        let cast: fn(&T) -> &dyn std::any::Any = |value| value;
+        ConcreteStudy::concrete_study(self, &cast)?.downcast_ref()
     }
 }
 

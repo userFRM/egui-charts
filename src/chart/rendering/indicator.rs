@@ -373,7 +373,13 @@ impl IndicatorRenderer {
                 crate::painting::volume_profile::ProfileStyle::Study {
                     right_aligned: plot.right_aligned,
                     strip: plot.strip.is_some(),
+                    walls_visible: if plot.profile.walls.is_some() {
+                        [3, 4].map(|line| indicator.plot_style(line).visible)
+                    } else {
+                        [true; 2]
+                    },
                     width: plot.width,
+                    volume_decimals: plot.volume_decimals,
                 },
                 &|price| price_scale.price_to_y(price),
             );
