@@ -1862,6 +1862,69 @@ mod tests {
                 &["Buy imbalance: Buy imbalance on 3 rows"],
             ),
         ];
+        // Bar 60's buy zone at 100.25 to 100.75: bar 120 rejects it, bar 180 closes below
+        // it, ending it silently, and bar 240 trades into the ended zone without a signal.
+        let rejection: [Step; 7] = [
+            (
+                120,
+                100.5,
+                1.0,
+                Sell,
+                &[
+                    "Buy imbalance: Buy imbalance on 3 rows",
+                    "Stacked buy imbalance: Stacked buy imbalance of 3 rows",
+                ],
+            ),
+            (121, 100.75, 1.0, Buy, &[]),
+            (
+                180,
+                100.25,
+                1.0,
+                Buy,
+                &["Buy zone rejection: Buy zone rejection at 100.25 to 100.75"],
+            ),
+            (181, 100.0, 1.0, Sell, &[]),
+            (240, 100.5, 1.0, Sell, &[]),
+            (241, 100.75, 1.0, Buy, &[]),
+            (300, 100.0, 1.0, Buy, &[]),
+        ];
+        // Bar 120 repeats bar 60's stack. Both later rejections name the shared bounds once.
+        let repeated: [Step; 9] = [
+            (
+                120,
+                100.0,
+                1.0,
+                Sell,
+                &[
+                    "Buy imbalance: Buy imbalance on 3 rows",
+                    "Stacked buy imbalance: Stacked buy imbalance of 3 rows",
+                ],
+            ),
+            (121, 100.25, 1.0, Sell, &[]),
+            (122, 100.5, 1.0, Sell, &[]),
+            (123, 100.25, 12.0, Buy, &[]),
+            (124, 100.5, 9.0, Buy, &[]),
+            (125, 100.75, 15.0, Buy, &[]),
+            (
+                180,
+                100.5,
+                1.0,
+                Sell,
+                &[
+                    "Buy imbalance: Buy imbalance on 3 rows",
+                    "Stacked buy imbalance: Stacked buy imbalance of 3 rows",
+                    "Buy zone rejection: Buy zone rejection at 100.25 to 100.75",
+                ],
+            ),
+            (181, 100.75, 1.0, Buy, &[]),
+            (
+                240,
+                101.0,
+                1.0,
+                Buy,
+                &["Buy zone rejection: Buy zone rejection at 100.25 to 100.75"],
+            ),
+        ];
         let settings = |minimum: f64| {
             let mut settings = DetectorSettings::default();
             settings.footprint.enabled = true;
@@ -1871,6 +1934,8 @@ mod tests {
             rule.sell_imbalance = true;
             rule.stacked_buy_imbalance = true;
             rule.stacked_sell_imbalance = true;
+            rule.buy_zone_rejection = true;
+            rule.sell_zone_rejection = true;
             rule.imbalance_min_volume = minimum;
             rule.buy_volume_above = Some(100.0);
             rule.sell_volume_above = Some(100.0);
@@ -1903,6 +1968,16 @@ mod tests {
             ),
             ("levels", 0.0, selling.to_vec()),
             ("horizontal gap breaks the stack", 0.0, gapped.to_vec()),
+            (
+                "zone rejection",
+                0.0,
+                [&stacked(&[])[..7], &rejection[..]].concat(),
+            ),
+            (
+                "repeated stack",
+                0.0,
+                [&stacked(&[])[..7], &repeated[..]].concat(),
+            ),
         ] {
             let mut host = Host::new(Some(1_000.0));
             let mut configured = settings(minimum);
@@ -1923,6 +1998,57 @@ mod tests {
                 let id = SignalId("footprint-stacked-buy-60000".into());
                 assert!(host.events().contains(&SignalEvent::Remove(id)), "{name}");
                 assert!(alerts(&host).is_empty(), "{name}: rebuilt five-minute bars");
+            }
+        }
+        // A closed bar skipped while disabled or after retention ends every active zone.
+        // Disabling and enabling inside a bar still reads its close and keeps unbroken zones.
+        for name in [
+            "disabled across close",
+            "first retained bar",
+            "disabled inside bar",
+        ] {
+            let host = Host::new(None);
+            let mut configured = DetectorSettings::default();
+            configured.footprint.enabled = true;
+            configured.footprint.alert = true;
+            configured.footprint.rule.buy_zone_rejection = true;
+            configured.footprint.rule.sell_zone_rejection = true;
+            host.detectors.set_settings(configured.clone());
+            let push = |second, price, size, side, expected: &[&str]| {
+                let trade = MarketEvent::Trade(fill(second, price, size, side, None));
+                host.detectors.push("ES", time(second), &trade);
+                assert_eq!(alerts(&host), expected, "{name}, second {second}");
+            };
+            for &(second, price, size, side, expected) in &stacked(&[])[..7] {
+                push(second, price, size, side, expected);
+            }
+            push(120, 100.5, 1.0, Sell, &[]);
+            if name != "first retained bar" {
+                configured.footprint.enabled = false;
+                host.detectors.set_settings(configured.clone());
+            }
+            if name == "disabled inside bar" {
+                push(121, 100.75, 1.0, Buy, &[]);
+                configured.footprint.enabled = true;
+                host.detectors.set_settings(configured);
+                let rejected = &["Buy zone rejection: Buy zone rejection at 100.25 to 100.75"];
+                push(180, 100.5, 1.0, Sell, rejected);
+                push(181, 100.75, 1.0, Buy, &[]);
+                push(240, 101.0, 1.0, Buy, rejected);
+            } else {
+                let fills = if name == "first retained bar" {
+                    100_010
+                } else {
+                    1
+                };
+                for _ in 0..fills {
+                    push(121, 99.0, 1.0, Sell, &[]);
+                }
+                push(180, 99.0, 1.0, Sell, &[]);
+                configured.footprint.enabled = true;
+                host.detectors.set_settings(configured);
+                push(181, 100.25, 1.0, Buy, &[]);
+                push(240, 100.5, 1.0, Buy, &[]);
             }
         }
         // Loaded history, with 101 sold on its own row: marked, never alerted, also when the first
