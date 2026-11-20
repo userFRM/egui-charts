@@ -379,6 +379,7 @@ impl IndicatorRenderer {
                         [true; 2]
                     },
                     width: plot.width,
+                    volume_decimals: plot.volume_decimals,
                 },
                 &|price| price_scale.price_to_y(price),
             );
