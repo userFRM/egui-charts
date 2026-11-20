@@ -1510,6 +1510,23 @@ mod tests {
                 |d| d.volume_profile.as_mut().unwrap().extend_right = true,
             ),
             (
+                "volume profile ticks per row",
+                DrawingToolType::FixedRangeVolumeProfile,
+                |d| d.volume_profile = crate::data::VolumeProfileConfig::new(24, 0.7),
+                |d| {
+                    d.volume_profile = crate::data::VolumeProfileConfig::new(48, 0.8)
+                        .and_then(|c| c.with_row_size(Some(2.0)))
+                },
+                |d| {
+                    let config = d.volume_profile.as_mut().unwrap();
+                    *config = config.with_row_ticks(Some(4)).unwrap();
+                },
+                |d| {
+                    let config = d.volume_profile.as_mut().unwrap();
+                    *config = config.with_row_ticks(Some(4)).unwrap();
+                },
+            ),
+            (
                 "vwap band line",
                 DrawingToolType::AnchoredVWAP,
                 |d| d.vwap = Some(VwapConfig::default()),
