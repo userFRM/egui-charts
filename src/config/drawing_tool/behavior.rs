@@ -58,6 +58,8 @@ impl DrawingToolType {
                 | Self::FibonacciWedge
                 // Projections fill their target zones from their own settings.
                 | Self::ProjectionTool
+                // Forecasts colour their cards and badges from their own settings.
+                | Self::Forecast
                 // Forks fill their bands from their level settings.
                 | Self::Pitchfork
                 | Self::SchiffPitchfork

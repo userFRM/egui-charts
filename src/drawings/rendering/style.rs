@@ -341,7 +341,6 @@ impl Drawing {
                         | DrawingToolType::Image
                         | DrawingToolType::Tweet
                         | DrawingToolType::Idea
-                        | DrawingToolType::Forecast
                 )
                 && let Some(configured) = self.fill_color32()
             {
@@ -395,7 +394,11 @@ impl Drawing {
             }
             Shape::Rect(r) => {
                 fill(&mut r.fill);
-                if dash.is_none() || r.stroke.is_empty() {
+                // A forecast's card frames stay solid; its line takes the pattern.
+                if dash.is_none()
+                    || r.stroke.is_empty()
+                    || self.tool_type == DrawingToolType::Forecast
+                {
                     return;
                 }
                 egui::epaint::tessellator::path::rounded_rectangle(
