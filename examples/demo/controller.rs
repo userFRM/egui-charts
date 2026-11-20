@@ -458,6 +458,8 @@ pub struct DemoApp {
     live_strategy: Option<(egui_charts::strategies::Backtest, String)>,
     strategy_trade: Option<usize>,
     strategy_session: SessionType,
+    /// The symbol and tick size the tester's price increment last followed.
+    strategy_instrument: Option<(String, Option<f64>)>,
 
     // Right-hand side panel.
     object_tree: ObjectTreePanel,
@@ -771,6 +773,7 @@ impl DemoApp {
             live_strategy: None,
             strategy_trade: None,
             strategy_session: SessionType::Full24x7,
+            strategy_instrument: None,
             object_tree: ObjectTreePanel::new(),
             open_panel: cc
                 .storage
