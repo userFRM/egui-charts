@@ -3179,6 +3179,16 @@ mod tests {
                 vec!["IBH 101.25"],
             ),
             (
+                "quarter tick IBH on four-tick rows",
+                &f2,
+                TPOConfig {
+                    tick_size: 1.0,
+                    instrument_tick: Some(0.25),
+                    ..with_labels(&["IBH"], true)
+                },
+                vec!["IBH 101.25"],
+            ),
+            (
                 "half tick midpoint",
                 &f2,
                 TPOConfig {
@@ -3256,7 +3266,7 @@ mod tests {
                             1,
                             &coords,
                             config,
-                            None,
+                            config.instrument_tick,
                             &BarClock::new(Timeframe::Min30),
                             |i, _| i as f32 * 30.0,
                             0.0,
