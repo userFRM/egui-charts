@@ -235,6 +235,16 @@ impl Indicator for Volume {
             ),
         ]
     }
+
+    // The average holds values only while it is shown.
+    fn alert_outputs(&self) -> Vec<(usize, String)> {
+        let outputs = if self.show_average { 3 } else { 2 };
+        self.line_names()
+            .into_iter()
+            .take(outputs)
+            .enumerate()
+            .collect()
+    }
 }
 
 #[cfg(test)]
