@@ -318,6 +318,19 @@ fn without_thresholds(condition: &AlertCondition) -> Option<AlertCondition> {
     })
 }
 
+/// The lower and upper bound of a channel condition, or a single level and one above it,
+/// which is how the condition menu and presets carry thresholds between operators.
+pub(super) fn seeded_bounds(condition: &AlertCondition) -> Option<(f64, f64)> {
+    use AlertCondition as C;
+    match condition {
+        C::EnteringChannel { lower, upper }
+        | C::ExitingChannel { lower, upper }
+        | C::InsideChannel { lower, upper }
+        | C::OutsideChannel { lower, upper } => Some((*lower, *upper)),
+        _ => condition.level().map(|level| (level, level + 1.0)),
+    }
+}
+
 /// A stored operator with the thresholds, drawings or plots of `current`, where a single level
 /// seeds a channel as the condition menu does. `None` for a rule that `replaces` `current` when
 /// the operator would drop the drawings or plots it tests or needs levels it lacks. A rule the
@@ -330,14 +343,7 @@ fn restored_condition(
     sources: &[(AlertSource, AlertSourceName)],
 ) -> Option<AlertCondition> {
     use AlertCondition as C;
-    let levels = match current {
-        C::EnteringChannel { lower, upper }
-        | C::ExitingChannel { lower, upper }
-        | C::InsideChannel { lower, upper }
-        | C::OutsideChannel { lower, upper } => Some((*lower, *upper)),
-        _ => current.level().map(|level| (level, level + 1.0)),
-    }
-    .or((!replaces).then_some((0.0, 1.0)));
+    let levels = seeded_bounds(current).or((!replaces).then_some((0.0, 1.0)));
     let to_level = |comparison| match (current, levels) {
         (C::Compare { other, .. }, _) => Some(C::Compare {
             other: other.clone(),
