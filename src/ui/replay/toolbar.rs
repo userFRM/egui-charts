@@ -334,10 +334,16 @@ impl<'a> ReplayToolbar<'a> {
     fn show_speed_selector(&self, ui: &mut Ui) -> Option<ReplayToolbarAction> {
         let mut action = None;
         let current = self.state.speed;
+        let spacing = ui.spacing();
+        let row_height = (ui.text_style_height(&egui::TextStyle::Button)
+            + 2.0 * spacing.button_padding.y)
+            .max(spacing.interact_size.y)
+            + spacing.item_spacing.y;
 
         egui::ComboBox::from_id_salt("replay_speed")
             .selected_text(l10n::text(ui.ctx(), current.label()))
             .width(DESIGN_TOKENS.sizing.replay.speed_dropdown_width)
+            .height(row_height * ReplaySpeed::presets().len() as f32)
             .show_ui(ui, |ui| {
                 for speed in ReplaySpeed::presets().iter().copied() {
                     if ui
@@ -533,6 +539,26 @@ mod tests {
         harness.get_by_label("50x").click();
         harness.run();
         assert_eq!(harness.state().state.speed, ReplaySpeed::Turbo);
+
+        harness.get_by_role(egui::Role::ComboBox).click();
+        harness.run();
+        let last_preset = harness.output().shapes.iter().find_map(|shape| {
+            if let egui::Shape::Text(text) = &shape.shape
+                && text.galley.text() == "100x"
+            {
+                Some(shape.clip_rect.contains_rect(text.visual_bounding_rect()))
+            } else {
+                None
+            }
+        });
+        assert_eq!(
+            last_preset,
+            Some(true),
+            "the last preset must be fully visible"
+        );
+        harness.get_by_label("100x").click();
+        harness.run();
+        assert_eq!(harness.state().state.speed, ReplaySpeed::Max);
 
         // Outside replay mode the toolbar offers no button that would do nothing.
         harness.state_mut().handle_action(ReplayAction::Stop);
