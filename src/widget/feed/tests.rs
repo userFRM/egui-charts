@@ -2985,9 +2985,15 @@ fn symbol_changes_reset_manual_price_scaling() {
             assert!(!chart.state.price_scale().bar_ratio_locked());
             assert!(!chart.state.has_zoom_history());
             let range = chart.state.price_scale().range();
-            // 50 / (1 - 0.1 - 0.1) = 62.5; each margin adds 6.25.
-            assert!((range.min - 993.75).abs() < 1e-10, "{range:?}");
-            assert!((range.max - 1056.25).abs() < 1e-10, "{range:?}");
+            // Span = 50 / 0.82; the bottom takes 8% of it and the top takes 10%.
+            assert!(
+                (range.min - (1000.0 - 50.0 / 0.82 * 0.08)).abs() < 1e-10,
+                "{range:?}"
+            );
+            assert!(
+                (range.max - (1050.0 + 50.0 / 0.82 * 0.1)).abs() < 1e-10,
+                "{range:?}"
+            );
         }
     }
 }
@@ -6322,6 +6328,175 @@ fn heatmap_appearance_survives_visibility_and_frozen_images() {
     }
 }
 
+/// Releasing history frees its textures, restarts paging and leaves the open sample intact.
+#[test]
+fn clearing_depth_history_frees_textures_and_refills() {
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    chart.set_liquidity_heatmap(true);
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve()
+        .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+    feed.page().send(page(bars(1), true));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    feed.depth
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(DepthPage::new(vec![], false)));
+    let time = bars(1)[0].time;
+    let sink = feed.sink();
+    sink.set_server_time(time);
+    let level = |price| crate::model::OrderBookLevel {
+        price,
+        size: 5.0,
+        order_cnt: None,
+    };
+    sink.push_depth_snapshot(
+        1,
+        crate::model::OrderBook {
+            ts: time,
+            symbol: "A".into(),
+            bids: vec![level(99.0)],
+            asks: vec![level(101.0)],
+        },
+    );
+    sink.advance_time(time + TimeDelta::seconds(1));
+    let ctx = frames.ctx.clone();
+    let paint = |chart: &Chart| {
+        ctx.run_ui(Default::default(), |ui| {
+            chart.paint_liquidity(ui.painter(), &chart.get_chart_mapping());
+        })
+    };
+    let populated = |output: &egui::FullOutput| {
+        output.textures_delta.set.values().flatten().any(|delta| {
+            let egui::ImageData::Color(image) = &delta.image;
+            delta.pos.is_some() && image.size == [1, 256] && image.pixels[99].a() > 0
+        })
+    };
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        chart.show(ui);
+    });
+    assert!(populated(&output));
+    output.textures_delta.clear();
+    feed.calls();
+    chart.clear_depth_history();
+    assert_eq!(
+        chart
+            .depth_history(SeriesId::MAIN)
+            .unwrap()
+            .columns()
+            .count(),
+        0
+    );
+    let mut output = paint(&chart);
+    assert!(!output.textures_delta.free.is_empty());
+    assert!(output.textures_delta.set.is_empty());
+    output.textures_delta.clear();
+    frames.run(&mut chart);
+    assert!(
+        feed.calls()
+            .iter()
+            .any(|call| matches!(call, Call::Depth(r) if r.before.is_none()))
+    );
+    sink.advance_time(time + TimeDelta::seconds(2));
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        chart.show(ui);
+    });
+    let held: Vec<_> = chart
+        .depth_history(SeriesId::MAIN)
+        .unwrap()
+        .columns()
+        .map(|c| c.time)
+        .collect();
+    assert_eq!(held, [time + TimeDelta::seconds(1)]);
+    assert!(populated(&output));
+    output.textures_delta.clear();
+}
+
+/// Releasing history forgets scroll-back pages and their retries so paging starts at the newest.
+#[test]
+fn clearing_depth_history_discards_old_pages_and_retries() {
+    for retry in [false, true] {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_depth_history(Some(DepthHistory::new(Default::default()).unwrap()));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(0.25)));
+        let bars = bars(1000);
+        feed.page().send(page(bars.clone(), true));
+        frames.run(&mut chart);
+        let column = |index: usize| crate::data::DepthColumn {
+            time: bars[index].time,
+            span: TimeDelta::seconds(60),
+            bids: vec![(400, 2.0)],
+            ..Default::default()
+        };
+        chart.set_visible_logical_range(crate::model::LogicalRange {
+            left: 950.0,
+            right: 999.0,
+        });
+        feed.depth
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(DepthPage::new(vec![column(900)], false)));
+        frames.run(&mut chart);
+        feed.calls();
+        chart.set_visible_logical_range(crate::model::LogicalRange {
+            left: 850.0,
+            right: 899.0,
+        });
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        assert!(matches!(
+            &feed.calls()[..],
+            [Call::Depth(r)] if r.before == Some(bars[900].time)
+        ));
+        let old = feed.depth.lock().unwrap().remove(0);
+        if retry {
+            old.send(Err(FeedError::Network("offline".into())));
+            frames.run(&mut chart);
+            chart.clear_depth_history();
+        } else {
+            chart.clear_depth_history();
+            old.send(Ok(DepthPage::new(vec![column(899)], false)));
+        }
+        frames.time += 2.0;
+        frames.run(&mut chart);
+        assert_eq!(
+            chart
+                .depth_history(SeriesId::MAIN)
+                .unwrap()
+                .columns()
+                .count(),
+            0,
+            "a released page must not refill history (retry: {retry})"
+        );
+        assert!(
+            matches!(&feed.calls()[..], [Call::Depth(r)] if r.before.is_none()),
+            "release must request the newest page (retry: {retry})"
+        );
+        feed.depth
+            .lock()
+            .unwrap()
+            .remove(0)
+            .send(Ok(DepthPage::new(vec![column(999)], true)));
+        frames.run(&mut chart);
+        let held: Vec<_> = chart
+            .depth_history(SeriesId::MAIN)
+            .unwrap()
+            .columns()
+            .map(|c| c.time)
+            .collect();
+        assert_eq!(held, [bars[999].time]);
+    }
+}
+
 /// A history filter that needs metadata absent from every held order samples no column, and the
 /// pane says why whatever the book profile shows. Two different failures each get one notice.
 #[test]
@@ -6460,16 +6635,47 @@ fn depth_paging_ends_independently_and_drops_old_settings_replies() {
 /// window names where they continue.
 #[test]
 fn depth_pages_follow_visible_time_and_stop_without_older_columns() {
-    for (name, offset, span, end, continuation, expected) in [
-        ("overlapping page", Some(899), 120, false, None, vec![900]),
-        ("final page", Some(899), 60, true, None, vec![899, 900]),
-        ("empty page", None, 60, false, None, vec![900]),
-        ("repeated page", Some(900), 60, false, None, vec![900]),
-        ("empty window", None, 60, false, Some(880), vec![900]),
+    for (name, offset, span, end, continuation, retention, expected) in [
+        (
+            "overlapping page",
+            Some(899),
+            120,
+            false,
+            None,
+            None,
+            vec![900],
+        ),
+        (
+            "final page",
+            Some(899),
+            60,
+            true,
+            None,
+            None,
+            vec![899, 900],
+        ),
+        ("empty page", None, 60, false, None, None, vec![900]),
+        ("repeated page", Some(900), 60, false, None, None, vec![900]),
+        ("empty window", None, 60, false, Some(880), None, vec![900]),
+        (
+            "retention reached",
+            Some(899),
+            60,
+            false,
+            None,
+            Some(120),
+            vec![899, 900],
+        ),
     ] {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
-        chart.set_depth_history(Some(DepthHistory::new(Default::default()).unwrap()));
+        chart.set_depth_history(Some(
+            DepthHistory::new(
+                crate::data::DepthHistoryConfig::default()
+                    .with_retention(retention.map(TimeDelta::seconds)),
+            )
+            .unwrap(),
+        ));
         let mut frames = Frames::new();
         frames.run(&mut chart);
         let mut instrument = Instrument::new("A");
@@ -6503,8 +6709,9 @@ fn depth_pages_follow_visible_time_and_stop_without_older_columns() {
         frames.run(&mut chart);
         let calls = feed.calls();
         assert_eq!(calls.len(), 1, "{name}: {calls:?}");
+        let since = retention.map(|_| bars[899].time);
         assert!(
-            matches!(&calls[0], Call::Depth(r) if r.before == Some(bars[900].time)),
+            matches!(&calls[0], Call::Depth(r) if r.before == Some(bars[900].time) && r.count == 600 && r.since == since),
             "{name}: {calls:?}"
         );
         let mut answer = DepthPage::new(offset.map(|i| column(i, span)).into_iter().collect(), end);
@@ -6839,6 +7046,8 @@ fn scroll_to_time_shows_the_nearest_bar_and_loads_older_history() {
         frames.run(&mut chart);
         let spacing = chart.state.time_scale().bar_spacing();
         chart.enable_tracking_mode();
+        // An explicit instant replaces local navigation's following-bar rule.
+        chart.go_to_local_time(all[0].time.date_naive(), None);
         chart.scroll_to_time(all[0].time + TimeDelta::seconds(seconds));
         frames.run(&mut chart);
         let range = chart.state.time_scale().visible_logical_range();
@@ -6959,6 +7168,164 @@ fn scroll_to_time_shows_the_nearest_bar_and_loads_older_history() {
         let range = chart.state.time_scale().visible_logical_range();
         assert!((range.left + range.right) / 2.0 > 25.0, "{row}: {range:?}");
     }
+}
+
+/// Local navigation keeps the zoom and selects the following bar, including after paging.
+/// New York is UTC-5 in November and UTC-4 after the March clock jump.
+#[cfg(feature = "timezones")]
+#[test]
+fn go_to_local_time_centres_the_first_bar_at_or_after_the_local_time() {
+    use crate::model::TimezoneId;
+    use crate::scales::TimezoneMode;
+    use chrono::{NaiveDate, NaiveTime};
+
+    let ny = TimezoneId::named("America/New_York").unwrap();
+    let series = |start: &str, count: i64, minutes: i64| {
+        let start: DateTime<Utc> = start.parse().unwrap();
+        (0..count)
+            .map(|i| {
+                Bar::new(
+                    start + TimeDelta::minutes(i * minutes),
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    1.0,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let sessions = [
+        series("2026-11-16T14:30:00Z", 13, 30),
+        series("2026-11-17T14:30:00Z", 13, 30),
+    ]
+    .concat();
+    let skipped = series("2026-03-08T04:00:00Z", 12, 30);
+    let repeated = series("2026-11-01T04:00:00Z", 12, 30);
+    let daily = series("2026-11-16T00:00:00Z", 5, 1440);
+    // Midnight EST is 05:00Z, nearer the previous session's 20:30Z than today's 14:30Z.
+    // 02:30 in the spring gap resolves to 03:00 EDT = 07:00Z; the first autumn 01:30
+    // is still EDT = 05:30Z. Supplied daily bars retain the UTC trading date on their axis.
+    for (name, bars, interval, date, time, expected) in [
+        (
+            "day in the bars",
+            &sessions,
+            Timeframe::Min30,
+            "2026-11-17",
+            None,
+            "2026-11-17T14:30:00Z",
+        ),
+        (
+            "time on that day",
+            &sessions,
+            Timeframe::Min30,
+            "2026-11-17",
+            Some("14:30"),
+            "2026-11-17T19:30:00Z",
+        ),
+        (
+            "skipped hour",
+            &skipped,
+            Timeframe::Min30,
+            "2026-03-08",
+            Some("02:30"),
+            "2026-03-08T07:00:00Z",
+        ),
+        (
+            "repeated hour",
+            &repeated,
+            Timeframe::Min30,
+            "2026-11-01",
+            Some("01:30"),
+            "2026-11-01T05:30:00Z",
+        ),
+        (
+            "after the last bar",
+            &sessions,
+            Timeframe::Min30,
+            "2026-11-20",
+            None,
+            "2026-11-17T20:30:00Z",
+        ),
+        (
+            "before supplied bars",
+            &sessions,
+            Timeframe::Min30,
+            "2026-11-15",
+            None,
+            "2026-11-16T14:30:00Z",
+        ),
+        (
+            "supplied daily bars",
+            &daily,
+            Timeframe::Day1,
+            "2026-11-17",
+            None,
+            "2026-11-17T00:00:00Z",
+        ),
+    ] {
+        let expected: DateTime<Utc> = expected.parse().unwrap();
+        let expected = bars.iter().position(|bar| bar.time == expected).unwrap();
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        chart.set_timeframe(interval);
+        chart.chart_options.time_scale.timezone = TimezoneMode::Timezone(ny.clone());
+        chart.set_visible_bars(4);
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        let spacing = chart.state.time_scale().bar_spacing();
+        chart.enable_tracking_mode();
+        let date = NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap();
+        let time = time.map(|text| NaiveTime::parse_from_str(text, "%H:%M").unwrap());
+        chart.go_to_local_time(date, time);
+        frames.run(&mut chart);
+        let range = chart.state.time_scale().visible_logical_range();
+        assert!(
+            ((range.left + range.right) / 2.0 - expected as f32).abs() < 0.01,
+            "{name}: {range:?}"
+        );
+        assert_eq!(chart.state.time_scale().bar_spacing(), spacing, "{name}");
+        assert!(!chart.is_tracking_mode_active(), "{name}");
+    }
+
+    let all = bars(3000);
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    chart.chart_options.time_scale.timezone = TimezoneMode::Timezone(ny.clone());
+    chart.set_visible_bars(4);
+    let mut frames = Frames::new();
+    // Before even the first page arrives the target remains pending. 10:00 EDT is 14:00Z,
+    // which is 14 * 60 = 840 minutes from the fixture's midnight on 15 March 2024.
+    chart.go_to_local_time(
+        NaiveDate::from_ymd_opt(2024, 3, 15).unwrap(),
+        NaiveTime::from_hms_opt(10, 0, 0),
+    );
+    frames.run(&mut chart);
+    feed.calls();
+    feed.page().send(page(all[2000..].to_vec(), false));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    let ranged = |before| {
+        let Call::History(mut request) = history("A", Timeframe::Min1, Some(before)) else {
+            unreachable!()
+        };
+        request.clock = request.clock.with_timezone(ny.clone());
+        request.since = Some(all[840].time);
+        Call::History(request)
+    };
+    assert_eq!(feed.calls(), [ranged(all[2000].time)]);
+    feed.page().send(page(all[1000..2000].to_vec(), false));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    assert_eq!(feed.calls(), [ranged(all[1000].time)]);
+    feed.page().send(page(all[..1000].to_vec(), false));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    let range = chart.state.time_scale().visible_logical_range();
+    assert!(
+        ((range.left + range.right) / 2.0 - 840.0).abs() < 0.01,
+        "history: {range:?}"
+    );
+    assert!(feed.calls().is_empty());
 }
 
 #[test]

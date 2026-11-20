@@ -58,6 +58,8 @@ impl DrawingToolType {
                 | Self::FibonacciWedge
                 // Projections fill their sectors from their own settings.
                 | Self::ProjectionTool
+                // Forecasts colour their cards and badges from their own settings.
+                | Self::Forecast
                 // Forks fill their bands from their level settings.
                 | Self::Pitchfork
                 | Self::SchiffPitchfork
@@ -195,7 +197,12 @@ impl DrawingToolType {
     pub fn supports_line_measurements(&self) -> bool {
         matches!(
             self,
-            Self::TrendLine | Self::Ray | Self::ExtendedLine | Self::InfoLine | Self::TrendAngle
+            Self::TrendLine
+                | Self::Ray
+                | Self::ExtendedLine
+                | Self::InfoLine
+                | Self::TrendAngle
+                | Self::Arrow
         )
     }
 

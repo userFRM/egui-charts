@@ -57,8 +57,8 @@ impl Chart {
     /// Creates a new chart with default configuration.
     ///
     /// Initializes the chart with the provided OHLCV data and sensible defaults:
-    /// candlestick chart type, default bar spacing and tracking mode off. The
-    /// bars are cleaned as by [`Chart::set_data`].
+    /// candlestick chart type, default bar spacing, tracking mode off, and 10% of the pane
+    /// free above the prices and 8% below. The bars are cleaned as by [`Chart::set_data`].
     ///
     /// # Arguments
     ///
@@ -67,6 +67,8 @@ impl Chart {
         let chart_options = ChartOptions::default();
         let (bars, rejected_bars) = super::series::clean(data.bars, &BarClock::exact());
         let mut state = ChartState::new(BarData::from_bars(bars));
+        state.price_scale_mut().options_mut().scale_margins =
+            crate::scales::PriceScaleMargins::CHART;
 
         // Initialize TimeScale with defaults (apply all constraints)
         {
@@ -101,6 +103,7 @@ impl Chart {
             scroll_start_spacing: None,
             pending_start_idx: None,
             pending_scroll_time: None,
+            pending_scroll_next: false,
             pending_visible_range: None,
             scroll_animation: None,
             time_axis_rect: egui::Rect::NOTHING,
@@ -137,6 +140,8 @@ impl Chart {
             volume_setting: false,
             #[cfg(feature = "studies")]
             volume_study: None,
+            #[cfg(feature = "studies")]
+            price_target_colors: None,
             main_series_visible: true,
             indicators_hidden: false,
             main_series_present: true,
@@ -183,6 +188,8 @@ impl Chart {
             legend_instrument: None,
             currency_choices: Vec::new(),
             currency_choice: None,
+            unit_choices: Vec::new(),
+            unit_choice: None,
             legend_badge: None,
             legend_statuses: Vec::new(),
             quote: None,
@@ -443,9 +450,25 @@ impl Chart {
     /// [`Chart::set_start_idx`] or tracking cancel it.
     pub fn scroll_to_time(&mut self, time: chrono::DateTime<chrono::Utc>) {
         self.pending_scroll_time = Some(time);
+        self.pending_scroll_next = false;
         self.pending_start_idx = None;
         self.disable_tracking_mode();
         self.kinetic_scroll = KineticScrollState::new();
+    }
+
+    /// Centres the first bar at or after `time` on `date`, or after the start of `date` without
+    /// a time, keeping the zoom. Dates read on the chart's calendar: the
+    /// [zone it shows](Self::display_timezone), or UTC where supplied bars of a day or longer
+    /// carry their trading date at 00:00 UTC. A wall time the clocks skip goes to the jump and a
+    /// repeated one to its first occurrence. A time after the last bar shows the last bar, and
+    /// with a feed a time before the loaded bars requests older history until it is reached, as
+    /// [`Chart::scroll_to_time`] does; panning, zooming or tracking cancel it. Applied on the
+    /// next frame. A date beyond the range chrono represents is ignored.
+    pub fn go_to_local_time(&mut self, date: chrono::NaiveDate, time: Option<chrono::NaiveTime>) {
+        if let Some(instant) = self.local_date_instant(date, time) {
+            self.scroll_to_time(instant);
+            self.pending_scroll_next = true;
+        }
     }
 
     /// Sets the chart type (Candles, Bars, Line, Area, Renko, Kagi).

@@ -172,12 +172,26 @@ impl ChartSettingsState {
             events: chart.event_visibility().clone(),
             show_session_breaks: Some(config.show_session_breaks),
             extended_hours: Some(chart.extended_hours()),
+            overnight_hours: Some(chart.overnight_hours()),
+            session_background: Some(super::SessionBackgroundSettings {
+                show_extended_hours: config.show_extended_hours,
+                extended_hours_color: config.extended_hours_color,
+                premarket_color: config.premarket_color,
+                postmarket_color: config.postmarket_color,
+                shade_premarket: config.shade_premarket,
+                shade_postmarket: config.shade_postmarket,
+                overnight_hours_color: config.overnight_hours_color,
+            }),
             order_flow: super::OrderFlowSettings {
                 show_heatmap: chart
                     .feed_link
                     .as_ref()
                     .is_some_and(|link| link.heatmap.is_some()),
                 heatmap: chart.liquidity_heatmap_config(),
+                heatmap_retention: chart
+                    .feed_link
+                    .as_ref()
+                    .and_then(|link| link.depth_retention),
                 show_order_book: chart
                     .feed_link
                     .as_ref()
@@ -388,6 +402,12 @@ impl ChartSettingsState {
         settings.crosshair.color = crosshair.horz_line_color;
         settings.crosshair.line_width = crosshair.horz_line_width;
         settings.crosshair.line_style = crosshair.horz_line_style;
+        settings.crosshair_lines = Some(super::CrosshairVisibility {
+            vertical_line: crosshair.vert_line_visible,
+            horizontal_line: crosshair.horz_line_visible,
+            time_label: crosshair.label_visible && crosshair.vert_label_visible,
+            price_label: crosshair.label_visible && crosshair.horz_label_visible,
+        });
         settings.precision = PrecisionMode::from_scale(chart.state().price_scale());
         settings.watermark.mode = if !config.show_watermark {
             WatermarkMode::ReplayMode
@@ -488,6 +508,7 @@ impl ChartSettingsState {
     }
 
     /// Apply the display controls offered by the dialog without rebuilding the chart or feed.
+    /// A changed hours choice reloads history on the next frame.
     /// Host-owned trading and alerts are left to their providers. Invalid timezone,
     /// margins or crosshair width returns an error before changing the chart. The optional
     /// choices that hold `None`, as in settings saved before they existed, keep the chart's,
@@ -509,6 +530,7 @@ impl ChartSettingsState {
             chart.config_mut().price_source = source;
         }
         chart.set_liquidity_heatmap_config(self.order_flow.heatmap);
+        chart.set_depth_retention(self.order_flow.heatmap_retention);
         chart.set_liquidity_heatmap(self.order_flow.show_heatmap);
         chart.set_order_book_view(self.order_flow.order_book.clone());
         chart.set_order_book_visible(self.order_flow.show_order_book);
@@ -522,8 +544,21 @@ impl ChartSettingsState {
         );
         chart.set_event_visibility(self.events.clone());
         chart.set_price_targets_visible(self.show_price_targets);
+        if let Some(overnight) = self.overnight_hours {
+            chart.set_overnight_hours(overnight);
+        }
         if let Some(extended) = self.extended_hours {
             chart.set_extended_hours(extended);
+        }
+        if let Some(background) = &self.session_background {
+            let config = chart.config_mut();
+            config.show_extended_hours = background.show_extended_hours;
+            config.extended_hours_color = background.extended_hours_color;
+            config.premarket_color = background.premarket_color;
+            config.postmarket_color = background.postmarket_color;
+            config.shade_premarket = background.shade_premarket;
+            config.shade_postmarket = background.shade_postmarket;
+            config.overnight_hours_color = background.overnight_hours_color;
         }
         chart.chart_options.time_scale.timezone = timezone;
         let scales = &self.scales_and_lines;
@@ -555,6 +590,20 @@ impl ChartSettingsState {
         crosshair.vert_line_width = self.crosshair.line_width;
         crosshair.horz_line_style = self.crosshair.line_style;
         crosshair.vert_line_style = crosshair.horz_line_style;
+        if let Some(shown) = self.crosshair_lines {
+            crosshair.vert_line_visible = shown.vertical_line;
+            crosshair.horz_line_visible = shown.horizontal_line;
+            // Unedited painted labels keep the master switch and record no undo step.
+            let labels = (
+                crosshair.label_visible && crosshair.vert_label_visible,
+                crosshair.label_visible && crosshair.horz_label_visible,
+            );
+            if labels != (shown.time_label, shown.price_label) {
+                crosshair.label_visible = true;
+                crosshair.vert_label_visible = shown.time_label;
+                crosshair.horz_label_visible = shown.price_label;
+            }
+        }
         chart.pane_options_mut().separator_color = self.pane_separator_color;
         let mut axis_layout = self.scales_and_lines.axis_layout;
         if self.scales_and_lines.price_scale_left != chart.main_axis_on_left()
@@ -982,6 +1031,7 @@ mod tests {
                 flow.show_heatmap = flags & 1 != 0;
                 flow.show_order_book = flags & 2 != 0;
                 flow.show_volume_bubbles = flags & 4 != 0;
+                flow.heatmap_retention = Some(chrono::TimeDelta::hours(1));
                 flow.heatmap.brightness = 0.5;
                 flow.heatmap.lower_cutoff = 2.0;
                 flow.heatmap.full_intensity_size = Some(20.0);
@@ -993,6 +1043,12 @@ mod tests {
                 flow.volume_bubbles.clamp_std_devs = clamp_std_devs;
                 flow.volume_bubbles.shaded = false;
                 settings.apply_to_chart(&mut chart).unwrap();
+                assert_eq!(
+                    chart
+                        .depth_history(crate::widget::SeriesId::MAIN)
+                        .map(|h| h.config().columns),
+                    (flags & 1 != 0).then_some(15)
+                );
                 assert_eq!(chart.chart_type(), kind);
                 assert_eq!(
                     ChartSettingsState::from_chart(&chart).order_flow,
@@ -1021,6 +1077,10 @@ mod tests {
                 );
                 // Settings saved before the flat style existed take the shaded default.
                 let mut unshaded = json.clone();
+                unshaded["settings"]["order_flow"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("heatmap_retention");
                 unshaded["settings"]["order_flow"]["volume_bubbles"]
                     .as_object_mut()
                     .unwrap()
@@ -1033,6 +1093,12 @@ mod tests {
                         .order_flow
                         .volume_bubbles
                         .shaded
+                );
+                assert_eq!(
+                    ChartSettingsState::from_chart(&chart)
+                        .order_flow
+                        .heatmap_retention,
+                    None
                 );
                 let mut legacy = json;
                 legacy["settings"]
@@ -1434,6 +1500,18 @@ mod tests {
         assert_eq!(config.grid_color, grid);
         assert_eq!(config.vertical_grid_color, Some(old_grid));
         assert!(chart.can_undo());
+
+        // A hidden master label switch applies back without changing the individual switches.
+        let mut chart = Chart::new(bars());
+        chart.chart_options.crosshair.label_visible = false;
+        chart.user_action(|chart| {
+            ChartSettingsState::from_chart(chart)
+                .apply_to_chart(chart)
+                .unwrap();
+        });
+        let crosshair = &chart.chart_options().crosshair;
+        assert!(crosshair.vert_label_visible && crosshair.horz_label_visible);
+        assert!(!chart.can_undo());
 
         // Margins leaving no room for prices, which the fit ignores, are kept.
         let mut chart = Chart::new(bars());
@@ -3200,7 +3278,7 @@ mod tests {
                     labels.format_crosshair(time, 86_400),
                     labels.format(time, TickMarkType::Time),
                 ],
-                chart.extended_hours(),
+                (chart.extended_hours(), chart.overnight_hours()),
             )
         };
         let mut chart = chart(&[100.0], &[110.0]);
@@ -3247,6 +3325,7 @@ mod tests {
             let mut settings = ChartSettingsState::from_chart(&chart);
             settings.show_session_breaks = Some(*breaks);
             settings.extended_hours = Some(*breaks);
+            settings.overnight_hours = Some(*breaks);
             let scales = &mut settings.scales_and_lines;
             scales.price_line_source = Some(*source);
             scales.prev_close_line = Some(*line);
@@ -3265,7 +3344,7 @@ mod tests {
                     Some(*lines),
                     Some(*lines),
                     labels.map(String::from),
-                    *breaks
+                    (*breaks, *breaks)
                 )
             );
             let settings = ChartSettingsState::from_chart(&chart);
@@ -3289,7 +3368,7 @@ mod tests {
                     scales.prev_close_line,
                     scales.show_bid_ask_lines,
                     scales.show_high_low_lines,
-                    settings.extended_hours
+                    (settings.extended_hours, settings.overnight_hours)
                 ),
                 (
                     Some(*breaks),
@@ -3300,7 +3379,7 @@ mod tests {
                     Some(*line),
                     Some(*lines),
                     Some(*lines),
-                    Some(*breaks)
+                    (Some(*breaks), Some(*breaks))
                 )
             );
         }
@@ -3315,7 +3394,7 @@ mod tests {
                     Some(row.7),
                     Some(row.7),
                     row.5.map(String::from),
-                    row.0
+                    (row.0, row.0)
                 )
             );
         }
@@ -3331,7 +3410,7 @@ mod tests {
                 Some(rows[2].7),
                 Some(rows[2].7),
                 rows[2].5.map(String::from),
-                rows[2].0
+                (rows[2].0, rows[2].0)
             )
         );
         assert!(chart.undo());
@@ -3348,6 +3427,7 @@ mod tests {
         for (group, choice) in [
             ("", "show_session_breaks"),
             ("", "extended_hours"),
+            ("", "overnight_hours"),
             ("/scales_and_lines", "price_line_source"),
             ("/scales_and_lines", "prev_close_line"),
             ("/scales_and_lines", "show_bid_ask_lines"),
@@ -3372,11 +3452,20 @@ mod tests {
                 Some(true),
                 Some(true),
                 ["Wed 13.03.2024 02:30 PM", "Wed 13.03.2024", "02:30 PM"].map(String::from),
-                true
+                (true, true)
             )
         );
         assert_eq!(chart.config().axis_font_family, egui::FontFamily::Monospace);
         assert_eq!(chart.config().thousands_sep, Some('_'));
+        // Regular hours win even when saved flags contradict one another.
+        let mut settings = ChartSettingsState::from_chart(&chart);
+        settings.extended_hours = Some(false);
+        settings.overnight_hours = Some(true);
+        settings.apply_to_chart(&mut chart).unwrap();
+        assert_eq!(
+            (chart.extended_hours(), chart.overnight_hours()),
+            (false, false)
+        );
     }
 
     /// The right margin row shows the margin the view keeps: part of a bar as it is, and a margin

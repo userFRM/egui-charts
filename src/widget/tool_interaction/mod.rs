@@ -1859,13 +1859,14 @@ mod tests {
                 ((anchor - y) * 100.0).round() / 100.0,
             ));
         }
-        // 100..200 with 10% margins spans 87.5..212.5, so the middle of the pane is price 150.
+        // The main 100..200 span is 100 / 0.82. Unequal margins put its midpoint at
+        // 150 + (0.1 - 0.08) * (100 / 0.82) / 2 = 151.219512..., rounded here to 151.22.
         assert!(
             observed
                 .iter()
-                .all(|(_, _, price, below)| *price == 150.0 && *below == 0.0),
+                .all(|(_, _, price, below)| *price == 151.22 && *below == 0.0),
             "(main series moved into the study's pane, strong magnet, first anchor price, \
-             anchor below the painted level) observed {observed:?} expected price 150 and 0 \
+             anchor below the painted level) observed {observed:?} expected price 151.22 and 0 \
              below in every row"
         );
     }
