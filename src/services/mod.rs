@@ -59,7 +59,7 @@ pub use alert_engine::AlertEngine;
 pub use alert_evaluator::AlertEvaluator;
 #[cfg(feature = "alert-engine")]
 pub use alert_feed::{AlertData, AlertFeed};
-pub use alerts::{AlertEvent, Alerts};
+pub use alerts::{AlertEvent, AlertNotice, Alerts};
 pub use broker::{AccountEvent, Broker, HistoryKind, HistoryPage, HistoryRequest};
 pub use chats::{
     ChatCapabilities, ChatEvent, ChatMessage, ChatUser, Chats, NewChatRoom, NewChatRoomKind,
@@ -76,7 +76,7 @@ pub(crate) use events::Listener;
 pub use events::{Events, EventsReader};
 pub use marks::{Marks, MarksPage, MarksRequest};
 pub use notifications::{Notification, NotificationTarget, Notifications};
-pub use paper::{PaperAccount, SavedPaperAccount};
+pub use paper::{PaperAccount, ReplayAccountSettings, SavedPaperAccount};
 pub use posts::Posts;
 #[cfg(feature = "widget")]
 #[cfg_attr(docsrs, doc(cfg(feature = "widget")))]

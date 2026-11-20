@@ -457,15 +457,6 @@ impl IndicatorDialog {
         self.is_open
     }
 
-    /// Sync dialog open/close state from an external flag.
-    pub fn sync_open_state(&mut self, should_be_open: bool) {
-        if should_be_open && !self.is_open {
-            self.open();
-        } else if !should_be_open && self.is_open {
-            self.close();
-        }
-    }
-
     /// Show the dialog with live theme colors
     pub fn show(&mut self, ctx: &egui::Context, theme: &Theme) -> IndicatorDialogAction {
         if !self.is_open {
@@ -1038,11 +1029,9 @@ mod tests {
         dialog.poll_metrics(&ctx);
         let mut replies = feed.0.lock().unwrap();
         for (reply, name) in replies.drain(..).zip(["Stale metric", "Funding rate"]) {
-            reply.send(Ok(vec![MetricSeries {
-                id: "funding".into(),
-                name: name.into(),
+            reply.send(Ok(vec![crate::data::MetricSeries {
                 unit: "%".into(),
-                format: StudyFormat::Percent,
+                ..crate::data::MetricSeries::new("funding", name, StudyFormat::Percent)
             }]));
         }
         dialog.poll_metrics(&ctx);
@@ -1951,6 +1940,7 @@ mod tests {
         let cases: &[Row] = &[
             ("52 Week High/Low", &["52W High/Low"], &[]),
             ("Accumulative Swing Index", &["ASI"], &[]),
+            ("Analyst price targets", &["Analyst price forecast"], &[]),
             ("Arnaud Legoux Moving Average", &["ALMA"], &[]),
             (
                 "Auto Fib Retracement",

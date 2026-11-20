@@ -101,8 +101,7 @@ fn hit_drawings(
         return None;
     }
     let drawings = crate::chart::indicators::plots::mapped_drawings(indicator, coords, value_to_y);
-    crate::drawings::services::DrawingInteraction::new()
-        .hit_test(click_pos, &drawings, "")
+    crate::drawings::services::hit_test(click_pos, &drawings, "")
         .map(|_| coords.x_to_idx(click_pos.x))
 }
 

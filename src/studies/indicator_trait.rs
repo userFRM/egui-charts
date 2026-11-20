@@ -8,6 +8,28 @@ use crate::model::Bar;
 use crate::studies::IndicatorValues;
 use egui::Color32;
 
+// All existing Indicator implementations (including borrowed and unsized ones) receive
+// this private supertrait. Only chart-owned 'static instances are inspected. Erasing the
+// *conversion function*, rather than coercing an arbitrary ?Sized self into dyn Any, keeps
+// that blanket implementation unconstrained. No study can override its concrete identity.
+pub(crate) trait ConcreteStudy {
+    #[cfg(all(feature = "widget", feature = "studies"))]
+    fn concrete_study(&self, cast: &dyn std::any::Any) -> Option<&dyn std::any::Any>
+    where
+        Self: 'static;
+}
+
+impl<T: ?Sized> ConcreteStudy for T {
+    #[cfg(all(feature = "widget", feature = "studies"))]
+    fn concrete_study(&self, cast: &dyn std::any::Any) -> Option<&dyn std::any::Any>
+    where
+        Self: 'static,
+    {
+        cast.downcast_ref::<fn(&T) -> &dyn std::any::Any>()
+            .map(|cast| cast(self))
+    }
+}
+
 /// The output value of an indicator at a single bar position.
 ///
 /// An owned row for constructing or exporting [`IndicatorValues`](super::IndicatorValues).
@@ -177,7 +199,11 @@ pub struct StudyPane {
 ///     inverted_color: None,
 /// };
 /// ```
-pub trait Indicator: Send {
+#[expect(
+    private_bounds,
+    reason = "blanket-implemented for every type; not a host extension point"
+)]
+pub trait Indicator: Send + ConcreteStudy {
     /// Sparse projected price bands, with fractional endpoints in future whitespace.
     fn projections(&self) -> &[super::StudyProjection] {
         &[]
@@ -348,6 +374,15 @@ pub trait Indicator: Send {
         0
     }
 
+    /// Whether everything drawn under the current inputs is plots, their shapes, bands and
+    /// fills, all of which an offset moves bar for bar. A study without a
+    /// [`source`](Self::source) offers Offset while this holds. Return true only when it reads
+    /// the chart's bars alone and draws no markers, labels, zones, projections, tables,
+    /// candles, profiles or drawings. False by default.
+    fn draws_only_plots(&self) -> bool {
+        false
+    }
+
     /// Optional per-bar colour, overriding the plot colour at a source bar.
     fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
         let _ = (line, bar);
@@ -393,52 +428,63 @@ pub trait Indicator: Send {
         self.values().value(line, source)
     }
 
+    /// Names of the declared alert conditions, in the order
+    /// [`alert_condition`](Self::alert_condition) numbers them, such as `"Trend change"`.
+    /// The alert dialog lists them after the outputs as `"{study}: {condition}"`, translating
+    /// the condition when shown. Keep indices stable across settings changes and releases.
+    /// None by default.
+    ///
+    /// A host study can declare a condition and construct an alert on it:
+    ///
+    /// ```
+    /// use egui_charts::model::{Alert, AlertCondition, AlertSource, Bar};
+    /// use egui_charts::studies::{Indicator, IndicatorValues};
+    ///
+    /// #[derive(Clone, Default)]
+    /// struct PositiveClose { values: IndicatorValues }
+    /// impl Indicator for PositiveClose {
+    ///     fn name(&self) -> &str { "Positive close" }
+    ///     fn calculate(&mut self, bars: &[Bar]) {
+    ///         self.values = IndicatorValues::new();
+    ///         for bar in bars {
+    ///             self.values.push_lines(&[bar.close]);
+    ///         }
+    ///     }
+    ///     fn values(&self) -> &IndicatorValues { &self.values }
+    ///     fn alert_conditions(&self) -> Vec<String> { vec!["Close above zero".into()] }
+    ///     fn alert_condition(&self, condition: usize, bar: usize) -> Option<bool> {
+    ///         match condition {
+    ///             0 => self.values.value(0, bar).map(|v| v > 0.0),
+    ///             _ => None,
+    ///         }
+    ///     }
+    /// #   fn colors(&self) -> Vec<ecolor::Color32> { vec![ecolor::Color32::YELLOW] }
+    /// #   fn set_colors(&mut self, _: Vec<ecolor::Color32>) {}
+    /// #   fn set_visible(&mut self, _: bool) {}
+    /// #   fn clone_box(&self) -> Box<dyn Indicator> { Box::new(self.clone()) }
+    /// }
+    /// let mut study = PositiveClose::default();
+    /// study.calculate(&[Bar::new(chrono::DateTime::UNIX_EPOCH, 1.0, 1.0, 1.0, 1.0, 1.0)]);
+    /// assert_eq!(study.alert_conditions(), ["Close above zero"]);
+    /// assert_eq!(study.alert_condition(0, 0), Some(true));
+    /// let mut alert = Alert::new("SAMPLE", AlertCondition::Holds);
+    /// alert.source = AlertSource::StudyCondition { id: "3".into(), condition: 0 };
+    /// assert!(alert.is_valid());
+    /// ```
+    fn alert_conditions(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Whether a declared condition holds at a source bar, independent of plot displacement.
+    /// Returns `None` for an unknown condition, a missing bar or an undefined condition,
+    /// including warm-up. An alert counts `None` as not holding.
+    fn alert_condition(&self, _condition: usize, _bar: usize) -> Option<bool> {
+        None
+    }
+
     /// Current applied presentation, initialized from the study's own defaults.
     fn settings(&self) -> super::StudySettings {
-        let (levels, fill_between_levels, level_fill_color) =
-            super::settings::declared_levels(self);
-        super::StudySettings {
-            show_legend_values: true,
-            user_edit_enabled: Some(self.user_edit_enabled()),
-            help_url: self.help_url().map(str::to_owned),
-            plots: (0..self.line_count())
-                .map(|line| self.plot_style(line))
-                .collect(),
-            precision: self.precision(),
-            hidden_intervals: Vec::new(),
-            timeframe_visibility: crate::model::TimeframeVisibility::all(),
-            levels,
-            fill_between_levels,
-            level_fill_color,
-            mfi_auto_range: false,
-            untagged_plots: (0..self.line_count())
-                .filter(|&line| !self.plot_tagged(line))
-                .collect(),
-            price_line_plots: (0..self.line_count())
-                .filter(|&line| self.plot_price_line(line))
-                .collect(),
-            plot_variants: (0..self.line_count())
-                .map(|line| self.plot_variants(line))
-                .collect(),
-            gradients: self
-                .gradients()
-                .iter()
-                .map(|fill| super::GradientStyle {
-                    colors: fill.colors,
-                    visible: true,
-                })
-                .collect(),
-            background: self.background(),
-            background_visible: true,
-            fills: self
-                .fills()
-                .iter()
-                .map(|fill| super::FillStyle {
-                    inverted_color: fill.inverted_color,
-                    ..super::FillStyle::new(fill.color)
-                })
-                .collect(),
-        }
+        super::settings::declared_settings(self)
     }
 
     /// Capture editable inputs and presentation without copying calculated values.
@@ -791,7 +837,9 @@ pub trait Indicator: Send {
     }
 
     /// Candle bodies and wicks, rendered in place of line plots when nonempty.
-    /// Source ranges and OHLCV remain available to hosts for per-bar readouts.
+    /// Each candle takes its plot's colour, or [`plot_color`](Self::plot_color) of that plot
+    /// at the candle's first source bar when that returns one. Source ranges and OHLCV remain
+    /// available to hosts for per-bar readouts.
     fn candles(&self) -> &[super::StudyCandle] {
         &[]
     }
@@ -1005,6 +1053,17 @@ pub trait Indicator: Send {
         vec![self.name().to_string()]
     }
 
+    /// The outputs an alert can test, with the names shown after the study's name. Read each
+    /// output through [`plot_value`](Self::plot_value). Defaults to every line of
+    /// [`line_names`](Self::line_names). Omit lines that cannot hold values with the current
+    /// settings, such as lines that only style zones, candles or drawings. Values drawn in
+    /// other forms, such as levels, may use outputs past
+    /// [`line_count`](Self::line_count), which renderers do not draw. Keep an output's number
+    /// while it means the same value, since saved alerts identify outputs by number.
+    fn alert_outputs(&self) -> Vec<(usize, String)> {
+        self.line_names().into_iter().enumerate().collect()
+    }
+
     /// Whether this indicator should currently be rendered.
     ///
     /// Defaults to `true`. Toggle with [`set_visible`](Indicator::set_visible).
@@ -1041,6 +1100,14 @@ pub trait Indicator: Send {
     /// continue to use `clone_box`.
     fn clone_for_export(&self) -> Box<dyn Indicator> {
         self.clone_box()
+    }
+}
+
+#[cfg(all(feature = "widget", feature = "studies"))]
+impl dyn Indicator {
+    pub(crate) fn concrete<T: 'static>(&self) -> Option<&T> {
+        let cast: fn(&T) -> &dyn std::any::Any = |value| value;
+        ConcreteStudy::concrete_study(self, &cast)?.downcast_ref()
     }
 }
 

@@ -446,6 +446,134 @@ fn line_drawings_tag_their_price_and_time_on_the_axes() {
     );
 }
 
+#[cfg(feature = "studies")]
+#[test]
+fn expirations_tag_their_date_on_the_time_axis() {
+    use crate::data::{
+        Datafeed, HistoryPage, HistoryRequest, OptionChain, OptionChainQuery, OptionChainSink,
+        OptionKind, OptionQuote, Reply,
+    };
+    use crate::model::{Bar, BarData, LogicalRange, Timeframe, TimeframeVisibility};
+    use crate::studies::{ConfiguredStudy, Indicator, InputValue, OptionsVolumeProfile, palette};
+    use chrono::{NaiveDate, TimeDelta};
+
+    struct Feed(Vec<OptionQuote>);
+    impl Datafeed for Feed {
+        fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+            reply.send(Ok(HistoryPage::default()));
+        }
+        fn option_chain(&self, _: OptionChainQuery, sink: OptionChainSink) {
+            sink.push(self.0.clone()).unwrap();
+        }
+    }
+    let start = NaiveDate::from_ymd_opt(2099, 11, 1)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc();
+    let historical = start + TimeDelta::days(9) + TimeDelta::hours(12);
+    let dates = [5, 12, 19, 26, 33].map(|day| (start + TimeDelta::days(day)).date_naive());
+    let feed = Feed(
+        dates
+            .iter()
+            .zip([1.0, 2.0, 4.0, 8.0, 16.0])
+            .map(|(&date, volume)| {
+                let mut row =
+                    OptionQuote::new(date.to_string(), date, 100.0, OptionKind::Call, historical);
+                row.volume = Some(volume);
+                row
+            })
+            .collect(),
+    );
+    let mut query = OptionChainQuery::new("SAMPLE", dates[0]..=dates[4]);
+    query.as_of = Some(historical);
+    let chain = OptionChain::new(&feed, query, || {}).unwrap();
+    let bars: Vec<_> = (0..10)
+        .map(|day| Bar::new(start + TimeDelta::days(day), 100.0, 101.0, 99.0, 100.0, 1.0))
+        .collect();
+    for (left, labels, visible, on_interval, separate_pane) in [
+        (false, true, true, true, false),
+        (true, true, true, true, false),
+        (false, false, true, true, false),
+        (false, true, false, true, false),
+        (false, true, true, false, false),
+        (false, true, true, true, true),
+    ] {
+        let mut study =
+            OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", dates.to_vec()).unwrap();
+        for (id, value) in [
+            ("layout", InputValue::Choice(1)),
+            ("placement", InputValue::Choice(usize::from(left))),
+            ("expiry_labels", InputValue::Toggle(labels)),
+        ] {
+            study.set_input(id, value).unwrap();
+        }
+        let mut study = ConfiguredStudy::new(Box::new(study));
+        if !on_interval {
+            let mut settings = study.settings();
+            settings.timeframe_visibility = TimeframeVisibility::specific(&["1h"]);
+            study.apply_settings(&[], settings).unwrap();
+        }
+        let ctx = egui::Context::default();
+        let mut chart = crate::widget::Chart::new(BarData::from_bars(bars.clone()));
+        chart.config.show_volume = false;
+        chart.set_timeframe(Timeframe::Day1);
+        let id = chart.add_indicator(Box::new(study));
+        assert!(chart.set_indicator_visible(id, visible));
+        if separate_pane {
+            assert!(chart.move_indicator_to_pane(id, id));
+        }
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        assert!(chart.set_visible_logical_range(LogicalRange::new(0.0, 45.0)));
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+        let plot = chart.last_rendered_price_rect;
+        let tags: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text)
+                    if text.pos.y >= plot.bottom() && text.galley.text().starts_with("2099-") =>
+                {
+                    Some(text)
+                }
+                _ => None,
+            })
+            .collect();
+        let shown = labels && visible && on_interval && !separate_pane;
+        assert_eq!(
+            tags.len(),
+            if shown { 4 } else { 0 },
+            "{left}, {labels}, {visible}, {on_interval}, {separate_pane}"
+        );
+        if shown {
+            for (date, index, color) in [
+                ("2099-11-13", 12, palette::WARM_ORANGE),
+                ("2099-11-20", 19, palette::PURPLE),
+                ("2099-11-27", 26, palette::PINK),
+                ("2099-12-04", 33, palette::TEAL),
+            ] {
+                let text = tags
+                    .iter()
+                    .find(|text| text.galley.text() == date)
+                    .expect(date);
+                let center = text.pos + text.galley.size() / 2.0;
+                let x = chart.get_chart_mapping().idx_to_x(index);
+                assert!(
+                    (center.x - x).abs() < 1.0,
+                    "{date}, left {left}: {} != {x}",
+                    center.x
+                );
+                assert!(
+                    painted.iter().any(|shape| matches!(shape,
+                        Shape::Rect(rect) if rect.fill == color && rect.rect.contains(center)
+                            && (rect.rect.center().x - x).abs() < 1.0
+                    )),
+                    "{date} uses its expiration colour"
+                );
+            }
+        }
+    }
+}
+
 /// On a logarithmic scale 100 lies halfway between 10 and 1,000 (ln 100 is the mean of ln 10 and
 /// ln 1,000); a linear mapping puts it a tenth of the way up. A range zoomed by hand before the
 /// switch, current or in the zoom history, is in the old mode's units and must not carry over.

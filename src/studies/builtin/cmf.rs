@@ -56,11 +56,6 @@ impl ChaikinMoneyFlow {
         }
     }
 
-    /// Create with default param (20)
-    pub fn default_params() -> Self {
-        Self::new(20)
-    }
-
     /// Set colors for positive and negative values
     pub fn with_colors(mut self, positive: Color32, negative: Color32) -> Self {
         self.positive_color = positive;
@@ -202,6 +197,10 @@ impl Indicator for ChaikinMoneyFlow {
 
     fn line_count(&self) -> usize {
         1
+    }
+
+    fn draws_only_plots(&self) -> bool {
+        true
     }
 
     fn is_visible(&self) -> bool {

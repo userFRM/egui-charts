@@ -79,8 +79,9 @@ reverses the vertical direction without changing the prices.
 [`scale_margins`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceScaleOptions.html#structfield.scale_margins)
 contains [`top`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceScaleMargins.html#structfield.top)
 and [`bottom`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceScaleMargins.html#structfield.bottom)
-fractions of the pane height. The defaults are 0.1 each, leaving the data in the
-middle 80%. Keep each fraction between 0 and 1 and their sum below 1; a sum of
+fractions of the pane height. Standalone scales default to 0.1 each, leaving the data in the
+middle 80%. A new chart's price scale starts with 0.1 above and 0.08 below, the
+defaults of the chart settings. Keep each fraction between 0 and 1 and their sum below 1; a sum of
 1 or more leaves no drawable space, so the margins are ignored. With data from
 100 to 120 and 10% margins, the total span is `20 / 0.8 = 25`, so autoscale uses
 97.5 to 122.5 in Normal mode.

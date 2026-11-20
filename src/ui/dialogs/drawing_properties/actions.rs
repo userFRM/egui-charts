@@ -364,6 +364,7 @@ impl DrawingProps {
                     range_settings.font_size,
                     range_settings.background,
                     range_settings.background_color,
+                    range_settings.shadow_color,
                     range_settings.border,
                     range_settings.border_color,
                     range_settings.border_width,
@@ -392,6 +393,7 @@ impl DrawingProps {
                     ghost_feed => |d: &Drawing| d.ghost_feed.unwrap_or_default(),
                     bars_pattern => |d: &Drawing| d.bars_pattern.unwrap_or_default(),
                     projection => |d: &Drawing| d.projection_config().into_owned(),
+                    forecast => |d: &Drawing| d.forecast_style(),
                     volume_profile => |d: &Drawing| d.volume_profile.unwrap_or_default(),
                     regression_trend => |d: &Drawing| d.regression_trend.unwrap_or_default(),
                     vwap => |d: &Drawing| d.vwap.unwrap_or_default(),
@@ -534,6 +536,15 @@ impl DrawingProps {
                     .any(|l| !(l.value.is_finite() && l.value > 0.0))
                 {
                     return Err("Gann fan and arc ratios must be positive and finite");
+                }
+                if c.price_levels
+                    .iter()
+                    .chain(&c.time_levels)
+                    .chain(&c.fan_ratios)
+                    .chain(&c.arc_ratios)
+                    .any(|l| l.width.is_some_and(|w| !(w > 0.0 && w <= MAX_STROKE_WIDTH)))
+                {
+                    return Err("Gann widths must be above 0 and at most 100");
                 }
             }
             if settings.ghost_feed.is_some_and(|c| !c.is_valid()) {
@@ -785,6 +796,8 @@ mod tests {
             DrawingToolType::HorizontalRay,
             DrawingToolType::VerticalLine,
             DrawingToolType::CrossLine,
+            DrawingToolType::DateRange,
+            DrawingToolType::DateAndPriceRange,
         ] {
             chart.drawings_mut().drawings.clear();
             let mut drawing = Drawing::new(7, tool);
@@ -806,6 +819,7 @@ mod tests {
                     ui,
                     &mut props,
                     &mut pickers,
+                    &mut Default::default(),
                     &mut Default::default(),
                     None,
                 );
@@ -955,7 +969,17 @@ mod tests {
             settings.note_text_style = Some(note_text);
             settings.arrow_start_style = crate::drawings::ArrowStyle::Arrow;
             settings.arrow_end_style = crate::drawings::ArrowStyle::None;
+            settings.range_settings.shadow_color = [50, 60, 70, 128];
             let expected = format!("{:?}", settings.fib_config);
+            let template: DrawingTemplate = serde_json::from_value(
+                serde_json::to_value(props.tool_settings.as_ref().unwrap()).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                template.settings.range_settings.shadow_color,
+                [50, 60, 70, 128]
+            );
+            props.tool_settings = Some(Box::new(template));
             props.apply_to_chart(DrawingId(7), &mut chart).unwrap();
             let saved = &chart.drawings().drawings[0];
             assert_eq!(format!("{:?}", saved.fib_config), expected);
@@ -1000,6 +1024,7 @@ mod tests {
             assert_eq!(saved.note_text_style, Some(note_text));
             assert_eq!(saved.arrow_start_style, crate::drawings::ArrowStyle::Arrow);
             assert_eq!(saved.arrow_end_style, crate::drawings::ArrowStyle::None);
+            assert_eq!(saved.range_settings.shadow_color, [50, 60, 70, 128]);
             assert!(chart.drawings().drawings[1].fib_config.is_none());
             let peer = &chart.drawings().drawings[1];
             assert!(!peer.italic && peer.background && peer.border);
@@ -1011,6 +1036,10 @@ mod tests {
             assert_eq!(chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(chart.undo());
             assert_eq!(
+                chart.drawings().drawings[0].range_settings.shadow_color,
+                Drawing::new(7, tool).range_settings.shadow_color
+            );
+            assert_eq!(
                 chart.drawings().drawings[0].line_measurements,
                 crate::drawings::LineMeasurements::for_tool(tool)
             );
@@ -1019,6 +1048,10 @@ mod tests {
                 format!("{:?}", Drawing::new(7, tool).fib_config)
             );
             assert!(chart.redo());
+            assert_eq!(
+                chart.drawings().drawings[0].range_settings.shadow_color,
+                [50, 60, 70, 128]
+            );
             chart
                 .drawings_mut()
                 .edit_drawing(7, |d| d.locked = true)
@@ -1318,8 +1351,8 @@ mod tests {
         }
         // Opened drawing, peer, dialog edit, and the peer's independently expected settings.
         use crate::drawings::{
-            BarsPatternConfig, ChartPoint, GannConfig, GhostFeedConfig, PitchforkConfig,
-            PitchforkLevel, RegressionTrendConfig, VwapConfig,
+            BarsPatternConfig, ChartPoint, ForecastStyle, GannConfig, GhostFeedConfig,
+            PitchforkConfig, PitchforkLevel, RegressionTrendConfig, VwapConfig,
         };
         type ConfigCase = (
             &'static str,
@@ -1473,6 +1506,23 @@ mod tests {
                 |d| d.volume_profile.as_mut().unwrap().extend_right = true,
             ),
             (
+                "volume profile ticks per row",
+                DrawingToolType::FixedRangeVolumeProfile,
+                |d| d.volume_profile = crate::data::VolumeProfileConfig::new(24, 0.7),
+                |d| {
+                    d.volume_profile = crate::data::VolumeProfileConfig::new(48, 0.8)
+                        .and_then(|c| c.with_row_size(Some(2.0)))
+                },
+                |d| {
+                    let config = d.volume_profile.as_mut().unwrap();
+                    *config = config.with_row_ticks(Some(4)).unwrap();
+                },
+                |d| {
+                    let config = d.volume_profile.as_mut().unwrap();
+                    *config = config.with_row_ticks(Some(4)).unwrap();
+                },
+            ),
+            (
                 "vwap band line",
                 DrawingToolType::AnchoredVWAP,
                 |d| d.vwap = Some(VwapConfig::default()),
@@ -1484,6 +1534,33 @@ mod tests {
                 },
                 |d| d.vwap.as_mut().unwrap().bands[0].upper.visible = false,
                 |d| d.vwap.as_mut().unwrap().bands[0].upper.visible = false,
+            ),
+            (
+                // A forecast saved before its card colours keeps its fill as every background.
+                "forecast saved before its colours",
+                DrawingToolType::Forecast,
+                |_| {},
+                |d| {
+                    d.forecast = None;
+                    d.fill_color = Some([1, 2, 3, 200]);
+                },
+                |d| d.forecast.as_mut().unwrap().start_text = Some([9, 8, 7, 255]),
+                |d| {
+                    let fill = Some([1, 2, 3, 200]);
+                    d.forecast = Some(ForecastStyle {
+                        start_background: fill,
+                        start_text: Some([9, 8, 7, 255]),
+                        start_border: None,
+                        target_background: fill,
+                        target_text: None,
+                        target_border: None,
+                        success_background: fill,
+                        success_text: None,
+                        failure_background: fill,
+                        failure_text: None,
+                        transparency: 0,
+                    });
+                },
             ),
             (
                 "edited level of a list of a different length",

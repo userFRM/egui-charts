@@ -176,7 +176,9 @@ impl SessionBreakRenderer {
         Self { config }
     }
 
-    /// Draw dividers for `visible_data`.
+    /// Draws the dividers of `visible_data` over the height of `ctx.rect` and returns their x
+    /// positions from left to right, which the other panes of the chart repeat with
+    /// [`paint`](Self::paint). A width that draws nothing returns none.
     ///
     /// `start_idx` is the global index of `visible_data[0]`; it is added to the
     /// local break index so the divider is placed at the bar's true x via the
@@ -188,28 +190,32 @@ impl SessionBreakRenderer {
         provider: &dyn SessionProvider,
         mapping: &ChartMapping,
         start_idx: usize,
-    ) {
+    ) -> Vec<f32> {
         let width = self.config.line_width;
         if visible_data.len() < 2 || !(width.is_finite() && width > 0.0) {
-            return;
+            return Vec::new();
         }
+        let xs: Vec<_> = find_session_breaks(visible_data, provider)
+            .into_iter()
+            .map(|(local_idx, _)| mapping.idx_to_x(start_idx + local_idx))
+            .filter(|x| mapping.is_x_visible(*x))
+            .collect();
+        self.paint(ctx.painter, &xs, ctx.rect.y_range());
+        xs
+    }
 
-        let stroke = Stroke::new(width, self.config.line_color);
-        for (local_idx, _) in find_session_breaks(visible_data, provider) {
-            let x = mapping.idx_to_x(start_idx + local_idx);
-            if !mapping.is_x_visible(x) {
-                continue;
-            }
-
-            let from = Pos2::new(x, ctx.rect.min.y);
-            let to = Pos2::new(x, ctx.rect.max.y);
-
+    /// Draws a divider at each of `xs` over the height `y`.
+    pub(crate) fn paint(&self, painter: &egui::Painter, xs: &[f32], y: egui::Rangef) {
+        let stroke = Stroke::new(self.config.line_width, self.config.line_color);
+        for &x in xs {
+            let from = Pos2::new(x, y.min);
+            let to = Pos2::new(x, y.max);
             match dash_pattern(self.config.style) {
                 None => {
-                    ctx.painter.line_segment([from, to], stroke);
+                    painter.line_segment([from, to], stroke);
                 }
                 Some((dash, gap)) => {
-                    draw_dashed_line(ctx.painter, from, to, stroke, dash, gap);
+                    draw_dashed_line(painter, from, to, stroke, dash, gap);
                 }
             }
         }

@@ -73,10 +73,6 @@ impl BarClock {
     }
 
     /// Clock in which every instant opens a bar of its own, for bars of an unknown timeframe.
-    #[cfg_attr(
-        not(any(feature = "widget", feature = "alert-engine")),
-        expect(dead_code, reason = "only charts and alerts read unaggregated bars")
-    )]
     pub(crate) fn exact() -> Self {
         Self {
             timeframe: None,
@@ -393,6 +389,12 @@ impl BarClock {
         Some(self.instant_open(at))
     }
 
+    /// The zone of a clock with no exchange-session rules. `Some(None)` is local time.
+    #[cfg(feature = "widget")]
+    pub(crate) fn sessionless_zone(&self) -> Option<Option<&TimezoneId>> {
+        self.session.is_none().then_some(self.timezone.as_ref())
+    }
+
     /// The timeframe of the bars, `None` for a clock that matches bars by their exact open time.
     pub(crate) fn timeframe(&self) -> Option<Timeframe> {
         self.timeframe
@@ -452,6 +454,12 @@ impl BarClock {
 pub(crate) struct Placement(Option<(BarClock, Range<DateTime<Utc>>, DateTime<Utc>)>);
 
 impl Placement {
+    /// Whether there is no time-based placement to account for in a trade-bar checkpoint.
+    #[cfg(all(feature = "widget", feature = "studies"))]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_none()
+    }
+
     /// [`BarClock::instant_open`] of `t` on `clock`.
     pub(crate) fn open(&mut self, clock: &BarClock, t: DateTime<Utc>) -> DateTime<Utc> {
         if clock.date_session().is_none() {

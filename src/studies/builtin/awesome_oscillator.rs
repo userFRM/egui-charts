@@ -7,8 +7,8 @@
 //! AO = SMA(median_price, 5) - SMA(median_price, 34)
 //! Where median_price = (high + low) / 2
 //!
-//! Drawn as a histogram: a bar at or below the one before it takes the falling colour and
-//! width, the others the rising ones. Columns remain available as a plot type.
+//! Drawn as columns: a bar at or below the one before it takes the falling colour, the others
+//! the rising one. Histogram remains available with its own falling width.
 //!
 //! # Interpretation
 //! - AO > 0: Bullish momentum
@@ -57,11 +57,6 @@ impl AwesomeOscillator {
             negative_color: crate::studies::palette::BRIGHT_RED,
             visible: true,
         }
-    }
-
-    /// Create with default params (5, 34)
-    pub fn default_params() -> Self {
-        Self::new(5, 34)
     }
 
     /// Set colours for increasing and decreasing oscillator values
@@ -133,7 +128,7 @@ impl Indicator for AwesomeOscillator {
             color: self.positive_color,
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
-            plot_type: crate::studies::PlotType::Histogram,
+            plot_type: crate::studies::PlotType::Columns,
             visible: true,
         }
     }
@@ -192,6 +187,25 @@ impl Indicator for AwesomeOscillator {
         true
     }
 
+    fn alert_conditions(&self) -> Vec<String> {
+        ["Changes to increasing bars", "Changes to decreasing bars"]
+            .map(str::to_owned)
+            .into()
+    }
+
+    fn alert_condition(&self, condition: usize, bar: usize) -> Option<bool> {
+        let value = self.values.value(0, bar)?;
+        let previous = self.values.value(0, bar.checked_sub(1)?)?;
+        let before = self.values.value(0, bar.checked_sub(2)?)?;
+        let rising = value > previous;
+        let rose = previous > before;
+        match condition {
+            0 => Some(rising && !rose),
+            1 => Some(!rising && rose),
+            _ => None,
+        }
+    }
+
     fn values(&self) -> &IndicatorValues {
         &self.values
     }
@@ -210,11 +224,11 @@ impl Indicator for AwesomeOscillator {
     }
 
     fn is_overlay(&self) -> bool {
-        false // AO is a separate histogram pane
+        false // AO is a separate column pane
     }
 
     fn line_count(&self) -> usize {
-        1 // Single histogram
+        1 // Single series
     }
 
     fn is_visible(&self) -> bool {
