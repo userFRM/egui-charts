@@ -116,6 +116,9 @@ pub(crate) fn paint_profile(
         return;
     }
     let Some((poc, (va_low, va_high))) = profile.poc_and_value_area(config.value_area()) else {
+        if !drawing {
+            paint_option_walls(painter, profile, span, right_aligned, price_to_y);
+        }
         return;
     };
     let y_at_row = |row: usize| (price_to_y)(profile.low + row as f64 * profile.row_height);

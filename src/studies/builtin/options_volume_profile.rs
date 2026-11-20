@@ -4283,13 +4283,17 @@ mod tests {
                 );
             }
             #[cfg(feature = "widget")]
-            {
+            for sides in [0, 4] {
+                // Calls with no puts have a zero ratio row, but still a call wall.
+                let mut displayed = study.clone();
+                displayed.set_input("volume_sides", Choice(sides)).unwrap();
+                let plot = displayed.volume_profiles(0..60).remove(0);
                 let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
                     crate::painting::volume_profile::paint_profile(
                         ui.painter(),
-                        &plots[0].profile,
-                        plots[0].config,
-                        plots[0].color,
+                        &plot.profile,
+                        plot.config,
+                        plot.color,
                         100.0..200.0,
                         crate::painting::volume_profile::ProfileStyle::Study {
                             right_aligned: left,
