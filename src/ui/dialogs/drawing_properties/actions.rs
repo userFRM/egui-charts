@@ -392,6 +392,7 @@ impl DrawingProps {
                     ghost_feed => |d: &Drawing| d.ghost_feed.unwrap_or_default(),
                     bars_pattern => |d: &Drawing| d.bars_pattern.unwrap_or_default(),
                     projection => |d: &Drawing| d.projection_config().into_owned(),
+                    forecast => |d: &Drawing| d.forecast_style(),
                     volume_profile => |d: &Drawing| d.volume_profile.unwrap_or_default(),
                     regression_trend => |d: &Drawing| d.regression_trend.unwrap_or_default(),
                     vwap => |d: &Drawing| d.vwap.unwrap_or_default(),
@@ -534,6 +535,15 @@ impl DrawingProps {
                     .any(|l| !(l.value.is_finite() && l.value > 0.0))
                 {
                     return Err("Gann fan and arc ratios must be positive and finite");
+                }
+                if c.price_levels
+                    .iter()
+                    .chain(&c.time_levels)
+                    .chain(&c.fan_ratios)
+                    .chain(&c.arc_ratios)
+                    .any(|l| l.width.is_some_and(|w| !(w > 0.0 && w <= MAX_STROKE_WIDTH)))
+                {
+                    return Err("Gann widths must be above 0 and at most 100");
                 }
             }
             if settings.ghost_feed.is_some_and(|c| !c.is_valid()) {
@@ -806,6 +816,7 @@ mod tests {
                     ui,
                     &mut props,
                     &mut pickers,
+                    &mut Default::default(),
                     &mut Default::default(),
                     None,
                 );
@@ -1318,8 +1329,8 @@ mod tests {
         }
         // Opened drawing, peer, dialog edit, and the peer's independently expected settings.
         use crate::drawings::{
-            BarsPatternConfig, ChartPoint, GannConfig, GhostFeedConfig, PitchforkConfig,
-            PitchforkLevel, RegressionTrendConfig, VwapConfig,
+            BarsPatternConfig, ChartPoint, ForecastStyle, GannConfig, GhostFeedConfig,
+            PitchforkConfig, PitchforkLevel, RegressionTrendConfig, VwapConfig,
         };
         type ConfigCase = (
             &'static str,
@@ -1484,6 +1495,33 @@ mod tests {
                 },
                 |d| d.vwap.as_mut().unwrap().bands[0].upper.visible = false,
                 |d| d.vwap.as_mut().unwrap().bands[0].upper.visible = false,
+            ),
+            (
+                // A forecast saved before its card colours keeps its fill as every background.
+                "forecast saved before its colours",
+                DrawingToolType::Forecast,
+                |_| {},
+                |d| {
+                    d.forecast = None;
+                    d.fill_color = Some([1, 2, 3, 200]);
+                },
+                |d| d.forecast.as_mut().unwrap().start_text = Some([9, 8, 7, 255]),
+                |d| {
+                    let fill = Some([1, 2, 3, 200]);
+                    d.forecast = Some(ForecastStyle {
+                        start_background: fill,
+                        start_text: Some([9, 8, 7, 255]),
+                        start_border: None,
+                        target_background: fill,
+                        target_text: None,
+                        target_border: None,
+                        success_background: fill,
+                        success_text: None,
+                        failure_background: fill,
+                        failure_text: None,
+                        transparency: 0,
+                    });
+                },
             ),
             (
                 "edited level of a list of a different length",

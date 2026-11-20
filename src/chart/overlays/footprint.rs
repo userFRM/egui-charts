@@ -233,6 +233,7 @@ impl FootprintConfig {
             .then_some(crate::studies::FootprintStudyConfig {
                 stacked_imbalances: params.footprint_stacked_imbalances,
                 stack: params.footprint_stack,
+                zones_until_broken: params.footprint_zones_until_broken,
                 naked_poc: params.footprint_naked_poc,
                 delta_poc: params.footprint_delta_poc,
                 unfinished_auctions: params.footprint_unfinished_auctions,
@@ -1937,6 +1938,8 @@ pub(crate) fn render_footprint_annotations(
 /// Stacks, naked POCs and unfinished levels extend to their first revisit, or a stack that ends
 /// only when broken to its break, to their expiry or the last displayed bar, in full colour while
 /// unvisited or rejected and dimmed once revisited, broken or expired;
+/// each bar that rejected a stack that ends only when broken is marked
+/// by a triangle on the stack's near edge, pointing away from it;
 /// stacks take the imbalance colour of their side;
 /// local annotations stay anchored to their originating bar. Delta percentage and ratio markers
 /// are triangles outside the bar: buy markers above it, sell markers below, the delta marker
@@ -2045,6 +2048,33 @@ pub(crate) fn render_footprint_studies_read(
             | FootprintStudyState::Broken => color.gamma_multiply(0.45),
             _ => color,
         };
+        // The near edge follows the price even on an inverted scale.
+        let radius = (mapping.bar_spacing * 0.2).min(4.0);
+        let edge = if study.kind == FootprintStudyKind::StackedBid {
+            y1
+        } else {
+            y2
+        };
+        let away = if edge < rect.center().y { -1.0 } else { 1.0 };
+        for time in &study.rejections {
+            let Some(&index) = indices.get(time) else {
+                continue;
+            };
+            let x = mapping.idx_to_x(index);
+            painter.add(Shape::convex_polygon(
+                vec![
+                    pos2(x, edge + away * radius * 1.5),
+                    pos2(x - radius, edge),
+                    pos2(x + radius, edge),
+                ],
+                if detail {
+                    color
+                } else {
+                    color.gamma_multiply(0.5)
+                },
+                Stroke::NONE,
+            ));
+        }
         let label = match study.kind {
             FootprintStudyKind::StackedBid => "Bid stack",
             FootprintStudyKind::StackedAsk => "Ask stack",
@@ -2463,6 +2493,49 @@ mod tests {
                 .studies
                 .is_none()
         );
+
+        // The chart type's persistence setting reaches the cached annotations: a buy stack
+        // at 100.25..100.75 is rejected by the next bar, which trades inside and closes at 100.75.
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+        for (price, size, side) in [
+            (100.0, 1.0, OrderSide::Sell),
+            (100.25, 1.0, OrderSide::Sell),
+            (100.5, 1.0, OrderSide::Sell),
+            (100.25, 12.0, OrderSide::Buy),
+            (100.5, 9.0, OrderSide::Buy),
+            (100.75, 15.0, OrderSide::Buy),
+        ] {
+            flow.push(&Tick::new(time, price, size, Some(side)))
+                .unwrap();
+        }
+        let next = time + chrono::TimeDelta::minutes(1);
+        for (price, side) in [(100.5, OrderSide::Sell), (100.75, OrderSide::Buy)] {
+            flow.push(&Tick::new(next, price, 1.0, Some(side))).unwrap();
+        }
+        let bars = [
+            Bar::new(time, 100.0, 100.75, 100.0, 100.75, 39.0),
+            Bar::new(next, 100.5, 100.75, 100.5, 100.75, 2.0),
+        ];
+        for until_broken in [true, false] {
+            let params = ChartTypeParams {
+                footprint_stacked_imbalances: true,
+                footprint_zones_until_broken: until_broken,
+                ..Default::default()
+            };
+            let config = FootprintConfig::from_chart_params(&params, [Color32::WHITE; 4], 1);
+            let studies = cached_annotations(&ctx, &annotation_mapping(), &bars, &flow, &config);
+            let zones: Vec<_> = studies
+                .iter()
+                .filter(|s| s.start == time && s.kind == FootprintStudyKind::StackedAsk)
+                .map(|s| (s.low, s.high, s.end, s.state, s.rejections.clone()))
+                .collect();
+            let expected = if until_broken {
+                (401, 403, None, FootprintStudyState::Rejected(1), vec![next])
+            } else {
+                (401, 403, Some(next), FootprintStudyState::Revisited, vec![])
+            };
+            assert_eq!(zones, [expected], "zones until broken: {until_broken}");
+        }
     }
 
     /// Volumes fall into equal quarters of their side's range, whatever the other side traded, and
@@ -4477,6 +4550,7 @@ mod tests {
             high: 106,
             kind,
             state: FootprintStudyState::Local,
+            rejections: Vec::new(),
         });
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(480.0, 320.0));
         let ctx = egui::Context::default();
@@ -4574,8 +4648,8 @@ mod tests {
     }
 
     /// Guards that the painted study annotations follow their public state: an unvisited or
-    /// rejected zone keeps its colour, a revisited, expired or broken one is dimmed, and a buy
-    /// marker is a triangle above the bar's top row.
+    /// rejected zone keeps its colour, a revisited, expired or broken one is dimmed, each rejection
+    /// is a triangle on the zone's near edge, and a buy marker is above the bar's top row.
     #[cfg(feature = "studies")]
     #[test]
     fn studies_are_painted_as_their_state_and_kind_say() {
@@ -4607,8 +4681,9 @@ mod tests {
             high: low,
             kind,
             state,
+            rejections: Vec::new(),
         };
-        let studies = [
+        let mut studies = [
             study(
                 FootprintStudyKind::StackedAsk,
                 FootprintStudyState::Unvisited,
@@ -4639,7 +4714,14 @@ mod tests {
                 FootprintStudyState::Broken,
                 404,
             ),
+            study(
+                FootprintStudyKind::StackedBid,
+                FootprintStudyState::Rejected(1),
+                405,
+            ),
         ];
+        studies[4].rejections = vec![time];
+        studies[6].rejections = vec![time];
         let config = bid_ask_config();
         let ctx = egui::Context::default();
         let mut output = ctx.run_ui(
@@ -4661,8 +4743,33 @@ mod tests {
         let dimmed = config.ask_color.gamma_multiply(0.45);
         assert_eq!(
             strokes,
-            [config.ask_color, dimmed, dimmed, config.ask_color, dimmed]
+            [
+                config.ask_color,
+                dimmed,
+                dimmed,
+                config.ask_color,
+                dimmed,
+                config.bid_color
+            ]
         );
+        // Radius 4, height 6: up from the high of buy row 403, down from the low of sell row 405.
+        let x = map.idx_to_x(0);
+        let (top, bottom) = (map.price_to_y(100.875), map.price_to_y(101.125));
+        let paths: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Path(path) => Some((path.fill, path.points.clone())),
+                _ => None,
+            })
+            .collect();
+        for (fill, tip, edge) in [
+            (config.ask_color, top - 6.0, top),
+            (config.bid_color, bottom + 6.0, bottom),
+        ] {
+            let mark = vec![pos2(x, tip), pos2(x - 4.0, edge), pos2(x + 4.0, edge)];
+            assert!(paths.contains(&(fill, mark)), "{fill:?} rejection mark");
+        }
         let top = map.price_to_y(100.125);
         let triangle = output.shapes.iter().find_map(|shape| match &shape.shape {
             Shape::Path(path) if path.fill == config.ask_color => Some(path.points.clone()),
@@ -4687,6 +4794,7 @@ mod tests {
             high: 400,
             kind: FootprintStudyKind::SinglePrint,
             state: FootprintStudyState::Local,
+            rejections: Vec::new(),
         };
         // At 120 a default ladder bar has room for its summary below, and captions avoid that too.
         let ladder = FootprintConfig::default();
