@@ -399,10 +399,10 @@ impl WatchlistPanel {
             .is_some_and(|list| list.add_symbol(symbol))
     }
 
-    /// Adds a list read with [`Watchlist::from_text`] and shows it.
+    /// Adds a list read with [`Watchlist::from_text`] and shows it, turning any flag filter off.
     pub fn import(&mut self, name: impl Into<String>, text: &str) {
         self.lists.push(Watchlist::from_text(name, text));
-        self.active = self.lists.len() - 1;
+        (self.active, self.flag_filter) = (self.lists.len() - 1, None);
     }
 
     /// Render the active list and return the host action.
@@ -1726,6 +1726,9 @@ mod tests {
             panel.lists[1].symbols().collect::<Vec<_>>(),
             ["AAPL", "BP", "SHEL"]
         );
+        panel.import("Imported", "TSLA");
+        assert_eq!(panel.flag_filter(), None, "an import shows the imported list");
+        assert_eq!(panel.symbols().collect::<Vec<_>>(), ["TSLA"]);
 
         let time = chrono::Utc::now();
         let regular = Quote::new(100.0, 90.0, time).with_volume(2_000.0);
