@@ -274,6 +274,19 @@ impl StoredDrawing {
         }) {
             return Some("fib_config".into());
         }
+        if d.gann.as_ref().is_some_and(|c| {
+            [
+                &c.price_levels,
+                &c.time_levels,
+                &c.fan_ratios,
+                &c.arc_ratios,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|level| level.width.is_some_and(bad_width))
+        }) {
+            return Some("gann".into());
+        }
         for (name, values) in [
             (
                 "fib_config.levels",
@@ -1527,7 +1540,10 @@ mod tests {
             }
             drawing.gann = Some(crate::drawings::GannConfig {
                 price_levels: vec![
-                    GannLevel::new(0.25, [1, 2, 3, 255]),
+                    GannLevel {
+                        width: Some(3.5),
+                        ..GannLevel::new(0.25, [1, 2, 3, 255])
+                    },
                     GannLevel::new(0.75, [4, 5, 6, 255]),
                 ],
                 time_levels: vec![GannLevel::new(0.5, [7, 8, 9, 255])],
@@ -1546,6 +1562,9 @@ mod tests {
                 show_background: false,
                 background_opacity: 7,
                 show_angles: true,
+                show_labels: false,
+                reverse: true,
+                one_color: Some([19, 20, 21, 255]),
             });
             drawing.ghost_feed = Some(crate::drawings::GhostFeedConfig {
                 average_range_ticks: 2.5,
@@ -3045,7 +3064,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 44] = [
+        let cases: [(Spoil, &str); 45] = [
             (
                 |s| {
                     first(s)
@@ -3264,6 +3283,17 @@ mod tests {
                         .value = f32::NAN
                 },
                 "invalid gann.time_levels[0].value",
+            ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .gann
+                        .get_or_insert_with(Default::default)
+                        .fan_ratios[0]
+                        .width = Some(0.0)
+                },
+                "invalid gann",
             ),
             (
                 |s| {

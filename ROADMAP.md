@@ -95,7 +95,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Three-drives ratios are measured in price.
 - [x] Elliott triangles collect an origin and waves A to E.
 - [x] Ghost Feed projects translucent candles along its clicked path, with configurable average range and noise in instrument ticks, body, border and wick colours, switches for the borders and the wicks, and transparency.
-- [x] Gann squares configure their fan direction, fan lines and arcs, and show or hide the fan and the arcs.
+- [x] Gann squares configure their fan direction, fan lines and arcs, and show or hide the fan and the arcs. Each level, fan line and arc of the Gann tools can take its own width, a whole Gann tool can be drawn in one colour while its level colours are kept, the box and the squares can be mirrored inside their anchors, and the box and the fan can hide their labels.
 - [x] Each drawing tool starts from a default style chosen for its role, including 12 px pattern and small channel labels, orange circles, wave colours per kind and Intermediate wave degree, translucent regression lines, bold price labels and positions risking 25% of an account of 1,000. Saved styles and missing legacy settings retain their previous behaviour. Default line, level and text colours, including former defaults held by saved drawings, take a shade that keeps 4:1 on the light, dark and high-contrast charts.
 - [ ] Complete the remaining on-chart text editing of horizontal rays and vertical lines.
 
