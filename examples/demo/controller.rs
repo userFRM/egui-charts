@@ -7840,9 +7840,16 @@ mod tests {
             );
             let shaded = |app: &mut DemoApp| {
                 settle(app, &ctx);
-                app.chart.config_mut().extended_hours_color = shading;
+                // This fixture detects the shared fill, independent of fresh phase defaults.
+                let config = app.chart.config_mut();
+                config.extended_hours_color = shading;
+                config.premarket_color = None;
+                config.postmarket_color = None;
                 for extra in &mut app.extra_charts {
-                    extra.chart.config_mut().extended_hours_color = shading;
+                    let config = extra.chart.config_mut();
+                    config.extended_hours_color = shading;
+                    config.premarket_color = None;
+                    config.postmarket_color = None;
                 }
                 let output = ctx.run_ui(
                     egui::RawInput {

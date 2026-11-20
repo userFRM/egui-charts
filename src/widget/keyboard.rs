@@ -254,6 +254,12 @@ pub(crate) struct KeyboardState {
     pub chart_id: Option<egui::Id>,
     pub last_pass: Option<u64>,
     pub focus_elsewhere: bool,
+    /// A limit-order key pressed this pass, for [`ChartMenus::show`] to turn into the chart
+    /// menu's limit row at the pointer.
+    ///
+    /// [`ChartMenus::show`]: crate::ui::context_menu::ChartMenus::show
+    #[cfg(feature = "ui")]
+    pub order_key: Option<KeyboardAction>,
 }
 
 pub(crate) fn shortcuts_suppressed(ctx: &Context) -> bool {
@@ -345,6 +351,11 @@ impl super::Chart {
         #[cfg(feature = "drawings")]
         {
             self.drawings.place_at_pointer = false;
+        }
+        // A limit-order key applies only in the pass of its press.
+        #[cfg(feature = "ui")]
+        {
+            self.keyboard.order_key = None;
         }
         // A drawing or eraser drag released while the chart was not shown ends once the pointer
         // is up, so undo and the drawing keys do not wait for a release the chart never sees.
@@ -589,6 +600,10 @@ impl super::Chart {
             }
             KeyboardAction::Redo => {
                 self.redo();
+            }
+            #[cfg(feature = "ui")]
+            KeyboardAction::BuyLimitAtPointer | KeyboardAction::SellLimitAtPointer => {
+                self.keyboard.order_key = Some(action);
             }
             _ => self.user_action(|chart| chart.apply_keyboard_edit(action, chart_rect)),
         }

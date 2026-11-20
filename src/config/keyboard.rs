@@ -181,6 +181,15 @@ pub enum KeyboardAction {
     CycleChartFocus,
     /// Cycle focus to previous chart (Shift+Tab)
     CycleChartFocusBack,
+
+    // Trading
+    /// A buy limit order at the pointer's price (Alt+Shift+B). `ChartMenus::show` returns the
+    /// order of the chart menu's buy limit row there, and nothing where the menu has no such
+    /// row. Without the `ui` feature the host receives it as a shortcut request.
+    BuyLimitAtPointer,
+    /// A sell limit order at the pointer's price (Alt+Shift+S), as
+    /// [`BuyLimitAtPointer`](Self::BuyLimitAtPointer) is for buying.
+    SellLimitAtPointer,
 }
 
 impl KeyboardAction {
@@ -279,6 +288,8 @@ impl KeyboardAction {
             Self::ShowKeyboardHelp => "Keyboard shortcuts",
             Self::CycleChartFocus => "Next chart",
             Self::CycleChartFocusBack => "Previous chart",
+            Self::BuyLimitAtPointer => "Buy limit at pointer price",
+            Self::SellLimitAtPointer => "Sell limit at pointer price",
         }
     }
 
@@ -425,6 +436,22 @@ impl KeyboardAction {
                     )]
                 }
             }
+            Self::BuyLimitAtPointer => {
+                const {
+                    &[KeyboardShortcut::new(
+                        Modifiers::ALT.plus(Modifiers::SHIFT),
+                        Key::B,
+                    )]
+                }
+            }
+            Self::SellLimitAtPointer => {
+                const {
+                    &[KeyboardShortcut::new(
+                        Modifiers::ALT.plus(Modifiers::SHIFT),
+                        Key::S,
+                    )]
+                }
+            }
             _ => &[],
         }
     }
@@ -473,6 +500,8 @@ impl KeyboardAction {
             Self::ShowKeyboardHelp => "Ctrl+/ / ? / F1",
             Self::CycleChartFocus => "Tab",
             Self::CycleChartFocusBack => "Shift+Tab",
+            Self::BuyLimitAtPointer => "Alt+Shift+B",
+            Self::SellLimitAtPointer => "Alt+Shift+S",
             Self::DrawingTool(crate::config::DrawingToolType::TrendLine) => "Alt+T",
             Self::DrawingTool(crate::config::DrawingToolType::HorizontalLine) => "Alt+H",
             Self::DrawingTool(crate::config::DrawingToolType::VerticalLine) => "Alt+V",
@@ -555,6 +584,10 @@ impl KeyboardAction {
                     Self::CycleChartFocusBack,
                     Self::ShowKeyboardHelp,
                 ],
+            ),
+            (
+                "Trading",
+                vec![Self::BuyLimitAtPointer, Self::SellLimitAtPointer],
             ),
         ]
     }
