@@ -882,8 +882,9 @@ impl ConfiguredStudy {
     /// alone, without order flow it cannot do without and with no data of its own to request
     /// unless its requests apply on any interval or are price bars it reads on that interval as
     /// on a chart of it: other symbols' bars, and bars of the chart's interval, while the study
-    /// has no interval input of its own. An accepted interval stays available if calculating on
-    /// it changes those requests.
+    /// has no interval input of its own. A study with an interval it picks below the chart's
+    /// ([`InputKind::AutoTimeframe`](super::InputKind::AutoTimeframe)) never qualifies. An
+    /// accepted interval stays available if calculating on it changes those requests.
     fn runs_on_other_bars(&self) -> bool {
         let requests = self.study.data_requests();
         let follows = |request: &super::StudyDataRequest| {
@@ -899,7 +900,14 @@ impl ConfiguredStudy {
                         .inputs()
                         .iter()
                         .any(|input| matches!(input.kind, super::InputKind::Timeframe))))
-                && !self.study.needs_order_flow())
+                && !self.study.needs_order_flow()
+                // An interval picked below the chart's follows the chart, whatever the study
+                // requests on it.
+                && !self
+                    .study
+                    .inputs()
+                    .iter()
+                    .any(|input| matches!(input.kind, super::InputKind::AutoTimeframe(_))))
     }
 
     /// Whether the study reads one source, or only the chart symbol's bars on an interval it
@@ -3984,6 +3992,17 @@ mod tests {
             study.apply_settings(&[], absent).unwrap();
             assert_eq!(study.settings(), defaults);
         }
+        // Saved before the lower interval named its automatic choice, this template keeps
+        // its unset input and every plot style on the chart's interval.
+        let saved = r#"{"name":"Volume Delta","inputs":[["lower_interval",{"Timeframe":null}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolumeDelta.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[8,153,129,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let template = serde_json::from_str::<crate::studies::StudyTemplate>(saved).unwrap();
+        let mut older = template.create().unwrap();
+        older.set_timeframe(Timeframe::Min5);
+        let restored = crate::studies::StudyTemplate::from_study(older.as_ref());
+        assert_eq!(restored.inputs, template.inputs);
+        assert_eq!(restored.settings, template.settings);
+        assert_eq!(restored.visible, template.visible);
+        assert_eq!(restored.scale, template.scale);
         // Profiles saved with finer bars keep their presentation and both saved interval inputs.
         // Saves that omitted those inputs keep their existing chart interval and close-wait defaults.
         for (saved, interval) in [

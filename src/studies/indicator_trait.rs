@@ -615,7 +615,9 @@ pub trait Indicator: Send {
     /// Interval and Wait for interval close inputs, otherwise offered to source-aware studies,
     /// studies that request nothing, and studies without an interval input of their own that
     /// request only price bars of other symbols or of the chart's interval, which they read on the
-    /// Interval as on a chart of it. On another interval it passes every request on with the
+    /// Interval as on a chart of it, but never to a study with an
+    /// [`InputKind::AutoTimeframe`](super::InputKind::AutoTimeframe) input, whose interval
+    /// follows the chart. On another interval it passes every request on with the
     /// start [`data_start`](Indicator::data_start) states. The default, `false`, keeps a study
     /// that requests other histories, such as the chart symbol's bars of a stated interval or
     /// metrics, on the chart's interval.

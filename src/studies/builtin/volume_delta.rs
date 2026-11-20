@@ -24,7 +24,7 @@ use crate::scales::StudyFormat;
 use crate::studies::palette;
 use crate::studies::{
     Indicator, IndicatorValue, IndicatorValues, InputKind, InputValue, PlotStyle, PlotType,
-    StudyCandle, StudyData, StudyDataRequest, StudyInput,
+    StudyCandle, StudyData, StudyDataRequest, StudyInput, StudyTable,
 };
 use egui::Color32;
 
@@ -49,6 +49,8 @@ struct DeltaCandles {
     values: IndicatorValues,
     colors: [Color32; 3],
     visible: bool,
+    /// Shown while the chosen lower interval is not read.
+    notice: Option<StudyTable>,
 }
 
 impl DeltaCandles {
@@ -61,6 +63,7 @@ impl DeltaCandles {
             values: IndicatorValues::new(),
             colors: [palette::BLUE, palette::UP, palette::DOWN],
             visible: true,
+            notice: None,
         }
     }
 
@@ -69,7 +72,7 @@ impl DeltaCandles {
     }
 
     fn inputs(&self) -> Vec<StudyInput> {
-        let mut inputs = vec![lower_interval::input(self.lower_interval)];
+        let mut inputs = vec![lower_interval::input(&self.clock, self.lower_interval)];
         if let Some(anchor) = self.anchor {
             inputs.push(
                 StudyInput::new(
@@ -213,7 +216,10 @@ macro_rules! delta_study {
                 self.core.inputs()
             }
             fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
-                self.core.set_input(id, value)
+                self.core.set_input(id, value)?;
+                self.core.notice =
+                    lower_interval::notice($name, &self.core.clock, self.core.lower_interval);
+                Ok(())
             }
             fn data_requests(&self) -> Vec<StudyDataRequest> {
                 self.core
@@ -231,6 +237,8 @@ macro_rules! delta_study {
             fn set_bar_clock(&mut self, clock: &BarClock) -> bool {
                 let changed = self.core.clock != *clock;
                 self.core.clock = clock.clone();
+                self.core.notice =
+                    lower_interval::notice($name, &self.core.clock, self.core.lower_interval);
                 changed
             }
             fn calculate(&mut self, data: &[Bar]) {
@@ -259,6 +267,9 @@ macro_rules! delta_study {
             }
             fn candles(&self) -> &[StudyCandle] {
                 &self.core.candles
+            }
+            fn table(&self) -> Option<&StudyTable> {
+                self.core.notice.as_ref()
             }
             fn colors(&self) -> Vec<Color32> {
                 self.core.colors.to_vec()
