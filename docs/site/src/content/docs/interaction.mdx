@@ -129,6 +129,7 @@ enum.
 | `DataLoaded`, `DataUpdated` | Refresh host state after accepted history or changed bars |
 | `SeriesAdded`, `SeriesRemoved` | Start or stop the host producer for that stable series id |
 | `Drawing { id, kind }` | Follow each drawing the user, undo or redo, or host code created, removed, hid, showed, moved or edited, for example in a host drawing list |
+| `Study { id, kind }` | Follow each study added, removed, hidden, shown or given other inputs by the user, undo or redo, or host code, for example in a host study list |
 | `SymbolChanged`, `TimeframeChanged` | Update host controls for the chart's instrument and interval |
 | `EventsDropped(count)` | Resynchronize the host from current chart state |
 

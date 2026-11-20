@@ -274,6 +274,19 @@ impl StoredDrawing {
         }) {
             return Some("fib_config".into());
         }
+        if d.gann.as_ref().is_some_and(|c| {
+            [
+                &c.price_levels,
+                &c.time_levels,
+                &c.fan_ratios,
+                &c.arc_ratios,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|level| level.width.is_some_and(bad_width))
+        }) {
+            return Some("gann".into());
+        }
         for (name, values) in [
             (
                 "fib_config.levels",
@@ -1527,7 +1540,10 @@ mod tests {
             }
             drawing.gann = Some(crate::drawings::GannConfig {
                 price_levels: vec![
-                    GannLevel::new(0.25, [1, 2, 3, 255]),
+                    GannLevel {
+                        width: Some(3.5),
+                        ..GannLevel::new(0.25, [1, 2, 3, 255])
+                    },
                     GannLevel::new(0.75, [4, 5, 6, 255]),
                 ],
                 time_levels: vec![GannLevel::new(0.5, [7, 8, 9, 255])],
@@ -1546,6 +1562,9 @@ mod tests {
                 show_background: false,
                 background_opacity: 7,
                 show_angles: true,
+                show_labels: false,
+                reverse: true,
+                one_color: Some([19, 20, 21, 255]),
             });
             drawing.ghost_feed = Some(crate::drawings::GhostFeedConfig {
                 average_range_ticks: 2.5,
@@ -1583,6 +1602,13 @@ mod tests {
                     line_style: LineStyle::SparseDotted,
                     width: Some(3.5),
                 }],
+                ..Default::default()
+            });
+            drawing.forecast = Some(crate::drawings::ForecastStyle {
+                start_text: None,
+                target_border: Some([11, 12, 13, 14]),
+                failure_text: Some([15, 16, 17, 18]),
+                transparency: 35,
                 ..Default::default()
             });
             drawing.channel_midline = true;
@@ -1753,11 +1779,24 @@ mod tests {
         for saved in [
             include_str!("fixtures/storage_v2.json"),
             include_str!("fixtures/storage_v10_channels.json"),
+            // A forecast saved on main before its card settings, with a shared translucent fill.
+            r#"{"version":10,"symbol":"LEGACY","drawings":[{"id":"7","points":[{"ts_ms":1704067200000,"price":1.1},{"ts_ms":1704326400000,"price":1.10055}],"drawing":{"label":null,"pane":null,"selectable":true,"saveable":true,"listed":true,"user_edit_enabled":true,"group":null,"folder":[],"custom_tool":null,"custom_settings":null,"tool_type":"Forecast","screen_anchor":null,"color":[41,98,255,255],"stroke_width":2.0,"text":null,"post":null,"line_style":"Solid","fill_color":[12,34,56,80],"locked":false,"visible":true,"font_size":14.0,"font_weight":"Normal","italic":false,"text_color":null,"background":true,"border":true,"border_color":null,"text_wrap":false,"text_wrap_width":200.0,"text_follows_zoom":false,"text_zoom_spacing":null,"note_text_style":null,"extend_left":false,"extend_right":false,"arrow_start_style":"None","arrow_end_style":"None","timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"price_axis_label":true,"time_axis_label":true,"line_measurements":{"persistent":false,"price_change":false,"percent_change":false,"pip_change":false,"bar_count":false,"elapsed_time":false,"length":false,"inclination":false,"midpoint":false,"price_labels":false,"position":"Right","text_horizontal_align":"Center","text_vertical_align":"Bottom","text_orientation":"Vertical","across_panes":false},"range_settings":{"price_change":true,"percent_change":true,"pip_change":true,"bar_count":true,"elapsed_time":true,"volume":true,"text_color":null,"font_size":12.0,"background":true,"background_color":null,"border":true,"border_color":null,"border_width":null,"border_style":null,"extend_top":false,"extend_bottom":false},"position_size":null,"position_sizing":{"point_value":1.0,"lot_size":1.0,"quantity_step":0.0,"leverage":1.0},"position_readout":{"persistent":false,"condensed":false,"account_currency":null,"conversion_rate":null,"quantity_decimals":null},"position_target_color":null,"position_stop_color":null,"position_style":{"line_color":null,"line_width":1.0,"text_color":null,"font_size":12.0,"label_background":true,"label_color":null,"fill":true,"border":false,"border_color":[102,123,139,255]},"marker":{"show_text":true,"glyph":"🙂","show_glyph":false,"glyph_color":null},"fib_config":null,"volume_profile":null,"regression_trend":null,"vwap":null,"gann":null,"ghost_feed":null,"channel_midline":false,"anchor_price_style":null,"middle_line":{"color":null,"width":1.0,"line_style":"Dashed"},"theme_shade":true,"image":null,"glyph_angle":0.0,"closed":false,"pitchfork":null,"elliott_degree":"Minor","elliott_show_wave":true,"bars_pattern":null,"projection":null,"z_order":0},"created_at":1704067200000,"modified_at":1704067200000}],"metadata":{"created_at":1704067200000,"modified_at":1704067200000,"app_version":null}}"#,
         ] {
             let (storage, skipped) = DrawingStorage::from_json(saved).unwrap();
             assert!(skipped.is_empty(), "{skipped:?}");
             for stored in storage.drawings() {
-                assert_eq!(restore(stored, 1).series_layer, None);
+                let restored = restore(stored, 1);
+                assert_eq!(restored.series_layer, None);
+                if restored.tool_type == DrawingToolType::Forecast {
+                    assert_eq!(restored.forecast, None);
+                    let style = restored.forecast_style();
+                    assert_eq!(style.start_background, Some([12, 34, 56, 80]));
+                    assert_eq!(style.target_background, style.start_background);
+                    assert_eq!(style.success_background, style.start_background);
+                    assert_eq!(style.failure_background, style.start_background);
+                    assert_eq!((style.start_border, style.target_border), (None, None));
+                    assert_eq!(style.transparency, 0);
+                }
                 assert!(
                     !serde_json::to_string(&stored.drawing)
                         .unwrap()
@@ -1765,6 +1804,19 @@ mod tests {
                 );
             }
         }
+        // A literal Gann box saved before per-line widths and the three switches.
+        let saved = r#"{"version":10,"symbol":"LEGACY","timeframe":null,"drawings":[{"id":"1","points":[{"ts_ms":1700006000000,"price":101.0},{"ts_ms":1700008700000,"price":109.0}],"drawing":{"label":null,"pane":null,"selectable":true,"saveable":true,"listed":true,"user_edit_enabled":true,"group":null,"folder":[],"custom_tool":null,"custom_settings":null,"tool_type":"GannBox","screen_anchor":null,"color":[41,98,255,255],"stroke_width":2.0,"text":null,"post":null,"line_style":"Solid","fill_color":null,"locked":false,"visible":true,"font_size":14.0,"font_weight":"Normal","italic":false,"text_color":null,"background":true,"border":true,"border_color":null,"text_wrap":false,"text_wrap_width":200.0,"text_follows_zoom":false,"text_zoom_spacing":null,"note_text_style":null,"extend_left":false,"extend_right":false,"arrow_start_style":"None","arrow_end_style":"None","timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"price_axis_label":true,"time_axis_label":true,"line_measurements":{"persistent":false,"price_change":false,"percent_change":false,"pip_change":false,"bar_count":false,"elapsed_time":false,"length":false,"inclination":false,"midpoint":false,"price_labels":false,"position":"Right","text_horizontal_align":"Center","text_vertical_align":"Bottom","text_orientation":"Vertical","across_panes":false},"range_settings":{"price_change":true,"percent_change":true,"pip_change":true,"bar_count":true,"elapsed_time":true,"volume":true,"text_color":null,"font_size":12.0,"background":true,"background_color":null,"border":true,"border_color":null,"border_width":null,"border_style":null,"extend_top":false,"extend_bottom":false},"position_size":null,"position_sizing":{"point_value":1.0,"lot_size":1.0,"quantity_step":0.0,"leverage":1.0},"position_readout":{"persistent":false,"condensed":false,"account_currency":null,"conversion_rate":null,"quantity_decimals":null},"position_target_color":null,"position_stop_color":null,"position_style":{"line_color":null,"line_width":1.0,"text_color":null,"font_size":12.0,"label_background":true,"label_color":null,"fill":true,"border":false,"border_color":[102,123,139,255]},"marker":{"show_text":true,"glyph":"🙂","show_glyph":false,"glyph_color":null},"fib_config":null,"volume_profile":null,"regression_trend":null,"vwap":null,"gann":{"price_levels":[{"value":0.0,"visible":true,"color":[128,128,128,255]},{"value":0.25,"visible":true,"color":[255,152,0,255]},{"value":1.0,"visible":true,"color":[0,188,212,255]}],"time_levels":[{"value":0.0,"visible":true,"color":[128,128,128,255]},{"value":0.25,"visible":true,"color":[255,152,0,255]},{"value":1.0,"visible":true,"color":[0,188,212,255]}],"show_grid":true,"show_fan":true,"fan_ratios":[{"value":8.0,"visible":false,"color":[128,128,128,255]},{"value":5.0,"visible":false,"color":[128,128,128,255]},{"value":4.0,"visible":false,"color":[128,128,128,255]},{"value":3.0,"visible":false,"color":[128,128,128,255]},{"value":2.0,"visible":true,"color":[0,188,212,255]},{"value":1.0,"visible":true,"color":[76,175,80,255]},{"value":0.5,"visible":true,"color":[8,153,129,255]},{"value":0.33333334,"visible":false,"color":[128,128,128,255]},{"value":0.25,"visible":false,"color":[128,128,128,255]},{"value":0.2,"visible":false,"color":[128,128,128,255]},{"value":0.125,"visible":false,"color":[128,128,128,255]}],"fan_direction":"Forward","show_arcs":true,"arc_ratios":[{"value":1.0,"visible":true,"color":[255,152,0,255]},{"value":1.4142135,"visible":true,"color":[255,152,0,255]},{"value":2.0,"visible":true,"color":[0,188,212,255]},{"value":2.236068,"visible":true,"color":[0,188,212,255]},{"value":3.0,"visible":true,"color":[76,175,80,255]},{"value":3.1622777,"visible":true,"color":[76,175,80,255]},{"value":4.0,"visible":true,"color":[8,153,129,255]},{"value":4.1231055,"visible":true,"color":[8,153,129,255]},{"value":5.0,"visible":true,"color":[41,98,255,255]},{"value":5.0990195,"visible":true,"color":[41,98,255,255]}],"show_background":true,"background_opacity":51,"show_angles":false},"ghost_feed":null,"channel_midline":false,"anchor_price_style":null,"middle_line":{"color":null,"width":1.0,"line_style":"Dashed"},"theme_shade":true,"image":null,"glyph_angle":0.0,"closed":false,"pitchfork":null,"elliott_degree":"Minor","elliott_show_wave":true,"bars_pattern":null,"projection":null,"z_order":0},"created_at":1795162989221,"modified_at":1795162989221,"notes":null}],"metadata":{"created_at":1795162989221,"modified_at":1795162989221,"app_version":null}}"#;
+        let (storage, skipped) = DrawingStorage::from_json(saved).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let mut want = crate::drawings::GannConfig::for_tool(DrawingToolType::GannBox);
+        want.price_levels = vec![
+            crate::drawings::GannLevel::new(0.0, [128, 128, 128, 255]),
+            crate::drawings::GannLevel::new(0.25, [255, 152, 0, 255]),
+            crate::drawings::GannLevel::new(1.0, [0, 188, 212, 255]),
+        ];
+        want.time_levels = want.price_levels.clone();
+        assert_eq!(restore(&storage.drawings()[0], 1).gann, Some(want));
+
         let v1_json = include_str!("fixtures/storage_v1.json");
         let (v1, skipped) = DrawingStorage::from_json(v1_json).unwrap();
         assert!(skipped.is_empty(), "{skipped:?}");
@@ -3045,7 +3097,7 @@ mod tests {
             &mut storage.drawings[0]
         }
         type Spoil = fn(&mut DrawingStorage);
-        let cases: [(Spoil, &str); 44] = [
+        let cases: [(Spoil, &str); 45] = [
             (
                 |s| {
                     first(s)
@@ -3264,6 +3316,17 @@ mod tests {
                         .value = f32::NAN
                 },
                 "invalid gann.time_levels[0].value",
+            ),
+            (
+                |s| {
+                    first(s)
+                        .drawing
+                        .gann
+                        .get_or_insert_with(Default::default)
+                        .fan_ratios[0]
+                        .width = Some(0.0)
+                },
+                "invalid gann",
             ),
             (
                 |s| {

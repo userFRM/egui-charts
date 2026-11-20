@@ -494,7 +494,13 @@ Footprint conditions read the same bars. [`FootprintRule`](https://userfrm.githu
 imbalance, or a stack of the rule's number of adjacent ones, using the rule's ratio, comparison
 and minimum volume on rows of one tick whatever grouping the chart displays;
 [`FootprintRule::follow_chart`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.FootprintRule.html#method.follow_chart) copies these from the chart's settings, as the demo does for its
-active chart. A buy volume, sell volume or delta level fires on the execution that takes the
+active chart. A buy or sell zone rejection fires on a closed bar that trades into an active
+stacked imbalance zone of an earlier bar without closing beyond its far edge, below a buy
+zone's lowest row or above a sell zone's highest row; the first bar closing beyond it ends the
+zone without firing. Detector zones use one-tick rows, retaining the newest 1,000 zones. A closed
+bar skipped because conditions are disabled or its retained footprint is incomplete or missing
+ends all active detector zones. Disabling and enabling inside a bar keeps them if its close is
+read. A buy volume, sell volume or delta level fires on the execution that takes the
 forming bar's value past it, from zero at the bar's open: a sell volume level of 100 fires on the
 101st unit sold. Each condition alerts at most once per bar and rebuilds with the stop sweeps on
 interval changes. Bars that opened before the bar of the first live event since tracking, such
