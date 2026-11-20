@@ -39,7 +39,7 @@ const PERIODS: [(&str, Period); 6] = [
 ];
 
 /// Behind each row's label, the grey the table paints behind Performance's headings.
-const LABEL_FILL: Color32 = Color32::from_rgba_unmultiplied_const(120, 123, 134, 51);
+pub(super) const LABEL_FILL: Color32 = Color32::from_rgba_unmultiplied_const(120, 123, 134, 51);
 /// Behind a change without a value.
 const MISSING_FILL: Color32 = Color32::from_rgba_unmultiplied_const(120, 123, 134, 26);
 
@@ -338,7 +338,7 @@ fn table_periods(list: &str) -> Vec<(String, Period)> {
 }
 
 /// A size input, in percent of the pane, as the table's share of it; 0 fits the cells.
-fn share(percent: f64) -> Option<f32> {
+pub(super) fn share(percent: f64) -> Option<f32> {
     (percent > 0.0).then_some((percent / 100.0) as f32)
 }
 
