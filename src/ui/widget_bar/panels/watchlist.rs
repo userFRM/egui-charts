@@ -429,7 +429,8 @@ impl WatchlistPanel {
     /// fills for the [`symbols`](Self::symbols) shown. The sections list the rows of the
     /// selected symbol, or of every shown symbol while none of them is selected. Selection,
     /// sorting, the active list and the flag filter are those of [`show`](Self::show), so
-    /// switching views keeps them. Returns [`WatchlistAction::CompactView`] from its view button.
+    /// switching views keeps them; while sorted by a column the compact view hides, that view
+    /// shows the list in its own order. Returns [`WatchlistAction::CompactView`] from its view button.
     pub fn show_wide(&mut self, ui: &mut Ui, details: &WatchlistDetails) -> WatchlistAction {
         self.show_with(ui, Some(details))
     }
@@ -713,6 +714,11 @@ impl WatchlistPanel {
         } else {
             compact_columns
         };
+        // Keep a hidden column's sort for the view that shows it; here rows keep list order
+        // and can be dragged.
+        let shown_sort = sort.filter(|&(column, _)| {
+            column == WatchlistColumn::Symbol || shown_columns.contains(&column)
+        });
         let numbers = shown_columns.len();
         let columns = |rect: egui::Rect, widths: &BTreeMap<WatchlistColumn, f32>| {
             let (left, right) = (rect.left() + 10.0, rect.right() - 4.0);
@@ -770,7 +776,7 @@ impl WatchlistPanel {
                 font.clone(),
                 theme.ui.text_muted,
             );
-            if let Some((sorted, descending)) = *sort
+            if let Some((sorted, descending)) = shown_sort
                 && sorted == column
             {
                 // A painted triangle beside the label: the fonts lack arrow glyphs.
@@ -806,7 +812,7 @@ impl WatchlistPanel {
                     &translated_label,
                 )
             });
-            if let Some((sorted, descending)) = *sort
+            if let Some((sorted, descending)) = shown_sort
                 && sorted == column
             {
                 ui.ctx().accesskit_node_builder(response.id, |node| {
@@ -891,7 +897,7 @@ impl WatchlistPanel {
             Some(view) => view,
             None => &mut lists[*active],
         };
-        let reorderable = sort.is_none() && !filtered;
+        let reorderable = shown_sort.is_none() && !filtered;
 
         let sections: Vec<usize> = (0..list.items.len())
             .filter(|&i| matches!(list.items[i], WatchlistItem::Section(_)))
@@ -907,7 +913,7 @@ impl WatchlistPanel {
             .zip(states.iter())
             .filter_map(|(&index, &hidden)| hidden.then_some(index))
             .collect();
-        let order = display_order(&list.items, quotes, *sort, &collapsed);
+        let order = display_order(&list.items, quotes, shown_sort, &collapsed);
         // Arrow keys move the selection instead of the keyboard focus.
         let arrows = EventFilter {
             vertical_arrows: true,
@@ -1941,6 +1947,87 @@ mod tests {
         press(&mut h, "New section", "Remove section");
         assert_eq!(h.state().lists()[0].to_text(), "A,###Renamed,B,C");
         assert_eq!(shown(&h), ["A"]);
+    }
+
+    /// A sort by a column hidden in the compact view leaves its rows in list order and
+    /// draggable, while the wide view keeps its sort.
+    #[test]
+    fn compact_view_keeps_list_order_under_a_wide_sort() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let details = WatchlistDetails::default();
+        let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("List", "AAA,BBB")]);
+        let time = Default::default();
+        panel.set_quote("AAA", Quote::new(10.0, 9.0, time).with_volume(5.0));
+        panel.set_quote("BBB", Quote::new(20.0, 19.0, time).with_volume(9.0));
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(1000.0, 600.0))
+            .build_ui_state(
+                |ui, (panel, wide): &mut (WatchlistPanel, bool)| {
+                    if *wide {
+                        panel.show_wide(ui, &details);
+                    } else {
+                        panel.show(ui);
+                    }
+                },
+                (panel, true),
+            );
+        for _ in 0..2 {
+            h.get_by_label("Vol").click();
+            h.run();
+        }
+        assert!(
+            h.get_by_role_and_label(egui::Role::ListBoxOption, "BBB")
+                .rect()
+                .min
+                .y
+                < h.get_by_role_and_label(egui::Role::ListBoxOption, "AAA")
+                    .rect()
+                    .min
+                    .y
+        );
+        h.state_mut().1 = false;
+        h.run();
+        assert!(
+            h.get_by_role_and_label(egui::Role::ListBoxOption, "AAA")
+                .rect()
+                .min
+                .y
+                < h.get_by_role_and_label(egui::Role::ListBoxOption, "BBB")
+                    .rect()
+                    .min
+                    .y
+        );
+        let from = h
+            .get_by_role_and_label(egui::Role::ListBoxOption, "BBB")
+            .rect()
+            .center();
+        h.drag_at(from);
+        h.run();
+        h.hover_at(from + vec2(0.0, 12.0));
+        h.run();
+        let to = h
+            .get_by_role_and_label(egui::Role::ListBoxOption, "AAA")
+            .rect()
+            .center();
+        h.hover_at(to);
+        h.run();
+        h.drop_at(to);
+        h.run();
+        assert_eq!(h.state().0.lists()[0].to_text(), "BBB,AAA");
+        h.state_mut().1 = true;
+        h.run();
+        assert_eq!(h.state().0.sort, Some((WatchlistColumn::Volume, true)));
+        assert!(
+            h.get_by_role_and_label(egui::Role::ListBoxOption, "BBB")
+                .rect()
+                .min
+                .y
+                < h.get_by_role_and_label(egui::Role::ListBoxOption, "AAA")
+                    .rect()
+                    .min
+                    .y
+        );
     }
 
     /// Sorting stays inside each section, puts symbols without a value last in both directions

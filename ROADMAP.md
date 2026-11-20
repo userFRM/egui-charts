@@ -283,7 +283,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [ ] Handle the series context menu's Copy price action in the demo; `Terminal` already copies the clicked price.
 - [x] Alt+Shift+R selects the rectangle tool and Alt+Enter maximises or restores the selected chart of a grid. Interval entry and go-to-date shortcuts run in `Terminal`.
 - [x] Main-symbol legend controls hide or show the series, open its settings and remove it. Hovered titles show only whole buttons that fit before the end of the legend's first row, clear of link group markers; rows too narrow for the flag show no controls. A host that hides the settings control leaves the settings buttons out of the legend, its study and series rows and the price axis corner, and out of keyboard focus. An added series row's More button and right click then request no settings. The selected drawing toolbar's More menu omits the alert row and its separator when the host sets alerts unavailable.
-- [x] Watchlists duplicate lists, filter flags, add symbols from the chart menu and open an advanced view in the terminal. The host supplies its earnings, dividends and headlines.
+- [x] Watchlists duplicate lists, filter flags, add symbols from the chart menu and open an advanced view in the terminal. A sort by a column hidden in the compact view leaves that view in list order with draggable rows, while the advanced view keeps its sort. The host supplies its earnings, dividends and headlines.
 
 ### Export
 
