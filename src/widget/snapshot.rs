@@ -19,7 +19,7 @@ pub struct SavedStudy {
     pub id: usize,
     /// Its name, inputs, styles and visibility.
     pub study: StudyTemplate,
-    /// The caption after its title in the legend.
+    /// The host's caption after its title in the legend, empty where the chart derives one.
     pub caption: String,
     /// Whether it widens the automatic range of the price scale.
     pub autoscale: bool,
@@ -277,7 +277,10 @@ impl Chart {
             .map(|(index, (id, study))| SavedStudy {
                 id: id.0,
                 study: StudyTemplate::from_study(study),
-                caption: self.indicator_inputs(id).unwrap_or_default().to_owned(),
+                caption: self
+                    .host_indicator_inputs(id)
+                    .unwrap_or_default()
+                    .to_owned(),
                 autoscale: self.study_autoscale[index],
                 pane: pane_of(id),
             })
@@ -1756,7 +1759,7 @@ mod tests {
         chart.set_timeframe(Timeframe::Min5);
         chart.set_chart_type(ChartType::Line);
         let sma = chart.add_indicator(Box::new(SMA::new(7)));
-        chart.set_indicator_inputs(sma, "7 close");
+        chart.set_indicator_inputs(sma, "Fast average");
         chart.set_indicator_autoscale(sma, false);
         let rsi = chart.add_indicator(Box::new(RSI::new(9)));
         let macd = chart.add_indicator(Box::new(MACD::new(5, 13, 4)));
@@ -1829,7 +1832,7 @@ mod tests {
         let [(sma, ..), (rsi, ..), (macd, ..)] = studies.as_slice() else {
             unreachable!()
         };
-        assert_eq!(restored.indicator_inputs(*sma), Some("7 close"));
+        assert_eq!(restored.indicator_inputs(*sma), Some("Fast average"));
         assert!(!restored.study_autoscale[0]);
         assert_eq!(
             restored.indicator_mut(*rsi).unwrap().source(),
@@ -1889,6 +1892,16 @@ mod tests {
         assert_eq!(drawings[0].pane, Some(rsi.0));
         assert_eq!(drawings[0].chart_points[0].bar_idx, 3.0);
         assert!(!restored.can_undo());
+        // Host captions survive, while saved empty captions still follow the study's inputs.
+        assert_eq!(restored.indicator_inputs(*rsi), Some("9"));
+        restored.set_indicator_inputs(*sma, "");
+        assert_eq!(restored.indicator_inputs(*sma), Some("7 close"));
+        restored
+            .indicator_mut(*rsi)
+            .unwrap()
+            .set_input("period", crate::studies::InputValue::Length(4))
+            .unwrap();
+        assert_eq!(restored.indicator_inputs(*rsi), Some("4"));
 
         // An absent interval clears an existing interval, and malformed geometry is atomic.
         let mut snapshot = layout.charts[0].clone();

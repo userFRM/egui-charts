@@ -726,10 +726,11 @@ impl StudySettingsSnapshot {
 /// A study with editable presentation, used automatically by the chart.
 /// Hosts composing their own chart can wrap built-in or custom studies the same way.
 ///
-/// Calculated on another interval or symbol, a study's volume profiles and zones span the chart
-/// bars that share time with their bars, its markers sit on the last such chart bar once the
-/// values on the chart reach their bar, and its labels are hidden. Its visible range is the range
-/// of its own bars that share time with the chart bars in view.
+/// Calculated on another interval or symbol, a study's volume profiles, zones and candles span
+/// the chart bars that share time with their bars. Each candle keeps the colour of its first
+/// source bar. Its markers sit on the last such chart bar once the values on the chart reach
+/// their bar, and its labels, price segments, drawings and projections are hidden. Its visible
+/// range is the range of its own bars that share time with the chart bars in view.
 pub struct ConfiguredStudy {
     study: Box<dyn Indicator>,
     /// The stable factory key, independent of the wrapped study's display name.
@@ -752,14 +753,16 @@ pub struct ConfiguredStudy {
     aligned: Option<IndicatorValues>,
     aligned_bars: Vec<Option<usize>>,
     /// For each chart bar, the bars of another interval or symbol that share its time, by which
-    /// the study's profiles, zones, markers and candles are placed on chart bars.
+    /// the study's profiles, zones, candles and markers are placed on chart bars.
     spans: Vec<std::ops::Range<usize>>,
     /// The chart bars in view, from `set_visible_range`.
     visible: Option<std::ops::Range<usize>>,
-    /// The study's geometry on chart bars while it runs on another interval or symbol.
+    /// The study's marks on chart bars while it runs on another interval or symbol.
     aligned_markers: Vec<super::IndicatorMarker>,
     aligned_zones: Vec<super::StudyZone>,
     aligned_candles: Vec<super::StudyCandle>,
+    /// The original candle for each mapped candle, retaining its first source bar.
+    aligned_candle_sources: Vec<usize>,
     /// The values kept on the bars that remain after the chart evicted the oldest bars, until
     /// the study is calculated again.
     kept: Option<Kept>,
@@ -829,6 +832,7 @@ impl ConfiguredStudy {
             aligned_markers: self.aligned_markers.clone(),
             aligned_zones: self.aligned_zones.clone(),
             aligned_candles: self.aligned_candles.clone(),
+            aligned_candle_sources: self.aligned_candle_sources.clone(),
             kept: self.kept.clone(),
             input_defaults: self.input_defaults.clone(),
         }
@@ -885,6 +889,7 @@ impl ConfiguredStudy {
             aligned_markers: Vec::new(),
             aligned_zones: Vec::new(),
             aligned_candles: Vec::new(),
+            aligned_candle_sources: Vec::new(),
             kept: None,
             input_defaults: Vec::new(),
         }
@@ -899,8 +904,9 @@ impl ConfiguredStudy {
     /// alone, without order flow it cannot do without and with no data of its own to request
     /// unless its requests apply on any interval or are price bars it reads on that interval as
     /// on a chart of it: other symbols' bars, and bars of the chart's interval, while the study
-    /// has no interval input of its own. An accepted interval stays available if calculating on
-    /// it changes those requests.
+    /// has no interval input of its own. A study with an interval it picks below the chart's
+    /// ([`InputKind::AutoTimeframe`](super::InputKind::AutoTimeframe)) never qualifies. An
+    /// accepted interval stays available if calculating on it changes those requests.
     fn runs_on_other_bars(&self) -> bool {
         let requests = self.study.data_requests();
         let follows = |request: &super::StudyDataRequest| {
@@ -916,7 +922,14 @@ impl ConfiguredStudy {
                         .inputs()
                         .iter()
                         .any(|input| matches!(input.kind, super::InputKind::Timeframe))))
-                && !self.study.needs_order_flow())
+                && !self.study.needs_order_flow()
+                // An interval picked below the chart's follows the chart, whatever the study
+                // requests on it.
+                && !self
+                    .study
+                    .inputs()
+                    .iter()
+                    .any(|input| matches!(input.kind, super::InputKind::AutoTimeframe(_))))
     }
 
     /// Whether the study reads one source, or only the chart symbol's bars on an interval it
@@ -1318,6 +1331,7 @@ impl Indicator for ConfiguredStudy {
             self.aligned_markers.clear();
             self.aligned_zones.clear();
             self.aligned_candles.clear();
+            self.aligned_candle_sources.clear();
             return;
         };
         self.instrument_precision = source
@@ -1412,17 +1426,21 @@ impl Indicator for ConfiguredStudy {
                 })
             })
             .collect();
-        self.aligned_candles = self
+        (self.aligned_candles, self.aligned_candle_sources) = self
             .study
             .candles()
             .iter()
-            .filter_map(|candle| {
-                Some(super::StudyCandle {
-                    bars: chart_bars(&self.spans, &candle.bars)?,
-                    ..candle.clone()
-                })
+            .enumerate()
+            .filter_map(|(index, candle)| {
+                Some((
+                    super::StudyCandle {
+                        bars: chart_bars(&self.spans, &candle.bars)?,
+                        ..candle.clone()
+                    },
+                    index,
+                ))
             })
-            .collect();
+            .unzip();
     }
     fn order_flow_inputs(&self) -> &[crate::data::OrderFlowInput] {
         self.study.order_flow_inputs()
@@ -1553,6 +1571,19 @@ impl Indicator for ConfiguredStudy {
         } else {
             self.study.candles()
         }
+    }
+    fn candle_color(&self, index: usize) -> Option<Color32> {
+        if self.aligned.is_none() {
+            let candle = self.candles().get(index)?;
+            return self.plot_color(candle.plot, candle.bars.start);
+        }
+        let index = *self.aligned_candle_sources.get(index)?;
+        let candle = self.study.candles().get(index)?;
+        self.study
+            .plot_variant(candle.plot, candle.bars.start)
+            .and_then(|variant| self.settings.plot_variants.get(candle.plot)?.get(variant))
+            .map(|variant| variant.color)
+            .or_else(|| self.study.candle_color(index))
     }
     fn solid_candles(&self) -> bool {
         self.study.solid_candles()
@@ -3029,28 +3060,28 @@ mod tests {
     /// symbols, metrics or trades keep their existing inputs.
     #[test]
     fn ohlc_studies_offer_a_calculation_interval() {
-        use super::super::{ADX, ATR};
+        use super::super::{ADX, ATR, IchimokuCloud, OHLC4, StudyDataRequest};
         let ids = |study: &ConfiguredStudy| -> Vec<String> {
             study.inputs().into_iter().map(|input| input.id).collect()
         };
-        for inner in [
-            Box::new(ATR::new(3)) as Box<dyn Indicator>,
-            Box::new(ADX::new(3)),
+        for (inner, offset) in [
+            (Box::new(ATR::new(3)) as Box<dyn Indicator>, true),
+            (Box::new(ADX::new(3)), true),
+            (Box::new(IchimokuCloud::default()), false),
+            (Box::new(OHLC4::new()), true),
         ] {
             let mut study = ConfiguredStudy::new(inner);
             let own = study.study.inputs().len();
             let ids = ids(&study);
-            assert_eq!(
-                &ids[own..],
-                [
-                    "plot_offset",
-                    "calculation_symbol",
-                    "calculation_timeframe",
-                    "wait_for_close"
-                ],
-                "{}",
-                study.name()
-            );
+            let mut expected = vec![
+                "calculation_symbol",
+                "calculation_timeframe",
+                "wait_for_close",
+            ];
+            if offset {
+                expected.insert(0, "plot_offset");
+            }
+            assert_eq!(&ids[own..], expected, "{}", study.name());
             assert!(study.data_requests().is_empty());
             study
                 .set_input(
@@ -3059,18 +3090,18 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(study.data_requests().len(), 1);
-            assert!(
-                study
-                    .set_input("calculation_symbol", InputValue::Symbol("X".into()))
-                    .is_ok()
-            );
+            study
+                .set_input("calculation_symbol", InputValue::Symbol("X".into()))
+                .unwrap();
             assert_eq!(
                 study.data_requests(),
-                [super::super::StudyDataRequest {
+                [StudyDataRequest {
                     symbol: "X".into(),
                     timeframe: Some(Timeframe::Hour1),
                     metric: None,
-                }]
+                }],
+                "{}",
+                study.name()
             );
         }
         let mut study = ConfiguredStudy::new(Box::new(super::super::TechnicalRatings::default()));
@@ -3217,16 +3248,149 @@ mod tests {
         }
         let breadth = ConfiguredStudy::new(Box::new(super::super::AdvanceDeclineRatio::default()));
         assert!(!ids(&breadth).contains(&"calculation_timeframe".to_owned()));
+        let factory = super::super::IndicatorFactory::new();
+        let mut excluded: Vec<_> = ["Correlation Coefficient", "Ratio", "Spread", "Performance"]
+            .into_iter()
+            .map(|name| factory.create_registered(name).unwrap())
+            .collect();
+        excluded.push(Box::new(super::super::MetricStudy::new(
+            crate::data::MetricSeries::new(
+                "oi",
+                "Open interest",
+                crate::scales::StudyFormat::Volume,
+            ),
+        )));
+        for inner in excluded {
+            let mut study = ConfiguredStudy::new(inner);
+            assert!(
+                !ids(&study).contains(&"calculation_symbol".to_owned()),
+                "{}",
+                study.name()
+            );
+            assert!(
+                study
+                    .set_input("calculation_symbol", InputValue::Symbol("X".into()))
+                    .is_err(),
+                "{}",
+                study.name()
+            );
+        }
     }
 
-    /// Volume profiles, zones and markers of a study calculated on a finer or a coarser interval
+    /// A bar study retains its calculation symbol through Cancel, saved settings and templates.
+    #[test]
+    fn bar_study_symbol_restores_from_settings_and_templates() {
+        use super::super::{IchimokuCloud, StudyTemplate};
+        let make = || ConfiguredStudy::new(Box::new(IchimokuCloud::default()));
+        let symbol = |study: &dyn Indicator| {
+            study
+                .inputs()
+                .into_iter()
+                .find(|input| input.id == "calculation_symbol")
+                .unwrap()
+                .value
+        };
+        let mut study = make();
+        let before = study.snapshot_settings();
+        study
+            .set_input("calculation_symbol", InputValue::Symbol("OTHER".into()))
+            .unwrap();
+        let edited = study.snapshot_settings();
+        let mut restored = make();
+        restored.restore_settings(&edited).unwrap();
+        assert_eq!(symbol(&restored), InputValue::Symbol("OTHER".into()));
+        assert_eq!(restored.data_requests()[0].symbol, "OTHER");
+        restored.restore_settings(&before).unwrap();
+        assert_eq!(symbol(&restored), InputValue::Symbol(String::new()));
+        assert!(restored.data_requests().is_empty());
+        let json = serde_json::to_string(&StudyTemplate::from_study(&study)).unwrap();
+        let template: StudyTemplate = serde_json::from_str(&json).unwrap();
+        let restored = template.create().unwrap();
+        assert_eq!(
+            symbol(restored.as_ref()),
+            InputValue::Symbol("OTHER".into())
+        );
+        assert_eq!(restored.data_requests()[0].symbol, "OTHER");
+    }
+
+    /// Requests added after another symbol's bars arrive follow that symbol, including when a
+    /// chart interval change makes Volume24h, Performance without comparisons and daily pivots
+    /// need bars of a stated interval. Each must accept the symbol and request its own bars.
+    #[test]
+    fn bar_study_on_another_symbol_reads_its_own_bars_on_that_symbol() {
+        use super::super::{PivotPoints, StudyData, StudyDataRequest, Volume24h};
+        use crate::model::BarClock;
+        let cases: [(Box<dyn Indicator>, Timeframe, Timeframe); 3] = [
+            (
+                Box::new(Volume24h::new()),
+                Timeframe::Week1,
+                Timeframe::Hour1,
+            ),
+            (
+                Box::new(performance_alone()),
+                Timeframe::Min5,
+                Timeframe::Day1,
+            ),
+            (
+                Box::new(PivotPoints::new().with_daily_bars(true)),
+                Timeframe::Min5,
+                Timeframe::Day1,
+            ),
+        ];
+        let request = |timeframe| StudyDataRequest {
+            symbol: "OTHER".into(),
+            timeframe,
+            metric: None,
+        };
+        for (inner, interval, stated) in cases {
+            let mut study = ConfiguredStudy::new(inner);
+            study.set_timeframe(Timeframe::Day1);
+            study.set_bar_clock(&BarClock::new(Timeframe::Day1));
+            assert!(study.data_requests().is_empty(), "{}", study.name());
+            study
+                .set_input("calculation_symbol", InputValue::Symbol("OTHER".into()))
+                .unwrap();
+            study.set_timeframe(interval);
+            study.set_bar_clock(&BarClock::new(interval));
+            assert_eq!(study.data_requests()[0], request(None));
+            let start: chrono::DateTime<chrono::Utc> = "2026-03-02T00:00:00Z".parse().unwrap();
+            let bars: Vec<_> = (0..3)
+                .map(|i| Bar::new(start + interval.duration() * i, 10.0, 10.0, 10.0, 10.0, 1.0))
+                .collect();
+            study.update_data(
+                &bars,
+                0,
+                &[StudyData {
+                    request: request(None),
+                    bars: &bars,
+                    clock: BarClock::new(interval),
+                    instrument: None,
+                    timeframe: interval,
+                }],
+            );
+            assert_eq!(
+                study.data_requests(),
+                [request(None), request(Some(stated))],
+                "{}",
+                study.name()
+            );
+            assert!(
+                study
+                    .inputs()
+                    .iter()
+                    .any(|input| input.id == "calculation_symbol")
+            );
+        }
+    }
+
+    /// Volume profiles, zones, candles and markers calculated on a finer or a coarser interval
     /// lie on the chart bars that share time with their bars, a marker once the values on the chart
-    /// reach its bar, and none are left when the other history is missing.
+    /// reach its bar. Projections are hidden, and no marks remain when the history is missing.
     #[test]
     fn profiles_zones_and_markers_of_another_interval_lie_on_their_chart_bars() {
         use super::super::{
-            CrossDirection, IndicatorMarker, StudyData, StudyZone, VolProfileSession,
-            VolProfileVisible,
+            CrossDirection, IndicatorMarker, StudyCandle, StudyData, StudyProjection, StudyZone,
+            VolProfileSession, VolProfileVisible,
         };
         // Markers on the second and the last bar, and a zone from the one to the other.
         #[derive(Clone, Default)]
@@ -3234,6 +3398,9 @@ mod tests {
             values: IndicatorValues,
             markers: Vec<IndicatorMarker>,
             zones: Vec<StudyZone>,
+            candles: Vec<StudyCandle>,
+            projections: Vec<StudyProjection>,
+            variants: bool,
         }
         impl Indicator for Marks {
             fn name(&self) -> &str {
@@ -3241,6 +3408,21 @@ mod tests {
             }
             fn calculate(&mut self, data: &[Bar]) {
                 self.values = IndicatorValues::missing(data.len());
+                self.candles = data
+                    .iter()
+                    .enumerate()
+                    .map(|(i, bar)| StudyCandle {
+                        bars: i..i + 1,
+                        bar: bar.clone(),
+                        plot: 0,
+                    })
+                    .collect();
+                self.projections = vec![StudyProjection {
+                    bars: 1.0..2.0,
+                    top: 101.0,
+                    bottom: 100.0,
+                    plot: 0,
+                }];
                 let last = data.len().saturating_sub(1);
                 let marker = |bar| IndicatorMarker {
                     bar,
@@ -3267,11 +3449,32 @@ mod tests {
             }
             fn set_colors(&mut self, _: Vec<Color32>) {}
             fn set_visible(&mut self, _: bool) {}
+            fn plot_color(&self, _: usize, bar: usize) -> Option<Color32> {
+                Some(Color32::from_gray((bar + 1) as u8))
+            }
+            fn plot_variants(&self, _: usize) -> Vec<PlotVariant> {
+                ["Even", "Odd"]
+                    .map(|name| PlotVariant {
+                        name: name.into(),
+                        color: Color32::WHITE,
+                        width: 1.0,
+                    })
+                    .to_vec()
+            }
+            fn plot_variant(&self, _: usize, bar: usize) -> Option<usize> {
+                self.variants.then_some(bar % 2)
+            }
             fn markers(&self) -> &[IndicatorMarker] {
                 &self.markers
             }
             fn zones(&self) -> &[StudyZone] {
                 &self.zones
+            }
+            fn candles(&self) -> &[StudyCandle] {
+                &self.candles
+            }
+            fn projections(&self) -> &[StudyProjection] {
+                &self.projections
             }
             fn clone_box(&self) -> Box<dyn Indicator> {
                 Box::new(self.clone())
@@ -3299,7 +3502,7 @@ mod tests {
                 })
                 .collect()
         };
-        for (name, [chart, other], sessions, (view, visible), markers, zones, levels) in [
+        for (name, [chart, other], sessions, (view, visible), markers, zones, levels, candles) in [
             (
                 "finer",
                 [(4, Timeframe::Min5), (20, Timeframe::Min1)],
@@ -3311,6 +3514,7 @@ mod tests {
                 vec![0, 3],
                 0..4,
                 (2..4, 105.0),
+                (0..20).map(|i| i / 5..i / 5 + 1).collect::<Vec<_>>(),
             ),
             (
                 "coarser",
@@ -3323,15 +3527,19 @@ mod tests {
                 vec![9],
                 5..20,
                 (10..20, 101.0),
+                (0..4).map(|i| 5 * i..5 * i + 5).collect(),
             ),
         ] {
             let (interval, source_interval) = (chart.1, other.1);
             let (chart, source) = (bars(chart.0, interval), bars(other.0, source_interval));
-            let calculated = |inner: Box<dyn Indicator>| {
+            let calculated = |inner: Box<dyn Indicator>, wait| {
                 let mut study = ConfiguredStudy::new(inner);
                 study.set_timeframe(interval);
                 let other = InputValue::Timeframe(Some(source_interval));
                 study.set_input("calculation_timeframe", other).unwrap();
+                study
+                    .set_input("wait_for_close", InputValue::Toggle(wait))
+                    .unwrap();
                 let data = StudyData {
                     request: study.data_requests().remove(0),
                     bars: &source,
@@ -3347,9 +3555,9 @@ mod tests {
                 .set_input("extend_poc", InputValue::Toggle(true))
                 .unwrap();
             let mut studies = [
-                calculated(Box::new(session)),
-                calculated(Box::new(VolProfileVisible::new(1))),
-                calculated(Box::<Marks>::default()),
+                calculated(Box::new(session), true),
+                calculated(Box::new(VolProfileVisible::new(1)), true),
+                calculated(Box::<Marks>::default(), true),
             ];
             assert_eq!(profiles(&studies[0], 0..chart.len()), sessions, "{name}");
             let extended: Vec<_> = studies[0]
@@ -3372,6 +3580,89 @@ mod tests {
                 plot: 0,
             };
             assert_eq!(studies[2].zones(), [zone], "{name}");
+            assert_eq!(
+                studies[2]
+                    .candles()
+                    .iter()
+                    .map(|candle| candle.bars.clone())
+                    .collect::<Vec<_>>(),
+                candles,
+                "{name}"
+            );
+            assert!(studies[2].projections().is_empty(), "{name}");
+            // The renderer must read each candle's own source bar, even when several share
+            // a chart bar or its aligned line still holds the preceding source bar's value.
+            #[cfg(feature = "widget")]
+            for wait in [true, false] {
+                for variants in [false, true] {
+                    use crate::chart::{coords::ChartMapping, rendering::RenderContext};
+                    use crate::scales::{PriceMap, PriceRange, PriceTransform};
+                    let mut study = calculated(
+                        Box::new(Marks {
+                            variants,
+                            ..Marks::default()
+                        }),
+                        wait,
+                    );
+                    let colors = [Color32::RED, Color32::BLUE];
+                    let mut settings = study.settings();
+                    for (variant, color) in settings.plot_variants[0].iter_mut().zip(colors) {
+                        variant.color = color;
+                    }
+                    study.apply_settings(&[], settings).unwrap();
+                    study.update_data(
+                        &chart,
+                        0,
+                        &[StudyData {
+                            request: study.data_requests().remove(0),
+                            bars: &source,
+                            clock: crate::model::BarClock::new(source_interval),
+                            instrument: None,
+                            timeframe: source_interval,
+                        }],
+                    );
+                    let rect =
+                        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(440.0, 300.0));
+                    let price = PriceMap::new(
+                        PriceTransform::default(),
+                        PriceRange::new(90.0, 130.0),
+                        rect.top(),
+                        rect.bottom(),
+                        false,
+                    );
+                    let coords = ChartMapping::new(rect, 20.0, 0, chart.len() - 1, 0.0, price);
+                    let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                        crate::chart::indicators::plots::paint_candles(
+                            &RenderContext::new(ui.painter(), rect),
+                            &study,
+                            &price,
+                            &coords,
+                        );
+                    });
+                    let painted: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Rect(body) => Some(body.stroke.color),
+                            _ => None,
+                        })
+                        .collect();
+                    output.drop_without_applying_deltas();
+                    let expected: Vec<_> = (0..source.len())
+                        .map(|bar| {
+                            if variants {
+                                colors[bar % 2]
+                            } else {
+                                Color32::from_gray((bar + 1) as u8)
+                            }
+                        })
+                        .collect();
+                    assert_eq!(
+                        painted, expected,
+                        "{name}, wait={wait}, variants={variants}"
+                    );
+                }
+            }
             for study in &mut studies {
                 study.update_data(&chart, 0, &[]);
             }
@@ -3379,7 +3670,9 @@ mod tests {
                 assert!(profiles(study, 0..chart.len()).is_empty(), "{name}");
                 assert!(study.profile_levels(0..chart.len()).is_empty(), "{name}");
                 assert!(
-                    study.markers().is_empty() && study.zones().is_empty(),
+                    study.markers().is_empty()
+                        && study.zones().is_empty()
+                        && study.candles().is_empty(),
                     "{name}"
                 );
             }
@@ -4001,6 +4294,17 @@ mod tests {
             study.apply_settings(&[], absent).unwrap();
             assert_eq!(study.settings(), defaults);
         }
+        // Saved before the lower interval named its automatic choice, this template keeps
+        // its unset input and every plot style on the chart's interval.
+        let saved = r#"{"name":"Volume Delta","inputs":[["lower_interval",{"Timeframe":null}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolumeDelta.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[8,153,129,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let template = serde_json::from_str::<crate::studies::StudyTemplate>(saved).unwrap();
+        let mut older = template.create().unwrap();
+        older.set_timeframe(Timeframe::Min5);
+        let restored = crate::studies::StudyTemplate::from_study(older.as_ref());
+        assert_eq!(restored.inputs, template.inputs);
+        assert_eq!(restored.settings, template.settings);
+        assert_eq!(restored.visible, template.visible);
+        assert_eq!(restored.scale, template.scale);
         // Profiles saved with finer bars keep their presentation and both saved interval inputs.
         // Saves that omitted those inputs keep their existing chart interval and close-wait defaults.
         for (saved, interval) in [
@@ -4068,6 +4372,18 @@ mod tests {
                 assert!(inputs.contains(input), "{input:?}");
             }
         }
+        // A default Ichimoku saved before Symbol existed keeps the chart symbol and its styles.
+        let saved = r#"{"name":"Ichimoku","inputs":[["tenkan_period",{"Length":9}],["kijun_period",{"Length":26}],["senkou_b_period",{"Length":52}],["displacement",{"Length":26}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.IchimokuCloud.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[183,28,28,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[165,214,167,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[239,154,154,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[67,160,71,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[0,1,2,3,4],"price_line_plots":[],"plot_variants":[[],[],[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[7,16,7,26],"inverted_color":[25,7,6,26],"visible":true,"independent":true}],"gradients":[]},"visible":true,"scale":"Main"}"#;
+        let template: crate::studies::StudyTemplate = serde_json::from_str(saved).unwrap();
+        let older = template.create().unwrap();
+        let fresh = ConfiguredStudy::new(Box::new(super::super::IchimokuCloud::default()));
+        assert_eq!(older.settings(), template.settings);
+        assert!(older.data_requests().is_empty());
+        assert_eq!(
+            serde_json::to_string(&crate::studies::StudyTemplate::from_study(older.as_ref()))
+                .unwrap(),
+            serde_json::to_string(&crate::studies::StudyTemplate::from_study(&fresh)).unwrap()
+        );
         // A template saved before the size basis existed keeps fill-based filtering and
         // its exact presentation; the missing toggle takes its declared false default.
         let saved = r#"{"name":"Size-Filtered CVD","inputs":[["min",{"Number":100.0}],["max",{"Number":1.7976931348623157e+308}],["anchor",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.OrderFlowStudy.html","plots":[{"color":[38,166,154,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[2,10,10,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
