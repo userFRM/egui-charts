@@ -1174,6 +1174,10 @@ mod v1 {
         drawing.fib_config = None;
         drawing.pitchfork = None;
         drawing.volume_profile = None;
+        // Version 1 feeds keep the range and noise the former loader supplied.
+        if let Some(feed) = drawing.ghost_feed.as_mut() {
+            (feed.average_range_ticks, feed.noise_ticks) = (10.0, 5.0);
+        }
         drawing.line_style = LineStyle::Solid;
         // The released renderers used fixed sizes, not the constructor's unused 12 pt field.
         // Other tools had no stored text presentation; their added captions keep their defaults.
@@ -1804,6 +1808,20 @@ mod tests {
             want.visible = tool != DrawingToolType::Arrow;
             assert_eq!(format!("{:?}", restore(stored, 1)), format!("{want:?}"));
         }
+        // A version 1 ghost feed keeps the range, noise and body colours the former loader gave it.
+        let mut value: serde_json::Value = serde_json::from_str(v1_json).unwrap();
+        let records = value["drawings"].as_array_mut().unwrap();
+        records.truncate(1);
+        records[0]["tool_type"] = "Ghost Feed".into();
+        let (loaded, skipped) = DrawingStorage::from_json(&value.to_string()).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        let feed = restore(&loaded.drawings[0], 1).ghost_feed.unwrap();
+        assert_eq!((feed.average_range_ticks, feed.noise_ticks), (10.0, 5.0));
+        assert_eq!(
+            (feed.body_up, feed.body_down),
+            ([172, 229, 220, 255], [250, 161, 164, 255])
+        );
+
         // A version 1 anchored VWAP stored one point and neither a line style nor bands: it
         // loads with a solid line and the default bands.
         let mut value: serde_json::Value = serde_json::from_str(v1_json).unwrap();
