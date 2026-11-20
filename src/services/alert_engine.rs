@@ -2936,8 +2936,8 @@ mod tests {
                     "{comparison}: changed geometry after bar {last}",
                 );
             }
-            // First evaluation on bar 1 must use bar 0's bounds, not bar 1's bounds twice.
-            let host = Host::new(host.engine.alerts());
+            // A new alert on bar 1 uses bar 0's bounds, not bar 1's bounds twice.
+            let host = Host::new(vec![watching]);
             host.events();
             host.engine
                 .update("SYM", None, Timeframe::Min1, &bars[..2], time(1020), rising);
