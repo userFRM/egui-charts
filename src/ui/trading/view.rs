@@ -102,6 +102,8 @@ impl Trading {
             last_fill: self.account_panel.fills.price(symbol),
             pnl_unit: self.display.position_pnl_unit,
             logo: instrument.and_then(|instrument| instrument.logo.as_deref()),
+            account: &self.account_id,
+            timezone: chart.display_timezone(),
         }
     }
 
@@ -225,6 +227,7 @@ impl Trading {
         let mapping = chart.get_chart_mapping();
         let display = &self.display;
         let options = TradingLineOptions {
+            timezone: chart.display_timezone(),
             show_orders: display.show_orders,
             extend_lines: display.extend_lines,
             label_alignment: display.label_alignment,
@@ -517,6 +520,7 @@ impl Trading {
                 .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
             let mapping = chart.get_chart_mapping();
             let options = TradingLineOptions {
+                timezone: chart.display_timezone(),
                 show_orders: true,
                 extend_lines: self.display.extend_lines,
                 label_alignment: self.display.label_alignment,
@@ -1030,6 +1034,107 @@ mod tests {
     use crate::ui_kit::notifications::Toasts;
     use crate::widget::settings::TradingSettings;
     use std::sync::Arc;
+
+    /// Orders report expiry in the table's UTC columns and label it in the chart's zone.
+    #[test]
+    fn good_till_date_orders_show_their_expiry() {
+        use crate::model::{TimeInForce, TimezoneId};
+        use crate::scales::TimezoneMode;
+        use egui_kittest::kittest::Queryable;
+        let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+        chart.set_symbol("ES");
+        chart.chart_options.time_scale.timezone =
+            TimezoneMode::Timezone(TimezoneId::fixed_offset(-5 * 3600).unwrap());
+        let mut request = OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Limit(95.0));
+        request.time_in_force = TimeInForce::GoodTillDate;
+        request.expires = Some("2026-12-01T21:00:00Z".parse().unwrap());
+        let order = Order::new(OrderId::new("dated"), request.clone(), OrderStatus::Working);
+        request.side = OrderSide::Sell;
+        request.order_type = OrderType::Limit(105.0);
+        request.position_bracket = Some(crate::model::PositionBracket::TakeProfit);
+        let exit = Order::new(OrderId::new("dated-exit"), request, OrderStatus::Working);
+        let mut trading = Trading::default();
+        let colors = crate::theme::Theme::dark().chart;
+        for account in ["stocks", "crypto"] {
+            trading.set_service(Arc::new(Recorder {
+                account,
+                ..Recorder::default()
+            }));
+            assert_eq!(trading.market(&chart, &colors).account, account);
+        }
+        trading.disconnect();
+        assert_eq!(trading.market(&chart, &colors).account, "");
+        trading.set_service(Arc::new(Recorder {
+            state: vec![
+                AccountEvent::Order(order),
+                AccountEvent::Order(exit),
+                AccountEvent::Position(Position::new("ES", 1.0, 100.0)),
+            ],
+            ..Recorder::default()
+        }));
+        let ctx = egui::Context::default();
+        trading.poll(&ctx, &mut Toasts::new());
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                    trading.show(ui, &mut chart);
+                },
+            );
+            texts = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+        }
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "Limit until 2026-12-01 16:00"),
+            "{texts:?}"
+        );
+        assert_eq!(
+            texts
+                .iter()
+                .filter(|text| text.ends_with(" until 2026-12-01 16:00"))
+                .count(),
+            2,
+            "a position exit keeps its expiry beside its bracket name or P&L: {texts:?}"
+        );
+        let mut harness = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, trading: &mut Trading| {
+                    trading.show_account_panel(ui, "ES");
+                },
+                trading,
+            );
+        harness.run();
+        harness.get_by_label("Orders 2").click();
+        harness.run();
+        assert!(
+            harness
+                .output()
+                .shapes
+                .iter()
+                .any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "2026-12-01 21:00:00"))
+        );
+    }
 
     /// Chart menus open their dialogs without an account panel and send each confirmation once.
     #[test]
@@ -2688,7 +2793,11 @@ mod tests {
             trading.poll(&ctx, &mut Toasts::new());
             let mut preset = OrderPreset::new("Balance stop", 1.0);
             preset.stop_loss = Some(Bracket::new(BracketMode::BalancePercent, 1.0));
-            trading.presets.push(preset);
+            trading
+                .presets
+                .entry(trading.account_id.clone())
+                .or_default()
+                .push(preset);
             let frame = |trading: &mut Trading, events| {
                 let output = ctx.run_ui(
                     egui::RawInput {
@@ -2786,6 +2895,7 @@ mod tests {
             assert!(!texts.iter().any(|(text, _)| text.contains("NaN")));
             click(&mut trading, "Compact form");
             assert!(trading.display.compact_ticket);
+            frame(&mut trading, key(egui::Key::Escape));
             let texts = frame(&mut trading, vec![]).0;
             for wanted in ["Limit", "Price", "Units", reason] {
                 assert!(

@@ -64,7 +64,7 @@ use eframe::egui;
 use egui_charts::Chart;
 use egui_charts::chart::overlays::{BookProfile, OrderBookView};
 use egui_charts::data::{DepthHistory, DepthHistoryConfig, OrderFilter, OrderSizeTiers};
-use egui_charts::model::{Alert, AlertCondition};
+use egui_charts::model::{Alert, AlertCondition, Watchlist};
 use egui_charts::model::{Bar, BarData, BoxSizeMethod, ChartType, Tick, Timeframe};
 use egui_charts::theme::Theme;
 use egui_charts::ui::app_state::ChartAppState;
@@ -93,16 +93,14 @@ use egui_charts::ui::top_toolbar::components::indicator_dialog::{
 };
 use egui_charts::ui::top_toolbar::components::settings_menu::{SettingsAction, SettingsDialog};
 use egui_charts::ui::top_toolbar::{TopToolbar, TopToolbarAction};
-use egui_charts::ui::widget_bar::panels::object_tree::{
-    DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem,
-};
 use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel};
 use egui_charts::ui::widget_bar::{
     CalendarAction, CalendarPanel, ChatsPanel, HotlistsAction, HotlistsPanel, NewsAction,
     NewsPanel, NotificationsAction, NotificationsPanel, Product, ProductsAction, ProductsPanel,
-    ScreenerAction, ScreenerPanel, SymbolDetailsPanel, TimeAndSalesPanel, Watchlist,
-    WatchlistAction, WatchlistPanel, WidgetBarSection, WidgetBarWidget,
+    ScreenerAction, ScreenerPanel, SymbolDetailsPanel, TimeAndSalesPanel, WatchlistAction,
+    WatchlistPanel, WidgetBarSection, WidgetBarWidget,
 };
+use egui_charts::ui::widget_bar::{DataWindowInfo, ObjectTreeAction, ObjectTreePanel, SourceItem};
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui_kit::EmptyState;
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
@@ -491,7 +489,7 @@ pub struct DemoApp {
     // Symbol search is open for the watchlist's add button: the pick joins the list.
     watchlist_search: bool,
     time_and_sales: TimeAndSalesPanel,
-    depth: egui_charts::ui::widget_bar::DepthPanel,
+    depth: egui_charts::ui::trading::DepthPanel,
     order_flow: egui_charts::ui::widget_bar::OrderFlowPanel,
     // Below the watchlist: the chart symbol's synthetic details and notes kept in app storage.
     symbol_details: SymbolDetailsPanel,
@@ -2212,7 +2210,7 @@ impl DemoApp {
                         panel_action = Some(SidePanel::OrderFlow);
                         ui.close();
                     }
-                    if egui_charts::ui::widget_bar::DepthPanel::is_available(&self.chart)
+                    if egui_charts::ui::trading::DepthPanel::is_available(&self.chart)
                         && menu_item(ui, "Depth", &icons::FIXED_RANGE_VOLUME_PROFILE, None)
                             .clicked()
                     {
@@ -2778,7 +2776,7 @@ impl DemoApp {
         }
         self.widget_bar.show_panel(ui);
         if self.open_panel == Some(SidePanel::Depth)
-            && !egui_charts::ui::widget_bar::DepthPanel::is_available(&self.chart)
+            && !egui_charts::ui::trading::DepthPanel::is_available(&self.chart)
         {
             return;
         }
@@ -2901,12 +2899,11 @@ impl DemoApp {
                     self.handle_news(ui.ctx(), action);
                 }
                 SidePanel::DataWindow => {
-                    self.data_window_expanded =
-                        egui_charts::ui::widget_bar::panels::object_tree::show_data_window(
-                            ui,
-                            &self.build_data_window(),
-                            self.data_window_expanded,
-                        );
+                    self.data_window_expanded = egui_charts::ui::widget_bar::show_data_window(
+                        ui,
+                        &self.build_data_window(),
+                        self.data_window_expanded,
+                    );
                 }
             });
     }
@@ -4607,9 +4604,9 @@ fn apply_settings_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_charts::model::DateRange;
     use egui_charts::model::{AlertSource, LineStyle};
     use egui_charts::ui::dialogs::DrawingProps;
-    use egui_charts::ui::timeframe_toolbar::DateRange;
 
     /// The menu actions reach the other chart, which lacks nothing, without a prompt; a chart
     /// without bars is named first, and the copy waits for the answer.
@@ -9843,7 +9840,7 @@ mod tests {
             );
             assert_eq!(info.prev_close, bars[index - 1].close, "{kind:?}");
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                egui_charts::ui::widget_bar::panels::object_tree::show_data_window(ui, &info, true);
+                egui_charts::ui::widget_bar::show_data_window(ui, &info, true);
             });
             let text: Vec<_> = output
                 .shapes
