@@ -11,6 +11,19 @@ const DAY_MS: i64 = 86_400_000;
 /// 1970-01-05, the first Monday after the Unix epoch.
 const FIRST_MONDAY_MS: i64 = 4 * DAY_MS;
 
+/// The trading dates a bar of `timeframe` holds on a clock with a session: custom intervals of
+/// two or more whole days count them; daily, weekly and monthly bars keep calendar periods.
+pub(super) fn days_per_bar(timeframe: Timeframe) -> Option<i64> {
+    match timeframe {
+        Timeframe::Custom(seconds)
+            if seconds.get() % 86_400 == 0 && seconds.get() >= 2 * 86_400 =>
+        {
+            i64::try_from(seconds.get() / 86_400).ok()
+        }
+        _ => None,
+    }
+}
+
 /// Bar boundaries for one timeframe, around the clock in UTC by default.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BarClock {
@@ -47,7 +60,9 @@ impl BarClock {
     /// Align intraday buckets to the first selected exchange-session window. Calendar bars
     /// keep their trading-date labels; use `data::resample_with_session` to derive those labels
     /// from intraday history. Live trades and heartbeats join the calendar bar of their trading
-    /// date. Extended and overnight windows participate only when requested.
+    /// date. Bars of two or more whole days, such as `3D`, hold that many trading dates of the
+    /// selected windows, counted from 1970-01-01, and carry the date of the first. Extended and
+    /// overnight windows participate only when requested.
     pub fn with_session(
         self,
         zone: super::TimezoneId,
@@ -72,6 +87,27 @@ impl BarClock {
         self
     }
 
+    /// This clock counting the trading dates of `session`'s selected hours in `zone` when its bars
+    /// hold two or more whole days and it has no session of its own, as
+    /// `data::resample_with_session` dates such bars.
+    pub(crate) fn with_trading_dates_of(
+        self,
+        zone: &TimezoneId,
+        session: &super::Session,
+        extended_hours: bool,
+        overnight_hours: bool,
+    ) -> Self {
+        if self.session.is_some() || self.timeframe.and_then(days_per_bar).is_none() {
+            return self;
+        }
+        self.with_session_hours(
+            zone.clone(),
+            session.clone(),
+            extended_hours,
+            overnight_hours,
+        )
+    }
+
     /// Clock in which every instant opens a bar of its own, for bars of an unknown timeframe.
     pub(crate) fn exact() -> Self {
         Self {
@@ -83,7 +119,10 @@ impl BarClock {
 
     /// Open time of the bar containing `t`. Bars shorter than a day align to local midnight,
     /// weekly bars to Monday, monthly bars to the first day of the month, and other bars to the
-    /// Unix epoch. Trade-based bars retain their exact opening timestamp.
+    /// Unix epoch. Trade-based bars retain their exact opening timestamp. On a clock with a
+    /// session, bars of two or more whole days instead hold that many consecutive trading dates,
+    /// counted from 1970-01-01, and open at the first one's local midnight; a day without trading
+    /// belongs to the bar of the trading date before it.
     pub fn bar_open(&self, t: DateTime<Utc>) -> DateTime<Utc> {
         let Some(timeframe) = self.timeframe else {
             return t;
@@ -119,6 +158,13 @@ impl BarClock {
             .naive_utc()
             .checked_add_signed(TimeDelta::seconds(i64::from(offset)))
             .unwrap_or(t.naive_utc());
+        if let Some(days) = days_per_bar(timeframe)
+            && let Some(session) = &self.session
+            && let Some(first) = session.trading_run(local.date(), days, 0)
+        {
+            // A date without trading stays in the bar of the trading date before it.
+            return self.local_boundary(first.and_time(NaiveTime::MIN), t);
+        }
         let ms = local.and_utc().timestamp_millis();
         let (period, anchor) = match timeframe {
             Timeframe::Ticks(_) => return t,
@@ -244,6 +290,18 @@ impl BarClock {
                 return Some(next);
             }
         }
+        if let Some(days) = days_per_bar(timeframe)
+            && let Some(session) = &self.session
+        {
+            let date = (open.naive_utc())
+                .checked_add_signed(TimeDelta::seconds(i64::from(self.offset_at(open))))?
+                .date();
+            if session.trading_run(date, days, 0).is_some() {
+                // Past the last trading date no bar follows; the hourly search below would not end.
+                let first = session.trading_run(date, days, 1)?;
+                return Some(self.local_boundary(first.and_time(NaiveTime::MIN), open));
+            }
+        }
         if let Timeframe::Months(count) = timeframe {
             let local = open
                 .naive_utc()
@@ -335,7 +393,7 @@ impl BarClock {
             return open;
         };
         let (mut start, mut at) = (open.min(t), t);
-        // A weekly or monthly bar holds several trading dates.
+        // A bar of several days, a week or a month holds several trading dates.
         while let Some(date_open) = session.session_open(at, false)
             && self.instant_open(date_open) == open
         {
@@ -833,6 +891,7 @@ mod tests {
                 false,
             );
         let day = futures(Timeframe::Day1);
+        let three_days = futures("3D".parse().unwrap());
         // The instant, its bar, the bar's first instant and the next bar with trading.
         #[rustfmt::skip]
         let cases = [
@@ -857,6 +916,8 @@ mod tests {
             (&futures(Timeframe::Week1), "2024-01-08T00:00:00Z", "2024-01-08T06:00:00Z", "2024-01-07T23:00:00Z", "2024-01-15T06:00:00Z"),
             (&futures(Timeframe::Week1), "2024-01-11T16:00:00Z", "2024-01-08T06:00:00Z", "2024-01-07T23:00:00Z", "2024-01-15T06:00:00Z"),
             (&futures(Timeframe::Month1), "2024-02-01T00:00:00Z", "2024-02-01T06:00:00Z", "2024-01-31T23:00:00Z", "2024-03-01T06:00:00Z"),
+            // A three-day bar holds Friday 5, Monday 8 and Tuesday 9 January; Sunday's open trades Monday.
+            (&three_days, "2024-01-07T23:00:00Z", "2024-01-05T06:00:00Z", "2024-01-04T23:00:00Z", "2024-01-10T06:00:00Z"),
         ];
         for (clock, at, open, start, next) in cases {
             assert_eq!(clock.instant_open(t(at)), t(open), "{at}");
