@@ -1005,12 +1005,11 @@ impl AlertsPanel {
 
     /// The boxes that narrow the Log tab to one alert, named by its newest entry, or one symbol.
     fn log_filters(&mut self, ui: &mut Ui) {
-        let ctx = ui.ctx().clone();
         let label = |trigger: &AlertTrigger| {
             if trigger.name.is_empty() {
                 trigger.id.0.clone()
             } else {
-                l10n::text(&ctx, &trigger.name)
+                trigger.name.clone()
             }
         };
         ui.horizontal_wrapped(|ui| {
@@ -1241,7 +1240,7 @@ impl AlertsPanel {
                         let mut parts = vec![if trigger.name.is_empty() {
                             trigger.id.0.clone()
                         } else {
-                            l10n::text(ui.ctx(), &trigger.name)
+                            trigger.name.clone()
                         }];
                         if !trigger.symbol.is_empty() {
                             parts.push(trigger.symbol.clone());
@@ -1360,7 +1359,7 @@ impl AlertsPanel {
                                 ));
                             }
                             if self.options.name && !alert.name.is_empty() {
-                                ui.label(l10n::text(ui.ctx(), &alert.name));
+                                ui.label(&alert.name);
                             }
                             let color = self.status_color(ui, alert.status);
                             ui.horizontal(|ui| {
@@ -2590,6 +2589,60 @@ mod tests {
         let refused = "Desktop notification failed: permission denied".to_owned();
         assert_eq!(errors[0], [(errors[0][0].0, refused)]);
         assert_eq!(errors[1], errors[0], "the first error toast stays, alone");
+    }
+
+    #[test]
+    fn a_user_alert_name_is_shown_as_saved_under_a_translator() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let host = Arc::new(Host::default());
+        let mut panel = AlertsPanel::default();
+        panel.set_service(host.clone());
+        // The name is also the catalogue key of the status shown below it.
+        let mut alert = Alert::new("SAMPLE", AlertCondition::Above(100.0));
+        alert.id = Some(AlertId("saved".into()));
+        alert.name = "Active".into();
+        let events = host.events.lock().unwrap().clone().unwrap();
+        events.push(AlertEvent::Upsert(Box::new(alert)));
+        let mut toasts = Toasts::new();
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(egui::vec2(300.0, 700.0))
+            .with_context_setup(|ctx| {
+                l10n::set_translator(ctx, |key| (key == "Active").then(|| "Aktiv".to_owned()));
+            })
+            .build_ui_state(
+                move |ui, panel: &mut AlertsPanel| {
+                    panel.poll(ui.ctx(), &mut toasts);
+                    panel.show(ui);
+                },
+                panel,
+            );
+        h.run_steps(3);
+        let shown = |text: &str| h.query_all_by_label(text).count();
+        assert_eq!(shown("Active"), 1, "the name as saved");
+        assert_eq!(shown("Aktiv"), 1, "the translated status");
+
+        let id = AlertId("saved".into());
+        let mut trigger = AlertTrigger::new(
+            id.clone(),
+            "SAMPLE",
+            "2026-11-20T12:00:00Z".parse().unwrap(),
+        );
+        trigger.name = "Active".into();
+        events.push(AlertEvent::Logged(trigger));
+        h.state_mut().show_log = true;
+        h.state_mut().log_alert = Some(id);
+        h.run_steps(3);
+        assert_eq!(
+            (
+                h.query_all_by_label("Active · SAMPLE · 2026-11-20 12:00:00 +00:00")
+                    .count(),
+                h.get_by_label("Filter by alert").value(),
+                h.query_all_by_label("Aktiv").count(),
+            ),
+            (1, Some("Active".to_owned()), 0),
+            "the log row and selected alert filter show the saved name"
+        );
     }
 
     #[test]
