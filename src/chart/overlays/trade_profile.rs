@@ -725,6 +725,62 @@ mod tests {
         }
     }
 
+    /// Four hundred ticks grouped by ceil(400 / 24) = 17 give keys 100 through 123.
+    #[test]
+    fn default_session_profile_groups_four_hundred_ticks_into_twenty_four_rows() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for price in 1700..2100 {
+            flow.push(&Tick::new(time, price as f64, 1.0, Some(OrderSide::Buy)))
+                .unwrap();
+        }
+        let bars = [Bar::new(time, 1700.0, 2099.0, 1700.0, 2099.0, 400.0)];
+        let ranges = TradeProfileRanges::new(vec![time..time + TimeDelta::minutes(1)]).unwrap();
+        for (rows, expected) in [
+            (TradeProfileSettings::default().rows, 24),
+            (crate::model::ProfileRows::Feed, 400),
+        ] {
+            let profiles = crate::studies::trade_profiles_with_rows(&flow, &ranges, rows);
+            let settings = TradeProfileSettings {
+                rows,
+                session_box: false,
+                poc: false,
+                ..Default::default()
+            };
+            let mapping = ChartMapping::new(
+                Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 900.0)),
+                100.0,
+                0,
+                0,
+                0.0,
+                PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(1690.0, 2110.0),
+                    0.0,
+                    900.0,
+                    false,
+                ),
+            );
+            let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                render_session_volume_profiles(
+                    ui.painter(),
+                    &mapping,
+                    &bars,
+                    &profiles,
+                    (&flow).into(),
+                    &settings,
+                    None,
+                );
+            });
+            let rectangles = output
+                .shapes
+                .iter()
+                .filter(|s| matches!(&s.shape, Shape::Rect(r) if r.rect.width() > 0.0))
+                .count();
+            assert_eq!(rectangles, expected, "{rows:?}");
+        }
+    }
+
     /// The rows hold bid 500 with ask 1,500 and bid 1,000 alone: totals 2K and 1K, deltas +1K and
     /// -1K. Their text fits rows 32 points tall but not 1.6, beside each bar inside the box.
     #[test]

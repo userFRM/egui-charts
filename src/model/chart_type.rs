@@ -642,7 +642,7 @@ pub enum ProfileRows {
 pub struct TradeProfileSettings {
     /// Hours that divide the chart into sessions.
     pub session: ProfileSession,
-    /// Price row grouping.
+    /// Price row grouping; new charts start at about 24 rows a session.
     pub rows: ProfileRows,
     /// Bid/ask stacks, total volume or signed delta; `DeltaVolume` also draws signed delta.
     pub mode: FootprintMode,
@@ -711,7 +711,7 @@ impl Default for TradeProfileSettings {
     fn default() -> Self {
         Self {
             session: ProfileSession::Chart,
-            rows: ProfileRows::Feed,
+            rows: ProfileRows::Count(24),
             mode: FootprintMode::BidAsk,
             developing_poc: false,
             developing_value_area: false,
@@ -1455,7 +1455,17 @@ mod tests {
                 "opening_price": true, "closing_price": true, "poor_high": false, "poor_low": true,
                 "single_prints": true, "prices": true});
         settings["tpo_level_tags"] = true.into();
+        assert_eq!(TradeProfileSettings::default().rows, ProfileRows::Count(24));
+        for (saved, expected) in [
+            (r#"{}"#, ProfileRows::Count(24)),
+            (r#"{"rows":"Feed"}"#, ProfileRows::Feed),
+            (r#"{"rows":{"Ticks":4}}"#, ProfileRows::Ticks(4)),
+        ] {
+            let restored: TradeProfileSettings = serde_json::from_str(saved).unwrap();
+            assert_eq!(restored.rows, expected);
+        }
         let params: ChartTypeParams = serde_json::from_value(settings.clone()).unwrap();
+        assert_eq!(params.profile.rows, ProfileRows::Count(24));
         let saved = serde_json::to_value(&params).unwrap();
         for (name, expected) in settings.as_object().unwrap() {
             if name == "profile" {
@@ -1585,6 +1595,11 @@ mod tests {
             assert_eq!(
                 legacy.profile,
                 TradeProfileSettings {
+                    rows: if guides {
+                        ProfileRows::Feed
+                    } else {
+                        ProfileRows::Count(24)
+                    },
                     value_area_guides: guides,
                     ..Default::default()
                 }
