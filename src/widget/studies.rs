@@ -9,7 +9,10 @@ impl Chart {
     /// Caps the studies at `limit`, or lifts the cap with `None`. The cap applies to
     /// [`try_add_indicator`](Self::try_add_indicator), which the terminal's dialogs use, to
     /// pasting a copied study, to applying a study template set, to copying studies from another
-    /// chart of a layout and to the object tree's Duplicate; studies already on the chart stay.
+    /// chart of a layout and to the object tree's Duplicate; studies already on the chart stay. A
+    /// user action that turns the volume setting on, such as the Toggle volume shortcut, leaves
+    /// [`ChartConfig::show_volume`](crate::config::ChartConfig::show_volume) off at the cap unless
+    /// a Volume study is already on the chart.
     /// [`set_chained_study_limit`](Self::set_chained_study_limit) caps, on the same paths, the
     /// studies that read another study's output; a study is refused when it would pass either cap.
     pub fn set_study_limit(&mut self, limit: Option<usize>) {
