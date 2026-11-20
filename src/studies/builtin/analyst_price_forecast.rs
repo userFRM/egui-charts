@@ -95,6 +95,11 @@ impl Indicator for AnalystPriceForecast {
         Box::new(self.clone())
     }
 
+    // The two outputs style host projections and have no calculated values to read out.
+    fn legend_lines(&self) -> Vec<usize> {
+        Vec::new()
+    }
+
     fn line_names(&self) -> Vec<String> {
         vec!["Positive".to_string(), "Negative".to_string()]
     }

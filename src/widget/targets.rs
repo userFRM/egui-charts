@@ -886,6 +886,8 @@ mod tests {
         let down = theme.chart.candle_down;
         let down_fill = Color32::from_rgba_premultiplied(48, 11, 14, 51);
         let painted = shapes(&mut chart);
+        assert!(label(&painted, AnalystPriceForecast::NAME).is_some());
+        assert_eq!(label(&painted, "∅"), None, "no calculated forecast values");
         assert_eq!(
             label(&painted, "High 150.00 (+50.00%)"),
             Some(Color32::YELLOW)
