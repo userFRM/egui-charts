@@ -1110,14 +1110,13 @@ mod tests {
         }
     }
 
-    /// Closing a table's editor without typing leaves the table as it was and records no edit:
-    /// a table placed without text, whose editor writes out its empty cells, and one whose rows
-    /// hold different numbers of cells, whose editor pads the short row.
+    /// Normalising unchanged cells records no edit; a style-only draft commits once and undo
+    /// restores both the original settings and text.
     #[test]
-    fn unedited_table_drafts_leave_the_table_alone() {
-        use crate::drawings::{Drawing, DrawingManager};
+    fn table_editor_drafts_commit_only_changed_cells_or_settings() {
+        use crate::drawings::{Drawing, DrawingManager, TableCellStyle, TableConfig};
         use egui::{Id, RawInput, Rect};
-        for text in [None, Some("a\tb\nc")] {
+        for (text, edited) in [(None, false), (Some("a\tb\nc"), false), (None, true)] {
             let ctx = Context::default();
             let pane = Rect::from_min_max(pos2(20.0, 20.0), pos2(620.0, 380.0));
             let mut manager = DrawingManager::new();
@@ -1126,6 +1125,13 @@ mod tests {
             drawing.text = text.map(Into::into);
             manager.drawings.push(drawing);
             super::begin_edit(&mut manager, 7, false);
+            let settings = TableConfig {
+                cells: vec![vec![TableCellStyle {
+                    background: Some([255, 0, 0, 255]),
+                    ..Default::default()
+                }]],
+                ..Default::default()
+            };
             let save = Event::Key {
                 key: Key::Enter,
                 physical_key: None,
@@ -1134,6 +1140,9 @@ mod tests {
                 modifiers: Modifiers::COMMAND,
             };
             for (time, events) in [vec![], vec![], vec![], vec![save]].into_iter().enumerate() {
+                if edited && time == 3 {
+                    manager.text_editor.as_mut().unwrap().table = settings.clone();
+                }
                 ctx.run_ui(
                     RawInput {
                         screen_rect: Some(Rect::from_min_max(pos2(0.0, 0.0), pos2(800.0, 600.0))),
@@ -1146,6 +1155,12 @@ mod tests {
                 .drop_without_applying_deltas();
             }
             assert!(manager.text_editor.is_none(), "{text:?}");
+            if edited {
+                assert_eq!(manager.drawings[0].table, Some(settings));
+                assert!(manager.can_undo());
+                assert!(manager.undo());
+            }
+            assert_eq!(manager.drawings[0].table, None);
             assert_eq!(manager.drawings[0].text.as_deref(), text);
             assert!(!manager.can_undo(), "{text:?}");
         }
