@@ -67,9 +67,19 @@ impl Terminal {
         self.alerts
             .panel
             .set_notification_seconds(settings.notification_seconds as f32);
-        self.alerts
-            .panel
-            .set_symbol(self.charts[self.active].symbol());
+        let chart = &self.charts[self.active];
+        self.alerts.panel.set_price(
+            chart.symbol(),
+            chart
+                .bars(SeriesId::MAIN)
+                .iter()
+                .rev()
+                .find(|bar| !bar.is_whitespace())
+                .map(|bar| bar.close),
+            chart
+                .instrument()
+                .and_then(|instrument| instrument.tick_size),
+        );
         let inputs = self.charts[self.active].alert_inputs();
         self.alerts.panel.set_sources(inputs.sources.clone());
         self.alerts
