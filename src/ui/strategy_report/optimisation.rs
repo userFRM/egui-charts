@@ -140,7 +140,7 @@ pub(super) fn show(ui: &mut egui::Ui, ranges: &mut [Range]) -> bool {
                                 _ => InputKind::Number(0.0f64.next_up(), f64::MAX),
                             };
                         }
-                        changed |= super::inputs::show_input(ui, &mut input, &[]);
+                        changed |= super::inputs::show_input(ui, &mut input, &[], &[]);
                         *value = input.value;
                     }
                 });

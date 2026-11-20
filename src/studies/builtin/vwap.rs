@@ -356,17 +356,17 @@ impl Indicator for VolumeWeightedAvgPrice {
             StudyInput::new(
                 "time_zone",
                 "Time zone",
-                InputValue::Text(self.time_zone.name().to_owned()),
-                InputKind::Text,
+                InputValue::TimeZone(self.time_zone.name().to_owned()),
+                InputKind::TimeZone { exchange: false },
             )
-            .with_default(InputValue::Text("UTC".to_owned())),
+            .with_default(InputValue::TimeZone("UTC".to_owned())),
             StudyInput::new(
                 "day_start",
-                "Trading day start, minutes after midnight",
-                InputValue::Length(day_start(&self.windows)),
-                InputKind::Length(0, 1439),
+                "Trading day start",
+                InputValue::TimeOfDay(crate::studies::inputs::clock(day_start(&self.windows))),
+                InputKind::TimeOfDay,
             )
-            .with_default(InputValue::Length(0)),
+            .with_default(InputValue::TimeOfDay(NaiveTime::MIN)),
             StudyInput::new(
                 "percentage_bands",
                 "Percentage bands",
@@ -395,10 +395,10 @@ impl Indicator for VolumeWeightedAvgPrice {
             StudyInput::new(
                 "event_time_zone",
                 "Event time zone",
-                InputValue::Text(self.event_zone.name().to_owned()),
-                InputKind::Text,
+                InputValue::TimeZone(self.event_zone.name().to_owned()),
+                InputKind::TimeZone { exchange: false },
             )
-            .with_default(InputValue::Text("UTC".to_owned())),
+            .with_default(InputValue::TimeZone("UTC".to_owned())),
             StudyInput::new(
                 "event_count",
                 "Events",
@@ -450,13 +450,14 @@ impl Indicator for VolumeWeightedAvgPrice {
             .into_iter()
             .find(|input| input.id == id)
             .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
+        let value = crate::studies::inputs::upgrade_saved_value(&schema.kind, value);
         if !schema.accepts(&value) {
             return Err(crate::studies::StudyError::invalid_input(id));
         }
         match (id, value) {
             ("hide_daily", InputValue::Toggle(value)) => self.hide_daily = value,
             ("anchor", InputValue::Choice(index)) => self.anchor = VWAP_ANCHORS[index],
-            ("time_zone", InputValue::Text(name)) => {
+            ("time_zone", InputValue::TimeZone(name)) => {
                 self.time_zone = TimezoneId::named(&name).ok_or_else(|| {
                     crate::studies::StudyError::InvalidInput {
                         id: id.into(),
@@ -464,7 +465,9 @@ impl Indicator for VolumeWeightedAvgPrice {
                     }
                 })?;
             }
-            ("day_start", InputValue::Length(minutes)) => self.windows = day_start_windows(minutes),
+            ("day_start", InputValue::TimeOfDay(time)) => {
+                self.windows = day_start_windows(crate::studies::inputs::minutes(time))
+            }
             ("percentage_bands", InputValue::Toggle(value)) => self.percentage_bands = value,
             ("band_count", InputValue::Length(count)) => {
                 let mut next = self.bands.len();
@@ -474,7 +477,7 @@ impl Indicator for VolumeWeightedAvgPrice {
                 });
                 self.fit_colors();
             }
-            ("event_time_zone", InputValue::Text(name)) => {
+            ("event_time_zone", InputValue::TimeZone(name)) => {
                 self.event_zone = TimezoneId::named(&name).ok_or_else(|| {
                     crate::studies::StudyError::InvalidInput {
                         id: id.into(),

@@ -126,13 +126,11 @@ fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
     let inputs = study.inputs();
     let mut caption: Vec<_> = inputs
         .iter()
-        // List sizes, painted widths and minutes after midnight mean nothing alone; the study's
-        // source goes below.
+        // List sizes and painted widths mean nothing alone; the study's source goes below.
         .filter(|input| {
             input.is_shown(&inputs)
                 && !input.style
                 && !matches!(input.id.as_str(), "band_count" | "event_count" | "width")
-                && !matches!(input.kind, InputKind::Length(0, 1439))
                 && (source.is_none() || input.id != "source")
         })
         .filter_map(|input| match (&input.kind, &input.value) {
