@@ -15,8 +15,9 @@ const TIERS: usize = 8;
 /// How a [`DepthHistory`] samples the order book.
 ///
 /// A column holds at most `rows` rows per side of 16 bytes each, 24 when it samples individual
-/// orders, and the history at most `columns * 8` columns: about 15 MB with the defaults, or
-/// 23 MB sampling individual orders, which span at least 42 hours.
+/// orders, and the history at most `columns * 8` columns: about 16 MB with the defaults, or
+/// 24 MB sampling individual orders (see [`max_memory`](Self::max_memory)), which span at least
+/// 42 hours (see [`span`](Self::span)).
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct DepthHistoryConfig {
@@ -33,8 +34,14 @@ pub struct DepthHistoryConfig {
     pub ticks_per_row: u32,
     /// Columns kept at each of 8 resolutions. The newest `columns` columns are samples; when there
     /// are more, the two oldest merge into one, and the merged columns overflow into the next
-    /// resolution in the same way. At least 2; 600 by default.
+    /// resolution in the same way. At least 2; 600 by default, or chosen for a retention by
+    /// [`with_retention`](Self::with_retention).
     pub columns: usize,
+    /// How long to keep columns, measured back from the newest column's end. Columns ending at
+    /// or before that cutoff leave on the next sample or page, and the chart requests no depth
+    /// page before it. Must be positive. `None`, the default, keeps every column the tiers hold.
+    /// [`with_retention`](Self::with_retention) also chooses [`columns`](Self::columns).
+    pub retention: Option<TimeDelta>,
     /// Sample the individual resting orders this filter accepts, summed into rows, instead of
     /// the aggregate prices the feed sends, and record the largest of them in each row (see
     /// [`DepthColumn::largest_bid_orders`]); `Some(OrderFilter::default())` samples every order.
@@ -53,7 +60,83 @@ impl Default for DepthHistoryConfig {
             rows: 100,
             ticks_per_row: 1,
             columns: 600,
+            retention: None,
             orders: None,
+        }
+    }
+}
+
+impl DepthHistoryConfig {
+    /// Keeps columns for `retention`, choosing the fewest [`columns`](Self::columns) per tier
+    /// that span that time after continuous sampling, at least 2. Set [`cadence`](Self::cadence)
+    /// first. `None` restores the default 600 columns. A non-positive retention or cadence only
+    /// sets `retention`; [`DepthHistory::new`] rejects invalid configurations.
+    ///
+    /// ```
+    /// use chrono::TimeDelta;
+    /// use egui_charts::data::DepthHistoryConfig;
+    ///
+    /// let config = DepthHistoryConfig::default().with_retention(Some(TimeDelta::hours(1)));
+    /// assert_eq!(config.columns, 15);
+    /// assert_eq!(config.span(), TimeDelta::hours(1));
+    /// ```
+    pub fn with_retention(mut self, retention: Option<TimeDelta>) -> Self {
+        let cadence = nanos(self.cadence);
+        match retention.map(nanos) {
+            None => self.columns = Self::default().columns,
+            Some(wanted) if wanted > 0 && cadence > 0 => {
+                // Full tiers hold at least 255 * columns - 127 cadences.
+                let cadences = (wanted + cadence - 1) / cadence;
+                self.columns = usize::try_from((cadences + 127 + 254) / 255)
+                    .unwrap_or(usize::MAX)
+                    .max(2);
+            }
+            Some(_) => {}
+        }
+        self.retention = retention;
+        self
+    }
+
+    /// The time covered after continuous sampling: `cadence * (255 * columns - 127)`, the least
+    /// the eight full tiers hold, limited by [`retention`](Self::retention) when set. About
+    /// 42 hours and 28 minutes by default. Large configurations saturate at [`TimeDelta::MAX`].
+    pub fn span(&self) -> TimeDelta {
+        let cadences = (self.columns as i128)
+            .saturating_mul(255)
+            .saturating_sub(127)
+            .max(0);
+        let full = delta(nanos(self.cadence).saturating_mul(cadences));
+        self.retention.map_or(full, |retention| retention.min(full))
+    }
+
+    /// Estimated maximum heap bytes for full tiers and `rows` rows per side, including largest
+    /// orders when [`orders`](Self::orders) is set. Excludes allocator overhead; about 16 MB by
+    /// default. Saturates at [`usize::MAX`] for large configurations.
+    pub fn max_memory(&self) -> usize {
+        let largest = if self.orders.is_some() {
+            size_of::<f64>()
+        } else {
+            0
+        };
+        let rows = self
+            .rows
+            .saturating_mul(size_of::<(i64, f64)>() + largest)
+            .saturating_mul(2);
+        // The column, its shared counts and the pointer a tier holds.
+        let column =
+            size_of::<DepthColumn>() + 2 * size_of::<usize>() + size_of::<Arc<DepthColumn>>();
+        self.columns
+            .saturating_mul(TIERS)
+            .saturating_mul(column.saturating_add(rows))
+    }
+
+    /// Page size and limit of sampled columns waiting for a frame. Retention lowers tier
+    /// capacity, but keeps at least 600 here to preserve paging speed and hidden charts.
+    pub(crate) fn page_columns(&self) -> usize {
+        if self.retention.is_some() {
+            self.columns.max(Self::default().columns)
+        } else {
+            self.columns
         }
     }
 }
@@ -139,6 +222,11 @@ impl DepthHistory {
                 config.columns
             )));
         }
+        if let Some(retention) = config.retention.filter(|r| *r <= TimeDelta::zero()) {
+            return Err(FeedError::InvalidData(format!(
+                "depth history retention must be positive, got {retention}"
+            )));
+        }
         Ok(Self {
             config,
             tiers: vec![VecDeque::new(); TIERS],
@@ -172,7 +260,8 @@ impl DepthHistory {
     /// A side's largest orders, if it has any, are one per row, finite and not negative.
     /// Memory remains bounded by the configured tiers. Returns the number of input columns
     /// retained, including those merged to a coarser resolution. Columns beyond the oldest
-    /// tier's capacity are dropped and do not count.
+    /// tier's capacity or older than the [`retention`](DepthHistoryConfig::retention) are dropped
+    /// and do not count.
     pub fn merge_page(&mut self, mut page: Vec<DepthColumn>) -> Result<usize, FeedError> {
         let cadence = self.config.cadence;
         let valid_side = |side: &[(i64, f64)], largest: &[f64], bid: bool| {
@@ -252,6 +341,7 @@ impl DepthHistory {
             }
         }
         self.compact();
+        self.retain_recent();
         let oldest = self.columns().next().expect("accepted columns").time;
         Ok(accepted.len() - accepted.partition_point(|c| c.time < oldest))
     }
@@ -278,6 +368,41 @@ impl DepthHistory {
             self.tiers[0].push_back(column);
         }
         self.compact();
+        self.retain_recent();
+    }
+
+    /// Columns wholly before this instant are outside the retention.
+    fn retention_cutoff(&self) -> Option<DateTime<Utc>> {
+        let newest = self.columns().next_back()?;
+        (newest.time + newest.span).checked_sub_signed(self.config.retention?)
+    }
+
+    /// First cadence period that a historical page can still contribute to.
+    #[cfg(feature = "widget")]
+    pub(crate) fn retention_start(&self) -> Option<DateTime<Utc>> {
+        start(self.retention_cutoff()?, self.config.cadence)
+    }
+
+    /// Reconfigures the tiers and immediately removes columns outside the chosen retention.
+    #[cfg(feature = "widget")]
+    pub(crate) fn set_retention(&mut self, retention: Option<TimeDelta>) {
+        self.config = self.config.clone().with_retention(retention);
+        self.compact();
+        self.retain_recent();
+    }
+
+    fn retain_recent(&mut self) {
+        let Some(cutoff) = self.retention_cutoff() else {
+            return;
+        };
+        for tier in self.tiers.iter_mut().rev() {
+            while tier.front().is_some_and(|c| c.time + c.span <= cutoff) {
+                tier.pop_front();
+            }
+            if !tier.is_empty() {
+                break;
+            }
+        }
     }
 
     /// Places a column by its span, constrained by the ages of the held tiers, and returns its
@@ -451,6 +576,20 @@ fn start(ts: DateTime<Utc>, cadence: TimeDelta) -> Option<DateTime<Utc>> {
     ))
 }
 
+/// Exact signed nanoseconds, including durations outside the i64 nanosecond range.
+fn nanos(delta: TimeDelta) -> i128 {
+    i128::from(delta.num_seconds()) * 1_000_000_000 + i128::from(delta.subsec_nanos())
+}
+
+fn delta(n: i128) -> TimeDelta {
+    let n = n.clamp(nanos(TimeDelta::MIN), nanos(TimeDelta::MAX));
+    TimeDelta::new(
+        i64::try_from(n.div_euclid(1_000_000_000)).expect("clamped"),
+        n.rem_euclid(1_000_000_000) as u32,
+    )
+    .expect("clamped")
+}
+
 /// One column spanning `older` and `newer`, adjacent, each row's size averaged over their spans
 /// and its largest order the larger of the two.
 fn merge(older: &DepthColumn, newer: &DepthColumn, rows: usize) -> DepthColumn {
@@ -542,6 +681,98 @@ mod tests {
             bids: vec![(100, bid)],
             ..Default::default()
         }
+    }
+
+    /// The tier bound is hand-calculated: ceil((ceil(retention / cadence) + 127) / 255).
+    /// A cutoff drops columns ending exactly there, but keeps a straddling merged column.
+    #[test]
+    fn retention_chooses_columns_and_bounds_the_history() {
+        for (retention, cadence, columns) in [
+            (900_000, 1_000, 5),
+            (3_600_000, 1_000, 15),
+            (86_400_000, 60_000, 7),
+            (3_600_000, 7_000, 3),
+            (90_000, 500, 2),
+            (1, 1_000, 2),
+        ] {
+            let retention = TimeDelta::milliseconds(retention);
+            let cadence = TimeDelta::milliseconds(cadence);
+            let config = DepthHistoryConfig {
+                cadence,
+                ..Default::default()
+            }
+            .with_retention(Some(retention));
+            assert_eq!(
+                (config.columns, config.retention, config.span()),
+                (columns, Some(retention), retention)
+            );
+            let mut history = DepthHistory::new(config).unwrap();
+            for i in 0..4 * 255 * columns {
+                let time = at(0) + cadence * i as i32;
+                history.push(DepthColumn {
+                    time,
+                    span: cadence,
+                    ..Default::default()
+                });
+                let end = time + cadence;
+                if end - at(0) >= retention {
+                    let held = end - history.columns().next().unwrap().time;
+                    assert!(
+                        held >= retention && held < retention + cadence * 128,
+                        "retention {retention}, cadence {cadence}, held {held}"
+                    );
+                }
+            }
+        }
+        let default = DepthHistoryConfig::default();
+        assert_eq!(default.span(), TimeDelta::seconds(152_873));
+        assert_eq!(
+            default
+                .clone()
+                .with_retention(Some(TimeDelta::hours(1)))
+                .with_retention(None),
+            default
+        );
+        for (orders, rows) in [
+            (None, 15_360_000),
+            (Some(crate::data::OrderFilter::default()), 23_040_000),
+        ] {
+            let config = DepthHistoryConfig {
+                orders,
+                ..default.clone()
+            };
+            assert!((rows..rows + 4_800 * 200).contains(&config.max_memory()));
+        }
+        let huge = DepthHistoryConfig {
+            cadence: TimeDelta::MAX,
+            columns: usize::MAX,
+            rows: usize::MAX,
+            ..default.clone()
+        };
+        assert_eq!(huge.span(), TimeDelta::MAX);
+        assert_eq!(huge.max_memory(), usize::MAX);
+        let longest = default.clone().with_retention(Some(TimeDelta::MAX));
+        if usize::BITS >= 64 {
+            assert_eq!(longest.span(), TimeDelta::MAX);
+        } else {
+            assert_eq!(longest.columns, usize::MAX);
+        }
+        let mut history = DepthHistory::new(DepthHistoryConfig {
+            retention: Some(TimeDelta::seconds(12)),
+            ..default
+        })
+        .unwrap();
+        for second in 100..110 {
+            history.push(column(second, 1, 1.0));
+        }
+        assert_eq!(
+            history.merge_page((90..100).map(|s| column(s, 1, 1.0)).collect()),
+            Ok(2)
+        );
+        assert_eq!(history.columns().next().unwrap().time, at(98));
+        history.push(column(110, 1, 1.0));
+        assert_eq!(history.columns().next().unwrap().time, at(99));
+        assert_eq!(history.columns().count(), 12);
     }
 
     /// Guards the decimation: a full tier must merge its two oldest columns into one spanning
