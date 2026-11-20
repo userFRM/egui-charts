@@ -2,7 +2,7 @@
 //! requires a strict inequality now and the opposite inequality or equality one bar ago.
 
 use super::{StrategyFactory, length, number, number_input, set_input};
-use crate::model::{Bar, OrderSide, OrderType};
+use crate::model::{Bar, OrderSide, OrderType, PriceSource, StudySource};
 use crate::strategies::{OrderSize, Strategy, StrategyContext};
 use crate::studies::{
     BollingerBands, Indicator, InputKind, InputValue, KeltnerChannels, MACD, Momentum,
@@ -112,17 +112,46 @@ impl StudyStrategy {
         match self.rule {
             // A band crossing holds for one bar: its stop works through the next bar only.
             Rule::Bollinger | Rule::DirectedBollinger => signals.map(|signal| signal.is_none()),
-            // A Keltner stop works until the close falls back through the basis.
+            // A Keltner stop works until the source falls back through the basis.
             Rule::Keltner => {
-                let close = context.bars()[at].close;
+                let bar = &context.bars()[at];
+                let source = self
+                    .source()
+                    .compute(bar.open, bar.high, bar.low, bar.close);
                 self.studies[0]
                     .values()
                     .value(0, at)
-                    .map_or([false; 2], |basis| [close < basis, close > basis])
+                    .map_or([false; 2], |basis| [source < basis, source > basis])
             }
             _ => [false; 2],
         }
     }
+
+    /// The price the Keltner basis averages and its signals compare.
+    fn source(&self) -> PriceSource {
+        match self.studies[0].source() {
+            Some(StudySource::Price(source)) => source,
+            _ => PriceSource::Close,
+        }
+    }
+}
+
+/// One `tick` beyond `price`, upwards for a long stop and downwards for a short one, or `price`
+/// itself without a tick. A tick whose reciprocal is a whole number, such as 0.01, puts the
+/// result on a multiple of it, so a later price quoted exactly one tick beyond reaches it.
+fn tick_beyond(price: f64, tick: Option<f64>, up: bool) -> f64 {
+    let Some(tick) = tick else {
+        return price;
+    };
+    let stepped = if up { price + tick } else { price - tick };
+    let per_unit = tick.recip().round();
+    if per_unit >= 1.0 && (per_unit * tick - 1.0).abs() <= 1e-9 {
+        let snapped = (stepped * per_unit).round() / per_unit;
+        if snapped.is_finite() {
+            return snapped;
+        }
+    }
+    stepped
 }
 
 fn crosses(a: &[f64], b: &[f64], at: usize) -> bool {
@@ -213,6 +242,11 @@ impl Strategy for StudyStrategy {
             study.calculate(bars);
         }
         let close: Vec<_> = bars.iter().map(|bar| bar.close).collect();
+        let source = self.source();
+        let source: Vec<_> = bars
+            .iter()
+            .map(|bar| source.compute(bar.open, bar.high, bar.low, bar.close))
+            .collect();
         let zero = vec![0.; bars.len()];
         let values = self.studies[0].values();
         let line = |column| values.line(column);
@@ -248,9 +282,10 @@ impl Strategy for StudyStrategy {
                         stop(2).filter(|_| crosses(&close, line(2), i)),
                         stop(0).filter(|_| crosses(line(0), &close, i)),
                     ],
+                    // The stops wait beyond the signal bar; `on_bar` adds the run's tick.
                     Rule::Keltner => [
-                        stop(1).filter(|_| crosses(&close, line(1), i)),
-                        stop(2).filter(|_| crosses(line(2), &close, i)),
+                        crosses(&source, line(1), i).then_some(OrderType::Stop(bar.high)),
+                        crosses(line(2), &source, i).then_some(OrderType::Stop(bar.low)),
                     ],
                     Rule::Macd => [
                         market(crosses(line(2), &zero, i)),
@@ -353,7 +388,11 @@ impl Strategy for StudyStrategy {
             return;
         }
         for (index, side) in [OrderSide::Buy, OrderSide::Sell].into_iter().enumerate() {
-            if let Some(order) = signals[index] {
+            if let Some(mut order) = signals[index] {
+                if let (Rule::Keltner, OrderType::Stop(price)) = (self.rule, order) {
+                    order =
+                        OrderType::Stop(tick_beyond(price, context.price_increment(), index == 0));
+                }
                 context.cancel(if index == 0 { "Short" } else { "Long" });
                 context.entry(if index == 0 { "Long" } else { "Short" }, side, None, order);
             } else if expired[index] {
