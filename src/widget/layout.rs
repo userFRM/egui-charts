@@ -1884,6 +1884,7 @@ impl ChartLayout {
         }
         if self.focus_range.is_some_and(|(from, to)| {
             from >= count
+                || from == to
                 || to != self.active
                 || !self.sync.sync_time_axis
                 || !self.same_group(from, to)
@@ -5078,7 +5079,8 @@ mod tests {
     }
 
     /// Alt+Enter shows the focused tile alone and a second press brings the preset back with the
-    /// tile's slot, viewport and synchronization group unchanged.
+    /// tile's slot, viewport and synchronization group unchanged. A clamped reselection keeps
+    /// live tracking enabled.
     #[test]
     fn alt_enter_maximizes_and_restores_the_active_tile() {
         let ctx = egui::Context::default();
@@ -5162,6 +5164,18 @@ mod tests {
         }
         layout.set_maximized(Some(2));
         frame(&mut layout, &mut charts, false, false);
+        charts[2].enable_tracking_mode();
+        layout.mode = ChartLayoutMode::ThreeHorizontal;
+        frame(&mut layout, &mut charts, false, false);
+        assert!(charts[2].is_tracking_mode_active());
+        layout.set_active(5);
+        frame(&mut layout, &mut charts, false, false);
+        assert_eq!((layout.maximized(), layout.active()), (Some(2), 2));
+        assert!(
+            charts[2].is_tracking_mode_active(),
+            "clamped reselection disabled live tracking"
+        );
+        layout.mode = ChartLayoutMode::Four;
         let other_group_spacing = charts[1].get_time_scale_state().0;
         layout.set_active(1);
         frame(&mut layout, &mut charts, false, false);
