@@ -869,7 +869,8 @@ mod tests {
         h.run_steps(3);
         assert!(h.query_by_value(description).is_none());
         for shown in [true, false] {
-            h.get_by_label("Core CPI").click();
+            h.get_by_role_and_label(egui::Role::Button, "Core CPI")
+                .click();
             h.run_steps(3);
             for value in [description, "Inflation"] {
                 assert_eq!(h.query_by_value(value).is_some(), shown, "{value}");

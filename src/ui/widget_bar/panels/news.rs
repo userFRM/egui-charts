@@ -73,6 +73,8 @@ struct NewsViews {
 /// to its text, with actions to show the chart at its time and to open its link. Publication times
 /// show in the zone given to [`set_timezone`](Self::set_timezone), UTC until set. Call
 /// [`poll`](Self::poll) each frame, then [`show`](Self::show) while the panel is open.
+/// With the keyboard, Up and Down move between stories, Enter opens one and Escape returns to
+/// the list.
 pub struct NewsPanel {
     highlights: bool,
     feed: Option<Arc<dyn Datafeed>>,
@@ -92,6 +94,8 @@ pub struct NewsPanel {
     timezone: TimezoneId,
     stories: Vec<NewsStory>,
     open: Option<String>,
+    focus_back: bool,
+    refocus: Option<String>,
     error: Option<FeedError>,
     loading: bool,
     inbox: Arc<Inbox>,
@@ -147,6 +151,8 @@ impl NewsPanel {
             timezone: TimezoneId::utc(),
             stories: Vec::new(),
             open: None,
+            focus_back: false,
+            refocus: None,
             error: None,
             loading: false,
             inbox: Arc::default(),
@@ -379,10 +385,14 @@ impl NewsPanel {
         {
             let mut back = false;
             PanelHeader::new(title).show(ui, |ui| {
-                back = IconButton::new(&icons::CHEVRON_LEFT)
+                let response = IconButton::new(&icons::CHEVRON_LEFT)
                     .tooltip("Back to the stories")
-                    .show(ui)
-                    .clicked();
+                    .show(ui);
+                if std::mem::take(&mut self.focus_back) {
+                    response.request_focus();
+                }
+                back = response.clicked()
+                    || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)));
             });
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
@@ -421,6 +431,7 @@ impl NewsPanel {
                     });
                 });
             if back {
+                self.refocus = Some(story.id.clone());
                 self.open = None;
             }
             return action;
@@ -560,56 +571,93 @@ impl NewsPanel {
             }
             None => {}
         }
+        let rows = ui.scope_id().with("news_stories");
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                let mut responses = Vec::new();
                 for story in &self.stories {
                     let response = ui
-                        .scope_builder(egui::UiBuilder::new().sense(Sense::click()), |ui| {
-                            let hovered = ui.response().hovered();
-                            egui::Frame::new()
-                                .fill(if hovered {
-                                    theme.ui.btn_bg_hover
-                                } else {
-                                    egui::Color32::TRANSPARENT
-                                })
-                                .inner_margin(egui::Margin::symmetric(8, 0))
-                                .show(ui, |ui| {
-                                    ui.set_width(ui.available_width());
-                                    ui.set_min_height(26.0);
-                                    ui.style_mut().interaction.selectable_labels = false;
-                                    ui.label(
-                                        RichText::new(l10n::text(
-                                            ui.ctx(),
-                                            meta(story, &self.timezone),
-                                        ))
-                                        .size(theme.text.small)
-                                        .color(theme.ui.text_secondary),
-                                    );
-                                    ui.add(
-                                        Label::new(
-                                            RichText::new(l10n::text(ui.ctx(), &story.headline))
+                        .scope_builder(
+                            egui::UiBuilder::new()
+                                .scope_id(rows.with(&story.id))
+                                .sense(Sense::click()),
+                            |ui| {
+                                let response = ui.response();
+                                let hovered =
+                                    response.hovered() || ui.memory(|m| m.has_focus(response.id));
+                                egui::Frame::new()
+                                    .fill(if hovered {
+                                        theme.ui.btn_bg_hover
+                                    } else {
+                                        egui::Color32::TRANSPARENT
+                                    })
+                                    .inner_margin(egui::Margin::symmetric(8, 0))
+                                    .show(ui, |ui| {
+                                        ui.set_width(ui.available_width());
+                                        ui.set_min_height(26.0);
+                                        ui.style_mut().interaction.selectable_labels = false;
+                                        ui.label(
+                                            RichText::new(l10n::text(
+                                                ui.ctx(),
+                                                meta(story, &self.timezone),
+                                            ))
+                                            .size(theme.text.small)
+                                            .color(theme.ui.text_secondary),
+                                        );
+                                        ui.add(
+                                            Label::new(
+                                                RichText::new(l10n::text(
+                                                    ui.ctx(),
+                                                    &story.headline,
+                                                ))
                                                 .strong(),
-                                        )
-                                        .wrap(),
-                                    );
-                                    if self.highlights && !story.body.is_empty() {
-                                        ui.label(l10n::text(ui.ctx(), &story.body));
-                                    }
-                                });
-                        })
+                                            )
+                                            .wrap(),
+                                        );
+                                        if self.highlights && !story.body.is_empty() {
+                                            ui.label(l10n::text(ui.ctx(), &story.body));
+                                        }
+                                    });
+                            },
+                        )
                         .response;
                     let translated_label = l10n::text(ui.ctx(), &story.headline);
                     response.widget_info(|| {
                         egui::WidgetInfo::labeled(egui::Role::Button, true, &translated_label)
                     });
+                    responses.push((response.id, response.rect));
+                    if self.refocus.as_ref() == Some(&story.id) {
+                        response.request_focus();
+                        response.scroll_to_me(None);
+                        self.refocus = None;
+                    }
+                    let focused = response.has_focus();
                     if response
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .clicked()
                     {
                         self.open = Some(story.id.clone());
+                        self.focus_back = focused;
                     }
                     ui.separator();
+                }
+                if let Some(at) =
+                    ui.memory(|m| responses.iter().position(|(id, _)| m.has_focus(*id)))
+                {
+                    let step = ui.input_mut(|i| {
+                        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) as isize
+                            - i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) as isize
+                    });
+                    if step != 0 {
+                        let next = at.saturating_add_signed(step).min(responses.len() - 1);
+                        let (id, rect) = responses[next];
+                        ui.memory_mut(|m| {
+                            m.request_focus(id);
+                            m.move_focus(egui::FocusDirection::None);
+                        });
+                        ui.scroll_to_rect(rect, None);
+                    }
                 }
             });
         action
@@ -939,5 +987,56 @@ mod tests {
         assert_eq!(views["current"], serde_json::Value::Null);
         assert_eq!(views["views"].as_object().unwrap().len(), 1);
         assert!(views["views"].get("Energy").is_some());
+    }
+
+    /// Reading with the keyboard keeps focus on one story, including at either end of the list
+    /// and after returning from its text.
+    #[test]
+    fn arrow_keys_move_between_stories_enter_opens_escape_returns() {
+        let mut panel = NewsPanel::new();
+        for title in ["First", "Second", "Third"] {
+            let mut story = NewsStory::new(title, DateTime::UNIX_EPOCH, title);
+            story.body = format!("Text of {title}");
+            panel.stories.push(story);
+        }
+        let mut h = Harness::builder()
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, panel: &mut NewsPanel| {
+                    panel.show(ui);
+                },
+                panel,
+            );
+        h.run();
+        h.get_by_role_and_label(egui::Role::Button, "First").focus();
+        h.run();
+        for (key, title) in [
+            (egui::Key::ArrowDown, "Second"),
+            (egui::Key::ArrowUp, "First"),
+            (egui::Key::ArrowUp, "First"),
+            (egui::Key::ArrowDown, "Second"),
+            (egui::Key::ArrowDown, "Third"),
+            (egui::Key::ArrowDown, "Third"),
+            (egui::Key::ArrowUp, "Second"),
+        ] {
+            h.key_press(key);
+            h.run();
+            assert!(
+                h.get_by_role_and_label(egui::Role::Button, title)
+                    .is_focused(),
+                "{key:?}: {title}"
+            );
+        }
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(h.state().open.as_deref(), Some("Second"));
+        h.get_by_value("Text of Second");
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(h.state().open.is_none());
+        assert!(
+            h.get_by_role_and_label(egui::Role::Button, "Second")
+                .is_focused()
+        );
     }
 }
