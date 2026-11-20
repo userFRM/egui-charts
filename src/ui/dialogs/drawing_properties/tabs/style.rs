@@ -84,26 +84,41 @@ impl StyleTab {
                 && style.color
             {
                 ui.label(l10n::text(ui.ctx(), "Color"));
-                color_picker.sel_color = props.color;
+                // Text with a colour of its own is painted in it.
+                let text = props
+                    .tool_settings
+                    .as_ref()
+                    .and_then(|template| template.settings.text_color_override());
+                color_picker.sel_color = text.map_or(props.color, |[r, g, b, a]| {
+                    Color32::from_rgba_unmultiplied(r, g, b, a)
+                });
                 let picker = ColorPicker::new(color_picker, "drawing_props_color");
                 // Without tool settings only the paint colour is held, which reads back as
                 // another hue at each opacity: the editor then keeps its own exact colour.
-                let picked = if props.tool_settings.is_some() {
+                let picked = if let Some(text) = text {
+                    picker.show_unmultiplied(ui, text).inner
+                } else if props.tool_settings.is_some() {
                     picker.show_unmultiplied(ui, props.color_rgba()).inner
                 } else {
                     picker.show(ui).inner.map(|c| c.to_srgba_unmultiplied())
                 };
                 if let Some([r, g, b, a]) = picked {
-                    // The custom editor sets the opacity; a palette swatch keeps the line's.
-                    let a = if color_picker.custom_mode {
+                    // The custom editor sets the opacity, of the text where that is what the row
+                    // edits; a palette swatch keeps the current one.
+                    let custom = color_picker.custom_mode;
+                    let line = if custom && text.is_none() {
                         a
                     } else {
                         props.color.a()
                     };
-                    let rgba = [r, g, b, a];
-                    props.color = Color32::from_rgba_unmultiplied(r, g, b, a);
+                    props.color = Color32::from_rgba_unmultiplied(r, g, b, line);
                     if let Some(template) = &mut props.tool_settings {
-                        template.settings.color = rgba;
+                        template.settings.color = [r, g, b, line];
+                        if let Some(text) = text {
+                            template.settings.text_color =
+                                Some([r, g, b, if custom { a } else { text[3] }]);
+                            props.color_row_text_pick = template.settings.text_color;
+                        }
                     }
                 }
                 ui.end_row();
@@ -499,6 +514,27 @@ impl StyleTab {
                     ui.add_space(ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x);
                     ui.checkbox(&mut props.extend_right, l10n::text(ui.ctx(), "Right"));
                 });
+                ui.end_row();
+            }
+            if let Some(template) = &mut props.tool_settings
+                && matches!(
+                    template.settings.tool_type,
+                    DrawingToolType::Pitchfork
+                        | DrawingToolType::SchiffPitchfork
+                        | DrawingToolType::ModifiedSchiffPitchfork
+                        | DrawingToolType::InsidePitchfork
+                )
+            {
+                // A fork saved without levels shows the ones it is drawn with.
+                let mut config = super::pitchfork_shown(&template.settings);
+                let label = ui.label(l10n::text(ui.ctx(), "Extend lines"));
+                if ui
+                    .checkbox(&mut config.extend_lines, "")
+                    .labelled_by(label.id)
+                    .changed()
+                {
+                    template.settings.pitchfork = Some(config);
+                }
                 ui.end_row();
             }
             if let Some(template) = &mut props.tool_settings
@@ -1054,8 +1090,8 @@ fn regression_rows(ui: &mut Ui, props: &mut DrawingProps, pickers: [&mut ColorPi
     }
 }
 
-/// The projection's leg row, which takes the drawing's colour and width, and its background
-/// switch with the colours of the zone's near and far halves. A palette colour keeps the
+/// The projection's outline row, which takes the drawing's colour and width, and its background
+/// switch with the colours at the sector's centre and arc. A palette colour keeps the
 /// opacity in use; the custom editor sets it.
 fn projection_rows(ui: &mut Ui, props: &mut DrawingProps, pickers: [&mut ColorPickerState; 3]) {
     let Some(template) = &props.tool_settings else {
@@ -1111,7 +1147,7 @@ fn projection_rows(ui: &mut Ui, props: &mut DrawingProps, pickers: [&mut ColorPi
     }
 }
 
-/// One line's row, for the regression trend's lines and the projection's leg: its switch named
+/// One line's row, for the regression trend's lines and the projection's outline: its switch named
 /// `name` in the label column, then its colour (a palette swatch keeps the opacity, the custom
 /// editor sets it), pattern and width.
 fn regression_line_row(
@@ -1350,6 +1386,7 @@ mod tests {
     fn palette_colours_keep_the_line_opacity() {
         for (tool, picker, alpha, fill) in [
             (DrawingToolType::Highlighter, 0, 51, None),
+            (DrawingToolType::TextLabel, 0, 255, None),
             (DrawingToolType::FibonacciRetracement, 1, 255, None),
             (DrawingToolType::FibonacciChannel, 1, 255, None),
             (DrawingToolType::FibonacciWedge, 1, 255, None),
@@ -1365,6 +1402,9 @@ mod tests {
             let chart = Chart::new(BarData::new());
             let mut drawing = Drawing::new(0, tool);
             drawing.fill_color = fill;
+            if tool == DrawingToolType::TextLabel {
+                drawing.text_color = Some([242, 54, 69, 128]);
+            }
             if let Some(config) = &mut drawing.fib_config {
                 for (i, level) in config.levels.iter_mut().enumerate() {
                     level.color[3] = if i % 2 == 0 { 51 } else { 153 };
@@ -1421,6 +1461,12 @@ mod tests {
             ]);
             let [r, g, b, _] = swatch.to_srgba_unmultiplied();
             assert_eq!(props.color, Color32::from_rgba_unmultiplied(r, g, b, alpha));
+            if tool == DrawingToolType::TextLabel {
+                assert_eq!(
+                    props.tool_settings.as_ref().unwrap().settings.text_color,
+                    Some([r, g, b, 128])
+                );
+            }
 
             if matches!(
                 tool,
@@ -1453,24 +1499,87 @@ mod tests {
 
     /// A palette swatch picked in the Style tab of one drawing in a selection recolours every
     /// selected drawing and leaves each at its own opacity: a trend line stays opaque and a
-    /// highlighter stays at 51, whichever of the two the dialog was opened on.
+    /// highlighter stays at 51. Text with its own colour also propagates a pick equal to its
+    /// drawing RGB, while accepting unchanged properties leaves every colour alone. Only an
+    /// opacity edited in the custom editor changes the other Texts' text opacity. Text-tab picks
+    /// reach only same-tool texts, including a pick equal to the drawing RGB.
     #[test]
     fn palette_colour_on_a_selection_keeps_each_line_opacity() {
-        let swatch = MAIN_COLORS[3];
-        let [r, g, b, _] = swatch.to_srgba_unmultiplied();
+        use DrawingToolType::{AnchoredText, TextLabel};
+
+        let green = Some([8, 153, 129, 200]);
+        let green_pick = Some(MAIN_COLORS[3]);
+        let blue_pick = Some(MAIN_COLORS[6]);
         let mut observed = Vec::new();
-        for (opened, alpha) in [(1, 51), (2, 51), (1, 0), (2, 0)] {
+        for (opened, alpha, text_tool, (peer_tool, peer_text), swatch, text_tab) in [
+            (1, 51, TextLabel, (TextLabel, green), green_pick, false),
+            (2, 51, TextLabel, (TextLabel, green), green_pick, false),
+            (1, 0, TextLabel, (TextLabel, green), green_pick, false),
+            (2, 0, TextLabel, (TextLabel, green), green_pick, false),
+            (3, 51, TextLabel, (TextLabel, green), blue_pick, false),
+            (3, 51, AnchoredText, (AnchoredText, green), blue_pick, false),
+            (3, 51, TextLabel, (TextLabel, green), green_pick, false),
+            (3, 51, TextLabel, (AnchoredText, green), green_pick, false),
+            (3, 51, AnchoredText, (TextLabel, green), green_pick, false),
+            (
+                3,
+                51,
+                AnchoredText,
+                (AnchoredText, green),
+                green_pick,
+                false,
+            ),
+            (3, 51, TextLabel, (AnchoredText, green), None, false),
+            (3, 51, AnchoredText, (TextLabel, green), None, false),
+            (3, 51, TextLabel, (TextLabel, None), green_pick, false),
+            (3, 51, TextLabel, (TextLabel, None), None, false),
+            (3, 51, TextLabel, (TextLabel, green), blue_pick, true),
+            (3, 51, TextLabel, (TextLabel, green), green_pick, true),
+            (3, 51, AnchoredText, (AnchoredText, green), blue_pick, true),
+            (3, 51, AnchoredText, (AnchoredText, green), green_pick, true),
+            (3, 51, TextLabel, (AnchoredText, green), blue_pick, true),
+            (3, 51, TextLabel, (TextLabel, None), blue_pick, true),
+        ] {
             let ctx = Context::default();
             ctx.global_style_mut(|style| style.animation_time = 0.0);
             let mut chart = Chart::new(BarData::new());
             let mut highlighter = Drawing::new(1, DrawingToolType::Highlighter);
-            let line = Drawing::new(2, DrawingToolType::TrendLine);
+            let mut line = Drawing::new(2, DrawingToolType::TrendLine);
             assert_eq!((highlighter.color[3], line.color[3]), (51, 255));
             highlighter.color[3] = alpha;
-            chart.drawings_mut().drawings = vec![highlighter, line];
-            chart.drawings_mut().select_drawings([1, 2]);
+            if opened == 3 {
+                line.color = [242, 54, 69, 255];
+            }
+            let mut text = Drawing::new(3, text_tool);
+            text.text_color = Some([242, 54, 69, 128]);
+            let mut peer = Drawing::new(4, peer_tool);
+            peer.text_color = peer_text;
+            chart.drawings_mut().drawings = vec![highlighter, line, text, peer];
+            chart.drawings_mut().select_drawings([1, 2, 3, 4]);
             let target = chart.drawings().drawings[opened - 1].clone();
             let mut props = DrawingProps::from_drawing(&target, &chart);
+            let original: Vec<_> = chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| (d.color, d.text_color))
+                .collect();
+            props
+                .apply_to_chart(
+                    crate::ui::dialogs::drawing_properties::actions::DrawingId(opened),
+                    &mut chart,
+                )
+                .unwrap();
+            assert_eq!(
+                chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .map(|d| (d.color, d.text_color))
+                    .collect::<Vec<_>>(),
+                original,
+                "unchanged properties on {text_tool:?}, drawing {opened}"
+            );
             let mut pickers: [ColorPickerState; 3] = Default::default();
             pickers[0].is_open = true;
             let mut frame = |events| {
@@ -1484,54 +1593,91 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        StyleTab::show(
-                            ui,
-                            &mut props,
-                            &mut pickers,
-                            &mut Default::default(),
-                            &mut Default::default(),
-                            None,
-                        )
+                        if text_tab {
+                            super::super::TextTab::show(ui, &mut props, &mut pickers);
+                        } else {
+                            StyleTab::show(
+                                ui,
+                                &mut props,
+                                &mut pickers,
+                                &mut Default::default(),
+                                &mut Default::default(),
+                                None,
+                            );
+                        }
                     },
                 );
-                let well = output.shapes.iter().find_map(|s| match &s.shape {
-                    Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
-                    _ => None,
-                });
+                let shapes: Vec<_> = output.shapes.iter().map(|s| s.shape.clone()).collect();
                 output.drop_without_applying_deltas();
-                well
+                shapes
             };
-            frame(vec![]);
-            let pos = frame(vec![]).expect("the palette shows the swatch");
-            frame(vec![
-                Event::PointerMoved(pos),
-                Event::PointerButton {
-                    pos,
-                    button: PointerButton::Primary,
-                    pressed: true,
-                    modifiers: Modifiers::NONE,
-                },
-                Event::PointerButton {
-                    pos,
-                    button: PointerButton::Primary,
-                    pressed: false,
-                    modifiers: Modifiers::NONE,
-                },
-            ]);
+            if let Some(swatch) = swatch {
+                frame(vec![]);
+                let pos = frame(vec![])
+                    .iter()
+                    .find_map(|s| match s {
+                        Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
+                        _ => None,
+                    })
+                    .expect("the palette shows the swatch");
+                frame(click(pos));
+            } else {
+                let shapes = open_custom_editor(
+                    &mut frame,
+                    Color32::from_rgba_unmultiplied(242, 54, 69, 128),
+                );
+                drag_alpha(&mut frame, &shapes, &[128, 64]);
+            }
             props
                 .apply_to_chart(
                     crate::ui::dialogs::drawing_properties::actions::DrawingId(opened),
                     &mut chart,
                 )
                 .unwrap();
+            let want = if let Some(swatch) = swatch {
+                let [r, g, b, _] = swatch.to_srgba_unmultiplied();
+                if text_tab {
+                    vec![
+                        original[0].0,
+                        original[1].0,
+                        [r, g, b, 128],
+                        if peer_tool == text_tool {
+                            [r, g, b, 128]
+                        } else {
+                            peer_text.unwrap_or(original[3].0)
+                        },
+                    ]
+                } else {
+                    vec![
+                        [r, g, b, alpha],
+                        [r, g, b, 255],
+                        [r, g, b, 128],
+                        [r, g, b, peer_text.map_or(255, |color| color[3])],
+                    ]
+                }
+            } else {
+                let [r, g, b, _] = peer_text.unwrap_or([41, 98, 255, 255]);
+                vec![
+                    [242, 54, 69, alpha],
+                    [242, 54, 69, 255],
+                    [242, 54, 69, 64],
+                    [r, g, b, 64],
+                ]
+            };
             observed.push((
                 chart
                     .drawings()
                     .drawings
                     .iter()
-                    .map(|d| d.color)
+                    .map(|d| {
+                        if d.id >= 3 {
+                            d.text_color.unwrap_or(d.color)
+                        } else {
+                            d.color
+                        }
+                    })
                     .collect::<Vec<_>>(),
-                vec![[r, g, b, alpha], [r, g, b, 255]],
+                want,
             ));
             let mut custom =
                 DrawingProps::from_drawing(&chart.drawings().drawings[opened - 1], &chart);
@@ -1543,11 +1689,10 @@ mod tests {
                 )
                 .unwrap();
             assert!(
-                chart
-                    .drawings()
-                    .drawings
-                    .iter()
-                    .all(|d| d.color == [255, 255, 255, 128]),
+                chart.drawings().drawings.iter().all(|d| {
+                    d.color == [255, 255, 255, 128]
+                        && (d.id < 3 || d.text_color.unwrap_or(d.color) == [255, 255, 255, 128])
+                }),
                 "an edited opacity applies to the entire selection"
             );
         }
