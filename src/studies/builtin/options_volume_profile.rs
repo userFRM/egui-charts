@@ -611,6 +611,9 @@ impl OptionsVolumeProfile {
                         .collect()
                 };
                 let exposure_of = |dates: &[NaiveDate], selected: &[&OptionQuote]| {
+                    if dates.is_empty() {
+                        return None;
+                    }
                     let snapshot = if let Some(supplied) = &supplied {
                         let mut snapshot = (**supplied).clone();
                         snapshot
@@ -2468,6 +2471,23 @@ mod tests {
                 assert_eq!(strike.puts, Some(0.0));
                 assert_eq!(strike.net, Some(11.0));
                 snapshot.rows.clear();
+                exposure_sink.push(snapshot.clone()).unwrap();
+                study
+                    .set_input(
+                        "through_date",
+                        InputValue::Text(expiry.pred_opt().unwrap().to_string()),
+                    )
+                    .unwrap();
+                assert!(study.volume_profiles(0..1).is_empty());
+                assert_eq!(
+                    study.plot_value(5, 0),
+                    None,
+                    "a provider level needs a selected expiration"
+                );
+                study
+                    .set_input("through_date", InputValue::Text(next.to_string()))
+                    .unwrap();
+                assert_eq!(study.plot_value(5, 0), Some(0.0));
                 snapshot.zero_gamma = None;
                 exposure_sink.push(snapshot).unwrap();
             } else {
