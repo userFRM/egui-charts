@@ -3401,6 +3401,39 @@ impl Chart {
                     ));
                 }
             }
+            for (_, study) in self
+                .study_ids
+                .iter()
+                .zip(self.rendered_studies().indicators())
+                .filter(|(id, study)| {
+                    self.shows_study(study.as_ref()) && self.series_pane(**id) == Some(main_pane)
+                })
+            {
+                for plot in study.volume_profiles(rendering::volume_profile::profile_range(&coords))
+                {
+                    let Some((date, [r, g, b, a])) = plot.profile.expiry_tag else {
+                        continue;
+                    };
+                    let index = if plot.right_aligned {
+                        plot.bars.end.saturating_sub(1)
+                    } else {
+                        plot.bars.start
+                    };
+                    let Some(time) = date.and_hms_opt(0, 0, 0).map(|time| time.and_utc()) else {
+                        continue;
+                    };
+                    time_tags.push(rendering::axes::render_primitive_time_label(
+                        &painter,
+                        axis,
+                        coords.idx_to_x(index),
+                        super::TimeAxisLabel::new(
+                            time,
+                            date.to_string(),
+                            egui::Color32::from_rgba_unmultiplied(r, g, b, a),
+                        ),
+                    ));
+                }
+            }
         }
 
         // Handle drawing tools
@@ -3685,6 +3718,7 @@ impl Chart {
                 let raw_price_formatter = self.series_price_formatter(super::SeriesId::MAIN);
                 legend.formatters = self.value_formatters(raw_price_formatter.as_deref());
                 legend.study_formatters = &study_formatters;
+                legend.study_ids = &self.study_ids;
                 legend.thousands_sep = price_map.thousands_sep();
                 legend.price_decimals = self.readout_price_decimals();
                 legend.instrument = self.instrument();
