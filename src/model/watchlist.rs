@@ -168,6 +168,10 @@ pub struct Watchlist {
     /// reading.
     #[serde(default, deserialize_with = "known_columns")]
     pub column_widths: BTreeMap<WatchlistColumn, f32>,
+    /// The widths, in points, the user dragged the host's columns to, by column name; see
+    /// `WatchlistPanel::add_column`.
+    #[serde(default)]
+    pub host_column_widths: BTreeMap<String, f32>,
 }
 
 /// The logos setting of a list saved without one.
@@ -221,6 +225,7 @@ impl Watchlist {
             show_descriptions: false,
             show_logos: true,
             column_widths: BTreeMap::new(),
+            host_column_widths: BTreeMap::new(),
         }
     }
 
