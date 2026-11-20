@@ -516,7 +516,9 @@ impl Alert {
                     }
                     let output = name.strip_prefix("output_")?.parse().ok()?;
                     match &self.source {
-                        AlertSource::Study { id, .. } => study(id, output),
+                        AlertSource::Study { id, .. } | AlertSource::StudyCondition { id, .. } => {
+                            study(id, output)
+                        }
                         _ => String::new(),
                     }
                 }
@@ -1326,6 +1328,7 @@ mod tests {
         let value = |source: &AlertSource| match source {
             AlertSource::Study { id, output: 0 } if id == "3" => Some(70.25),
             AlertSource::Study { id, output: 1 } if id == "3" => Some(3.0),
+            AlertSource::StudyCondition { id, condition: 0 } if id == "3" => Some(1.0),
             AlertSource::Price => Some(101.5),
             _ => None,
         };
@@ -1348,6 +1351,14 @@ mod tests {
                 "AAPL on NASDAQ at 2024-01-01T00:01:00+00:00",
             ),
             ("{{value}}/{{output_1}}", study.clone(), "70.25/3"),
+            (
+                "{{value}}/{{output_1}}",
+                AlertSource::StudyCondition {
+                    id: "3".into(),
+                    condition: 0,
+                },
+                "1/3",
+            ),
             ("{{output_2}}.", study.clone(), "NaN."),
             ("{{value}}{{output_1}}", AlertSource::Price, "101.5"),
             (
