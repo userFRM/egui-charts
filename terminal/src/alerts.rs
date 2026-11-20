@@ -197,9 +197,13 @@ impl Terminal {
         }
         match action {
             Action::TopToolbar(TopToolbarAction::CreateAlert)
-            | Action::Alerts(AlertPanelAction::CreateAlert)
-            | Action::ChartMenu(ChartContextAction::Series(SeriesContextMenuAction::AddAlert)) => {
-                self.open_alert(None)
+            | Action::Alerts(AlertPanelAction::CreateAlert) => self.open_alert(None),
+            Action::ChartMenu(ChartContextAction::Series(SeriesContextMenuAction::AddAlert)) => {
+                let alert = Alert::new(
+                    self.chart().symbol(),
+                    AlertCondition::Crossing(self.menus.series_click_price()),
+                );
+                self.open_alert(Some(alert));
             }
             Action::WidgetBar(WidgetBarAction::Clicked(RightBarIcon::Alerts)) => {
                 self.open_panel(SidePanel::Alerts)
@@ -1181,6 +1185,59 @@ mod tests {
             }
             assert_eq!(engine.alerts().len(), 4, "the bell opens the shared editor");
         }
+    }
+
+    #[test]
+    fn series_menu_alert_starts_at_the_clicked_price() {
+        use egui::{Event, Modifiers, PointerButton};
+
+        let engine = Arc::new(AlertEngine::new());
+        let mut terminal = Terminal::new(Arc::new(crate::test_support::TestFeed))
+            .with_symbol("AAPL")
+            .with_alerts(engine.clone());
+        frames(&mut terminal);
+
+        let chart = terminal.chart();
+        let index = chart.state().shown().len() - 5;
+        let close = chart.state().shown()[index].close;
+        let mapping = chart.get_chart_mapping();
+        let point = egui::pos2(mapping.idx_to_x(index), mapping.price_to_y(close));
+        let expected = terminal.chart().get_chart_mapping().y_to_price(point.y);
+        let last_close = terminal.chart().bars(SeriesId::MAIN).last().unwrap().close;
+        assert_ne!(
+            expected, last_close,
+            "the test point differs from the last close"
+        );
+
+        frame(&mut terminal, SIZE, vec![Event::PointerMoved(point)]);
+        for pressed in [true, false] {
+            frame(
+                &mut terminal,
+                SIZE,
+                vec![Event::PointerButton {
+                    pos: point,
+                    button: PointerButton::Secondary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                }],
+            );
+        }
+        let menu = frame(&mut terminal, SIZE, vec![]);
+        let alert_item = menu
+            .text_starting_with("Add alert on AAPL at ")
+            .expect("series menu offers an alert at the clicked price");
+        click(&mut terminal, SIZE, alert_item);
+        frames(&mut terminal);
+
+        assert!(terminal.alerts.dialog.is_open);
+        assert_eq!(
+            terminal.alerts.dialog.alert.condition,
+            AlertCondition::Crossing(expected)
+        );
+        assert!(
+            engine.alerts().is_empty(),
+            "the alert is still being edited"
+        );
     }
 
     #[test]

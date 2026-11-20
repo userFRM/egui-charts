@@ -224,6 +224,13 @@ impl Frame {
             .iter()
             .find_map(|(text, pos)| (text == label).then_some(*pos))
     }
+
+    /// The centre of the first control or text whose label starts with `prefix`.
+    pub(super) fn text_starting_with(&self, prefix: &str) -> Option<Pos2> {
+        self.labels
+            .iter()
+            .find_map(|(text, pos)| text.starts_with(prefix).then_some(*pos))
+    }
 }
 
 /// Runs one frame of `terminal` in a window of `size`, a tenth of a second after the last.
