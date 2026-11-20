@@ -1083,7 +1083,8 @@ impl Indicator for ConfiguredStudy {
         inputs
     }
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
-        if id == "plot_offset" && self.offers_offset() {
+        // Offset 0 is no offset: a list read before an input withdrew Offset still applies.
+        if id == "plot_offset" && (self.offers_offset() || value == InputValue::Integer(0)) {
             let InputValue::Integer(offset) = value else {
                 return Err(crate::studies::StudyError::invalid_input(id));
             };
@@ -2815,6 +2816,8 @@ mod tests {
                     .iter()
                     .any(|input| input.id == "plot_offset")
             );
+            // A list read before the pair withdrew Offset still applies with its Offset 0.
+            edited.apply_settings(&inputs, edited.settings()).unwrap();
             edited.calculate(&bars);
             assert!(!edited.markers().is_empty());
             assert!(
