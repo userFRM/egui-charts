@@ -355,7 +355,8 @@ impl SettingsDialog {
                                         checkbox(
                                             ui,
                                             &mut background.shade_premarket,
-                                            l10n::text(ui.ctx(), "Show pre-market").into(),
+                                            RichText::new(l10n::text(ui.ctx(), "Show pre-market"))
+                                                .color(theme.ui.text),
                                         );
                                         background.shade_premarket
                                     }
@@ -363,7 +364,8 @@ impl SettingsDialog {
                                         checkbox(
                                             ui,
                                             &mut background.shade_postmarket,
-                                            l10n::text(ui.ctx(), "Show post-market").into(),
+                                            RichText::new(l10n::text(ui.ctx(), "Show post-market"))
+                                                .color(theme.ui.text),
                                         );
                                         background.shade_postmarket
                                     }
