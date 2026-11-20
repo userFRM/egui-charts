@@ -75,11 +75,12 @@ struct Stamp {
     progress: FeedProgress,
 }
 
-// Eligibility excludes feed errors and outstanding requests, so this clone contains no
-// heap data. Paging decisions and public drop counters must rewind along with the tape.
+// Replay diagnostics and tape paging decisions, not the destination subscription's health.
 #[derive(Debug, PartialEq)]
 struct FeedProgress {
-    state: crate::data::FeedState,
+    rejected_bars: u64,
+    late_ticks: u64,
+    repeated_ticks: u64,
     trades_complete: bool,
     trades_from_start: bool,
 }
@@ -92,7 +93,9 @@ impl Stamp {
             edits: chart.readout_revision,
             close_time: chart.bar_close_time,
             progress: FeedProgress {
-                state: chart.feed.clone(),
+                rejected_bars: chart.feed.rejected_bars,
+                late_ticks: chart.feed.late_ticks,
+                repeated_ticks: chart.feed.repeated_ticks,
                 trades_complete: link.trades_complete,
                 trades_from_start: link.trades_from_start,
             },
@@ -308,7 +311,8 @@ impl Chart {
     /// The host verifies the recording and exact event position. Unlike the capture plan,
     /// the checkpoint is reusable. A pending update, unsupported state or incompatible
     /// instrument, grouping, retention or studies refuses before changing the chart or sink.
-    /// This restores replay data, not the viewport or drawing settings.
+    /// This restores replay data and trade counters, not the destination's connection status,
+    /// symbol catalog revision, last feed error, viewport or drawing settings.
     pub fn restore_trade_replay_checkpoint(
         &mut self,
         checkpoint: &TradeReplayCheckpoint,
@@ -363,7 +367,9 @@ impl Chart {
         self.replace_main_data(checkpoint.bars.clone());
         self.from_ticks.extend(checkpoint.origins.iter().copied());
         self.bar_close_time = checkpoint.close_time;
-        self.feed.clone_from(&checkpoint.progress.state);
+        self.feed.rejected_bars = checkpoint.progress.rejected_bars;
+        self.feed.late_ticks = checkpoint.progress.late_ticks;
+        self.feed.repeated_ticks = checkpoint.progress.repeated_ticks;
         self.recalculate_studies();
         Ok(())
     }

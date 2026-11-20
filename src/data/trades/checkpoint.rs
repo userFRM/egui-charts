@@ -71,6 +71,9 @@ impl PackedTrades {
         // A reusable checkpoint replaces the tape even when it restores the same executions.
         dest.revision = next_revision();
         dest.generation = dest.revision;
+        // Restored rows are the baseline. Only later stream appends count as new executions.
+        dest.page_revision = dest.generation;
+        dest.live_count = 0;
     }
 }
 
@@ -118,6 +121,30 @@ mod tests {
             );
             assert!(!dest.holds(6));
         }
+    }
+
+    #[test]
+    fn restored_rows_are_not_new_stream_progress() {
+        let mut tape = Trades::new(2);
+        let mut queued = tape.empty();
+        queued.push(trade(1, 0));
+        tape.append(queued, &mut |_, _| ());
+        let mut cursor = 0;
+        let (old_page, first) = tape.progress(&mut cursor);
+        assert_eq!(first, 0);
+
+        let saved = tape.pack_checkpoint();
+        saved.restore(&mut tape);
+        cursor = 0; // Consumers reset their cursor on a new generation.
+        let (page, first) = tape.progress(&mut cursor);
+        assert_ne!(page, old_page);
+        assert_eq!(first, 1);
+
+        let mut queued = tape.empty();
+        queued.push(trade(2, 1));
+        tape.append(queued, &mut |_, _| ());
+        assert_eq!(tape.progress(&mut cursor), (page, 1));
+        assert_eq!(tape.progress(&mut cursor), (page, 2));
     }
 
     #[test]

@@ -856,11 +856,20 @@ pub(super) mod tests {
             .collect()
     }
 
-    /// Counts the heap allocations of each thread, so a test can bound its own.
+    /// Counts allocation requests and their sizes on the calling thread.
     struct Counting;
 
     thread_local! {
-        static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static TOTALS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    }
+
+    impl Counting {
+        fn record(bytes: usize) {
+            let _ = TOTALS.try_with(|totals| {
+                let (count, requested) = totals.get();
+                totals.set((count + 1, requested.wrapping_add(bytes)));
+            });
+        }
     }
 
     #[global_allocator]
@@ -869,7 +878,7 @@ pub(super) mod tests {
     // SAFETY: every call forwards to `System` with the caller's arguments; the counter only observes.
     unsafe impl std::alloc::GlobalAlloc for Counting {
         unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
-            let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
+            Self::record(layout.size());
             // SAFETY: forwarded unchanged.
             unsafe { std::alloc::System.alloc(layout) }
         }
@@ -885,7 +894,7 @@ pub(super) mod tests {
             layout: std::alloc::Layout,
             new_size: usize,
         ) -> *mut u8 {
-            let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
+            Self::record(new_size);
             // SAFETY: forwarded unchanged.
             unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
         }
@@ -893,9 +902,17 @@ pub(super) mod tests {
 
     /// The heap allocations `run` makes on this thread, not counting the drop of its result.
     pub(in crate::widget) fn allocations<T>(run: impl FnOnce() -> T) -> (usize, T) {
-        let before = ALLOCATIONS.with(std::cell::Cell::get);
+        let before = TOTALS.with(std::cell::Cell::get).0;
         let result = run();
-        (ALLOCATIONS.with(std::cell::Cell::get) - before, result)
+        (TOTALS.with(std::cell::Cell::get).0 - before, result)
+    }
+
+    /// Total bytes requested on this thread, charging reallocations at their full new size.
+    pub(in crate::widget) fn requested_bytes<T>(run: impl FnOnce() -> T) -> (usize, T) {
+        let before = TOTALS.with(std::cell::Cell::get).1;
+        let result = run();
+        let after = TOTALS.with(std::cell::Cell::get).1;
+        (after.wrapping_sub(before), result)
     }
 
     /// The chart rebuilds its session profiles on every frame, so grouping rows must not copy

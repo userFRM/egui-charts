@@ -249,16 +249,16 @@ pub(crate) struct Trades {
     /// held, and until the sink drops live trades, which are at or after it. The list goes when the
     /// store evicts, or the sink drops, a trade of that instant or a later one.
     unheld_live: Option<(DateTime<Utc>, Vec<Tick>)>,
-    /// First revision of this store, unchanged by paging, pushes and evictions.
+    /// First revision of this timeline, unchanged by paging, pushes and evictions.
     #[cfg(feature = "widget")]
     pub(crate) generation: u64,
-    /// Revision of the last page that added executions, independent of streamed appends.
+    /// Revision of the last page that added execution data, or the timeline's first revision.
     #[cfg(feature = "widget")]
     page_revision: u64,
-    /// Number of streamed executions admitted to this tape, including those since evicted.
+    /// Streamed executions admitted since the timeline began, including those since evicted.
     #[cfg(feature = "widget")]
     live_count: usize,
-    /// Changes whenever a trade is added or evicted.
+    /// Changes when the held trades or their history coverage changes.
     revision: u64,
     /// Whether the sink dropped live trades since the subscription began, after which no more are
     /// kept apart.
@@ -302,7 +302,7 @@ impl Trades {
         (self.page_revision, self.trades.len().saturating_sub(added))
     }
 
-    /// Identifies the held trades: it differs after any trade was added or evicted.
+    /// Identifies the held trades and their history coverage.
     #[cfg_attr(
         not(feature = "widget"),
         expect(dead_code, reason = "only the chart widget consumes a feed")
@@ -574,7 +574,6 @@ impl Trades {
         mut page: Vec<Tick>,
         changed: &mut impl FnMut(&Tick, bool),
     ) -> u64 {
-        #[cfg(feature = "widget")]
         let before = self.revision;
         let received = page.len();
         page.retain(valid);
@@ -648,9 +647,14 @@ impl Trades {
             self.paged += 1;
             self.trades.push_front(trade);
         }
-        #[cfg(feature = "widget")]
-        if self.revision != before {
-            self.page_revision = self.revision;
+        if self.revision == before {
+            // Even an empty page can complete the front without adding execution data.
+            self.revision = next_revision();
+        } else {
+            #[cfg(feature = "widget")]
+            {
+                self.page_revision = self.revision;
+            }
         }
         rejected
     }
@@ -785,6 +789,25 @@ mod tests {
         Reanchor,
     }
     use Step::{Live, Page, Reanchor};
+
+    #[cfg(feature = "widget")]
+    #[test]
+    fn page_progress_distinguishes_new_rows_from_coverage() {
+        let mut tape = Trades::new(2);
+        tape.push(trade(1, 100.));
+        let mut cursor = 0;
+        let progress = tape.progress(&mut cursor);
+        let revision = tape.revision();
+        tape.prepend(Vec::new(), &mut |_, _| ());
+        assert!(tape.front_reached);
+        assert_ne!(tape.revision(), revision);
+        assert_eq!(tape.progress(&mut cursor), progress);
+
+        tape.prepend(vec![trade(0, 99.)], &mut |_, _| ());
+        let (page, first_live) = tape.progress(&mut cursor);
+        assert_ne!(page, progress.0);
+        assert_eq!(first_live, 2);
+    }
 
     /// Group only explicit aggressor ids, across pages and drains, without moving price volume.
     #[test]

@@ -103,9 +103,6 @@ impl<'a> Binding<'a> {
             return Err(Error::NotDrained);
         }
         let instrument = link.instrument.as_ref().ok_or(Error::Unsupported)?;
-        if chart.feed.last_error.is_some() {
-            return Err(Error::Unsupported);
-        }
         if link.subscription.is_none()
             || instrument.session.is_some()
             || instrument.tick_size.is_some_and(|v| !v.is_finite())

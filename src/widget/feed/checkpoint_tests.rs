@@ -72,11 +72,14 @@ fn resume_inside_shared_timestamp_volume_split() {
         [2048., 6.]
     );
     let (mut dest, sink, mut dest_frames) = ready(2048);
-    sink.push_tick(trade(99, 13.));
+    let mut old = trade(99, 13.);
+    old.ts = DateTime::from_timestamp(1_699_999_000, 0).unwrap();
+    sink.push_tick(old);
     dest_frames.run(&mut dest);
     for _ in 0..2 {
         dest.restore_trade_replay_checkpoint(&mark).unwrap();
-        assert_eq!(dest.feed, reference.feed);
+        assert_eq!(dest.bars(SeriesId::MAIN).len(), 1);
+        assert_eq!(dest.bars(SeriesId::MAIN)[0].volume, 2047.);
         sink.push_tick(trade(1, 2047.)); // The checkpoint must restore deduplication, not just the visible candle.
         sink.push_tick(trade(2, 7.));
         for _ in 0..6 {
@@ -105,6 +108,35 @@ fn resume_inside_shared_timestamp_volume_split() {
         }
     }
 }
+
+#[test]
+fn restoring_replay_counters_preserves_current_subscription_health() {
+    use crate::data::FeedStatus;
+
+    let (mut chart, sink, mut frames) = ready(2048);
+    sink.set_status(FeedStatus::Live);
+    sink.push_tick(trade(1, 2047.));
+    frames.run(&mut chart);
+    let mark = chart
+        .capture_trade_replay_checkpoint(chart.plan_trade_replay_checkpoint().unwrap())
+        .unwrap();
+
+    let error = FeedError::Network("connection closed".into());
+    sink.set_status(FeedStatus::Disconnected);
+    sink.symbols_changed();
+    sink.report_error(error.clone());
+    sink.push_tick(trade(1, 2047.));
+    frames.run(&mut chart);
+    assert_eq!(chart.feed_state(SeriesId::MAIN).unwrap().repeated_ticks, 1);
+
+    chart.restore_trade_replay_checkpoint(&mark).unwrap();
+    let state = chart.feed_state(SeriesId::MAIN).unwrap();
+    assert_eq!(state.status, Some(FeedStatus::Disconnected));
+    assert_eq!(state.symbol_catalog_revision, 1);
+    assert_eq!(state.last_error.as_ref(), Some(&error));
+    assert_eq!(state.repeated_ticks, 0);
+}
+
 #[test]
 fn refusals_leave_chart_and_next_sink_allocation_unchanged() {
     let (mut chart, sink, mut frames) = ready(2048);
@@ -113,7 +145,15 @@ fn refusals_leave_chart_and_next_sink_allocation_unchanged() {
     let mark = chart
         .capture_trade_replay_checkpoint(chart.plan_trade_replay_checkpoint().unwrap())
         .unwrap();
+    let before_heartbeat = chart.plan_trade_replay_checkpoint().unwrap();
+    sink.advance_time(trade(1, 2047.).ts + TimeDelta::seconds(1));
+    frames.run(&mut chart);
+    // It's a drain boundary again, but not the position authorized by the old plan.
     let stale = chart.plan_trade_replay_checkpoint().unwrap();
+    assert!(matches!(
+        chart.capture_trade_replay_checkpoint(before_heartbeat),
+        Err(Error::StalePlan)
+    ));
     sink.push_tick(trade(2, 7.));
     assert!(matches!(
         chart.restore_trade_replay_checkpoint(&mark),
@@ -342,4 +382,35 @@ fn named_security_identifiers_count_against_the_hosts_capture_budget() {
         .push((crate::model::IdentifierKind::Other(label), value));
     let with = chart.plan_trade_replay_checkpoint().unwrap().max_bytes();
     assert!(with >= without + payload_bytes);
+}
+
+#[cfg(feature = "studies")]
+#[test]
+fn planned_bytes_cover_capture_of_retained_trades_and_volume_bars() {
+    use crate::widget::studies_data::tests::requested_bytes;
+
+    // Both copies must dwarf the plan's fixed allowance, not just the tape.
+    let (mut chart, sink, frames) = ready(8);
+    for batch in 0..32 {
+        for id in batch * 128..(batch + 1) * 128 {
+            let mut tick = trade(id, 1.0);
+            tick.ts += TimeDelta::seconds(id as i64);
+            sink.push_tick(tick);
+        }
+        chart.pump(&frames.ctx);
+    }
+    assert_eq!(chart.trades(SeriesId::MAIN).count(), 4096);
+    let bars = chart.bars(SeriesId::MAIN);
+    assert_eq!(bars.len(), 512);
+    assert!(bars.iter().all(|bar| bar.volume == 8.0));
+
+    let (requested, (bound, _mark)) = requested_bytes(|| {
+        let plan = chart.plan_trade_replay_checkpoint().unwrap();
+        let bound = plan.max_bytes();
+        (bound, chart.capture_trade_replay_checkpoint(plan).unwrap())
+    });
+    assert!(
+        requested <= bound,
+        "requested {requested} bytes, planned {bound}"
+    );
 }
