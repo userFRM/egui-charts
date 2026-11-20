@@ -2830,7 +2830,8 @@ mod tests {
 
     /// The fixture is a parallel channel and a flat top/bottom as the release before their middle
     /// line and price settings saved them. They restore with the default middle line, a dashed
-    /// hairline in the line colour, and no price style, as they were drawn.
+    /// hairline in the line colour, no price style and their text in the middle of their first
+    /// line, as they were drawn.
     #[test]
     fn channels_saved_before_their_middle_line_and_price_settings_keep_their_look() {
         let saved = include_str!("fixtures/storage_v10_channels.json");
@@ -2845,6 +2846,11 @@ mod tests {
             assert_eq!(drawing.tool_type, tool);
             assert_eq!(drawing.middle_line, MiddleLineStyle::default(), "{tool:?}");
             assert_eq!(drawing.anchor_price_style, None, "{tool:?}");
+            assert_eq!(
+                drawing.line_measurements.text_horizontal_align,
+                LineTextHorizontalAlign::Center,
+                "{tool:?}"
+            );
             assert_eq!(
                 drawing.channel_midline,
                 tool == DrawingToolType::ParallelChannel

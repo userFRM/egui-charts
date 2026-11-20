@@ -295,8 +295,9 @@ pub struct Drawing {
 
     // === Tool-specific configuration (None uses the defaults) ===
     /// Readouts, midpoint, price labels and text placement of a trend line, ray, extended line,
-    /// info line or trend angle, the text placement of a horizontal line or ray or a vertical
-    /// line, and the reach of a vertical line. Other tools ignore these settings.
+    /// info line or trend angle, the text placement of a horizontal line or ray, a vertical line,
+    /// a cross line, an arrow, a channel or a regression trend, the prices of a flat top/bottom or
+    /// disjoint channel, and the reach of a vertical line. Other tools ignore these settings.
     #[serde(default = "LineMeasurements::left_out")]
     pub line_measurements: LineMeasurements,
     /// Readouts, card, box border and vertical reach of a date range or date and price range.
@@ -1516,7 +1517,9 @@ mod tests {
     /// Elliott wave has its colour and starts at the Intermediate degree; a regression trend
     /// draws a 1 px line in red at 30% opacity (77 of 255) under opaque red text, with 2 px bands
     /// in blue at 30% opacity; a price label is bold; a position risks 25% of an account of
-    /// 1,000 in lots of 1, over a green target and a red stop zone at 20% opacity (51). The
+    /// 1,000 in lots of 1, over a green target and a red stop zone at 20% opacity (51). A
+    /// parallel channel, flat top/bottom or disjoint channel starts its text at the left end of
+    /// its first line, and one saved without line measurements keeps it in the middle. The
     /// triangle, ellipse and double curve keep the styles they shared before.
     #[test]
     fn new_drawings_start_in_their_tool_style() {
@@ -1686,6 +1689,23 @@ mod tests {
             );
         }
         assert_eq!(Drawing::new(1, T::PriceLabel).font_weight, FontWeight::Bold);
+        // Channels write their text from the left end of their first line; a channel saved
+        // without line measurements keeps it in the middle.
+        use crate::drawings::LineTextHorizontalAlign as H;
+        for tool in [T::ParallelChannel, T::FlatTopBottom, T::DisjointChannel] {
+            let placed = Drawing::new(1, tool);
+            let mut saved = serde_json::to_value(&placed).unwrap();
+            saved.as_object_mut().unwrap().remove("line_measurements");
+            let read: Drawing = serde_json::from_value(saved).unwrap();
+            assert_eq!(
+                (
+                    placed.line_measurements.text_horizontal_align,
+                    read.line_measurements.text_horizontal_align
+                ),
+                (H::Left, H::Center),
+                "{tool:?}"
+            );
+        }
         let config = Drawing::new(1, T::RegressionTrend)
             .regression_trend
             .unwrap();

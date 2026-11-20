@@ -1403,8 +1403,9 @@ thread_local! {
 impl LineMeasurements {
     /// The settings a new drawing of `tool` starts with: an info line keeps every readout visible
     /// in the middle of the line, a horizontal or vertical line writes its text on the line and a
-    /// vertical line runs through every pane, other tools keep their readouts hidden and their text
-    /// above the line.
+    /// vertical line runs through every pane, a parallel channel, flat top/bottom or disjoint
+    /// channel starts its text at the left end of its first line, and other tools keep their
+    /// readouts hidden and their text above the middle of the line.
     pub fn for_tool(tool: super::DrawingToolType) -> Self {
         if tool == super::DrawingToolType::VerticalLine {
             return Self {
@@ -1416,6 +1417,17 @@ impl LineMeasurements {
         if tool == super::DrawingToolType::HorizontalLine {
             return Self {
                 text_vertical_align: LineTextVerticalAlign::Middle,
+                ..Self::default()
+            };
+        }
+        if matches!(
+            tool,
+            super::DrawingToolType::ParallelChannel
+                | super::DrawingToolType::FlatTopBottom
+                | super::DrawingToolType::DisjointChannel
+        ) {
+            return Self {
+                text_horizontal_align: LineTextHorizontalAlign::Left,
                 ..Self::default()
             };
         }
