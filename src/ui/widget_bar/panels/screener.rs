@@ -37,7 +37,7 @@ pub enum ScreenerAction {
     /// Save this CSV text of the shown rows to a file the host chooses.
     ExportCsv(String),
     /// Add these symbols, the shown rows in order, to a watchlist, such as with
-    /// [`WatchlistPanel::import`](super::WatchlistPanel::import).
+    /// [`WatchlistPanel::import`](crate::ui::widget_bar::WatchlistPanel::import).
     SendToWatchlist(Vec<String>),
 }
 
