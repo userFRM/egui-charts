@@ -1350,40 +1350,39 @@ impl AlertsPanel {
                         }
                         let label = parts.join(" · ");
                         let selected = self.log_selected == Some(index);
-                        let response = ui
-                            .scope_builder(
-                                egui::UiBuilder::new()
-                                    .scope_id(rows.with(index))
-                                    .sense(Sense::click()),
-                                |ui| {
-                                    ui.style_mut().interaction.selectable_labels = false;
-                                    let hovered = ui.response().hovered();
-                                    egui::Frame::new()
-                                        .fill(if selected {
-                                            theme.ui.btn_bg_active
-                                        } else if hovered {
-                                            theme.ui.btn_bg_hover
-                                        } else {
-                                            Color32::TRANSPARENT
-                                        })
-                                        .show(ui, |ui| {
-                                            ui.set_width(ui.available_width());
-                                            ui.label(&label);
-                                            if self.options.log_price
-                                                && let Some(price) = trigger.price
-                                            {
-                                                ui.label(l10n::text(ui.ctx(), price.to_string()));
-                                            }
-                                            if self.options.log_message
-                                                && !trigger.message.is_empty()
-                                            {
-                                                ui.label(&trigger.message);
-                                            }
-                                            ui.separator();
-                                        });
-                                },
-                            )
-                            .response;
+                        let row = ui.scope_builder(
+                            egui::UiBuilder::new()
+                                .scope_id(rows.with(index))
+                                .sense(Sense::click()),
+                            |ui| {
+                                ui.style_mut().interaction.selectable_labels = false;
+                                let hovered = ui.response().hovered();
+                                egui::Frame::new()
+                                    .fill(if selected {
+                                        theme.ui.btn_bg_active
+                                    } else if hovered {
+                                        theme.ui.btn_bg_hover
+                                    } else {
+                                        Color32::TRANSPARENT
+                                    })
+                                    .show(ui, |ui| {
+                                        ui.set_width(ui.available_width());
+                                        let heading = ui.label(&label);
+                                        if self.options.log_price
+                                            && let Some(price) = trigger.price
+                                        {
+                                            ui.label(l10n::text(ui.ctx(), price.to_string()));
+                                        }
+                                        if self.options.log_message && !trigger.message.is_empty() {
+                                            ui.label(&trigger.message);
+                                        }
+                                        ui.separator();
+                                        heading.id
+                                    })
+                                    .inner
+                            },
+                        );
+                        let response = row.response.labelled_by(row.inner);
                         response.widget_info(|| {
                             egui::WidgetInfo::labeled(egui::Role::ListBoxOption, true, &label)
                         });

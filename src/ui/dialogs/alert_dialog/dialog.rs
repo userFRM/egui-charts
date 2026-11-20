@@ -899,7 +899,7 @@ impl AlertDialog {
                 .accessible_name(time_label);
                 ui.end_row();
             }
-            ui.label(l10n::text(ui.ctx(), "Notifications"));
+            let schedule_label = ui.label(l10n::text(ui.ctx(), "Notifications"));
             let before = self.schedule_choice();
             let mut choice = before;
             let choices = [
@@ -921,7 +921,7 @@ impl AlertDialog {
                     }
                 })
                 .response
-                .accessible_name(l10n::text(ui.ctx(), "Notifications"));
+                .labelled_by(schedule_label.id);
             if choice != before {
                 self.scheduled = choice != ScheduleChoice::Always;
                 if matches!(

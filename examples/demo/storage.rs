@@ -525,6 +525,11 @@ mod tests {
         }
         let ctx = egui::Context::default();
         let mut storage = AppStorage::default();
+        eframe::set_value(
+            &mut storage,
+            KEY,
+            &HashMap::from([("own-data", r#"{"asked":true}"#)]),
+        );
         let mut app = restart(&ctx, &storage);
         app.alert_host.engine().connect_custom_events("Turns");
         let mut alert = Alert::new("STOCKA", AlertCondition::CustomEvents("Turns".into()));
