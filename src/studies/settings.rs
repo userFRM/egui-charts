@@ -791,6 +791,18 @@ impl std::fmt::Debug for ConfiguredStudy {
 }
 
 impl ConfiguredStudy {
+    /// Only main-bar calculations can be regenerated from a trade checkpoint. In particular,
+    /// an evicted prefix may have contributed to kept values that no longer follow from the
+    /// retained bars alone.
+    #[cfg(all(feature = "widget", feature = "studies"))]
+    pub(crate) fn replay_calculation(&self) -> Option<(&(dyn Indicator + 'static), i32, bool)> {
+        (self.calculation_symbol.is_empty()
+            && self.calculation_timeframe.is_none()
+            && self.aligned.is_none()
+            && self.kept.is_none())
+        .then_some((self.study.as_ref(), self.offset, self.wait_for_close))
+    }
+
     // Select the inner clone once, without first cloning and discarding its calculated data.
     fn clone_with(&self, study: Box<dyn Indicator>) -> Self {
         Self {

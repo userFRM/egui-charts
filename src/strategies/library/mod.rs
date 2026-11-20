@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 
 use super::Strategy;
+#[cfg(feature = "studies")]
+use crate::model::Timeframe;
 use crate::studies::{InputKind, InputValue, StudyInput};
 
 mod price_action;
@@ -20,7 +22,13 @@ type StrategyConstructor = Box<dyn Fn() -> Box<dyn Strategy> + Send + Sync>;
 /// [`Strategy::study_inputs`] and edited through [`Strategy::set_input`]. Entry size and
 /// pyramiding come from [`super::BacktestSettings`]. SuperTrend suggests 15% of equity and
 /// Technical Ratings 5% through [`Strategy::default_order_size`], which the strategy tester
-/// applies on selection. Built-ins ignore fill callbacks and decide
+/// applies on selection. Technical Ratings protects positions at 3 ATR(14) from their average
+/// price, or with a stop activated at 5 ATR(14) in profit that trails the best price by 2 ATR(14).
+/// Its Indicator timeframe input uses the chart interval by default, or the last longer-interval
+/// bar closed by each chart bar's end. Higher bars use UTC boundaries and are built from chart
+/// bars, so input validation refuses another interval that is shorter, trade-based or not made
+/// of whole chart bars, such as 5 minutes on a 3-minute chart or a month on a weekly one.
+/// Built-ins ignore fill callbacks and decide
 /// at bar close, or on forming-bar updates when tick recalculation is enabled.
 ///
 /// ```
@@ -132,5 +140,17 @@ fn number(inputs: &[StudyInput], id: &str) -> f64 {
     {
         Some(InputValue::Number(value)) => *value,
         _ => unreachable!("declared numeric input"),
+    }
+}
+
+#[cfg(feature = "studies")]
+fn timeframe(inputs: &[StudyInput], id: &str) -> Option<Timeframe> {
+    match inputs
+        .iter()
+        .find(|input| input.id == id)
+        .map(|input| &input.value)
+    {
+        Some(InputValue::Timeframe(value)) => *value,
+        _ => unreachable!("declared timeframe input"),
     }
 }
